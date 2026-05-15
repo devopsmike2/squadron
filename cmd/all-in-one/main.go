@@ -222,8 +222,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		_ = httpServer.Stop(ctx)
 	}()
 
-	// Initialize HTTP API server
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, configSender, logger)
+	// Initialize HTTP API server.
+	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
+	// worker, and API metrics in a single endpoint.
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, configSender, registry, logger)
 
 	// Start API server in a goroutine
 	go func() {

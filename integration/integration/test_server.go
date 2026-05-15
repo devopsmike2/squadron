@@ -58,6 +58,7 @@ type TestServer struct {
 	workerPool *worker.Pool
 
 	// Metrics
+	registry     *prometheus.Registry
 	opampMetrics *metrics.OpAMPMetrics
 	otlpMetrics  *metrics.OTLPMetrics
 
@@ -135,10 +136,10 @@ func (ts *TestServer) initMemoryStorage() {
 	}
 }
 
-// initMetrics initializes metrics components
+// initMetrics initializes metrics components on a single shared registry.
 func (ts *TestServer) initMetrics() {
-	registry := prometheus.NewRegistry()
-	metricsFactory := metrics.NewPrometheusFactory("squadron", registry)
+	ts.registry = prometheus.NewRegistry()
+	metricsFactory := metrics.NewPrometheusFactory("squadron", ts.registry)
 	ts.opampMetrics = metrics.NewOpAMPMetrics(metricsFactory)
 	ts.otlpMetrics = metrics.NewOTLPMetrics(metricsFactory)
 }
@@ -203,8 +204,8 @@ func (ts *TestServer) initServers() {
 	// Create telemetry service
 	ts.telemetryService = services.NewTelemetryQueryService(ts.telemetryReader, ts.agentService, ts.logger)
 
-	// API Server
-	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, configSender, ts.logger)
+	// API Server — uses the same registry as OpAMP/OTLP metrics.
+	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, configSender, ts.registry, ts.logger)
 
 	// Create worker pool for async telemetry processing
 	// Using default values: queue_size=10000, workers=3, timeout=5s

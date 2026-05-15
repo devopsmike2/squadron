@@ -39,15 +39,19 @@ type Server struct {
 	registry          *prometheus.Registry
 }
 
-// NewServer creates a new API server
-func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, commander AgentCommander, logger *zap.Logger) *Server {
+// NewServer creates a new API server.
+//
+// The caller owns the Prometheus registry — pass the same registry used to
+// register OpAMP, OTLP, and worker metrics so that /metrics exposes a single,
+// unified view of the process. (Previously this constructor created its own
+// registry, which silently hid every non-API metric from /metrics.)
+func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, commander AgentCommander, registry *prometheus.Registry, logger *zap.Logger) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.New()
 
-	// Initialize metrics
-	registry := prometheus.NewRegistry()
+	// Initialize API metrics on the caller-provided registry.
 	metricsFactory := metrics.NewPrometheusFactory("squadron", registry)
 	apiMetrics := metrics.NewAPIMetrics(metricsFactory)
 
@@ -57,13 +61,14 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 	router.Use(loggingMiddleware(logger))
 
 	server := &Server{
-		router:           router,
-		agentService:     agentService,
-		telemetryService: telemetryService,
-		commander:        commander,
-		logger:           logger,
-		metrics:          apiMetrics,
-		registry:         registry,
+		router:            router,
+		agentService:      agentService,
+		telemetryService:  telemetryService,
+		savedQueryService: savedQueryService,
+		commander:         commander,
+		logger:            logger,
+		metrics:           apiMetrics,
+		registry:          registry,
 	}
 
 	// Add metrics middleware
