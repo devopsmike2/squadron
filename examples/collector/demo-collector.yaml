@@ -1,0 +1,77 @@
+receivers:
+  # OTLP receiver for accepting telemetry from applications
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  # Debug exporter for testing
+  debug:
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+  # OpAMP extension for remote management
+  opamp:
+    server:
+      ws:
+        endpoint: ws://squadron:4320/v1/opamp
+    agent_description:
+      include_resource_attributes: true
+    capabilities:
+      reports_effective_config: true
+      reports_health: true
+
+service:
+  extensions: [opamp, health_check]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+
+  # Internal telemetry configuration
+  telemetry:
+    resource:
+      # Resource attributes for identifying this collector
+      agent.group_name: demo-group
+      service.name: demo-collector
+      deployment.environment: development
+
+    # Metrics telemetry - sent to squadron backend
+    metrics:
+      readers:
+        - periodic:
+            interval: 30
+            exporter:
+              otlp:
+                protocol: grpc
+                endpoint: http://squadron:4317
+
+    # Logs telemetry - sent to squadron backend
+    logs:
+      level: info
+      processors:
+        - batch:
+            exporter:
+              otlp:
+                protocol: grpc
+                endpoint: http://squadron:4317

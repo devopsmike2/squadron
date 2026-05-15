@@ -1,0 +1,60 @@
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  resource:
+    attributes:
+      - action: upsert
+        key: agent.group_name
+        value: lab
+      - action: upsert
+        key: deployment.environment
+        value: testing
+      - action: upsert
+        key: agent.tier
+        value: scheduler
+      - action: upsert
+        key: service.name
+        value: agent-05
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  debug: {}
+  otlp/squadron:
+    endpoint: squadron:4317
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  opamp:
+    server:
+      ws:
+        endpoint: ws://squadron:4320/v1/opamp
+        tls:
+          insecure: true
+
+service:
+  extensions: [opamp, health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [debug, otlp/squadron]
+    metrics:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [debug, otlp/squadron]
+    logs:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [debug, otlp/squadron]

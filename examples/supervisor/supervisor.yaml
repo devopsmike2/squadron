@@ -1,0 +1,39 @@
+server:
+  endpoint: ws://squadron:4320/v1/opamp
+  tls:
+    insecure_skip_verify: true
+    insecure: true
+
+telemetry:
+  resource:
+    agent.group_name: demo-group
+    service.name: demo-supervisor
+    deployment.environment: development
+  logs:
+    processors:
+      - batch:
+          exporter:
+            otlp:
+              protocol: grpc
+              endpoint: http://squadron:4317
+
+capabilities:
+  reports_effective_config: true
+  reports_own_metrics: true
+  reports_own_logs: true
+  reports_health: true
+  accepts_remote_config: true
+  reports_remote_config: true
+  accepts_restart_command: true
+
+agent:
+  executable: /otelcol-contrib
+  passthrough_logs: true
+  description:
+    identifying_attributes:
+      agent.group_name: demo-group
+  config_files:
+    - /collector.yaml
+
+storage:
+  directory: /var/lib/opamp

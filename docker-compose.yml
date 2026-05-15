@@ -1,0 +1,99 @@
+services:
+  # Go backend with hot reloading (development mode)
+  squadron:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: squadron
+    ports:
+      - "8080:8080"    # HTTP API
+      - "4320:4320"    # OpAMP server
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+      - "2345:2345"    # Delve debugger (optional)
+    volumes:
+      # Mount source code for hot reloading
+      - ./cmd:/app/cmd
+      - ./internal:/app/internal
+      - ./go.mod:/app/go.mod
+      - ./go.sum:/app/go.sum
+      - ./squadron.yaml:/app/squadron.yaml
+      # Persist data directory
+      - squadron-data:/app/data
+      # Persist go build cache for faster rebuilds
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    environment:
+      - GIN_MODE=debug
+      - CGO_ENABLED=1
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=console
+      - TZ=UTC
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - squadron-network
+
+  # Development UI server with hot-reloading
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: squadron-ui
+    ports:
+      - "5173:5173"    # Vite dev server
+    volumes:
+      - ./ui:/app
+      - /app/node_modules  # Prevent overwriting node_modules
+    environment:
+      - VITE_BACKEND_URL=http://localhost:8080
+    depends_on:
+      - squadron
+    networks:
+      - squadron-network
+    restart: unless-stopped
+
+  # Demo OpenTelemetry Collector with OpAMP support
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.134.1
+    container_name: demo-collector
+    command: ['--config', '/etc/otelcol-contrib/config.yaml']
+    ports:
+      - "4319:4317"    # OTLP gRPC receiver
+      - "4321:4318"    # OTLP HTTP receiver
+      - "13133:13133"  # Health check
+    volumes:
+      - ./examples/collector/demo-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      - squadron
+    networks:
+      - squadron-network
+    restart: unless-stopped
+
+  supervisor:
+    build:
+      context: ./examples/supervisor
+      dockerfile: Dockerfile
+    container_name: demo-supervisor
+    depends_on:
+      - squadron
+    networks:
+      - squadron-network
+    restart: unless-stopped
+
+volumes:
+  squadron-data:
+    driver: local
+  go-build-cache:
+    driver: local
+  go-mod-cache:
+    driver: local
+
+networks:
+  squadron-network:
+    driver: bridge

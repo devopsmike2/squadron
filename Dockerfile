@@ -1,0 +1,124 @@
+# Production Dockerfile for Squadron
+# Multi-stage build with Go backend and React frontend
+
+# =============================================================================
+# Stage 1: Build Go Backend
+# =============================================================================
+FROM golang:1.24-bookworm AS backend-builder
+
+# Install build dependencies (including gcc/g++ for CGO, SQLite, and DuckDB)
+RUN apt-get update && apt-get install -y \
+    git \
+    ca-certificates \
+    tzdata \
+    gcc \
+    g++ \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application with CGO enabled for DuckDB
+RUN CGO_ENABLED=1 GOOS=linux go build -a -o squadron ./cmd/all-in-one
+
+# =============================================================================
+# Stage 2: Build React Frontend
+# =============================================================================
+FROM node:20-alpine AS frontend-builder
+
+# Install pnpm
+RUN npm install -g pnpm
+
+# Set working directory
+WORKDIR /app
+
+# Allow builders to override the default backend URL used at build time.
+ARG VITE_BACKEND_URL=http://localhost:8080
+ENV VITE_BACKEND_URL=${VITE_BACKEND_URL}
+
+# Copy package files
+COPY ui/package.json ui/pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY ui/ .
+
+# Build the frontend
+RUN pnpm build
+
+# =============================================================================
+# Stage 3: Production Image
+# =============================================================================
+FROM debian:bookworm-slim
+
+# OCI labels for GitHub Container Registry
+LABEL org.opencontainers.image.source="https://github.com/devopsmike2/squadron"
+LABEL org.opencontainers.image.description="OpenTelemetry agent management platform with built-in observability backend"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# Install runtime dependencies (including sqlite and C++ libs for DuckDB)
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    tzdata \
+    curl \
+    libsqlite3-0 \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -g 1001 squadron && \
+    useradd -u 1001 -g squadron -s /bin/bash -m squadron
+
+# Set working directory
+WORKDIR /app
+
+# Copy backend binary
+COPY --from=backend-builder /app/squadron .
+
+# Copy frontend build
+COPY --from=frontend-builder /app/dist ./ui/dist
+
+# Copy configuration
+COPY squadron.yaml .
+
+# Copy runtime entrypoint for injecting frontend config
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && chown squadron:squadron /entrypoint.sh
+
+# Create data directory
+RUN mkdir -p /app/data && \
+    chown -R squadron:squadron /app
+
+# Switch to non-root user
+USER squadron
+
+# Expose ports
+# 8080 - HTTP API
+# 4320 - OpAMP server
+# 4317 - OTLP gRPC
+# 4318 - OTLP HTTP
+EXPOSE 8080 4320 4317 4318
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Set environment variables
+ENV GIN_MODE=release
+ENV TZ=UTC
+
+ENTRYPOINT ["/entrypoint.sh"]
+# Run the application
+CMD ["./squadron"]

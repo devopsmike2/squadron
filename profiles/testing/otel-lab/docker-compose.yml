@@ -1,0 +1,257 @@
+version: "3.9"
+
+x-collector-base: &collector-base
+  image: otel/opentelemetry-collector-contrib:0.103.1
+  command: ["--config=/config/collector.yaml"]
+  restart: unless-stopped
+  depends_on:
+    - squadron
+
+x-generator-base: &generator-base
+  build:
+    context: ./telemetrygen
+  restart: unless-stopped
+
+services:
+  squadron:
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - LOG_LEVEL=info
+    volumes:
+      - ./data:/app/data
+
+  agent-01:
+    <<: *collector-base
+    hostname: agent-01
+    volumes:
+      - ./collectors/agent-01.yaml:/config/collector.yaml:ro
+
+  agent-02:
+    <<: *collector-base
+    hostname: agent-02
+    volumes:
+      - ./collectors/agent-02.yaml:/config/collector.yaml:ro
+
+  agent-03:
+    <<: *collector-base
+    hostname: agent-03
+    volumes:
+      - ./collectors/agent-03.yaml:/config/collector.yaml:ro
+
+  agent-04:
+    <<: *collector-base
+    hostname: agent-04
+    volumes:
+      - ./collectors/agent-04.yaml:/config/collector.yaml:ro
+
+  agent-05:
+    <<: *collector-base
+    hostname: agent-05
+    volumes:
+      - ./collectors/agent-05.yaml:/config/collector.yaml:ro
+
+  agent-06:
+    <<: *collector-base
+    hostname: agent-06
+    volumes:
+      - ./collectors/agent-06.yaml:/config/collector.yaml:ro
+
+  agent-07:
+    <<: *collector-base
+    hostname: agent-07
+    volumes:
+      - ./collectors/agent-07.yaml:/config/collector.yaml:ro
+
+  agent-08:
+    <<: *collector-base
+    hostname: agent-08
+    volumes:
+      - ./collectors/agent-08.yaml:/config/collector.yaml:ro
+
+  agent-09:
+    <<: *collector-base
+    hostname: agent-09
+    volumes:
+      - ./collectors/agent-09.yaml:/config/collector.yaml:ro
+
+  agent-10:
+    <<: *collector-base
+    hostname: agent-10
+    volumes:
+      - ./collectors/agent-10.yaml:/config/collector.yaml:ro
+  telemetry-agent-01:
+    <<: *generator-base
+    depends_on:
+      - agent-01
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-01:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-01",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-01"'
+      ]
+
+  telemetry-agent-02:
+    <<: *generator-base
+    depends_on:
+      - agent-02
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-02:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-02",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-02"'
+      ]
+
+  telemetry-agent-03:
+    <<: *generator-base
+    depends_on:
+      - agent-03
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-03:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-03",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-03"'
+      ]
+
+  telemetry-agent-04:
+    <<: *generator-base
+    depends_on:
+      - agent-04
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-04:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-04",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-04"'
+      ]
+
+  telemetry-agent-05:
+    <<: *generator-base
+    depends_on:
+      - agent-05
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-05:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-05",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-05"'
+      ]
+
+  telemetry-agent-06:
+    <<: *generator-base
+    depends_on:
+      - agent-06
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-06:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-06",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-06"'
+      ]
+
+  telemetry-agent-07:
+    <<: *generator-base
+    depends_on:
+      - agent-07
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-07:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-07",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-07"'
+      ]
+
+  telemetry-agent-08:
+    <<: *generator-base
+    depends_on:
+      - agent-08
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-08:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-08",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-08"'
+      ]
+
+  telemetry-agent-09:
+    <<: *generator-base
+    depends_on:
+      - agent-09
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-09:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-09",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-09"'
+      ]
+
+  telemetry-agent-10:
+    <<: *generator-base
+    depends_on:
+      - agent-10
+    command:
+      [
+        "traces",
+        "--otlp-endpoint", "agent-10:4317",
+        "--otlp-insecure",
+        "--service", "loadgen-agent-10",
+        "--rate", "2",
+        "--duration", "720h",
+        "--telemetry-attributes", 'env="test"',
+        "--telemetry-attributes", 'profile="squadron-lab"',
+        "--telemetry-attributes", 'target_agent="agent-10"'
+      ]
