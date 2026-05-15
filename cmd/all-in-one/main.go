@@ -18,6 +18,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
@@ -174,6 +175,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	agentService := services.NewAgentService(appStore, driftMetrics, eventBroker, auditService, logger)
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 	alertService := services.NewAlertService(appStore, logger)
+	rolloutService := services.NewRolloutService(appStore, agentService, auditService, logger)
 
 	// Create config sender (separate concern from AgentService)
 	configSender := opamp.NewConfigSender(agents, logger)
@@ -246,7 +248,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
 	// worker, and API metrics in a single endpoint. The event broker is
 	// shared with publishers so /events/stream reflects what they emit.
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, configSender, eventBroker, registry, logger)
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, configSender, eventBroker, registry, logger)
 
 	// Start API server in a goroutine
 	go func() {
@@ -268,6 +270,17 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	defer func() {
 		if err := alertEvaluator.Stop(10 * time.Second); err != nil {
 			logger.Error("Failed to stop alert evaluator", zap.Error(err))
+		}
+	}()
+
+	// Start the rollout engine. Walks active rollouts, advances stages,
+	// and triggers automatic rollback when abort criteria fire. Uses the
+	// OpAMP ConfigSender as its AgentCommander.
+	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, configSender, logger)
+	rolloutEngine.Start()
+	defer func() {
+		if err := rolloutEngine.Stop(10 * time.Second); err != nil {
+			logger.Error("Failed to stop rollout engine", zap.Error(err))
 		}
 	}()
 

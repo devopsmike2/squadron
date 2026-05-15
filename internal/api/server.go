@@ -35,6 +35,7 @@ type Server struct {
 	savedQueryService services.SavedQueryService
 	alertService      services.AlertService
 	auditService      services.AuditService
+	rolloutService    services.RolloutService
 	commander         AgentCommander
 	broker            *events.Broker
 	logger            *zap.Logger
@@ -49,7 +50,7 @@ type Server struct {
 // register OpAMP, OTLP, and worker metrics so that /metrics exposes a single,
 // unified view of the process. (Previously this constructor created its own
 // registry, which silently hid every non-API metric from /metrics.)
-func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, auditService services.AuditService, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
+func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, auditService services.AuditService, rolloutService services.RolloutService, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
@@ -71,6 +72,7 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 		savedQueryService: savedQueryService,
 		alertService:      alertService,
 		auditService:      auditService,
+		rolloutService:    rolloutService,
 		commander:         commander,
 		broker:            broker,
 		logger:            logger,
@@ -122,6 +124,7 @@ func (s *Server) registerRoutes() {
 	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
 	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.logger)
+	rolloutHandlers := handlers.NewRolloutHandlers(s.rolloutService, s.logger)
 	eventsHandlers := handlers.NewEventsHandlers(s.broker, s.logger)
 
 	// Metrics endpoint
@@ -225,6 +228,15 @@ func (s *Server) registerRoutes() {
 		audit := v1.Group("/audit")
 		{
 			audit.GET("/events", auditHandlers.HandleListAuditEvents)
+		}
+
+		// Rollouts — safe staged config deployment with automatic rollback.
+		rollouts := v1.Group("/rollouts")
+		{
+			rollouts.GET("", rolloutHandlers.HandleListRollouts)
+			rollouts.POST("", rolloutHandlers.HandleCreateRollout)
+			rollouts.GET("/:id", rolloutHandlers.HandleGetRollout)
+			rollouts.POST("/:id/abort", rolloutHandlers.HandleAbortRollout)
 		}
 	}
 

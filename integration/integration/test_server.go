@@ -50,6 +50,7 @@ type TestServer struct {
 	savedQueryService services.SavedQueryService
 	alertService      services.AlertService
 	auditService      services.AuditService
+	rolloutService    services.RolloutService
 
 	// Servers
 	apiServer   *api.Server
@@ -203,6 +204,10 @@ func (ts *TestServer) initServices() {
 	ts.agentService = services.NewAgentService(appStore, nil, ts.broker, ts.auditService, ts.logger)
 	ts.savedQueryService = services.NewSavedQueryService(appStore, ts.logger)
 	ts.alertService = services.NewAlertService(appStore, ts.logger)
+	// Rollout service is wired so /api/v1/rollouts routes are reachable.
+	// The engine goroutine isn't started here — tests don't exercise the
+	// background state machine.
+	ts.rolloutService = services.NewRolloutService(appStore, ts.agentService, ts.auditService, ts.logger)
 }
 
 // initServers initializes all servers
@@ -225,7 +230,7 @@ func (ts *TestServer) initServers() {
 	// API Server — uses the same registry as OpAMP/OTLP metrics, and the
 	// same broker as the agent service so /events/stream sees publishes
 	// from the rest of the harness.
-	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, ts.auditService, configSender, ts.broker, ts.registry, ts.logger)
+	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, ts.auditService, ts.rolloutService, configSender, ts.broker, ts.registry, ts.logger)
 
 	// Create worker pool for async telemetry processing.
 	// Using default values: queue_size=10000, workers=3, timeout=5s.
