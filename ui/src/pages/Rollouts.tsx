@@ -5,7 +5,7 @@
 // inline at the top so operators can kick one off without navigating
 // away.
 
-import { Pause, Play, Plus, RotateCcw } from "lucide-react";
+import { Pause, Play, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 
@@ -56,19 +56,27 @@ interface GroupsList {
   groups: Group[];
 }
 
-const emptyInput = (): {
+// FormState mirrors the API's RolloutInput shape but uses string-typed
+// inputs since that's what controlled <Input type="number"> gives us. We
+// parse + validate at submit time.
+interface FormState {
   name: string;
   group_id: string;
   target_config_id: string;
-  stage_percents: string;
-  dwell_seconds: string;
+  // One entry per stage. Strings so the inputs can be partially edited.
+  stages: { percentage: string; dwell_seconds: string }[];
   max_drifted_agents: string;
-} => ({
+}
+
+const emptyInput = (): FormState => ({
   name: "",
   group_id: "",
   target_config_id: "",
-  stage_percents: "10, 50, 100",
-  dwell_seconds: "60",
+  stages: [
+    { percentage: "10", dwell_seconds: "60" },
+    { percentage: "50", dwell_seconds: "120" },
+    { percentage: "100", dwell_seconds: "60" },
+  ],
   max_drifted_agents: "0",
 });
 
@@ -97,18 +105,16 @@ export default function RolloutsPage() {
     setSubmitting(true);
     setSubmitError(null);
 
-    // Parse the comma-separated percentages into ordered stages. All
-    // stages share the same dwell — UI keeps this simple; the API
-    // supports per-stage dwell if we expose it later.
-    const percentages = form.stage_percents
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !Number.isNaN(n));
-    const dwell = parseInt(form.dwell_seconds, 10) || 60;
-    const stages: RolloutStage[] = percentages.map((p) => ({
-      percentage: p,
-      dwell_seconds: dwell,
-    }));
+    // Parse each stage row. Per-stage percentage + dwell is the
+    // canonical API shape. Empty rows are dropped.
+    const stages: RolloutStage[] = form.stages
+      .map((row) => ({
+        percentage: parseInt(row.percentage, 10),
+        dwell_seconds: parseInt(row.dwell_seconds, 10),
+      }))
+      .filter(
+        (s) => !Number.isNaN(s.percentage) && !Number.isNaN(s.dwell_seconds),
+      );
 
     const input: RolloutInput = {
       name: form.name.trim(),
@@ -230,48 +236,102 @@ export default function RolloutsPage() {
               </p>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Stages</Label>
               <div className="space-y-2">
-                <Label htmlFor="stages">Stages (% cumulative)</Label>
-                <Input
-                  id="stages"
-                  value={form.stage_percents}
-                  onChange={(e) =>
-                    setForm({ ...form, stage_percents: e.target.value })
+                {form.stages.map((stage, i) => (
+                  <div key={i} className="flex items-end gap-2">
+                    <div className="flex-1 space-y-1">
+                      <Label htmlFor={`stage-pct-${i}`} className="text-xs">
+                        Stage {i + 1} — % of group
+                      </Label>
+                      <Input
+                        id={`stage-pct-${i}`}
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={stage.percentage}
+                        onChange={(e) => {
+                          const next = [...form.stages];
+                          next[i] = { ...next[i], percentage: e.target.value };
+                          setForm({ ...form, stages: next });
+                        }}
+                      />
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <Label
+                        htmlFor={`stage-dwell-${i}`}
+                        className="text-xs"
+                      >
+                        Dwell (s)
+                      </Label>
+                      <Input
+                        id={`stage-dwell-${i}`}
+                        type="number"
+                        min={0}
+                        value={stage.dwell_seconds}
+                        onChange={(e) => {
+                          const next = [...form.stages];
+                          next[i] = {
+                            ...next[i],
+                            dwell_seconds: e.target.value,
+                          };
+                          setForm({ ...form, stages: next });
+                        }}
+                      />
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        if (form.stages.length <= 1) return;
+                        const next = form.stages.filter((_, j) => j !== i);
+                        setForm({ ...form, stages: next });
+                      }}
+                      disabled={form.stages.length <= 1}
+                      title="Remove stage"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1"
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      stages: [
+                        ...form.stages,
+                        { percentage: "100", dwell_seconds: "60" },
+                      ],
+                    })
                   }
-                  placeholder="10, 50, 100"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Final stage must reach 100.
-                </p>
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add stage
+                </Button>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="dwell">Dwell per stage (s)</Label>
-                <Input
-                  id="dwell"
-                  type="number"
-                  min={0}
-                  value={form.dwell_seconds}
-                  onChange={(e) =>
-                    setForm({ ...form, dwell_seconds: e.target.value })
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="maxdrift">Max drifted agents</Label>
-                <Input
-                  id="maxdrift"
-                  type="number"
-                  min={0}
-                  value={form.max_drifted_agents}
-                  onChange={(e) =>
-                    setForm({ ...form, max_drifted_agents: e.target.value })
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Auto-abort when more than this many canary agents drift.
-                </p>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Percentages are cumulative. Final stage must reach 100.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="maxdrift">Max drifted agents</Label>
+              <Input
+                id="maxdrift"
+                type="number"
+                min={0}
+                value={form.max_drifted_agents}
+                onChange={(e) =>
+                  setForm({ ...form, max_drifted_agents: e.target.value })
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Auto-abort when more than this many canary agents drift.
+              </p>
             </div>
 
             {submitError && (
