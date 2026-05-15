@@ -11,10 +11,24 @@ type Group = types.Group
 type Config = types.Config
 type ConfigFilter = types.ConfigFilter
 type SavedQuery = types.SavedQuery
+type AlertRule = types.AlertRule
+type AlertSeverity = types.AlertSeverity
+type ThresholdOperator = types.ThresholdOperator
 
 // Re-export constants
 const (
 	AgentStatusOnline  = types.AgentStatusOnline
 	AgentStatusOffline = types.AgentStatusOffline
 	AgentStatusError   = types.AgentStatusError
+
+	AlertSeverityInfo     = types.AlertSeverityInfo
+	AlertSeverityWarning  = types.AlertSeverityWarning
+	AlertSeverityCritical = types.AlertSeverityCritical
+
+	ThresholdGreater        = types.ThresholdGreater
+	ThresholdGreaterOrEqual = types.ThresholdGreaterOrEqual
+	ThresholdLess           = types.ThresholdLess
+	ThresholdLessOrEqual    = types.ThresholdLessOrEqual
+	ThresholdEqual          = types.ThresholdEqual
+	ThresholdNotEqual       = types.ThresholdNotEqual
 )
