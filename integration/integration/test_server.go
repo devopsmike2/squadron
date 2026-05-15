@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/api"
+	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
@@ -62,6 +63,10 @@ type TestServer struct {
 	registry     *prometheus.Registry
 	opampMetrics *metrics.OpAMPMetrics
 	otlpMetrics  *metrics.OTLPMetrics
+
+	// Event broker — wired in so the /events/stream endpoint works in the
+	// test harness too, even though the integration tests don't subscribe.
+	broker *events.Broker
 
 	// Utilities
 	logger  *zap.Logger
@@ -183,8 +188,13 @@ func (ts *TestServer) initServices() {
 		ts.t.Fatalf("Failed to create app store: %v", err)
 	}
 
+	// Create the event broker first so services that publish can be wired
+	// against it. Tests don't subscribe; this just keeps the production
+	// wiring intact under test.
+	ts.broker = events.NewBroker()
+
 	// Create agent service without config sender initially
-	ts.agentService = services.NewAgentService(appStore, nil, ts.logger)
+	ts.agentService = services.NewAgentService(appStore, nil, ts.broker, ts.logger)
 	ts.savedQueryService = services.NewSavedQueryService(appStore, ts.logger)
 	ts.alertService = services.NewAlertService(appStore, ts.logger)
 }
@@ -206,11 +216,10 @@ func (ts *TestServer) initServers() {
 	// Create telemetry service
 	ts.telemetryService = services.NewTelemetryQueryService(ts.telemetryReader, ts.agentService, ts.logger)
 
-	// API Server — uses the same registry as OpAMP/OTLP metrics.
-	// AlertService is wired so the /api/v1/alerts/rules routes are reachable;
-	// the evaluator goroutine isn't started here because integration tests
-	// don't exercise alert evaluation.
-	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, configSender, ts.registry, ts.logger)
+	// API Server — uses the same registry as OpAMP/OTLP metrics, and the
+	// same broker as the agent service so /events/stream sees publishes
+	// from the rest of the harness.
+	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, configSender, ts.broker, ts.registry, ts.logger)
 
 	// Create worker pool for async telemetry processing.
 	// Using default values: queue_size=10000, workers=3, timeout=5s.

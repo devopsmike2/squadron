@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/api/handlers"
+	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -34,6 +35,7 @@ type Server struct {
 	savedQueryService services.SavedQueryService
 	alertService      services.AlertService
 	commander         AgentCommander
+	broker            *events.Broker
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -46,7 +48,7 @@ type Server struct {
 // register OpAMP, OTLP, and worker metrics so that /metrics exposes a single,
 // unified view of the process. (Previously this constructor created its own
 // registry, which silently hid every non-API metric from /metrics.)
-func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, commander AgentCommander, registry *prometheus.Registry, logger *zap.Logger) *Server {
+func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
@@ -68,6 +70,7 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 		savedQueryService: savedQueryService,
 		alertService:      alertService,
 		commander:         commander,
+		broker:            broker,
 		logger:            logger,
 		metrics:           apiMetrics,
 		registry:          registry,
@@ -116,6 +119,7 @@ func (s *Server) registerRoutes() {
 	topologyHandlers := handlers.NewTopologyHandlers(s.agentService, s.telemetryService, s.logger)
 	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
+	eventsHandlers := handlers.NewEventsHandlers(s.broker, s.logger)
 
 	// Metrics endpoint
 	s.router.GET("/metrics", gin.WrapH(promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{})))
@@ -210,6 +214,9 @@ func (s *Server) registerRoutes() {
 			alerts.PUT("/:id", alertHandlers.HandleUpdateAlertRule)
 			alerts.DELETE("/:id", alertHandlers.HandleDeleteAlertRule)
 		}
+
+		// Real-time event stream (Server-Sent Events).
+		v1.GET("/events/stream", eventsHandlers.HandleStream)
 	}
 
 	// Serve static files for the UI

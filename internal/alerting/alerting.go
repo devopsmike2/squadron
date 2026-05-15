@@ -28,6 +28,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/query"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -48,6 +49,7 @@ type Evaluator struct {
 	httpClient       *http.Client
 	logger           *zap.Logger
 	metrics          *metrics.AlertMetrics
+	broker           *events.Broker // optional; nil disables SSE event publishing
 
 	mu       sync.Mutex
 	firing   map[string]bool      // rule id -> currently firing?
@@ -58,11 +60,13 @@ type Evaluator struct {
 }
 
 // NewEvaluator wires up an evaluator. If alertMetrics is nil, no-op metrics
-// are used internally so the evaluator stays nil-safe in tests.
+// are used internally so the evaluator stays nil-safe in tests. The events
+// broker is also optional.
 func NewEvaluator(
 	alertService services.AlertService,
 	telemetryService services.TelemetryQueryService,
 	alertMetrics *metrics.AlertMetrics,
+	broker *events.Broker,
 	logger *zap.Logger,
 ) *Evaluator {
 	if alertMetrics == nil {
@@ -75,6 +79,7 @@ func NewEvaluator(
 		httpClient:       &http.Client{Timeout: 10 * time.Second},
 		logger:           logger,
 		metrics:          alertMetrics,
+		broker:           broker,
 		firing:           make(map[string]bool),
 		lastEval:         make(map[string]time.Time),
 		shutdown:         make(chan struct{}),
@@ -187,10 +192,30 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule *services.AlertRule, 
 	case shouldFire && !wasFiring:
 		e.recordFiring(rule.Severity)
 		e.dispatch(ctx, rule, value, "firing", now)
+		e.publishEvent(events.AlertFired, rule, value, now)
 	case !shouldFire && wasFiring:
 		e.recordResolved(rule.Severity)
 		e.dispatch(ctx, rule, value, "resolved", now)
+		e.publishEvent(events.AlertResolved, rule, value, now)
 	}
+}
+
+// publishEvent emits a domain event to the broker if one is wired in.
+// Separated so the firing/resolved branches stay short and obvious.
+func (e *Evaluator) publishEvent(t events.Type, rule *services.AlertRule, value float64, at time.Time) {
+	if e.broker == nil {
+		return
+	}
+	e.broker.Publish(events.Event{
+		Type: t,
+		At:   at,
+		Data: map[string]any{
+			"rule_id":   rule.ID,
+			"rule_name": rule.Name,
+			"severity":  string(rule.Severity),
+			"value":     value,
+		},
+	})
 }
 
 // queryScalar parses and executes a Squadron QL query, returning the row

@@ -12,6 +12,7 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
@@ -21,6 +22,7 @@ type AgentServiceImpl struct {
 	appStore     applicationstore.ApplicationStore
 	logger       *zap.Logger
 	driftMetrics *metrics.DriftMetrics
+	broker       *events.Broker // optional; nil means no events published
 }
 
 // NewAgentService creates a new agent service.
@@ -29,7 +31,10 @@ type AgentServiceImpl struct {
 // stays nil-safe in tests. Production callers should pass real metrics from
 // the shared Prometheus registry so drift transitions and fleet state show
 // up on /metrics.
-func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *metrics.DriftMetrics, logger *zap.Logger) AgentService {
+//
+// The events broker is optional; if nil, no domain events are published
+// (tests and the integration harness keep things quiet this way).
+func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *metrics.DriftMetrics, broker *events.Broker, logger *zap.Logger) AgentService {
 	if driftMetrics == nil {
 		driftMetrics = metrics.NewDriftMetrics(metrics.NullFactory)
 	}
@@ -37,6 +42,7 @@ func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *m
 		appStore:     appStore,
 		logger:       logger,
 		driftMetrics: driftMetrics,
+		broker:       broker,
 	}
 }
 
@@ -55,7 +61,20 @@ func (s *AgentServiceImpl) CreateAgent(ctx context.Context, agent *Agent) error 
 		CreatedAt:    agent.CreatedAt,
 		UpdatedAt:    agent.UpdatedAt,
 	}
-	return s.appStore.CreateAgent(ctx, storageAgent)
+	if err := s.appStore.CreateAgent(ctx, storageAgent); err != nil {
+		return err
+	}
+	if s.broker != nil {
+		s.broker.Publish(events.Event{
+			Type: events.AgentRegistered,
+			Data: map[string]any{
+				"id":     agent.ID.String(),
+				"name":   agent.Name,
+				"status": string(agent.Status),
+			},
+		})
+	}
+	return nil
 }
 
 // GetAgent gets an agent by ID
@@ -226,6 +245,16 @@ func (s *AgentServiceImpl) recordDriftTransition(agentID uuid.UUID, from, to Con
 		s.logger.Info("agent drift resolved", fields...)
 	default:
 		s.logger.Debug("agent drift status changed", fields...)
+	}
+	if s.broker != nil {
+		s.broker.Publish(events.Event{
+			Type: events.AgentDriftChanged,
+			Data: map[string]any{
+				"agent_id": agentID.String(),
+				"from":     string(from),
+				"to":       string(to),
+			},
+		})
 	}
 }
 

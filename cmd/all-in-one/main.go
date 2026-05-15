@@ -17,6 +17,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/alerting"
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/config"
+	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
@@ -143,6 +144,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	driftMetrics := metrics.NewDriftMetrics(metricsFactory)
 	alertMetrics := metrics.NewAlertMetrics(metricsFactory)
 
+	// In-process event broker for SSE delivery of agent / alert state
+	// changes to the UI. Lives for the whole process lifetime.
+	eventBroker := events.NewBroker()
+
 	agents := opamp.NewAgents(logger)
 
 	// Determine which OTLP endpoints to offer to agents
@@ -157,8 +162,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create agent service. driftMetrics is wired so drift transitions and
-	// fleet drift state appear on /metrics.
-	agentService := services.NewAgentService(appStore, driftMetrics, logger)
+	// fleet drift state appear on /metrics. The event broker receives
+	// agent_registered and agent_drift_changed events for the SSE stream.
+	agentService := services.NewAgentService(appStore, driftMetrics, eventBroker, logger)
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 	alertService := services.NewAlertService(appStore, logger)
 
@@ -231,8 +237,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 
 	// Initialize HTTP API server.
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
-	// worker, and API metrics in a single endpoint.
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, configSender, registry, logger)
+	// worker, and API metrics in a single endpoint. The event broker is
+	// shared with publishers so /events/stream reflects what they emit.
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, configSender, eventBroker, registry, logger)
 
 	// Start API server in a goroutine
 	go func() {
@@ -247,8 +254,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Start alert evaluator. Evaluates each enabled rule on its configured
-	// cadence and dispatches firing/resolved notifications.
-	alertEvaluator := alerting.NewEvaluator(alertService, telemetryService, alertMetrics, logger)
+	// cadence and dispatches firing/resolved notifications, and publishes
+	// AlertFired/AlertResolved events to the broker for the UI's live feed.
+	alertEvaluator := alerting.NewEvaluator(alertService, telemetryService, alertMetrics, eventBroker, logger)
 	alertEvaluator.Start()
 	defer func() {
 		if err := alertEvaluator.Stop(10 * time.Second); err != nil {
