@@ -11,6 +11,7 @@ import TopologyPage from "./pages/Topology";
 import "./App.css";
 import { CommandPalette } from "@/components/CommandPalette";
 import { EventSubscriber } from "@/components/EventSubscriber";
+import { KeyboardShortcutsHelp } from "@/components/KeyboardShortcutsHelp";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { SWRProvider } from "@/lib/swr-provider";
 import { ApiProvider } from "@/providers/ApiProvider";
@@ -28,6 +29,8 @@ function App() {
                 stream and revalidates the relevant SWR caches so pages stay
                 live without each one wiring its own subscription. */}
             <EventSubscriber />
+            {/* Global keyboard shortcut system + ? help overlay. */}
+            <KeyboardShortcutsHelp />
             <Routes>
               {/* Main application routes */}
               <Route element={<Layout />}>
