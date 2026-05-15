@@ -23,18 +23,14 @@ type AgentServiceImpl struct {
 	logger       *zap.Logger
 	driftMetrics *metrics.DriftMetrics
 	broker       *events.Broker // optional; nil means no events published
+	audit        AuditService   // optional; nil means no audit log entries
 }
 
 // NewAgentService creates a new agent service.
 //
-// If driftMetrics is nil, a no-op metrics struct is wired up so the service
-// stays nil-safe in tests. Production callers should pass real metrics from
-// the shared Prometheus registry so drift transitions and fleet state show
-// up on /metrics.
-//
-// The events broker is optional; if nil, no domain events are published
-// (tests and the integration harness keep things quiet this way).
-func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *metrics.DriftMetrics, broker *events.Broker, logger *zap.Logger) AgentService {
+// driftMetrics, broker, and audit are all optional — pass nil in tests to
+// suppress side effects. Production callers wire all three.
+func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *metrics.DriftMetrics, broker *events.Broker, audit AuditService, logger *zap.Logger) AgentService {
 	if driftMetrics == nil {
 		driftMetrics = metrics.NewDriftMetrics(metrics.NullFactory)
 	}
@@ -43,6 +39,7 @@ func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *m
 		logger:       logger,
 		driftMetrics: driftMetrics,
 		broker:       broker,
+		audit:        audit,
 	}
 }
 
@@ -71,6 +68,19 @@ func (s *AgentServiceImpl) CreateAgent(ctx context.Context, agent *Agent) error 
 				"id":     agent.ID.String(),
 				"name":   agent.Name,
 				"status": string(agent.Status),
+			},
+		})
+	}
+	if s.audit != nil {
+		_ = s.audit.Record(ctx, AuditEntry{
+			Actor:      AuditActorOpAMP,
+			EventType:  AuditEventAgentRegistered,
+			TargetType: AuditTargetAgent,
+			TargetID:   agent.ID.String(),
+			Action:     "created",
+			Payload: map[string]any{
+				"name":    agent.Name,
+				"version": agent.Version,
 			},
 		})
 	}
@@ -253,6 +263,25 @@ func (s *AgentServiceImpl) recordDriftTransition(agentID uuid.UUID, from, to Con
 				"agent_id": agentID.String(),
 				"from":     string(from),
 				"to":       string(to),
+			},
+		})
+	}
+	if s.audit != nil {
+		eventType := AuditEventAgentDriftSynced
+		if to == ConfigDriftStatusDrifted {
+			eventType = AuditEventAgentDriftDrifted
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.audit.Record(ctx, AuditEntry{
+			Actor:      AuditActorSystem,
+			EventType:  eventType,
+			TargetType: AuditTargetAgent,
+			TargetID:   agentID.String(),
+			Action:     "drift",
+			Payload: map[string]any{
+				"from": string(from),
+				"to":   string(to),
 			},
 		})
 	}
@@ -507,6 +536,21 @@ func (s *AgentServiceImpl) StoreConfigForAgent(ctx context.Context, agentID uuid
 		zap.String("agent_id", agentID.String()),
 		zap.String("config_id", newConfig.ID),
 		zap.Int("version", version))
+
+	if s.audit != nil {
+		_ = s.audit.Record(ctx, AuditEntry{
+			Actor:      AuditActorSystem,
+			EventType:  AuditEventConfigStored,
+			TargetType: AuditTargetConfig,
+			TargetID:   newConfig.ID,
+			Action:     "stored",
+			Payload: map[string]any{
+				"agent_id":    agentID.String(),
+				"version":     version,
+				"config_hash": configHash,
+			},
+		})
+	}
 
 	return newConfig, nil
 }

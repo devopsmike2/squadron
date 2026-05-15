@@ -21,6 +21,7 @@ type Store struct {
 	configs      map[string]*types.Config
 	savedQueries map[string]*types.SavedQuery
 	alertRules   map[string]*types.AlertRule
+	auditEvents  []*types.AuditEvent // append-only; sorted newest-first on read
 }
 
 // NewStore creates a new in-memory store
@@ -31,6 +32,7 @@ func NewStore() *Store {
 		configs:      make(map[string]*types.Config),
 		savedQueries: make(map[string]*types.SavedQuery),
 		alertRules:   make(map[string]*types.AlertRule),
+		auditEvents:  make([]*types.AuditEvent, 0, 64),
 	}
 }
 
@@ -482,6 +484,65 @@ func (s *Store) DeleteAlertRule(ctx context.Context, id string) error {
 	return nil
 }
 
+// Audit log management
+
+func (s *Store) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Defensive copy of the payload so callers can't mutate stored state.
+	eventCopy := *e
+	if e.Payload != nil {
+		eventCopy.Payload = make(map[string]any, len(e.Payload))
+		for k, v := range e.Payload {
+			eventCopy.Payload[k] = v
+		}
+	}
+	s.auditEvents = append(s.auditEvents, &eventCopy)
+	return nil
+}
+
+func (s *Store) ListAuditEvents(ctx context.Context, filter types.AuditEventFilter) ([]*types.AuditEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	// Walk in reverse (newest-first), apply filters, accumulate up to limit.
+	out := make([]*types.AuditEvent, 0)
+	for i := len(s.auditEvents) - 1; i >= 0; i-- {
+		e := s.auditEvents[i]
+		if filter.TargetType != "" && e.TargetType != filter.TargetType {
+			continue
+		}
+		if filter.TargetID != "" && e.TargetID != filter.TargetID {
+			continue
+		}
+		if !filter.Since.IsZero() && e.Timestamp.Before(filter.Since) {
+			continue
+		}
+		// Defensive copy on read too.
+		eventCopy := *e
+		if e.Payload != nil {
+			eventCopy.Payload = make(map[string]any, len(e.Payload))
+			for k, v := range e.Payload {
+				eventCopy.Payload[k] = v
+			}
+		}
+		out = append(out, &eventCopy)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // purge removes all data from the store (for testing)
 func (s *Store) purge(context.Context) {
 	s.mu.Lock()
@@ -492,4 +553,5 @@ func (s *Store) purge(context.Context) {
 	s.configs = make(map[string]*types.Config)
 	s.savedQueries = make(map[string]*types.SavedQuery)
 	s.alertRules = make(map[string]*types.AlertRule)
+	s.auditEvents = make([]*types.AuditEvent, 0, 64)
 }

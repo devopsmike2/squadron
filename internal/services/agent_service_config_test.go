@@ -19,7 +19,7 @@ func TestStoreConfigForAgent_Success(t *testing.T) {
 	// Setup
 	store := memory.NewStore()
 	logger := zap.NewNop()
-	service := NewAgentService(store, nil, nil, logger)
+	service := NewAgentService(store, nil, nil, nil, logger)
 
 	agentID := uuid.New()
 	configContent := "receivers:\n  otlp:\n    protocols:\n      grpc:"
@@ -58,7 +58,7 @@ func TestStoreConfigForAgent_Success(t *testing.T) {
 func TestStoreConfigForAgent_AgentNotFound(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()
-	service := NewAgentService(store, nil, nil, logger)
+	service := NewAgentService(store, nil, nil, nil, logger)
 
 	agentID := uuid.New()
 
@@ -71,7 +71,7 @@ func TestStoreConfigForAgent_AgentNotFound(t *testing.T) {
 func TestStoreConfigForAgent_NoCapability(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()
-	service := NewAgentService(store, nil, nil, logger)
+	service := NewAgentService(store, nil, nil, nil, logger)
 
 	agentID := uuid.New()
 
@@ -99,7 +99,7 @@ func TestStoreConfigForAgent_NoCapability(t *testing.T) {
 func TestStoreConfigForAgent_Versioning(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()
-	service := NewAgentService(store, nil, nil, logger)
+	service := NewAgentService(store, nil, nil, nil, logger)
 
 	agentID := uuid.New()
 

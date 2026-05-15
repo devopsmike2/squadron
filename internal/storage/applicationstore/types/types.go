@@ -41,6 +41,41 @@ type ApplicationStore interface {
 	ListAlertRules(ctx context.Context) ([]*AlertRule, error)
 	UpdateAlertRule(ctx context.Context, rule *AlertRule) error
 	DeleteAlertRule(ctx context.Context, id string) error
+
+	// Audit log
+	CreateAuditEvent(ctx context.Context, event *AuditEvent) error
+	ListAuditEvents(ctx context.Context, filter AuditEventFilter) ([]*AuditEvent, error)
+}
+
+// AuditEvent is one entry in the audit log. Every state change in Squadron
+// — config push, drift transition, rule edit, agent registration — is
+// recorded as an AuditEvent so operators have an answerable history when
+// something goes wrong.
+//
+// The Payload is intentionally freeform so publishers can attach event-
+// specific metadata (before/after, diff, value at firing, etc.) without
+// forcing a schema migration every time we add a new event type.
+type AuditEvent struct {
+	ID         string         `json:"id"`
+	Timestamp  time.Time      `json:"timestamp"`            // when the event happened
+	Actor      string         `json:"actor"`                // "system" | "operator:<email>" | "agent:<id>" | "opamp"
+	EventType  string         `json:"event_type"`           // dotted name, e.g. "config.applied"
+	TargetType string         `json:"target_type"`          // "agent" | "group" | "config" | "rule"
+	TargetID   string         `json:"target_id,omitempty"`  // affected entity id; may be empty for fleet-wide events
+	Action     string         `json:"action"`               // "created" | "updated" | "deleted" | "applied" | "drift" | ...
+	Payload    map[string]any `json:"payload,omitempty"`    // freeform JSON metadata
+	CreatedAt  time.Time      `json:"created_at"`           // when the row was inserted
+}
+
+// AuditEventFilter narrows a ListAuditEvents query.
+//
+// All fields are optional. An empty filter returns the most recent events
+// across the whole fleet (subject to Limit).
+type AuditEventFilter struct {
+	TargetType string
+	TargetID   string
+	Since      time.Time // events with Timestamp >= Since; zero value disables the filter
+	Limit      int       // default 100 if zero; capped at 1000 by the storage layer
 }
 
 // AlertSeverity is the severity level attached to a firing alert.

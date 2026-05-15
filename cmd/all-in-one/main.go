@@ -161,10 +161,17 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		agentHTTPEndpoint = config.OTLP.HTTPEndpoint
 	}
 
+	// AuditService records every state change. Constructed before the
+	// other services so they can publish into it via injection. Wired
+	// with the same broker so timeline UIs append entries in real time
+	// over SSE.
+	auditService := services.NewAuditService(appStore, eventBroker, logger)
+
 	// Create agent service. driftMetrics is wired so drift transitions and
 	// fleet drift state appear on /metrics. The event broker receives
-	// agent_registered and agent_drift_changed events for the SSE stream.
-	agentService := services.NewAgentService(appStore, driftMetrics, eventBroker, logger)
+	// agent_registered and agent_drift_changed events for the SSE stream;
+	// auditService records the same transitions as durable log entries.
+	agentService := services.NewAgentService(appStore, driftMetrics, eventBroker, auditService, logger)
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 	alertService := services.NewAlertService(appStore, logger)
 
@@ -239,7 +246,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
 	// worker, and API metrics in a single endpoint. The event broker is
 	// shared with publishers so /events/stream reflects what they emit.
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, configSender, eventBroker, registry, logger)
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, configSender, eventBroker, registry, logger)
 
 	// Start API server in a goroutine
 	go func() {
@@ -256,7 +263,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Start alert evaluator. Evaluates each enabled rule on its configured
 	// cadence and dispatches firing/resolved notifications, and publishes
 	// AlertFired/AlertResolved events to the broker for the UI's live feed.
-	alertEvaluator := alerting.NewEvaluator(alertService, telemetryService, alertMetrics, eventBroker, logger)
+	alertEvaluator := alerting.NewEvaluator(alertService, telemetryService, alertMetrics, eventBroker, auditService, logger)
 	alertEvaluator.Start()
 	defer func() {
 		if err := alertEvaluator.Stop(10 * time.Second); err != nil {

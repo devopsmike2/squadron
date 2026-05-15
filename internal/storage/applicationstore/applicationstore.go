@@ -14,6 +14,8 @@ type SavedQuery = types.SavedQuery
 type AlertRule = types.AlertRule
 type AlertSeverity = types.AlertSeverity
 type ThresholdOperator = types.ThresholdOperator
+type AuditEvent = types.AuditEvent
+type AuditEventFilter = types.AuditEventFilter
 
 // Re-export constants
 const (

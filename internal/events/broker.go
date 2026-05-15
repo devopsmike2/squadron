@@ -31,6 +31,7 @@ const (
 	AgentStatusChanged Type = "agent_status_changed"
 	AlertFired         Type = "alert_fired"
 	AlertResolved      Type = "alert_resolved"
+	AuditEventRecorded Type = "audit_event_recorded"
 )
 
 // Event is one published domain event. The Data shape is type-specific and

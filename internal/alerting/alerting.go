@@ -45,6 +45,7 @@ const tickInterval = 5 * time.Second
 type Evaluator struct {
 	alertService     services.AlertService
 	telemetryService services.TelemetryQueryService
+	auditService     services.AuditService // optional
 	executor         *query.Executor
 	httpClient       *http.Client
 	logger           *zap.Logger
@@ -59,14 +60,14 @@ type Evaluator struct {
 	wg       sync.WaitGroup
 }
 
-// NewEvaluator wires up an evaluator. If alertMetrics is nil, no-op metrics
-// are used internally so the evaluator stays nil-safe in tests. The events
-// broker is also optional.
+// NewEvaluator wires up an evaluator. alertMetrics, broker, and audit are
+// all optional — pass nil to disable that side effect.
 func NewEvaluator(
 	alertService services.AlertService,
 	telemetryService services.TelemetryQueryService,
 	alertMetrics *metrics.AlertMetrics,
 	broker *events.Broker,
+	audit services.AuditService,
 	logger *zap.Logger,
 ) *Evaluator {
 	if alertMetrics == nil {
@@ -75,6 +76,7 @@ func NewEvaluator(
 	return &Evaluator{
 		alertService:     alertService,
 		telemetryService: telemetryService,
+		auditService:     audit,
 		executor:         query.NewExecutor(telemetryService, logger),
 		httpClient:       &http.Client{Timeout: 10 * time.Second},
 		logger:           logger,
@@ -193,11 +195,33 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule *services.AlertRule, 
 		e.recordFiring(rule.Severity)
 		e.dispatch(ctx, rule, value, "firing", now)
 		e.publishEvent(events.AlertFired, rule, value, now)
+		e.recordAudit(ctx, rule, value, services.AuditEventAlertFired, "fired")
 	case !shouldFire && wasFiring:
 		e.recordResolved(rule.Severity)
 		e.dispatch(ctx, rule, value, "resolved", now)
 		e.publishEvent(events.AlertResolved, rule, value, now)
+		e.recordAudit(ctx, rule, value, services.AuditEventAlertResolved, "resolved")
 	}
+}
+
+// recordAudit logs a durable audit entry for a state transition. Pulled
+// out of evaluateRule so the call sites stay one-line.
+func (e *Evaluator) recordAudit(ctx context.Context, rule *services.AlertRule, value float64, eventType, action string) {
+	if e.auditService == nil {
+		return
+	}
+	_ = e.auditService.Record(ctx, services.AuditEntry{
+		Actor:      services.AuditActorSystem,
+		EventType:  eventType,
+		TargetType: services.AuditTargetRule,
+		TargetID:   rule.ID,
+		Action:     action,
+		Payload: map[string]any{
+			"rule_name": rule.Name,
+			"severity":  string(rule.Severity),
+			"value":     value,
+		},
+	})
 }
 
 // publishEvent emits a domain event to the broker if one is wired in.

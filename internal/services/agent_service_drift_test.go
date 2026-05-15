@@ -45,7 +45,7 @@ func newRecordingDriftMetrics() *metrics.DriftMetrics {
 func TestAgentServiceConfigDriftDetection(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()
-	service := NewAgentService(store, nil, nil, logger)
+	service := NewAgentService(store, nil, nil, nil, logger)
 
 	agentID := uuid.New()
 	now := time.Now()
@@ -100,7 +100,7 @@ func TestDriftTransitionCounters(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()
 	driftMetrics := newRecordingDriftMetrics()
-	service := NewAgentService(store, driftMetrics, nil, logger)
+	service := NewAgentService(store, driftMetrics, nil, nil, logger)
 
 	agentID := uuid.New()
 	now := time.Now()
@@ -148,7 +148,7 @@ func TestFleetDriftGaugesViaListAgents(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()
 	driftMetrics := newRecordingDriftMetrics()
-	service := NewAgentService(store, driftMetrics, nil, logger)
+	service := NewAgentService(store, driftMetrics, nil, nil, logger)
 	ctx := context.Background()
 
 	now := time.Now()

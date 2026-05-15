@@ -124,6 +124,22 @@ func (s *Storage) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
 
+	CREATE TABLE IF NOT EXISTS audit_events (
+		id TEXT PRIMARY KEY,
+		timestamp DATETIME NOT NULL,
+		actor TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		target_type TEXT NOT NULL,
+		target_id TEXT,
+		action TEXT NOT NULL,
+		payload TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events(timestamp DESC);
+	CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id, timestamp DESC);
+	CREATE INDEX IF NOT EXISTS idx_audit_events_event_type ON audit_events(event_type);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -896,6 +912,112 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// Audit log
+
+const defaultAuditLimit = 100
+const maxAuditLimit = 1000
+
+func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) error {
+	var payloadJSON []byte
+	if e.Payload != nil {
+		var err error
+		payloadJSON, err = json.Marshal(e.Payload)
+		if err != nil {
+			return fmt.Errorf("failed to marshal audit payload: %w", err)
+		}
+	}
+	stmt := `
+		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
+	if e.Timestamp.IsZero() {
+		e.Timestamp = e.CreatedAt
+	}
+	_, err := s.db.ExecContext(ctx, stmt,
+		e.ID,
+		e.Timestamp,
+		e.Actor,
+		e.EventType,
+		e.TargetType,
+		nullableString(e.TargetID),
+		e.Action,
+		string(payloadJSON),
+		e.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create audit event: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFilter) ([]*types.AuditEvent, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultAuditLimit
+	}
+	if limit > maxAuditLimit {
+		limit = maxAuditLimit
+	}
+
+	// Build a parameterized query. We always add a LIMIT clause; the rest
+	// of the clauses are appended conditionally.
+	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at FROM audit_events WHERE 1=1"
+	var args []any
+	if filter.TargetType != "" {
+		q += " AND target_type = ?"
+		args = append(args, filter.TargetType)
+	}
+	if filter.TargetID != "" {
+		q += " AND target_id = ?"
+		args = append(args, filter.TargetID)
+	}
+	if !filter.Since.IsZero() {
+		q += " AND timestamp >= ?"
+		args = append(args, filter.Since)
+	}
+	q += " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list audit events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*types.AuditEvent
+	for rows.Next() {
+		e := &types.AuditEvent{}
+		var targetID sql.NullString
+		var payload sql.NullString
+		if err := rows.Scan(
+			&e.ID, &e.Timestamp, &e.Actor, &e.EventType, &e.TargetType,
+			&targetID, &e.Action, &payload, &e.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan audit event: %w", err)
+		}
+		if targetID.Valid {
+			e.TargetID = targetID.String
+		}
+		if payload.Valid && payload.String != "" {
+			_ = json.Unmarshal([]byte(payload.String), &e.Payload)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// nullableString returns a sql.NullString that's invalid for the empty
+// string. SQLite would otherwise persist "" which makes filtering harder.
+func nullableString(s string) any {
+	if s == "" {
+		return sql.NullString{Valid: false}
+	}
+	return s
 }
 
 // Close closes the database connection

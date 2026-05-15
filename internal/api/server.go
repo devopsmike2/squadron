@@ -34,6 +34,7 @@ type Server struct {
 	telemetryService  services.TelemetryQueryService
 	savedQueryService services.SavedQueryService
 	alertService      services.AlertService
+	auditService      services.AuditService
 	commander         AgentCommander
 	broker            *events.Broker
 	logger            *zap.Logger
@@ -48,7 +49,7 @@ type Server struct {
 // register OpAMP, OTLP, and worker metrics so that /metrics exposes a single,
 // unified view of the process. (Previously this constructor created its own
 // registry, which silently hid every non-API metric from /metrics.)
-func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
+func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, auditService services.AuditService, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
@@ -69,6 +70,7 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 		telemetryService:  telemetryService,
 		savedQueryService: savedQueryService,
 		alertService:      alertService,
+		auditService:      auditService,
 		commander:         commander,
 		broker:            broker,
 		logger:            logger,
@@ -119,6 +121,7 @@ func (s *Server) registerRoutes() {
 	topologyHandlers := handlers.NewTopologyHandlers(s.agentService, s.telemetryService, s.logger)
 	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
+	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.logger)
 	eventsHandlers := handlers.NewEventsHandlers(s.broker, s.logger)
 
 	// Metrics endpoint
@@ -217,6 +220,12 @@ func (s *Server) registerRoutes() {
 
 		// Real-time event stream (Server-Sent Events).
 		v1.GET("/events/stream", eventsHandlers.HandleStream)
+
+		// Audit log — read-only.
+		audit := v1.Group("/audit")
+		{
+			audit.GET("/events", auditHandlers.HandleListAuditEvents)
+		}
 	}
 
 	// Serve static files for the UI

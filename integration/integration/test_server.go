@@ -49,6 +49,7 @@ type TestServer struct {
 	telemetryService  services.TelemetryQueryService
 	savedQueryService services.SavedQueryService
 	alertService      services.AlertService
+	auditService      services.AuditService
 
 	// Servers
 	apiServer   *api.Server
@@ -193,8 +194,13 @@ func (ts *TestServer) initServices() {
 	// wiring intact under test.
 	ts.broker = events.NewBroker()
 
+	// AuditService comes next — the agent service injects it for drift /
+	// config events. Order matters: construct it before any service that
+	// captures it by reference.
+	ts.auditService = services.NewAuditService(appStore, ts.broker, ts.logger)
+
 	// Create agent service without config sender initially
-	ts.agentService = services.NewAgentService(appStore, nil, ts.broker, ts.logger)
+	ts.agentService = services.NewAgentService(appStore, nil, ts.broker, ts.auditService, ts.logger)
 	ts.savedQueryService = services.NewSavedQueryService(appStore, ts.logger)
 	ts.alertService = services.NewAlertService(appStore, ts.logger)
 }
@@ -219,7 +225,7 @@ func (ts *TestServer) initServers() {
 	// API Server — uses the same registry as OpAMP/OTLP metrics, and the
 	// same broker as the agent service so /events/stream sees publishes
 	// from the rest of the harness.
-	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, configSender, ts.broker, ts.registry, ts.logger)
+	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, ts.auditService, configSender, ts.broker, ts.registry, ts.logger)
 
 	// Create worker pool for async telemetry processing.
 	// Using default values: queue_size=10000, workers=3, timeout=5s.
