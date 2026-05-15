@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/configdiff"
+	"github.com/devopsmike2/squadron/internal/configlint"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
@@ -93,21 +95,50 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		zap.String("target_config_id", rollout.TargetConfigID))
 
 	if s.auditService != nil {
+		payload := map[string]any{
+			"name":             rollout.Name,
+			"group_id":         rollout.GroupID,
+			"target_config_id": rollout.TargetConfigID,
+			"stage_count":      len(rollout.Stages),
+		}
+		// Diff fingerprint — small enough to keep in the audit log so
+		// a post-mortem can answer "how big a change was this?" without
+		// re-fetching both configs. We record the previous_config_id
+		// here too so the diff can be reproduced later via Preview.
+		if rollout.PreviousConfigID != "" {
+			payload["previous_config_id"] = rollout.PreviousConfigID
+		}
+		if diff, err := s.diffAtCreate(ctx, rollout.GroupID, rollout.TargetConfigID); err == nil {
+			payload["diff_added_lines"] = diff.Added
+			payload["diff_removed_lines"] = diff.Removed
+			payload["diff_identical"] = diff.Identical
+		}
 		_ = s.auditService.Record(ctx, AuditEntry{
 			Actor:      AuditActorSystem,
 			EventType:  "rollout.created",
 			TargetType: "rollout",
 			TargetID:   rollout.ID,
 			Action:     "created",
-			Payload: map[string]any{
-				"name":             rollout.Name,
-				"group_id":         rollout.GroupID,
-				"target_config_id": rollout.TargetConfigID,
-				"stage_count":      len(rollout.Stages),
-			},
+			Payload:    payload,
 		})
 	}
 	return rollout, nil
+}
+
+// diffAtCreate computes the (added, removed, identical) summary for the
+// audit payload at create time. Failures here are best-effort — they're
+// logged but don't fail Create, since a missing diff summary is cosmetic
+// and the rollout itself is independent of it.
+func (s *RolloutServiceImpl) diffAtCreate(ctx context.Context, groupID, targetConfigID string) (configdiff.Result, error) {
+	target, err := s.appStore.GetConfig(ctx, targetConfigID)
+	if err != nil || target == nil {
+		return configdiff.Result{}, fmt.Errorf("target unreadable")
+	}
+	currentContent := ""
+	if cur, err := s.appStore.GetLatestConfigForGroup(ctx, groupID); err == nil && cur != nil {
+		currentContent = cur.Content
+	}
+	return configdiff.Diff(currentContent, target.Content), nil
 }
 
 func (s *RolloutServiceImpl) Get(ctx context.Context, id string) (*Rollout, error) {
@@ -245,6 +276,82 @@ func (s *RolloutServiceImpl) Resume(ctx context.Context, id string) (*Rollout, e
 // so the engine doesn't take an application-store dependency directly.
 func (s *RolloutServiceImpl) Persist(ctx context.Context, rollout *Rollout) error {
 	return s.appStore.UpdateRollout(ctx, toStorageRollout(rollout))
+}
+
+// Preview returns a side-by-side view of what creating a rollout against
+// (groupID, targetConfigID) would do: the group's current effective
+// config, the target, a line-level diff, and lint findings against the
+// target. The UI displays this in the create form so operators see what
+// they're about to ship before clicking Start.
+//
+// A missing target config is a user-facing 404 (the caller picked a bad
+// id). A missing current config is benign — new groups have no
+// baseline, the diff just shows the entire target as additions.
+//
+// This is the same logic the engine would run if you called Create —
+// kept aligned so the preview the operator sees is what actually ships.
+func (s *RolloutServiceImpl) Preview(ctx context.Context, groupID, targetConfigID string) (*RolloutPreview, error) {
+	if groupID == "" {
+		return nil, fmt.Errorf("group_id is required")
+	}
+	if targetConfigID == "" {
+		return nil, fmt.Errorf("target_config_id is required")
+	}
+
+	target, err := s.appStore.GetConfig(ctx, targetConfigID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load target config: %w", err)
+	}
+	if target == nil {
+		return nil, fmt.Errorf("target config not found: %s", targetConfigID)
+	}
+
+	// Current may legitimately not exist for a brand-new group; we
+	// don't propagate the storage error here unless it's a real
+	// failure (a not-found is just *Config==nil with no error).
+	var current *applicationstore.Config
+	if c, err := s.appStore.GetLatestConfigForGroup(ctx, groupID); err == nil {
+		current = c
+	} else {
+		s.logger.Warn("rollout preview: failed to load current group config; treating as none",
+			zap.String("group_id", groupID), zap.Error(err))
+	}
+
+	preview := &RolloutPreview{
+		GroupID: groupID,
+		Target:  toServiceConfig(target),
+	}
+	currentContent := ""
+	if current != nil {
+		preview.Current = toServiceConfig(current)
+		currentContent = current.Content
+	}
+	preview.Diff = configdiff.Diff(currentContent, target.Content)
+	findings := configlint.Lint(target.Content)
+	if findings == nil {
+		findings = []configlint.Finding{}
+	}
+	preview.LintFindings = findings
+	return preview, nil
+}
+
+// toServiceConfig is a tiny wrapper to avoid importing applicationstore
+// types into other call sites. Service-layer Config has the same field
+// shape as the storage one for this purpose; keep them in sync.
+func toServiceConfig(c *applicationstore.Config) *Config {
+	if c == nil {
+		return nil
+	}
+	return &Config{
+		ID:         c.ID,
+		Name:       c.Name,
+		AgentID:    c.AgentID,
+		GroupID:    c.GroupID,
+		ConfigHash: c.ConfigHash,
+		Content:    c.Content,
+		Version:    c.Version,
+		CreatedAt:  c.CreatedAt,
+	}
 }
 
 // validateRolloutInput rejects rollouts the engine can't safely run.

@@ -6,6 +6,7 @@ import type {
   AbortCriteriaRecipe,
   Rollout,
   RolloutInput,
+  RolloutPreview,
   RolloutTemplate,
 } from "@/types/rollout";
 
@@ -42,6 +43,21 @@ export const listRolloutTemplates = async (): Promise<RolloutTemplate[]> => {
     "/rollout-recipes/templates",
   );
   return resp.templates ?? [];
+};
+
+// getRolloutPreview fetches the diff + lint preview between a group's
+// current effective config and a candidate target config. Called by
+// the create form once both fields are set so operators see what
+// they're about to ship.
+export const getRolloutPreview = async (
+  groupId: string,
+  targetConfigId: string,
+): Promise<RolloutPreview> => {
+  const params = new URLSearchParams({
+    group_id: groupId,
+    target_config_id: targetConfigId,
+  });
+  return simpleRequest<RolloutPreview>(`/rollout-preview?${params.toString()}`);
 };
 
 export const listRollouts = async (): Promise<Rollout[]> => {

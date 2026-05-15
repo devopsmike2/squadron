@@ -275,6 +275,177 @@ func TestRolloutService_Abort_RejectsTerminalStates(t *testing.T) {
 	assert.Contains(t, err.Error(), "terminal state")
 }
 
+func TestRolloutService_Preview_DiffAndLint(t *testing.T) {
+	// Create two configs in the store, then verify Preview returns
+	// both, a populated diff, and a lint result. This is the happy
+	// path the UI hits every time the operator picks a target config.
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	// Current config bound to the group — this becomes the diff
+	// baseline. Note GroupID has to be set so GetLatestConfigForGroup
+	// returns it.
+	groupID := "group-preview"
+	current := &applicationstore.Config{
+		ID:         uuid.New().String(),
+		Name:       "current",
+		GroupID:    &groupID,
+		ConfigHash: "cur-hash",
+		Content:    "receivers:\n  otlp: {}\nexporters:\n  logging: {}\n",
+		Version:    1,
+		CreatedAt:  time.Now(),
+	}
+	require.NoError(t, store.CreateConfig(ctx, current))
+
+	target := &applicationstore.Config{
+		ID:         uuid.New().String(),
+		Name:       "target",
+		ConfigHash: "tgt-hash",
+		Content:    "receivers:\n  otlp: {}\nexporters:\n  otlp: {}\n",
+		Version:    1,
+		CreatedAt:  time.Now(),
+	}
+	require.NoError(t, store.CreateConfig(ctx, target))
+
+	preview, err := svc.Preview(ctx, groupID, target.ID)
+	require.NoError(t, err)
+	require.NotNil(t, preview)
+	require.NotNil(t, preview.Target)
+	require.NotNil(t, preview.Current, "current config should be populated when group has one")
+	assert.Equal(t, target.ID, preview.Target.ID)
+	assert.Equal(t, current.ID, preview.Current.ID)
+	assert.False(t, preview.Diff.Identical, "configs differ — diff should report it")
+	assert.Greater(t, preview.Diff.Added+preview.Diff.Removed, 0)
+	assert.NotNil(t, preview.LintFindings, "lint_findings should be a non-nil slice")
+}
+
+func TestRolloutService_Preview_NoCurrentConfig(t *testing.T) {
+	// Brand-new group: the diff is "everything new". The current
+	// pointer should be nil, the target should be populated, and the
+	// diff should count all target lines as additions.
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	target := &applicationstore.Config{
+		ID:         uuid.New().String(),
+		Name:       "fresh",
+		ConfigHash: "x",
+		Content:    "receivers:\n  otlp: {}\n",
+		Version:    1,
+		CreatedAt:  time.Now(),
+	}
+	require.NoError(t, store.CreateConfig(ctx, target))
+
+	preview, err := svc.Preview(ctx, "group-without-current", target.ID)
+	require.NoError(t, err)
+	require.NotNil(t, preview)
+	assert.Nil(t, preview.Current, "no current config means preview.Current is nil")
+	require.NotNil(t, preview.Target)
+	assert.Greater(t, preview.Diff.Added, 0)
+	assert.Equal(t, 0, preview.Diff.Removed)
+}
+
+func TestRolloutService_Preview_TargetMissing(t *testing.T) {
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	_, err := svc.Preview(context.Background(), "group-a", "no-such-config")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestRolloutService_Preview_RequiresParams(t *testing.T) {
+	svc := NewRolloutService(memory.NewStore(), nil, nil, zap.NewNop())
+	_, err := svc.Preview(context.Background(), "", "x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "group_id")
+
+	_, err = svc.Preview(context.Background(), "g", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "target_config_id")
+}
+
+func TestRolloutService_Create_RecordsDiffSummaryInAudit(t *testing.T) {
+	// Verify the rollout.created audit event carries diff fingerprint
+	// fields when the group has a current config. The UI's
+	// AuditTimeline can then render "1 line added, 2 lines removed"
+	// without re-fetching both configs.
+	store := memory.NewStore()
+	auditSvc := NewAuditService(store, nil, zap.NewNop())
+	svc := NewRolloutService(store, nil, auditSvc, zap.NewNop())
+	ctx := context.Background()
+
+	// Group needs a current config so the diff has a baseline.
+	groupID := "group-audit"
+	current := &applicationstore.Config{
+		ID:         uuid.New().String(),
+		Name:       "current",
+		GroupID:    &groupID,
+		ConfigHash: "x",
+		Content:    "foo: 1\n",
+		Version:    1,
+		CreatedAt:  time.Now(),
+	}
+	require.NoError(t, store.CreateConfig(ctx, current))
+	target := &applicationstore.Config{
+		ID:         uuid.New().String(),
+		Name:       "target",
+		ConfigHash: "y",
+		Content:    "foo: 2\nbar: 3\n",
+		Version:    1,
+		CreatedAt:  time.Now(),
+	}
+	require.NoError(t, store.CreateConfig(ctx, target))
+
+	in := RolloutInput{
+		Name:           "preview-audit",
+		GroupID:        groupID,
+		TargetConfigID: target.ID,
+		Stages: []RolloutStage{
+			{Mode: RolloutStageModePercent, Percentage: 100, DwellSeconds: 0},
+		},
+	}
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+
+	events, err := auditSvc.List(ctx, AuditEventFilter{TargetID: r.ID, Limit: 10})
+	require.NoError(t, err)
+	require.NotEmpty(t, events)
+	var created *AuditEvent
+	for _, e := range events {
+		if e.EventType == "rollout.created" {
+			created = e
+			break
+		}
+	}
+	require.NotNil(t, created, "expected a rollout.created audit event")
+	// JSON round-trip: the audit store may marshal numbers as
+	// float64. Accept either int or float by coercing to int.
+	addedI, _ := toInt(created.Payload["diff_added_lines"])
+	removedI, _ := toInt(created.Payload["diff_removed_lines"])
+	assert.GreaterOrEqual(t, addedI, 1, "expected at least one added line in diff summary")
+	assert.GreaterOrEqual(t, removedI, 1, "expected at least one removed line in diff summary")
+	assert.Equal(t, current.ID, created.Payload["previous_config_id"])
+}
+
+// toInt coerces JSON-unmarshaled numeric values back to int. The audit
+// store may round-trip payloads through JSON depending on backend, so
+// what was an int going in can be a float64 coming out.
+func toInt(v any) (int, bool) {
+	switch x := v.(type) {
+	case int:
+		return x, true
+	case int64:
+		return int(x), true
+	case float64:
+		return int(x), true
+	default:
+		return 0, false
+	}
+}
+
 func TestRolloutService_AbortMissing(t *testing.T) {
 	svc := NewRolloutService(memory.NewStore(), nil, nil, zap.NewNop())
 	_, err := svc.Abort(context.Background(), "no-such-rollout", "")

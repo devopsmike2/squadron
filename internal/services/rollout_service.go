@@ -6,6 +6,9 @@ package services
 import (
 	"context"
 	"time"
+
+	"github.com/devopsmike2/squadron/internal/configdiff"
+	"github.com/devopsmike2/squadron/internal/configlint"
 )
 
 // RolloutService manages the lifecycle of safe staged config rollouts.
@@ -17,6 +20,13 @@ import (
 // Abort flips an in-progress rollout to the aborted state; the engine
 // performs the actual rollback (pushing the previous config back to the
 // affected agents) and transitions to rolled_back.
+//
+// Preview is a read-only helper: given a target group and target
+// config, it returns what shipping this rollout would actually do —
+// the live config the group is on right now, the target the operator
+// picked, a line-level diff, and lint findings against the target.
+// The UI calls this before the operator clicks Start so the diff lands
+// in front of them at the most useful moment.
 type RolloutService interface {
 	Create(ctx context.Context, input RolloutInput) (*Rollout, error)
 	Get(ctx context.Context, id string) (*Rollout, error)
@@ -24,11 +34,29 @@ type RolloutService interface {
 	Abort(ctx context.Context, id, reason string) (*Rollout, error)
 	Pause(ctx context.Context, id string) (*Rollout, error)
 	Resume(ctx context.Context, id string) (*Rollout, error)
+	Preview(ctx context.Context, groupID, targetConfigID string) (*RolloutPreview, error)
 
 	// Persist is used by the engine to write back transitions discovered
 	// during evaluation. Service-layer guard so the engine doesn't reach
 	// into the application store directly.
 	Persist(ctx context.Context, rollout *Rollout) error
+}
+
+// RolloutPreview is the response shape of a Preview call.
+//
+// Current may be nil if the group has no current effective config (a
+// brand-new group where this rollout will be the first push). The UI
+// renders that as "everything is new" and the diff shows the entire
+// target as +-lines.
+//
+// LintFindings is always non-nil so the UI can rely on .length without
+// a null check.
+type RolloutPreview struct {
+	GroupID         string              `json:"group_id"`
+	Current         *Config             `json:"current,omitempty"`
+	Target          *Config             `json:"target"`
+	Diff            configdiff.Result   `json:"diff"`
+	LintFindings    []configlint.Finding `json:"lint_findings"`
 }
 
 // RolloutState mirrors applicationstore.RolloutState so consumers don't

@@ -78,3 +78,46 @@ export interface RolloutTemplate {
   stages: RolloutStage[];
   abort_criteria: RolloutAbortCriteria;
 }
+
+// LintFinding mirrors configlint.Finding. Subset of the fields the
+// preview pane uses; the full type lives in @/types/config but we
+// inline what we need here to avoid a cross-module dep cycle.
+export interface LintFinding {
+  severity: "error" | "warning" | "info";
+  rule: string;
+  message: string;
+  line?: number;
+  path?: string;
+}
+
+// DiffResult mirrors configdiff.Result.
+export interface DiffResult {
+  unified: string;
+  added: number;
+  removed: number;
+  identical: boolean;
+}
+
+// ConfigSummary is the projection of services.Config returned in the
+// preview response. Same shape as the full Config type but kept inline
+// here so the preview wire types are self-contained.
+export interface ConfigSummary {
+  id: string;
+  name: string;
+  agent_id?: string;
+  group_id?: string;
+  config_hash: string;
+  content: string;
+  version: number;
+  created_at: string;
+}
+
+// RolloutPreview mirrors services.RolloutPreview. The UI displays this
+// in the create form so operators see the diff before committing.
+export interface RolloutPreview {
+  group_id: string;
+  current?: ConfigSummary;
+  target: ConfigSummary;
+  diff: DiffResult;
+  lint_findings: LintFinding[];
+}

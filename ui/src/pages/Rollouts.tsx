@@ -27,6 +27,7 @@ import {
   resumeRollout,
 } from "@/api/rollouts";
 import { AuditTimeline } from "@/components/AuditTimeline";
+import { RolloutPreviewPane } from "@/components/rollouts/RolloutPreviewPane";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -480,6 +481,15 @@ export default function RolloutsPage() {
                 Squadron snapshots the group's current config as the rollback
                 target when the rollout is created.
               </p>
+              {/* Preview pane: shows the diff + lint findings between
+                  the group's current effective config and the target
+                  the operator just typed in. Renders inline so the
+                  diff lands in front of the operator at exactly the
+                  decision point. */}
+              <RolloutPreviewPane
+                groupId={form.group_id}
+                targetConfigId={form.target_config_id.trim()}
+              />
             </div>
 
             <div className="space-y-2">

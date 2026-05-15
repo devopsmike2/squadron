@@ -238,8 +238,19 @@ function describe(e: AuditEvent): string {
       return `Alert fired${e.payload?.rule_name ? `: ${e.payload.rule_name}` : ""}`;
     case "alert.resolved":
       return `Alert resolved${e.payload?.rule_name ? `: ${e.payload.rule_name}` : ""}`;
-    case "rollout.created":
-      return `Rollout created${e.payload?.name ? `: ${e.payload.name}` : ""}`;
+    case "rollout.created": {
+      const name = typeof e.payload?.name === "string" ? `: ${e.payload.name}` : "";
+      // If the audit payload carries the diff fingerprint (post-v0.6
+      // rollouts always do), surface it inline so a glance at the
+      // timeline tells you how big each rollout's change was.
+      const added = typeof e.payload?.diff_added_lines === "number" ? e.payload.diff_added_lines : null;
+      const removed = typeof e.payload?.diff_removed_lines === "number" ? e.payload.diff_removed_lines : null;
+      const identical = e.payload?.diff_identical === true;
+      let suffix = "";
+      if (identical) suffix = " (identical to current)";
+      else if (added !== null && removed !== null) suffix = ` (+${added} / -${removed} lines)`;
+      return `Rollout created${name}${suffix}`;
+    }
     case "rollout.stage_applied": {
       const stage = typeof e.payload?.stage === "number" ? e.payload.stage : null;
       const mode = typeof e.payload?.mode === "string" ? e.payload.mode : "percent";

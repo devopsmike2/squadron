@@ -247,6 +247,12 @@ func (s *Server) registerRoutes() {
 		// change only on Squadron upgrade.
 		v1.GET("/rollout-recipes/abort-criteria", rolloutHandlers.HandleListAbortCriteriaRecipes)
 		v1.GET("/rollout-recipes/templates", rolloutHandlers.HandleListRolloutTemplates)
+
+		// Rollout preview — diff + lint between a group's current
+		// effective config and a target config, for the create-form
+		// "are you sure?" pane. Sibling of /rollouts for the same
+		// routing-conflict reason.
+		v1.GET("/rollout-preview", rolloutHandlers.HandlePreviewRollout)
 	}
 
 	// Serve static files for the UI

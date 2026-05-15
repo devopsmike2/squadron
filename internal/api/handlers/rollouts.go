@@ -135,6 +135,49 @@ func (h *RolloutHandlers) HandleResumeRollout(c *gin.Context) {
 	c.JSON(http.StatusOK, r)
 }
 
+// HandlePreviewRollout serves GET /api/v1/rollout-preview.
+//
+// Query params:
+//   - group_id (required): the target group whose current effective
+//     config will be used as the diff baseline.
+//   - target_config_id (required): the config the operator is
+//     considering rolling out.
+//
+// Returns {current, target, diff, lint_findings}. current may be null
+// if the group has no current effective config (a brand-new group).
+//
+// Read-only; safe to call repeatedly from the create form as the
+// operator types the target config id (caller should debounce).
+func (h *RolloutHandlers) HandlePreviewRollout(c *gin.Context) {
+	groupID := c.Query("group_id")
+	targetConfigID := c.Query("target_config_id")
+	if groupID == "" || targetConfigID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "group_id and target_config_id query params are required",
+		})
+		return
+	}
+	preview, err := h.rolloutService.Preview(c.Request.Context(), groupID, targetConfigID)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": msg})
+			return
+		}
+		if strings.Contains(msg, "is required") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			return
+		}
+		h.logger.Error("failed to build rollout preview",
+			zap.String("group_id", groupID),
+			zap.String("target_config_id", targetConfigID),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build preview"})
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
 // HandleListRolloutTemplates serves GET /api/v1/rollout-recipes/templates.
 //
 // Returns the curated template gallery. Templates are bigger than
