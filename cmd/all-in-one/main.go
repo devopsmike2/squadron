@@ -275,8 +275,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 
 	// Start the rollout engine. Walks active rollouts, advances stages,
 	// and triggers automatic rollback when abort criteria fire. Uses the
-	// OpAMP ConfigSender as its AgentCommander.
-	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, configSender, logger)
+	// OpAMP ConfigSender as its AgentCommander, and publishes
+	// RolloutStateChanged events to the broker so the UI sees engine
+	// actions in real time.
+	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, configSender, eventBroker, logger)
 	rolloutEngine.Start()
 	defer func() {
 		if err := rolloutEngine.Stop(10 * time.Second); err != nil {

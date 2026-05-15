@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
@@ -52,19 +53,21 @@ type Engine struct {
 	auditService   services.AuditService // optional
 	configStore    ConfigStore
 	commander      AgentCommander
+	broker         *events.Broker // optional; nil disables SSE publication
 	logger         *zap.Logger
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 }
 
-// NewEngine wires up the engine. auditService is optional.
+// NewEngine wires up the engine. auditService and broker are both optional.
 func NewEngine(
 	rolloutService services.RolloutService,
 	agentService services.AgentService,
 	auditService services.AuditService,
 	configStore ConfigStore,
 	commander AgentCommander,
+	broker *events.Broker,
 	logger *zap.Logger,
 ) *Engine {
 	return &Engine{
@@ -73,9 +76,29 @@ func NewEngine(
 		auditService:   auditService,
 		configStore:    configStore,
 		commander:      commander,
+		broker:         broker,
 		logger:         logger,
 		shutdown:       make(chan struct{}),
 	}
+}
+
+// publishStateChange emits a RolloutStateChanged event over the broker so
+// the UI can refresh its rollouts list without polling. No-op if broker is
+// nil. Each transition the engine takes goes through here.
+func (e *Engine) publishStateChange(r *services.Rollout, transition string) {
+	if e.broker == nil {
+		return
+	}
+	e.broker.Publish(events.Event{
+		Type: events.RolloutStateChanged,
+		Data: map[string]any{
+			"rollout_id":    r.ID,
+			"name":          r.Name,
+			"state":         string(r.State),
+			"current_stage": r.CurrentStage,
+			"transition":    transition,
+		},
+	})
 }
 
 // Start launches the engine loop in a goroutine.
@@ -173,6 +196,7 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 		"stage":      r.CurrentStage,
 		"percentage": r.Stages[r.CurrentStage].Percentage,
 	})
+	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout started",
 		zap.String("rollout_id", r.ID),
 		zap.Int("percentage", r.Stages[r.CurrentStage].Percentage))
@@ -227,6 +251,7 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		"stage":      r.CurrentStage,
 		"percentage": r.Stages[r.CurrentStage].Percentage,
 	})
+	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout advanced",
 		zap.String("rollout_id", r.ID),
 		zap.Int("stage", r.CurrentStage),
@@ -243,6 +268,7 @@ func (e *Engine) finish(ctx context.Context, r *services.Rollout) {
 		return
 	}
 	e.recordAudit(ctx, r, "rollout.succeeded", "succeeded", nil)
+	e.publishStateChange(r, "succeeded")
 	e.logger.Info("rollout succeeded", zap.String("rollout_id", r.ID))
 }
 
@@ -256,6 +282,7 @@ func (e *Engine) triggerAbort(ctx context.Context, r *services.Rollout, reason s
 		return
 	}
 	e.recordAudit(ctx, r, "rollout.aborted", "aborted", map[string]any{"reason": reason})
+	e.publishStateChange(r, "aborted")
 	e.logger.Warn("rollout auto-aborted",
 		zap.String("rollout_id", r.ID),
 		zap.String("reason", reason))
@@ -276,6 +303,7 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 				zap.String("rollout_id", r.ID), zap.Error(err))
 		}
 		e.recordAudit(ctx, r, "rollout.rolled_back", "rolled_back", nil)
+		e.publishStateChange(r, "rolled_back")
 	}()
 
 	if r.PreviousConfigID == "" {

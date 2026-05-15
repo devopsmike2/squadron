@@ -26,12 +26,13 @@ import (
 type Type string
 
 const (
-	AgentRegistered    Type = "agent_registered"
-	AgentDriftChanged  Type = "agent_drift_changed"
-	AgentStatusChanged Type = "agent_status_changed"
-	AlertFired         Type = "alert_fired"
-	AlertResolved      Type = "alert_resolved"
-	AuditEventRecorded Type = "audit_event_recorded"
+	AgentRegistered     Type = "agent_registered"
+	AgentDriftChanged   Type = "agent_drift_changed"
+	AgentStatusChanged  Type = "agent_status_changed"
+	AlertFired          Type = "alert_fired"
+	AlertResolved       Type = "alert_resolved"
+	AuditEventRecorded  Type = "audit_event_recorded"
+	RolloutStateChanged Type = "rollout_state_changed"
 )
 
 // Event is one published domain event. The Data shape is type-specific and

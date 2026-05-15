@@ -17,6 +17,7 @@ const EVENT_INVALIDATIONS: Record<string, readonly string[]> = {
   agent_status_changed: ["agents", "command-palette/agents"],
   alert_fired: ["/api/v1/alerts/rules", "command-palette/alert-rules"],
   alert_resolved: ["/api/v1/alerts/rules", "command-palette/alert-rules"],
+  rollout_state_changed: ["rollouts"],
 };
 
 // Audit-event SWR keys follow the pattern "audit/<targetType>/<targetId>/<limit>"

@@ -88,4 +88,5 @@ const KNOWN_TYPES = [
   "alert_fired",
   "alert_resolved",
   "audit_event_recorded",
+  "rollout_state_changed",
 ] as const;
