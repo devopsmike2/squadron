@@ -27,8 +27,11 @@ export function KeyboardShortcutsHelp() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
-  // "?" opens the help overlay (Shift-/ on US layout).
-  useGlobalShortcut({ key: "?", shift: true }, () => setOpen(true));
+  // "?" opens the help overlay. We don't require shift in the spec because
+  // the keyboard event's `key` is the resulting character ("?" on US, etc.)
+  // and the modifier state varies by layout — what matters is the typed
+  // character, not how the user got there.
+  useGlobalShortcut({ key: "?" }, () => setOpen(true));
 
   // G-then-X "leader" shortcuts: type G, then one of [a t c l] within
   // 1.5s. Common Vim-y pattern. Implemented inline because it's two
