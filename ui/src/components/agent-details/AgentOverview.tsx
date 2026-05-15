@@ -188,6 +188,24 @@ export function AgentOverview({ agent, metrics }: AgentOverviewProps) {
           </CardContent>
         </Card>
       )}
+
+      {agent.drift_status === "drifted" && agent.drift_details?.diff && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold flex items-center gap-2">
+              <span className="text-red-600">Config drift</span>
+              <span className="text-xs font-normal text-muted-foreground">
+                intended → effective
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-muted/40 rounded p-3 overflow-auto max-h-96">
+              {agent.drift_details.diff}
+            </pre>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
