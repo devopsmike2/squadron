@@ -99,6 +99,23 @@ service:
 
 Start your collector and it will register with Squadron automatically.
 
+## Documentation
+
+Full documentation lives under [`/docs`](./docs/README.md):
+
+- [Getting started](./docs/getting-started.md) — install Squadron, connect
+  a collector, push your first config.
+- [Concepts](./docs/concepts.md) — agents, groups, configs, drift.
+- [Rollouts](./docs/rollouts.md) — staged deploys with canary selection,
+  auto-abort, preview/diff, recipes, templates.
+- [Alerts](./docs/alerts.md) — threshold rules over telemetry and fleet
+  state, with webhooks.
+- [Audit log](./docs/audit-log.md) — every state change, filterable.
+- [Operating Squadron](./docs/operating.md) — env vars, prod checklist,
+  backup, upgrade notes.
+- [API reference](./docs/api-reference.md) — REST endpoints with curl
+  examples.
+
 ## Architecture
 
 Squadron runs as a single process composed of:
