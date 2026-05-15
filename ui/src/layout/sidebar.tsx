@@ -5,6 +5,7 @@ import {
   BarChart3,
   GitBranch,
   Bell,
+  Rocket,
   ScrollText,
   Sparkle,
 } from "lucide-react";
@@ -74,6 +75,12 @@ export function AppSidebar() {
       title: "Alerts",
       url: "/alerts",
       icon: Bell,
+    },
+    {
+      key: "rollouts",
+      title: "Rollouts",
+      url: "/rollouts",
+      icon: Rocket,
     },
     {
       key: "audit",

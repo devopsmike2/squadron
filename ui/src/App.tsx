@@ -6,6 +6,7 @@ import AlertsPage from "./pages/Alerts";
 import AuditPage from "./pages/Audit";
 import ConfigsPage from "./pages/Configs";
 import GroupsPage from "./pages/Groups";
+import RolloutsPage from "./pages/Rollouts";
 import TelemetryPage from "./pages/Telemetry";
 import TopologyPage from "./pages/Topology";
 
@@ -50,6 +51,7 @@ function App() {
                 <Route path="/telemetry" element={<TelemetryPage />} />
                 <Route path="/topology" element={<TopologyPage />} />
                 <Route path="/alerts" element={<AlertsPage />} />
+                <Route path="/rollouts" element={<RolloutsPage />} />
                 <Route path="/audit" element={<AuditPage />} />
               </Route>
             </Routes>
