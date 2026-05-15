@@ -1,10 +1,14 @@
-.PHONY: all ui build build-backend run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean
+.PHONY: all ui build build-backend build-cli build-cli-all-platforms run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean
 
 # Variables
 BINARY_NAME=squadron
+CLI_NAME=squadronctl
 BUILD_DIR=bin
 UI_DIR=ui
 DATA_DIR=data
+# VERSION is stamped into the CLI via -ldflags. Override on the
+# command line for release builds: `make build-cli VERSION=v0.9.0`.
+VERSION?=dev
 
 all: ui build
 
@@ -34,6 +38,38 @@ build-linux:
 	@echo "Building $(BINARY_NAME) for Linux..."
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux ./cmd/all-in-one
+
+# Build squadronctl for the host platform. No CGO needed — the CLI
+# does not link SQLite/DuckDB so it cross-compiles trivially.
+build-cli:
+	@echo "Building $(CLI_NAME) ($(VERSION))..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 go build \
+		-ldflags "-s -w -X github.com/devopsmike2/squadron/cmd/squadronctl/commands.Version=$(VERSION)" \
+		-o $(BUILD_DIR)/$(CLI_NAME) ./cmd/squadronctl
+
+# Build squadronctl for every platform we ship. Run from the release
+# workflow on tag pushes; output binaries go in $(BUILD_DIR) and are
+# attached to the GitHub release.
+build-cli-all-platforms:
+	@mkdir -p $(BUILD_DIR)
+	@for target in \
+		darwin/amd64 \
+		darwin/arm64 \
+		linux/amd64 \
+		linux/arm64 \
+		windows/amd64 \
+	; do \
+		GOOS=$$(echo $$target | cut -d/ -f1); \
+		GOARCH=$$(echo $$target | cut -d/ -f2); \
+		EXT=""; \
+		if [ "$$GOOS" = "windows" ]; then EXT=".exe"; fi; \
+		OUT=$(BUILD_DIR)/$(CLI_NAME)-$$GOOS-$$GOARCH$$EXT; \
+		echo "→ $$OUT"; \
+		CGO_ENABLED=0 GOOS=$$GOOS GOARCH=$$GOARCH go build \
+			-ldflags "-s -w -X github.com/devopsmike2/squadron/cmd/squadronctl/commands.Version=$(VERSION)" \
+			-o $$OUT ./cmd/squadronctl; \
+	done
 
 # Run locally
 run: build
