@@ -18,6 +18,7 @@ type AuditEvent = types.AuditEvent
 type AuditEventFilter = types.AuditEventFilter
 type Rollout = types.Rollout
 type RolloutStage = types.RolloutStage
+type RolloutStageMode = types.RolloutStageMode
 type RolloutAbortCriteria = types.RolloutAbortCriteria
 type RolloutState = types.RolloutState
 type RolloutFilter = types.RolloutFilter
@@ -45,4 +46,7 @@ const (
 	RolloutStateSucceeded  = types.RolloutStateSucceeded
 	RolloutStateAborted    = types.RolloutStateAborted
 	RolloutStateRolledBack = types.RolloutStateRolledBack
+
+	RolloutStageModePercent = types.RolloutStageModePercent
+	RolloutStageModeLabel   = types.RolloutStageModeLabel
 )

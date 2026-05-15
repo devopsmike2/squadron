@@ -261,7 +261,8 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 	now := time.Now().UTC()
 	r.StageStartedAt = &now
 
-	if err := e.applyStage(ctx, r, r.CurrentStage); err != nil {
+	ids, err := e.applyStage(ctx, r, r.CurrentStage)
+	if err != nil {
 		e.logger.Warn("rollout engine: failed to apply initial stage; will retry next tick",
 			zap.String("rollout_id", r.ID), zap.Error(err))
 		return
@@ -270,14 +271,18 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 		e.logger.Warn("rollout engine: failed to persist start", zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
-	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", map[string]any{
-		"stage":      r.CurrentStage,
-		"percentage": r.Stages[r.CurrentStage].Percentage,
-	})
+	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", stageAuditPayload(r, r.CurrentStage, ids))
+	// Surface zero-canary stages as a distinct audit event so post-mortems
+	// don't have to guess why nothing happened. Common case: label
+	// selector typo at create time, group emptied after creation.
+	if len(ids) == 0 {
+		e.recordAudit(ctx, r, "rollout.empty_canary", "empty_canary", stageAuditPayload(r, r.CurrentStage, ids))
+	}
 	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout started",
 		zap.String("rollout_id", r.ID),
-		zap.Int("percentage", r.Stages[r.CurrentStage].Percentage))
+		zap.Int("stage", r.CurrentStage),
+		zap.Int("canary_size", len(ids)))
 }
 
 // advanceOrCheck inspects an in-progress rollout: if dwell hasn't elapsed,
@@ -313,7 +318,8 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 	r.CurrentStage++
 	now := time.Now().UTC()
 	r.StageStartedAt = &now
-	if err := e.applyStage(ctx, r, r.CurrentStage); err != nil {
+	ids, err := e.applyStage(ctx, r, r.CurrentStage)
+	if err != nil {
 		e.logger.Warn("rollout engine: failed to apply next stage; will retry",
 			zap.String("rollout_id", r.ID), zap.Error(err))
 		// Roll back the in-memory advance so the next tick retries the
@@ -325,15 +331,12 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		e.logger.Warn("rollout engine: failed to persist advance", zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
-	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", map[string]any{
-		"stage":      r.CurrentStage,
-		"percentage": r.Stages[r.CurrentStage].Percentage,
-	})
+	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", stageAuditPayload(r, r.CurrentStage, ids))
 	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout advanced",
 		zap.String("rollout_id", r.ID),
 		zap.Int("stage", r.CurrentStage),
-		zap.Int("percentage", r.Stages[r.CurrentStage].Percentage))
+		zap.Int("canary_size", len(ids)))
 }
 
 // finish marks the rollout as succeeded.
@@ -416,30 +419,48 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 	}
 }
 
-// applyStage pushes the target config to the canary set for the given
-// stage. The canary is the first stage[N].percentage % of agents in the
-// group, sorted deterministically by ID so stage progression is
-// monotonic — agents at stage K are guaranteed to also be canary at
-// stage K+1.
-func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx int) error {
+// applyStage pushes the target config to the resolved canary set for the
+// given stage. Selection is delegated to canaryAgentsForStage (percent or
+// label depending on stage.Mode). The resolved agent IDs are returned so
+// the caller can attach them to the stage_applied audit payload —
+// operators reading a post-mortem need to see exactly which hosts got the
+// new config, regardless of how they were selected.
+//
+// An empty canary set is treated as a soft warning, not a failure: the
+// stage still "applies" (dwell starts, the rollout will advance), but
+// the warning surfaces in logs + audit so operators notice a
+// misconfigured label selector or an emptied group. The alternative —
+// failing the stage — risks getting stuck retrying forever when a
+// percent-mode rollout happens to fire against an empty group.
+func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx int) ([]uuid.UUID, error) {
 	target, err := e.configStore.GetConfig(ctx, r.TargetConfigID)
 	if err != nil {
-		return fmt.Errorf("failed to load target config: %w", err)
+		return nil, fmt.Errorf("failed to load target config: %w", err)
 	}
 	if target == nil {
-		return fmt.Errorf("target config %s no longer exists", r.TargetConfigID)
+		return nil, fmt.Errorf("target config %s no longer exists", r.TargetConfigID)
 	}
 	canary, err := e.canaryAgentsForStage(ctx, r, stageIdx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(canary) == 0 {
-		// No agents to push to. The rollout still advances on dwell —
-		// nothing to do this stage. Operators see this in the audit
-		// payload count: 0.
-		return nil
+		stage := r.Stages[stageIdx]
+		fields := []zap.Field{
+			zap.String("rollout_id", r.ID),
+			zap.String("group_id", r.GroupID),
+			zap.Int("stage", stageIdx),
+			zap.String("mode", string(stage.Mode)),
+		}
+		if stage.Mode == services.RolloutStageModeLabel {
+			fields = append(fields, zap.Any("label_selector", stage.LabelSelector))
+		}
+		e.logger.Warn("rollout engine: stage resolved to zero canary agents", fields...)
+		return nil, nil
 	}
+	ids := make([]uuid.UUID, 0, len(canary))
 	for _, agent := range canary {
+		ids = append(ids, agent.ID)
 		if err := e.commander.SendConfigToAgent(agent.ID, target.Content); err != nil {
 			e.logger.Warn("rollout engine: stage push failed for agent",
 				zap.String("rollout_id", r.ID),
@@ -449,7 +470,7 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 			// when the agent reconnects. We don't fail the whole stage.
 		}
 	}
-	return nil
+	return ids, nil
 }
 
 // evaluateAbortCriteria returns a non-empty reason string if the rollout
@@ -504,15 +525,37 @@ func (e *Engine) canaryAgents(ctx context.Context, r *services.Rollout) ([]*serv
 }
 
 // canaryAgentsForStage returns the deterministic canary set for the given
-// stage index. Picking is by sorted agent id so stage K+1's canary is a
-// superset of stage K's.
+// stage index. The selection strategy depends on the stage's Mode:
+//
+//   - percent: take the first stage.Percentage % of the group's agents
+//     sorted by ID. Stage K+1's canary is a guaranteed superset of stage
+//     K's, so an agent that received a stage-K push will continue to
+//     receive subsequent pushes.
+//
+//   - label: AND-match the stage's LabelSelector against each agent's
+//     labels (all key=value pairs must equal). The selector is evaluated
+//     fresh each tick so newly-added agents with matching labels join the
+//     canary automatically; conversely, an agent re-labeled mid-rollout
+//     can drop out. This is intentional — label-mode rollouts pick
+//     agents by intent ("the canary host", "the staging shard"), not by
+//     historical membership.
+//
+// In both modes the result is filtered to the rollout's target group and
+// sorted by ID for stable output (deterministic test fixtures, audit-log
+// reproducibility).
 func (e *Engine) canaryAgentsForStage(ctx context.Context, r *services.Rollout, stageIdx int) ([]*services.Agent, error) {
+	if stageIdx < 0 || stageIdx >= len(r.Stages) {
+		return nil, fmt.Errorf("stage index %d out of range (rollout has %d stages)", stageIdx, len(r.Stages))
+	}
 	allAgents, err := e.agentService.ListAgents(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list agents: %w", err)
 	}
 
-	// Filter to this group.
+	// Filter to this group first — regardless of mode, the canary is
+	// always scoped to the rollout's target group. Operators rely on this
+	// to keep label-mode selectors short (no need to repeat group filters
+	// in every selector).
 	groupAgents := make([]*services.Agent, 0)
 	for _, a := range allAgents {
 		if a.GroupID != nil && *a.GroupID == r.GroupID {
@@ -522,18 +565,87 @@ func (e *Engine) canaryAgentsForStage(ctx context.Context, r *services.Rollout, 
 	if len(groupAgents) == 0 {
 		return nil, nil
 	}
-	// Deterministic order.
+	// Deterministic order. Done before selection so test fixtures and
+	// audit-log "agent_ids" lists come out in the same order on every run.
 	sort.Slice(groupAgents, func(i, j int) bool {
 		return groupAgents[i].ID.String() < groupAgents[j].ID.String()
 	})
 
-	pct := r.Stages[stageIdx].Percentage
-	// ceil so 1 agent at 10% still gets pushed (rather than rounding to zero).
-	n := (len(groupAgents)*pct + 99) / 100
-	if n > len(groupAgents) {
-		n = len(groupAgents)
+	stage := r.Stages[stageIdx]
+	mode := stage.Mode
+	if mode == "" {
+		// Backward compatibility: pre-v0.6 rollouts stored stages without
+		// a mode field. Treat them as percent mode.
+		mode = services.RolloutStageModePercent
 	}
-	return groupAgents[:n], nil
+
+	switch mode {
+	case services.RolloutStageModeLabel:
+		return matchByLabel(groupAgents, stage.LabelSelector), nil
+	case services.RolloutStageModePercent:
+		fallthrough
+	default:
+		pct := stage.Percentage
+		// ceil so 1 agent at 10% still gets pushed (rather than rounding to zero).
+		n := (len(groupAgents)*pct + 99) / 100
+		if n > len(groupAgents) {
+			n = len(groupAgents)
+		}
+		return groupAgents[:n], nil
+	}
+}
+
+// matchByLabel returns agents whose Labels map contains every key=value
+// pair in selector (AND semantics). Empty selector returns no agents —
+// validation rejects empty selectors at create time, so reaching this
+// with an empty selector is a programmer error; we fail closed to avoid
+// accidentally pushing to the whole group.
+func matchByLabel(agents []*services.Agent, selector map[string]string) []*services.Agent {
+	if len(selector) == 0 {
+		return nil
+	}
+	out := make([]*services.Agent, 0, len(agents))
+agentLoop:
+	for _, a := range agents {
+		for k, v := range selector {
+			if got, ok := a.Labels[k]; !ok || got != v {
+				continue agentLoop
+			}
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// stageAuditPayload builds the audit payload for a stage_applied event.
+// Captures stage index, mode, selection criteria, and the resolved agent
+// id list — the post-mortem-critical bit. We stringify agent IDs because
+// the audit Payload eventually round-trips through JSON, and uuid.UUID
+// marshals as a string anyway; keeping it uniform here means the SQLite
+// row matches the wire format byte-for-byte.
+func stageAuditPayload(r *services.Rollout, stageIdx int, ids []uuid.UUID) map[string]any {
+	stage := r.Stages[stageIdx]
+	agentIDs := make([]string, len(ids))
+	for i, id := range ids {
+		agentIDs[i] = id.String()
+	}
+	mode := stage.Mode
+	if mode == "" {
+		mode = services.RolloutStageModePercent
+	}
+	out := map[string]any{
+		"stage":       stageIdx,
+		"mode":        string(mode),
+		"canary_size": len(agentIDs),
+		"agent_ids":   agentIDs,
+	}
+	switch mode {
+	case services.RolloutStageModePercent:
+		out["percentage"] = stage.Percentage
+	case services.RolloutStageModeLabel:
+		out["label_selector"] = stage.LabelSelector
+	}
+	return out
 }
 
 func (e *Engine) recordAudit(ctx context.Context, r *services.Rollout, eventType, action string, payload map[string]any) {

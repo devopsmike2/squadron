@@ -65,12 +65,37 @@ const (
 	RolloutStateRolledBack  RolloutState = "rolled_back"  // previous config restored; terminal
 )
 
-// RolloutStage is one promotion step. Percentage is cumulative — stage[N]
-// targets that many percent of the group's agents (so [10, 50, 100] means
-// 10% first, then expand to 50%, then 100%).
+// RolloutStageMode controls how the engine picks the canary set for a
+// stage. "percent" is the original behavior — take the first N% of the
+// group's agents in deterministic id order. "label" uses a key=value
+// equality match against agent labels, letting operators name specific
+// agents (e.g. host.name=canary-1) or whole sub-environments
+// (e.g. deployment.environment=staging) as the canary.
+type RolloutStageMode string
+
+const (
+	RolloutStageModePercent RolloutStageMode = "percent"
+	RolloutStageModeLabel   RolloutStageMode = "label"
+)
+
+// RolloutStage is one promotion step. The Mode field decides which other
+// fields are honored:
+//   - "percent": Percentage (1-100). Cumulative — stage[N] targets that
+//     many percent of the group's agents (so [10, 50, 100] means 10%
+//     first, then expand to 50%, then 100%).
+//   - "label": LabelSelector. AND-semantics over key=value equality on
+//     agent labels. The matched set is the canary for this stage.
+//     Stages within a label-mode rollout don't have a "cumulative"
+//     constraint — the operator is responsible for ordering them in a
+//     sensible superset progression.
+//
+// v1 requires every stage in a rollout to share the same mode. Mixed-mode
+// rollouts return a validation error.
 type RolloutStage struct {
-	Percentage   int `json:"percentage"`     // 0-100
-	DwellSeconds int `json:"dwell_seconds"`  // pause at this stage before auto-advancing
+	Mode          RolloutStageMode  `json:"mode"`                     // "percent" or "label"
+	Percentage    int               `json:"percentage,omitempty"`     // for percent mode; 1-100
+	LabelSelector map[string]string `json:"label_selector,omitempty"` // for label mode
+	DwellSeconds  int               `json:"dwell_seconds"`            // pause at this stage before auto-advancing
 }
 
 // RolloutAbortCriteria are the conditions under which the engine auto-aborts

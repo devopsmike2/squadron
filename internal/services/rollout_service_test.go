@@ -112,6 +112,113 @@ func TestRolloutService_Validation(t *testing.T) {
 	}
 }
 
+func TestRolloutService_LabelModeValidation(t *testing.T) {
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	// Helper: build a config so target_config_id validation passes, then
+	// each case can swap in its own stage list.
+	withStages := func(stages []RolloutStage) RolloutInput {
+		in := validRolloutInput(t, store)
+		in.Stages = stages
+		return in
+	}
+
+	cases := []struct {
+		name   string
+		stages []RolloutStage
+		errSub string
+	}{
+		{
+			name: "mixed modes rejected",
+			stages: []RolloutStage{
+				{Mode: RolloutStageModePercent, Percentage: 10},
+				{Mode: RolloutStageModeLabel, LabelSelector: map[string]string{"role": "canary"}},
+			},
+			errSub: "mixed stage modes are not supported",
+		},
+		{
+			name: "label mode with empty selector rejected",
+			stages: []RolloutStage{
+				{Mode: RolloutStageModeLabel, LabelSelector: nil},
+			},
+			errSub: "non-empty label_selector",
+		},
+		{
+			name: "label mode with empty key rejected",
+			stages: []RolloutStage{
+				{Mode: RolloutStageModeLabel, LabelSelector: map[string]string{"": "v"}},
+			},
+			errSub: "label_selector keys must be non-empty",
+		},
+		{
+			name: "label mode with empty value rejected",
+			stages: []RolloutStage{
+				{Mode: RolloutStageModeLabel, LabelSelector: map[string]string{"role": ""}},
+			},
+			errSub: "value for \"role\" must be non-empty",
+		},
+		{
+			name: "invalid mode rejected",
+			stages: []RolloutStage{
+				{Mode: "shrug", Percentage: 100},
+			},
+			errSub: "invalid mode",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.Create(ctx, withStages(tc.stages))
+			require.Error(t, err, "expected validation to fail")
+			assert.Contains(t, err.Error(), tc.errSub)
+		})
+	}
+}
+
+func TestRolloutService_LabelModeAccepted(t *testing.T) {
+	// Sanity: a well-formed all-label-mode rollout passes validation, no
+	// final-stage=100 rule applies, and the persisted shape round-trips
+	// the LabelSelector intact.
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	in := validRolloutInput(t, store)
+	in.Stages = []RolloutStage{
+		{Mode: RolloutStageModeLabel, LabelSelector: map[string]string{"role": "canary"}, DwellSeconds: 60},
+		{Mode: RolloutStageModeLabel, LabelSelector: map[string]string{"deployment.environment": "staging"}, DwellSeconds: 120},
+	}
+
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	require.Len(t, r.Stages, 2)
+	assert.Equal(t, RolloutStageModeLabel, r.Stages[0].Mode)
+	assert.Equal(t, "canary", r.Stages[0].LabelSelector["role"])
+
+	got, err := svc.Get(ctx, r.ID)
+	require.NoError(t, err)
+	require.Len(t, got.Stages, 2)
+	assert.Equal(t, RolloutStageModeLabel, got.Stages[1].Mode)
+	assert.Equal(t, "staging", got.Stages[1].LabelSelector["deployment.environment"])
+}
+
+func TestRolloutService_NormalizesEmptyModeToPercent(t *testing.T) {
+	// Pre-v0.6 callers built stages without Mode. The create path must
+	// default them to percent so old clients keep working.
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	in := validRolloutInput(t, store) // baseline uses no Mode field
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	for i, st := range r.Stages {
+		assert.Equal(t, RolloutStageModePercent, st.Mode, "stage %d should default to percent mode", i)
+	}
+}
+
 func TestRolloutService_TargetConfigMustExist(t *testing.T) {
 	store := memory.NewStore()
 	svc := NewRolloutService(store, nil, nil, zap.NewNop())

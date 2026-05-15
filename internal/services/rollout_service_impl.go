@@ -75,7 +75,7 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		GroupID:          input.GroupID,
 		TargetConfigID:   input.TargetConfigID,
 		PreviousConfigID: previousID,
-		Stages:           input.Stages,
+		Stages:           normalizeStages(input.Stages),
 		AbortCriteria:    input.AbortCriteria,
 		NotificationURL:  input.NotificationURL,
 		State:            RolloutStatePending,
@@ -248,6 +248,12 @@ func (s *RolloutServiceImpl) Persist(ctx context.Context, rollout *Rollout) erro
 }
 
 // validateRolloutInput rejects rollouts the engine can't safely run.
+//
+// Stages must all share one mode: either every stage is percent or every
+// stage is label. Mixed-mode rollouts return a validation error in v1 —
+// the canary-set monotonicity guarantee that percent mode relies on
+// doesn't generalize cleanly to label mode, so we keep them separate
+// until operators ask for the combination.
 func validateRolloutInput(in RolloutInput) error {
 	if in.Name == "" {
 		return fmt.Errorf("name is required")
@@ -261,24 +267,62 @@ func validateRolloutInput(in RolloutInput) error {
 	if len(in.Stages) == 0 {
 		return fmt.Errorf("at least one stage is required")
 	}
-	prev := 0
+
+	// Default empty mode to percent for backward compatibility with
+	// callers that haven't been updated yet. Treat a missing mode as
+	// the historical "percentage-only" stage shape.
+	mode := in.Stages[0].Mode
+	if mode == "" {
+		mode = RolloutStageModePercent
+	}
+	if mode != RolloutStageModePercent && mode != RolloutStageModeLabel {
+		return fmt.Errorf("stage 0: invalid mode %q (must be percent or label)", mode)
+	}
+
 	for i, st := range in.Stages {
-		if st.Percentage <= 0 || st.Percentage > 100 {
-			return fmt.Errorf("stage %d: percentage must be in (0, 100]", i)
+		stMode := st.Mode
+		if stMode == "" {
+			stMode = RolloutStageModePercent
 		}
-		if st.Percentage < prev {
-			return fmt.Errorf("stage %d: percentage %d must be >= previous stage's %d", i, st.Percentage, prev)
+		if stMode != mode {
+			return fmt.Errorf("stage %d: mixed stage modes are not supported (rollout uses %q, got %q)", i, mode, stMode)
 		}
 		if st.DwellSeconds < 0 {
 			return fmt.Errorf("stage %d: dwell_seconds must be >= 0", i)
 		}
-		prev = st.Percentage
+		switch stMode {
+		case RolloutStageModePercent:
+			if st.Percentage <= 0 || st.Percentage > 100 {
+				return fmt.Errorf("stage %d: percentage must be in (0, 100]", i)
+			}
+			if i > 0 && st.Percentage < in.Stages[i-1].Percentage {
+				return fmt.Errorf("stage %d: percentage %d must be >= previous stage's %d", i, st.Percentage, in.Stages[i-1].Percentage)
+			}
+		case RolloutStageModeLabel:
+			if len(st.LabelSelector) == 0 {
+				return fmt.Errorf("stage %d: label mode requires a non-empty label_selector", i)
+			}
+			for k, v := range st.LabelSelector {
+				if k == "" {
+					return fmt.Errorf("stage %d: label_selector keys must be non-empty", i)
+				}
+				if v == "" {
+					return fmt.Errorf("stage %d: label_selector value for %q must be non-empty", i, k)
+				}
+			}
+		}
 	}
-	// Final stage must reach 100 — operators sometimes write [10, 50] and
-	// wonder why the rollout never finishes. Catch it.
-	if in.Stages[len(in.Stages)-1].Percentage != 100 {
-		return fmt.Errorf("final stage must have percentage = 100 to complete the rollout")
+
+	// Percent mode demands a final stage reaching 100 — operators
+	// sometimes write [10, 50] and wonder why the rollout never finishes.
+	// Label mode has no equivalent constraint; the final stage is
+	// whatever the operator decided is "everyone we care about".
+	if mode == RolloutStageModePercent {
+		if in.Stages[len(in.Stages)-1].Percentage != 100 {
+			return fmt.Errorf("final stage must have percentage = 100 to complete the rollout")
+		}
 	}
+
 	if in.AbortCriteria.MaxDriftedAgents < 0 {
 		return fmt.Errorf("abort_criteria.max_drifted_agents must be >= 0")
 	}
@@ -291,12 +335,42 @@ func validateRolloutInput(in RolloutInput) error {
 	return nil
 }
 
+// copyStringMap returns a defensive copy so callers can't mutate stored
+// state through their reference. Returns nil for nil input so empty stays
+// empty.
+func copyStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// Also: any caller that built a stage without specifying Mode is treated
+// as percent mode at create time so old clients don't break. The Create
+// path normalizes the stored value before persisting.
+func normalizeStages(stages []RolloutStage) []RolloutStage {
+	out := make([]RolloutStage, len(stages))
+	for i, st := range stages {
+		if st.Mode == "" {
+			st.Mode = RolloutStageModePercent
+		}
+		out[i] = st
+	}
+	return out
+}
+
 func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 	stages := make([]applicationstore.RolloutStage, len(r.Stages))
 	for i, st := range r.Stages {
 		stages[i] = applicationstore.RolloutStage{
-			Percentage:   st.Percentage,
-			DwellSeconds: st.DwellSeconds,
+			Mode:          applicationstore.RolloutStageMode(st.Mode),
+			Percentage:    st.Percentage,
+			LabelSelector: copyStringMap(st.LabelSelector),
+			DwellSeconds:  st.DwellSeconds,
 		}
 	}
 	return &applicationstore.Rollout{
@@ -326,8 +400,10 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 	stages := make([]RolloutStage, len(r.Stages))
 	for i, st := range r.Stages {
 		stages[i] = RolloutStage{
-			Percentage:   st.Percentage,
-			DwellSeconds: st.DwellSeconds,
+			Mode:          RolloutStageMode(st.Mode),
+			Percentage:    st.Percentage,
+			LabelSelector: copyStringMap(st.LabelSelector),
+			DwellSeconds:  st.DwellSeconds,
 		}
 	}
 	return &Rollout{

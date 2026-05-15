@@ -44,10 +44,22 @@ const (
 	RolloutStateRolledBack RolloutState = "rolled_back"
 )
 
-// RolloutStage is one promotion step. Percentage is cumulative.
+// RolloutStageMode mirrors applicationstore.RolloutStageMode.
+type RolloutStageMode string
+
+const (
+	RolloutStageModePercent RolloutStageMode = "percent"
+	RolloutStageModeLabel   RolloutStageMode = "label"
+)
+
+// RolloutStage is one promotion step. See applicationstore.RolloutStage for
+// the full doc — in short, Mode picks the selection strategy and the
+// matching field (Percentage for percent, LabelSelector for label).
 type RolloutStage struct {
-	Percentage   int `json:"percentage"`
-	DwellSeconds int `json:"dwell_seconds"`
+	Mode          RolloutStageMode  `json:"mode"`
+	Percentage    int               `json:"percentage,omitempty"`
+	LabelSelector map[string]string `json:"label_selector,omitempty"`
+	DwellSeconds  int               `json:"dwell_seconds"`
 }
 
 // RolloutAbortCriteria — see applicationstore.RolloutAbortCriteria.
