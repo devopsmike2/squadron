@@ -20,14 +20,17 @@ type Store struct {
 	groups       map[string]*types.Group
 	configs      map[string]*types.Config
 	savedQueries map[string]*types.SavedQuery
+	alertRules   map[string]*types.AlertRule
 }
 
 // NewStore creates a new in-memory store
 func NewStore() *Store {
 	return &Store{
-		agents:  make(map[uuid.UUID]*types.Agent),
-		groups:  make(map[string]*types.Group),
-		configs: make(map[string]*types.Config),
+		agents:       make(map[uuid.UUID]*types.Agent),
+		groups:       make(map[string]*types.Group),
+		configs:      make(map[string]*types.Config),
+		savedQueries: make(map[string]*types.SavedQuery),
+		alertRules:   make(map[string]*types.AlertRule),
 	}
 }
 
@@ -423,6 +426,61 @@ func (s *Store) DeleteSavedQuery(ctx context.Context, id string) error {
 	return nil
 }
 
+// Alert rule management
+
+func (s *Store) CreateAlertRule(ctx context.Context, rule *types.AlertRule) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.alertRules[rule.ID]; exists {
+		return fmt.Errorf("alert rule already exists: %s", rule.ID)
+	}
+	ruleCopy := *rule
+	s.alertRules[rule.ID] = &ruleCopy
+	return nil
+}
+
+func (s *Store) GetAlertRule(ctx context.Context, id string) (*types.AlertRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rule, ok := s.alertRules[id]
+	if !ok {
+		return nil, nil
+	}
+	ruleCopy := *rule
+	return &ruleCopy, nil
+}
+
+func (s *Store) ListAlertRules(ctx context.Context) ([]*types.AlertRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rules := make([]*types.AlertRule, 0, len(s.alertRules))
+	for _, r := range s.alertRules {
+		ruleCopy := *r
+		rules = append(rules, &ruleCopy)
+	}
+	return rules, nil
+}
+
+func (s *Store) UpdateAlertRule(ctx context.Context, rule *types.AlertRule) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.alertRules[rule.ID]; !ok {
+		return fmt.Errorf("alert rule not found: %s", rule.ID)
+	}
+	ruleCopy := *rule
+	s.alertRules[rule.ID] = &ruleCopy
+	return nil
+}
+
+func (s *Store) DeleteAlertRule(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.alertRules[id]; !ok {
+		return fmt.Errorf("alert rule not found: %s", id)
+	}
+	delete(s.alertRules, id)
+	return nil
+}
 
 // purge removes all data from the store (for testing)
 func (s *Store) purge(context.Context) {
@@ -433,4 +491,5 @@ func (s *Store) purge(context.Context) {
 	s.groups = make(map[string]*types.Group)
 	s.configs = make(map[string]*types.Config)
 	s.savedQueries = make(map[string]*types.SavedQuery)
+	s.alertRules = make(map[string]*types.AlertRule)
 }

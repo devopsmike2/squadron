@@ -34,6 +34,56 @@ type ApplicationStore interface {
 	CreateSavedQuery(ctx context.Context, query *SavedQuery) error
 	UpdateSavedQuery(ctx context.Context, query *SavedQuery) error
 	DeleteSavedQuery(ctx context.Context, id string) error
+
+	// Alert rule management
+	CreateAlertRule(ctx context.Context, rule *AlertRule) error
+	GetAlertRule(ctx context.Context, id string) (*AlertRule, error)
+	ListAlertRules(ctx context.Context) ([]*AlertRule, error)
+	UpdateAlertRule(ctx context.Context, rule *AlertRule) error
+	DeleteAlertRule(ctx context.Context, id string) error
+}
+
+// AlertSeverity is the severity level attached to a firing alert.
+type AlertSeverity string
+
+const (
+	AlertSeverityInfo     AlertSeverity = "info"
+	AlertSeverityWarning  AlertSeverity = "warning"
+	AlertSeverityCritical AlertSeverity = "critical"
+)
+
+// ThresholdOperator is the comparison used between the query result and the
+// threshold value. Mirrors the common Prometheus expression operators.
+type ThresholdOperator string
+
+const (
+	ThresholdGreater        ThresholdOperator = ">"
+	ThresholdGreaterOrEqual ThresholdOperator = ">="
+	ThresholdLess           ThresholdOperator = "<"
+	ThresholdLessOrEqual    ThresholdOperator = "<="
+	ThresholdEqual          ThresholdOperator = "=="
+	ThresholdNotEqual       ThresholdOperator = "!="
+)
+
+// AlertRule defines a periodically-evaluated Squadron QL query and what to do
+// when its scalar result satisfies the threshold.
+//
+// Example: name "high drift rate", query "fleet_drift_status_drifted",
+// operator ">", threshold 5, interval 60s, severity warning,
+// webhook https://hooks.example.com/squadron.
+type AlertRule struct {
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	Description       string            `json:"description,omitempty"`
+	Query             string            `json:"query"`
+	ThresholdOperator ThresholdOperator `json:"threshold_operator"`
+	ThresholdValue    float64           `json:"threshold_value"`
+	IntervalSeconds   int               `json:"interval_seconds"`
+	Severity          AlertSeverity     `json:"severity"`
+	Enabled           bool              `json:"enabled"`
+	WebhookURL        string            `json:"webhook_url,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
 // Agent represents an OpenTelemetry agent

@@ -107,6 +107,23 @@ func (s *Storage) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_saved_queries_updated_at ON saved_queries(updated_at);
 
+	CREATE TABLE IF NOT EXISTS alert_rules (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL UNIQUE,
+		description TEXT,
+		query TEXT NOT NULL,
+		threshold_operator TEXT NOT NULL,
+		threshold_value REAL NOT NULL,
+		interval_seconds INTEGER NOT NULL,
+		severity TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		webhook_url TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -759,6 +776,127 @@ func (s *Storage) DeleteSavedQuery(ctx context.Context, id string) error {
 	return nil
 }
 
+
+// Alert rule management
+
+func (s *Storage) CreateAlertRule(ctx context.Context, rule *types.AlertRule) error {
+	stmt := `
+		INSERT INTO alert_rules (id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := s.db.ExecContext(ctx, stmt,
+		rule.ID,
+		rule.Name,
+		rule.Description,
+		rule.Query,
+		string(rule.ThresholdOperator),
+		rule.ThresholdValue,
+		rule.IntervalSeconds,
+		string(rule.Severity),
+		boolToInt(rule.Enabled),
+		rule.WebhookURL,
+		rule.CreatedAt,
+		rule.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create alert rule: %w", err)
+	}
+	s.logger.Debug("Created alert rule", zap.String("rule_id", rule.ID), zap.String("name", rule.Name))
+	return nil
+}
+
+func (s *Storage) GetAlertRule(ctx context.Context, id string) (*types.AlertRule, error) {
+	stmt := `SELECT id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at FROM alert_rules WHERE id = ?`
+	rule := &types.AlertRule{}
+	var op, severity string
+	var enabledInt int
+	if err := s.db.QueryRowContext(ctx, stmt, id).Scan(
+		&rule.ID, &rule.Name, &rule.Description, &rule.Query,
+		&op, &rule.ThresholdValue, &rule.IntervalSeconds, &severity,
+		&enabledInt, &rule.WebhookURL, &rule.CreatedAt, &rule.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get alert rule: %w", err)
+	}
+	rule.ThresholdOperator = types.ThresholdOperator(op)
+	rule.Severity = types.AlertSeverity(severity)
+	rule.Enabled = enabledInt != 0
+	return rule, nil
+}
+
+func (s *Storage) ListAlertRules(ctx context.Context) ([]*types.AlertRule, error) {
+	stmt := `SELECT id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at FROM alert_rules ORDER BY name ASC`
+	rows, err := s.db.QueryContext(ctx, stmt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list alert rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []*types.AlertRule
+	for rows.Next() {
+		rule := &types.AlertRule{}
+		var op, severity string
+		var enabledInt int
+		if err := rows.Scan(
+			&rule.ID, &rule.Name, &rule.Description, &rule.Query,
+			&op, &rule.ThresholdValue, &rule.IntervalSeconds, &severity,
+			&enabledInt, &rule.WebhookURL, &rule.CreatedAt, &rule.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan alert rule: %w", err)
+		}
+		rule.ThresholdOperator = types.ThresholdOperator(op)
+		rule.Severity = types.AlertSeverity(severity)
+		rule.Enabled = enabledInt != 0
+		rules = append(rules, rule)
+	}
+	return rules, nil
+}
+
+func (s *Storage) UpdateAlertRule(ctx context.Context, rule *types.AlertRule) error {
+	stmt := `
+		UPDATE alert_rules
+		SET name = ?, description = ?, query = ?, threshold_operator = ?, threshold_value = ?,
+		    interval_seconds = ?, severity = ?, enabled = ?, webhook_url = ?, updated_at = ?
+		WHERE id = ?
+	`
+	result, err := s.db.ExecContext(ctx, stmt,
+		rule.Name, rule.Description, rule.Query,
+		string(rule.ThresholdOperator), rule.ThresholdValue,
+		rule.IntervalSeconds, string(rule.Severity),
+		boolToInt(rule.Enabled), rule.WebhookURL,
+		rule.UpdatedAt, rule.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update alert rule: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return fmt.Errorf("alert rule not found: %s", rule.ID)
+	}
+	s.logger.Debug("Updated alert rule", zap.String("rule_id", rule.ID))
+	return nil
+}
+
+func (s *Storage) DeleteAlertRule(ctx context.Context, id string) error {
+	stmt := `DELETE FROM alert_rules WHERE id = ?`
+	result, err := s.db.ExecContext(ctx, stmt, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete alert rule: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return fmt.Errorf("alert rule not found: %s", id)
+	}
+	s.logger.Debug("Deleted alert rule", zap.String("rule_id", id))
+	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // Close closes the database connection
 func (s *Storage) Close() error {

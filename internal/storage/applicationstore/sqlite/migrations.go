@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -111,7 +111,37 @@ END;
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 `
 
+// AlertRulesSchema adds the alert_rules table for the phase 3b alerting feature.
+const AlertRulesSchema = `
+-- Alert rules table
+CREATE TABLE IF NOT EXISTS alert_rules (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL UNIQUE,
+	description TEXT,
+	query TEXT NOT NULL,
+	threshold_operator TEXT NOT NULL,
+	threshold_value REAL NOT NULL,
+	interval_seconds INTEGER NOT NULL,
+	severity TEXT NOT NULL,
+	enabled INTEGER NOT NULL DEFAULT 1,
+	webhook_url TEXT,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+
+CREATE TRIGGER IF NOT EXISTS update_alert_rules_timestamp
+AFTER UPDATE ON alert_rules
+BEGIN
+	UPDATE alert_rules SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (2);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
+	AlertRulesSchema,
 }
