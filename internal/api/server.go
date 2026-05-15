@@ -32,6 +32,7 @@ type Server struct {
 	agentService      services.AgentService
 	telemetryService  services.TelemetryQueryService
 	savedQueryService services.SavedQueryService
+	alertService      services.AlertService
 	commander         AgentCommander
 	logger            *zap.Logger
 	httpServer        *http.Server
@@ -45,7 +46,7 @@ type Server struct {
 // register OpAMP, OTLP, and worker metrics so that /metrics exposes a single,
 // unified view of the process. (Previously this constructor created its own
 // registry, which silently hid every non-API metric from /metrics.)
-func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, commander AgentCommander, registry *prometheus.Registry, logger *zap.Logger) *Server {
+func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, commander AgentCommander, registry *prometheus.Registry, logger *zap.Logger) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
@@ -65,6 +66,7 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 		agentService:      agentService,
 		telemetryService:  telemetryService,
 		savedQueryService: savedQueryService,
+		alertService:      alertService,
 		commander:         commander,
 		logger:            logger,
 		metrics:           apiMetrics,
@@ -113,6 +115,7 @@ func (s *Server) registerRoutes() {
 	savedQueryHandlers := handlers.NewSavedQueryHandlers(s.savedQueryService, s.logger)
 	topologyHandlers := handlers.NewTopologyHandlers(s.agentService, s.telemetryService, s.logger)
 	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.logger)
+	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
 
 	// Metrics endpoint
 	s.router.GET("/metrics", gin.WrapH(promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{})))
@@ -193,6 +196,16 @@ func (s *Server) registerRoutes() {
 			topology.GET("", topologyHandlers.HandleGetTopology)
 			topology.GET("/agent/:id", topologyHandlers.HandleGetAgentTopology)
 			topology.GET("/group/:id", topologyHandlers.HandleGetGroupTopology)
+		}
+
+		// Alert rule routes
+		alerts := v1.Group("/alerts/rules")
+		{
+			alerts.GET("", alertHandlers.HandleListAlertRules)
+			alerts.POST("", alertHandlers.HandleCreateAlertRule)
+			alerts.GET("/:id", alertHandlers.HandleGetAlertRule)
+			alerts.PUT("/:id", alertHandlers.HandleUpdateAlertRule)
+			alerts.DELETE("/:id", alertHandlers.HandleDeleteAlertRule)
 		}
 	}
 

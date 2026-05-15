@@ -47,6 +47,7 @@ type TestServer struct {
 	agentService      services.AgentService
 	telemetryService  services.TelemetryQueryService
 	savedQueryService services.SavedQueryService
+	alertService      services.AlertService
 
 	// Servers
 	apiServer   *api.Server
@@ -185,6 +186,7 @@ func (ts *TestServer) initServices() {
 	// Create agent service without config sender initially
 	ts.agentService = services.NewAgentService(appStore, nil, ts.logger)
 	ts.savedQueryService = services.NewSavedQueryService(appStore, ts.logger)
+	ts.alertService = services.NewAlertService(appStore, ts.logger)
 }
 
 // initServers initializes all servers
@@ -205,7 +207,10 @@ func (ts *TestServer) initServers() {
 	ts.telemetryService = services.NewTelemetryQueryService(ts.telemetryReader, ts.agentService, ts.logger)
 
 	// API Server — uses the same registry as OpAMP/OTLP metrics.
-	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, configSender, ts.registry, ts.logger)
+	// AlertService is wired so the /api/v1/alerts/rules routes are reachable;
+	// the evaluator goroutine isn't started here because integration tests
+	// don't exercise alert evaluation.
+	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, configSender, ts.registry, ts.logger)
 
 	// Create worker pool for async telemetry processing.
 	// Using default values: queue_size=10000, workers=3, timeout=5s.

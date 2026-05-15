@@ -158,6 +158,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// fleet drift state appear on /metrics.
 	agentService := services.NewAgentService(appStore, driftMetrics, logger)
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
+	alertService := services.NewAlertService(appStore, logger)
 
 	// Create config sender (separate concern from AgentService)
 	configSender := opamp.NewConfigSender(agents, logger)
@@ -229,7 +230,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Initialize HTTP API server.
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
 	// worker, and API metrics in a single endpoint.
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, configSender, registry, logger)
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, configSender, registry, logger)
 
 	// Start API server in a goroutine
 	go func() {
