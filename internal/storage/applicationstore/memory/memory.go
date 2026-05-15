@@ -24,6 +24,7 @@ type Store struct {
 	alertRules   map[string]*types.AlertRule
 	auditEvents  []*types.AuditEvent // append-only; sorted newest-first on read
 	rollouts     map[string]*types.Rollout
+	apiTokens    map[string]*types.APIToken // keyed by ID; secondary index built on the fly for hash lookup
 }
 
 // NewStore creates a new in-memory store
@@ -36,6 +37,7 @@ func NewStore() *Store {
 		alertRules:   make(map[string]*types.AlertRule),
 		auditEvents:  make([]*types.AuditEvent, 0, 64),
 		rollouts:     make(map[string]*types.Rollout),
+		apiTokens:    make(map[string]*types.APIToken),
 	}
 }
 
@@ -631,6 +633,83 @@ func (s *Store) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	return nil
 }
 
+// API token management
+//
+// The map is keyed by token ID. For hash-based lookup the in-memory
+// store scans linearly — fine for tests and small instances; the SQLite
+// store has a proper index.
+
+func (s *Store) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.apiTokens[t.ID]; exists {
+		return fmt.Errorf("api token id already exists: %s", t.ID)
+	}
+	for _, existing := range s.apiTokens {
+		if existing.Hash == t.Hash {
+			return fmt.Errorf("api token hash collision")
+		}
+	}
+	tokenCopy := *t
+	s.apiTokens[t.ID] = &tokenCopy
+	return nil
+}
+
+func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (*types.APIToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, t := range s.apiTokens {
+		if t.Hash == hash {
+			tokenCopy := *t
+			return &tokenCopy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *Store) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.APIToken, 0, len(s.apiTokens))
+	for _, t := range s.apiTokens {
+		tokenCopy := *t
+		out = append(out, &tokenCopy)
+	}
+	// Newest-first to match the SQLite impl.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (s *Store) UpdateAPITokenLastUsed(ctx context.Context, id string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.apiTokens[id]
+	if !ok {
+		return fmt.Errorf("api token not found: %s", id)
+	}
+	atCopy := at
+	t.LastUsedAt = &atCopy
+	return nil
+}
+
+func (s *Store) RevokeAPIToken(ctx context.Context, id string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.apiTokens[id]
+	if !ok {
+		// Idempotent — matches the SQLite impl.
+		return nil
+	}
+	if t.RevokedAt != nil {
+		return nil
+	}
+	atCopy := at
+	t.RevokedAt = &atCopy
+	return nil
+}
+
 // purge removes all data from the store (for testing)
 func (s *Store) purge(context.Context) {
 	s.mu.Lock()
@@ -643,4 +722,5 @@ func (s *Store) purge(context.Context) {
 	s.alertRules = make(map[string]*types.AlertRule)
 	s.auditEvents = make([]*types.AuditEvent, 0, 64)
 	s.rollouts = make(map[string]*types.Rollout)
+	s.apiTokens = make(map[string]*types.APIToken)
 }

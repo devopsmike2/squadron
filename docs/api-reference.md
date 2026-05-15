@@ -5,9 +5,11 @@ Squadron exposes a JSON REST API on port 8080 (configurable via
 authoritative source is the Go handlers under
 `internal/api/handlers/`.
 
-All endpoints are unauthenticated today. Run Squadron behind a trust
-boundary — see [Operating Squadron](./operating.md#production-checklist).
+When `auth.enabled` is true (see [Authentication](./auth.md)), every
+endpoint below requires `Authorization: Bearer <token>`. `/metrics` and
+`/health` stay public regardless.
 
+- [Auth tokens](#auth-tokens)
 - [Agents](#agents)
 - [Groups](#groups)
 - [Configs](#configs)
@@ -16,6 +18,16 @@ boundary — see [Operating Squadron](./operating.md#production-checklist).
 - [Alerts](#alerts)
 - [Audit](#audit)
 - [Events (SSE)](#events-sse)
+
+## Auth tokens
+
+| Method | Path                                | Purpose                                                       |
+|--------|-------------------------------------|---------------------------------------------------------------|
+| GET    | `/api/v1/auth/tokens`               | List issued tokens (active + revoked, newest first)           |
+| POST   | `/api/v1/auth/tokens`               | Issue. Body `{"label": "..."}`. Response carries plaintext ONCE. |
+| POST   | `/api/v1/auth/tokens/:id/revoke`    | Revoke. Idempotent.                                            |
+
+See [Authentication](./auth.md) for the bootstrap flow and recovery path.
 
 ## Agents
 

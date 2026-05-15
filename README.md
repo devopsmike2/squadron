@@ -111,6 +111,8 @@ Full documentation lives under [`/docs`](./docs/README.md):
 - [Alerts](./docs/alerts.md) — threshold rules over telemetry and fleet
   state, with webhooks.
 - [Audit log](./docs/audit-log.md) — every state change, filterable.
+- [Authentication](./docs/auth.md) — Bearer tokens, bootstrap flow,
+  token lifecycle.
 - [Operating Squadron](./docs/operating.md) — env vars, prod checklist,
   backup, upgrade notes.
 - [API reference](./docs/api-reference.md) — REST endpoints with curl

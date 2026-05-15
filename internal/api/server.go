@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/api/handlers"
+	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -27,6 +28,15 @@ type AgentCommander interface {
 	SendConfigToAgentsInGroup(groupId string, configContent string) ([]uuid.UUID, []error)
 }
 
+// AuthConfig controls the API auth middleware. When Enabled is true,
+// every /api/v1/* request must carry a valid Bearer token; /metrics
+// and /health stay public. When false, no auth middleware is mounted
+// and the API behaves as it did pre-v0.8 — useful for development,
+// dangerous in production.
+type AuthConfig struct {
+	Enabled bool
+}
+
 // Server represents the HTTP API server
 type Server struct {
 	router            *gin.Engine
@@ -36,6 +46,8 @@ type Server struct {
 	alertService      services.AlertService
 	auditService      services.AuditService
 	rolloutService    services.RolloutService
+	authService       services.AuthService
+	authConfig        AuthConfig
 	commander         AgentCommander
 	broker            *events.Broker
 	logger            *zap.Logger
@@ -50,7 +62,7 @@ type Server struct {
 // register OpAMP, OTLP, and worker metrics so that /metrics exposes a single,
 // unified view of the process. (Previously this constructor created its own
 // registry, which silently hid every non-API metric from /metrics.)
-func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, auditService services.AuditService, rolloutService services.RolloutService, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
+func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, auditService services.AuditService, rolloutService services.RolloutService, authService services.AuthService, authConfig AuthConfig, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
@@ -73,6 +85,8 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 		alertService:      alertService,
 		auditService:      auditService,
 		rolloutService:    rolloutService,
+		authService:       authService,
+		authConfig:        authConfig,
 		commander:         commander,
 		broker:            broker,
 		logger:            logger,
@@ -126,16 +140,34 @@ func (s *Server) registerRoutes() {
 	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.logger)
 	rolloutHandlers := handlers.NewRolloutHandlers(s.rolloutService, s.logger)
 	eventsHandlers := handlers.NewEventsHandlers(s.broker, s.logger)
+	authHandlers := handlers.NewAuthHandlers(s.authService, s.logger)
 
-	// Metrics endpoint
+	// Metrics endpoint — public so scrapers don't need a token.
 	s.router.GET("/metrics", gin.WrapH(promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{})))
 
-	// Health check
+	// Health check — public so load balancers can probe.
 	s.router.GET("/health", healthHandlers.HandleHealth)
 
 	// API v1 routes
 	v1 := s.router.Group("/api/v1")
+	if s.authConfig.Enabled {
+		// When auth is enabled, every /api/v1/* request must carry a
+		// valid Bearer token. /metrics and /health above stay public.
+		v1.Use(middleware.RequireBearer(s.authService, s.logger))
+	}
 	{
+		// Auth token management lives under /api/v1/auth/tokens.
+		// Bootstrap problem: the first token has to be created without
+		// a token. That's handled by the bootstrap-token-on-first-start
+		// flow in main.go — by the time operators reach this endpoint
+		// they should already have a token to authenticate with.
+		auth := v1.Group("/auth/tokens")
+		{
+			auth.GET("", authHandlers.HandleListTokens)
+			auth.POST("", authHandlers.HandleCreateToken)
+			auth.POST("/:id/revoke", authHandlers.HandleRevokeToken)
+		}
+
 		// Agent routes
 		agents := v1.Group("/agents")
 		{

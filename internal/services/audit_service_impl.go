@@ -33,12 +33,24 @@ func NewAuditService(appStore applicationstore.ApplicationStore, broker *events.
 // against partial writes: failure to persist is logged at Warn and returned;
 // failure to publish (broker full) is silent (the broker drops, not
 // records) — the durable record wins.
+//
+// If the context carries an AuthActor (set by the bearer middleware),
+// that actor overrides whatever the caller put in entry.Actor. This
+// way authenticated requests get attributed to the issuing token
+// without every handler having to plumb the actor through manually.
+// Background operations (the rollout engine, the alert evaluator) call
+// Record with a plain context.Background() and keep their original
+// "system" actor unchanged.
 func (s *AuditServiceImpl) Record(ctx context.Context, entry AuditEntry) error {
+	actor := entry.Actor
+	if a := ActorFromContext(ctx); !a.IsZero() {
+		actor = a.String()
+	}
 	now := time.Now().UTC()
 	stored := &applicationstore.AuditEvent{
 		ID:         uuid.New().String(),
 		Timestamp:  now,
-		Actor:      entry.Actor,
+		Actor:      actor,
 		EventType:  entry.EventType,
 		TargetType: entry.TargetType,
 		TargetID:   entry.TargetID,

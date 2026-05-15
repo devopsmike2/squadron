@@ -51,6 +51,31 @@ type ApplicationStore interface {
 	GetRollout(ctx context.Context, id string) (*Rollout, error)
 	ListRollouts(ctx context.Context, filter RolloutFilter) ([]*Rollout, error)
 	UpdateRollout(ctx context.Context, rollout *Rollout) error
+
+	// API tokens (bearer auth)
+	CreateAPIToken(ctx context.Context, token *APIToken) error
+	GetAPITokenByHash(ctx context.Context, hash string) (*APIToken, error)
+	ListAPITokens(ctx context.Context) ([]*APIToken, error)
+	UpdateAPITokenLastUsed(ctx context.Context, id string, at time.Time) error
+	RevokeAPIToken(ctx context.Context, id string, at time.Time) error
+}
+
+// APIToken is one issued bearer token. Plaintext token values are NEVER
+// stored — only the sha256 hex digest. The plaintext is shown to the
+// operator once at creation time.
+//
+// Lifecycle: created with RevokedAt nil. Revocation sets RevokedAt to
+// the moment of revocation; the row is kept so audit history can
+// resolve token IDs to labels long after revocation. LastUsedAt is
+// best-effort: the middleware updates it on each successful
+// authentication, but we don't fail requests if the update errors.
+type APIToken struct {
+	ID         string     `json:"id"`
+	Label      string     `json:"label"`      // human-readable, operator-supplied
+	Hash       string     `json:"-"`          // sha256 hex; NEVER in JSON responses
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 }
 
 // RolloutState is the lifecycle position of a Rollout.

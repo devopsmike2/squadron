@@ -105,10 +105,13 @@ docker run -d \
 
 Before pointing real traffic at Squadron:
 
-- [ ] **Put it behind authenticated reverse proxy.** Squadron does not
-      currently ship auth. Anyone who can reach `:8080` can push configs,
-      create rollouts, and abort them. A simple HTTP basic-auth or
-      OAuth2-proxy in front is the minimum bar.
+- [ ] **Enable API auth.** Set `auth.enabled: true` in `squadron.yaml`.
+      On first start Squadron emits a bootstrap token to stderr; copy
+      it, sign in to the UI, create properly-labeled tokens, and revoke
+      the bootstrap one. See [Authentication](./auth.md). If you'd
+      rather use OIDC/SSO, front Squadron with a reverse proxy that
+      enforces auth and leave the in-app auth off — both layers
+      compose.
 - [ ] **Persistent volume on a local filesystem.** See above.
 - [ ] **Retention budget.** Audit + telemetry data grows. Decide your
       retention windows for raw metrics/logs (default 24h is fine for

@@ -8,6 +8,7 @@ import {
   Rocket,
   ScrollText,
   Sparkle,
+  KeyRound,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -87,6 +88,12 @@ export function AppSidebar() {
       title: "Audit",
       url: "/audit",
       icon: ScrollText,
+    },
+    {
+      key: "settings-tokens",
+      title: "API tokens",
+      url: "/settings/tokens",
+      icon: KeyRound,
     },
   ];
 

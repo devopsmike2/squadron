@@ -40,3 +40,11 @@ worker:
   queue_size: 10000
   workers: 3
   timeout: 5s
+
+auth:
+  # When true, every /api/v1/* request must carry a valid Bearer token.
+  # /metrics and /health stay public for scrapers and load balancers.
+  # On first start with auth enabled and an empty tokens table, Squadron
+  # emits a bootstrap token to stderr that operators use to log in and
+  # create proper tokens. See docs/auth.md for the full flow.
+  enabled: false

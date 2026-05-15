@@ -20,6 +20,8 @@ jump straight to that page.
   rollout health.
 - [Audit log](./audit-log.md) — every state change in Squadron is recorded.
   How to filter, what's in the payload, how to use it for post-mortems.
+- [Authentication](./auth.md) — opt-in Bearer-token auth, bootstrap
+  flow, token management, recovery path.
 - [Operating Squadron](./operating.md) — environment variables, the
   production checklist, backup considerations, upgrade notes.
 - [API reference](./api-reference.md) — REST endpoints with curl examples.
@@ -42,9 +44,10 @@ jump straight to that page.
 
 - **Multi-tenant.** Everything is global to a Squadron instance. Run one
   per team or per environment for now.
-- **SSO/RBAC.** No auth at all today — Squadron assumes it's behind a
-  trust boundary (VPN, reverse proxy with auth, etc.). RBAC is on the
-  roadmap.
+- **SSO/RBAC.** Squadron ships Bearer-token auth (see [Authentication](./auth.md))
+  but every token has full API access — there's no concept of
+  "read-only" or scoped roles yet. SSO/OIDC is best handled by a
+  reverse proxy in front of Squadron today.
 - **A Kubernetes operator.** OpAMP works fine with collectors deployed
   via Helm/manifest; a CRD-based operator that pushes configs into the
   cluster is on the roadmap.

@@ -176,6 +176,23 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 	alertService := services.NewAlertService(appStore, logger)
 	rolloutService := services.NewRolloutService(appStore, agentService, auditService, logger)
+	authService := services.NewAuthService(appStore, logger)
+
+	// Bootstrap an initial token if auth is enabled and the store has
+	// none yet. Operators see this token in stderr on first start; they
+	// copy it, use it to log in, create proper labeled tokens, and
+	// revoke the bootstrap one. The check runs every start but only
+	// emits a token when the store is empty so subsequent restarts are
+	// quiet. See docs/auth.md for the recovery flow if every token is
+	// lost.
+	if config.Auth.Enabled {
+		if err := bootstrapAuthToken(context.Background(), authService, logger); err != nil {
+			logger.Fatal("Failed to bootstrap auth token", zap.Error(err))
+		}
+	} else {
+		logger.Warn("API auth is disabled — every endpoint is open. " +
+			"Set auth.enabled=true in squadron.yaml for production.")
+	}
 
 	// Create config sender (separate concern from AgentService)
 	configSender := opamp.NewConfigSender(agents, logger)
@@ -248,7 +265,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
 	// worker, and API metrics in a single endpoint. The event broker is
 	// shared with publishers so /events/stream reflects what they emit.
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, configSender, eventBroker, registry, logger)
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: config.Auth.Enabled}, configSender, eventBroker, registry, logger)
 
 	// Start API server in a goroutine
 	go func() {
@@ -315,6 +332,38 @@ func versionCommand() *cobra.Command {
 			fmt.Printf("%s v%s\n", appName, version)
 		},
 	}
+}
+
+// bootstrapAuthToken issues a labeled token when the application store
+// is empty. This solves the "first run" chicken-and-egg: with auth
+// enabled, the operator can't reach the token-creation API without a
+// token, so Squadron emits one to stderr at startup. The label
+// "bootstrap" is intentionally generic — operators are expected to
+// rotate to properly-labeled tokens and revoke this one immediately.
+//
+// Quiet on every subsequent start; only fires when the tokens table is
+// empty. Recovery from "all tokens lost" is documented in docs/auth.md
+// (revoke at the SQLite level + restart).
+func bootstrapAuthToken(ctx context.Context, authService services.AuthService, logger *zap.Logger) error {
+	tokens, err := authService.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list tokens: %w", err)
+	}
+	if len(tokens) > 0 {
+		return nil
+	}
+	_, plaintext, err := authService.Issue(ctx, "bootstrap")
+	if err != nil {
+		return fmt.Errorf("issue bootstrap token: %w", err)
+	}
+	// Loud on purpose. Operators NEED to see this — it's the only path
+	// to authenticating to a freshly-enabled Squadron. We write to the
+	// logger at Warn level so it shows up under default log levels and
+	// in any aggregator. Operators should revoke this token after
+	// creating properly-labeled ones via the /auth/tokens UI.
+	logger.Warn("API auth is enabled and no tokens exist yet — issued a bootstrap token. Revoke it after creating your real tokens.",
+		zap.String("bootstrap_token", plaintext))
+	return nil
 }
 
 // configCommand returns the config subcommand

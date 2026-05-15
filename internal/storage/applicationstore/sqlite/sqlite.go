@@ -161,6 +161,18 @@ func (s *Storage) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_rollouts_state ON rollouts(state);
 	CREATE INDEX IF NOT EXISTS idx_rollouts_group ON rollouts(group_id, created_at DESC);
 
+	CREATE TABLE IF NOT EXISTS api_tokens (
+		id TEXT PRIMARY KEY,
+		label TEXT NOT NULL,
+		hash TEXT NOT NULL UNIQUE,            -- sha256 hex digest of the plaintext token
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_used_at DATETIME,
+		revoked_at DATETIME
+	);
+
+	-- Fast lookup by hash for every authenticated request.
+	CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(hash);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -1212,6 +1224,108 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		r.CompletedAt = &completedAt.Time
 	}
 	return r, nil
+}
+
+// API token management
+//
+// Plaintext token values are never persisted. The middleware hashes the
+// incoming bearer with sha256 and looks up the row by hash; if a row
+// exists and RevokedAt is null, the request is authenticated.
+
+func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
+	stmt := `
+		INSERT INTO api_tokens (id, label, hash, created_at, last_used_at, revoked_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`
+	_, err := s.db.ExecContext(ctx, stmt,
+		t.ID, t.Label, t.Hash, t.CreatedAt, t.LastUsedAt, t.RevokedAt)
+	if err != nil {
+		return fmt.Errorf("failed to create api token: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.APIToken, error) {
+	stmt := `SELECT id, label, hash, created_at, last_used_at, revoked_at FROM api_tokens WHERE hash = ?`
+	t := &types.APIToken{}
+	var lastUsedAt, revokedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, stmt, hash).Scan(
+		&t.ID, &t.Label, &t.Hash, &t.CreatedAt, &lastUsedAt, &revokedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get api token: %w", err)
+	}
+	if lastUsedAt.Valid {
+		t.LastUsedAt = &lastUsedAt.Time
+	}
+	if revokedAt.Valid {
+		t.RevokedAt = &revokedAt.Time
+	}
+	return t, nil
+}
+
+// ListAPITokens returns every issued token, revoked or not, newest first.
+// Revoked tokens stay in the list so the UI can show a full history and
+// audit consumers can still resolve old token IDs to labels.
+func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
+	stmt := `
+		SELECT id, label, hash, created_at, last_used_at, revoked_at
+		FROM api_tokens
+		ORDER BY created_at DESC
+	`
+	rows, err := s.db.QueryContext(ctx, stmt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list api tokens: %w", err)
+	}
+	defer rows.Close()
+	var out []*types.APIToken
+	for rows.Next() {
+		t := &types.APIToken{}
+		var lastUsedAt, revokedAt sql.NullTime
+		if err := rows.Scan(&t.ID, &t.Label, &t.Hash, &t.CreatedAt, &lastUsedAt, &revokedAt); err != nil {
+			return nil, err
+		}
+		if lastUsedAt.Valid {
+			t.LastUsedAt = &lastUsedAt.Time
+		}
+		if revokedAt.Valid {
+			t.RevokedAt = &revokedAt.Time
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// UpdateAPITokenLastUsed touches the last_used_at column. Best-effort:
+// the middleware fires this asynchronously and doesn't fail requests on
+// error. Concurrent-update races resolve as "newest write wins", which
+// is fine since the column is only used for display.
+func (s *Storage) UpdateAPITokenLastUsed(ctx context.Context, id string, at time.Time) error {
+	stmt := `UPDATE api_tokens SET last_used_at = ? WHERE id = ?`
+	_, err := s.db.ExecContext(ctx, stmt, at, id)
+	if err != nil {
+		return fmt.Errorf("failed to update api token last_used_at: %w", err)
+	}
+	return nil
+}
+
+// RevokeAPIToken sets revoked_at if it's null. Already-revoked tokens
+// keep their original revoked_at — there's no point re-stamping a
+// revocation that already happened.
+func (s *Storage) RevokeAPIToken(ctx context.Context, id string, at time.Time) error {
+	stmt := `UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`
+	res, err := s.db.ExecContext(ctx, stmt, at, id)
+	if err != nil {
+		return fmt.Errorf("failed to revoke api token: %w", err)
+	}
+	// We don't return an error if no row was affected — calling revoke
+	// on an already-revoked or missing token is idempotent from the
+	// service's perspective. The service layer enforces the "not found"
+	// distinction by doing a List/Get before the revoke if needed.
+	_ = res
+	return nil
 }
 
 // Close closes the database connection

@@ -17,6 +17,15 @@ type Config struct {
 	Rollups   RollupsConfig   `yaml:"rollups"`
 	Logging   LoggingConfig   `yaml:"logging"`
 	Worker    WorkerConfig    `yaml:"worker"`
+	Auth      AuthConfig      `yaml:"auth"`
+}
+
+// AuthConfig controls API authentication. When enabled, every
+// /api/v1/* request must carry a valid Bearer token. /metrics and
+// /health stay public regardless. Defaults to disabled — turn it on
+// before exposing Squadron beyond a trusted network.
+type AuthConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // ServerConfig contains server configuration
