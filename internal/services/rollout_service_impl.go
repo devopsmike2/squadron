@@ -282,6 +282,12 @@ func validateRolloutInput(in RolloutInput) error {
 	if in.AbortCriteria.MaxDriftedAgents < 0 {
 		return fmt.Errorf("abort_criteria.max_drifted_agents must be >= 0")
 	}
+	if in.AbortCriteria.MaxErrorLogsPerMinute < 0 {
+		return fmt.Errorf("abort_criteria.max_error_logs_per_minute must be >= 0")
+	}
+	if in.AbortCriteria.MinDwellSecondsBeforeAbort < 0 {
+		return fmt.Errorf("abort_criteria.min_dwell_seconds_before_abort must be >= 0")
+	}
 	return nil
 }
 
@@ -301,7 +307,9 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		PreviousConfigID: r.PreviousConfigID,
 		Stages:           stages,
 		AbortCriteria: applicationstore.RolloutAbortCriteria{
-			MaxDriftedAgents: r.AbortCriteria.MaxDriftedAgents,
+			MaxDriftedAgents:           r.AbortCriteria.MaxDriftedAgents,
+			MaxErrorLogsPerMinute:      r.AbortCriteria.MaxErrorLogsPerMinute,
+			MinDwellSecondsBeforeAbort: r.AbortCriteria.MinDwellSecondsBeforeAbort,
 		},
 		NotificationURL: r.NotificationURL,
 		State:           applicationstore.RolloutState(r.State),
@@ -330,7 +338,9 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		PreviousConfigID: r.PreviousConfigID,
 		Stages:           stages,
 		AbortCriteria: RolloutAbortCriteria{
-			MaxDriftedAgents: r.AbortCriteria.MaxDriftedAgents,
+			MaxDriftedAgents:           r.AbortCriteria.MaxDriftedAgents,
+			MaxErrorLogsPerMinute:      r.AbortCriteria.MaxErrorLogsPerMinute,
+			MinDwellSecondsBeforeAbort: r.AbortCriteria.MinDwellSecondsBeforeAbort,
 		},
 		NotificationURL: r.NotificationURL,
 		State:           RolloutState(r.State),

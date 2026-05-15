@@ -48,6 +48,16 @@ type ConfigStore interface {
 	GetConfig(ctx context.Context, id string) (*applicationstore.Config, error)
 }
 
+// TelemetryReader is the subset of telemetrystore.Reader the engine uses
+// to evaluate error-rate abort criteria against canary agents.
+type TelemetryReader interface {
+	// CanaryErrorLogsPerMinute returns the average ERROR-or-higher log
+	// records per minute emitted by the given agent ids in the window
+	// [since, now). Returns 0 if there are no records (which the engine
+	// treats as healthy).
+	CanaryErrorLogsPerMinute(ctx context.Context, agentIDs []uuid.UUID, since time.Time) (float64, error)
+}
+
 // Engine advances active rollouts and triggers rollback when abort
 // criteria fire.
 type Engine struct {
@@ -55,6 +65,7 @@ type Engine struct {
 	agentService   services.AgentService
 	auditService   services.AuditService // optional
 	configStore    ConfigStore
+	telemetry      TelemetryReader // optional; nil disables error-rate criteria
 	commander      AgentCommander
 	broker         *events.Broker // optional; nil disables SSE publication
 	httpClient     *http.Client   // for webhook notifications
@@ -64,12 +75,14 @@ type Engine struct {
 	wg       sync.WaitGroup
 }
 
-// NewEngine wires up the engine. auditService and broker are both optional.
+// NewEngine wires up the engine. auditService, telemetry, and broker are
+// all optional.
 func NewEngine(
 	rolloutService services.RolloutService,
 	agentService services.AgentService,
 	auditService services.AuditService,
 	configStore ConfigStore,
+	telemetry TelemetryReader,
 	commander AgentCommander,
 	broker *events.Broker,
 	logger *zap.Logger,
@@ -79,6 +92,7 @@ func NewEngine(
 		agentService:   agentService,
 		auditService:   auditService,
 		configStore:    configStore,
+		telemetry:      telemetry,
 		commander:      commander,
 		broker:         broker,
 		httpClient:     &http.Client{Timeout: 10 * time.Second},
@@ -457,7 +471,29 @@ func (e *Engine) evaluateAbortCriteria(ctx context.Context, r *services.Rollout,
 		return fmt.Sprintf("%d canary agent(s) drifted (max %d)",
 			driftedCount, r.AbortCriteria.MaxDriftedAgents)
 	}
-	_ = stage // dwell-window-specific criteria (e.g. error rate per minute) will plug in here
+
+	// Error-rate abort: only if both the criterion and a telemetry reader
+	// are wired in, and only after the configurable warmup window (so
+	// newly-pushed agents have time to flush startup noise).
+	if r.AbortCriteria.MaxErrorLogsPerMinute > 0 && e.telemetry != nil {
+		warmup := time.Duration(r.AbortCriteria.MinDwellSecondsBeforeAbort) * time.Second
+		if warmup == 0 {
+			warmup = 30 * time.Second
+		}
+		if r.StageStartedAt != nil && time.Since(*r.StageStartedAt) >= warmup {
+			ids := make([]uuid.UUID, 0, len(canary))
+			for _, a := range canary {
+				ids = append(ids, a.ID)
+			}
+			rate, err := e.telemetry.CanaryErrorLogsPerMinute(ctx, ids, *r.StageStartedAt)
+			if err == nil && rate > float64(r.AbortCriteria.MaxErrorLogsPerMinute) {
+				return fmt.Sprintf("canary error log rate %.1f/min exceeded max %d/min",
+					rate, r.AbortCriteria.MaxErrorLogsPerMinute)
+			}
+		}
+	}
+
+	_ = stage // additional criteria can plug in here
 	return ""
 }
 

@@ -81,6 +81,16 @@ type RolloutAbortCriteria struct {
 	// MaxDriftedAgents: if more than this many canary agents end up in
 	// drift state during a dwell, abort. 0 means any drift aborts.
 	MaxDriftedAgents int `json:"max_drifted_agents"`
+
+	// MaxErrorLogsPerMinute: if the canary agents collectively produce
+	// more than this many ERROR/FATAL log records per minute (averaged
+	// over the dwell window so far), abort. 0 disables the check.
+	MaxErrorLogsPerMinute int `json:"max_error_logs_per_minute,omitempty"`
+
+	// MinDwellSecondsBeforeAbort: how long after a stage starts the
+	// engine waits before applying error-rate criteria. Gives newly-
+	// pushed agents time to flush startup noise. Default 30s.
+	MinDwellSecondsBeforeAbort int `json:"min_dwell_seconds_before_abort,omitempty"`
 }
 
 // Rollout is one safe staged config rollout against a group.

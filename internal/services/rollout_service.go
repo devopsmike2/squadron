@@ -52,7 +52,9 @@ type RolloutStage struct {
 
 // RolloutAbortCriteria — see applicationstore.RolloutAbortCriteria.
 type RolloutAbortCriteria struct {
-	MaxDriftedAgents int `json:"max_drifted_agents"`
+	MaxDriftedAgents           int `json:"max_drifted_agents"`
+	MaxErrorLogsPerMinute      int `json:"max_error_logs_per_minute,omitempty"`
+	MinDwellSecondsBeforeAbort int `json:"min_dwell_seconds_before_abort,omitempty"`
 }
 
 // Rollout is the service-layer view of an applicationstore.Rollout.

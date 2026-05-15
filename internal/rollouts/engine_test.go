@@ -54,6 +54,7 @@ func TestEngine_CanaryAgentsForStage_PercentageMath(t *testing.T) {
 	e := &Engine{
 		agentService: stub,
 		logger:       zap.NewNop(),
+		telemetry:    nil, // not used by this test
 	}
 
 	cases := []struct {
