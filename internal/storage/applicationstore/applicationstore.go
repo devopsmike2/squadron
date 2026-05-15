@@ -16,6 +16,11 @@ type AlertSeverity = types.AlertSeverity
 type ThresholdOperator = types.ThresholdOperator
 type AuditEvent = types.AuditEvent
 type AuditEventFilter = types.AuditEventFilter
+type Rollout = types.Rollout
+type RolloutStage = types.RolloutStage
+type RolloutAbortCriteria = types.RolloutAbortCriteria
+type RolloutState = types.RolloutState
+type RolloutFilter = types.RolloutFilter
 
 // Re-export constants
 const (
@@ -33,4 +38,10 @@ const (
 	ThresholdLessOrEqual    = types.ThresholdLessOrEqual
 	ThresholdEqual          = types.ThresholdEqual
 	ThresholdNotEqual       = types.ThresholdNotEqual
+
+	RolloutStatePending    = types.RolloutStatePending
+	RolloutStateInProgress = types.RolloutStateInProgress
+	RolloutStateSucceeded  = types.RolloutStateSucceeded
+	RolloutStateAborted    = types.RolloutStateAborted
+	RolloutStateRolledBack = types.RolloutStateRolledBack
 )

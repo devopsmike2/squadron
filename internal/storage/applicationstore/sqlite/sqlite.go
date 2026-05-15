@@ -140,6 +140,26 @@ func (s *Storage) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id, timestamp DESC);
 	CREATE INDEX IF NOT EXISTS idx_audit_events_event_type ON audit_events(event_type);
 
+	CREATE TABLE IF NOT EXISTS rollouts (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		group_id TEXT NOT NULL,
+		target_config_id TEXT NOT NULL,
+		previous_config_id TEXT,
+		stages TEXT NOT NULL,                 -- JSON array of {percentage, dwell_seconds}
+		abort_criteria TEXT NOT NULL,         -- JSON {max_drifted_agents}
+		state TEXT NOT NULL,
+		current_stage INTEGER NOT NULL DEFAULT 0,
+		stage_started_at DATETIME,
+		abort_reason TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		completed_at DATETIME
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_rollouts_state ON rollouts(state);
+	CREATE INDEX IF NOT EXISTS idx_rollouts_group ON rollouts(group_id, created_at DESC);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -1018,6 +1038,172 @@ func nullableString(s string) any {
 		return sql.NullString{Valid: false}
 	}
 	return s
+}
+
+// Rollout management
+
+func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
+	stagesJSON, err := json.Marshal(r.Stages)
+	if err != nil {
+		return fmt.Errorf("failed to marshal rollout stages: %w", err)
+	}
+	criteriaJSON, err := json.Marshal(r.AbortCriteria)
+	if err != nil {
+		return fmt.Errorf("failed to marshal rollout abort criteria: %w", err)
+	}
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	if r.UpdatedAt.IsZero() {
+		r.UpdatedAt = r.CreatedAt
+	}
+	stmt := `
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err = s.db.ExecContext(ctx, stmt,
+		r.ID, r.Name, r.GroupID, r.TargetConfigID,
+		nullableString(r.PreviousConfigID),
+		string(stagesJSON), string(criteriaJSON),
+		string(r.State), r.CurrentStage,
+		r.StageStartedAt, nullableString(r.AbortReason),
+		r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create rollout: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE id = ?`
+	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return r, err
+}
+
+func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) ([]*types.Rollout, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE 1=1"
+	var args []any
+	if filter.GroupID != "" {
+		q += " AND group_id = ?"
+		args = append(args, filter.GroupID)
+	}
+	if filter.State != "" {
+		q += " AND state = ?"
+		args = append(args, string(filter.State))
+	}
+	q += " ORDER BY created_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list rollouts: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*types.Rollout
+	for rows.Next() {
+		r, err := s.scanRollout(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
+	stagesJSON, err := json.Marshal(r.Stages)
+	if err != nil {
+		return fmt.Errorf("failed to marshal rollout stages: %w", err)
+	}
+	criteriaJSON, err := json.Marshal(r.AbortCriteria)
+	if err != nil {
+		return fmt.Errorf("failed to marshal rollout abort criteria: %w", err)
+	}
+	r.UpdatedAt = time.Now().UTC()
+	stmt := `
+		UPDATE rollouts
+		SET name = ?, group_id = ?, target_config_id = ?, previous_config_id = ?,
+		    stages = ?, abort_criteria = ?, state = ?, current_stage = ?,
+		    stage_started_at = ?, abort_reason = ?, updated_at = ?, completed_at = ?
+		WHERE id = ?
+	`
+	res, err := s.db.ExecContext(ctx, stmt,
+		r.Name, r.GroupID, r.TargetConfigID,
+		nullableString(r.PreviousConfigID),
+		string(stagesJSON), string(criteriaJSON),
+		string(r.State), r.CurrentStage,
+		r.StageStartedAt, nullableString(r.AbortReason),
+		r.UpdatedAt, r.CompletedAt,
+		r.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update rollout: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("rollout not found: %s", r.ID)
+	}
+	return nil
+}
+
+// scanner is the minimal interface satisfied by both *sql.Row and *sql.Rows
+// so scanRollout can serve both code paths.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
+	r := &types.Rollout{}
+	var (
+		previousConfigID sql.NullString
+		stagesJSON       string
+		criteriaJSON     string
+		stateStr         string
+		stageStartedAt   sql.NullTime
+		abortReason      sql.NullString
+		completedAt      sql.NullTime
+	)
+	if err := sc.Scan(
+		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
+		&previousConfigID, &stagesJSON, &criteriaJSON,
+		&stateStr, &r.CurrentStage,
+		&stageStartedAt, &abortReason,
+		&r.CreatedAt, &r.UpdatedAt, &completedAt,
+	); err != nil {
+		return nil, err
+	}
+	if previousConfigID.Valid {
+		r.PreviousConfigID = previousConfigID.String
+	}
+	if err := json.Unmarshal([]byte(stagesJSON), &r.Stages); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal rollout stages: %w", err)
+	}
+	if err := json.Unmarshal([]byte(criteriaJSON), &r.AbortCriteria); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal abort criteria: %w", err)
+	}
+	r.State = types.RolloutState(stateStr)
+	if stageStartedAt.Valid {
+		r.StageStartedAt = &stageStartedAt.Time
+	}
+	if abortReason.Valid {
+		r.AbortReason = abortReason.String
+	}
+	if completedAt.Valid {
+		r.CompletedAt = &completedAt.Time
+	}
+	return r, nil
 }
 
 // Close closes the database connection

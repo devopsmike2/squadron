@@ -6,6 +6,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ type Store struct {
 	savedQueries map[string]*types.SavedQuery
 	alertRules   map[string]*types.AlertRule
 	auditEvents  []*types.AuditEvent // append-only; sorted newest-first on read
+	rollouts     map[string]*types.Rollout
 }
 
 // NewStore creates a new in-memory store
@@ -33,6 +35,7 @@ func NewStore() *Store {
 		savedQueries: make(map[string]*types.SavedQuery),
 		alertRules:   make(map[string]*types.AlertRule),
 		auditEvents:  make([]*types.AuditEvent, 0, 64),
+		rollouts:     make(map[string]*types.Rollout),
 	}
 }
 
@@ -543,6 +546,91 @@ func (s *Store) ListAuditEvents(ctx context.Context, filter types.AuditEventFilt
 	return out, nil
 }
 
+// Rollout management
+
+func (s *Store) CreateRollout(ctx context.Context, r *types.Rollout) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.rollouts[r.ID]; exists {
+		return fmt.Errorf("rollout already exists: %s", r.ID)
+	}
+	rolloutCopy := *r
+	// Deep-copy slice + map fields to insulate stored state.
+	if r.Stages != nil {
+		rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
+		copy(rolloutCopy.Stages, r.Stages)
+	}
+	s.rollouts[r.ID] = &rolloutCopy
+	return nil
+}
+
+func (s *Store) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.rollouts[id]
+	if !ok {
+		return nil, nil
+	}
+	rolloutCopy := *r
+	if r.Stages != nil {
+		rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
+		copy(rolloutCopy.Stages, r.Stages)
+	}
+	return &rolloutCopy, nil
+}
+
+func (s *Store) ListRollouts(ctx context.Context, filter types.RolloutFilter) ([]*types.Rollout, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	// Collect matching rollouts, sort newest-first by CreatedAt.
+	var matches []*types.Rollout
+	for _, r := range s.rollouts {
+		if filter.GroupID != "" && r.GroupID != filter.GroupID {
+			continue
+		}
+		if filter.State != "" && r.State != filter.State {
+			continue
+		}
+		rolloutCopy := *r
+		if r.Stages != nil {
+			rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
+			copy(rolloutCopy.Stages, r.Stages)
+		}
+		matches = append(matches, &rolloutCopy)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].CreatedAt.After(matches[j].CreatedAt)
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches, nil
+}
+
+func (s *Store) UpdateRollout(ctx context.Context, r *types.Rollout) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.rollouts[r.ID]; !ok {
+		return fmt.Errorf("rollout not found: %s", r.ID)
+	}
+	rolloutCopy := *r
+	if r.Stages != nil {
+		rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
+		copy(rolloutCopy.Stages, r.Stages)
+	}
+	s.rollouts[r.ID] = &rolloutCopy
+	return nil
+}
+
 // purge removes all data from the store (for testing)
 func (s *Store) purge(context.Context) {
 	s.mu.Lock()
@@ -554,4 +642,5 @@ func (s *Store) purge(context.Context) {
 	s.savedQueries = make(map[string]*types.SavedQuery)
 	s.alertRules = make(map[string]*types.AlertRule)
 	s.auditEvents = make([]*types.AuditEvent, 0, 64)
+	s.rollouts = make(map[string]*types.Rollout)
 }

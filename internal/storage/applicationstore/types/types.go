@@ -45,6 +45,68 @@ type ApplicationStore interface {
 	// Audit log
 	CreateAuditEvent(ctx context.Context, event *AuditEvent) error
 	ListAuditEvents(ctx context.Context, filter AuditEventFilter) ([]*AuditEvent, error)
+
+	// Rollouts (safe staged config rollouts)
+	CreateRollout(ctx context.Context, rollout *Rollout) error
+	GetRollout(ctx context.Context, id string) (*Rollout, error)
+	ListRollouts(ctx context.Context, filter RolloutFilter) ([]*Rollout, error)
+	UpdateRollout(ctx context.Context, rollout *Rollout) error
+}
+
+// RolloutState is the lifecycle position of a Rollout.
+type RolloutState string
+
+const (
+	RolloutStatePending     RolloutState = "pending"      // created but engine hasn't picked it up yet
+	RolloutStateInProgress  RolloutState = "in_progress"  // actively advancing through stages
+	RolloutStateSucceeded   RolloutState = "succeeded"    // final stage completed cleanly
+	RolloutStateAborted     RolloutState = "aborted"      // operator clicked Abort or criteria fired; rollback in progress
+	RolloutStateRolledBack  RolloutState = "rolled_back"  // previous config restored; terminal
+)
+
+// RolloutStage is one promotion step. Percentage is cumulative — stage[N]
+// targets that many percent of the group's agents (so [10, 50, 100] means
+// 10% first, then expand to 50%, then 100%).
+type RolloutStage struct {
+	Percentage   int `json:"percentage"`     // 0-100
+	DwellSeconds int `json:"dwell_seconds"`  // pause at this stage before auto-advancing
+}
+
+// RolloutAbortCriteria are the conditions under which the engine auto-aborts
+// a rollout and rolls back to PreviousConfigID. Conservative defaults are
+// recommended — a rolled-back-by-mistake rollout is recoverable, a let-it-
+// burn rollout often isn't.
+type RolloutAbortCriteria struct {
+	// MaxDriftedAgents: if more than this many canary agents end up in
+	// drift state during a dwell, abort. 0 means any drift aborts.
+	MaxDriftedAgents int `json:"max_drifted_agents"`
+}
+
+// Rollout is one safe staged config rollout against a group.
+type Rollout struct {
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	GroupID          string               `json:"group_id"`
+	TargetConfigID   string               `json:"target_config_id"`
+	PreviousConfigID string               `json:"previous_config_id,omitempty"` // captured at create time for rollback
+	Stages           []RolloutStage       `json:"stages"`
+	AbortCriteria    RolloutAbortCriteria `json:"abort_criteria"`
+
+	State          RolloutState `json:"state"`
+	CurrentStage   int          `json:"current_stage"`              // index into Stages
+	StageStartedAt *time.Time   `json:"stage_started_at,omitempty"` // when CurrentStage began dwelling
+	AbortReason    string       `json:"abort_reason,omitempty"`     // populated when State transitions to aborted
+
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"` // set on terminal state
+}
+
+// RolloutFilter narrows ListRollouts. Empty filter returns all.
+type RolloutFilter struct {
+	GroupID string
+	State   RolloutState
+	Limit   int
 }
 
 // AuditEvent is one entry in the audit log. Every state change in Squadron
