@@ -130,6 +130,37 @@ export function AppSidebar() {
 
       <SidebarFooter className="border-t border-border">
         <SidebarMenu>
+          {state === "expanded" && (
+            <SidebarMenuItem>
+              {/* Discoverability hint for the global command palette. The
+                  keyboard handler lives in <CommandPalette />; this row is
+                  purely a visual cue so first-time users find it. */}
+              <button
+                type="button"
+                onClick={() => {
+                  // Synthesize a ⌘K keypress so we route through the same
+                  // global handler the keyboard does — keeps a single source
+                  // of truth for what "open the palette" means.
+                  const isMac = navigator.platform.toLowerCase().includes("mac");
+                  document.dispatchEvent(
+                    new KeyboardEvent("keydown", {
+                      key: "k",
+                      metaKey: isMac,
+                      ctrlKey: !isMac,
+                      bubbles: true,
+                    }),
+                  );
+                }}
+                className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                aria-label="Open command palette"
+              >
+                <span>Quick search</span>
+                <kbd className="font-mono border rounded px-1.5 py-0.5">
+                  ⌘K
+                </kbd>
+              </button>
+            </SidebarMenuItem>
+          )}
           <SidebarMenuItem>
             <ModeToggle iconOnly={state === "collapsed"} />
           </SidebarMenuItem>

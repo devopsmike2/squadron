@@ -9,6 +9,7 @@ import TelemetryPage from "./pages/Telemetry";
 import TopologyPage from "./pages/Topology";
 
 import "./App.css";
+import { CommandPalette } from "@/components/CommandPalette";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { SWRProvider } from "@/lib/swr-provider";
 import { ApiProvider } from "@/providers/ApiProvider";
@@ -19,6 +20,9 @@ function App() {
       <SWRProvider>
         <ApiProvider>
           <Router>
+            {/* Global ⌘K command palette. Mounted inside the Router so its
+                items can use useNavigate. */}
+            <CommandPalette />
             <Routes>
               {/* Main application routes */}
               <Route element={<Layout />}>
