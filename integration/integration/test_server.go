@@ -183,7 +183,7 @@ func (ts *TestServer) initServices() {
 	}
 
 	// Create agent service without config sender initially
-	ts.agentService = services.NewAgentService(appStore, ts.logger)
+	ts.agentService = services.NewAgentService(appStore, nil, ts.logger)
 	ts.savedQueryService = services.NewSavedQueryService(appStore, ts.logger)
 }
 

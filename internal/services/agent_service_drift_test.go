@@ -15,7 +15,7 @@ import (
 func TestAgentServiceConfigDriftDetection(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()
-	service := NewAgentService(store, logger)
+	service := NewAgentService(store, nil, logger)
 
 	agentID := uuid.New()
 	now := time.Now()

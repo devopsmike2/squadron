@@ -12,20 +12,31 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
 // AgentServiceImpl implements the AgentService interface
 type AgentServiceImpl struct {
-	appStore applicationstore.ApplicationStore
-	logger   *zap.Logger
+	appStore     applicationstore.ApplicationStore
+	logger       *zap.Logger
+	driftMetrics *metrics.DriftMetrics
 }
 
-// NewAgentService creates a new agent service
-func NewAgentService(appStore applicationstore.ApplicationStore, logger *zap.Logger) AgentService {
+// NewAgentService creates a new agent service.
+//
+// If driftMetrics is nil, a no-op metrics struct is wired up so the service
+// stays nil-safe in tests. Production callers should pass real metrics from
+// the shared Prometheus registry so drift transitions and fleet state show
+// up on /metrics.
+func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *metrics.DriftMetrics, logger *zap.Logger) AgentService {
+	if driftMetrics == nil {
+		driftMetrics = metrics.NewDriftMetrics(metrics.NullFactory)
+	}
 	return &AgentServiceImpl{
-		appStore: appStore,
-		logger:   logger,
+		appStore:     appStore,
+		logger:       logger,
+		driftMetrics: driftMetrics,
 	}
 }
 
@@ -119,7 +130,40 @@ func (s *AgentServiceImpl) ListAgents(ctx context.Context) ([]*Agent, error) {
 		result[i] = current
 	}
 
+	// Refresh fleet drift gauges as a side effect. This is the dominant code
+	// path that walks the whole fleet, so gauges stay reasonably fresh as long
+	// as someone (the UI poll, a Prometheus scrape via the API, etc.) is
+	// calling ListAgents.
+	s.refreshFleetDriftGauges(result)
+
 	return result, nil
+}
+
+// refreshFleetDriftGauges tallies agents by drift status and updates the gauge
+// values. Concurrent ListAgents callers can all execute this safely — each
+// gauge Update is atomic and concurrent calls converge on the same value.
+func (s *AgentServiceImpl) refreshFleetDriftGauges(agents []*Agent) {
+	var synced, drifted, noIntent, noEffective, unknown int64
+	for _, a := range agents {
+		switch a.DriftStatus {
+		case ConfigDriftStatusSynced:
+			synced++
+		case ConfigDriftStatusDrifted:
+			drifted++
+		case ConfigDriftStatusNoIntent:
+			noIntent++
+		case ConfigDriftStatusNoEffective:
+			noEffective++
+		default:
+			unknown++
+		}
+	}
+	s.driftMetrics.FleetAgentsTotal.Update(int64(len(agents)))
+	s.driftMetrics.FleetSynced.Update(synced)
+	s.driftMetrics.FleetDrifted.Update(drifted)
+	s.driftMetrics.FleetNoIntent.Update(noIntent)
+	s.driftMetrics.FleetNoEffective.Update(noEffective)
+	s.driftMetrics.FleetUnknown.Update(unknown)
 }
 
 // UpdateAgentStatus updates agent status
@@ -132,9 +176,57 @@ func (s *AgentServiceImpl) UpdateAgentLastSeen(ctx context.Context, id uuid.UUID
 	return s.appStore.UpdateAgentLastSeen(ctx, id, lastSeen)
 }
 
-// UpdateAgentEffectiveConfig updates agent effective config
+// UpdateAgentEffectiveConfig updates agent effective config.
+//
+// Side effect: drift status is re-evaluated before and after the update; if
+// the status transitions (e.g. synced -> drifted because the agent reverted
+// its config), the corresponding transition counter is incremented and the
+// transition is logged. This is the primary signal alerts will fire on.
 func (s *AgentServiceImpl) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, effectiveConfig string) error {
-	return s.appStore.UpdateAgentEffectiveConfig(ctx, id, effectiveConfig)
+	prevStatus := s.snapshotDriftStatus(ctx, id)
+
+	if err := s.appStore.UpdateAgentEffectiveConfig(ctx, id, effectiveConfig); err != nil {
+		return err
+	}
+
+	currStatus := s.snapshotDriftStatus(ctx, id)
+	if currStatus != prevStatus {
+		s.recordDriftTransition(id, prevStatus, currStatus)
+	}
+	return nil
+}
+
+// snapshotDriftStatus returns the drift status that a fresh GetAgent would
+// compute. Returns ConfigDriftStatusUnknown if the agent can't be fetched —
+// callers should treat that as "no change worth alerting on" and skip
+// transition recording.
+func (s *AgentServiceImpl) snapshotDriftStatus(ctx context.Context, id uuid.UUID) ConfigDriftStatus {
+	agent, err := s.GetAgent(ctx, id)
+	if err != nil || agent == nil {
+		return ConfigDriftStatusUnknown
+	}
+	return agent.DriftStatus
+}
+
+// recordDriftTransition increments the appropriate transition counter and
+// logs the transition. The from->drifted transition is the one operators
+// will most often alert on, so it gets a WARN; recoveries log at INFO.
+func (s *AgentServiceImpl) recordDriftTransition(agentID uuid.UUID, from, to ConfigDriftStatus) {
+	fields := []zap.Field{
+		zap.String("agent_id", agentID.String()),
+		zap.String("from", string(from)),
+		zap.String("to", string(to)),
+	}
+	switch to {
+	case ConfigDriftStatusDrifted:
+		s.driftMetrics.TransitionsToDrifted.Inc(1)
+		s.logger.Warn("agent drifted", fields...)
+	case ConfigDriftStatusSynced:
+		s.driftMetrics.TransitionsToSynced.Inc(1)
+		s.logger.Info("agent drift resolved", fields...)
+	default:
+		s.logger.Debug("agent drift status changed", fields...)
+	}
 }
 
 // DeleteAgent deletes an agent

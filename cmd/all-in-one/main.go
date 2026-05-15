@@ -139,6 +139,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	opampMetrics := metrics.NewOpAMPMetrics(metricsFactory)
 	otlpMetrics := metrics.NewOTLPMetrics(metricsFactory)
 	workerMetrics := metrics.NewWorkerMetrics(metricsFactory)
+	driftMetrics := metrics.NewDriftMetrics(metricsFactory)
 
 	agents := opamp.NewAgents(logger)
 
@@ -153,8 +154,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		agentHTTPEndpoint = config.OTLP.HTTPEndpoint
 	}
 
-	// Create agent service
-	agentService := services.NewAgentService(appStore, logger)
+	// Create agent service. driftMetrics is wired so drift transitions and
+	// fleet drift state appear on /metrics.
+	agentService := services.NewAgentService(appStore, driftMetrics, logger)
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 
 	// Create config sender (separate concern from AgentService)
