@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  Rocket,
   Server,
 } from "lucide-react";
 import { useState } from "react";
@@ -100,6 +101,12 @@ function AuditRow({ event }: { event: AuditEvent }) {
   const icon = iconFor(event);
   const ts = new Date(event.timestamp);
 
+  // Rollout stage_applied + empty_canary events get a first-class
+  // "agents this stage touched" rendering, because that list is the
+  // single most useful artifact for a post-mortem ("which hosts saw the
+  // new config at stage 2?"). The full payload is still available below.
+  const agentIDs = extractAgentIDs(event);
+
   return (
     <li>
       <button
@@ -140,12 +147,48 @@ function AuditRow({ event }: { event: AuditEvent }) {
         </Badge>
       </button>
       {expanded && hasPayload && (
-        <pre className="mx-6 mb-2 text-[11px] font-mono whitespace-pre-wrap break-all bg-muted/40 rounded p-2 overflow-auto max-h-48">
-          {JSON.stringify(event.payload, null, 2)}
-        </pre>
+        <div className="mx-6 mb-2 space-y-2">
+          {agentIDs && agentIDs.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Canary agents ({agentIDs.length})
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {agentIDs.map((id) => (
+                  <span
+                    key={id}
+                    className="inline-block font-mono text-[10px] px-1.5 py-0.5 rounded bg-muted/60 border"
+                    title={id}
+                  >
+                    {id.slice(0, 8)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <pre className="text-[11px] font-mono whitespace-pre-wrap break-all bg-muted/40 rounded p-2 overflow-auto max-h-48">
+            {JSON.stringify(event.payload, null, 2)}
+          </pre>
+        </div>
       )}
     </li>
   );
+}
+
+// extractAgentIDs returns the resolved agent ID list from a rollout
+// stage event, if present. Mirrors the payload shape produced by
+// engine.stageAuditPayload — defensive against missing/wrongly-typed
+// fields because event payloads are freeform JSON.
+function extractAgentIDs(event: AuditEvent): string[] | null {
+  if (
+    event.event_type !== "rollout.stage_applied" &&
+    event.event_type !== "rollout.empty_canary"
+  ) {
+    return null;
+  }
+  const raw = event.payload?.agent_ids;
+  if (!Array.isArray(raw)) return null;
+  return raw.filter((v): v is string => typeof v === "string");
 }
 
 // iconFor picks a visual cue based on the event type prefix. Falls back to
@@ -165,6 +208,14 @@ function iconFor(e: AuditEvent) {
     return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (e.event_type.startsWith("alert"))
     return <Bell className="h-4 w-4 text-amber-600" />;
+  if (e.event_type === "rollout.empty_canary")
+    return <AlertTriangle className="h-4 w-4 text-amber-600" />;
+  if (e.event_type === "rollout.aborted")
+    return <AlertCircle className="h-4 w-4 text-red-600" />;
+  if (e.event_type === "rollout.succeeded")
+    return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
+  if (e.event_type.startsWith("rollout."))
+    return <Rocket className="h-4 w-4 text-blue-600" />;
   return <Activity className="h-4 w-4 text-muted-foreground" />;
 }
 
@@ -187,9 +238,50 @@ function describe(e: AuditEvent): string {
       return `Alert fired${e.payload?.rule_name ? `: ${e.payload.rule_name}` : ""}`;
     case "alert.resolved":
       return `Alert resolved${e.payload?.rule_name ? `: ${e.payload.rule_name}` : ""}`;
+    case "rollout.created":
+      return `Rollout created${e.payload?.name ? `: ${e.payload.name}` : ""}`;
+    case "rollout.stage_applied": {
+      const stage = typeof e.payload?.stage === "number" ? e.payload.stage : null;
+      const mode = typeof e.payload?.mode === "string" ? e.payload.mode : "percent";
+      const size =
+        typeof e.payload?.canary_size === "number" ? e.payload.canary_size : null;
+      const where =
+        mode === "label"
+          ? labelSelectorSummary(e.payload?.label_selector)
+          : `${e.payload?.percentage ?? "?"}%`;
+      const stageStr = stage !== null ? `Stage ${stage + 1}` : "Stage";
+      const sizeStr = size !== null ? `, ${size} agent${size === 1 ? "" : "s"}` : "";
+      return `${stageStr} applied (${where}${sizeStr})`;
+    }
+    case "rollout.empty_canary":
+      return "Stage resolved to 0 canary agents";
+    case "rollout.aborted":
+      return `Rollout aborted${e.payload?.reason ? `: ${e.payload.reason}` : ""}`;
+    case "rollout.paused":
+      return "Rollout paused";
+    case "rollout.resumed":
+      return "Rollout resumed";
+    case "rollout.succeeded":
+      return "Rollout succeeded";
+    case "rollout.rolled_back":
+      return "Rollback applied";
   }
   // Generic fallback: humanize the event type.
   return `${e.event_type} ${e.action}`;
+}
+
+// labelSelectorSummary turns a {k:v} map from an audit payload into a
+// compact "k=v, k=v" string for the one-line event summary. Defensive
+// against malformed payloads (audit payloads are freeform JSON).
+function labelSelectorSummary(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "label";
+  const entries = Object.entries(raw as Record<string, unknown>)
+    .filter(([k, v]) => typeof k === "string" && typeof v === "string")
+    .map(([k, v]) => `${k}=${String(v)}`);
+  if (entries.length === 0) return "label";
+  // Cap at 3 pairs so a sprawling selector doesn't blow out the row.
+  const head = entries.slice(0, 3).join(", ");
+  return entries.length > 3 ? `${head}, …` : head;
 }
 
 // timeAgo returns "5m ago", "2h ago", etc. Tight format for dense lists.

@@ -4,11 +4,18 @@
 // badge. In-progress rollouts get an Abort button. The create form is
 // inline at the top so operators can kick one off without navigating
 // away.
+//
+// Stages support two selection modes:
+//   - "percent": pick the first N% of the group's agents (legacy / default)
+//   - "label":   match by AND'd key=value pairs against agent labels
+// The form toggles between the two; live match-count against the target
+// group gives operators feedback before they click Start.
 
-import { Pause, Play, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, ChevronRight, Pause, Play, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 
+import { getAgents } from "@/api/agents";
 import { getGroups, type Group } from "@/api/groups";
 import {
   abortRollout,
@@ -17,6 +24,7 @@ import {
   pauseRollout,
   resumeRollout,
 } from "@/api/rollouts";
+import { AuditTimeline } from "@/components/AuditTimeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,10 +42,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { Agent } from "@/types/agent";
 import type {
   Rollout,
   RolloutInput,
   RolloutStage,
+  RolloutStageMode,
   RolloutState,
 } from "@/types/rollout";
 
@@ -56,31 +66,85 @@ interface GroupsList {
   groups: Group[];
 }
 
-// FormState mirrors the API's RolloutInput shape but uses string-typed
-// inputs since that's what controlled <Input type="number"> gives us. We
-// parse + validate at submit time.
+// FormStage carries both modes' fields side-by-side. Whichever is "active"
+// is determined by `mode`. We keep the inactive mode's values around so
+// flipping the toggle doesn't wipe the operator's selector entries.
+interface FormStage {
+  mode: RolloutStageMode;
+  percentage: string; // controlled <Input type="number"> wants a string
+  // selector_rows is an editable list of {key, value} pairs. We keep it as
+  // an array (not a Record) so duplicate-key keystrokes don't collide and
+  // so empty rows persist while the operator is mid-edit.
+  selector_rows: { key: string; value: string }[];
+  dwell_seconds: string;
+}
+
 interface FormState {
   name: string;
   group_id: string;
   target_config_id: string;
-  // One entry per stage. Strings so the inputs can be partially edited.
-  stages: { percentage: string; dwell_seconds: string }[];
+  stages: FormStage[];
   max_drifted_agents: string;
   notification_url: string;
 }
+
+const emptyPercentStage = (percentage: string, dwell: string): FormStage => ({
+  mode: "percent",
+  percentage,
+  selector_rows: [{ key: "", value: "" }],
+  dwell_seconds: dwell,
+});
 
 const emptyInput = (): FormState => ({
   name: "",
   group_id: "",
   target_config_id: "",
   stages: [
-    { percentage: "10", dwell_seconds: "60" },
-    { percentage: "50", dwell_seconds: "120" },
-    { percentage: "100", dwell_seconds: "60" },
+    emptyPercentStage("10", "60"),
+    emptyPercentStage("50", "120"),
+    emptyPercentStage("100", "60"),
   ],
   max_drifted_agents: "0",
   notification_url: "",
 });
+
+// Build the wire-shape RolloutStage from form state. Discards the
+// inactive mode's fields so the API receives clean input.
+const toWireStage = (s: FormStage): RolloutStage => {
+  const base: RolloutStage = { dwell_seconds: parseInt(s.dwell_seconds, 10) || 0 };
+  if (s.mode === "label") {
+    const selector: Record<string, string> = {};
+    for (const row of s.selector_rows) {
+      const k = row.key.trim();
+      const v = row.value.trim();
+      if (k && v) selector[k] = v;
+    }
+    return { ...base, mode: "label", label_selector: selector };
+  }
+  return { ...base, mode: "percent", percentage: parseInt(s.percentage, 10) || 0 };
+};
+
+// Materialize a stage's effective selector at the moment of typing so
+// the match-count widget can show a number. Mirrors backend AND-semantics.
+const matchAgents = (agents: Agent[], groupId: string, stage: FormStage): Agent[] => {
+  const inGroup = agents.filter((a) => a.group_id === groupId);
+  if (stage.mode === "percent") {
+    const pct = parseInt(stage.percentage, 10);
+    if (!pct || pct <= 0) return [];
+    // ceil division mirrors engine.canaryAgentsForStage percent math
+    const n = Math.min(inGroup.length, Math.ceil((inGroup.length * pct) / 100));
+    // Deterministic id sort like the backend so the preview matches.
+    return [...inGroup].sort((a, b) => a.id.localeCompare(b.id)).slice(0, n);
+  }
+  // Label mode: AND-match across all completed (non-empty key+value) rows.
+  // Incomplete rows are ignored — operators in mid-typing shouldn't see
+  // their match-count crash to zero between keystrokes.
+  const completed = stage.selector_rows.filter((r) => r.key.trim() && r.value.trim());
+  if (completed.length === 0) return [];
+  return inGroup.filter((a) =>
+    completed.every((r) => a.labels?.[r.key.trim()] === r.value.trim()),
+  );
+};
 
 export default function RolloutsPage() {
   const { data: rollouts, error, isLoading } = useSWR<Rollout[]>(
@@ -88,6 +152,14 @@ export default function RolloutsPage() {
     listRollouts,
   );
   const { data: groupsResp } = useSWR<GroupsList>("groups-list", getGroups);
+  const { data: agentsResp } = useSWR("agents-list", getAgents);
+  // Flatten the agents-by-id map the API returns. Used for label-mode
+  // match counts and (eventually) hover-to-see-which-agents UX.
+  const allAgents: Agent[] = useMemo(
+    () => Object.values(agentsResp?.agents ?? {}),
+    [agentsResp],
+  );
+
   // Surface group names for the row UI without an extra round trip.
   const groupName = (id: string): string =>
     groupsResp?.groups?.find((g) => g.id === id)?.name ?? id.slice(0, 8);
@@ -103,20 +175,32 @@ export default function RolloutsPage() {
     setSubmitError(null);
   };
 
+  // Per-stage match count is recomputed off the (debounced) form state +
+  // agent list. We debounce by holding a "settled" mirror that updates
+  // 150ms after the last edit, so quick typing doesn't thrash useSWR or
+  // re-render the agent list.
+  const [settledStages, setSettledStages] = useState(form.stages);
+  useEffect(() => {
+    const h = setTimeout(() => setSettledStages(form.stages), 150);
+    return () => clearTimeout(h);
+  }, [form.stages]);
+
   const submit = async () => {
     setSubmitting(true);
     setSubmitError(null);
 
-    // Parse each stage row. Per-stage percentage + dwell is the
-    // canonical API shape. Empty rows are dropped.
+    // The form holds both mode's fields side-by-side; toWireStage drops
+    // whichever isn't active so the API sees a clean shape.
     const stages: RolloutStage[] = form.stages
-      .map((row) => ({
-        percentage: parseInt(row.percentage, 10),
-        dwell_seconds: parseInt(row.dwell_seconds, 10),
-      }))
-      .filter(
-        (s) => !Number.isNaN(s.percentage) && !Number.isNaN(s.dwell_seconds),
-      );
+      .map(toWireStage)
+      .filter((s) => {
+        // Drop blank rows the operator never filled in (defensive — the
+        // add/remove buttons should keep this from happening).
+        if (s.mode === "label") {
+          return s.label_selector && Object.keys(s.label_selector).length > 0;
+        }
+        return typeof s.percentage === "number" && s.percentage > 0;
+      });
 
     const input: RolloutInput = {
       name: form.name.trim(),
@@ -166,6 +250,26 @@ export default function RolloutsPage() {
       alert(e instanceof Error ? e.message : "pause/resume failed");
     }
   };
+
+  // groupAgents count is shown next to each match-count so operators
+  // immediately see "0 of 12 agents matched" rather than just "0".
+  const groupAgentCount = form.group_id
+    ? allAgents.filter((a) => a.group_id === form.group_id).length
+    : 0;
+
+  // Once the operator has picked a group, validate label-mode rollouts
+  // have a non-zero match at stage 0. We warn but still allow Start so
+  // they can launch ahead of an agent rolling in with the matching label.
+  const stageZeroMatchesZero =
+    form.group_id &&
+    settledStages[0] &&
+    settledStages[0].mode === "label" &&
+    matchAgents(allAgents, form.group_id, settledStages[0]).length === 0;
+
+  // Stages with all-same mode required by the API. We surface this in the
+  // form too so operators don't get a 400 after Start.
+  const mixedModes =
+    new Set(form.stages.map((s) => s.mode)).size > 1;
 
   return (
     <div className="space-y-4 p-6">
@@ -241,84 +345,76 @@ export default function RolloutsPage() {
 
             <div className="space-y-2">
               <Label>Stages</Label>
-              <div className="space-y-2">
-                {form.stages.map((stage, i) => (
-                  <div key={i} className="flex items-end gap-2">
-                    <div className="flex-1 space-y-1">
-                      <Label htmlFor={`stage-pct-${i}`} className="text-xs">
-                        Stage {i + 1} — % of group
-                      </Label>
-                      <Input
-                        id={`stage-pct-${i}`}
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={stage.percentage}
-                        onChange={(e) => {
-                          const next = [...form.stages];
-                          next[i] = { ...next[i], percentage: e.target.value };
-                          setForm({ ...form, stages: next });
-                        }}
-                      />
-                    </div>
-                    <div className="flex-1 space-y-1">
-                      <Label
-                        htmlFor={`stage-dwell-${i}`}
-                        className="text-xs"
-                      >
-                        Dwell (s)
-                      </Label>
-                      <Input
-                        id={`stage-dwell-${i}`}
-                        type="number"
-                        min={0}
-                        value={stage.dwell_seconds}
-                        onChange={(e) => {
-                          const next = [...form.stages];
-                          next[i] = {
-                            ...next[i],
-                            dwell_seconds: e.target.value,
-                          };
-                          setForm({ ...form, stages: next });
-                        }}
-                      />
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => {
-                        if (form.stages.length <= 1) return;
-                        const next = form.stages.filter((_, j) => j !== i);
-                        setForm({ ...form, stages: next });
+              <div className="space-y-3">
+                {form.stages.map((stage, i) => {
+                  const matches = form.group_id
+                    ? matchAgents(allAgents, form.group_id, settledStages[i] ?? stage)
+                    : [];
+                  return (
+                    <StageEditor
+                      key={i}
+                      index={i}
+                      stage={stage}
+                      groupSelected={Boolean(form.group_id)}
+                      groupAgentCount={groupAgentCount}
+                      matchCount={matches.length}
+                      onChange={(next) => {
+                        const arr = [...form.stages];
+                        arr[i] = next;
+                        setForm({ ...form, stages: arr });
                       }}
-                      disabled={form.stages.length <= 1}
-                      title="Remove stage"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
+                      onRemove={() => {
+                        if (form.stages.length <= 1) return;
+                        const arr = form.stages.filter((_, j) => j !== i);
+                        setForm({ ...form, stages: arr });
+                      }}
+                      removable={form.stages.length > 1}
+                    />
+                  );
+                })}
                 <Button
                   variant="outline"
                   size="sm"
                   className="gap-1"
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      stages: [
-                        ...form.stages,
-                        { percentage: "100", dwell_seconds: "60" },
-                      ],
-                    })
-                  }
+                  onClick={() => {
+                    // New stages copy the previous stage's mode so the
+                    // mixed-mode rejection rule doesn't surprise operators.
+                    const lastMode = form.stages[form.stages.length - 1]?.mode ?? "percent";
+                    const next: FormStage =
+                      lastMode === "label"
+                        ? {
+                            mode: "label",
+                            percentage: "100",
+                            selector_rows: [{ key: "", value: "" }],
+                            dwell_seconds: "60",
+                          }
+                        : emptyPercentStage("100", "60");
+                    setForm({ ...form, stages: [...form.stages, next] });
+                  }}
                 >
                   <Plus className="h-3.5 w-3.5" />
                   Add stage
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Percentages are cumulative. Final stage must reach 100.
+                Percent-mode stages are cumulative and must reach 100. Label
+                mode stages must all use the label selector — mixed modes
+                aren't supported.
               </p>
+              {mixedModes && (
+                <p className="text-xs text-amber-600">
+                  Stages mix percent and label modes. Pick one mode for the
+                  whole rollout before starting.
+                </p>
+              )}
+              {stageZeroMatchesZero && (
+                <p className="text-xs text-amber-600">
+                  Stage 1's label selector matches 0 agents in this group. The
+                  rollout can still be started — Squadron will record an
+                  empty-canary audit event and the rollout will sit at stage 1
+                  until matching agents appear.
+                </p>
+              )}
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -361,7 +457,7 @@ export default function RolloutsPage() {
               <Button variant="outline" onClick={reset} disabled={submitting}>
                 Cancel
               </Button>
-              <Button onClick={submit} disabled={submitting}>
+              <Button onClick={submit} disabled={submitting || mixedModes}>
                 {submitting ? "Starting…" : "Start rollout"}
               </Button>
             </div>
@@ -402,6 +498,201 @@ export default function RolloutsPage() {
   );
 }
 
+// StageEditor renders one stage row with a mode toggle, the appropriate
+// editor for that mode, and a live "matches N of M" hint when a group is
+// selected. Kept separate so the parent's render stays scannable.
+interface StageEditorProps {
+  index: number;
+  stage: FormStage;
+  groupSelected: boolean;
+  groupAgentCount: number;
+  matchCount: number;
+  onChange: (next: FormStage) => void;
+  onRemove: () => void;
+  removable: boolean;
+}
+
+function StageEditor({
+  index,
+  stage,
+  groupSelected,
+  groupAgentCount,
+  matchCount,
+  onChange,
+  onRemove,
+  removable,
+}: StageEditorProps) {
+  const matchHint = groupSelected ? (
+    matchCount === 0 ? (
+      <span className="text-amber-600">
+        matches 0 of {groupAgentCount} agents
+      </span>
+    ) : (
+      <span className="text-emerald-700">
+        matches {matchCount} of {groupAgentCount} agents
+      </span>
+    )
+  ) : (
+    <span>pick a group above to preview matches</span>
+  );
+
+  return (
+    <div className="rounded-md border p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Stage {index + 1}
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Mode toggle: button group, not Select, so it's one click. */}
+          <div className="inline-flex rounded-md border bg-muted/40 p-0.5">
+            <button
+              type="button"
+              className={`px-2.5 py-0.5 text-xs rounded ${
+                stage.mode === "percent"
+                  ? "bg-background shadow text-foreground"
+                  : "text-muted-foreground"
+              }`}
+              onClick={() => onChange({ ...stage, mode: "percent" })}
+            >
+              Percent
+            </button>
+            <button
+              type="button"
+              className={`px-2.5 py-0.5 text-xs rounded ${
+                stage.mode === "label"
+                  ? "bg-background shadow text-foreground"
+                  : "text-muted-foreground"
+              }`}
+              onClick={() => onChange({ ...stage, mode: "label" })}
+            >
+              Label selector
+            </button>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onRemove}
+            disabled={!removable}
+            title="Remove stage"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {stage.mode === "percent" ? (
+        <div className="grid gap-2 md:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor={`stage-pct-${index}`} className="text-xs">
+              % of group
+            </Label>
+            <Input
+              id={`stage-pct-${index}`}
+              type="number"
+              min={1}
+              max={100}
+              value={stage.percentage}
+              onChange={(e) => onChange({ ...stage, percentage: e.target.value })}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={`stage-dwell-${index}`} className="text-xs">
+              Dwell (s)
+            </Label>
+            <Input
+              id={`stage-dwell-${index}`}
+              type="number"
+              min={0}
+              value={stage.dwell_seconds}
+              onChange={(e) => onChange({ ...stage, dwell_seconds: e.target.value })}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <Label className="text-xs">Label selector (all keys AND-matched)</Label>
+          <div className="space-y-1.5">
+            {stage.selector_rows.map((row, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Input
+                  placeholder="key (e.g. host.name)"
+                  value={row.key}
+                  className="font-mono text-sm"
+                  onChange={(e) => {
+                    const rows = [...stage.selector_rows];
+                    rows[i] = { ...rows[i], key: e.target.value };
+                    onChange({ ...stage, selector_rows: rows });
+                  }}
+                />
+                <span className="text-muted-foreground text-xs">=</span>
+                <Input
+                  placeholder="value (e.g. canary-1)"
+                  value={row.value}
+                  className="font-mono text-sm"
+                  onChange={(e) => {
+                    const rows = [...stage.selector_rows];
+                    rows[i] = { ...rows[i], value: e.target.value };
+                    onChange({ ...stage, selector_rows: rows });
+                  }}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    if (stage.selector_rows.length <= 1) {
+                      // Last row — clear it rather than removing so the
+                      // editor always shows at least one input pair.
+                      onChange({ ...stage, selector_rows: [{ key: "", value: "" }] });
+                      return;
+                    }
+                    const rows = stage.selector_rows.filter((_, j) => j !== i);
+                    onChange({ ...stage, selector_rows: rows });
+                  }}
+                  title="Remove selector row"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              onClick={() =>
+                onChange({
+                  ...stage,
+                  selector_rows: [
+                    ...stage.selector_rows,
+                    { key: "", value: "" },
+                  ],
+                })
+              }
+            >
+              <Plus className="h-3 w-3" />
+              Add label
+            </Button>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={`stage-dwell-${index}`} className="text-xs">
+              Dwell (s)
+            </Label>
+            <Input
+              id={`stage-dwell-${index}`}
+              type="number"
+              min={0}
+              value={stage.dwell_seconds}
+              onChange={(e) => onChange({ ...stage, dwell_seconds: e.target.value })}
+              className="max-w-40"
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="text-xs text-muted-foreground">{matchHint}</div>
+    </div>
+  );
+}
+
 interface RolloutCardProps {
   rollout: Rollout;
   groupName: string;
@@ -415,12 +706,34 @@ function RolloutCard({
   onAbort,
   onPauseResume,
 }: RolloutCardProps) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const totalStages = r.stages.length;
-  const currentPct =
-    totalStages > 0 ? r.stages[Math.min(r.current_stage, totalStages - 1)].percentage : 0;
+  const currentStage = r.stages[Math.min(r.current_stage, totalStages - 1)];
   const isActive =
     r.state === "in_progress" || r.state === "pending" || r.state === "paused";
   const isPaused = r.state === "paused";
+
+  // Stage summary text varies by mode. We render this in both the header
+  // and in the per-stage tooltips below.
+  const summarizeStage = (s: RolloutStage, idx: number): string => {
+    const mode = s.mode ?? "percent";
+    const dwell = `${s.dwell_seconds}s dwell`;
+    if (mode === "label") {
+      const pairs = Object.entries(s.label_selector ?? {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ");
+      return `Stage ${idx + 1}: label[${pairs || "?"}] · ${dwell}`;
+    }
+    return `Stage ${idx + 1}: ${s.percentage ?? 0}% · ${dwell}`;
+  };
+
+  const currentMode = currentStage?.mode ?? "percent";
+  const currentSummary =
+    currentMode === "label"
+      ? `label selector: ${Object.entries(currentStage?.label_selector ?? {})
+          .map(([k, v]) => `${k}=${v}`)
+          .join(", ") || "(empty)"}`
+      : `${currentStage?.percentage ?? 0}% of group`;
 
   return (
     <Card>
@@ -499,16 +812,38 @@ function RolloutCard({
                 className={`flex-1 h-2 rounded ${
                   reached ? "bg-blue-500" : "bg-muted"
                 }`}
-                title={`Stage ${i + 1}: ${stage.percentage}% · ${stage.dwell_seconds}s dwell`}
+                title={summarizeStage(stage, i)}
               />
             );
           })}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {currentPct}% of group at this stage
-        </div>
+        <div className="text-xs text-muted-foreground">{currentSummary}</div>
+
+        {/* History toggle — mounts an AuditTimeline filtered to this
+            rollout. Includes the per-stage resolved agent IDs so a
+            post-mortem can answer "who got pushed at each stage?". */}
+        <button
+          type="button"
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setHistoryOpen((v) => !v)}
+        >
+          {historyOpen ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+          {historyOpen ? "Hide history" : "Show history"}
+        </button>
+        {historyOpen && (
+          <div className="border-t pt-2">
+            <AuditTimeline
+              targetType="rollout"
+              targetId={r.id}
+              limit={100}
+            />
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
-

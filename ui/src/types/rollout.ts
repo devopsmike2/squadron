@@ -8,8 +8,15 @@ export type RolloutState =
   | "aborted"
   | "rolled_back";
 
+// Stage mode mirrors services.RolloutStageMode. "percent" picks the first
+// N% of agents in the group; "label" matches by key=value equality.
+export type RolloutStageMode = "percent" | "label";
+
 export interface RolloutStage {
-  percentage: number;
+  // Mode may be missing for rollouts persisted before v0.6; treat as "percent".
+  mode?: RolloutStageMode;
+  percentage?: number;
+  label_selector?: Record<string, string>;
   dwell_seconds: number;
 }
 
