@@ -62,7 +62,25 @@ type UpdateAgentGroupRequest struct {
 	GroupID *string `json:"group_id" binding:"omitempty,uuid"`
 }
 
+// validDriftFilters is the set of drift_status query values the endpoint
+// accepts. Mirrors services.ConfigDriftStatus.
+var validDriftFilters = map[string]services.ConfigDriftStatus{
+	"synced":       services.ConfigDriftStatusSynced,
+	"drifted":      services.ConfigDriftStatusDrifted,
+	"no_intent":    services.ConfigDriftStatusNoIntent,
+	"no_effective": services.ConfigDriftStatusNoEffective,
+	"unknown":      services.ConfigDriftStatusUnknown,
+}
+
 // handleGetAgents handles GET /api/v1/agents
+//
+// Optional query parameter:
+//   - drift_status=synced|drifted|no_intent|no_effective|unknown
+//     Filter results to agents matching that drift status. Useful for the UI
+//     ("show me what's broken") and for scripted ops checks.
+//
+// The response counts (totalCount, activeCount, inactiveCount) reflect the
+// filtered result, not the full fleet.
 func (h *AgentHandlers) HandleGetAgents(c *gin.Context) {
 	// Get agents from service
 	agents, err := h.agentService.ListAgents(c.Request.Context())
@@ -70,6 +88,25 @@ func (h *AgentHandlers) HandleGetAgents(c *gin.Context) {
 		h.logger.Error("Failed to get agents", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agents"})
 		return
+	}
+
+	// Apply optional drift_status filter.
+	if raw := c.Query("drift_status"); raw != "" {
+		want, ok := validDriftFilters[raw]
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid drift_status",
+				"allowed": []string{"synced", "drifted", "no_intent", "no_effective", "unknown"},
+			})
+			return
+		}
+		filtered := agents[:0]
+		for _, a := range agents {
+			if a.DriftStatus == want {
+				filtered = append(filtered, a)
+			}
+		}
+		agents = filtered
 	}
 
 	// Convert to map format expected by frontend
