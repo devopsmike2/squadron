@@ -1,9 +1,11 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { AlertCircle, Workflow, Loader2, AlertTriangle } from "lucide-react";
 import type { editor } from "monaco-editor";
-import { useState, useRef } from "react";
+import { useCallback, useState, useRef } from "react";
 
 import { CollectorPipelineView } from "@/components/collector-pipeline/CollectorPipelineView";
+import { ConfigLintPanel } from "@/components/configs/ConfigLintPanel";
+import { ConfigTemplatePicker } from "@/components/configs/ConfigTemplatePicker";
 import { useTheme } from "@/components/ThemeProvider";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -31,6 +33,17 @@ export function ConfigEditorSideBySide({
     value,
     editorRef,
   );
+
+  // jumpToLine focuses the editor on a specific line — used by the lint
+  // panel when an operator clicks on a finding. Keeps the line near the
+  // center of the viewport for context.
+  const jumpToLine = useCallback((line: number) => {
+    const ed = editorRef.current;
+    if (!ed || line <= 0) return;
+    ed.revealLineInCenter(line);
+    ed.setPosition({ lineNumber: line, column: 1 });
+    ed.focus();
+  }, []);
 
   const handleEditorDidMount: OnMount = (editor) => {
     editorRef.current = editor;
@@ -82,6 +95,10 @@ export function ConfigEditorSideBySide({
               <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">Config</span>
+                  <ConfigTemplatePicker
+                    currentValue={value}
+                    onInsert={onChange}
+                  />
                 </div>
                 <div className="flex items-center gap-2">
                   {(isParsing || isValidating) && (
@@ -170,7 +187,7 @@ export function ConfigEditorSideBySide({
               </div>
 
               {/* Monaco Editor */}
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-hidden">
                 <Editor
                   height="100%"
                   defaultLanguage="yaml"
@@ -195,6 +212,11 @@ export function ConfigEditorSideBySide({
                   }}
                 />
               </div>
+
+              {/* Squadron server-side lint findings — sits beneath the editor
+                  and updates on debounce as the YAML changes. Clicking a
+                  finding jumps the editor to the offending line. */}
+              <ConfigLintPanel value={value} onJumpToLine={jumpToLine} />
             </div>
           </ResizablePanel>
 
