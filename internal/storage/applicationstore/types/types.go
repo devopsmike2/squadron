@@ -85,6 +85,14 @@ type APIToken struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+
+	// ExpiresAt is an optional expiry. When non-nil and in the past,
+	// the middleware treats the token the same as revoked: validation
+	// returns nil and the request gets a 401. Nil = never expires.
+	// Setting expiries is encouraged but not required; the original
+	// tokens issued before v0.11 have ExpiresAt=nil and stay valid
+	// until explicitly revoked.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // RolloutState is the lifecycle position of a Rollout.

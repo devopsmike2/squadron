@@ -5,6 +5,7 @@ package commands
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,6 +53,39 @@ func TestParseStagesSpec_IgnoresEmptyEntries(t *testing.T) {
 	require.Len(t, stages, 2)
 	assert.Equal(t, 10, stages[0].Percentage)
 	assert.Equal(t, 50, stages[1].Percentage)
+}
+
+func TestParseDurationShorthand_Days(t *testing.T) {
+	d, err := parseDurationShorthand("90d")
+	require.NoError(t, err)
+	assert.Equal(t, 90*24*time.Hour, d)
+}
+
+func TestParseDurationShorthand_FallsBackToStdlib(t *testing.T) {
+	d, err := parseDurationShorthand("24h")
+	require.NoError(t, err)
+	assert.Equal(t, 24*time.Hour, d)
+
+	d, err = parseDurationShorthand("30m")
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Minute, d)
+}
+
+func TestParseDurationShorthand_RejectsZeroAndNegative(t *testing.T) {
+	_, err := parseDurationShorthand("0d")
+	require.Error(t, err)
+	_, err = parseDurationShorthand("-1d")
+	require.Error(t, err)
+}
+
+func TestParseDurationShorthand_RejectsEmpty(t *testing.T) {
+	_, err := parseDurationShorthand("")
+	require.Error(t, err)
+}
+
+func TestParseDurationShorthand_RejectsGarbage(t *testing.T) {
+	_, err := parseDurationShorthand("forever")
+	require.Error(t, err)
 }
 
 func TestMaskToken_ShowsPrefix(t *testing.T) {

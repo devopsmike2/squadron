@@ -32,7 +32,7 @@ func newScopedRouter(authSvc services.AuthService, required string) *gin.Engine 
 
 func TestRequireScope_TokenWithMatchingScope_200(t *testing.T) {
 	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
-	_, plaintext, err := svc.Issue(t.Context(), "reader", []string{services.ScopeAgentsRead})
+	_, plaintext, err := svc.Issue(t.Context(), "reader", []string{services.ScopeAgentsRead}, nil)
 	require.NoError(t, err)
 
 	r := newScopedRouter(svc, services.ScopeAgentsRead)
@@ -47,7 +47,7 @@ func TestRequireScope_TokenWithDifferentScope_403(t *testing.T) {
 	// Token has agents:read but the route needs rollouts:write.
 	// Must be 403 (not 401) — auth was OK, permission was the problem.
 	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
-	_, plaintext, err := svc.Issue(t.Context(), "reader", []string{services.ScopeAgentsRead})
+	_, plaintext, err := svc.Issue(t.Context(), "reader", []string{services.ScopeAgentsRead}, nil)
 	require.NoError(t, err)
 
 	r := newScopedRouter(svc, services.ScopeRolloutsWrite)
@@ -64,7 +64,7 @@ func TestRequireScope_WildcardToken_200_OnAnyRoute(t *testing.T) {
 	// A wildcard-scoped token (the bootstrap shape) authorizes
 	// every endpoint regardless of which RequireScope guards it.
 	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
-	_, plaintext, err := svc.Issue(t.Context(), "wildcard", []string{services.ScopeWildcard})
+	_, plaintext, err := svc.Issue(t.Context(), "wildcard", []string{services.ScopeWildcard}, nil)
 	require.NoError(t, err)
 
 	for _, scope := range []string{

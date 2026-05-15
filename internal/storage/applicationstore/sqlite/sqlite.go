@@ -169,7 +169,8 @@ func (s *Storage) migrate() error {
 		scopes TEXT NOT NULL DEFAULT '[]',    -- JSON array of permission scopes; '[]' = legacy full-access
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		last_used_at DATETIME,
-		revoked_at DATETIME
+		revoked_at DATETIME,
+		expires_at DATETIME                   -- nullable; nil = never expires
 	);
 
 	-- ALTER TABLE for upgrades from pre-v0.10 schemas. SQLite ignores
@@ -205,6 +206,10 @@ func (s *Storage) migrate() error {
 		// as legacy full-access (so existing operator + automation
 		// tokens keep working through the upgrade).
 		`ALTER TABLE api_tokens ADD COLUMN scopes TEXT NOT NULL DEFAULT '[]'`,
+		// v0.11: api_tokens gain an optional expires_at column.
+		// Nullable — pre-v0.11 tokens upgrade with no expiry and
+		// stay valid until explicitly revoked.
+		`ALTER TABLE api_tokens ADD COLUMN expires_at DATETIME`,
 	}
 
 	for _, migration := range migrations {
@@ -1262,25 +1267,25 @@ func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
 		return err
 	}
 	stmt := `
-		INSERT INTO api_tokens (id, label, hash, scopes, created_at, last_used_at, revoked_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO api_tokens (id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
-		t.ID, t.Label, t.Hash, scopesJSON, t.CreatedAt, t.LastUsedAt, t.RevokedAt); err != nil {
+		t.ID, t.Label, t.Hash, scopesJSON, t.CreatedAt, t.LastUsedAt, t.RevokedAt, t.ExpiresAt); err != nil {
 		return fmt.Errorf("failed to create api token: %w", err)
 	}
 	return nil
 }
 
 func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.APIToken, error) {
-	stmt := `SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at FROM api_tokens WHERE hash = ?`
+	stmt := `SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at FROM api_tokens WHERE hash = ?`
 	t := &types.APIToken{}
 	var (
-		scopesJSON           string
-		lastUsedAt, revokedAt sql.NullTime
+		scopesJSON                       string
+		lastUsedAt, revokedAt, expiresAt sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx, stmt, hash).Scan(
-		&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt)
+		&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt, &expiresAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1294,6 +1299,9 @@ func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.AP
 	if revokedAt.Valid {
 		t.RevokedAt = &revokedAt.Time
 	}
+	if expiresAt.Valid {
+		t.ExpiresAt = &expiresAt.Time
+	}
 	return t, nil
 }
 
@@ -1302,7 +1310,7 @@ func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.AP
 // audit consumers can still resolve old token IDs to labels.
 func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
 	stmt := `
-		SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at
+		SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at
 		FROM api_tokens
 		ORDER BY created_at DESC
 	`
@@ -1315,10 +1323,10 @@ func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) 
 	for rows.Next() {
 		t := &types.APIToken{}
 		var (
-			scopesJSON           string
-			lastUsedAt, revokedAt sql.NullTime
+			scopesJSON                       string
+			lastUsedAt, revokedAt, expiresAt sql.NullTime
 		)
-		if err := rows.Scan(&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt, &expiresAt); err != nil {
 			return nil, err
 		}
 		t.Scopes = unmarshalScopes(scopesJSON)
@@ -1327,6 +1335,9 @@ func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) 
 		}
 		if revokedAt.Valid {
 			t.RevokedAt = &revokedAt.Time
+		}
+		if expiresAt.Valid {
+			t.ExpiresAt = &expiresAt.Time
 		}
 		out = append(out, t)
 	}

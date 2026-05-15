@@ -37,6 +37,12 @@ export default function SettingsTokensPage() {
   // "Full access" shortcut just flips them all on plus the wildcard.
   const [selectedScopes, setSelectedScopes] = useState<Set<string>>(new Set());
   const [fullAccess, setFullAccess] = useState(false);
+  // expiryChoice is one of the canned options (never / 7 / 30 / 90)
+  // or "custom" — in which case the operator types an RFC3339 date in
+  // expiryCustom. Defaulting to "never" keeps the form's behavior
+  // identical to v0.10 for operators who don't care about expiry.
+  const [expiryChoice, setExpiryChoice] = useState<"never" | "7" | "30" | "90" | "custom">("never");
+  const [expiryCustom, setExpiryCustom] = useState("");
   // freshPlaintext holds the just-issued token plaintext for the
   // "copy this now" modal. Cleared when the operator dismisses the
   // modal — at which point Squadron has no way to recover it.
@@ -58,6 +64,21 @@ export default function SettingsTokensPage() {
     return Array.from(selectedScopes);
   };
 
+  // expiryForSubmit returns the RFC3339 timestamp to send, or
+  // undefined for "never expires". The canned options (7/30/90 days)
+  // become "now + N days" client-side; "custom" passes the operator's
+  // string through to the API which validates the format.
+  const expiryForSubmit = (): string | undefined => {
+    if (expiryChoice === "never") return undefined;
+    if (expiryChoice === "custom") {
+      const t = expiryCustom.trim();
+      return t === "" ? undefined : t;
+    }
+    const days = parseInt(expiryChoice, 10);
+    const d = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    return d.toISOString();
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
@@ -69,11 +90,13 @@ export default function SettingsTokensPage() {
       return;
     }
     try {
-      const resp = await createAPIToken(newLabel.trim(), scopes);
+      const resp = await createAPIToken(newLabel.trim(), scopes, expiryForSubmit());
       setFreshPlaintext(resp.plaintext);
       setNewLabel("");
       setSelectedScopes(new Set());
       setFullAccess(false);
+      setExpiryChoice("never");
+      setExpiryCustom("");
       setCreating(false);
       await mutate(TOKENS_KEY);
     } catch (err) {
@@ -196,6 +219,45 @@ export default function SettingsTokensPage() {
                 </p>
               </div>
 
+              {/* Expiry picker. Never is the safe default (matches
+                  pre-v0.11 behavior); setting an expiry is encouraged
+                  for human-issued tokens. The canned 7/30/90-day
+                  options cover most use cases. */}
+              <div className="space-y-2">
+                <Label>Expires</Label>
+                <div className="flex flex-wrap gap-3 text-sm">
+                  {(["never", "7", "30", "90", "custom"] as const).map((choice) => (
+                    <label key={choice} className="flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        name="expiry"
+                        checked={expiryChoice === choice}
+                        onChange={() => setExpiryChoice(choice)}
+                      />
+                      {choice === "never"
+                        ? "Never"
+                        : choice === "custom"
+                          ? "Custom"
+                          : `${choice} days`}
+                    </label>
+                  ))}
+                </div>
+                {expiryChoice === "custom" && (
+                  <Input
+                    placeholder="2026-12-31T23:59:59Z"
+                    value={expiryCustom}
+                    onChange={(e) => setExpiryCustom(e.target.value)}
+                    className="font-mono text-sm max-w-sm"
+                  />
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Squadron rejects expired tokens at validate time (same
+                  401 response as a revoked one). Long-lived automation
+                  tokens are fine without an expiry, but rotating by
+                  hand is recommended every few months.
+                </p>
+              </div>
+
               {submitError && (
                 <div className="text-sm text-red-600">{submitError}</div>
               )}
@@ -292,6 +354,7 @@ export default function SettingsTokensPage() {
                   <th className="py-2 pr-3">Scopes</th>
                   <th className="py-2 pr-3">Created</th>
                   <th className="py-2 pr-3">Last used</th>
+                  <th className="py-2 pr-3">Expires</th>
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 w-1" />
                 </tr>
@@ -309,22 +372,11 @@ export default function SettingsTokensPage() {
                     <td className="py-2 pr-3 text-muted-foreground">
                       {t.last_used_at ? formatTimestamp(t.last_used_at) : "—"}
                     </td>
+                    <td className="py-2 pr-3 text-xs">
+                      {renderExpiry(t.expires_at)}
+                    </td>
                     <td className="py-2 pr-3">
-                      {t.revoked_at ? (
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] uppercase bg-muted text-muted-foreground"
-                        >
-                          revoked
-                        </Badge>
-                      ) : (
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] uppercase bg-emerald-500/10 text-emerald-700 border-emerald-500/20"
-                        >
-                          active
-                        </Badge>
-                      )}
+                      {renderStatus(t)}
                     </td>
                     <td className="py-2">
                       {!t.revoked_at && (
@@ -346,6 +398,59 @@ export default function SettingsTokensPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+// renderExpiry shows the token's expiry — "never", a date in the
+// future, or "expired N days ago" for past expirations. Keeping the
+// past-tense relative reading helps operators spot stale tokens
+// without doing date math.
+function renderExpiry(iso?: string): React.ReactNode {
+  if (!iso) {
+    return <span className="text-muted-foreground">never</span>;
+  }
+  const t = new Date(iso);
+  const now = Date.now();
+  if (t.getTime() <= now) {
+    const days = Math.floor((now - t.getTime()) / (24 * 60 * 60 * 1000));
+    return (
+      <span className="text-red-600">
+        expired{" "}
+        {days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}
+      </span>
+    );
+  }
+  return <span className="text-muted-foreground">{t.toLocaleString()}</span>;
+}
+
+// renderStatus returns the right badge for a token's effective state.
+// Order matters: revoked > expired > active, because operators
+// generally care about revocation first ("did we kill this one?").
+function renderStatus(t: APIToken): React.ReactNode {
+  if (t.revoked_at) {
+    return (
+      <Badge variant="outline" className="text-[10px] uppercase bg-muted text-muted-foreground">
+        revoked
+      </Badge>
+    );
+  }
+  if (t.expires_at && new Date(t.expires_at).getTime() <= Date.now()) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] uppercase bg-red-500/10 text-red-700 border-red-500/20"
+      >
+        expired
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] uppercase bg-emerald-500/10 text-emerald-700 border-emerald-500/20"
+    >
+      active
+    </Badge>
   );
 }
 

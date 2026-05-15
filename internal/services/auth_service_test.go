@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestAuthService_Issue_ReturnsPlaintextOnce(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 
-	token, plaintext, err := svc.Issue(ctx, "ci-bot", []string{ScopeWildcard})
+	token, plaintext, err := svc.Issue(ctx, "ci-bot", []string{ScopeWildcard}, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, plaintext)
 	require.True(t, strings.HasPrefix(plaintext, "sqd_"), "token should have human-readable prefix")
@@ -35,18 +36,18 @@ func TestAuthService_Issue_ReturnsPlaintextOnce(t *testing.T) {
 
 func TestAuthService_Issue_LabelRequired(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
-	_, _, err := svc.Issue(context.Background(), "", []string{ScopeWildcard})
+	_, _, err := svc.Issue(context.Background(), "", []string{ScopeWildcard}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "label")
 
-	_, _, err = svc.Issue(context.Background(), "   ", []string{ScopeWildcard})
+	_, _, err = svc.Issue(context.Background(), "   ", []string{ScopeWildcard}, nil)
 	require.Error(t, err, "whitespace-only labels should be rejected")
 }
 
 func TestAuthService_Issue_LabelLength(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	long := strings.Repeat("x", labelMaxLen+1)
-	_, _, err := svc.Issue(context.Background(), long, []string{ScopeWildcard})
+	_, _, err := svc.Issue(context.Background(), long, []string{ScopeWildcard}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "chars or fewer")
 }
@@ -55,7 +56,7 @@ func TestAuthService_Validate_RoundTrip(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 
-	_, plaintext, err := svc.Issue(ctx, "ci-bot", []string{ScopeWildcard})
+	_, plaintext, err := svc.Issue(ctx, "ci-bot", []string{ScopeWildcard}, nil)
 	require.NoError(t, err)
 
 	got, err := svc.Validate(ctx, plaintext)
@@ -95,7 +96,7 @@ func TestAuthService_Revoke_TokenStopsValidating(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 
-	token, plaintext, err := svc.Issue(ctx, "rotate-me", []string{ScopeWildcard})
+	token, plaintext, err := svc.Issue(ctx, "rotate-me", []string{ScopeWildcard}, nil)
 	require.NoError(t, err)
 
 	// Before revoke: validates.
@@ -115,7 +116,7 @@ func TestAuthService_Revoke_Idempotent(t *testing.T) {
 	// or two operators may revoke the same token concurrently.
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
-	token, _, err := svc.Issue(ctx, "x", []string{ScopeWildcard})
+	token, _, err := svc.Issue(ctx, "x", []string{ScopeWildcard}, nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.Revoke(ctx, token.ID))
 	require.NoError(t, svc.Revoke(ctx, token.ID), "second revoke should be a no-op, not an error")
@@ -132,7 +133,7 @@ func TestAuthService_List_NewestFirst(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 	for _, label := range []string{"first", "second", "third"} {
-		_, _, err := svc.Issue(ctx, label, []string{ScopeWildcard})
+		_, _, err := svc.Issue(ctx, label, []string{ScopeWildcard}, nil)
 		require.NoError(t, err)
 	}
 	tokens, err := svc.List(ctx)
@@ -147,9 +148,9 @@ func TestAuthService_PlaintextIsUnique(t *testing.T) {
 	// 32 bytes of entropy makes collision astronomically unlikely, but
 	// it's still worth a regression-safety assertion.
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
-	_, a, err := svc.Issue(context.Background(), "a", []string{ScopeWildcard})
+	_, a, err := svc.Issue(context.Background(), "a", []string{ScopeWildcard}, nil)
 	require.NoError(t, err)
-	_, b, err := svc.Issue(context.Background(), "b", []string{ScopeWildcard})
+	_, b, err := svc.Issue(context.Background(), "b", []string{ScopeWildcard}, nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, a, b)
 }
@@ -160,18 +161,18 @@ func TestAuthService_Issue_RejectsEmptyScopes(t *testing.T) {
 	// fallback in APIToken.HasScope exists only for legacy rows that
 	// existed before v0.10; new tokens can never be created that way.
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
-	_, _, err := svc.Issue(context.Background(), "no-scopes", nil)
+	_, _, err := svc.Issue(context.Background(), "no-scopes", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "scopes is required")
 
-	_, _, err = svc.Issue(context.Background(), "no-scopes", []string{})
+	_, _, err = svc.Issue(context.Background(), "no-scopes", []string{}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "scopes is required")
 }
 
 func TestAuthService_Issue_RejectsUnknownScope(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
-	_, _, err := svc.Issue(context.Background(), "typo", []string{"agnets:read"})
+	_, _, err := svc.Issue(context.Background(), "typo", []string{"agnets:read"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown scope")
 }
@@ -182,7 +183,7 @@ func TestAuthService_Issue_DedupsScopes(t *testing.T) {
 	// audit / list views render clean.
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	token, _, err := svc.Issue(context.Background(), "dedup",
-		[]string{ScopeAgentsRead, ScopeAgentsRead, ScopeRolloutsRead})
+		[]string{ScopeAgentsRead, ScopeAgentsRead, ScopeRolloutsRead}, nil)
 	require.NoError(t, err)
 	assert.Len(t, token.Scopes, 2)
 }
@@ -217,6 +218,66 @@ func TestIsValidScope(t *testing.T) {
 	assert.False(t, IsValidScope(""))
 	assert.False(t, IsValidScope("not-a-scope"))
 	assert.False(t, IsValidScope("agents:delete"))
+}
+
+func TestAuthService_Issue_RejectsPastExpiry(t *testing.T) {
+	// Operators occasionally copy a past date by accident (forgetting
+	// to bump a year). Better to reject at issue time as a clean 400
+	// than ship a token that 401s the first time it's used.
+	svc := NewAuthService(memory.NewStore(), zap.NewNop())
+	past := time.Now().Add(-time.Hour)
+	_, _, err := svc.Issue(context.Background(), "stale", []string{ScopeWildcard}, &past)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expires_at")
+}
+
+func TestAuthService_Issue_AcceptsFutureExpiry(t *testing.T) {
+	svc := NewAuthService(memory.NewStore(), zap.NewNop())
+	future := time.Now().Add(24 * time.Hour)
+	token, _, err := svc.Issue(context.Background(), "tomorrow", []string{ScopeWildcard}, &future)
+	require.NoError(t, err)
+	require.NotNil(t, token.ExpiresAt)
+	assert.True(t, token.ExpiresAt.After(time.Now()), "expiry should be in the future")
+}
+
+func TestAuthService_Validate_RejectsExpiredToken(t *testing.T) {
+	// Expired token must 401 the same way a revoked one does — the
+	// middleware treats both as "this credential is no longer valid"
+	// without leaking which condition applies.
+	svc := NewAuthService(memory.NewStore(), zap.NewNop())
+	ctx := context.Background()
+	soon := time.Now().Add(50 * time.Millisecond)
+	_, plaintext, err := svc.Issue(ctx, "ephemeral", []string{ScopeWildcard}, &soon)
+	require.NoError(t, err)
+
+	// Validates while not yet expired.
+	got, err := svc.Validate(ctx, plaintext)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	// Wait past expiry, then re-validate.
+	time.Sleep(100 * time.Millisecond)
+	got, err = svc.Validate(ctx, plaintext)
+	require.NoError(t, err)
+	assert.Nil(t, got, "expired token must not validate")
+}
+
+func TestAPIToken_IsExpired(t *testing.T) {
+	t.Run("never expires", func(t *testing.T) {
+		assert.False(t, (&APIToken{}).IsExpired())
+	})
+	t.Run("future expiry", func(t *testing.T) {
+		f := time.Now().Add(time.Hour)
+		assert.False(t, (&APIToken{ExpiresAt: &f}).IsExpired())
+	})
+	t.Run("past expiry", func(t *testing.T) {
+		p := time.Now().Add(-time.Hour)
+		assert.True(t, (&APIToken{ExpiresAt: &p}).IsExpired())
+	})
+	t.Run("nil receiver", func(t *testing.T) {
+		var t1 *APIToken
+		assert.False(t, t1.IsExpired())
+	})
 }
 
 func TestActorFromContext_ZeroByDefault(t *testing.T) {

@@ -10,6 +10,7 @@ beyond a trusted network.
 - [Bootstrap: the first token](#bootstrap-the-first-token)
 - [Managing tokens](#managing-tokens)
 - [Scopes](#scopes)
+- [Expiry](#expiry)
 - [Using a token](#using-a-token)
 - [Token lifecycle](#token-lifecycle)
 - [Recovery: lost all tokens](#recovery-lost-all-tokens)
@@ -176,6 +177,67 @@ scopes when they get a chance.
 New tokens are required to declare scopes; the API rejects an empty
 scope list at create time. Pass `["*"]` for the explicit full-access
 case so the choice is visible in the audit log.
+
+## Expiry
+
+Tokens can carry an optional expiry. When a token's `expires_at` is in
+the past, Squadron rejects it at validate time — same 401 response as
+revoked or unknown tokens, so a guesser can't learn from the status
+which condition applies.
+
+Expiry is optional and defaults to never. Long-lived automation tokens
+without an expiry are fine but should be rotated by hand every few
+months. Tokens issued before v0.11 have no expiry recorded and stay
+valid until explicitly revoked.
+
+### Setting an expiry
+
+From the UI: pick a duration in the **Expires** radio group on the
+token-create form. "Never", 7/30/90 days, or "Custom" for an RFC3339
+timestamp.
+
+From the CLI:
+
+```bash
+# Duration shorthand: d (days), h, m, s. Repeatable units NOT supported —
+# pick the unit that lands closest to your intended date.
+squadronctl auth create-token --label deploy-bot \
+  --scope rollouts:write --scope configs:write \
+  --expires-in 90d
+
+# Or pass an explicit RFC3339 timestamp.
+squadronctl auth create-token --label q4-release \
+  --scope rollouts:write \
+  --expires-at 2026-12-31T23:59:59Z
+```
+
+`--expires-in` and `--expires-at` are mutually exclusive. The server
+rejects expiries already in the past with a 400, so accidental
+copy-paste of last year's date fails loudly at create time rather than
+silently producing a dead-on-arrival token.
+
+### What happens at expiry
+
+The expired token starts returning 401 from its next request onward.
+The token row remains in the store with `expires_at` set; the
+**API tokens** page renders it with an `expired` status badge and an
+"expired N days ago" hint so operators can rotate it explicitly.
+
+Best practice: pair expiry with a calendar reminder for the
+operator/automation owner. Squadron does not (yet) email or webhook
+the owner when a token nears expiry — that's on the roadmap.
+
+### Recommended cadences
+
+| Bearer type             | Expiry              |
+|-------------------------|---------------------|
+| Per-person operator     | 90 days             |
+| Per-CI-pipeline         | 180-365 days        |
+| Bootstrap / break-glass | None (manual revoke) |
+| Production automation   | 365 days + calendar reminder |
+
+These are starting points. Adjust based on how often the bearer's
+credentials get audited / rotated in your org.
 
 ## Using a token
 

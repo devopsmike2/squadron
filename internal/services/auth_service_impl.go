@@ -62,7 +62,7 @@ const (
 // permissions they're granting. The "empty == legacy full access"
 // behavior in APIToken.HasScope exists only for tokens persisted
 // before v0.10.
-func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []string) (*APIToken, string, error) {
+func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []string, expiresAt *time.Time) (*APIToken, string, error) {
 	label = strings.TrimSpace(label)
 	if len(label) < labelMinLen {
 		return nil, "", fmt.Errorf("label is required")
@@ -93,6 +93,19 @@ func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []stri
 		return nil, "", fmt.Errorf("scopes is required: pass [\"*\"] for full access or a specific list")
 	}
 
+	// Reject expiries already in the past. Operators sometimes copy a
+	// past date by accident (e.g. forgetting to bump a year); rejecting
+	// here surfaces it as a clean 400 rather than a token that 401s
+	// the first time it's used.
+	now := time.Now().UTC()
+	if expiresAt != nil {
+		exp := expiresAt.UTC()
+		if !exp.After(now) {
+			return nil, "", fmt.Errorf("expires_at must be in the future")
+		}
+		expiresAt = &exp
+	}
+
 	// 32 bytes of cryptographic entropy. Base64-URL-encoded so the
 	// result is filename-safe and copy-paste-safe (no slashes).
 	buf := make([]byte, tokenEntropyBytes)
@@ -102,13 +115,13 @@ func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []stri
 	plaintext := tokenPrefix + base64.RawURLEncoding.EncodeToString(buf)
 	hash := hashToken(plaintext)
 
-	now := time.Now().UTC()
 	stored := &applicationstore.APIToken{
 		ID:        uuid.New().String(),
 		Label:     label,
 		Hash:      hash,
 		Scopes:    normalized,
 		CreatedAt: now,
+		ExpiresAt: expiresAt,
 	}
 	if err := s.appStore.CreateAPIToken(ctx, stored); err != nil {
 		return nil, "", fmt.Errorf("failed to persist token: %w", err)
@@ -184,6 +197,13 @@ func (s *AuthServiceImpl) Validate(ctx context.Context, plaintext string) (*APIT
 	if stored == nil || stored.RevokedAt != nil {
 		return nil, nil
 	}
+	// Expired tokens hit the same 401 path as unknown / revoked. We
+	// deliberately don't leak "your token is specifically expired"
+	// because a guesser learning a string was once valid is itself
+	// information.
+	if stored.ExpiresAt != nil && !time.Now().Before(*stored.ExpiresAt) {
+		return nil, nil
+	}
 	if err := s.appStore.UpdateAPITokenLastUsed(ctx, stored.ID, time.Now().UTC()); err != nil {
 		s.logger.Warn("failed to update token last_used_at",
 			zap.String("token_id", stored.ID), zap.Error(err))
@@ -209,6 +229,7 @@ func toServiceToken(t *applicationstore.APIToken) *APIToken {
 		CreatedAt:  t.CreatedAt,
 		LastUsedAt: t.LastUsedAt,
 		RevokedAt:  t.RevokedAt,
+		ExpiresAt:  t.ExpiresAt,
 	}
 	if len(t.Scopes) > 0 {
 		out.Scopes = make([]string, len(t.Scopes))

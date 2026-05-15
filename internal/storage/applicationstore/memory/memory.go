@@ -680,12 +680,28 @@ func (s *Store) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
 }
 
 // copyToken returns a defensive copy with a fresh Scopes slice so
-// callers can't mutate stored state through the slice header.
+// callers can't mutate stored state through the slice header. The
+// *time.Time fields are aliased — time.Time itself is a value type
+// so callers reading them can't corrupt the stored row, but they
+// could swap the pointer out via the returned token. We rebind those
+// pointers to fresh allocations for the same reason as Scopes.
 func copyToken(t *types.APIToken) *types.APIToken {
 	cp := *t
 	if len(t.Scopes) > 0 {
 		cp.Scopes = make([]string, len(t.Scopes))
 		copy(cp.Scopes, t.Scopes)
+	}
+	if t.LastUsedAt != nil {
+		v := *t.LastUsedAt
+		cp.LastUsedAt = &v
+	}
+	if t.RevokedAt != nil {
+		v := *t.RevokedAt
+		cp.RevokedAt = &v
+	}
+	if t.ExpiresAt != nil {
+		v := *t.ExpiresAt
+		cp.ExpiresAt = &v
 	}
 	return &cp
 }

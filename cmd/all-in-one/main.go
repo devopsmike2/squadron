@@ -354,7 +354,11 @@ func bootstrapAuthToken(ctx context.Context, authService services.AuthService, l
 	}
 	// Bootstrap token gets the wildcard so the operator can do
 	// anything — including create properly-scoped replacement tokens.
-	_, plaintext, err := authService.Issue(ctx, "bootstrap", []string{services.ScopeWildcard})
+	// No expiry: a bootstrap token's job is to recover the auth flow
+	// after upgrades, and one expiring in the middle of an incident
+	// would defeat the purpose. Operators are expected to revoke it
+	// after issuing proper scoped tokens.
+	_, plaintext, err := authService.Issue(ctx, "bootstrap", []string{services.ScopeWildcard}, nil)
 	if err != nil {
 		return fmt.Errorf("issue bootstrap token: %w", err)
 	}

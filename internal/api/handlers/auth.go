@@ -6,6 +6,7 @@ package handlers
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -28,9 +29,16 @@ func NewAuthHandlers(authService services.AuthService, logger *zap.Logger) *Auth
 // in audit log actors. Scopes is required — operators must opt into
 // the permissions they're granting. Pass ["*"] for full access (still
 // recorded explicitly so the audit log shows it).
+//
+// ExpiresAt is optional. When non-nil and in the future, Squadron
+// rejects the token after that time. Nil = never expires (the default,
+// matching pre-v0.11 behavior). Operators should set expiries on
+// human-issued tokens; long-lived automation tokens are OK without
+// them but should be rotated by hand.
 type CreateTokenRequest struct {
-	Label  string   `json:"label" binding:"required"`
-	Scopes []string `json:"scopes" binding:"required"`
+	Label     string     `json:"label" binding:"required"`
+	Scopes    []string   `json:"scopes" binding:"required"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // CreateTokenResponse is the body of POST /api/v1/auth/tokens. Plaintext
@@ -49,10 +57,11 @@ func (h *AuthHandlers) HandleCreateToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "detail": err.Error()})
 		return
 	}
-	token, plaintext, err := h.authService.Issue(c.Request.Context(), req.Label, req.Scopes)
+	token, plaintext, err := h.authService.Issue(c.Request.Context(), req.Label, req.Scopes, req.ExpiresAt)
 	if err != nil {
 		msg := err.Error()
-		if strings.Contains(msg, "label") || strings.Contains(msg, "scopes") || strings.Contains(msg, "unknown scope") {
+		if strings.Contains(msg, "label") || strings.Contains(msg, "scopes") ||
+			strings.Contains(msg, "unknown scope") || strings.Contains(msg, "expires_at") {
 			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		}

@@ -9,6 +9,9 @@ export interface APIToken {
   created_at: string;
   last_used_at?: string;
   revoked_at?: string;
+  // Optional expiry. When set and in the past, the server rejects the
+  // token at validate time (401, same as revoked).
+  expires_at?: string;
 }
 
 // The canonical scope vocabulary mirrors services.AllScopes() on the
@@ -48,14 +51,19 @@ export const listAPITokens = async (): Promise<APIToken[]> => {
 // createAPIToken issues a token. The returned plaintext is shown to
 // the operator once at creation time and never persisted in retrievable
 // form on the server — losing it means issuing a new one. scopes must
-// be non-empty; pass ["*"] for full access.
+// be non-empty; pass ["*"] for full access. expiresAt is optional —
+// pass undefined for "never expires" or an RFC3339 timestamp for an
+// auto-revoking token.
 export const createAPIToken = async (
   label: string,
   scopes: string[],
+  expiresAt?: string,
 ): Promise<CreateResponse> => {
+  const body: Record<string, unknown> = { label, scopes };
+  if (expiresAt) body.expires_at = expiresAt;
   return simpleRequest<CreateResponse>("/auth/tokens", {
     method: "POST",
-    body: JSON.stringify({ label, scopes }),
+    body: JSON.stringify(body),
   });
 };
 

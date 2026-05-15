@@ -25,14 +25,20 @@ import (
 // same plaintext will return nil. The row stays in the store so
 // historical audit entries can still resolve token IDs to labels.
 type AuthService interface {
-	Issue(ctx context.Context, label string, scopes []string) (token *APIToken, plaintext string, err error)
+	// Issue creates a token. expiresAt is optional — pass nil for "never
+	// expires", or a future timestamp for an auto-revoking token. The
+	// service rejects expiresAt in the past so operators don't
+	// accidentally ship a dead-on-arrival token.
+	Issue(ctx context.Context, label string, scopes []string, expiresAt *time.Time) (token *APIToken, plaintext string, err error)
 	List(ctx context.Context) ([]*APIToken, error)
 	Revoke(ctx context.Context, id string) error
 
 	// Validate checks a plaintext bearer value. Returns nil, nil if the
-	// token is unknown OR revoked — callers shouldn't distinguish those
-	// cases (both lead to a 401). Returns nil, err only on storage
-	// failure.
+	// token is unknown, revoked, OR expired — callers shouldn't
+	// distinguish those cases (all three lead to a 401, since leaking
+	// "your token specifically is expired" would let a guesser learn
+	// that the value used to be valid). Returns nil, err only on
+	// storage failure.
 	Validate(ctx context.Context, plaintext string) (*APIToken, error)
 }
 
@@ -105,6 +111,13 @@ type APIToken struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+}
+
+// IsExpired reports whether the token has an expiry and that expiry
+// has passed. Tokens with no expiry never report as expired.
+func (t *APIToken) IsExpired() bool {
+	return t != nil && t.ExpiresAt != nil && !time.Now().Before(*t.ExpiresAt)
 }
 
 // HasScope reports whether this token may exercise the given scope.
