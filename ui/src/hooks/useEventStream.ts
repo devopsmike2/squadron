@@ -87,4 +87,5 @@ const KNOWN_TYPES = [
   "agent_status_changed",
   "alert_fired",
   "alert_resolved",
+  "audit_event_recorded",
 ] as const;

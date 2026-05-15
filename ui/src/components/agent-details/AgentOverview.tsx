@@ -1,5 +1,6 @@
 import type { Agent } from "@/types/agent";
 
+import { AuditTimeline } from "@/components/AuditTimeline";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InfoCard } from "@/components/ui/info-card";
@@ -188,6 +189,15 @@ export function AgentOverview({ agent, metrics }: AgentOverviewProps) {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold">History</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <AuditTimeline targetType="agent" targetId={agent.id} limit={50} />
+        </CardContent>
+      </Card>
 
       {agent.drift_status === "drifted" && agent.drift_details?.diff && (
         <Card>

@@ -19,8 +19,18 @@ const EVENT_INVALIDATIONS: Record<string, readonly string[]> = {
   alert_resolved: ["/api/v1/alerts/rules", "command-palette/alert-rules"],
 };
 
+// Audit-event SWR keys follow the pattern "audit/<targetType>/<targetId>/<limit>"
+// — invalidate them all when audit_event_recorded comes in. Using SWR's
+// key-predicate signature so we don't have to enumerate every variant.
+const isAuditKey = (key: unknown): boolean =>
+  typeof key === "string" && key.startsWith("audit/");
+
 export function EventSubscriber() {
   const onEvent = useCallback((event: SquadronEvent) => {
+    if (event.type === "audit_event_recorded") {
+      void mutate(isAuditKey);
+      return;
+    }
     const keys = EVENT_INVALIDATIONS[event.type];
     if (!keys) return;
     for (const key of keys) {
