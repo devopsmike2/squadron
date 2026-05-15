@@ -4,6 +4,7 @@ import {
   FileText,
   BarChart3,
   GitBranch,
+  Bell,
   Sparkle,
 } from "lucide-react";
 import * as React from "react";
@@ -66,6 +67,12 @@ export function AppSidebar() {
       title: "Telemetry",
       url: "/telemetry",
       icon: BarChart3,
+    },
+    {
+      key: "alerts",
+      title: "Alerts",
+      url: "/alerts",
+      icon: Bell,
     },
   ];
 

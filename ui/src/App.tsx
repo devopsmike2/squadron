@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 
 import Layout from "./layout";
 import AgentsPage from "./pages/Agents";
+import AlertsPage from "./pages/Alerts";
 import ConfigsPage from "./pages/Configs";
 import GroupsPage from "./pages/Groups";
 import TelemetryPage from "./pages/Telemetry";
@@ -35,6 +36,7 @@ function App() {
                 />
                 <Route path="/telemetry" element={<TelemetryPage />} />
                 <Route path="/topology" element={<TopologyPage />} />
+                <Route path="/alerts" element={<AlertsPage />} />
               </Route>
             </Routes>
           </Router>
