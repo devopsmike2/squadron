@@ -65,3 +65,16 @@ export interface AbortCriteriaRecipe {
   when_to_use: string;
   criteria: RolloutAbortCriteria;
 }
+
+// RolloutTemplate mirrors services.RolloutTemplate. Bigger than a
+// recipe: bundles stages + criteria + a default name. The picker
+// prefills everything except group_id and target_config_id.
+export interface RolloutTemplate {
+  id: string;
+  name: string;
+  description: string;
+  when_to_use: string;
+  default_name: string;
+  stages: RolloutStage[];
+  abort_criteria: RolloutAbortCriteria;
+}

@@ -135,6 +135,21 @@ func (h *RolloutHandlers) HandleResumeRollout(c *gin.Context) {
 	c.JSON(http.StatusOK, r)
 }
 
+// HandleListRolloutTemplates serves GET /api/v1/rollout-recipes/templates.
+//
+// Returns the curated template gallery. Templates are bigger than
+// abort-criteria recipes — each one bundles stages + criteria + a
+// default name so an operator who picks one only needs to fill in the
+// target group and config before clicking Start.
+//
+// Same cache properties as the recipe cookbook: server-of-record,
+// changes only on Squadron upgrade, fine to cache for the page's
+// lifetime.
+func (h *RolloutHandlers) HandleListRolloutTemplates(c *gin.Context) {
+	templates := services.RolloutTemplates()
+	c.JSON(http.StatusOK, gin.H{"templates": templates})
+}
+
 // HandleListAbortCriteriaRecipes serves GET /api/v1/rollouts/abort-criteria/recipes.
 //
 // Returns the curated cookbook of pre-tuned RolloutAbortCriteria values

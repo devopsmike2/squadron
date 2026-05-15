@@ -21,6 +21,7 @@ import {
   abortRollout,
   createRollout,
   listAbortCriteriaRecipes,
+  listRolloutTemplates,
   listRollouts,
   pauseRollout,
   resumeRollout,
@@ -51,6 +52,7 @@ import type {
   RolloutStage,
   RolloutStageMode,
   RolloutState,
+  RolloutTemplate,
 } from "@/types/rollout";
 
 const ROLLOUTS_KEY = "rollouts";
@@ -89,11 +91,17 @@ interface FormState {
   max_drifted_agents: string;
   max_error_logs_per_minute: string;
   min_dwell_seconds_before_abort: string;
-  // recipe_id remembers which cookbook recipe (if any) the operator
-  // picked to prefill the abort-criteria fields. The fields above are
-  // the source of truth — recipe_id is just used to highlight the
-  // current selection in the picker.
+  // recipe_id and template_id remember which cookbook entries the
+  // operator picked. They're UI memos for highlighting the current
+  // selection — the form fields are the source of truth on submit.
+  // recipe_id clears on hand-edits to the criteria fields (since
+  // those edits desync from the recipe); template_id is sticky and
+  // only changes when the operator picks a different template or
+  // "Custom". This gives operators a "what was my starting point?"
+  // breadcrumb without making the UI lie about whether what they're
+  // submitting is exactly the template's shape.
   recipe_id: string;
+  template_id: string;
   notification_url: string;
 }
 
@@ -119,8 +127,51 @@ const emptyInput = (): FormState => ({
   max_error_logs_per_minute: "0",
   min_dwell_seconds_before_abort: "30",
   recipe_id: "",
+  template_id: "",
   notification_url: "",
 });
+
+// applyTemplate returns a FormState with the template's stages,
+// criteria, and default name overwritten in, preserving group_id and
+// target_config_id (the operator-supplied bits). Stage shape is
+// converted from the wire-typed RolloutStage to the FormStage variant
+// so the editor's controlled inputs remain string-typed.
+function applyTemplate(prev: FormState, tpl: RolloutTemplate): FormState {
+  const stages: FormStage[] = tpl.stages.map((s) => {
+    const dwell = String(s.dwell_seconds ?? 0);
+    if (s.mode === "label") {
+      const selectorRows = Object.entries(s.label_selector ?? {}).map(
+        ([key, value]) => ({ key, value }),
+      );
+      return {
+        mode: "label",
+        percentage: "100",
+        selector_rows:
+          selectorRows.length > 0 ? selectorRows : [{ key: "", value: "" }],
+        dwell_seconds: dwell,
+      };
+    }
+    return {
+      mode: "percent",
+      percentage: String(s.percentage ?? 100),
+      selector_rows: [{ key: "", value: "" }],
+      dwell_seconds: dwell,
+    };
+  });
+  const crit = tpl.abort_criteria;
+  return {
+    ...prev,
+    name: tpl.default_name,
+    stages,
+    max_drifted_agents: String(crit.max_drifted_agents),
+    max_error_logs_per_minute: String(crit.max_error_logs_per_minute ?? 0),
+    min_dwell_seconds_before_abort: String(crit.min_dwell_seconds_before_abort ?? 0),
+    template_id: tpl.id,
+    // Picking a template fully owns the criteria, so the recipe
+    // selection is no longer accurate — clear it.
+    recipe_id: "",
+  };
+}
 
 // Build the wire-shape RolloutStage from form state. Discards the
 // inactive mode's fields so the API receives clean input.
@@ -172,6 +223,11 @@ export default function RolloutsPage() {
   const { data: recipes = [] } = useSWR<AbortCriteriaRecipe[]>(
     "abort-criteria-recipes",
     listAbortCriteriaRecipes,
+    { revalidateOnFocus: false, revalidateIfStale: false },
+  );
+  const { data: templates = [] } = useSWR<RolloutTemplate[]>(
+    "rollout-templates",
+    listRolloutTemplates,
     { revalidateOnFocus: false, revalidateIfStale: false },
   );
   // Flatten the agents-by-id map the API returns. Used for label-mode
@@ -321,6 +377,64 @@ export default function RolloutsPage() {
             <CardTitle className="text-base">New rollout</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Template picker — top of the form because picking one
+                overwrites name/stages/criteria. Operator picks a
+                template, then only has to fill in group + target
+                config. Templates ship percent-mode only; label-mode
+                rollouts must be hand-built for now (the comment in
+                services/rollout_template.go explains why). */}
+            <div className="space-y-2 rounded-md border border-dashed p-3">
+              <Label htmlFor="template">Start from template (optional)</Label>
+              <Select
+                value={form.template_id || "blank"}
+                onValueChange={(v) => {
+                  if (v === "blank") {
+                    setForm({ ...form, template_id: "" });
+                    return;
+                  }
+                  const tpl = templates.find((t) => t.id === v);
+                  if (!tpl) return;
+                  setForm((prev) => applyTemplate(prev, tpl));
+                }}
+              >
+                <SelectTrigger id="template">
+                  <SelectValue placeholder="Build from scratch..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {templates.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="blank">
+                    Build from scratch (no template)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              {(() => {
+                const active = templates.find((t) => t.id === form.template_id);
+                if (!active) {
+                  return (
+                    <p className="text-xs text-muted-foreground">
+                      Pick a template to prefill name, stages, and abort
+                      criteria — you'll still need to pick a group and
+                      target config below.
+                    </p>
+                  );
+                }
+                return (
+                  <div className="space-y-1">
+                    <p className="text-xs text-foreground">
+                      {active.description}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      {active.when_to_use}
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
+
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="name">Name</Label>

@@ -6,6 +6,7 @@ import type {
   AbortCriteriaRecipe,
   Rollout,
   RolloutInput,
+  RolloutTemplate,
 } from "@/types/rollout";
 
 interface ListResponse {
@@ -14,6 +15,10 @@ interface ListResponse {
 
 interface RecipesResponse {
   recipes: AbortCriteriaRecipe[];
+}
+
+interface TemplatesResponse {
+  templates: RolloutTemplate[];
 }
 
 // listAbortCriteriaRecipes fetches the curated cookbook of abort-criteria
@@ -26,6 +31,17 @@ export const listAbortCriteriaRecipes = async (): Promise<
     "/rollout-recipes/abort-criteria",
   );
   return resp.recipes ?? [];
+};
+
+// listRolloutTemplates fetches the curated template gallery. Each
+// template bundles stages + criteria + a default name; picking one
+// prefills the entire create form except for group_id and
+// target_config_id.
+export const listRolloutTemplates = async (): Promise<RolloutTemplate[]> => {
+  const resp = await simpleRequest<TemplatesResponse>(
+    "/rollout-recipes/templates",
+  );
+  return resp.templates ?? [];
 };
 
 export const listRollouts = async (): Promise<Rollout[]> => {
