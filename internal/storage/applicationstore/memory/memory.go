@@ -650,8 +650,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
 			return fmt.Errorf("api token hash collision")
 		}
 	}
-	tokenCopy := *t
-	s.apiTokens[t.ID] = &tokenCopy
+	s.apiTokens[t.ID] = copyToken(t)
 	return nil
 }
 
@@ -660,8 +659,7 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (*types.APIT
 	defer s.mu.RUnlock()
 	for _, t := range s.apiTokens {
 		if t.Hash == hash {
-			tokenCopy := *t
-			return &tokenCopy, nil
+			return copyToken(t), nil
 		}
 	}
 	return nil, nil
@@ -672,14 +670,24 @@ func (s *Store) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
 	defer s.mu.RUnlock()
 	out := make([]*types.APIToken, 0, len(s.apiTokens))
 	for _, t := range s.apiTokens {
-		tokenCopy := *t
-		out = append(out, &tokenCopy)
+		out = append(out, copyToken(t))
 	}
 	// Newest-first to match the SQLite impl.
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
 	return out, nil
+}
+
+// copyToken returns a defensive copy with a fresh Scopes slice so
+// callers can't mutate stored state through the slice header.
+func copyToken(t *types.APIToken) *types.APIToken {
+	cp := *t
+	if len(t.Scopes) > 0 {
+		cp.Scopes = make([]string, len(t.Scopes))
+		copy(cp.Scopes, t.Scopes)
+	}
+	return &cp
 }
 
 func (s *Store) UpdateAPITokenLastUsed(ctx context.Context, id string, at time.Time) error {

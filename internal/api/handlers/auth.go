@@ -25,9 +25,12 @@ func NewAuthHandlers(authService services.AuthService, logger *zap.Logger) *Auth
 
 // CreateTokenRequest is the body of POST /api/v1/auth/tokens. Label is
 // required so issued tokens are operator-readable in the list view and
-// in audit log actors.
+// in audit log actors. Scopes is required — operators must opt into
+// the permissions they're granting. Pass ["*"] for full access (still
+// recorded explicitly so the audit log shows it).
 type CreateTokenRequest struct {
-	Label string `json:"label" binding:"required"`
+	Label  string   `json:"label" binding:"required"`
+	Scopes []string `json:"scopes" binding:"required"`
 }
 
 // CreateTokenResponse is the body of POST /api/v1/auth/tokens. Plaintext
@@ -46,10 +49,11 @@ func (h *AuthHandlers) HandleCreateToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "detail": err.Error()})
 		return
 	}
-	token, plaintext, err := h.authService.Issue(c.Request.Context(), req.Label)
+	token, plaintext, err := h.authService.Issue(c.Request.Context(), req.Label, req.Scopes)
 	if err != nil {
-		if strings.Contains(err.Error(), "label") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		msg := err.Error()
+		if strings.Contains(msg, "label") || strings.Contains(msg, "scopes") || strings.Contains(msg, "unknown scope") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		}
 		h.logger.Error("failed to issue api token", zap.Error(err))

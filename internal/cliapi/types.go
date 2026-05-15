@@ -178,9 +178,12 @@ type AuditResponse struct {
 }
 
 // APIToken mirrors services.APIToken. Plaintext is NEVER on this type.
+// Scopes is empty for legacy pre-v0.10 tokens (treated as full-access
+// by the middleware); explicit scopes for v0.10+ tokens.
 type APIToken struct {
 	ID         string     `json:"id"`
 	Label      string     `json:"label"`
+	Scopes     []string   `json:"scopes"`
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`

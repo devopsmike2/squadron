@@ -9,6 +9,7 @@ beyond a trusted network.
 - [Turning it on](#turning-it-on)
 - [Bootstrap: the first token](#bootstrap-the-first-token)
 - [Managing tokens](#managing-tokens)
+- [Scopes](#scopes)
 - [Using a token](#using-a-token)
 - [Token lifecycle](#token-lifecycle)
 - [Recovery: lost all tokens](#recovery-lost-all-tokens)
@@ -111,6 +112,70 @@ log as `operator:<label>`. Suggested patterns:
 Resist the urge to share tokens between systems. The audit log can't
 distinguish two consumers of the same token, and revoking the shared
 token to rotate one of them breaks the others.
+
+## Scopes
+
+Each token carries a list of permission scopes. The middleware enforces
+them per route: a token with `agents:read` can `GET /api/v1/agents` but
+gets a **403 Forbidden** on `POST /api/v1/agents/:id/restart`. The
+distinction matters — **401 Unauthorized** means "I don't know who you
+are" (no token / bad token), **403 Forbidden** means "I know who you
+are but you can't do this" (auth OK, scope missing). CLI clients
+should branch on the status code, not the message.
+
+### Vocabulary
+
+| Scope                | Gates                                                      |
+|----------------------|------------------------------------------------------------|
+| `*` (wildcard)       | Every endpoint. Use for break-glass / bootstrap tokens.    |
+| `agents:read`        | List + get agents; group → agents listing.                 |
+| `agents:write`       | Push config to an agent, restart, move between groups; group restart. |
+| `groups:read`        | List + get groups + group configs.                         |
+| `groups:write`       | Create, edit, delete groups; assign group configs.         |
+| `configs:read`       | List + get + lint + validate configs.                      |
+| `configs:write`      | Create, update, delete configs.                            |
+| `telemetry:read`     | Query metrics / logs / traces; saved-query CRUD.           |
+| `alerts:read`        | List + get alert rules.                                    |
+| `alerts:write`       | Create, update, delete alert rules.                        |
+| `rollouts:read`      | List + get rollouts + recipes + templates + preview.       |
+| `rollouts:write`     | Create, abort, pause, resume rollouts.                     |
+| `audit:read`         | Read audit log; subscribe to the SSE event stream.         |
+| `auth:read`          | List API tokens.                                           |
+| `auth:write`         | Create + revoke API tokens.                                |
+
+### Common bundles
+
+```bash
+# Read-only viewer: someone watching dashboards but not deploying.
+squadronctl auth create-token --label viewer \
+  --scope agents:read --scope groups:read --scope configs:read \
+  --scope telemetry:read --scope alerts:read --scope rollouts:read \
+  --scope audit:read
+
+# CI deploy pipeline: pushes configs and ships rollouts, nothing else.
+squadronctl auth create-token --label ci-deploy \
+  --scope configs:write --scope rollouts:write --scope rollouts:read
+
+# Alerts manager: tunes alert rules without touching configs.
+squadronctl auth create-token --label alerts-manager \
+  --scope alerts:read --scope alerts:write --scope audit:read
+
+# Break-glass / bootstrap: full access. Revoke after use.
+squadronctl auth create-token --label oncall-break-glass --full-access
+```
+
+### Backward compatibility
+
+Tokens issued before v0.10 have no scopes recorded (the column didn't
+exist). The middleware treats those tokens as having **full access**
+so the v0.10 upgrade doesn't break every existing operator and
+automation token. The token-list UI renders them with a `legacy: full
+access` badge — operators should revoke and reissue with explicit
+scopes when they get a chance.
+
+New tokens are required to declare scopes; the API rejects an empty
+scope list at create time. Pass `["*"]` for the explicit full-access
+case so the choice is visible in the audit log.
 
 ## Using a token
 

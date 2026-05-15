@@ -163,42 +163,49 @@ func (s *Server) registerRoutes() {
 		// they should already have a token to authenticate with.
 		auth := v1.Group("/auth/tokens")
 		{
-			auth.GET("", authHandlers.HandleListTokens)
-			auth.POST("", authHandlers.HandleCreateToken)
-			auth.POST("/:id/revoke", authHandlers.HandleRevokeToken)
+			auth.GET("", middleware.RequireScope(services.ScopeAuthRead), authHandlers.HandleListTokens)
+			auth.POST("", middleware.RequireScope(services.ScopeAuthWrite), authHandlers.HandleCreateToken)
+			auth.POST("/:id/revoke", middleware.RequireScope(services.ScopeAuthWrite), authHandlers.HandleRevokeToken)
 		}
 
-		// Agent routes
+		// Agent routes. GET is read; PATCH/POST modify the agent (group
+		// assignment, config push, restart) and require write.
 		agents := v1.Group("/agents")
 		{
-			agents.GET("", agentHandlers.HandleGetAgents)
-			agents.GET("/stats", agentHandlers.HandleGetAgentStats) // Must come before /:id
-			agents.GET("/:id", agentHandlers.HandleGetAgent)
-			agents.PATCH("/:id/group", agentHandlers.HandleUpdateAgentGroup)
-			agents.POST("/:id/config", agentHandlers.HandleSendConfigToAgent)
-			agents.POST("/:id/restart", agentHandlers.HandleRestartAgent)
+			agents.GET("", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgents)
+			agents.GET("/stats", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgentStats)
+			agents.GET("/:id", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgent)
+			agents.PATCH("/:id/group", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleUpdateAgentGroup)
+			agents.POST("/:id/config", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleSendConfigToAgent)
+			agents.POST("/:id/restart", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleRestartAgent)
 		}
 
-		// Config routes
+		// Config routes. validate/lint/templates are read-shaped (they
+		// don't mutate state even though they're POSTs by API design),
+		// so they require configs:read. Create/update/delete need write.
 		configs := v1.Group("/configs")
 		{
-			configs.GET("", configHandlers.HandleGetConfigs)
-			configs.POST("", configHandlers.HandleCreateConfig)
-			configs.POST("/validate", configHandlers.HandleValidateConfig) // Must come before /:id
-			configs.POST("/lint", configHandlers.HandleLintConfig)         // Anti-pattern + structural lint
-			configs.GET("/templates", configHandlers.HandleGetConfigTemplates)
-			configs.GET("/templates/:id", configHandlers.HandleGetConfigTemplate)
-			configs.GET("/versions", configHandlers.HandleGetConfigVersions)
-			configs.GET("/:id", configHandlers.HandleGetConfig)
-			configs.PUT("/:id", configHandlers.HandleUpdateConfig)
-			configs.DELETE("/:id", configHandlers.HandleDeleteConfig)
+			configs.GET("", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleGetConfigs)
+			configs.POST("", middleware.RequireScope(services.ScopeConfigsWrite), configHandlers.HandleCreateConfig)
+			configs.POST("/validate", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleValidateConfig)
+			configs.POST("/lint", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleLintConfig)
+			configs.GET("/templates", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleGetConfigTemplates)
+			configs.GET("/templates/:id", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleGetConfigTemplate)
+			configs.GET("/versions", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleGetConfigVersions)
+			configs.GET("/:id", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleGetConfig)
+			configs.PUT("/:id", middleware.RequireScope(services.ScopeConfigsWrite), configHandlers.HandleUpdateConfig)
+			configs.DELETE("/:id", middleware.RequireScope(services.ScopeConfigsWrite), configHandlers.HandleDeleteConfig)
 		}
 
-		// Telemetry routes
+		// Telemetry routes are all read-shaped (POSTs are queries, not
+		// mutations). Saved queries are a CRUD library that piggybacks
+		// on the same scope — there's no separate "saved query write"
+		// scope for v0.10; if operators want stricter isolation, that's
+		// a future scope subdivision.
 		telemetry := v1.Group("/telemetry")
+		telemetry.Use(middleware.RequireScope(services.ScopeTelemetryRead))
 		{
-			// Legacy endpoints
-			telemetry.POST("/metrics/query", telemetryHandlers.HandleQueryMetrics)			// Saved query library
+			telemetry.POST("/metrics/query", telemetryHandlers.HandleQueryMetrics)
 			savedQueries := telemetry.Group("/saved-queries")
 			{
 				savedQueries.GET("", savedQueryHandlers.HandleListSavedQueries)
@@ -207,13 +214,11 @@ func (s *Server) registerRoutes() {
 				savedQueries.DELETE("/:id", savedQueryHandlers.HandleDeleteSavedQuery)
 			}
 
-
 			telemetry.POST("/logs/query", telemetryHandlers.HandleQueryLogs)
 			telemetry.POST("/traces/query", telemetryHandlers.HandleQueryTraces)
 			telemetry.GET("/overview", telemetryHandlers.HandleGetTelemetryOverview)
 			telemetry.GET("/services", telemetryHandlers.HandleGetServices)
 
-			// Squadron QL endpoints
 			telemetry.POST("/query", squadronQLHandlers.HandleSquadronQLQuery)
 			telemetry.POST("/query/validate", squadronQLHandlers.HandleValidateQuery)
 			telemetry.POST("/query/suggestions", squadronQLHandlers.HandleGetSuggestions)
@@ -221,22 +226,24 @@ func (s *Server) registerRoutes() {
 			telemetry.GET("/query/functions", squadronQLHandlers.HandleGetFunctions)
 		}
 
-		// Group routes
+		// Group routes. Restart is a write because it triggers an
+		// operational change on every agent in the group.
 		groups := v1.Group("/groups")
 		{
-			groups.GET("", groupHandlers.HandleGetGroups)
-			groups.POST("", groupHandlers.HandleCreateGroup)
-			groups.GET("/:id", groupHandlers.HandleGetGroup)
-			groups.PUT("/:id", groupHandlers.HandleUpdateGroup)
-			groups.DELETE("/:id", groupHandlers.HandleDeleteGroup)
-			groups.POST("/:id/config", groupHandlers.HandleAssignConfig)
-			groups.GET("/:id/config", groupHandlers.HandleGetGroupConfig)
-			groups.GET("/:id/agents", groupHandlers.HandleGetGroupAgents)
-			groups.POST("/:id/restart", groupHandlers.HandleRestartGroup)
+			groups.GET("", middleware.RequireScope(services.ScopeGroupsRead), groupHandlers.HandleGetGroups)
+			groups.POST("", middleware.RequireScope(services.ScopeGroupsWrite), groupHandlers.HandleCreateGroup)
+			groups.GET("/:id", middleware.RequireScope(services.ScopeGroupsRead), groupHandlers.HandleGetGroup)
+			groups.PUT("/:id", middleware.RequireScope(services.ScopeGroupsWrite), groupHandlers.HandleUpdateGroup)
+			groups.DELETE("/:id", middleware.RequireScope(services.ScopeGroupsWrite), groupHandlers.HandleDeleteGroup)
+			groups.POST("/:id/config", middleware.RequireScope(services.ScopeGroupsWrite), groupHandlers.HandleAssignConfig)
+			groups.GET("/:id/config", middleware.RequireScope(services.ScopeGroupsRead), groupHandlers.HandleGetGroupConfig)
+			groups.GET("/:id/agents", middleware.RequireScope(services.ScopeAgentsRead), groupHandlers.HandleGetGroupAgents)
+			groups.POST("/:id/restart", middleware.RequireScope(services.ScopeAgentsWrite), groupHandlers.HandleRestartGroup)
 		}
 
-		// Topology routes
+		// Topology routes are read-only views over agents + telemetry.
 		topology := v1.Group("/topology")
+		topology.Use(middleware.RequireScope(services.ScopeAgentsRead))
 		{
 			topology.GET("", topologyHandlers.HandleGetTopology)
 			topology.GET("/agent/:id", topologyHandlers.HandleGetAgentTopology)
@@ -246,18 +253,22 @@ func (s *Server) registerRoutes() {
 		// Alert rule routes
 		alerts := v1.Group("/alerts/rules")
 		{
-			alerts.GET("", alertHandlers.HandleListAlertRules)
-			alerts.POST("", alertHandlers.HandleCreateAlertRule)
-			alerts.GET("/:id", alertHandlers.HandleGetAlertRule)
-			alerts.PUT("/:id", alertHandlers.HandleUpdateAlertRule)
-			alerts.DELETE("/:id", alertHandlers.HandleDeleteAlertRule)
+			alerts.GET("", middleware.RequireScope(services.ScopeAlertsRead), alertHandlers.HandleListAlertRules)
+			alerts.POST("", middleware.RequireScope(services.ScopeAlertsWrite), alertHandlers.HandleCreateAlertRule)
+			alerts.GET("/:id", middleware.RequireScope(services.ScopeAlertsRead), alertHandlers.HandleGetAlertRule)
+			alerts.PUT("/:id", middleware.RequireScope(services.ScopeAlertsWrite), alertHandlers.HandleUpdateAlertRule)
+			alerts.DELETE("/:id", middleware.RequireScope(services.ScopeAlertsWrite), alertHandlers.HandleDeleteAlertRule)
 		}
 
-		// Real-time event stream (Server-Sent Events).
-		v1.GET("/events/stream", eventsHandlers.HandleStream)
+		// Real-time event stream (Server-Sent Events). Stream carries
+		// state-change events across every domain; the audit:read scope
+		// is the closest match since the events are largely the same
+		// shapes the audit log records.
+		v1.GET("/events/stream", middleware.RequireScope(services.ScopeAuditRead), eventsHandlers.HandleStream)
 
 		// Audit log — read-only.
 		audit := v1.Group("/audit")
+		audit.Use(middleware.RequireScope(services.ScopeAuditRead))
 		{
 			audit.GET("/events", auditHandlers.HandleListAuditEvents)
 		}
@@ -265,26 +276,34 @@ func (s *Server) registerRoutes() {
 		// Rollouts — safe staged config deployment with automatic rollback.
 		rollouts := v1.Group("/rollouts")
 		{
-			rollouts.GET("", rolloutHandlers.HandleListRollouts)
-			rollouts.POST("", rolloutHandlers.HandleCreateRollout)
-			rollouts.GET("/:id", rolloutHandlers.HandleGetRollout)
-			rollouts.POST("/:id/abort", rolloutHandlers.HandleAbortRollout)
-			rollouts.POST("/:id/pause", rolloutHandlers.HandlePauseRollout)
-			rollouts.POST("/:id/resume", rolloutHandlers.HandleResumeRollout)
+			rollouts.GET("", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleListRollouts)
+			rollouts.POST("", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleCreateRollout)
+			rollouts.GET("/:id", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleGetRollout)
+			rollouts.POST("/:id/abort", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleAbortRollout)
+			rollouts.POST("/:id/pause", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandlePauseRollout)
+			rollouts.POST("/:id/resume", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleResumeRollout)
 		}
 
 		// Rollout recipe cookbook. Sibling of /rollouts (not nested)
 		// to avoid Gin's static-vs-parametric route conflict with
 		// /rollouts/:id. Both endpoints are cache-friendly — they
-		// change only on Squadron upgrade.
-		v1.GET("/rollout-recipes/abort-criteria", rolloutHandlers.HandleListAbortCriteriaRecipes)
-		v1.GET("/rollout-recipes/templates", rolloutHandlers.HandleListRolloutTemplates)
+		// change only on Squadron upgrade. rollouts:read gates them so
+		// a read-only operator can see what shapes are available even
+		// though they can't create rollouts.
+		v1.GET("/rollout-recipes/abort-criteria",
+			middleware.RequireScope(services.ScopeRolloutsRead),
+			rolloutHandlers.HandleListAbortCriteriaRecipes)
+		v1.GET("/rollout-recipes/templates",
+			middleware.RequireScope(services.ScopeRolloutsRead),
+			rolloutHandlers.HandleListRolloutTemplates)
 
 		// Rollout preview — diff + lint between a group's current
 		// effective config and a target config, for the create-form
 		// "are you sure?" pane. Sibling of /rollouts for the same
 		// routing-conflict reason.
-		v1.GET("/rollout-preview", rolloutHandlers.HandlePreviewRollout)
+		v1.GET("/rollout-preview",
+			middleware.RequireScope(services.ScopeRolloutsRead),
+			rolloutHandlers.HandlePreviewRollout)
 	}
 
 	// Serve static files for the UI

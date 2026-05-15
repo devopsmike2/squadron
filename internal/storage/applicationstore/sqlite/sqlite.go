@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -165,10 +166,18 @@ func (s *Storage) migrate() error {
 		id TEXT PRIMARY KEY,
 		label TEXT NOT NULL,
 		hash TEXT NOT NULL UNIQUE,            -- sha256 hex digest of the plaintext token
+		scopes TEXT NOT NULL DEFAULT '[]',    -- JSON array of permission scopes; '[]' = legacy full-access
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		last_used_at DATETIME,
 		revoked_at DATETIME
 	);
+
+	-- ALTER TABLE for upgrades from pre-v0.10 schemas. SQLite ignores
+	-- the second ADD if the column already exists; the IF NOT EXISTS
+	-- pattern isn't supported on ALTER, so we guard with a sub-select
+	-- against sqlite_master.
+	CREATE TABLE IF NOT EXISTS _migrations_done (name TEXT PRIMARY KEY);
+	-- (Migration applied below in Go code; defining the marker table here.)
 
 	-- Fast lookup by hash for every authenticated request.
 	CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(hash);
@@ -184,10 +193,18 @@ func (s *Storage) migrate() error {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
-	// Run migrations for schema changes
+	// Run migrations for schema changes. SQLite doesn't support
+	// "ALTER TABLE ... ADD COLUMN IF NOT EXISTS", so we run each
+	// migration unconditionally and swallow "duplicate column"
+	// errors. This is idempotent across upgrades.
 	migrations := []string{
-		// Add name column to configs table if it doesn't exist
+		// v0.1: configs gain a human-readable name.
 		`ALTER TABLE configs ADD COLUMN name TEXT`,
+		// v0.10: api_tokens gain a scopes column. Existing tokens
+		// upgrade with the default '[]' which the service interprets
+		// as legacy full-access (so existing operator + automation
+		// tokens keep working through the upgrade).
+		`ALTER TABLE api_tokens ADD COLUMN scopes TEXT NOT NULL DEFAULT '[]'`,
 	}
 
 	for _, migration := range migrations {
@@ -205,8 +222,15 @@ func (s *Storage) migrate() error {
 
 // isColumnExistsError checks if the error is due to a column already existing
 func isColumnExistsError(err error) bool {
-	return err != nil && (err.Error() == "duplicate column name: name" ||
-		err.Error() == "column name already exists")
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// SQLite phrases the error as "duplicate column name: <col>" or
+	// "column <col> already exists" depending on driver version.
+	// Match the prefix rather than enumerating every column name.
+	return strings.HasPrefix(msg, "duplicate column name") ||
+		strings.Contains(msg, "already exists")
 }
 
 // Agent management
@@ -1233,30 +1257,37 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 // exists and RevokedAt is null, the request is authenticated.
 
 func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
-	stmt := `
-		INSERT INTO api_tokens (id, label, hash, created_at, last_used_at, revoked_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`
-	_, err := s.db.ExecContext(ctx, stmt,
-		t.ID, t.Label, t.Hash, t.CreatedAt, t.LastUsedAt, t.RevokedAt)
+	scopesJSON, err := marshalScopes(t.Scopes)
 	if err != nil {
+		return err
+	}
+	stmt := `
+		INSERT INTO api_tokens (id, label, hash, scopes, created_at, last_used_at, revoked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+	if _, err := s.db.ExecContext(ctx, stmt,
+		t.ID, t.Label, t.Hash, scopesJSON, t.CreatedAt, t.LastUsedAt, t.RevokedAt); err != nil {
 		return fmt.Errorf("failed to create api token: %w", err)
 	}
 	return nil
 }
 
 func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.APIToken, error) {
-	stmt := `SELECT id, label, hash, created_at, last_used_at, revoked_at FROM api_tokens WHERE hash = ?`
+	stmt := `SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at FROM api_tokens WHERE hash = ?`
 	t := &types.APIToken{}
-	var lastUsedAt, revokedAt sql.NullTime
+	var (
+		scopesJSON           string
+		lastUsedAt, revokedAt sql.NullTime
+	)
 	err := s.db.QueryRowContext(ctx, stmt, hash).Scan(
-		&t.ID, &t.Label, &t.Hash, &t.CreatedAt, &lastUsedAt, &revokedAt)
+		&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get api token: %w", err)
 	}
+	t.Scopes = unmarshalScopes(scopesJSON)
 	if lastUsedAt.Valid {
 		t.LastUsedAt = &lastUsedAt.Time
 	}
@@ -1271,7 +1302,7 @@ func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.AP
 // audit consumers can still resolve old token IDs to labels.
 func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
 	stmt := `
-		SELECT id, label, hash, created_at, last_used_at, revoked_at
+		SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at
 		FROM api_tokens
 		ORDER BY created_at DESC
 	`
@@ -1283,10 +1314,14 @@ func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) 
 	var out []*types.APIToken
 	for rows.Next() {
 		t := &types.APIToken{}
-		var lastUsedAt, revokedAt sql.NullTime
-		if err := rows.Scan(&t.ID, &t.Label, &t.Hash, &t.CreatedAt, &lastUsedAt, &revokedAt); err != nil {
+		var (
+			scopesJSON           string
+			lastUsedAt, revokedAt sql.NullTime
+		)
+		if err := rows.Scan(&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt); err != nil {
 			return nil, err
 		}
+		t.Scopes = unmarshalScopes(scopesJSON)
 		if lastUsedAt.Valid {
 			t.LastUsedAt = &lastUsedAt.Time
 		}
@@ -1296,6 +1331,36 @@ func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) 
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// marshalScopes serializes the scope list to the JSON-array form
+// stored in the scopes column. Nil and empty both become '[]' so the
+// SELECT path can rely on a non-null body.
+func marshalScopes(s []string) (string, error) {
+	if len(s) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", fmt.Errorf("marshal scopes: %w", err)
+	}
+	return string(b), nil
+}
+
+// unmarshalScopes returns the scope list for a stored token. Empty
+// arrays decode as nil so callers can distinguish "no scopes recorded"
+// from "scopes recorded but empty" — both currently mean legacy
+// full-access for the service layer, but keeping nil keeps the
+// JSON-marshaled response shape stable when the column is missing.
+func unmarshalScopes(s string) []string {
+	if s == "" || s == "[]" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 // UpdateAPITokenLastUsed touches the last_used_at column. Best-effort:

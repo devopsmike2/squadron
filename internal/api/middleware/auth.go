@@ -93,6 +93,7 @@ func RequireBearer(auth services.AuthService, logger *zap.Logger) gin.HandlerFun
 		actor := services.AuthActor{
 			TokenID:    token.ID,
 			TokenLabel: token.Label,
+			Scopes:     token.Scopes,
 		}
 		c.Set(AuthActorContextKey, actor)
 		// Also stash on the request context so service-layer audit
@@ -120,4 +121,37 @@ func ActorFromGin(c *gin.Context) services.AuthActor {
 		}
 	}
 	return services.AuthActor{}
+}
+
+// RequireScope returns Gin middleware that enforces a specific scope
+// on the authenticated actor. Must run AFTER RequireBearer — that's
+// the middleware that puts the actor on the context. If no actor is
+// present (auth disabled server-side) the scope check is skipped —
+// auth-disabled deployments behave as before, and operators who turn
+// auth on get authorization with the same flag flip.
+//
+// 401 vs 403:
+//   - 401 unauthorized = "I don't know who you are" (no/bad token).
+//     Returned by RequireBearer.
+//   - 403 forbidden    = "I know who you are but you can't do this".
+//     Returned here. Distinct status so the CLI can branch — e.g.
+//     a 403 means "your token is fine, but it lacks 'rollouts:write'".
+func RequireScope(required string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		actor := ActorFromGin(c)
+		if actor.IsZero() {
+			// Auth is disabled server-side; nothing to authorize against.
+			c.Next()
+			return
+		}
+		if !actor.HasScope(required) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error":          "forbidden",
+				"detail":         "token does not have the required scope",
+				"required_scope": required,
+			})
+			return
+		}
+		c.Next()
+	}
 }

@@ -6,10 +6,12 @@
 // Mounted at /settings/tokens.
 
 import { Copy, KeyRound, Plus, Trash2 } from "lucide-react";
+import type React from "react";
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 
 import {
+  ALL_SCOPES,
   type APIToken,
   createAPIToken,
   listAPITokens,
@@ -30,6 +32,11 @@ export default function SettingsTokensPage() {
   );
   const [creating, setCreating] = useState(false);
   const [newLabel, setNewLabel] = useState("");
+  // selectedScopes is the working set for the new-token form. Starts
+  // empty so operators have to explicitly pick something — the
+  // "Full access" shortcut just flips them all on plus the wildcard.
+  const [selectedScopes, setSelectedScopes] = useState<Set<string>>(new Set());
+  const [fullAccess, setFullAccess] = useState(false);
   // freshPlaintext holds the just-issued token plaintext for the
   // "copy this now" modal. Cleared when the operator dismisses the
   // modal — at which point Squadron has no way to recover it.
@@ -37,14 +44,36 @@ export default function SettingsTokensPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  const toggleScope = (id: string) => {
+    setSelectedScopes((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const scopesForSubmit = (): string[] => {
+    if (fullAccess) return ["*"];
+    return Array.from(selectedScopes);
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setSubmitError(null);
+    const scopes = scopesForSubmit();
+    if (scopes.length === 0) {
+      setSubmitError("Pick at least one scope, or choose 'Full access'.");
+      setSubmitting(false);
+      return;
+    }
     try {
-      const resp = await createAPIToken(newLabel.trim());
+      const resp = await createAPIToken(newLabel.trim(), scopes);
       setFreshPlaintext(resp.plaintext);
       setNewLabel("");
+      setSelectedScopes(new Set());
+      setFullAccess(false);
       setCreating(false);
       await mutate(TOKENS_KEY);
     } catch (err) {
@@ -116,6 +145,57 @@ export default function SettingsTokensPage() {
                   pick something that identifies the bearer.
                 </p>
               </div>
+
+              {/* Scope picker. Default: nothing selected, so operators
+                  must actively choose. "Full access" is the wildcard
+                  shortcut — useful for the bootstrap / break-glass
+                  case but discouraged for normal automation. */}
+              <div className="space-y-2">
+                <Label>Scopes</Label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={fullAccess}
+                    onChange={(e) => {
+                      setFullAccess(e.target.checked);
+                      if (e.target.checked) setSelectedScopes(new Set());
+                    }}
+                  />
+                  Full access (wildcard <span className="font-mono">*</span>)
+                </label>
+                {!fullAccess && (
+                  <div className="grid gap-2 md:grid-cols-2 rounded-md border p-3">
+                    {ALL_SCOPES.map((s) => (
+                      <label
+                        key={s.id}
+                        className="flex items-start gap-2 text-sm"
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={selectedScopes.has(s.id)}
+                          onChange={() => toggleScope(s.id)}
+                        />
+                        <span className="flex-1">
+                          <span className="font-mono text-xs">{s.id}</span>
+                          <span className="block text-[11px] text-muted-foreground">
+                            {s.label}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Token holders can only call endpoints in their granted
+                  scopes. Match the scope to the bearer's job: a CI
+                  pipeline that pushes configs and creates rollouts wants{" "}
+                  <span className="font-mono">configs:write</span> +{" "}
+                  <span className="font-mono">rollouts:write</span>, not
+                  full access.
+                </p>
+              </div>
+
               {submitError && (
                 <div className="text-sm text-red-600">{submitError}</div>
               )}
@@ -209,6 +289,7 @@ export default function SettingsTokensPage() {
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b">
                   <th className="py-2 pr-3">Label</th>
+                  <th className="py-2 pr-3">Scopes</th>
                   <th className="py-2 pr-3">Created</th>
                   <th className="py-2 pr-3">Last used</th>
                   <th className="py-2 pr-3">Status</th>
@@ -219,6 +300,9 @@ export default function SettingsTokensPage() {
                 {tokens.map((t) => (
                   <tr key={t.id} className="border-b last:border-0">
                     <td className="py-2 pr-3 font-medium">{t.label}</td>
+                    <td className="py-2 pr-3 text-xs">
+                      {renderScopes(t.scopes)}
+                    </td>
                     <td className="py-2 pr-3 text-muted-foreground">
                       {formatTimestamp(t.created_at)}
                     </td>
@@ -271,4 +355,32 @@ function formatTimestamp(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// renderScopes shows a concise scope summary. Empty scopes = legacy
+// full-access (pre-v0.10 row); wildcard = explicitly full. Anything
+// else renders the count + a tooltip with the full list.
+function renderScopes(scopes: string[] | undefined): React.ReactNode {
+  if (!scopes || scopes.length === 0) {
+    return (
+      <Badge variant="outline" className="text-[10px] uppercase">
+        legacy: full access
+      </Badge>
+    );
+  }
+  if (scopes.includes("*")) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] uppercase bg-amber-500/10 text-amber-700 border-amber-500/20"
+      >
+        full access (*)
+      </Badge>
+    );
+  }
+  return (
+    <span className="font-mono text-[11px]" title={scopes.join(", ")}>
+      {scopes.length === 1 ? scopes[0] : `${scopes.length} scopes`}
+    </span>
+  );
 }

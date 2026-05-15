@@ -71,7 +71,7 @@ func TestRequireBearer_UnknownToken_401(t *testing.T) {
 
 func TestRequireBearer_ValidToken_200_AndActorAvailable(t *testing.T) {
 	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
-	_, plaintext, err := svc.Issue(t.Context(), "ci-bot")
+	_, plaintext, err := svc.Issue(t.Context(), "ci-bot", []string{services.ScopeWildcard})
 	require.NoError(t, err)
 
 	r := newTestRouter(svc)
@@ -86,7 +86,7 @@ func TestRequireBearer_ValidToken_200_AndActorAvailable(t *testing.T) {
 
 func TestRequireBearer_RevokedToken_401(t *testing.T) {
 	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
-	token, plaintext, err := svc.Issue(t.Context(), "rotate-me")
+	token, plaintext, err := svc.Issue(t.Context(), "rotate-me", []string{services.ScopeWildcard})
 	require.NoError(t, err)
 	require.NoError(t, svc.Revoke(t.Context(), token.ID))
 
@@ -102,7 +102,7 @@ func TestRequireBearer_CaseInsensitiveScheme(t *testing.T) {
 	// RFC 7235 says auth schemes are case-insensitive. We assert that
 	// here so a curl client lowercasing the scheme still authenticates.
 	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
-	_, plaintext, err := svc.Issue(t.Context(), "ci-bot")
+	_, plaintext, err := svc.Issue(t.Context(), "ci-bot", []string{services.ScopeWildcard})
 	require.NoError(t, err)
 
 	r := newTestRouter(svc)
@@ -137,7 +137,7 @@ func TestRequireBearer_ActorAlsoOnRequestContext(t *testing.T) {
 	// and the request's context.Context (for service-layer code that
 	// doesn't see Gin). This test exercises the request context path.
 	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
-	_, plaintext, err := svc.Issue(t.Context(), "deep-actor")
+	_, plaintext, err := svc.Issue(t.Context(), "deep-actor", []string{services.ScopeWildcard})
 	require.NoError(t, err)
 
 	r := gin.New()

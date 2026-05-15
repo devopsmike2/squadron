@@ -95,28 +95,68 @@ func newAuthTokensListCommand() *cobra.Command {
 				rows = append(rows, []string{
 					truncate(t.ID, 8),
 					t.Label,
+					summarizeScopes(t.Scopes),
 					t.CreatedAt.Format("2006-01-02 15:04:05"),
 					lastUsed,
 					status,
 				})
 			}
-			table(cmd.OutOrStdout(), []string{"ID", "LABEL", "CREATED", "LAST USED", "STATUS"}, rows)
+			table(cmd.OutOrStdout(), []string{"ID", "LABEL", "SCOPES", "CREATED", "LAST USED", "STATUS"}, rows)
 			return nil
 		},
 	}
 }
 
+// summarizeScopes is the same display logic the UI uses: empty scopes
+// = legacy pre-v0.10 full-access, "*" = explicit full-access, otherwise
+// the count (or the single scope if there's only one).
+func summarizeScopes(scopes []string) string {
+	if len(scopes) == 0 {
+		return "legacy:*"
+	}
+	for _, s := range scopes {
+		if s == "*" {
+			return "*"
+		}
+	}
+	if len(scopes) == 1 {
+		return scopes[0]
+	}
+	return fmt.Sprintf("%d scopes", len(scopes))
+}
+
 func newAuthTokensCreateCommand() *cobra.Command {
-	var label string
+	var (
+		label      string
+		scopes     []string
+		fullAccess bool
+	)
 	cmd := &cobra.Command{
 		Use:   "create-token",
 		Short: "Issue a new API token. Plaintext printed ONCE.",
+		Long: `Issue a new API token.
+
+Scope flags (at least one is required — operators must opt in to the
+permissions they're granting):
+  --scope agents:read         repeatable; one per scope
+  --full-access               shortcut for --scope='*' (the wildcard)
+
+Common bundles to copy:
+  read-only viewer:   --scope agents:read --scope rollouts:read --scope audit:read
+  CI deploy pipeline: --scope configs:write --scope rollouts:write --scope rollouts:read
+  alerts manager:     --scope alerts:read --scope alerts:write --scope audit:read`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if label == "" {
 				return fmt.Errorf("--label is required")
 			}
+			if fullAccess {
+				scopes = []string{"*"}
+			}
+			if len(scopes) == 0 {
+				return fmt.Errorf("at least one --scope is required (or --full-access)")
+			}
 			c := newClient()
-			body := map[string]string{"label": label}
+			body := map[string]any{"label": label, "scopes": scopes}
 			var resp cliapi.CreateTokenResponse
 			if err := c.Do(http.MethodPost, "/api/v1/auth/tokens", nil, body, &resp); err != nil {
 				return err
@@ -131,12 +171,15 @@ func newAuthTokensCreateCommand() *cobra.Command {
 			}
 			fmt.Printf("Token issued: %s\n", resp.Token.Label)
 			fmt.Printf("ID:           %s\n", resp.Token.ID)
+			fmt.Printf("Scopes:       %v\n", resp.Token.Scopes)
 			fmt.Printf("Plaintext:    %s\n", resp.Plaintext)
 			fmt.Println("\nCopy the plaintext above NOW. Squadron stores only a hash — there's no way to retrieve it later.")
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&label, "label", "", "Human-readable label (required)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "Scope to grant (repeatable). E.g. --scope agents:read")
+	cmd.Flags().BoolVar(&fullAccess, "full-access", false, "Shortcut for --scope='*' (the wildcard)")
 	return cmd
 }
 

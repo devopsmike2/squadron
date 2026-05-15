@@ -69,10 +69,19 @@ type ApplicationStore interface {
 // resolve token IDs to labels long after revocation. LastUsedAt is
 // best-effort: the middleware updates it on each successful
 // authentication, but we don't fail requests if the update errors.
+//
+// Scopes is the list of permission scopes the token carries (e.g.
+// "agents:read", "rollouts:write"). Empty/nil scopes is treated as
+// FULL ACCESS for backward compatibility with tokens issued before
+// v0.10. New tokens issued via the UI / CLI / API always specify
+// scopes explicitly; the empty-equals-full case exists only so
+// existing pre-v0.10 deployments don't have every token suddenly
+// rejected by the new middleware after upgrade.
 type APIToken struct {
 	ID         string     `json:"id"`
 	Label      string     `json:"label"`      // human-readable, operator-supplied
 	Hash       string     `json:"-"`          // sha256 hex; NEVER in JSON responses
+	Scopes     []string   `json:"scopes"`     // empty = legacy full-access token
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`

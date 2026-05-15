@@ -54,13 +54,43 @@ const (
 // canonical row and the plaintext value. The plaintext is the ONLY
 // time the operator (or anyone) can see the token — Squadron does not
 // retain a recoverable copy.
-func (s *AuthServiceImpl) Issue(ctx context.Context, label string) (*APIToken, string, error) {
+//
+// Scopes is required and validated against the known-scope set. The
+// caller may pass [ScopeWildcard] to grant full access (still
+// recorded explicitly so the audit log shows it). An empty scope list
+// is rejected at the service layer — operators must opt in to the
+// permissions they're granting. The "empty == legacy full access"
+// behavior in APIToken.HasScope exists only for tokens persisted
+// before v0.10.
+func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []string) (*APIToken, string, error) {
 	label = strings.TrimSpace(label)
 	if len(label) < labelMinLen {
 		return nil, "", fmt.Errorf("label is required")
 	}
 	if len(label) > labelMaxLen {
 		return nil, "", fmt.Errorf("label must be %d chars or fewer", labelMaxLen)
+	}
+	if len(scopes) == 0 {
+		return nil, "", fmt.Errorf("scopes is required: pass [\"*\"] for full access or a specific list")
+	}
+	dedup := make(map[string]struct{}, len(scopes))
+	normalized := make([]string, 0, len(scopes))
+	for _, sc := range scopes {
+		sc = strings.TrimSpace(sc)
+		if sc == "" {
+			continue
+		}
+		if !IsValidScope(sc) {
+			return nil, "", fmt.Errorf("unknown scope %q", sc)
+		}
+		if _, dup := dedup[sc]; dup {
+			continue
+		}
+		dedup[sc] = struct{}{}
+		normalized = append(normalized, sc)
+	}
+	if len(normalized) == 0 {
+		return nil, "", fmt.Errorf("scopes is required: pass [\"*\"] for full access or a specific list")
 	}
 
 	// 32 bytes of cryptographic entropy. Base64-URL-encoded so the
@@ -77,12 +107,16 @@ func (s *AuthServiceImpl) Issue(ctx context.Context, label string) (*APIToken, s
 		ID:        uuid.New().String(),
 		Label:     label,
 		Hash:      hash,
+		Scopes:    normalized,
 		CreatedAt: now,
 	}
 	if err := s.appStore.CreateAPIToken(ctx, stored); err != nil {
 		return nil, "", fmt.Errorf("failed to persist token: %w", err)
 	}
-	s.logger.Info("issued api token", zap.String("token_id", stored.ID), zap.String("label", stored.Label))
+	s.logger.Info("issued api token",
+		zap.String("token_id", stored.ID),
+		zap.String("label", stored.Label),
+		zap.Strings("scopes", normalized))
 	return toServiceToken(stored), plaintext, nil
 }
 
@@ -169,11 +203,16 @@ func toServiceToken(t *applicationstore.APIToken) *APIToken {
 	if t == nil {
 		return nil
 	}
-	return &APIToken{
+	out := &APIToken{
 		ID:         t.ID,
 		Label:      t.Label,
 		CreatedAt:  t.CreatedAt,
 		LastUsedAt: t.LastUsedAt,
 		RevokedAt:  t.RevokedAt,
 	}
+	if len(t.Scopes) > 0 {
+		out.Scopes = make([]string, len(t.Scopes))
+		copy(out.Scopes, t.Scopes)
+	}
+	return out
 }

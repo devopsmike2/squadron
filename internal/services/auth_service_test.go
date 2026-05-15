@@ -22,7 +22,7 @@ func TestAuthService_Issue_ReturnsPlaintextOnce(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 
-	token, plaintext, err := svc.Issue(ctx, "ci-bot")
+	token, plaintext, err := svc.Issue(ctx, "ci-bot", []string{ScopeWildcard})
 	require.NoError(t, err)
 	require.NotEmpty(t, plaintext)
 	require.True(t, strings.HasPrefix(plaintext, "sqd_"), "token should have human-readable prefix")
@@ -35,18 +35,18 @@ func TestAuthService_Issue_ReturnsPlaintextOnce(t *testing.T) {
 
 func TestAuthService_Issue_LabelRequired(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
-	_, _, err := svc.Issue(context.Background(), "")
+	_, _, err := svc.Issue(context.Background(), "", []string{ScopeWildcard})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "label")
 
-	_, _, err = svc.Issue(context.Background(), "   ")
+	_, _, err = svc.Issue(context.Background(), "   ", []string{ScopeWildcard})
 	require.Error(t, err, "whitespace-only labels should be rejected")
 }
 
 func TestAuthService_Issue_LabelLength(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	long := strings.Repeat("x", labelMaxLen+1)
-	_, _, err := svc.Issue(context.Background(), long)
+	_, _, err := svc.Issue(context.Background(), long, []string{ScopeWildcard})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "chars or fewer")
 }
@@ -55,7 +55,7 @@ func TestAuthService_Validate_RoundTrip(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 
-	_, plaintext, err := svc.Issue(ctx, "ci-bot")
+	_, plaintext, err := svc.Issue(ctx, "ci-bot", []string{ScopeWildcard})
 	require.NoError(t, err)
 
 	got, err := svc.Validate(ctx, plaintext)
@@ -95,7 +95,7 @@ func TestAuthService_Revoke_TokenStopsValidating(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 
-	token, plaintext, err := svc.Issue(ctx, "rotate-me")
+	token, plaintext, err := svc.Issue(ctx, "rotate-me", []string{ScopeWildcard})
 	require.NoError(t, err)
 
 	// Before revoke: validates.
@@ -115,7 +115,7 @@ func TestAuthService_Revoke_Idempotent(t *testing.T) {
 	// or two operators may revoke the same token concurrently.
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
-	token, _, err := svc.Issue(ctx, "x")
+	token, _, err := svc.Issue(ctx, "x", []string{ScopeWildcard})
 	require.NoError(t, err)
 	require.NoError(t, svc.Revoke(ctx, token.ID))
 	require.NoError(t, svc.Revoke(ctx, token.ID), "second revoke should be a no-op, not an error")
@@ -132,7 +132,7 @@ func TestAuthService_List_NewestFirst(t *testing.T) {
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
 	ctx := context.Background()
 	for _, label := range []string{"first", "second", "third"} {
-		_, _, err := svc.Issue(ctx, label)
+		_, _, err := svc.Issue(ctx, label, []string{ScopeWildcard})
 		require.NoError(t, err)
 	}
 	tokens, err := svc.List(ctx)
@@ -147,11 +147,76 @@ func TestAuthService_PlaintextIsUnique(t *testing.T) {
 	// 32 bytes of entropy makes collision astronomically unlikely, but
 	// it's still worth a regression-safety assertion.
 	svc := NewAuthService(memory.NewStore(), zap.NewNop())
-	_, a, err := svc.Issue(context.Background(), "a")
+	_, a, err := svc.Issue(context.Background(), "a", []string{ScopeWildcard})
 	require.NoError(t, err)
-	_, b, err := svc.Issue(context.Background(), "b")
+	_, b, err := svc.Issue(context.Background(), "b", []string{ScopeWildcard})
 	require.NoError(t, err)
 	assert.NotEqual(t, a, b)
+}
+
+func TestAuthService_Issue_RejectsEmptyScopes(t *testing.T) {
+	// Operators must opt into permissions explicitly — Issue rejects
+	// a missing or empty scope list. The empty-equals-full-access
+	// fallback in APIToken.HasScope exists only for legacy rows that
+	// existed before v0.10; new tokens can never be created that way.
+	svc := NewAuthService(memory.NewStore(), zap.NewNop())
+	_, _, err := svc.Issue(context.Background(), "no-scopes", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scopes is required")
+
+	_, _, err = svc.Issue(context.Background(), "no-scopes", []string{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scopes is required")
+}
+
+func TestAuthService_Issue_RejectsUnknownScope(t *testing.T) {
+	svc := NewAuthService(memory.NewStore(), zap.NewNop())
+	_, _, err := svc.Issue(context.Background(), "typo", []string{"agnets:read"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown scope")
+}
+
+func TestAuthService_Issue_DedupsScopes(t *testing.T) {
+	// Operators occasionally pass the same scope twice (via shell
+	// expansion). The stored scope list should be deduplicated so the
+	// audit / list views render clean.
+	svc := NewAuthService(memory.NewStore(), zap.NewNop())
+	token, _, err := svc.Issue(context.Background(), "dedup",
+		[]string{ScopeAgentsRead, ScopeAgentsRead, ScopeRolloutsRead})
+	require.NoError(t, err)
+	assert.Len(t, token.Scopes, 2)
+}
+
+func TestAPIToken_HasScope_LegacyEmptyMeansFullAccess(t *testing.T) {
+	// The empty-scope special case is the ONLY back-compat path for
+	// pre-v0.10 tokens. Pin the behavior so refactors can't quietly
+	// flip the default for existing rows.
+	legacy := &APIToken{Scopes: nil}
+	assert.True(t, legacy.HasScope(ScopeAgentsRead))
+	assert.True(t, legacy.HasScope(ScopeRolloutsWrite))
+	assert.True(t, legacy.HasScope("anything"))
+}
+
+func TestAPIToken_HasScope_WildcardMatchesEverything(t *testing.T) {
+	t.Run("wildcard token", func(t *testing.T) {
+		wild := &APIToken{Scopes: []string{ScopeWildcard}}
+		assert.True(t, wild.HasScope(ScopeAgentsRead))
+		assert.True(t, wild.HasScope(ScopeRolloutsWrite))
+	})
+	t.Run("specific token", func(t *testing.T) {
+		specific := &APIToken{Scopes: []string{ScopeAgentsRead}}
+		assert.True(t, specific.HasScope(ScopeAgentsRead))
+		assert.False(t, specific.HasScope(ScopeRolloutsWrite))
+	})
+}
+
+func TestIsValidScope(t *testing.T) {
+	assert.True(t, IsValidScope(ScopeWildcard))
+	assert.True(t, IsValidScope(ScopeAgentsRead))
+	assert.True(t, IsValidScope(ScopeRolloutsWrite))
+	assert.False(t, IsValidScope(""))
+	assert.False(t, IsValidScope("not-a-scope"))
+	assert.False(t, IsValidScope("agents:delete"))
 }
 
 func TestActorFromContext_ZeroByDefault(t *testing.T) {

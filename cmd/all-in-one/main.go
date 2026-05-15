@@ -352,7 +352,9 @@ func bootstrapAuthToken(ctx context.Context, authService services.AuthService, l
 	if len(tokens) > 0 {
 		return nil
 	}
-	_, plaintext, err := authService.Issue(ctx, "bootstrap")
+	// Bootstrap token gets the wildcard so the operator can do
+	// anything — including create properly-scoped replacement tokens.
+	_, plaintext, err := authService.Issue(ctx, "bootstrap", []string{services.ScopeWildcard})
 	if err != nil {
 		return fmt.Errorf("issue bootstrap token: %w", err)
 	}
