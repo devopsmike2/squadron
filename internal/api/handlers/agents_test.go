@@ -106,6 +106,66 @@ func TestHandleGetAgents_ServiceError(t *testing.T) {
 	assert.Contains(t, response["error"], "Failed to fetch agents")
 }
 
+// TestHandleGetAgents_DriftStatusFilter verifies that ?drift_status=… returns
+// only matching agents, and that an unrecognized value 400s with the allowed
+// list in the body.
+func TestHandleGetAgents_DriftStatusFilter(t *testing.T) {
+	handlers, mockService := setupAgentHandlersTest()
+
+	// Two synced, one drifted, one with no_intent.
+	mkAgent := func(name string, drift services.ConfigDriftStatus) *services.Agent {
+		a := testutils.MakeTestAgentWithStatus(uuid.New(), services.AgentStatusOnline)
+		a.Name = name
+		a.DriftStatus = drift
+		return a
+	}
+	syncedA := mkAgent("a", services.ConfigDriftStatusSynced)
+	syncedB := mkAgent("b", services.ConfigDriftStatusSynced)
+	drifted := mkAgent("c", services.ConfigDriftStatusDrifted)
+	noIntent := mkAgent("d", services.ConfigDriftStatusNoIntent)
+
+	for _, a := range []*services.Agent{syncedA, syncedB, drifted, noIntent} {
+		require.NoError(t, mockService.CreateAgent(context.TODO(), a))
+	}
+
+	// Filter: drifted -> should return exactly 1 agent (c).
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/agents?drift_status=drifted", nil)
+	handlers.HandleGetAgents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp GetAgentsResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 1, resp.TotalCount, "drifted filter should return exactly one agent")
+	assert.Len(t, resp.Agents, 1)
+	require.Contains(t, resp.Agents, drifted.ID.String())
+	assert.Equal(t, services.ConfigDriftStatusDrifted, resp.Agents[drifted.ID.String()].DriftStatus)
+
+	// Filter: synced -> should return both synced agents.
+	w = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/agents?drift_status=synced", nil)
+	handlers.HandleGetAgents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	resp = GetAgentsResponse{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 2, resp.TotalCount, "synced filter should return both synced agents")
+
+	// Filter: unknown value -> 400 with allowed list.
+	w = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/agents?drift_status=bogus", nil)
+	handlers.HandleGetAgents(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Equal(t, "invalid drift_status", errResp["error"])
+	assert.Contains(t, errResp, "allowed")
+}
+
 func TestHandleGetAgent(t *testing.T) {
 	handlers, mockService := setupAgentHandlersTest()
 
