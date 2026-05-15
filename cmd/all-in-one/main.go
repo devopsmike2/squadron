@@ -22,6 +22,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
+	"github.com/devopsmike2/squadron/internal/selftel"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/telemetrystore"
@@ -162,11 +163,37 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		agentHTTPEndpoint = config.OTLP.HTTPEndpoint
 	}
 
+	// Self-telemetry publisher: when telemetry.enabled is true Squadron
+	// exports each audit event as an OTel span to the configured OTLP
+	// endpoint. Disabled here means a no-op publisher — the audit
+	// service treats nil and no-op identically.
+	selftelPub, err := selftel.New(context.Background(), selftel.Config{
+		Enabled:     config.Telemetry.Enabled,
+		ServiceName: config.Telemetry.ServiceName,
+		Endpoint:    config.Telemetry.OTLP.Endpoint,
+		Protocol:    config.Telemetry.OTLP.Protocol,
+		Headers:     config.Telemetry.OTLP.Headers,
+		Insecure:    config.Telemetry.OTLP.Insecure,
+	}, logger)
+	if err != nil {
+		logger.Fatal("Failed to initialize self-telemetry", zap.Error(err))
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := selftelPub.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("self-telemetry shutdown failed", zap.Error(err))
+		}
+	}()
+
 	// AuditService records every state change. Constructed before the
 	// other services so they can publish into it via injection. Wired
 	// with the same broker so timeline UIs append entries in real time
-	// over SSE.
-	auditService := services.NewAuditService(appStore, eventBroker, logger)
+	// over SSE, and with the self-telemetry publisher so each entry
+	// also surfaces in the operator's external observability stack
+	// when configured.
+	auditService := services.NewAuditServiceWithSelfTelemetry(appStore, eventBroker,
+		&selftelAdapter{pub: selftelPub}, logger)
 
 	// Create agent service. driftMetrics is wired so drift transitions and
 	// fleet drift state appear on /metrics. The event broker receives
@@ -332,6 +359,26 @@ func versionCommand() *cobra.Command {
 			fmt.Printf("%s v%s\n", appName, version)
 		},
 	}
+}
+
+// selftelAdapter bridges the selftel.Publisher to the
+// services.SelfTelemetryPublisher interface. The two packages can't
+// directly know about each other's types (services/ lives below
+// selftel/ in the dependency graph), so this thin wiring layer
+// translates one entry struct to the other at runtime.
+type selftelAdapter struct {
+	pub *selftel.Publisher
+}
+
+func (a *selftelAdapter) PublishAuditEvent(ctx context.Context, entry services.SelfTelemetryEntry) {
+	a.pub.PublishAuditEvent(ctx, selftel.AuditEntry{
+		Actor:      entry.Actor,
+		EventType:  entry.EventType,
+		TargetType: entry.TargetType,
+		TargetID:   entry.TargetID,
+		Action:     entry.Action,
+		Payload:    entry.Payload,
+	})
 }
 
 // bootstrapAuthToken issues a labeled token when the application store

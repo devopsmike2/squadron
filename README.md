@@ -113,6 +113,8 @@ Full documentation lives under [`/docs`](./docs/README.md):
 - [Audit log](./docs/audit-log.md) — every state change, filterable.
 - [Authentication](./docs/auth.md) — Bearer tokens, bootstrap flow,
   token lifecycle.
+- [Self-monitoring](./docs/self-monitoring.md) — emit Squadron's own
+  state changes as OTel traces.
 - [squadronctl CLI](./docs/squadronctl.md) — command-line client for
   CI pipelines and scripting.
 - [Operating Squadron](./docs/operating.md) — env vars, prod checklist,

@@ -22,6 +22,8 @@ jump straight to that page.
   How to filter, what's in the payload, how to use it for post-mortems.
 - [Authentication](./auth.md) — opt-in Bearer-token auth, bootstrap
   flow, token management, recovery path.
+- [Self-monitoring](./self-monitoring.md) — emit Squadron's own state
+  changes as OTel traces into your existing observability stack.
 - [squadronctl CLI](./squadronctl.md) — command-line client for
   scripting Squadron from CI pipelines and terminals.
 - [Operating Squadron](./operating.md) — environment variables, the

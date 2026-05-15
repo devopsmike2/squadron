@@ -183,5 +183,6 @@ Squadron is observable about itself:
 - **SSE event stream** at `GET /api/v1/events`. The UI uses this for live
   updates; you can subscribe directly for custom dashboards or alerting.
 
-A "Squadron emits its own OTel telemetry" mode (so it shows up in your
-existing observability stack) is on the roadmap.
+Squadron can also emit its own state changes as OpenTelemetry traces
+into your existing observability stack — see
+[Self-monitoring](./self-monitoring.md).

@@ -18,6 +18,35 @@ type Config struct {
 	Logging   LoggingConfig   `yaml:"logging"`
 	Worker    WorkerConfig    `yaml:"worker"`
 	Auth      AuthConfig      `yaml:"auth"`
+	Telemetry TelemetryConfig `yaml:"telemetry"`
+}
+
+// TelemetryConfig controls Squadron's self-monitoring: when enabled,
+// Squadron emits its own audit events as OpenTelemetry traces to a
+// configurable OTLP endpoint. Default: disabled. Configure to point at
+// your existing telemetry stack (the same one you're using Squadron to
+// manage the collectors for, if you like).
+//
+// This is intentionally separate from the OTLP receiver config — the
+// receiver accepts telemetry FROM agents, this section emits telemetry
+// TO somewhere else.
+type TelemetryConfig struct {
+	Enabled     bool              `yaml:"enabled"`      // master switch
+	ServiceName string            `yaml:"service_name"` // resource attr; default "squadron"
+	OTLP        OTLPExportConfig  `yaml:"otlp"`
+}
+
+// OTLPExportConfig points at the OTLP endpoint Squadron exports to.
+//
+// Endpoint must be set when Telemetry.Enabled is true. Protocol picks
+// between OTLP gRPC (the standard) and OTLP HTTP. Headers is forwarded
+// verbatim — typically a bearer token if your destination requires
+// auth (e.g. SigNoz Cloud, Honeycomb, Datadog OTLP).
+type OTLPExportConfig struct {
+	Endpoint string            `yaml:"endpoint"`  // e.g. "localhost:4317" or "https://api.honeycomb.io"
+	Protocol string            `yaml:"protocol"`  // "grpc" (default) or "http"
+	Headers  map[string]string `yaml:"headers"`   // forwarded on every export request
+	Insecure bool              `yaml:"insecure"`  // skip TLS for grpc (local dev only)
 }
 
 // AuthConfig controls API authentication. When enabled, every

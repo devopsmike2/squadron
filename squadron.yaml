@@ -48,3 +48,17 @@ auth:
   # emits a bootstrap token to stderr that operators use to log in and
   # create proper tokens. See docs/auth.md for the full flow.
   enabled: false
+
+telemetry:
+  # When true, Squadron exports its own state changes as OpenTelemetry
+  # traces to the configured OTLP endpoint. Each audit event becomes
+  # one span — operators get to query Squadron's activity alongside
+  # everything else in their observability stack. See
+  # docs/self-monitoring.md for the full picture.
+  enabled: false
+  service_name: squadron
+  otlp:
+    endpoint: ""        # e.g. otel-collector:4317 or api.honeycomb.io
+    protocol: grpc      # grpc | http
+    insecure: false     # set true for plaintext local OTLP
+    headers: {}         # e.g. authorization: "Bearer <api-key>"

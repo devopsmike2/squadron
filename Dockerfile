@@ -4,7 +4,7 @@
 # =============================================================================
 # Stage 1: Build Go Backend
 # =============================================================================
-FROM golang:1.24-bookworm AS backend-builder
+FROM golang:1.25-bookworm AS backend-builder
 
 # Install build dependencies (including gcc/g++ for CGO, SQLite, and DuckDB)
 RUN apt-get update && apt-get install -y \
