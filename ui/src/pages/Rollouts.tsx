@@ -20,6 +20,7 @@ import { getGroups, type Group } from "@/api/groups";
 import {
   abortRollout,
   createRollout,
+  listAbortCriteriaRecipes,
   listRollouts,
   pauseRollout,
   resumeRollout,
@@ -44,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import type { Agent } from "@/types/agent";
 import type {
+  AbortCriteriaRecipe,
   Rollout,
   RolloutInput,
   RolloutStage,
@@ -85,6 +87,13 @@ interface FormState {
   target_config_id: string;
   stages: FormStage[];
   max_drifted_agents: string;
+  max_error_logs_per_minute: string;
+  min_dwell_seconds_before_abort: string;
+  // recipe_id remembers which cookbook recipe (if any) the operator
+  // picked to prefill the abort-criteria fields. The fields above are
+  // the source of truth — recipe_id is just used to highlight the
+  // current selection in the picker.
+  recipe_id: string;
   notification_url: string;
 }
 
@@ -104,7 +113,12 @@ const emptyInput = (): FormState => ({
     emptyPercentStage("50", "120"),
     emptyPercentStage("100", "60"),
   ],
+  // Defaults match the historical pre-cookbook form values so an
+  // operator who skips the picker sees the same form as before.
   max_drifted_agents: "0",
+  max_error_logs_per_minute: "0",
+  min_dwell_seconds_before_abort: "30",
+  recipe_id: "",
   notification_url: "",
 });
 
@@ -153,6 +167,13 @@ export default function RolloutsPage() {
   );
   const { data: groupsResp } = useSWR<GroupsList>("groups-list", getGroups);
   const { data: agentsResp } = useSWR("agents-list", getAgents);
+  // Cookbook is server-defined and only changes on upgrade; fine to
+  // fetch once and reuse without revalidation.
+  const { data: recipes = [] } = useSWR<AbortCriteriaRecipe[]>(
+    "abort-criteria-recipes",
+    listAbortCriteriaRecipes,
+    { revalidateOnFocus: false, revalidateIfStale: false },
+  );
   // Flatten the agents-by-id map the API returns. Used for label-mode
   // match counts and (eventually) hover-to-see-which-agents UX.
   const allAgents: Agent[] = useMemo(
@@ -209,6 +230,10 @@ export default function RolloutsPage() {
       stages,
       abort_criteria: {
         max_drifted_agents: parseInt(form.max_drifted_agents, 10) || 0,
+        max_error_logs_per_minute:
+          parseInt(form.max_error_logs_per_minute, 10) || 0,
+        min_dwell_seconds_before_abort:
+          parseInt(form.min_dwell_seconds_before_abort, 10) || 0,
       },
       notification_url: form.notification_url.trim(),
     };
@@ -417,36 +442,152 @@ export default function RolloutsPage() {
               )}
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-3 rounded-md border p-3">
               <div className="space-y-2">
-                <Label htmlFor="maxdrift">Max drifted agents</Label>
-                <Input
-                  id="maxdrift"
-                  type="number"
-                  min={0}
-                  value={form.max_drifted_agents}
-                  onChange={(e) =>
-                    setForm({ ...form, max_drifted_agents: e.target.value })
+                <Label htmlFor="recipe">Abort criteria recipe</Label>
+                <Select
+                  value={form.recipe_id || "custom"}
+                  onValueChange={(v) => {
+                    if (v === "custom") {
+                      setForm({ ...form, recipe_id: "" });
+                      return;
+                    }
+                    const recipe = recipes.find((r) => r.id === v);
+                    if (!recipe) return;
+                    setForm({
+                      ...form,
+                      recipe_id: recipe.id,
+                      max_drifted_agents: String(recipe.criteria.max_drifted_agents),
+                      max_error_logs_per_minute: String(
+                        recipe.criteria.max_error_logs_per_minute ?? 0,
+                      ),
+                      min_dwell_seconds_before_abort: String(
+                        recipe.criteria.min_dwell_seconds_before_abort ?? 0,
+                      ),
+                    });
+                  }}
+                >
+                  <SelectTrigger id="recipe">
+                    <SelectValue placeholder="Pick a recipe to prefill criteria..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {recipes.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.name}
+                      </SelectItem>
+                    ))}
+                    {/* "Custom" lets the operator hand-tune. Stored as
+                        empty recipe_id so the next render's selectedRecipe
+                        lookup returns nothing and the hint hides. */}
+                    <SelectItem value="custom">Custom (no recipe)</SelectItem>
+                  </SelectContent>
+                </Select>
+                {(() => {
+                  // Render the description for the active recipe so
+                  // operators know what they're picking before they
+                  // commit. IIFE avoids leaking a const into the JSX
+                  // body just for one line of conditional render.
+                  const active = recipes.find((r) => r.id === form.recipe_id);
+                  if (!active) {
+                    return (
+                      <p className="text-xs text-muted-foreground">
+                        Pick a recipe to prefill the criteria below, or
+                        leave on "Custom" and tune each field yourself.
+                      </p>
+                    );
                   }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Auto-abort when more than this many canary agents drift.
-                </p>
+                  return (
+                    <div className="space-y-1">
+                      <p className="text-xs text-foreground">
+                        {active.description}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        {active.when_to_use}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="notif">Notification webhook (optional)</Label>
-                <Input
-                  id="notif"
-                  value={form.notification_url}
-                  onChange={(e) =>
-                    setForm({ ...form, notification_url: e.target.value })
-                  }
-                  placeholder="https://hooks.example.com/squadron-rollouts"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Squadron POSTs a JSON payload on every state transition.
-                </p>
+
+              <div className="grid gap-3 md:grid-cols-3 pt-1">
+                <div className="space-y-1">
+                  <Label htmlFor="maxdrift" className="text-xs">
+                    Max drifted agents
+                  </Label>
+                  <Input
+                    id="maxdrift"
+                    type="number"
+                    min={0}
+                    value={form.max_drifted_agents}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        // Hand-edits clear the recipe selection — what's
+                        // in the form no longer matches any cookbook entry.
+                        recipe_id: "",
+                        max_drifted_agents: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="maxerr" className="text-xs">
+                    Max errors / min
+                  </Label>
+                  <Input
+                    id="maxerr"
+                    type="number"
+                    min={0}
+                    value={form.max_error_logs_per_minute}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        recipe_id: "",
+                        max_error_logs_per_minute: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="warmup" className="text-xs">
+                    Warmup (s)
+                  </Label>
+                  <Input
+                    id="warmup"
+                    type="number"
+                    min={0}
+                    value={form.min_dwell_seconds_before_abort}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        recipe_id: "",
+                        min_dwell_seconds_before_abort: e.target.value,
+                      })
+                    }
+                  />
+                </div>
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                Drift threshold is checked every tick. Error-rate threshold
+                only fires after the warmup elapses so newly-pushed agents
+                have time to flush startup noise. Set max errors/min to 0
+                to disable the error-rate check.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="notif">Notification webhook (optional)</Label>
+              <Input
+                id="notif"
+                value={form.notification_url}
+                onChange={(e) =>
+                  setForm({ ...form, notification_url: e.target.value })
+                }
+                placeholder="https://hooks.example.com/squadron-rollouts"
+              />
+              <p className="text-xs text-muted-foreground">
+                Squadron POSTs a JSON payload on every state transition.
+              </p>
             </div>
 
             {submitError && (

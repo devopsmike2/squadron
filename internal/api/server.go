@@ -240,6 +240,12 @@ func (s *Server) registerRoutes() {
 			rollouts.POST("/:id/pause", rolloutHandlers.HandlePauseRollout)
 			rollouts.POST("/:id/resume", rolloutHandlers.HandleResumeRollout)
 		}
+
+		// Abort-criteria recipe cookbook. Sibling of /rollouts (not
+		// nested) to avoid Gin's static-vs-parametric route conflict
+		// with /rollouts/:id. Cache-friendly: changes only on
+		// Squadron upgrade.
+		v1.GET("/rollout-recipes/abort-criteria", rolloutHandlers.HandleListAbortCriteriaRecipes)
 	}
 
 	// Serve static files for the UI

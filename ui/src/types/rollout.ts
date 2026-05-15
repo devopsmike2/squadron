@@ -22,6 +22,8 @@ export interface RolloutStage {
 
 export interface RolloutAbortCriteria {
   max_drifted_agents: number;
+  max_error_logs_per_minute?: number;
+  min_dwell_seconds_before_abort?: number;
 }
 
 export interface Rollout {
@@ -49,4 +51,17 @@ export interface RolloutInput {
   stages: RolloutStage[];
   abort_criteria: RolloutAbortCriteria;
   notification_url: string;
+}
+
+// AbortCriteriaRecipe mirrors services.AbortCriteriaRecipe. The
+// cookbook is server-of-record; the UI fetches the list, displays it
+// in a picker, and (when the operator picks one) prefills the
+// abort_criteria fields. Operators can still tweak each value
+// afterward.
+export interface AbortCriteriaRecipe {
+  id: string;
+  name: string;
+  description: string;
+  when_to_use: string;
+  criteria: RolloutAbortCriteria;
 }

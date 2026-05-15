@@ -135,6 +135,22 @@ func (h *RolloutHandlers) HandleResumeRollout(c *gin.Context) {
 	c.JSON(http.StatusOK, r)
 }
 
+// HandleListAbortCriteriaRecipes serves GET /api/v1/rollouts/abort-criteria/recipes.
+//
+// Returns the curated cookbook of pre-tuned RolloutAbortCriteria values
+// that operators can pick from in the create form. The list is
+// server-of-record (built into the binary, not stored) and returned in
+// a stable order — see services.AbortCriteriaRecipes for the order and
+// the rationale behind each recipe.
+//
+// This endpoint is intentionally cache-friendly: the response only
+// changes when Squadron itself is upgraded. UI may cache it for the
+// lifetime of the page.
+func (h *RolloutHandlers) HandleListAbortCriteriaRecipes(c *gin.Context) {
+	recipes := services.AbortCriteriaRecipes()
+	c.JSON(http.StatusOK, gin.H{"recipes": recipes})
+}
+
 // HandleAbortRollout serves POST /api/v1/rollouts/:id/abort.
 //
 // Optional body: {reason: string}. If reason is empty, "aborted by
