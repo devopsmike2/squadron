@@ -176,6 +176,69 @@ func (s *RolloutServiceImpl) Abort(ctx context.Context, id, reason string) (*Rol
 	return toServiceRollout(stored), nil
 }
 
+// Pause flips an in-progress rollout to paused. The engine will leave it
+// alone — no stage advance, no auto-abort — until Resume is called.
+// Pause is a no-op on already-paused rollouts and an error on terminal
+// states.
+func (s *RolloutServiceImpl) Pause(ctx context.Context, id string) (*Rollout, error) {
+	stored, err := s.appStore.GetRollout(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		return nil, fmt.Errorf("rollout not found: %s", id)
+	}
+	if stored.State == applicationstore.RolloutStatePaused {
+		return toServiceRollout(stored), nil
+	}
+	if stored.State != applicationstore.RolloutStateInProgress && stored.State != applicationstore.RolloutStatePending {
+		return toServiceRollout(stored), fmt.Errorf("cannot pause rollout in state %q", stored.State)
+	}
+	stored.State = applicationstore.RolloutStatePaused
+	if err := s.appStore.UpdateRollout(ctx, stored); err != nil {
+		return nil, fmt.Errorf("failed to persist pause: %w", err)
+	}
+	s.logger.Info("rollout paused", zap.String("rollout_id", id))
+	if s.auditService != nil {
+		_ = s.auditService.Record(ctx, AuditEntry{
+			Actor: AuditActorSystem, EventType: "rollout.paused",
+			TargetType: "rollout", TargetID: id, Action: "paused",
+		})
+	}
+	return toServiceRollout(stored), nil
+}
+
+// Resume flips a paused rollout back to in_progress. Resets the stage
+// dwell clock so the operator gets a fresh window of dwell + abort
+// criteria evaluation — the safer default than picking up mid-dwell with
+// stale criteria state.
+func (s *RolloutServiceImpl) Resume(ctx context.Context, id string) (*Rollout, error) {
+	stored, err := s.appStore.GetRollout(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		return nil, fmt.Errorf("rollout not found: %s", id)
+	}
+	if stored.State != applicationstore.RolloutStatePaused {
+		return toServiceRollout(stored), fmt.Errorf("cannot resume rollout in state %q", stored.State)
+	}
+	stored.State = applicationstore.RolloutStateInProgress
+	now := time.Now().UTC()
+	stored.StageStartedAt = &now
+	if err := s.appStore.UpdateRollout(ctx, stored); err != nil {
+		return nil, fmt.Errorf("failed to persist resume: %w", err)
+	}
+	s.logger.Info("rollout resumed", zap.String("rollout_id", id))
+	if s.auditService != nil {
+		_ = s.auditService.Record(ctx, AuditEntry{
+			Actor: AuditActorSystem, EventType: "rollout.resumed",
+			TargetType: "rollout", TargetID: id, Action: "resumed",
+		})
+	}
+	return toServiceRollout(stored), nil
+}
+
 // Persist writes a rollout back to the store after the engine mutates it
 // (state transitions, current_stage bumps, etc.). Wraps the storage call
 // so the engine doesn't take an application-store dependency directly.

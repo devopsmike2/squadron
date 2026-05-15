@@ -22,6 +22,8 @@ type RolloutService interface {
 	Get(ctx context.Context, id string) (*Rollout, error)
 	List(ctx context.Context, filter RolloutFilter) ([]*Rollout, error)
 	Abort(ctx context.Context, id, reason string) (*Rollout, error)
+	Pause(ctx context.Context, id string) (*Rollout, error)
+	Resume(ctx context.Context, id string) (*Rollout, error)
 
 	// Persist is used by the engine to write back transitions discovered
 	// during evaluation. Service-layer guard so the engine doesn't reach
@@ -36,6 +38,7 @@ type RolloutState string
 const (
 	RolloutStatePending    RolloutState = "pending"
 	RolloutStateInProgress RolloutState = "in_progress"
+	RolloutStatePaused     RolloutState = "paused"
 	RolloutStateSucceeded  RolloutState = "succeeded"
 	RolloutStateAborted    RolloutState = "aborted"
 	RolloutStateRolledBack RolloutState = "rolled_back"

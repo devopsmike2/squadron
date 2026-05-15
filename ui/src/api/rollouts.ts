@@ -33,3 +33,11 @@ export const abortRollout = async (
     body: JSON.stringify({ reason: reason ?? "" }),
   });
 };
+
+export const pauseRollout = async (id: string): Promise<Rollout> => {
+  return simpleRequest<Rollout>(`/rollouts/${id}/pause`, { method: "POST" });
+};
+
+export const resumeRollout = async (id: string): Promise<Rollout> => {
+  return simpleRequest<Rollout>(`/rollouts/${id}/resume`, { method: "POST" });
+};

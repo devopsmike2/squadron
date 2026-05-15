@@ -3,6 +3,7 @@
 export type RolloutState =
   | "pending"
   | "in_progress"
+  | "paused"
   | "succeeded"
   | "aborted"
   | "rolled_back";

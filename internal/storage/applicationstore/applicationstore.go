@@ -41,6 +41,7 @@ const (
 
 	RolloutStatePending    = types.RolloutStatePending
 	RolloutStateInProgress = types.RolloutStateInProgress
+	RolloutStatePaused     = types.RolloutStatePaused
 	RolloutStateSucceeded  = types.RolloutStateSucceeded
 	RolloutStateAborted    = types.RolloutStateAborted
 	RolloutStateRolledBack = types.RolloutStateRolledBack

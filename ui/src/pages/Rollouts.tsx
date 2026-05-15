@@ -5,12 +5,18 @@
 // inline at the top so operators can kick one off without navigating
 // away.
 
-import { Pause, Plus, RotateCcw } from "lucide-react";
+import { Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 
 import { getGroups, type Group } from "@/api/groups";
-import { abortRollout, createRollout, listRollouts } from "@/api/rollouts";
+import {
+  abortRollout,
+  createRollout,
+  listRollouts,
+  pauseRollout,
+  resumeRollout,
+} from "@/api/rollouts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +46,7 @@ const ROLLOUTS_KEY = "rollouts";
 const stateBadge: Record<RolloutState, string> = {
   pending: "bg-slate-500/10 text-slate-700 border-slate-500/20",
   in_progress: "bg-blue-500/10 text-blue-700 border-blue-500/20",
+  paused: "bg-violet-500/10 text-violet-700 border-violet-500/20",
   succeeded: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
   aborted: "bg-amber-500/10 text-amber-700 border-amber-500/20",
   rolled_back: "bg-red-500/10 text-red-700 border-red-500/20",
@@ -135,6 +142,19 @@ export default function RolloutsPage() {
       await mutate(ROLLOUTS_KEY);
     } catch (e) {
       alert(e instanceof Error ? e.message : "abort failed");
+    }
+  };
+
+  const handlePauseResume = async (r: Rollout) => {
+    try {
+      if (r.state === "paused") {
+        await resumeRollout(r.id);
+      } else {
+        await pauseRollout(r.id);
+      }
+      await mutate(ROLLOUTS_KEY);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "pause/resume failed");
     }
   };
 
@@ -296,6 +316,7 @@ export default function RolloutsPage() {
             rollout={r}
             groupName={groupName(r.group_id)}
             onAbort={handleAbort}
+            onPauseResume={handlePauseResume}
           />
         ))}
     </div>
@@ -306,13 +327,21 @@ interface RolloutCardProps {
   rollout: Rollout;
   groupName: string;
   onAbort: (r: Rollout) => void;
+  onPauseResume: (r: Rollout) => void;
 }
 
-function RolloutCard({ rollout: r, groupName, onAbort }: RolloutCardProps) {
+function RolloutCard({
+  rollout: r,
+  groupName,
+  onAbort,
+  onPauseResume,
+}: RolloutCardProps) {
   const totalStages = r.stages.length;
   const currentPct =
     totalStages > 0 ? r.stages[Math.min(r.current_stage, totalStages - 1)].percentage : 0;
-  const isActive = r.state === "in_progress" || r.state === "pending";
+  const isActive =
+    r.state === "in_progress" || r.state === "pending" || r.state === "paused";
+  const isPaused = r.state === "paused";
 
   return (
     <Card>
@@ -344,15 +373,34 @@ function RolloutCard({ rollout: r, groupName, onAbort }: RolloutCardProps) {
             </div>
           </div>
           {isActive && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1"
-              onClick={() => onAbort(r)}
-            >
-              <Pause className="h-3.5 w-3.5" />
-              Abort
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => onPauseResume(r)}
+              >
+                {isPaused ? (
+                  <>
+                    <Play className="h-3.5 w-3.5" />
+                    Resume
+                  </>
+                ) : (
+                  <>
+                    <Pause className="h-3.5 w-3.5" />
+                    Pause
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => onAbort(r)}
+              >
+                Abort
+              </Button>
+            </div>
           )}
           {r.state === "rolled_back" && (
             <Badge variant="outline" className="gap-1 text-xs">

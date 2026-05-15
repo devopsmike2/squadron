@@ -59,6 +59,7 @@ type RolloutState string
 const (
 	RolloutStatePending     RolloutState = "pending"      // created but engine hasn't picked it up yet
 	RolloutStateInProgress  RolloutState = "in_progress"  // actively advancing through stages
+	RolloutStatePaused      RolloutState = "paused"       // operator paused — engine no-ops, no advance, no auto-abort
 	RolloutStateSucceeded   RolloutState = "succeeded"    // final stage completed cleanly
 	RolloutStateAborted     RolloutState = "aborted"      // operator clicked Abort or criteria fired; rollback in progress
 	RolloutStateRolledBack  RolloutState = "rolled_back"  // previous config restored; terminal

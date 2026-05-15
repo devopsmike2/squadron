@@ -93,6 +93,48 @@ func (h *RolloutHandlers) HandleCreateRollout(c *gin.Context) {
 	c.JSON(http.StatusCreated, r)
 }
 
+// HandlePauseRollout serves POST /api/v1/rollouts/:id/pause.
+func (h *RolloutHandlers) HandlePauseRollout(c *gin.Context) {
+	id := c.Param("id")
+	r, err := h.rolloutService.Pause(c.Request.Context(), id)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": msg})
+			return
+		}
+		if strings.Contains(msg, "cannot pause") {
+			c.JSON(http.StatusConflict, gin.H{"error": msg})
+			return
+		}
+		h.logger.Error("failed to pause rollout", zap.String("id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pause rollout"})
+		return
+	}
+	c.JSON(http.StatusOK, r)
+}
+
+// HandleResumeRollout serves POST /api/v1/rollouts/:id/resume.
+func (h *RolloutHandlers) HandleResumeRollout(c *gin.Context) {
+	id := c.Param("id")
+	r, err := h.rolloutService.Resume(c.Request.Context(), id)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": msg})
+			return
+		}
+		if strings.Contains(msg, "cannot resume") {
+			c.JSON(http.StatusConflict, gin.H{"error": msg})
+			return
+		}
+		h.logger.Error("failed to resume rollout", zap.String("id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resume rollout"})
+		return
+	}
+	c.JSON(http.StatusOK, r)
+}
+
 // HandleAbortRollout serves POST /api/v1/rollouts/:id/abort.
 //
 // Optional body: {reason: string}. If reason is empty, "aborted by

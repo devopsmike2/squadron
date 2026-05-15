@@ -237,6 +237,8 @@ func (s *Server) registerRoutes() {
 			rollouts.POST("", rolloutHandlers.HandleCreateRollout)
 			rollouts.GET("/:id", rolloutHandlers.HandleGetRollout)
 			rollouts.POST("/:id/abort", rolloutHandlers.HandleAbortRollout)
+			rollouts.POST("/:id/pause", rolloutHandlers.HandlePauseRollout)
+			rollouts.POST("/:id/resume", rolloutHandlers.HandleResumeRollout)
 		}
 	}
 
