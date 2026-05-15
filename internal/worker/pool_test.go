@@ -419,6 +419,9 @@ func BenchmarkPoolThroughput(b *testing.B) {
 
 // TestPoolHighThroughput tests processing 10K+ items with multiple workers
 func TestPoolHighThroughput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
@@ -459,6 +462,9 @@ func TestPoolHighThroughput(t *testing.T) {
 
 // TestPoolMemoryUsage monitors memory growth under sustained load
 func TestPoolMemoryUsage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
@@ -538,6 +544,9 @@ func TestPoolQueueSaturation(t *testing.T) {
 
 // TestPoolConcurrentSubmission tests heavy concurrent submissions from multiple goroutines
 func TestPoolConcurrentSubmission(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
@@ -638,6 +647,9 @@ func TestPoolBackpressure(t *testing.T) {
 
 // TestPoolScaling tests with different worker counts to verify scaling behavior
 func TestPoolScaling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	traceData, err := GenerateValidTraceData()
 	require.NoError(t, err)
@@ -685,6 +697,9 @@ func TestPoolScaling(t *testing.T) {
 
 // TestPoolWriterFailures injects storage write failures and verifies graceful handling
 func TestPoolWriterFailures(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
@@ -754,6 +769,9 @@ func TestPoolParserFailures(t *testing.T) {
 
 // TestPoolRecoveryAfterErrors verifies pool continues processing after errors
 func TestPoolRecoveryAfterErrors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
@@ -789,6 +807,9 @@ func TestPoolRecoveryAfterErrors(t *testing.T) {
 
 // TestPoolSlowWriter tests with artificially slow writer
 func TestPoolSlowWriter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
@@ -940,6 +961,9 @@ func TestPoolLogsEndToEnd(t *testing.T) {
 
 // TestPoolMixedDataTypes submits mixed traces/metrics/logs and verifies all processed
 func TestPoolMixedDataTypes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
@@ -998,6 +1022,9 @@ func TestPoolMixedDataTypes(t *testing.T) {
 
 // TestPoolGracefulShutdownUnderLoad stops pool with many queued items
 func TestPoolGracefulShutdownUnderLoad(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping load test in -short mode")
+	}
 	logger := zaptest.NewLogger(t)
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
