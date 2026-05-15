@@ -14,8 +14,11 @@
 package rollouts
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -54,6 +57,7 @@ type Engine struct {
 	configStore    ConfigStore
 	commander      AgentCommander
 	broker         *events.Broker // optional; nil disables SSE publication
+	httpClient     *http.Client   // for webhook notifications
 	logger         *zap.Logger
 
 	shutdown chan struct{}
@@ -77,28 +81,88 @@ func NewEngine(
 		configStore:    configStore,
 		commander:      commander,
 		broker:         broker,
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
 		logger:         logger,
 		shutdown:       make(chan struct{}),
 	}
 }
 
-// publishStateChange emits a RolloutStateChanged event over the broker so
-// the UI can refresh its rollouts list without polling. No-op if broker is
-// nil. Each transition the engine takes goes through here.
-func (e *Engine) publishStateChange(r *services.Rollout, transition string) {
-	if e.broker == nil {
+// notifyWebhook POSTs a structured JSON payload to the rollout's
+// NotificationURL on every state transition. No-op if the rollout has no
+// URL configured. Failures are logged but don't block engine progress —
+// the audit log captures the durable record.
+func (e *Engine) notifyWebhook(ctx context.Context, r *services.Rollout, transition string) {
+	if r.NotificationURL == "" {
 		return
 	}
-	e.broker.Publish(events.Event{
-		Type: events.RolloutStateChanged,
-		Data: map[string]any{
-			"rollout_id":    r.ID,
-			"name":          r.Name,
-			"state":         string(r.State),
-			"current_stage": r.CurrentStage,
-			"transition":    transition,
-		},
-	})
+	payload := map[string]any{
+		"rollout_id":       r.ID,
+		"name":             r.Name,
+		"group_id":         r.GroupID,
+		"target_config_id": r.TargetConfigID,
+		"state":            string(r.State),
+		"transition":       transition,
+		"current_stage":    r.CurrentStage,
+		"total_stages":     len(r.Stages),
+		"abort_reason":     r.AbortReason,
+		"at":               time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		e.logger.Warn("rollout engine: failed to marshal webhook payload",
+			zap.String("rollout_id", r.ID), zap.Error(err))
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.NotificationURL, bytes.NewReader(body))
+	if err != nil {
+		e.logger.Warn("rollout engine: failed to build webhook request",
+			zap.String("rollout_id", r.ID), zap.Error(err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Squadron/rollouts")
+
+	resp, err := e.httpClient.Do(req)
+	if err != nil {
+		e.logger.Warn("rollout engine: webhook delivery failed",
+			zap.String("rollout_id", r.ID),
+			zap.String("url", r.NotificationURL),
+			zap.Error(err))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		e.logger.Warn("rollout engine: webhook returned non-2xx",
+			zap.String("rollout_id", r.ID),
+			zap.Int("status", resp.StatusCode))
+	}
+}
+
+// publishStateChange emits a RolloutStateChanged event over the broker AND
+// POSTs to the rollout's notification webhook if configured. Each
+// transition the engine takes goes through here so both channels stay in
+// sync.
+func (e *Engine) publishStateChange(r *services.Rollout, transition string) {
+	if e.broker != nil {
+		e.broker.Publish(events.Event{
+			Type: events.RolloutStateChanged,
+			Data: map[string]any{
+				"rollout_id":    r.ID,
+				"name":          r.Name,
+				"state":         string(r.State),
+				"current_stage": r.CurrentStage,
+				"transition":    transition,
+			},
+		})
+	}
+	// Fire webhook in the background — don't block engine progress on a
+	// slow operator endpoint. Use a short timeout context so a hung
+	// webhook can't keep the engine goroutine alive past shutdown.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		e.notifyWebhook(ctx, r, transition)
+	}()
 }
 
 // Start launches the engine loop in a goroutine.

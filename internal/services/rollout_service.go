@@ -64,6 +64,7 @@ type Rollout struct {
 	PreviousConfigID string               `json:"previous_config_id,omitempty"`
 	Stages           []RolloutStage       `json:"stages"`
 	AbortCriteria    RolloutAbortCriteria `json:"abort_criteria"`
+	NotificationURL  string               `json:"notification_url,omitempty"`
 
 	State          RolloutState `json:"state"`
 	CurrentStage   int          `json:"current_stage"`
@@ -79,11 +80,12 @@ type Rollout struct {
 // derives ID, timestamps, and PreviousConfigID (snapshotting the group's
 // current config so we have a rollback target).
 type RolloutInput struct {
-	Name           string               `json:"name"`
-	GroupID        string               `json:"group_id"`
-	TargetConfigID string               `json:"target_config_id"`
-	Stages         []RolloutStage       `json:"stages"`
-	AbortCriteria  RolloutAbortCriteria `json:"abort_criteria"`
+	Name            string               `json:"name"`
+	GroupID         string               `json:"group_id"`
+	TargetConfigID  string               `json:"target_config_id"`
+	Stages          []RolloutStage       `json:"stages"`
+	AbortCriteria   RolloutAbortCriteria `json:"abort_criteria"`
+	NotificationURL string               `json:"notification_url"`
 }
 
 // RolloutFilter narrows List queries.

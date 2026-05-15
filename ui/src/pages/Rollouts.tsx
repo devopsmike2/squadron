@@ -66,6 +66,7 @@ interface FormState {
   // One entry per stage. Strings so the inputs can be partially edited.
   stages: { percentage: string; dwell_seconds: string }[];
   max_drifted_agents: string;
+  notification_url: string;
 }
 
 const emptyInput = (): FormState => ({
@@ -78,6 +79,7 @@ const emptyInput = (): FormState => ({
     { percentage: "100", dwell_seconds: "60" },
   ],
   max_drifted_agents: "0",
+  notification_url: "",
 });
 
 export default function RolloutsPage() {
@@ -124,6 +126,7 @@ export default function RolloutsPage() {
       abort_criteria: {
         max_drifted_agents: parseInt(form.max_drifted_agents, 10) || 0,
       },
+      notification_url: form.notification_url.trim(),
     };
 
     try {
@@ -318,20 +321,36 @@ export default function RolloutsPage() {
               </p>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="maxdrift">Max drifted agents</Label>
-              <Input
-                id="maxdrift"
-                type="number"
-                min={0}
-                value={form.max_drifted_agents}
-                onChange={(e) =>
-                  setForm({ ...form, max_drifted_agents: e.target.value })
-                }
-              />
-              <p className="text-xs text-muted-foreground">
-                Auto-abort when more than this many canary agents drift.
-              </p>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="maxdrift">Max drifted agents</Label>
+                <Input
+                  id="maxdrift"
+                  type="number"
+                  min={0}
+                  value={form.max_drifted_agents}
+                  onChange={(e) =>
+                    setForm({ ...form, max_drifted_agents: e.target.value })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  Auto-abort when more than this many canary agents drift.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="notif">Notification webhook (optional)</Label>
+                <Input
+                  id="notif"
+                  value={form.notification_url}
+                  onChange={(e) =>
+                    setForm({ ...form, notification_url: e.target.value })
+                  }
+                  placeholder="https://hooks.example.com/squadron-rollouts"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Squadron POSTs a JSON payload on every state transition.
+                </p>
+              </div>
             </div>
 
             {submitError && (

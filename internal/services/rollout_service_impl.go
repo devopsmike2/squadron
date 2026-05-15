@@ -77,6 +77,7 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		PreviousConfigID: previousID,
 		Stages:           input.Stages,
 		AbortCriteria:    input.AbortCriteria,
+		NotificationURL:  input.NotificationURL,
 		State:            RolloutStatePending,
 		CurrentStage:     0,
 		CreatedAt:        now,
@@ -302,13 +303,14 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		AbortCriteria: applicationstore.RolloutAbortCriteria{
 			MaxDriftedAgents: r.AbortCriteria.MaxDriftedAgents,
 		},
-		State:          applicationstore.RolloutState(r.State),
-		CurrentStage:   r.CurrentStage,
-		StageStartedAt: r.StageStartedAt,
-		AbortReason:    r.AbortReason,
-		CreatedAt:      r.CreatedAt,
-		UpdatedAt:      r.UpdatedAt,
-		CompletedAt:    r.CompletedAt,
+		NotificationURL: r.NotificationURL,
+		State:           applicationstore.RolloutState(r.State),
+		CurrentStage:    r.CurrentStage,
+		StageStartedAt:  r.StageStartedAt,
+		AbortReason:     r.AbortReason,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
+		CompletedAt:     r.CompletedAt,
 	}
 }
 
@@ -330,12 +332,13 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		AbortCriteria: RolloutAbortCriteria{
 			MaxDriftedAgents: r.AbortCriteria.MaxDriftedAgents,
 		},
-		State:          RolloutState(r.State),
-		CurrentStage:   r.CurrentStage,
-		StageStartedAt: r.StageStartedAt,
-		AbortReason:    r.AbortReason,
-		CreatedAt:      r.CreatedAt,
-		UpdatedAt:      r.UpdatedAt,
-		CompletedAt:    r.CompletedAt,
+		NotificationURL: r.NotificationURL,
+		State:           RolloutState(r.State),
+		CurrentStage:    r.CurrentStage,
+		StageStartedAt:  r.StageStartedAt,
+		AbortReason:     r.AbortReason,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
+		CompletedAt:     r.CompletedAt,
 	}
 }

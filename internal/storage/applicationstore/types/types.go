@@ -92,6 +92,7 @@ type Rollout struct {
 	PreviousConfigID string               `json:"previous_config_id,omitempty"` // captured at create time for rollback
 	Stages           []RolloutStage       `json:"stages"`
 	AbortCriteria    RolloutAbortCriteria `json:"abort_criteria"`
+	NotificationURL  string               `json:"notification_url,omitempty"` // optional webhook for state transitions
 
 	State          RolloutState `json:"state"`
 	CurrentStage   int          `json:"current_stage"`              // index into Stages

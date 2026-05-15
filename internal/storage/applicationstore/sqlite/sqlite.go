@@ -148,6 +148,7 @@ func (s *Storage) migrate() error {
 		previous_config_id TEXT,
 		stages TEXT NOT NULL,                 -- JSON array of {percentage, dwell_seconds}
 		abort_criteria TEXT NOT NULL,         -- JSON {max_drifted_agents}
+		notification_url TEXT,                -- optional webhook
 		state TEXT NOT NULL,
 		current_stage INTEGER NOT NULL DEFAULT 0,
 		stage_started_at DATETIME,
@@ -1058,13 +1059,14 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		r.UpdatedAt = r.CreatedAt
 	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
 		nullableString(r.PreviousConfigID),
 		string(stagesJSON), string(criteriaJSON),
+		nullableString(r.NotificationURL),
 		string(r.State), r.CurrentStage,
 		r.StageStartedAt, nullableString(r.AbortReason),
 		r.CreatedAt, r.UpdatedAt, r.CompletedAt,
@@ -1076,7 +1078,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 }
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1093,7 +1095,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1136,7 +1138,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	stmt := `
 		UPDATE rollouts
 		SET name = ?, group_id = ?, target_config_id = ?, previous_config_id = ?,
-		    stages = ?, abort_criteria = ?, state = ?, current_stage = ?,
+		    stages = ?, abort_criteria = ?, notification_url = ?,
+		    state = ?, current_stage = ?,
 		    stage_started_at = ?, abort_reason = ?, updated_at = ?, completed_at = ?
 		WHERE id = ?
 	`
@@ -1144,6 +1147,7 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		r.Name, r.GroupID, r.TargetConfigID,
 		nullableString(r.PreviousConfigID),
 		string(stagesJSON), string(criteriaJSON),
+		nullableString(r.NotificationURL),
 		string(r.State), r.CurrentStage,
 		r.StageStartedAt, nullableString(r.AbortReason),
 		r.UpdatedAt, r.CompletedAt,
@@ -1170,6 +1174,7 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		previousConfigID sql.NullString
 		stagesJSON       string
 		criteriaJSON     string
+		notificationURL  sql.NullString
 		stateStr         string
 		stageStartedAt   sql.NullTime
 		abortReason      sql.NullString
@@ -1177,7 +1182,7 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
-		&previousConfigID, &stagesJSON, &criteriaJSON,
+		&previousConfigID, &stagesJSON, &criteriaJSON, &notificationURL,
 		&stateStr, &r.CurrentStage,
 		&stageStartedAt, &abortReason,
 		&r.CreatedAt, &r.UpdatedAt, &completedAt,
@@ -1186,6 +1191,9 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 	}
 	if previousConfigID.Valid {
 		r.PreviousConfigID = previousConfigID.String
+	}
+	if notificationURL.Valid {
+		r.NotificationURL = notificationURL.String
 	}
 	if err := json.Unmarshal([]byte(stagesJSON), &r.Stages); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal rollout stages: %w", err)

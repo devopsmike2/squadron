@@ -25,6 +25,7 @@ export interface Rollout {
   previous_config_id?: string;
   stages: RolloutStage[];
   abort_criteria: RolloutAbortCriteria;
+  notification_url?: string;
   state: RolloutState;
   current_stage: number;
   stage_started_at?: string;
@@ -40,4 +41,5 @@ export interface RolloutInput {
   target_config_id: string;
   stages: RolloutStage[];
   abort_criteria: RolloutAbortCriteria;
+  notification_url: string;
 }
