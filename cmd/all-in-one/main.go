@@ -323,27 +323,94 @@ func startRollupGenerator(telemetryService services.TelemetryQueryService, confi
 	}
 }
 
-// generateRollup generates a single rollup for the given interval
+// generateRollup creates pre-aggregated rollups for the given interval over the
+// most recently completed window. The window aligned to the interval boundary
+// — e.g. for a "1m" interval called at 10:23:15, we roll up the window starting
+// at 10:22:00.
 func generateRollup(ctx context.Context, telemetryService services.TelemetryQueryService, interval string, now time.Time, logger *zap.Logger) error {
-	// TODO: Implement rollup generation
-	logger.Debug("Generating rollup", zap.String("interval", interval))
-	return nil
+	var (
+		rollupInterval services.RollupInterval
+		windowStart    time.Time
+	)
+	switch interval {
+	case "1m":
+		rollupInterval = services.RollupInterval1m
+		windowStart = now.Truncate(time.Minute).Add(-time.Minute)
+	case "5m":
+		rollupInterval = services.RollupInterval5m
+		windowStart = now.Truncate(5 * time.Minute).Add(-5 * time.Minute)
+	case "1h":
+		rollupInterval = services.RollupInterval1h
+		windowStart = now.Truncate(time.Hour).Add(-time.Hour)
+	default:
+		return fmt.Errorf("unsupported rollup interval %q", interval)
+	}
+
+	logger.Debug("Generating rollup",
+		zap.String("interval", interval),
+		zap.Time("window_start", windowStart))
+	return telemetryService.CreateRollups(ctx, windowStart, rollupInterval)
 }
 
-// startCleanupTask periodically cleans up old data
+// startCleanupTask periodically cleans up old data using retention configured
+// in config.Retention. The current telemetry store interface accepts a single
+// duration covering all signals, so we use the longest of the configured
+// retentions as a conservative ceiling — nothing is deleted before any signal
+// type's retention has expired. Per-signal retention enforcement is tracked
+// for a follow-up storage-interface change.
 func startCleanupTask(telemetryService services.TelemetryQueryService, config *config.Config, logger *zap.Logger) {
-	logger.Info("Starting cleanup task")
+	retention := cleanupRetention(config.Retention, logger)
+	if retention <= 0 {
+		logger.Info("Cleanup task disabled (no retention configured)")
+		return
+	}
+
+	logger.Info("Starting cleanup task", zap.Duration("retention", retention))
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		ctx := context.Background()
-		retention := 24 * time.Hour // TODO: Parse from config
-
 		if err := telemetryService.CleanupOldData(ctx, retention); err != nil {
 			logger.Error("Failed to cleanup old telemetry data", zap.Error(err))
 		} else {
 			logger.Debug("Cleaned up old telemetry data", zap.Duration("retention", retention))
 		}
 	}
+}
+
+// cleanupRetention returns the longest configured retention across all signal
+// classes, falling back to 24h if nothing is parseable. Unparseable individual
+// fields are logged and ignored rather than crashing the cleanup loop.
+func cleanupRetention(r config.RetentionConfig, logger *zap.Logger) time.Duration {
+	const fallback = 24 * time.Hour
+	candidates := map[string]string{
+		"raw_metrics": r.RawMetrics,
+		"raw_logs":    r.RawLogs,
+		"rollups_1m":  r.Rollups1m,
+		"rollups_5m":  r.Rollups5m,
+	}
+
+	var max time.Duration
+	for name, raw := range candidates {
+		if raw == "" {
+			continue
+		}
+		d, err := config.ParseDuration(raw)
+		if err != nil {
+			logger.Warn("Failed to parse retention setting; ignoring",
+				zap.String("setting", name),
+				zap.String("value", raw),
+				zap.Error(err))
+			continue
+		}
+		if d > max {
+			max = d
+		}
+	}
+	if max == 0 {
+		logger.Warn("No valid retention setting found; using fallback", zap.Duration("retention", fallback))
+		return fallback
+	}
+	return max
 }
