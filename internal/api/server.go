@@ -143,6 +143,9 @@ func (s *Server) registerRoutes() {
 			configs.GET("", configHandlers.HandleGetConfigs)
 			configs.POST("", configHandlers.HandleCreateConfig)
 			configs.POST("/validate", configHandlers.HandleValidateConfig) // Must come before /:id
+			configs.POST("/lint", configHandlers.HandleLintConfig)         // Anti-pattern + structural lint
+			configs.GET("/templates", configHandlers.HandleGetConfigTemplates)
+			configs.GET("/templates/:id", configHandlers.HandleGetConfigTemplate)
 			configs.GET("/versions", configHandlers.HandleGetConfigVersions)
 			configs.GET("/:id", configHandlers.HandleGetConfig)
 			configs.PUT("/:id", configHandlers.HandleUpdateConfig)
