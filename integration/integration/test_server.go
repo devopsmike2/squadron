@@ -207,9 +207,11 @@ func (ts *TestServer) initServers() {
 	// API Server — uses the same registry as OpAMP/OTLP metrics.
 	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, configSender, ts.registry, ts.logger)
 
-	// Create worker pool for async telemetry processing
-	// Using default values: queue_size=10000, workers=3, timeout=5s
-	ts.workerPool = worker.NewPool(10000, 3, 5*time.Second, ts.telemetryWriter, ts.agentService, ts.logger)
+	// Create worker pool for async telemetry processing.
+	// Using default values: queue_size=10000, workers=3, timeout=5s.
+	// Worker metrics are nil — the pool falls back to a no-op WorkerMetrics
+	// internally, so the test harness doesn't need to wire Prometheus.
+	ts.workerPool = worker.NewPool(10000, 3, 5*time.Second, ts.telemetryWriter, ts.agentService, nil, ts.logger)
 	ts.workerPool.Start()
 
 	// OTLP Receivers - use worker pool for async processing

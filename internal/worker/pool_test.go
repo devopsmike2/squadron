@@ -47,7 +47,7 @@ func TestNewPool(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(100, 2, 5*time.Second, writer, agentService, logger)
+	pool := NewPool(100, 2, 5*time.Second, writer, agentService, nil, logger)
 
 	assert.NotNil(t, pool)
 	assert.Equal(t, 100, pool.queueSize)
@@ -63,7 +63,7 @@ func TestPoolStartStop(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(10, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(10, 1, 1*time.Second, writer, agentService, nil, logger)
 
 	// Start the pool
 	pool.Start()
@@ -82,7 +82,7 @@ func TestPoolSubmitSuccess(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(10, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(10, 1, 1*time.Second, writer, agentService, nil, logger)
 
 	item := WorkItem{
 		Type:    WorkItemTypeTraces,
@@ -103,7 +103,7 @@ func TestPoolSubmitTimeout(t *testing.T) {
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil).
 		After(200 * time.Millisecond)
 
-	pool := NewPool(5, 1, 100*time.Millisecond, writer, agentService, logger)
+	pool := NewPool(5, 1, 100*time.Millisecond, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -137,7 +137,7 @@ func TestPoolQueueDepth(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(10, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(10, 1, 1*time.Second, writer, agentService, nil, logger)
 
 	// Initially queue should be empty
 	assert.Equal(t, 0, pool.QueueDepth())
@@ -167,7 +167,7 @@ func TestPoolProcessesTraces(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(10, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(10, 1, 1*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(2 * time.Second) }()
 
@@ -191,7 +191,7 @@ func TestPoolProcessesMetrics(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(10, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(10, 1, 1*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(2 * time.Second) }()
 
@@ -215,7 +215,7 @@ func TestPoolProcessesLogs(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(10, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(10, 1, 1*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(2 * time.Second) }()
 
@@ -250,7 +250,7 @@ func TestPoolMultipleWorkers(t *testing.T) {
 		<-mutex
 	}).Return(nil)
 
-	pool := NewPool(100, 5, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(100, 5, 1*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(5 * time.Second) }()
 
@@ -280,7 +280,7 @@ func TestPoolGracefulShutdown(t *testing.T) {
 	agentService := testutils.NewMockAgentService()
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(100, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(100, 1, 1*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 
 	// Submit items
@@ -311,7 +311,7 @@ func TestPoolErrorHandling(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(10, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(10, 1, 1*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(2 * time.Second) }()
 
@@ -335,7 +335,7 @@ func TestPoolUnderLoad(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(1000, 10, 5*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 10, 5*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(10 * time.Second) }()
 
@@ -378,7 +378,7 @@ func BenchmarkPoolSubmission(b *testing.B) {
 	agentService := testutils.NewMockAgentService()
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(10000, 4, 5*time.Second, writer, agentService, logger)
+	pool := NewPool(10000, 4, 5*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(5 * time.Second) }()
 
@@ -399,7 +399,7 @@ func BenchmarkPoolThroughput(b *testing.B) {
 	agentService := testutils.NewMockAgentService()
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(10000, 4, 5*time.Second, writer, agentService, logger)
+	pool := NewPool(10000, 4, 5*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 
 	item := WorkItem{
@@ -425,7 +425,7 @@ func TestPoolHighThroughput(t *testing.T) {
 
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(10000, 10, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(10000, 10, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -465,7 +465,7 @@ func TestPoolMemoryUsage(t *testing.T) {
 
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(5000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(5000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -509,7 +509,7 @@ func TestPoolQueueSaturation(t *testing.T) {
 		After(10 * time.Millisecond)
 
 	queueSize := 100
-	pool := NewPool(queueSize, 1, 100*time.Millisecond, writer, agentService, logger)
+	pool := NewPool(queueSize, 1, 100*time.Millisecond, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -546,7 +546,7 @@ func TestPoolConcurrentSubmission(t *testing.T) {
 	writer.On("WriteMetrics", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	writer.On("WriteLogs", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(10000, 20, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(10000, 20, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(60 * time.Second) }()
 
@@ -607,7 +607,7 @@ func TestPoolBackpressure(t *testing.T) {
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil).
 		After(100 * time.Millisecond)
 
-	pool := NewPool(10, 1, 50*time.Millisecond, writer, agentService, logger)
+	pool := NewPool(10, 1, 50*time.Millisecond, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -651,7 +651,7 @@ func TestPoolScaling(t *testing.T) {
 
 			writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-			pool := NewPool(1000, workerCount, 10*time.Second, writer, agentService, logger)
+			pool := NewPool(1000, workerCount, 10*time.Second, writer, agentService, nil, logger)
 			pool.Start()
 			defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -692,7 +692,7 @@ func TestPoolWriterFailures(t *testing.T) {
 	// Mock writer to succeed (test just verifies pool handles processing)
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -725,7 +725,7 @@ func TestPoolParserFailures(t *testing.T) {
 
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -764,7 +764,7 @@ func TestPoolRecoveryAfterErrors(t *testing.T) {
 		callCount++
 	})
 
-	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -797,7 +797,7 @@ func TestPoolSlowWriter(t *testing.T) {
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil).
 		After(200 * time.Millisecond)
 
-	pool := NewPool(50, 1, 1*time.Second, writer, agentService, logger)
+	pool := NewPool(50, 1, 1*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(60 * time.Second) }()
 
@@ -836,7 +836,7 @@ func TestPoolTracesEndToEnd(t *testing.T) {
 		}
 	}).Return(nil)
 
-	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -880,7 +880,7 @@ func TestPoolMetricsEndToEnd(t *testing.T) {
 			}
 		}).Return(nil)
 
-	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -917,7 +917,7 @@ func TestPoolLogsEndToEnd(t *testing.T) {
 		}
 	}).Return(nil)
 
-	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -961,7 +961,7 @@ func TestPoolMixedDataTypes(t *testing.T) {
 		atomic.AddInt64(&logsCalled, 1)
 	}).Return(nil)
 
-	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(1000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -1004,7 +1004,7 @@ func TestPoolGracefulShutdownUnderLoad(t *testing.T) {
 
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(5000, 5, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(5000, 5, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 
 	traceData, err := GenerateValidTraceData()
@@ -1038,7 +1038,7 @@ func TestPoolShutdownTimeout(t *testing.T) {
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil).
 		After(500 * time.Millisecond)
 
-	pool := NewPool(100, 2, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(100, 2, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 
 	traceData, err := GenerateValidTraceData()
@@ -1068,7 +1068,7 @@ func TestPoolMultipleShutdowns(t *testing.T) {
 
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(100, 1, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(100, 1, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 
 	// First shutdown should succeed
@@ -1087,7 +1087,7 @@ func TestPoolSubmitAfterShutdown(t *testing.T) {
 	writer := &MockTelemetryWriter{}
 	agentService := testutils.NewMockAgentService()
 
-	pool := NewPool(100, 1, 10*time.Second, writer, agentService, logger)
+	pool := NewPool(100, 1, 10*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 
 	// Shutdown pool
@@ -1122,7 +1122,7 @@ func TestPoolSubmitTimeoutRealistic(t *testing.T) {
 		After(100 * time.Millisecond)
 
 	// Small queue with short timeout
-	pool := NewPool(5, 1, 50*time.Millisecond, writer, agentService, logger)
+	pool := NewPool(5, 1, 50*time.Millisecond, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(30 * time.Second) }()
 
@@ -1161,7 +1161,7 @@ func BenchmarkPoolMixedWorkload(b *testing.B) {
 	writer.On("WriteMetrics", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	writer.On("WriteLogs", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(10000, 8, 5*time.Second, writer, agentService, logger)
+	pool := NewPool(10000, 8, 5*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(5 * time.Second) }()
 
@@ -1196,7 +1196,7 @@ func BenchmarkPoolDifferentWorkerCounts(b *testing.B) {
 
 			writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-			pool := NewPool(10000, workerCount, 5*time.Second, writer, agentService, logger)
+			pool := NewPool(10000, workerCount, 5*time.Second, writer, agentService, nil, logger)
 			pool.Start()
 			defer func() { _ = pool.Stop(5 * time.Second) }()
 
@@ -1220,7 +1220,7 @@ func BenchmarkPoolLargePayloads(b *testing.B) {
 
 	writer.On("WriteTraces", mock.Anything, mock.Anything).Return(nil)
 
-	pool := NewPool(10000, 10, 5*time.Second, writer, agentService, logger)
+	pool := NewPool(10000, 10, 5*time.Second, writer, agentService, nil, logger)
 	pool.Start()
 	defer func() { _ = pool.Stop(5 * time.Second) }()
 

@@ -138,6 +138,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	metricsFactory := metrics.NewPrometheusFactory("squadron", registry)
 	opampMetrics := metrics.NewOpAMPMetrics(metricsFactory)
 	otlpMetrics := metrics.NewOTLPMetrics(metricsFactory)
+	workerMetrics := metrics.NewWorkerMetrics(metricsFactory)
 
 	agents := opamp.NewAgents(logger)
 
@@ -176,8 +177,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Warn("Failed to parse worker timeout, using default", zap.Error(err))
 	}
 
-	// Initialize worker pool for async telemetry processing (with agentService for enrichment)
-	workerPool := worker.NewPool(config.Worker.QueueSize, config.Worker.Workers, workerTimeout, telemetryWriter, agentService, logger)
+	// Initialize worker pool for async telemetry processing.
+	// Pass workerMetrics so retry/dead-letter counters land on /metrics.
+	workerPool := worker.NewPool(config.Worker.QueueSize, config.Worker.Workers, workerTimeout, telemetryWriter, agentService, workerMetrics, logger)
 	workerPool.Start()
 	defer func() {
 		if err := workerPool.Stop(30 * time.Second); err != nil {
