@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/alerting"
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/metrics"
@@ -140,6 +141,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	otlpMetrics := metrics.NewOTLPMetrics(metricsFactory)
 	workerMetrics := metrics.NewWorkerMetrics(metricsFactory)
 	driftMetrics := metrics.NewDriftMetrics(metricsFactory)
+	alertMetrics := metrics.NewAlertMetrics(metricsFactory)
 
 	agents := opamp.NewAgents(logger)
 
@@ -242,6 +244,16 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = apiServer.Stop(ctx)
+	}()
+
+	// Start alert evaluator. Evaluates each enabled rule on its configured
+	// cadence and dispatches firing/resolved notifications.
+	alertEvaluator := alerting.NewEvaluator(alertService, telemetryService, alertMetrics, logger)
+	alertEvaluator.Start()
+	defer func() {
+		if err := alertEvaluator.Stop(10 * time.Second); err != nil {
+			logger.Error("Failed to stop alert evaluator", zap.Error(err))
+		}
 	}()
 
 	// Start background services
