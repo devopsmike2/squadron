@@ -39,8 +39,15 @@ const tickInterval = 5 * time.Second
 // AgentCommander is the subset of opamp.ConfigSender the engine needs.
 // Defined as an interface here so tests can plug in a mock without pulling
 // the OpAMP machinery.
+//
+// SendConfigToAgentWithContext is the trace-aware variant used by
+// applyStage and rollback so the per-push OTel span context rides along
+// into the OpAMP CustomMessage (see internal/opamp/traceparent.go).
+// SendConfigToAgent stays for any non-traced callsite + back-compat for
+// existing test mocks.
 type AgentCommander interface {
 	SendConfigToAgent(agentID uuid.UUID, content string) error
+	SendConfigToAgentWithContext(ctx context.Context, agentID uuid.UUID, content string) error
 }
 
 // ConfigStore is the subset of applicationstore the engine needs for
@@ -461,7 +468,7 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		// source so operators can filter for rollback-driven pushes
 		// specifically.
 		push := e.configsTracer.BeginPush(ctx, agent.ID.String(), r.PreviousConfigID, r.GroupID, configs.SourceRollout)
-		if err := e.commander.SendConfigToAgent(agent.ID, previous.Content); err != nil {
+		if err := e.commander.SendConfigToAgentWithContext(push.Context(), agent.ID, previous.Content); err != nil {
 			push.RecordNack(err.Error())
 			push.End()
 			e.logger.Warn("rollout engine: rollback push failed for agent",
@@ -522,7 +529,7 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 		// case (RecordAck) and the timeout / agent-not-found case
 		// (RecordNack with the error message as reason).
 		push := e.configsTracer.BeginPush(ctx, agent.ID.String(), r.TargetConfigID, r.GroupID, configs.SourceRollout)
-		if err := e.commander.SendConfigToAgent(agent.ID, target.Content); err != nil {
+		if err := e.commander.SendConfigToAgentWithContext(push.Context(), agent.ID, target.Content); err != nil {
 			push.RecordNack(err.Error())
 			push.End()
 			e.logger.Warn("rollout engine: stage push failed for agent",

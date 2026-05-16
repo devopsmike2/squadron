@@ -22,9 +22,17 @@ import (
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
-// AgentCommander defines the interface for sending commands to agents
+// AgentCommander defines the interface for sending commands to agents.
+//
+// SendConfigToAgentWithContext is the trace-aware variant used by the
+// per-agent direct-push handler — it propagates the per-push span
+// context into the OpAMP CustomMessage so an OTel-aware agent can join
+// the originating trace. SendConfigToAgent stays for non-traced and
+// group-fanout callers and to preserve back-compat for downstream
+// embedders.
 type AgentCommander interface {
 	SendConfigToAgent(agentId uuid.UUID, configContent string) error
+	SendConfigToAgentWithContext(ctx context.Context, agentId uuid.UUID, configContent string) error
 	RestartAgent(agentId uuid.UUID) error
 	RestartAgentsInGroup(groupId string) ([]uuid.UUID, []error)
 	SendConfigToAgentsInGroup(groupId string, configContent string) ([]uuid.UUID, []error)

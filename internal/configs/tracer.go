@@ -30,10 +30,10 @@ import (
 type PushSource string
 
 const (
-	SourceRollout            PushSource = "rollout"             // rollout engine, stage apply or rollback
-	SourceDirect             PushSource = "direct"              // API handler, single-agent push
-	SourceGroup              PushSource = "group"               // API handler, whole-group config assignment
-	SourceDriftRemediation   PushSource = "drift_remediation"   // (future) auto-resync on drift detection
+	SourceRollout          PushSource = "rollout"           // rollout engine, stage apply or rollback
+	SourceDirect           PushSource = "direct"            // API handler, single-agent push
+	SourceGroup            PushSource = "group"             // API handler, whole-group config assignment
+	SourceDriftRemediation PushSource = "drift_remediation" // (future) auto-resync on drift detection
 )
 
 // Tracer wraps an OTel trace.Tracer with the config-push lifecycle.
@@ -59,9 +59,23 @@ func NewTracer(t trace.Tracer) *Tracer {
 // outcome as a span event; End closes the span and sets Ok or
 // Error status based on whether RecordNack was called.
 type Push struct {
-	span    trace.Span
-	nacked  bool
-	reason  string
+	span   trace.Span
+	ctx    context.Context
+	nacked bool
+	reason string
+}
+
+// Context returns a context.Context with the push span injected via
+// trace.ContextWithSpan. Callers that want downstream code (e.g. the
+// OpAMP traceparent injector) to see the push span as the active
+// trace context pass this ctx through to the next layer. Returns the
+// background context when the push handle is nil so callers can
+// chain unconditionally.
+func (p *Push) Context() context.Context {
+	if p == nil || p.span == nil {
+		return context.Background()
+	}
+	return p.ctx
 }
 
 // BeginPush opens a span bracketing one config-push operation. All
@@ -84,11 +98,11 @@ func (t *Tracer) BeginPush(ctx context.Context, agentID, configID, groupID strin
 	if groupID != "" {
 		attrs = append(attrs, attribute.String("squadron.group_id", groupID))
 	}
-	_, span := t.tracer.Start(ctx, "config.push",
+	spanCtx, span := t.tracer.Start(ctx, "config.push",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attrs...),
 	)
-	return &Push{span: span}
+	return &Push{span: span, ctx: spanCtx}
 }
 
 // RecordAck attaches an opamp_ack event to the push span. The push

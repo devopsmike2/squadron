@@ -32,6 +32,10 @@ func (m *mockConfigSender) SendConfigToAgent(agentId uuid.UUID, configContent st
 	return nil
 }
 
+func (m *mockConfigSender) SendConfigToAgentWithContext(ctx context.Context, agentId uuid.UUID, configContent string) error {
+	return nil
+}
+
 func (m *mockConfigSender) RestartAgent(agentId uuid.UUID) error {
 	return nil
 }

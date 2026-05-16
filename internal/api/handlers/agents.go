@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -12,9 +13,16 @@ import (
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
-// AgentCommander defines the interface for sending commands to agents
+// AgentCommander defines the interface for sending commands to agents.
+//
+// SendConfigToAgentWithContext is the trace-aware variant — the handler
+// passes its per-push span context so the OpAMP CustomMessage carries
+// the W3C TraceContext to the agent (see internal/opamp/traceparent.go).
+// SendConfigToAgent stays on the interface for back-compat with the
+// non-traced group push and to keep existing test mocks compiling.
 type AgentCommander interface {
 	SendConfigToAgent(agentId uuid.UUID, configContent string) error
+	SendConfigToAgentWithContext(ctx context.Context, agentId uuid.UUID, configContent string) error
 	RestartAgent(agentId uuid.UUID) error
 	RestartAgentsInGroup(groupId string) ([]uuid.UUID, []error)
 	SendConfigToAgentsInGroup(groupId string, configContent string) ([]uuid.UUID, []error)
@@ -292,7 +300,7 @@ func (h *AgentHandlers) HandleSendConfigToAgent(c *gin.Context) {
 	// so the operator sees this direct manual push alongside the
 	// rollout-driven pushes in their trace tool.
 	push := h.configsTracer.BeginPush(c.Request.Context(), agentUUID.String(), config.ID, "", configs.SourceDirect)
-	if err := h.commander.SendConfigToAgent(agentUUID, req.Content); err != nil {
+	if err := h.commander.SendConfigToAgentWithContext(push.Context(), agentUUID, req.Content); err != nil {
 		push.RecordNack(err.Error())
 		push.End()
 		h.logger.Error("Failed to send config to agent",

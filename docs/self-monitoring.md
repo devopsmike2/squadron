@@ -13,6 +13,7 @@ dogfood version of "telemetry control plane".
 - [Alert evaluation traces](#alert-evaluation-traces)
 - [Config push traces](#config-push-traces)
 - [OpAMP connection traces](#opamp-connection-traces)
+- [Tracing across the agent boundary](#tracing-across-the-agent-boundary)
 - [Tracing API requests](#tracing-api-requests)
 - [Examples](#examples)
 - [What's NOT exported (yet)](#whats-not-exported-yet)
@@ -278,6 +279,94 @@ process; a fresh span opens for each one. Span identity therefore
 doesn't carry across restarts. Document this in your runbook if
 your operators rely on connection-span continuity across deploys.
 
+## Tracing across the agent boundary
+
+The trace propagation story doesn't stop at the API edge. When
+Squadron pushes a config to an agent — via the rollout engine, the
+direct-push API handler, or (eventually) the drift-remediation loop —
+the W3C TraceContext for the originating operation rides along on
+the OpAMP message. An OTel-instrumented agent can extract it and
+parent its own apply-side spans under Squadron's trace, so a single
+trace tells the full story: caller → Squadron API → engine → agent.
+
+### What rides on the wire
+
+The OpAMP spec doesn't (yet) define a standard capability for
+cross-boundary trace propagation. Until it does, Squadron uses a
+Squadron-defined custom capability attached to the same
+`ServerToAgent` frame that carries the `RemoteConfig`:
+
+| Field        | Value                                                    |
+|--------------|----------------------------------------------------------|
+| `Capability` | `io.squadron.traceparent.v1`                             |
+| `Type`       | `context`                                                |
+| `Data`       | JSON: `{"traceparent": "...", "tracestate": "..."}`      |
+
+The `traceparent` value is exactly what the W3C TraceContext
+propagator would put into an HTTP `traceparent` header (`00-<trace-id>-<span-id>-<flags>`).
+`tracestate` is included only when the source context carries one.
+
+Per the OpAMP spec, agents that don't recognize a custom capability
+ignore it. The injection is therefore fully backward-compatible —
+old agents see the same wire frame they always saw.
+
+### When the field is attached
+
+Only when the calling context has a valid active OTel span. Common
+sources:
+
+- A `rollouts.stage.apply` span (rollout engine push during a stage
+  apply or rollback)
+- A `config.push` span (direct-push handler, future drift-remediation
+  loop)
+
+Squadron deliberately omits the CustomMessage when no active span is
+present rather than emitting a sentinel all-zeros traceparent. The
+W3C spec treats `00-00000000000000000000000000000000-0000000000000000-00`
+as syntactically valid, and naive consumers might adopt it as a
+parent — that would create phantom traces rooted in a non-existent
+span. Better to send nothing.
+
+### What we don't send
+
+The selftel publisher installs a composite propagator
+(`TraceContext` + `Baggage`). Squadron extracts only the W3C
+trace-context headers for the OpAMP payload — baggage entries are
+dropped. Baggage typically carries operator-private context (tenant
+id, deploy version, request-scoped feature flags), and shipping it
+to every agent in the fleet on every push is unnecessary noise.
+Operators who do want baggage propagation can patch
+`internal/opamp/traceparent.go` to include the full carrier; we'll
+revisit if there's demand.
+
+### Consumption sketch for an OTel-aware agent
+
+Agent-side, an OpAMP collector with a custom-message hook can look
+for the `io.squadron.traceparent.v1` capability, decode the JSON
+payload into an `http.Header`-style map, and feed it to the
+propagator's `Extract`:
+
+```go
+// Inside the agent's OpAMP custom-message handler:
+if msg.Capability == "io.squadron.traceparent.v1" && msg.Type == "context" {
+    var headers map[string]string
+    if err := json.Unmarshal(msg.Data, &headers); err == nil {
+        carrier := propagation.MapCarrier(headers)
+        applyCtx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
+        // Use applyCtx as the parent for the agent's apply-side span(s).
+        _, span := tracer.Start(applyCtx, "agent.apply_config",
+            trace.WithSpanKind(trace.SpanKindServer),
+        )
+        defer span.End()
+        // ... rest of the apply path ...
+    }
+}
+```
+
+When the OpAMP spec defines a standard capability for this, Squadron
+will emit both for one release, then switch over and deprecate the
+`io.squadron.*` form.
+
 ## Tracing API requests
 
 Squadron's API server participates in W3C
@@ -397,9 +486,11 @@ the control-plane events. Then narrow further by any attribute:
 
 - **Metrics.** Squadron's `/metrics` endpoint is the primary Prometheus
   scrape path; an OTel-metrics bridge would duplicate the surface
-  area without adding much value. Planned for a future patch.
-- **Outgoing traceparent injection from squadronctl.** The CLI talks
-  to the API as a plain HTTP client today; wrapping it with `otel-cli`
-  or any other otelhttp-instrumented runner is the current path
-  (see [Tracing API requests](#tracing-api-requests)). Native
-  injection from `squadronctl` itself is a planned follow-up.
+  area without adding much value. Planned for a future patch — at the
+  point that lands, the four-tier trace story (caller → API → engine
+  → agent) and the parallel metrics story will both be in place.
+
+As of v0.16, trace propagation reaches all the way to the agent
+boundary — see [Tracing across the agent boundary](#tracing-across-the-agent-boundary).
+Inbound API requests (caller → Squadron) and outbound config pushes
+(Squadron → agent) both carry W3C TraceContext.

@@ -76,6 +76,10 @@ func (m *mockCommander) SendConfigToAgent(agentId uuid.UUID, configContent strin
 	return call.err
 }
 
+func (m *mockCommander) SendConfigToAgentWithContext(ctx context.Context, agentId uuid.UUID, configContent string) error {
+	return m.SendConfigToAgent(agentId, configContent)
+}
+
 func (m *mockCommander) SendConfigToAgentsInGroup(groupId string, configContent string) ([]uuid.UUID, []error) {
 	call := sendConfigToAgentsInGroupCall{
 		groupID:       groupId,

@@ -2,6 +2,7 @@ package opamp
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 
 	"github.com/open-telemetry/opamp-go/protobufs"
@@ -17,6 +18,33 @@ import (
 func (agent *Agent) SetCustomConfig(
 	config *protobufs.AgentConfigMap,
 	notifyWhenConfigIsApplied chan<- struct{},
+) {
+	agent.setCustomConfigWithTraceparent(config, notifyWhenConfigIsApplied, nil)
+}
+
+// SetCustomConfigWithContext is the trace-aware variant. When ctx
+// carries an active OTel span, the outbound ServerToAgent message
+// gets a CustomMessage attached carrying the W3C TraceContext
+// headers — see internal/opamp/traceparent.go. Used by the
+// ConfigSender path so rollout / direct / drift-remediation pushes
+// propagate the originating trace across the agent boundary.
+func (agent *Agent) SetCustomConfigWithContext(
+	ctx context.Context,
+	config *protobufs.AgentConfigMap,
+	notifyWhenConfigIsApplied chan<- struct{},
+) {
+	agent.setCustomConfigWithTraceparent(config, notifyWhenConfigIsApplied, buildTraceparentMessage(ctx))
+}
+
+// setCustomConfigWithTraceparent is the shared implementation. The
+// optional traceparent argument rides along on the same ServerToAgent
+// wire frame as the RemoteConfig so agents that subscribe to the
+// custom capability see the trace context with the config they're
+// being asked to apply.
+func (agent *Agent) setCustomConfigWithTraceparent(
+	config *protobufs.AgentConfigMap,
+	notifyWhenConfigIsApplied chan<- struct{},
+	traceparent *protobufs.CustomMessage,
 ) {
 	agent.mux.Lock()
 
@@ -35,6 +63,9 @@ func (agent *Agent) SetCustomConfig(
 		}
 		msg := &protobufs.ServerToAgent{
 			RemoteConfig: agent.remoteConfig,
+		}
+		if traceparent != nil {
+			msg.CustomMessage = traceparent
 		}
 		agent.mux.Unlock()
 
