@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-cli build-cli-all-platforms run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean
+.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean
 
 # Variables
 BINARY_NAME=squadron
@@ -38,6 +38,13 @@ build-linux:
 	@echo "Building $(BINARY_NAME) for Linux..."
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux ./cmd/all-in-one
+
+# Build fleetsim — synthetic OpAMP load generator for scale testing.
+# See docs/scale-testing.md for usage.
+fleetsim:
+	@echo "Building fleetsim..."
+	CGO_ENABLED=0 go build -o $(BUILD_DIR)/fleetsim ./cmd/fleetsim
+	@echo "Run: ./$(BUILD_DIR)/fleetsim --count=100"
 
 # Build squadronctl for the host platform. No CGO needed — the CLI
 # does not link SQLite/DuckDB so it cross-compiles trivially.

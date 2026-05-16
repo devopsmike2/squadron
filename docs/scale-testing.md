@@ -1,0 +1,162 @@
+# Scale testing
+
+Squadron ships with `fleetsim`, a synthetic OpAMP load generator,
+so you can validate behavior at fleet sizes that are inconvenient
+to assemble for real. Each simulated agent is a real `opamp-go`
+client speaking the standard protocol — they exercise the same
+server code path a production OpenTelemetry Collector would.
+
+This page documents how to run it and what to expect.
+
+## Running fleetsim
+
+```bash
+make fleetsim                                  # builds ./fleetsim
+./fleetsim --count=100                         # 100 agents, default settings
+./fleetsim --count=500 --ramp=60s --drift-pct=10 --offline-pct=2
+./fleetsim --count=1000 --ramp=90s --label-prefix=loadtest
+```
+
+Flags worth knowing:
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--target` | `ws://localhost:4320/v1/opamp` | OpAMP endpoint to dial. |
+| `--count` | 100 | How many synthetic agents to spawn. |
+| `--ramp` | 30s | Spread initial connects across this window. 0 = all at once. |
+| `--drift-pct` | 10 | Percent of agents that mark themselves as drifted (server-side detection requires both intent + effective config; see caveats below). |
+| `--offline-pct` | 0 | Percent of agents that connect once, then disconnect. Useful for testing offline-status detection. |
+| `--version` | `0.119.0` | `service.version` reported in `AgentDescription`. |
+| `--group` | empty | `agent.group_name` label applied to every simulated agent. |
+| `--label-prefix` | `fleetsim` | Value of the `simulated.fleet` label — filterable in the UI to distinguish sim agents from real ones. |
+| `--health-interval` | 15s | How often each simulated agent sends a health ping. |
+
+Stop with `Ctrl+C`. Connection drains cleanly; agents transition to
+offline on the server side as the WebSocket close fires.
+
+## Baseline scale findings (v0.22.0)
+
+Run against a single all-in-one Squadron instance (Docker dev mode,
+M-series Mac, 8 GB RAM available to the container).
+
+| Agents | RAM | CPU | /agents (cold) | /agents payload | UI render |
+|---|---|---|---|---|---|
+| 2 (baseline) | ~80 MiB | 1% | 8 ms | 4 KB | instant |
+| 100 | 195 MiB | 11% | 13 ms | 64 KB | instant |
+| 500 | 414 MiB | 29% | 10 ms | 342 KB | <1s |
+| 1000 (882 connected at sample) | 446 MiB | 68% | 30 ms | 594 KB | ~2s |
+
+**Headline result: the OpAMP server, app-store, dashboard, and Fleet
+Map render correctly at 1000 agents with no errors and a 500MB
+memory footprint.** No request failures, no panics, no log warnings
+of any kind in the squadron container during ramp or steady state.
+
+### Where the bottlenecks live
+
+These aren't broken; they're untapered. Documented here so the right
+fixes land in the right release rather than as ad-hoc patches.
+
+#### 1. `/api/v1/agents` returns the full record map
+
+Today's endpoint serializes every agent into one JSON object keyed
+by ID. At 1000 agents that's a 594 KB payload — fine on localhost,
+painful on a slow link or with 10× the fleet.
+
+**Recommended fix:** add `offset` + `limit` query params and a
+`X-Total-Count` header. The UI already paginates visually (card
+grid only fills the viewport); the API just needs to follow.
+
+**Tracked as a v0.23.x prerequisite** before cost-optimization
+features go in.
+
+#### 2. UI table + card-grid render eagerly
+
+The Agents page renders all N cards/rows in one shot. At 500 the
+page is responsive but slow to first paint (~1s). At 1000+ rows
+the DOM has 10k+ nodes and scrolling starts to lag.
+
+**Recommended fix:** virtualize the card grid (use
+`react-window` or `react-virtual`). Same for the table mode.
+Threshold: enable virtualization above 200 visible rows so small
+fleets don't pay the abstraction cost.
+
+#### 3. Heartbeat interval vs. online cutoff
+
+At 1000 agents, every health-ping cycle (15s in fleetsim) generates
+a burst of WebSocket frames. Some agents end up with a
+`last_seen` skew of >30s, which Squadron currently classifies as
+"offline" — even though the connection is still open.
+
+This was visible in the 1000-agent run: 871 online / 11 offline at
+steady state, where ~10 of the offline agents were actually
+healthy but had recently-stale `last_seen` due to ping batching.
+
+**Recommended fix:** decouple "is the WebSocket connected?" from
+"did we hear from this agent in the last N seconds?". Today
+they're conflated. Two distinct states:
+- **connected** — TCP/WS is alive (cheap to know).
+- **reporting** — recent telemetry within the threshold.
+
+A configurable threshold + `online_threshold` server setting
+(default 60s) would fix this.
+
+#### 4. Drift detection requires both `intent` and `effective` config
+
+The `--drift-pct` flag in fleetsim marks agents as "internally
+drifted" but doesn't actually publish a *different* effective
+config. The server-side drift detector needs both sides of the
+comparison; absent a stored intent config, every fleetsim agent
+shows up as `drift_status=no_intent`.
+
+**To exercise drift detection at scale:**
+1. Create a config in the UI and assign it to a group.
+2. Apply that group's label to fleetsim's agents
+   (`--group=my-group`).
+3. Wait for the rollout / config push.
+4. Drift will register once fleetsim is enhanced to send a tweaked
+   effective config back. See follow-up issue.
+
+#### 5. Group label matching appears greedy
+
+During 1000-agent runs, the demo group's "agent count" in the
+sidebar showed `1002 agents` rather than just the 2 real ones.
+Cause: the demo-group's label matcher treats empty/missing labels
+permissively — likely matches every agent that doesn't explicitly
+opt out.
+
+Worth confirming in a focused test before patching; could be a
+display bug rather than a matcher bug.
+
+### What we deliberately did NOT load-test
+
+| Path | Why deferred |
+|------|--------------|
+| OTLP receiver under load | Different code path from OpAMP. Needs a synthetic OTLP generator. Will be v0.22.x. |
+| DuckDB telemetry write throughput | Tied to the OTLP path above. |
+| Rollout engine under N agents | Tested implicitly (10s tick across 1000 agents had no observable lag), but a dedicated test that creates a 100-stage rollout and watches the tick budget is worth doing. |
+| Long-running stability (24h+) | Not a single-session test. Run fleetsim under a sustained-load harness for a day before any GA claim. |
+
+### Reproducing
+
+```bash
+# Terminal 1: run Squadron however you normally do
+docker compose up squadron
+
+# Terminal 2: load
+make fleetsim
+./fleetsim --count=500 --ramp=60s --drift-pct=10
+
+# Terminal 3: observe
+watch -n 1 'curl -sS http://localhost:8080/api/v1/agents/stats; echo'
+```
+
+Then open the UI at http://localhost:5173 and exercise:
+- Fleet Status dashboard
+- Agents page (cards + table)
+- Fleet Map (pipeline / data flow / fleet tabs)
+
+### Next steps
+
+The v0.23-v0.25 cost-optimization arc is gated on fixing #1 and
+the headline polish on #2. Both are small (< 1 day each); they
+land before any new feature work.
