@@ -4,6 +4,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -61,7 +62,7 @@ func newRolloutsListCommand() *cobra.Command {
 				q.Set("state", state)
 			}
 			var resp cliapi.RolloutsResponse
-			if err := c.Do(http.MethodGet, "/api/v1/rollouts", q, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/rollouts", q, nil, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
@@ -101,7 +102,7 @@ func newRolloutsGetCommand() *cobra.Command {
 		Short: "Show full details of one rollout",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := fetchRollout(args[0])
+			r, err := fetchRollout(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -202,7 +203,7 @@ codes: 0=succeeded, 2=rolled_back or aborted, 3=timeout.`,
 			if templateID != "" {
 				c := newClient()
 				var tplResp cliapi.RolloutTemplatesResponse
-				if err := c.Do(http.MethodGet, "/api/v1/rollout-recipes/templates", nil, nil, &tplResp); err != nil {
+				if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/rollout-recipes/templates", nil, nil, &tplResp); err != nil {
 					return err
 				}
 				var tpl *cliapi.RolloutTemplate
@@ -249,7 +250,7 @@ codes: 0=succeeded, 2=rolled_back or aborted, 3=timeout.`,
 
 			c := newClient()
 			var created cliapi.Rollout
-			if err := c.Do(http.MethodPost, "/api/v1/rollouts", nil, input, &created); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/rollouts", nil, input, &created); err != nil {
 				return err
 			}
 
@@ -270,7 +271,7 @@ codes: 0=succeeded, 2=rolled_back or aborted, 3=timeout.`,
 			if !wait {
 				return nil
 			}
-			return waitForTerminal(created.ID, waitTimeout, flags.Output == "json")
+			return waitForTerminal(cmd.Context(), created.ID, waitTimeout, flags.Output == "json")
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Display name for the rollout (defaults to template name or a timestamp)")
@@ -297,7 +298,7 @@ func newRolloutsAbortCommand() *cobra.Command {
 			c := newClient()
 			body := cliapi.AbortRequest{Reason: reason}
 			var r cliapi.Rollout
-			if err := c.Do(http.MethodPost, "/api/v1/rollouts/"+url.PathEscape(args[0])+"/abort", nil, body, &r); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/rollouts/"+url.PathEscape(args[0])+"/abort", nil, body, &r); err != nil {
 				return err
 			}
 			fmt.Printf("Aborted: %s (state=%s)\n", r.ID, r.State)
@@ -316,7 +317,7 @@ func newRolloutsPauseCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := newClient()
 			var r cliapi.Rollout
-			if err := c.Do(http.MethodPost, "/api/v1/rollouts/"+url.PathEscape(args[0])+"/pause", nil, nil, &r); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/rollouts/"+url.PathEscape(args[0])+"/pause", nil, nil, &r); err != nil {
 				return err
 			}
 			fmt.Printf("Paused: %s\n", r.ID)
@@ -333,7 +334,7 @@ func newRolloutsResumeCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := newClient()
 			var r cliapi.Rollout
-			if err := c.Do(http.MethodPost, "/api/v1/rollouts/"+url.PathEscape(args[0])+"/resume", nil, nil, &r); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/rollouts/"+url.PathEscape(args[0])+"/resume", nil, nil, &r); err != nil {
 				return err
 			}
 			fmt.Printf("Resumed: %s\n", r.ID)
@@ -355,7 +356,7 @@ func newRolloutsWaitCommand() *cobra.Command {
 		Short: "Block until a rollout reaches a terminal state",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return waitForTerminalWithInterval(args[0], timeout, interval, flags.Output == "json")
+			return waitForTerminalWithInterval(cmd.Context(), args[0], timeout, interval, flags.Output == "json")
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "Maximum time to wait")
@@ -380,7 +381,7 @@ func newRolloutsPreviewCommand() *cobra.Command {
 			q.Set("group_id", groupID)
 			q.Set("target_config_id", targetCfg)
 			var p cliapi.RolloutPreview
-			if err := c.Do(http.MethodGet, "/api/v1/rollout-preview", q, nil, &p); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/rollout-preview", q, nil, &p); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
@@ -426,7 +427,7 @@ func newRolloutsTemplatesCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := newClient()
 			var resp cliapi.RolloutTemplatesResponse
-			if err := c.Do(http.MethodGet, "/api/v1/rollout-recipes/templates", nil, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/rollout-recipes/templates", nil, nil, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
@@ -493,27 +494,27 @@ func parseStagesSpec(spec string) ([]cliapi.RolloutStage, error) {
 	return stages, nil
 }
 
-func fetchRollout(id string) (*cliapi.Rollout, error) {
+func fetchRollout(ctx context.Context, id string) (*cliapi.Rollout, error) {
 	c := newClient()
 	var r cliapi.Rollout
-	if err := c.Do(http.MethodGet, "/api/v1/rollouts/"+url.PathEscape(id), nil, nil, &r); err != nil {
+	if err := c.Do(ctx, http.MethodGet, "/api/v1/rollouts/"+url.PathEscape(id), nil, nil, &r); err != nil {
 		return nil, err
 	}
 	return &r, nil
 }
 
-func waitForTerminal(id string, timeout time.Duration, jsonOut bool) error {
-	return waitForTerminalWithInterval(id, timeout, 5*time.Second, jsonOut)
+func waitForTerminal(ctx context.Context, id string, timeout time.Duration, jsonOut bool) error {
+	return waitForTerminalWithInterval(ctx, id, timeout, 5*time.Second, jsonOut)
 }
 
 // waitForTerminalWithInterval polls the rollout until it succeeds, is
 // rolled back, or the timeout elapses. Exit codes match the constants
 // at the top of this file so CI can branch on them.
-func waitForTerminalWithInterval(id string, timeout, interval time.Duration, jsonOut bool) error {
+func waitForTerminalWithInterval(ctx context.Context, id string, timeout, interval time.Duration, jsonOut bool) error {
 	deadline := time.Now().Add(timeout)
 	lastState := ""
 	for {
-		r, err := fetchRollout(id)
+		r, err := fetchRollout(ctx, id)
 		if err != nil {
 			return err
 		}

@@ -45,7 +45,7 @@ func newAuditListCommand() *cobra.Command {
 				q.Set("limit", strconv.Itoa(limit))
 			}
 			var resp cliapi.AuditResponse
-			if err := c.Do(http.MethodGet, "/api/v1/audit/events", q, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/audit/events", q, nil, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {

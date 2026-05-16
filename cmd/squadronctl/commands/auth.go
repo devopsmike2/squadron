@@ -48,7 +48,7 @@ func newAuthWhoamiCommand() *cobra.Command {
 
 			c := newClient()
 			var resp cliapi.TokensResponse
-			if err := c.Do(http.MethodGet, "/api/v1/auth/tokens", nil, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/auth/tokens", nil, nil, &resp); err != nil {
 				if cliapi.Is401(err) {
 					fmt.Println("Status: unauthorized (set SQUADRON_TOKEN to a valid token)")
 					return err
@@ -74,7 +74,7 @@ func newAuthTokensListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := newClient()
 			var resp cliapi.TokensResponse
-			if err := c.Do(http.MethodGet, "/api/v1/auth/tokens", nil, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/auth/tokens", nil, nil, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
@@ -197,7 +197,7 @@ Common bundles to copy:
 				body["expires_at"] = expiry.Format(time.RFC3339)
 			}
 			var resp cliapi.CreateTokenResponse
-			if err := c.Do(http.MethodPost, "/api/v1/auth/tokens", nil, body, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/auth/tokens", nil, body, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
@@ -265,7 +265,7 @@ func newAuthTokensRevokeCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := newClient()
 			path := "/api/v1/auth/tokens/" + url.PathEscape(args[0]) + "/revoke"
-			if err := c.Do(http.MethodPost, path, nil, nil, nil); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, path, nil, nil, nil); err != nil {
 				return err
 			}
 			fmt.Printf("Revoked: %s\n", args[0])

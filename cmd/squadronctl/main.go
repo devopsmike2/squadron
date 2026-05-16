@@ -26,7 +26,13 @@ import (
 
 func main() {
 	root := commands.NewRootCommand()
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	// Close the OTel span and flush exporters regardless of outcome.
+	// Cobra's PersistentPostRunE only fires when RunE returns nil, so
+	// the error path needs this explicit shutdown to avoid losing the
+	// failing span on the wire.
+	commands.EndRootSpan(err)
+	if err != nil {
 		// cobra already prints the error; we just need the right exit.
 		fmt.Fprintln(os.Stderr, "")
 		os.Exit(1)

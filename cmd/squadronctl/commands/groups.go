@@ -28,7 +28,7 @@ func newGroupsListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := newClient()
 			var resp cliapi.GroupsResponse
-			if err := c.Do(http.MethodGet, "/api/v1/groups", nil, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/groups", nil, nil, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {

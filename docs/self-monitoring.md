@@ -563,19 +563,14 @@ the control-plane events. Then narrow further by any attribute:
 
 ## What's NOT exported (yet)
 
-As of v0.17, the trace and metrics surfaces are both covered. Inbound
-API requests (caller → Squadron), the engine internals (rollouts,
-alerts, OpAMP, config pushes), and outbound config pushes
-(Squadron → agent) all carry W3C TraceContext; Squadron's
-Prometheus `/metrics` collectors also export as OTLP metrics — see
-[Metrics](#metrics).
+As of v0.18 the full four-tier story is in place:
 
-Remaining gaps are operator-facing wrappers rather than fundamental
-plumbing:
+    caller (CI / squadronctl) → Squadron API → engine → agent
 
-- **Outgoing traceparent injection from `squadronctl`.** The CLI
-  talks to the API as a plain HTTP client today; wrapping it with
-  `otel-cli` or any other otelhttp-instrumented runner is the
-  current path (see [Tracing API requests](#tracing-api-requests)).
-  Native injection from `squadronctl` itself is a planned
-  follow-up.
+Every link carries W3C TraceContext when the relevant runners are
+configured, and the Prometheus `/metrics` surface bridges to OTLP
+metrics on the same endpoint as the traces. Nothing major remains
+on the self-monitoring backlog. Future work is around polish (more
+attributes on specific spans, agent-side reference implementations
+for the `io.squadron.traceparent.v1` capability, etc.) rather than
+new pipelines.

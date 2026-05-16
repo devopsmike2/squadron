@@ -254,3 +254,71 @@ squadronctl audit list -o json \
 The `human` output format is intentionally not stable — it's optimized
 for terminal readability and may change between releases. Pipelines
 should use `-o json`.
+
+## Tracing
+
+Since v0.18, `squadronctl` participates in W3C TraceContext
+propagation, so an operation that starts in CI and ends inside an
+agent ends up in a single trace. There are two ways to turn it on,
+and they compose.
+
+### Wrap with a tracing CI runner (TRACEPARENT inheritance)
+
+If your CI runner (`otel-cli`, GitHub Actions OpenTelemetry, GitLab's
+OTel integration, etc.) already injects a `TRACEPARENT` env var into
+spawned child processes, `squadronctl` honors it automatically.
+Every API call carries the inherited traceparent forward, so the
+server-side request span — and everything that runs under it on the
+Squadron side — becomes a child of the CI span:
+
+```bash
+otel-cli exec --service-name ci-deploy --name "deploy v2.3" -- \
+  squadronctl rollouts create \
+    --group prod-collectors \
+    --target-config $CONFIG \
+    --template standard-percent-ramp \
+    --wait
+```
+
+No env vars on `squadronctl` itself are required for this path —
+`TRACEPARENT` is the only thing it reads from the environment.
+
+### Native OTLP export from squadronctl
+
+If you want `squadronctl` to emit its own span (covering the entire
+CLI invocation including command-side overhead, not just the HTTP
+calls) as a real OTLP record, set the standard OTel env vars:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc           # or http
+export OTEL_EXPORTER_OTLP_INSECURE=true           # plain-tcp local
+export OTEL_SERVICE_NAME=squadronctl              # optional; default squadronctl
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=...     # optional; override for traces
+
+squadronctl rollouts create ...
+```
+
+The span hierarchy looks like:
+
+- `squadronctl rollouts create` (Client, root or child of TRACEPARENT
+  if set)
+  - `POST /api/v1/rollouts` (auto-instrumented by otelhttp)
+    - server-side spans rooted in Squadron (rollout engine, etc.)
+
+This composes with the TRACEPARENT path: if both are set, the
+`squadronctl` span nests under the inherited CI span AND exports
+its own record. Operators querying their trace tool see the full
+chain.
+
+### Trace flush on exit
+
+`squadronctl` ends its root span and shuts down the OTLP exporter
+inline before the process exits (3-second timeout). The last span
+in the invocation always lands, even on the error path. If the
+OTLP endpoint is unreachable, the export silently fails — the CLI
+never blocks user feedback on telemetry.
+
+See [self-monitoring.md](./self-monitoring.md) for the server-side
+of the picture (the Squadron API's gin middleware extracts the
+traceparent and roots its internal spans there).

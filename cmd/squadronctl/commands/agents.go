@@ -45,7 +45,7 @@ func newAgentsListCommand() *cobra.Command {
 				q.Set("drift", "drifted")
 			}
 			var resp cliapi.AgentsResponse
-			if err := c.Do(http.MethodGet, "/api/v1/agents", q, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/agents", q, nil, &resp); err != nil {
 				return err
 			}
 
@@ -101,7 +101,7 @@ func newAgentsGetCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := newClient()
 			var a cliapi.Agent
-			if err := c.Do(http.MethodGet, "/api/v1/agents/"+url.PathEscape(args[0]), nil, nil, &a); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/agents/"+url.PathEscape(args[0]), nil, nil, &a); err != nil {
 				return err
 			}
 			if flags.Output == "json" {

@@ -4,9 +4,11 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -26,6 +28,12 @@ type globalFlags struct {
 
 var flags globalFlags
 
+// endSpanFn is set by PersistentPreRunE and called by
+// PersistentPostRunE / on error so each invocation's root span gets
+// closed exactly once. Pointer-to-fn so the closure can capture a
+// pre-RunE-determined "did RunE return an error" value.
+var endSpanFn func(error) = func(error) {}
+
 // NewRootCommand returns the top-level squadronctl command tree.
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
@@ -34,8 +42,30 @@ func NewRootCommand() *cobra.Command {
 		Long: `squadronctl wraps the Squadron REST API for scripting,
 CI pipelines, and ad-hoc terminal use. Set SQUADRON_URL to your
 server's address and SQUADRON_TOKEN to an API token issued from the
-Squadron UI's API tokens page.`,
+Squadron UI's API tokens page.
+
+Tracing: when OTEL_EXPORTER_OTLP_ENDPOINT is set, squadronctl wraps
+each invocation in an OTel span and exports it via OTLP. The
+outbound API call carries a W3C traceparent header so the
+server-side span becomes a child of squadronctl's. If TRACEPARENT
+is set in the environment (the otel-cli convention),
+squadronctl's span nests under that. See docs/squadronctl.md
+"Tracing" for the full picture.`,
 		SilenceUsage: true,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if err := initTracing(cmd.Context()); err != nil {
+				return err
+			}
+			ctx, end := beginCommandSpan(cmd.Context(), commandSpanName(cmd))
+			cmd.SetContext(ctx)
+			endSpanFn = end
+			return nil
+		},
+		PersistentPostRunE: func(_ *cobra.Command, _ []string) error {
+			endSpanFn(nil)
+			shutdownTracing()
+			return nil
+		},
 	}
 
 	root.PersistentFlags().StringVar(&flags.Server, "server", "",
@@ -58,6 +88,35 @@ Squadron UI's API tokens page.`,
 	)
 	return root
 }
+
+// commandSpanName returns the OTel span name for a given subcommand.
+// Builds it as "squadronctl <full path>" — e.g. "squadronctl rollouts
+// create" — so trace UIs sort related invocations together. The
+// root command itself ("squadronctl --help" etc.) returns just
+// "squadronctl".
+func commandSpanName(cmd *cobra.Command) string {
+	parts := []string{}
+	for c := cmd; c != nil && c.Name() != ""; c = c.Parent() {
+		parts = append([]string{c.Name()}, parts...)
+	}
+	return strings.Join(parts, " ")
+}
+
+// EndRootSpan closes the per-invocation root span. Exposed for main.go
+// to call from the error path — cobra's PersistentPostRunE only fires
+// when RunE returns nil, so failures need an explicit hook.
+func EndRootSpan(err error) {
+	endSpanFn(err)
+	shutdownTracing()
+	// Reset to no-op so a future call (or a test re-running the root
+	// command in-process) doesn't double-close.
+	endSpanFn = func(error) {}
+}
+
+// rootContext returns context.Background() for tests / non-cobra
+// entry points. Kept as a function rather than a constant so any
+// future cross-cutting setup (signal handling, deadline) lives here.
+func rootContext() context.Context { return context.Background() }
 
 // fileConfig is the optional ~/.squadronctl/config.yaml structure.
 // Field names mirror the env-var conventions so it's obvious what

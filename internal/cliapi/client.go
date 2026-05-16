@@ -18,6 +18,7 @@ package cliapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Client is the canonical Squadron HTTP client used by the CLI.
@@ -44,11 +47,25 @@ type Client struct {
 // New constructs a Client with sensible defaults. Pass an empty token
 // for an unauthenticated client (useful for dev instances with
 // auth.enabled=false).
+//
+// The HTTPClient's RoundTripper is wrapped with otelhttp so every
+// outbound request automatically becomes a child span of the
+// caller's context AND carries a W3C traceparent header injected via
+// the global propagator. When tracing isn't initialized (no OTLP
+// endpoint configured), otelhttp produces a no-op span and emits
+// nothing — overhead is negligible and the wire shape is unchanged.
 func New(baseURL, token string) *Client {
 	return &Client{
-		BaseURL:    strings.TrimRight(baseURL, "/"),
-		Token:      token,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		BaseURL: strings.TrimRight(baseURL, "/"),
+		Token:   token,
+		HTTPClient: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: otelhttp.NewTransport(http.DefaultTransport,
+				otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+					return r.Method + " " + r.URL.Path
+				}),
+			),
+		},
 	}
 }
 
@@ -84,9 +101,16 @@ func Is401(err error) bool {
 // query is optional URL query params (nil for none). body, if non-nil,
 // is JSON-marshaled.
 //
+// ctx carries cancellation + the active OTel span context. The
+// otelhttp-wrapped transport reads the span from ctx and injects a
+// traceparent header on the outbound request, so the server-side
+// otelgin middleware can extract it and make the API request span a
+// child of the caller. Pass context.Background() in tests / scripts
+// that don't care.
+//
 // Non-2xx responses are returned as *APIError so callers can inspect
 // the status without parsing the message.
-func (c *Client) Do(method, path string, query url.Values, body any, out any) error {
+func (c *Client) Do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
 	u := c.BaseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -101,7 +125,7 @@ func (c *Client) Do(method, path string, query url.Values, body any, out any) er
 		bodyReader = bytes.NewReader(buf)
 	}
 
-	req, err := http.NewRequest(method, u, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, u, bodyReader)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

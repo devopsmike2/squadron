@@ -4,6 +4,7 @@
 package cliapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -26,11 +27,11 @@ func TestClient_AttachesBearerToken(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "sqd_abc")
-	require.NoError(t, c.Do(http.MethodGet, "/api/v1/anything", nil, nil, nil))
+	require.NoError(t, c.Do(context.Background(), http.MethodGet, "/api/v1/anything", nil, nil, nil))
 	assert.Equal(t, "Bearer sqd_abc", gotAuth)
 
 	c2 := New(srv.URL, "")
-	require.NoError(t, c2.Do(http.MethodGet, "/api/v1/anything", nil, nil, nil))
+	require.NoError(t, c2.Do(context.Background(), http.MethodGet, "/api/v1/anything", nil, nil, nil))
 	assert.Empty(t, gotAuth, "empty token must not produce an Authorization header")
 }
 
@@ -43,7 +44,7 @@ func TestClient_DecodesJSONResponse(t *testing.T) {
 
 	c := New(srv.URL, "")
 	var got APIToken
-	require.NoError(t, c.Do(http.MethodGet, "/api/v1/auth/tokens/abc", nil, nil, &got))
+	require.NoError(t, c.Do(context.Background(), http.MethodGet, "/api/v1/auth/tokens/abc", nil, nil, &got))
 	assert.Equal(t, "abc", got.ID)
 	assert.Equal(t, "ci-bot", got.Label)
 }
@@ -59,7 +60,7 @@ func TestClient_401ProducesIs401True(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "sqd_bogus")
-	err := c.Do(http.MethodGet, "/api/v1/agents", nil, nil, nil)
+	err := c.Do(context.Background(), http.MethodGet, "/api/v1/agents", nil, nil, nil)
 	require.Error(t, err)
 	assert.True(t, Is401(err), "Is401 must report true on 401 errors")
 	assert.Contains(t, err.Error(), "unauthorized")
@@ -77,7 +78,7 @@ func TestClient_4xxNonJSONStillDecodesAsError(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "")
-	err := c.Do(http.MethodGet, "/api/v1/agents", nil, nil, nil)
+	err := c.Do(context.Background(), http.MethodGet, "/api/v1/agents", nil, nil, nil)
 	require.Error(t, err)
 	assert.False(t, Is401(err))
 	apiErr, ok := err.(*APIError)
@@ -98,7 +99,7 @@ func TestClient_PassesQueryParams(t *testing.T) {
 	q := url.Values{}
 	q.Set("group_id", "g1")
 	q.Set("state", "in_progress")
-	require.NoError(t, c.Do(http.MethodGet, "/api/v1/rollouts", q, nil, nil))
+	require.NoError(t, c.Do(context.Background(), http.MethodGet, "/api/v1/rollouts", q, nil, nil))
 	assert.Equal(t, "g1", gotQuery.Get("group_id"))
 	assert.Equal(t, "in_progress", gotQuery.Get("state"))
 }
@@ -115,7 +116,7 @@ func TestClient_MarshalsBody(t *testing.T) {
 	c := New(srv.URL, "")
 	in := CreateConfigRequest{Name: "n", Content: "k: v"}
 	var out CreateConfigRequest
-	require.NoError(t, c.Do(http.MethodPost, "/api/v1/configs", nil, in, &out))
+	require.NoError(t, c.Do(context.Background(), http.MethodPost, "/api/v1/configs", nil, in, &out))
 	assert.Equal(t, "n", out.Name)
 	assert.Contains(t, string(gotBody), `"name":"n"`)
 }
@@ -148,6 +149,6 @@ func TestClient_204NoBody(t *testing.T) {
 
 	c := New(srv.URL, "")
 	var out APIToken
-	err := c.Do(http.MethodPost, "/api/v1/auth/tokens/x/revoke", nil, nil, &out)
+	err := c.Do(context.Background(), http.MethodPost, "/api/v1/auth/tokens/x/revoke", nil, nil, &out)
 	assert.NoError(t, err)
 }

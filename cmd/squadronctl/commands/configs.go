@@ -45,7 +45,7 @@ func newConfigsListCommand() *cobra.Command {
 				q.Set("agent_id", agentID)
 			}
 			var resp cliapi.ConfigsResponse
-			if err := c.Do(http.MethodGet, "/api/v1/configs", q, nil, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodGet, "/api/v1/configs", q, nil, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
@@ -124,7 +124,7 @@ func newConfigsApplyCommand() *cobra.Command {
 
 			c := newClient()
 			var created cliapi.Config
-			if err := c.Do(http.MethodPost, "/api/v1/configs", nil, body, &created); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/configs", nil, body, &created); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
@@ -168,7 +168,7 @@ func newConfigsLintCommand() *cobra.Command {
 			c := newClient()
 			var resp cliapi.LintResponse
 			body := map[string]string{"content": string(content)}
-			if err := c.Do(http.MethodPost, "/api/v1/configs/lint", nil, body, &resp); err != nil {
+			if err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/configs/lint", nil, body, &resp); err != nil {
 				return err
 			}
 			if flags.Output == "json" {
