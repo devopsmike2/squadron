@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/api/handlers"
@@ -76,6 +77,14 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 	router.Use(gin.Recovery())
 	router.Use(corsMiddleware())
 	router.Use(loggingMiddleware(logger))
+	// OTel trace propagation: extracts the W3C traceparent header on
+	// inbound requests into the gin context, and creates a server
+	// span named by the route. When selftel is disabled, the global
+	// propagator + tracer are no-ops so this layer is effectively
+	// free. Mounted ABOVE auth so the span exists even for 401
+	// rejections — operators trace-debugging a misauthed CI run can
+	// still find their request in the trace UI.
+	router.Use(otelgin.Middleware("squadron"))
 
 	server := &Server{
 		router:            router,

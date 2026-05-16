@@ -49,6 +49,33 @@ type RolloutService interface {
 // renders that as "everything is new" and the diff shows the entire
 // target as +-lines.
 //
+// RolloutTracer is the slim contract the rollout service uses to fan
+// lifecycle events out as OTel span events. Lives here (not as a
+// direct reference to the rollouts.Tracer) because the rollouts
+// package imports services, not the other way around — the real
+// tracer satisfies this interface and gets injected via main.go.
+//
+// All methods MUST be nil-receiver-safe so service constructors can
+// take a nil tracer and call unconditionally.
+//
+// RecordEvent attaches a named event to the rollout's active parent
+// span. Used for pause/resume transitions today; future state changes
+// that happen at service boundaries (rather than inside the engine)
+// will reach for this same method.
+//
+// LinkRolloutToContext stores the caller's OTel span context so that
+// when the engine eventually opens the rollout's parent span, it can
+// add a link back to the originating API request. Spans live across
+// many engine ticks while the API span ended seconds ago, so a true
+// parent-child relationship doesn't fit; span links are the OTel-
+// blessed primitive for "related but not parent-child". Operators
+// viewing the API trace can navigate to the linked rollout trace and
+// vice versa.
+type RolloutTracer interface {
+	RecordEvent(rolloutID, name, reason string)
+	LinkRolloutToContext(rolloutID string, ctx context.Context)
+}
+
 // LintFindings is always non-nil so the UI can rely on .length without
 // a null check.
 type RolloutPreview struct {

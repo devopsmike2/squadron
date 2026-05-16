@@ -446,6 +446,95 @@ func toInt(v any) (int, bool) {
 	}
 }
 
+// fakeTracer is a tiny stub of RolloutTracer for the service-level
+// tests below. It records every call rather than producing real OTel
+// spans — the rollouts.Tracer behaviour is already covered in
+// tracer_test.go; this just verifies the service calls into the
+// tracer at the right moments.
+type fakeTracer struct {
+	events []fakeEvent
+	links  []string // rollout IDs LinkRolloutToContext was called for
+}
+
+type fakeEvent struct{ ID, Name, Reason string }
+
+func (f *fakeTracer) RecordEvent(id, name, reason string) {
+	f.events = append(f.events, fakeEvent{id, name, reason})
+}
+
+func (f *fakeTracer) LinkRolloutToContext(id string, _ context.Context) {
+	f.links = append(f.links, id)
+}
+
+func TestRolloutService_PauseResume_FireTracerEvents(t *testing.T) {
+	// Operator-level pause/resume happens at the service boundary,
+	// not in the engine. Verify the service calls RolloutTracer so
+	// these transitions land on the engine-opened parent span.
+	store := memory.NewStore()
+	tracer := &fakeTracer{}
+	svc := NewRolloutServiceWithTracer(store, nil, nil, tracer, zap.NewNop())
+	ctx := context.Background()
+
+	r, err := svc.Create(ctx, validRolloutInput(t, store))
+	require.NoError(t, err)
+	// Create itself should register a span link (we'll come back to
+	// that assertion below).
+	require.Contains(t, tracer.links, r.ID)
+
+	// Simulate the engine transitioning the rollout to in_progress
+	// so Pause is valid. Persist via the service so the in-memory
+	// store sees the new state.
+	r.State = RolloutStateInProgress
+	require.NoError(t, svc.Persist(ctx, r))
+
+	_, err = svc.Pause(ctx, r.ID)
+	require.NoError(t, err)
+	_, err = svc.Resume(ctx, r.ID)
+	require.NoError(t, err)
+
+	require.Len(t, tracer.events, 2)
+	assert.Equal(t, "paused", tracer.events[0].Name)
+	assert.Equal(t, "resumed", tracer.events[1].Name)
+	assert.Equal(t, r.ID, tracer.events[0].ID)
+}
+
+func TestRolloutService_AbortAlsoFiresTracerEvent(t *testing.T) {
+	// Operator-initiated abort is the manual counterpart to the
+	// engine's auto-abort path. Both should land on the same span,
+	// so the tracer event fires from service.Abort too.
+	store := memory.NewStore()
+	tracer := &fakeTracer{}
+	svc := NewRolloutServiceWithTracer(store, nil, nil, tracer, zap.NewNop())
+	ctx := context.Background()
+	r, err := svc.Create(ctx, validRolloutInput(t, store))
+	require.NoError(t, err)
+	r.State = RolloutStateInProgress
+	require.NoError(t, svc.Persist(ctx, r))
+
+	_, err = svc.Abort(ctx, r.ID, "operator changed their mind")
+	require.NoError(t, err)
+
+	found := false
+	for _, e := range tracer.events {
+		if e.Name == "aborted" && e.Reason == "operator changed their mind" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected an 'aborted' tracer event carrying the reason")
+}
+
+func TestRolloutService_PauseOnMissingRollout_NoTracerEvent(t *testing.T) {
+	// Defensive: pause against a missing rollout returns an error
+	// before the tracer is reached. No phantom event lands on a
+	// rollout that doesn't exist.
+	store := memory.NewStore()
+	tracer := &fakeTracer{}
+	svc := NewRolloutServiceWithTracer(store, nil, nil, tracer, zap.NewNop())
+	_, err := svc.Pause(context.Background(), "never-existed")
+	require.Error(t, err)
+	assert.Empty(t, tracer.events)
+}
+
 func TestRolloutService_AbortMissing(t *testing.T) {
 	svc := NewRolloutService(memory.NewStore(), nil, nil, zap.NewNop())
 	_, err := svc.Abort(context.Background(), "no-such-rollout", "")

@@ -241,6 +241,98 @@ func TestTracer_RecordEvent_NoActiveRolloutIsNoOp(t *testing.T) {
 	})
 }
 
+func TestTracer_RecordEvent_PausedResumedLandOnActiveSpan(t *testing.T) {
+	// Pause/resume are service-level transitions (the operator hits
+	// the API) rather than engine-driven, but they should still
+	// appear on the engine-opened parent span as named events. This
+	// pins the integration so a trace tells the full pause/resume
+	// story without operators having to cross-reference the audit
+	// log.
+	tr, exporter := newTestTracer(t)
+	r := newRollout("r-pr", "pause-resume", percentStage(100, 60))
+
+	tr.BeginRollout(context.Background(), r)
+	tr.BeginStage(r, 0, 1)
+	tr.RecordEvent(r.ID, "paused", "")
+	tr.RecordEvent(r.ID, "resumed", "")
+	tr.EndRollout(r.ID, services.RolloutStateSucceeded, "")
+
+	spans := exporter.GetSpans()
+	var parent tracetest.SpanStub
+	for _, s := range spans {
+		if !s.Parent.IsValid() {
+			parent = s
+		}
+	}
+	require.NotEmpty(t, parent.Events, "pause + resume should both surface as events on the parent span")
+	eventNames := []string{}
+	for _, e := range parent.Events {
+		eventNames = append(eventNames, e.Name)
+	}
+	assert.Contains(t, eventNames, "paused")
+	assert.Contains(t, eventNames, "resumed")
+}
+
+func TestTracer_LinkRolloutToContext_AddsLinkOnBeginRollout(t *testing.T) {
+	// The API request's span context, captured at Create time via
+	// LinkRolloutToContext, should attach as a Link on the rollout's
+	// parent span when the engine opens it. Span links are the
+	// OTel-blessed way to thread the originating trace into a
+	// long-lived span without making it a parent-child relationship
+	// (engine spans live across many ticks; the API span ended
+	// seconds ago).
+	tr, exporter := newTestTracer(t)
+	r := newRollout("r-linked", "linked-rollout", percentStage(100, 0))
+
+	// Synthesize a fake API request span by starting one with the
+	// same provider the tracer uses. The span context we capture is
+	// what'd be on c.Request.Context() after otelgin middleware.
+	apiCtx, apiSpan := tr.tracer.Start(context.Background(), "POST /api/v1/rollouts")
+	tr.LinkRolloutToContext(r.ID, apiCtx)
+	apiSpan.End()
+
+	tr.BeginRollout(context.Background(), r)
+	tr.EndRollout(r.ID, services.RolloutStateSucceeded, "")
+
+	spans := exporter.GetSpans()
+	var parent tracetest.SpanStub
+	var apiStub tracetest.SpanStub
+	for _, s := range spans {
+		switch s.Name {
+		case "rollout.linked-rollout":
+			parent = s
+		case "POST /api/v1/rollouts":
+			apiStub = s
+		}
+	}
+	require.NotEmpty(t, parent.Name, "rollout span should exist")
+	require.NotEmpty(t, apiStub.Name, "api span should exist")
+	require.Len(t, parent.Links, 1, "rollout span should carry exactly one link back to the API request")
+	assert.Equal(t, apiStub.SpanContext.SpanID(), parent.Links[0].SpanContext.SpanID(),
+		"the link should point at the API request span context")
+	// Pinned link attribute lets operators distinguish this link
+	// from any future links (e.g. spawned-from-another-rollout).
+	linkAttrs := attrsByKey(parent.Links[0].Attributes)
+	assert.Equal(t, "created_by_request", linkAttrs["squadron.link"])
+}
+
+func TestTracer_LinkRolloutToContext_NoSpanInContextIsNoOp(t *testing.T) {
+	// A context with no active span (e.g. an admin call without
+	// otelgin middleware, or telemetry disabled) shouldn't produce
+	// a link with an invalid span context — that would render as a
+	// broken arrow in trace UIs.
+	tr, exporter := newTestTracer(t)
+	r := newRollout("r-nolink", "no-link", percentStage(100, 0))
+
+	tr.LinkRolloutToContext(r.ID, context.Background())
+	tr.BeginRollout(context.Background(), r)
+	tr.EndRollout(r.ID, services.RolloutStateSucceeded, "")
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Empty(t, spans[0].Links, "no upstream span = no link, no broken arrows")
+}
+
 // attrsByKey converts a slice of attribute.KeyValue into a map so
 // tests can assert on individual values without iterating.
 func attrsByKey(kvs []attribute.KeyValue) map[string]any {

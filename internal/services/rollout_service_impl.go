@@ -19,10 +19,15 @@ import (
 // RolloutServiceImpl is the canonical implementation backed by an
 // ApplicationStore. It performs validation, snapshots the previous config
 // for rollback at Create time, and records audit entries on create + abort.
+//
+// tracer is optional — when nil (the common case for tests + auth-
+// disabled dev instances), every tracer call short-circuits via the
+// RolloutTracer interface's nil-receiver-safe contract.
 type RolloutServiceImpl struct {
 	appStore     applicationstore.ApplicationStore
 	agentService AgentService
 	auditService AuditService // optional
+	tracer       RolloutTracer // optional
 	logger       *zap.Logger
 }
 
@@ -40,6 +45,27 @@ func NewRolloutService(
 		appStore:     appStore,
 		agentService: agentService,
 		auditService: audit,
+		logger:       logger,
+	}
+}
+
+// NewRolloutServiceWithTracer is the production constructor used when
+// telemetry.enabled is true. Identical to NewRolloutService except for
+// the tracer wiring. Keeping it a separate constructor avoids adding a
+// nil tracer parameter to every NewRolloutService caller in existing
+// tests.
+func NewRolloutServiceWithTracer(
+	appStore applicationstore.ApplicationStore,
+	agentService AgentService,
+	audit AuditService,
+	tracer RolloutTracer,
+	logger *zap.Logger,
+) RolloutService {
+	return &RolloutServiceImpl{
+		appStore:     appStore,
+		agentService: agentService,
+		auditService: audit,
+		tracer:       tracer,
 		logger:       logger,
 	}
 }
@@ -93,6 +119,17 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		zap.String("rollout_id", rollout.ID),
 		zap.String("group_id", rollout.GroupID),
 		zap.String("target_config_id", rollout.TargetConfigID))
+
+	// Capture the caller's OTel span context so the engine's
+	// eventual rollout span can link back to the originating API
+	// request. The engine span starts on the engine's next tick —
+	// often seconds later — and lives across many subsequent ticks,
+	// so a true parent-child relationship to the now-ended API span
+	// doesn't fit. Span links are the OTel-blessed primitive for
+	// "related but not parent-child". Nil-safe when telemetry is off.
+	if s.tracer != nil {
+		s.tracer.LinkRolloutToContext(rollout.ID, ctx)
+	}
 
 	if s.auditService != nil {
 		payload := map[string]any{
@@ -205,6 +242,13 @@ func (s *RolloutServiceImpl) Abort(ctx context.Context, id, reason string) (*Rol
 			Payload:    map[string]any{"reason": reason},
 		})
 	}
+	// Operator-initiated abort also lands on the rollout's parent
+	// span. The engine's triggerAbort fires the same event for
+	// auto-aborts; we cover the manual path here so a trace tells
+	// the full story regardless of who pulled the lever.
+	if s.tracer != nil {
+		s.tracer.RecordEvent(id, "aborted", reason)
+	}
 	return toServiceRollout(stored), nil
 }
 
@@ -237,6 +281,13 @@ func (s *RolloutServiceImpl) Pause(ctx context.Context, id string) (*Rollout, er
 			TargetType: "rollout", TargetID: id, Action: "paused",
 		})
 	}
+	// Weave the transition into the rollout's parent OTel span as a
+	// named event. Operators searching a rollout trace for "why did
+	// this stall?" see paused/resumed on the parent timeline
+	// alongside stage_applied + aborted + rollback_started. Nil-safe.
+	if s.tracer != nil {
+		s.tracer.RecordEvent(id, "paused", "")
+	}
 	return toServiceRollout(stored), nil
 }
 
@@ -267,6 +318,9 @@ func (s *RolloutServiceImpl) Resume(ctx context.Context, id string) (*Rollout, e
 			Actor: AuditActorSystem, EventType: "rollout.resumed",
 			TargetType: "rollout", TargetID: id, Action: "resumed",
 		})
+	}
+	if s.tracer != nil {
+		s.tracer.RecordEvent(id, "resumed", "")
 	}
 	return toServiceRollout(stored), nil
 }

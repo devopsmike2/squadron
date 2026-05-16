@@ -10,6 +10,7 @@ dogfood version of "telemetry control plane".
 - [What gets emitted](#what-gets-emitted)
 - [Attribute schema](#attribute-schema)
 - [Rollout traces](#rollout-traces)
+- [Tracing API requests](#tracing-api-requests)
 - [Examples](#examples)
 - [What's NOT exported (yet)](#whats-not-exported-yet)
 
@@ -142,7 +143,9 @@ Span events on the parent span carry the transition narrative:
 | Event name           | When                                                  |
 |----------------------|-------------------------------------------------------|
 | `empty_canary`       | A stage resolved to zero agents (likely selector typo). |
-| `aborted`            | Engine flipped state to aborted; rollback push pending. |
+| `paused`             | Operator paused the rollout (via API / UI / CLI).      |
+| `resumed`            | Operator resumed a paused rollout.                    |
+| `aborted`            | Auto-abort fired OR operator aborted; rollback pending. |
 | `rollback_started`   | Engine began pushing the previous config back.        |
 
 ### Restart recovery
@@ -161,6 +164,65 @@ Truncated spans end with status `Error` and message `engine.shutdown`,
 so they're visible in the trace UI rather than silently dropped. The
 rollout itself isn't aborted — on next start the engine resumes from
 the persisted state and opens a new span.
+
+## Tracing API requests
+
+Squadron's API server participates in W3C
+[Trace Context](https://www.w3.org/TR/trace-context/) propagation.
+When a client (`squadronctl`, a CI pipeline, the in-browser UI) sends
+a `traceparent` header on `POST /api/v1/rollouts` or any other API
+call, Squadron's server span becomes a child of the caller's span —
+the request shows up under the caller's trace in your observability
+tool rather than starting a fresh root.
+
+This is automatic — turning on `telemetry.enabled` also installs the
+W3C TraceContext + Baggage propagator globally, and the API server
+mounts the `otelgin` middleware on every route.
+
+### How rollouts connect to the originating request
+
+`POST /api/v1/rollouts` opens a server span for the request. The
+service-layer `Create` captures that span context and stores it for
+the rollout engine. When the engine eventually picks up the pending
+rollout (typically seconds later) and opens its bracketing parent
+span, that span is created with an OTel **span link** pointing at
+the API request's span context.
+
+Trace UIs that support links (Tempo, Jaeger, Honeycomb, Datadog) let
+operators jump from the API request trace to the rollout trace and
+back. The link carries `squadron.link = created_by_request` so it's
+distinguishable from any future link types.
+
+We use a link rather than a true parent-child relationship because:
+
+- The rollout span lives across many engine ticks — often minutes,
+  sometimes hours. The API span ended seconds after the request
+  returned.
+- Nesting a long-lived span under a short-lived one breaks trace UIs
+  that compute durations from start to end timestamps.
+- Span links are the OTel-blessed primitive for "related but not
+  parent-child", exactly this case.
+
+### Example: tracing `squadronctl rollout create`
+
+```bash
+# squadronctl doesn't yet inject traceparent on its own (planned),
+# but you can wrap it with anything that does — e.g. otel-cli:
+otel-cli exec --service-name ci-deploy --name "deploy v2.3" -- \
+  squadronctl rollout create \
+    --group prod-collectors \
+    --target-config $CONFIG \
+    --template standard-percent-ramp \
+    --wait
+```
+
+In your trace UI:
+
+- The `ci-deploy` root span shows the full operation.
+- A `POST /api/v1/rollouts` child span shows the API request.
+- A `rollout.deploy-v2.3` linked span shows the engine's bracketing
+  rollout trace — kept as a separate trace tree because it lives
+  beyond the API request.
 
 ## Examples
 
@@ -224,18 +286,14 @@ the control-plane events. Then narrow further by any attribute:
   scrape path; an OTel-metrics bridge would duplicate the
   surface area without adding much value. Planned for a future patch.
 - **Bracketing spans for non-rollout operations.** v0.13 added the
-  rollout span tree. Similar treatment for alert evaluations,
-  long-running config pushes, and OpAMP connection lifecycles is
-  planned but not yet shipped.
+  rollout span tree and v0.14 wove pause/resume into it. Similar
+  treatment for alert evaluations, long-running config pushes, and
+  OpAMP connection lifecycles is planned but not yet shipped.
 - **OTel logs.** The logs SDK was stabilizing as of late 2024; once
   it's solid we'll add a parallel log emitter so operators who prefer
   log search over trace search can use either.
-- **Trace context propagation from incoming API calls.** A future patch
-  will pick up the W3C `traceparent` header on `/api/v1/*` calls so a
-  rollout created by `squadronctl` appears under the CLI's trace, not
-  a new root. Today every rollout span starts a fresh trace.
-- **Pause / resume events on the rollout span.** They appear as
-  point-event spans via the v0.12 audit-event publisher (filterable
-  by `squadron.event_type = rollout.paused`), but they're not yet
-  woven into the rollout's bracketing span as events. Bounded
-  follow-up.
+- **Outgoing traceparent injection from squadronctl.** The CLI talks
+  to the API as a plain HTTP client today; wrapping it with `otel-cli`
+  or any other otelhttp-instrumented runner is the current path
+  (see [Tracing API requests](#tracing-api-requests)). Native
+  injection from `squadronctl` itself is a planned follow-up.

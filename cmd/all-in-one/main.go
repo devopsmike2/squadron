@@ -202,8 +202,17 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	agentService := services.NewAgentService(appStore, driftMetrics, eventBroker, auditService, logger)
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 	alertService := services.NewAlertService(appStore, logger)
-	rolloutService := services.NewRolloutService(appStore, agentService, auditService, logger)
 	authService := services.NewAuthService(appStore, logger)
+
+	// Rollout OTel tracer — bracketing spans per rollout + child
+	// spans per stage. Reuses the self-telemetry tracer provider so
+	// rollout traces show up in the same OTLP endpoint as audit
+	// spans. The same tracer instance handles both engine-driven
+	// spans and service-driven span events (pause / resume / abort
+	// via the RolloutTracer interface) so a single rollout trace
+	// captures every transition regardless of origin.
+	rolloutTracer := rollouts.NewTracer(selftelPub.Tracer("squadron/rollouts"))
+	rolloutService := services.NewRolloutServiceWithTracer(appStore, agentService, auditService, rolloutTracer, logger)
 
 	// Bootstrap an initial token if auth is enabled and the store has
 	// none yet. Operators see this token in stderr on first start; they
@@ -323,12 +332,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// error-rate criteria, and publishes RolloutStateChanged events to
 	// the broker so the UI sees engine actions in real time.
 	rolloutTelemetry := rollouts.NewTelemetryAdapter(telemetryReader)
-	// Rollout OTel tracer — bracketing spans per rollout + child
-	// spans per stage. Reuses the self-telemetry tracer provider so
-	// rollout traces show up in the same OTLP endpoint as audit
-	// spans. nil tracer = disabled (selftelPub returns the global
-	// no-op tracer when telemetry.enabled is false).
-	rolloutTracer := rollouts.NewTracer(selftelPub.Tracer("squadron/rollouts"))
+	// rolloutTracer was constructed above alongside rolloutService —
+	// reusing the same instance ensures service-layer span events
+	// (pause / resume / abort) land on the same parent span the
+	// engine opened.
 	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, rolloutTelemetry, configSender, eventBroker, rolloutTracer, logger)
 	rolloutEngine.Start()
 	defer func() {

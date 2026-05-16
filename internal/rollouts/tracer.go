@@ -32,8 +32,17 @@ import (
 type Tracer struct {
 	tracer trace.Tracer
 
-	mu     sync.Mutex
+	mu sync.Mutex
+	// active tracks the in-flight spans for rollouts the engine is
+	// currently processing.
 	active map[string]*activeRollout // keyed by rollout ID
+	// pendingLinks holds span contexts captured at rollout-create
+	// time (typically from an inbound API request) so the engine
+	// can link the eventual rollout span back to its originating
+	// trace. Drained by BeginRollout; entries for rollouts that
+	// never start (e.g. the operator deletes before the engine ticks)
+	// stay in the map until process restart, which is bounded.
+	pendingLinks map[string]trace.SpanContext
 }
 
 // activeRollout holds the span handles for one in-flight rollout. The
@@ -56,8 +65,9 @@ func NewTracer(t trace.Tracer) *Tracer {
 		return nil
 	}
 	return &Tracer{
-		tracer: t,
-		active: make(map[string]*activeRollout),
+		tracer:       t,
+		active:       make(map[string]*activeRollout),
+		pendingLinks: make(map[string]trace.SpanContext),
 	}
 }
 
@@ -65,6 +75,12 @@ func NewTracer(t trace.Tracer) *Tracer {
 // span stays open across ticks; EndRollout closes it. Idempotent — a
 // second call for the same rollout ID is a no-op (the engine might
 // re-process a pending rollout if a previous tick crashed mid-start).
+//
+// If a pending link was registered for this rollout (typically by the
+// API handler at create time, via LinkRolloutToContext), the new span
+// is created with trace.WithLinks pointing at the originating context.
+// Trace UIs that support links let operators jump from the API
+// request trace to the rollout trace and back.
 func (t *Tracer) BeginRollout(ctx context.Context, r *services.Rollout) {
 	if t == nil {
 		return
@@ -74,15 +90,48 @@ func (t *Tracer) BeginRollout(ctx context.Context, r *services.Rollout) {
 	if _, exists := t.active[r.ID]; exists {
 		return
 	}
-	spanCtx, span := t.tracer.Start(ctx, "rollout."+r.Name,
+	startOpts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(rolloutAttrs(r)...),
-	)
+	}
+	if linkCtx, ok := t.pendingLinks[r.ID]; ok && linkCtx.IsValid() {
+		startOpts = append(startOpts, trace.WithLinks(trace.Link{
+			SpanContext: linkCtx,
+			Attributes: []attribute.KeyValue{
+				attribute.String("squadron.link", "created_by_request"),
+			},
+		}))
+		delete(t.pendingLinks, r.ID)
+	}
+	spanCtx, span := t.tracer.Start(ctx, "rollout."+r.Name, startOpts...)
 	t.active[r.ID] = &activeRollout{
 		rolloutSpan: span,
 		rolloutCtx:  spanCtx,
 		stageIndex:  -1,
 	}
+}
+
+// LinkRolloutToContext registers the caller's OTel span context so
+// the next BeginRollout for this ID creates its span with a link back
+// to that context. Used by the API handler / service layer to thread
+// caller traces (typically the inbound HTTP request span) into the
+// engine's rollout span without making the engine a child of the
+// API span — that's a poor fit because the engine span lives across
+// many ticks while the API span ended seconds after returning.
+//
+// Idempotent: re-registering for the same ID replaces the previous
+// link (last writer wins). No-op when ctx carries no valid span.
+func (t *Tracer) LinkRolloutToContext(rolloutID string, ctx context.Context) {
+	if t == nil {
+		return
+	}
+	sc := trace.SpanFromContext(ctx).SpanContext()
+	if !sc.IsValid() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.pendingLinks[rolloutID] = sc
 }
 
 // BeginStage opens a child span for the stage application. If a

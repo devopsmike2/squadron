@@ -41,6 +41,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -118,6 +119,18 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*Publisher, error
 	// a future patch) without each caller having to plumb the provider
 	// through.
 	otel.SetTracerProvider(tp)
+
+	// W3C TraceContext + Baggage propagator. When set as the global
+	// propagator, inbound HTTP requests carrying a traceparent header
+	// have their span context extracted into the request context
+	// automatically (via otelgin / otelhttp middleware). Squadron
+	// becomes a participant in the caller's trace rather than always
+	// starting a fresh root. Baggage carries non-tracing context
+	// (tenant id, deploy version, etc.) operators may already use.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
 	logger.Info("selftel: OTLP trace export enabled",
 		zap.String("endpoint", cfg.Endpoint),
