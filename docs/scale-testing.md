@@ -127,6 +127,39 @@ opt out.
 Worth confirming in a focused test before patching; could be a
 display bug rather than a matcher bug.
 
+### After v0.23: pagination + virtualization
+
+The v0.22 baseline measured a single eager-fetch of every agent.
+v0.23 introduces `?offset=&limit=` on `/api/v1/agents` plus
+threshold-based UI virtualization. Re-running the same 1000-agent
+fleetsim scenario:
+
+| Metric                          | v0.22       | v0.23           | Delta |
+|---------------------------------|-------------|-----------------|-------|
+| First-page `/agents` payload    | 594 KB      | 137 KB          | **−77%** |
+| First-page `/agents` response   | 30 ms       | 20 ms           | −33% |
+| Agents page time-to-first-paint | ~2 s        | <1 s            | Snappy |
+| DOM nodes at 1000 agents        | ~10k        | ~2k (virtualized) | −80% |
+| Memory while scrolling          | grows w/ DOM | bounded         | — |
+
+The UI now loads the first 100 agents in a single round-trip,
+then fetches subsequent pages on scroll (200 → 300 → 400 …). At
+200 rows the virtualizer takes over so the DOM stays bounded
+regardless of how far the operator scrolls. Below 200 rows the
+non-virtualized grid + table render directly (no virtualizer
+overhead).
+
+The header summary line ("980/1002 reporting · 1 drifted") uses
+three small `limit=1` queries against the new pagination
+endpoint to read fleet-wide totals without re-fetching every
+agent — those queries cost about 5 ms each.
+
+Trade-off worth noting: the response payload now contains both
+the new `items` array AND the legacy `agents` map, so the
+serialized body is roughly 2× the size of items alone. This is
+v0.23's deliberate back-compat cost; a future major version will
+drop the legacy map and reclaim that overhead.
+
 ### What we deliberately did NOT load-test
 
 | Path | Why deferred |

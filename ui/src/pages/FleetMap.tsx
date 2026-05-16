@@ -122,12 +122,19 @@ export default function FleetMapPage() {
   // The Data Flow tab needs full agent objects (effective_config) —
   // /topology returns a slim projection. /agents has what we need
   // and is already cached by the agents page.
+  // Fleet Map needs effective_config per agent for the Data Flow
+  // tab's exporter parsing. /topology returns a slim projection;
+  // /agents gives us the full Agent object including config. We
+  // ask for 500 in one shot — at fleets >500 the Pipeline thumbnail
+  // grid would be 100+ rows tall anyway and benefits from a
+  // dedicated "scoped by group/label" filter on the rail (planned
+  // for v0.24 alongside cost optimization). 500 is the API cap.
   const { data: agentsResp, mutate: mutateAgents } = useSWR(
-    "/agents",
-    () => getAgents(),
+    "/agents-fleetmap",
+    () => getAgents({ limit: 500 }),
     { refreshInterval: 30000 },
   );
-  const agents: Agent[] = agentsResp ? Object.values(agentsResp.agents) : [];
+  const agents: Agent[] = agentsResp?.items ?? [];
 
   const { nodes, edges } = useTopologyLayout(topologyData, topologyLevel);
 

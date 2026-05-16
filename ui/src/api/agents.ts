@@ -2,16 +2,56 @@ import { apiGet, apiPatch, apiPost } from "./base";
 
 import type { Agent, AgentStats } from "@/types/agent";
 
+/**
+ * GET /api/v1/agents response.
+ *
+ * v0.23 added `items` + pagination envelope. `agents` (map),
+ * `totalCount`, `activeCount`, and `inactiveCount` remain for
+ * back-compat — pages built before pagination existed still work.
+ */
 export interface GetAgentsResponse {
+  // v0.23+ paginated shape.
+  items: Agent[];
+  total: number;
+  offset: number;
+  limit: number;
+
+  // Legacy back-compat fields.
   agents: Record<string, Agent>;
   totalCount: number;
   activeCount: number;
   inactiveCount: number;
 }
 
-// Get all agents
-export const getAgents = (): Promise<GetAgentsResponse> => {
-  return apiGet<GetAgentsResponse>("/agents");
+export interface GetAgentsParams {
+  offset?: number;
+  limit?: number;
+  drift_status?: string;
+  status?: string;
+  group_id?: string;
+  q?: string;
+}
+
+/**
+ * Build a query string from the params. Empty / undefined values
+ * are skipped so the URL stays clean (and the server's "any"
+ * branches don't get tickled with an empty string).
+ */
+function buildAgentsQuery(params?: GetAgentsParams): string {
+  if (!params) return "";
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === "" || v === null) continue;
+    usp.set(k, String(v));
+  }
+  const q = usp.toString();
+  return q ? `?${q}` : "";
+}
+
+// Get a (paginated, filtered) page of agents. Default page size
+// matches the server's defaultAgentsLimit.
+export const getAgents = (params?: GetAgentsParams): Promise<GetAgentsResponse> => {
+  return apiGet<GetAgentsResponse>(`/agents${buildAgentsQuery(params)}`);
 };
 
 // Get agent by ID

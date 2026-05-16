@@ -67,9 +67,15 @@ function GroupsDisplaySection({
   onItemClick?: (node: TopologyNode) => void;
 }) {
   const { data } = useSWR("groups", getGroups);
-  const { data: agentsData } = useSWR("agents", getAgents);
+  // Pull a single 500-agent page for the rail. Below that threshold
+  // the rail shows the full fleet; above, it becomes a "first 500"
+  // preview and the dedicated Agents page (with its own paginated
+  // fetch + virtualization) is the right place to browse the tail.
+  const { data: agentsData } = useSWR("agents-sidebar", () =>
+    getAgents({ limit: 500 }),
+  );
   const groups = data?.groups || [];
-  const agents = agentsData?.agents ? Object.values(agentsData.agents) : [];
+  const agents = agentsData?.items ?? [];
 
   // Calculate agent count for each group
   const groupAgentCounts = groups.reduce(
@@ -169,8 +175,12 @@ function AgentsDisplaySection({
   onToggle: () => void;
   onItemClick?: (node: TopologyNode) => void;
 }) {
-  const { data: agentsData } = useSWR("agents", getAgents);
-  const agents = agentsData?.agents ? Object.values(agentsData.agents) : [];
+  // Same caveat as the Groups section above — capped at 500 agents
+  // for the rail; the dedicated Agents page browses the tail.
+  const { data: agentsData } = useSWR("agents-sidebar", () =>
+    getAgents({ limit: 500 }),
+  );
+  const agents = agentsData?.items ?? [];
 
   return (
     <div className="space-y-2">

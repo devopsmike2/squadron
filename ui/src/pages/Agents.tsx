@@ -1,33 +1,54 @@
 /**
- * Agents page — the highest-traffic page in Squadron.
+ * Agents page — paginated + virtualized as of v0.23.
  *
- * v0.21 reframes this from "a database table" to "a fleet view":
- * cards by default, table on demand. Card-grid is the right primary
- * because operators almost always come here looking for "is anything
- * wrong?", which a wall of color-coded tiles answers in a glance —
- * tables only beat cards once you're scanning for specific text.
+ * Two architectural changes from the v0.21 version:
  *
- * Filter bar above the grid handles the four scopes operators
- * actually use: search by name/label, drift state, status, group.
- * The drift filter is wired to the URL (?drift_status=) so the
- * Fleet Status dashboard donut and the Drifted hero card both
- * deeplink directly into a filtered view.
+ *   1. **Server-side filtering + pagination.** The filter bar (search,
+ *      drift, status, group) now flows to /api/v1/agents query
+ *      params, and we use SWR's infinite-loader to walk pages of
+ *      100 items as the operator scrolls. At 1000+ agents this keeps
+ *      both the network payload AND the time-to-first-paint bounded.
+ *
+ *   2. **Virtualization above 200 rows.** Small fleets render the
+ *      grid/table directly — virtualization has measurable overhead
+ *      that's not worth paying for 50 cards. At 200+ items, we swap
+ *      in @tanstack/react-virtual to render only the rows actually
+ *      in viewport.
+ *
+ * @tanstack/react-virtual was chosen over react-window because the
+ * tanstack ecosystem is already in our deps (@tanstack/react-table),
+ * its API maps cleanly to both row-virtualized tables and
+ * row-virtualized grids (multi-card-per-row), and the bundle hit is
+ * smaller than the legacy react-window.
  */
 
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   AlertCircleIcon,
   LayoutGridIcon,
+  Loader2Icon,
   RefreshCwIcon,
   RowsIcon,
   SearchIcon,
   ServerIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams } from "react-router-dom";
 import useSWR from "swr";
+import useSWRInfinite from "swr/infinite";
 
-import { getAgents } from "@/api/agents";
+import {
+  getAgents,
+  type GetAgentsParams,
+  type GetAgentsResponse,
+} from "@/api/agents";
 import { getGroups } from "@/api/groups";
 import { AgentDetailsDrawer } from "@/components/AgentDetailsDrawer";
 import { AgentCard } from "@/components/agents/AgentCard";
@@ -64,6 +85,18 @@ type LayoutMode = "cards" | "table";
 
 const LAYOUT_KEY = "squadron.agents.layout";
 
+// Page size matches the server's defaultAgentsLimit. Bumping this
+// would reduce round-trips on long scrolls but trade off first-paint
+// time — operators often filter heavily and don't need the full
+// page anyway.
+const PAGE_SIZE = 100;
+
+// Virtualization kicks in at this threshold. Below it, we render
+// the full list directly because @tanstack/react-virtual carries
+// a small per-render cost (measure-then-layout) that small lists
+// would notice as jank, not benefit.
+const VIRT_THRESHOLD = 200;
+
 const DRIFT_OPTIONS: { value: DriftFilter; label: string; color: string }[] = [
   { value: "any", label: "All", color: "var(--muted-foreground)" },
   { value: "synced", label: "Synced", color: "var(--success)" },
@@ -78,6 +111,76 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "offline", label: "Offline" },
   { value: "error", label: "Error" },
 ];
+
+// ============================================================
+// Paginated fetch hook
+// ============================================================
+
+/**
+ * Wraps useSWRInfinite with our /agents query shape. Returns the
+ * flattened items array plus pagination controls. The `params`
+ * object becomes part of the SWR key so changing a filter blows
+ * away the cached pages and refetches from the start — which is
+ * what an operator expects when they type into search.
+ */
+function useAgentsPaginated(params: GetAgentsParams) {
+  const getKey = (pageIndex: number, prev: GetAgentsResponse | null) => {
+    // Stop fetching when the previous page returned everything.
+    if (prev && prev.items.length === 0) return null;
+    if (prev && pageIndex * PAGE_SIZE >= prev.total) return null;
+    return [
+      "/agents",
+      pageIndex,
+      params.drift_status ?? "",
+      params.status ?? "",
+      params.group_id ?? "",
+      params.q ?? "",
+    ];
+  };
+
+  const swr = useSWRInfinite<GetAgentsResponse>(
+    getKey,
+    ([, pageIndex, drift_status, status, group_id, q]) =>
+      getAgents({
+        offset: (pageIndex as number) * PAGE_SIZE,
+        limit: PAGE_SIZE,
+        drift_status: drift_status || undefined,
+        status: status || undefined,
+        group_id: group_id || undefined,
+        q: q || undefined,
+      }),
+    {
+      // Keep already-fetched pages in cache while a new filter is
+      // being typed — the UI stays warm rather than flashing empty.
+      keepPreviousData: true,
+      revalidateFirstPage: false,
+    },
+  );
+
+  const items: Agent[] = useMemo(
+    () => (swr.data ?? []).flatMap((p) => p.items),
+    [swr.data],
+  );
+  const total = swr.data?.[0]?.total ?? 0;
+  const loadingMore =
+    swr.isValidating &&
+    swr.data !== undefined &&
+    swr.data.length > 0 &&
+    items.length < total;
+  const reachedEnd = items.length >= total;
+
+  return {
+    items,
+    total,
+    loadingMore,
+    reachedEnd,
+    size: swr.size,
+    setSize: swr.setSize,
+    isLoading: swr.isLoading,
+    error: swr.error,
+    mutate: swr.mutate,
+  };
+}
 
 // ============================================================
 // Page
@@ -103,14 +206,18 @@ export default function AgentsPage() {
     setSearchParams(sp, { replace: true });
   };
 
-  // Other filters stay in-page. They're noise to URL-bind because
-  // operators rarely deeplink a name search.
   const [status, setStatus] = useState<StatusFilter>("any");
   const [groupId, setGroupId] = useState<string>("any");
+  // Debounce search so we don't fire a query on every keystroke at
+  // the API. 200ms is the sweet spot between "feels live" and "not
+  // hammering the server while the operator types a long string".
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 200);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
-  // Layout preference persists per-operator. localStorage keeps the
-  // choice across reloads without bothering the server.
   const [layout, setLayout] = useState<LayoutMode>(() => {
     const stored = typeof window !== "undefined"
       ? localStorage.getItem(LAYOUT_KEY)
@@ -121,15 +228,65 @@ export default function AgentsPage() {
     localStorage.setItem(LAYOUT_KEY, layout);
   }, [layout]);
 
+  // Server-side filter params. Build once per filter set so
+  // useAgentsPaginated's key only churns on real changes.
+  const apiParams = useMemo<GetAgentsParams>(
+    () => ({
+      drift_status: drift !== "any" ? drift : undefined,
+      status: status !== "any" ? status : undefined,
+      // group_id="none" is a UI sentinel for "ungrouped"; the
+      // server doesn't have that filter today so we fall back to
+      // local filtering for that single case. Anything else is
+      // server-side.
+      group_id: groupId !== "any" && groupId !== "none" ? groupId : undefined,
+      q: search.trim() || undefined,
+    }),
+    [drift, status, groupId, search],
+  );
+
   const {
-    data: agentsData,
+    items: serverItems,
+    total: serverTotal,
+    loadingMore,
+    reachedEnd,
+    size,
+    setSize,
+    isLoading,
     error: agentsError,
     mutate: mutateAgents,
-  } = useSWR("agents", getAgents, { refreshInterval: 30000 });
+  } = useAgentsPaginated(apiParams);
+
+  // Apply the "ungrouped" sentinel locally on top of server results.
+  const agents = useMemo(() => {
+    if (groupId === "none") {
+      return serverItems.filter((a) => !a.group_id);
+    }
+    return serverItems;
+  }, [serverItems, groupId]);
+  const total = groupId === "none" ? agents.length : serverTotal;
 
   const { data: groupsData } = useSWR("groups", getGroups, {
     refreshInterval: 30000,
   });
+
+  // Fleet-wide summary numbers. Uses a separate small query so the
+  // header counters stay accurate when the main grid is filtered.
+  // limit=1 + total is the cheapest way to get a server-side count.
+  const { data: fleetTotal } = useSWR(
+    "/agents-total",
+    () => getAgents({ limit: 1 }).then((r) => r.total),
+    { refreshInterval: 60000 },
+  );
+  const { data: fleetOnline } = useSWR(
+    "/agents-total-online",
+    () => getAgents({ status: "online", limit: 1 }).then((r) => r.total),
+    { refreshInterval: 60000 },
+  );
+  const { data: fleetDrifted } = useSWR(
+    "/agents-total-drifted",
+    () => getAgents({ drift_status: "drifted", limit: 1 }).then((r) => r.total),
+    { refreshInterval: 60000 },
+  );
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -143,54 +300,6 @@ export default function AgentsPage() {
     return map;
   }, [groupsData]);
 
-  const allAgents: Agent[] = useMemo(
-    () => (agentsData?.agents ? Object.values(agentsData.agents) : []),
-    [agentsData],
-  );
-
-  const agents = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return allAgents.filter((a) => {
-      if (status !== "any" && a.status !== status) return false;
-      if (drift !== "any") {
-        const d = a.drift_status ?? "unknown";
-        if (d !== drift) return false;
-      }
-      if (groupId !== "any") {
-        if (groupId === "none") {
-          if (a.group_id) return false;
-        } else if (a.group_id !== groupId) return false;
-      }
-      if (q) {
-        const haystack = [
-          a.name,
-          a.id,
-          ...Object.entries(a.labels ?? {}).map(([k, v]) => `${k}=${v}`),
-        ]
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [allAgents, status, drift, groupId, search]);
-
-  // Sort by online-first, then drifted-second, then alpha. Operators
-  // care about anything-wrong-first; the rest is alpha for muscle memory.
-  const sortedAgents = useMemo(() => {
-    const rank = (a: Agent) => {
-      if (a.drift_status === "drifted") return 0;
-      if (a.status === "error") return 1;
-      if (a.status === "offline") return 2;
-      return 3;
-    };
-    return [...agents].sort((a, b) => {
-      const r = rank(a) - rank(b);
-      if (r !== 0) return r;
-      return a.name.localeCompare(b.name);
-    });
-  }, [agents]);
-
   const openAgent = (id: string) => {
     setSelectedAgentId(id);
     setDrawerOpen(true);
@@ -200,18 +309,6 @@ export default function AgentsPage() {
     setSelectedGroupId(id);
     setGroupDrawerOpen(true);
   };
-
-  // Header counts derived from unfiltered data so the "1 drifted"
-  // chip count reflects fleet reality, not what's currently filtered.
-  const fleetSummary = useMemo(() => {
-    let online = 0;
-    let drifted = 0;
-    for (const a of allAgents) {
-      if (a.status === "online") online++;
-      if (a.drift_status === "drifted") drifted++;
-    }
-    return { total: allAgents.length, online, drifted };
-  }, [allAgents]);
 
   if (agentsError) {
     return (
@@ -240,8 +337,17 @@ export default function AgentsPage() {
     setDrift("any");
     setStatus("any");
     setGroupId("any");
+    setSearchInput("");
     setSearch("");
   };
+
+  // Infinite-scroll: when the bottom sentinel comes into view, ask
+  // SWR for the next page. The handler is shared between the
+  // virtualized + non-virtualized paths.
+  const onNeedMore = useCallback(() => {
+    if (loadingMore || reachedEnd) return;
+    setSize(size + 1);
+  }, [loadingMore, reachedEnd, setSize, size]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -255,20 +361,20 @@ export default function AgentsPage() {
             Agents
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {fleetSummary.total > 0 ? (
+            {fleetTotal !== undefined && fleetTotal > 0 ? (
               <>
                 <span className="font-tabular text-foreground">
-                  {fleetSummary.online}/{fleetSummary.total}
+                  {fleetOnline ?? "—"}/{fleetTotal}
                 </span>{" "}
                 reporting
-                {fleetSummary.drifted > 0 && (
+                {fleetDrifted !== undefined && fleetDrifted > 0 && (
                   <>
                     {" · "}
                     <span
                       className="font-tabular"
                       style={{ color: "var(--destructive)" }}
                     >
-                      {fleetSummary.drifted} drifted
+                      {fleetDrifted} drifted
                     </span>
                   </>
                 )}
@@ -315,13 +421,12 @@ export default function AgentsPage() {
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
           <Input
             placeholder="Search by name, ID, or label…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="h-8 w-72 pl-8 text-sm"
           />
         </div>
 
-        {/* Drift filter chips */}
         <div className="ml-2 flex items-center gap-1">
           {DRIFT_OPTIONS.map((o) => {
             const active = drift === o.value;
@@ -355,7 +460,6 @@ export default function AgentsPage() {
           })}
         </div>
 
-        {/* Status select */}
         <Select
           value={status}
           onValueChange={(v) => setStatus(v as StatusFilter)}
@@ -372,7 +476,6 @@ export default function AgentsPage() {
           </SelectContent>
         </Select>
 
-        {/* Group select */}
         <Select value={groupId} onValueChange={setGroupId}>
           <SelectTrigger className="h-8 w-44 text-xs">
             <SelectValue />
@@ -400,42 +503,80 @@ export default function AgentsPage() {
         )}
       </div>
 
-      {/* Result count */}
       <div className="-mb-1 flex items-center justify-between text-xs text-muted-foreground">
         <span>
           Showing{" "}
-          <span className="font-tabular text-foreground">
-            {sortedAgents.length}
-          </span>{" "}
-          of {fleetSummary.total}
+          <span className="font-tabular text-foreground">{agents.length}</span>
+          {agents.length < total ? (
+            <> of {total}</>
+          ) : null}
+          {fleetTotal !== undefined && total < fleetTotal ? (
+            <> · {fleetTotal} in fleet</>
+          ) : null}
         </span>
+        {agents.length >= VIRT_THRESHOLD && (
+          <span className="font-tabular text-[10px] uppercase tracking-wider text-muted-foreground/70">
+            Virtualized
+          </span>
+        )}
       </div>
 
-      {/* Body: cards or table */}
-      {sortedAgents.length === 0 ? (
+      {isLoading && agents.length === 0 ? (
+        <LoadingState />
+      ) : agents.length === 0 ? (
         <EmptyState
           hasFilters={hasAnyFilter}
-          totalAgents={fleetSummary.total}
+          totalAgents={fleetTotal ?? 0}
           onClearFilters={clearAll}
         />
       ) : layout === "cards" ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {sortedAgents.map((a) => (
-            <AgentCard
-              key={a.id}
-              agent={a}
-              groupName={a.group_id ? groupIdToName[a.group_id] : undefined}
-              onClick={() => openAgent(a.id)}
-              onGroupClick={openGroup}
-            />
-          ))}
-        </div>
-      ) : (
-        <AgentTable
-          agents={sortedAgents}
+        agents.length >= VIRT_THRESHOLD ? (
+          <VirtualizedCardGrid
+            agents={agents}
+            groupIdToName={groupIdToName}
+            onAgentClick={openAgent}
+            onGroupClick={openGroup}
+            onNeedMore={onNeedMore}
+            loadingMore={loadingMore}
+          />
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {agents.map((a) => (
+              <AgentCard
+                key={a.id}
+                agent={a}
+                groupName={a.group_id ? groupIdToName[a.group_id] : undefined}
+                onClick={() => openAgent(a.id)}
+                onGroupClick={openGroup}
+              />
+            ))}
+          </div>
+        )
+      ) : agents.length >= VIRT_THRESHOLD ? (
+        <VirtualizedAgentTable
+          agents={agents}
           groupIdToName={groupIdToName}
           onAgentClick={openAgent}
           onGroupClick={openGroup}
+          onNeedMore={onNeedMore}
+          loadingMore={loadingMore}
+        />
+      ) : (
+        <AgentTable
+          agents={agents}
+          groupIdToName={groupIdToName}
+          onAgentClick={openAgent}
+          onGroupClick={openGroup}
+        />
+      )}
+
+      {/* Bottom sentinel: non-virtualized path triggers next page
+          when this comes into view. Virtualized paths handle their
+          own onNeedMore via the scroll listener. */}
+      {agents.length < VIRT_THRESHOLD && !reachedEnd && (
+        <NonVirtualSentinel
+          onVisible={onNeedMore}
+          loading={loadingMore}
         />
       )}
 
@@ -455,8 +596,259 @@ export default function AgentsPage() {
 }
 
 // ============================================================
-// Table fallback
+// Virtualized card grid
+//
+// We virtualize rows-of-cards rather than individual cards because
+// the grid layout reflows on viewport width — virtualizing each
+// card would mean recomputing positions on every resize. Rows are
+// stable: N cards per row × ceil(items/N) rows.
 // ============================================================
+
+function useCardsPerRow(): number {
+  // Mirror Tailwind's grid breakpoints from the non-virtualized
+  // path: 1 / 2 / 3 / 4 columns at sm/lg/xl. Measured on resize so
+  // virtualization recomputes row counts when the operator drags
+  // the window.
+  const [n, setN] = useState(() => columnsForWidth(window.innerWidth));
+  useEffect(() => {
+    const onResize = () => setN(columnsForWidth(window.innerWidth));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return n;
+}
+
+function columnsForWidth(w: number): number {
+  if (w >= 1280) return 4; // xl
+  if (w >= 1024) return 3; // lg
+  if (w >= 640) return 2; // sm
+  return 1;
+}
+
+interface VirtualGridProps {
+  agents: Agent[];
+  groupIdToName: Record<string, string>;
+  onAgentClick: (id: string) => void;
+  onGroupClick: (id: string) => void;
+  onNeedMore: () => void;
+  loadingMore: boolean;
+}
+
+function VirtualizedCardGrid({
+  agents,
+  groupIdToName,
+  onAgentClick,
+  onGroupClick,
+  onNeedMore,
+  loadingMore,
+}: VirtualGridProps) {
+  const cols = useCardsPerRow();
+  const rows = Math.ceil(agents.length / cols);
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virt = useVirtualizer({
+    count: rows + (loadingMore ? 1 : 0),
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 168, // card height (~150) + grid gap (12) + padding fudge
+    overscan: 4,
+  });
+
+  // Trigger next-page fetch when the user scrolls within ~3 rows
+  // of the bottom. Cheap: just compare the highest virtualized
+  // index against total.
+  useEffect(() => {
+    const items = virt.getVirtualItems();
+    if (items.length === 0) return;
+    const last = items[items.length - 1];
+    if (last.index >= rows - 3) {
+      onNeedMore();
+    }
+  }, [virt, rows, onNeedMore]);
+
+  return (
+    <div
+      ref={parentRef}
+      className="relative h-[calc(100vh-280px)] min-h-[400px] overflow-auto rounded-lg"
+    >
+      <div
+        style={{
+          height: virt.getTotalSize(),
+          position: "relative",
+          width: "100%",
+        }}
+      >
+        {virt.getVirtualItems().map((vRow) => {
+          const start = vRow.index * cols;
+          const slice = agents.slice(start, start + cols);
+          const isLoaderRow = vRow.index >= rows;
+          return (
+            <div
+              key={vRow.key}
+              data-index={vRow.index}
+              ref={virt.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vRow.start}px)`,
+              }}
+            >
+              {isLoaderRow ? (
+                <div className="flex items-center justify-center py-4 text-xs text-muted-foreground">
+                  <Loader2Icon className="mr-2 h-3 w-3 animate-spin" />
+                  Loading more…
+                </div>
+              ) : (
+                <div
+                  className="grid gap-3 pb-3"
+                  style={{
+                    gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {slice.map((a) => (
+                    <AgentCard
+                      key={a.id}
+                      agent={a}
+                      groupName={
+                        a.group_id ? groupIdToName[a.group_id] : undefined
+                      }
+                      onClick={() => onAgentClick(a.id)}
+                      onGroupClick={onGroupClick}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Virtualized + non-virtualized table fallbacks
+// ============================================================
+
+function VirtualizedAgentTable({
+  agents,
+  groupIdToName,
+  onAgentClick,
+  onGroupClick,
+  onNeedMore,
+  loadingMore,
+}: VirtualGridProps) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virt = useVirtualizer({
+    count: agents.length + (loadingMore ? 1 : 0),
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 56, // row height
+    overscan: 8,
+  });
+
+  useEffect(() => {
+    const items = virt.getVirtualItems();
+    if (items.length === 0) return;
+    const last = items[items.length - 1];
+    if (last.index >= agents.length - 10) {
+      onNeedMore();
+    }
+  }, [virt, agents.length, onNeedMore]);
+
+  return (
+    <div
+      ref={parentRef}
+      className="h-[calc(100vh-280px)] min-h-[400px] overflow-auto rounded-lg border border-border bg-card/60 backdrop-blur"
+    >
+      {/* Header is sticky so column labels stay put while the body
+          scrolls. The virtualized rows sit inside a relative
+          spacer; matching column widths between header and rows
+          uses fixed widths to avoid full-row remeasurement. */}
+      <div
+        className="sticky top-0 z-10 grid border-b border-border bg-card/95 backdrop-blur"
+        style={{ gridTemplateColumns: TABLE_COLS }}
+      >
+        {TABLE_HEADS.map((h) => (
+          <div
+            key={h}
+            className="px-4 py-2 text-left text-xs font-medium text-muted-foreground"
+          >
+            {h}
+          </div>
+        ))}
+      </div>
+      <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+        {virt.getVirtualItems().map((vr) => {
+          const isLoader = vr.index >= agents.length;
+          const a = agents[vr.index];
+          return (
+            <div
+              key={vr.key}
+              data-index={vr.index}
+              ref={virt.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vr.start}px)`,
+              }}
+            >
+              {isLoader ? (
+                <div className="flex items-center justify-center py-3 text-xs text-muted-foreground">
+                  <Loader2Icon className="mr-2 h-3 w-3 animate-spin" />
+                  Loading more…
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onAgentClick(a.id)}
+                  className="grid w-full cursor-pointer items-center border-b border-border/40 px-0 py-0 text-left hover:bg-accent/30"
+                  style={{ gridTemplateColumns: TABLE_COLS }}
+                >
+                  <div className="px-4 py-3">
+                    <StatusBadge status={a.status} />
+                  </div>
+                  <div className="px-4 py-3">
+                    <DriftBadge status={a.drift_status} />
+                  </div>
+                  <div className="px-4 py-3 truncate font-medium text-foreground">
+                    {a.name}
+                  </div>
+                  <div className="px-4 py-3 font-tabular text-xs text-muted-foreground">
+                    {a.version}
+                  </div>
+                  <div className="px-4 py-3">
+                    {a.group_id ? (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onGroupClick(a.group_id!);
+                        }}
+                        className="text-primary hover:underline"
+                      >
+                        {groupIdToName[a.group_id] || a.group_id.slice(0, 8)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </div>
+                  <div className="px-4 py-3 font-tabular text-xs text-muted-foreground">
+                    {new Date(a.last_seen).toLocaleString()}
+                  </div>
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const TABLE_COLS = "112px 128px 1fr 96px 192px 192px";
+const TABLE_HEADS = ["Status", "Drift", "Name", "Version", "Group", "Last Seen"];
 
 function AgentTable({
   agents,
@@ -550,6 +942,10 @@ function AgentTable({
   );
 }
 
+// ============================================================
+// Helpers
+// ============================================================
+
 function StatusBadge({ status }: { status: Agent["status"] }) {
   const color =
     status === "online"
@@ -591,9 +987,94 @@ function DriftBadge({ status }: { status?: ConfigDriftStatus }) {
   );
 }
 
-// ============================================================
-// Empty state
-// ============================================================
+// Sentinel for the non-virtualized path. We can't rely on
+// IntersectionObserver with the default viewport root because the
+// Layout wraps the page content in an overflow-auto container —
+// the sentinel can be visible inside that container but never
+// intersects the document viewport in a way the default observer
+// notices. Instead we attach a scroll listener to the actual
+// scrolling ancestor and fire onVisible when the user is within
+// `triggerDistance` pixels of the bottom.
+function NonVirtualSentinel({
+  onVisible,
+  loading,
+}: {
+  onVisible: () => void;
+  loading: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Keep onVisible in a ref so the scroll listener can call the
+  // latest version without re-attaching every render (which would
+  // miss in-flight scroll events).
+  const onVisibleRef = useRef(onVisible);
+  onVisibleRef.current = onVisible;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Walk up the DOM to find the first overflow-y:auto|scroll
+    // ancestor — that's the layout's main scroll container.
+    let scroller: HTMLElement | Window = window;
+    let p: HTMLElement | null = el.parentElement;
+    while (p) {
+      const style = getComputedStyle(p);
+      if (
+        (style.overflowY === "auto" || style.overflowY === "scroll") &&
+        p.scrollHeight > p.clientHeight
+      ) {
+        scroller = p;
+        break;
+      }
+      p = p.parentElement;
+    }
+
+    const triggerDistance = 400; // px from the bottom
+    const onScroll = () => {
+      const rect = el.getBoundingClientRect();
+      // The sentinel is "approaching the bottom" when its top is
+      // within the viewport (or scroller viewport) minus the
+      // trigger distance.
+      const viewportBottom =
+        scroller === window
+          ? window.innerHeight
+          : (scroller as HTMLElement).getBoundingClientRect().bottom;
+      if (rect.top - triggerDistance <= viewportBottom) {
+        onVisibleRef.current();
+      }
+    };
+    // Run once immediately in case the sentinel is already near
+    // the bottom on mount (small fleets, or after a filter
+    // narrows the list).
+    onScroll();
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      className="flex items-center justify-center py-4 text-xs text-muted-foreground"
+    >
+      {loading ? (
+        <>
+          <Loader2Icon className="mr-2 h-3 w-3 animate-spin" />
+          Loading more…
+        </>
+      ) : (
+        <span className="opacity-0">Loading…</span>
+      )}
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="flex items-center justify-center rounded-lg border border-dashed border-border/60 bg-card/40 px-6 py-12 text-sm text-muted-foreground">
+      <Loader2Icon className="mr-2 h-4 w-4 animate-spin" />
+      Loading agents…
+    </div>
+  );
+}
 
 function EmptyState({
   hasFilters,

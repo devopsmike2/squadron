@@ -529,7 +529,14 @@ function RecentActivity({ events }: { events: { id: string; timestamp: string; a
 export default function DashboardPage() {
   // Same SWR keys other pages use — invalidations triggered by SSE
   // for any of these caches benefit the dashboard at no extra cost.
-  const { data: agentsResp } = useSWR("/agents", () => getAgents());
+  // The donut + drift counters need the full fleet's drift_status
+  // tally, so we ask for a single 500-agent page. /agents/stats
+  // gives us the fleet-wide online/offline totals separately. At
+  // fleets >500 the donut numbers will be a "top 500" sample; a
+  // future improvement is a server-side drift breakdown endpoint.
+  const { data: agentsResp } = useSWR("/agents-dashboard", () =>
+    getAgents({ limit: 500 }),
+  );
   const { data: stats } = useSWR("/agents/stats", () => getAgentStats());
   const { data: rollouts } = useSWR<Rollout[]>("/rollouts", () => listRollouts());
   const { data: alerts } = useSWR("/alerts/rules", () => listAlertRules());
@@ -538,7 +545,7 @@ export default function DashboardPage() {
   );
 
   const agents: Agent[] = React.useMemo(
-    () => Object.values(agentsResp?.agents ?? {}),
+    () => agentsResp?.items ?? [],
     [agentsResp],
   );
   const tally = tallyDrift(agents);
