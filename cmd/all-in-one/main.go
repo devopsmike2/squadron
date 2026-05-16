@@ -18,6 +18,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/config"
+	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/metrics"
@@ -213,6 +214,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// via the RolloutTracer interface) so a single rollout trace
 	// captures every transition regardless of origin.
 	rolloutTracer := rollouts.NewTracer(selftelPub.Tracer("squadron/rollouts"))
+	// Config-push tracer — bracketing span per agent push. Shared
+	// between the engine (rollout pushes + rollback pushes) and the
+	// API handlers (direct + group pushes). Source attribute lets
+	// operators filter by what triggered each push.
+	configsTracer := configs.NewTracer(selftelPub.Tracer("squadron/configs"))
 	rolloutService := services.NewRolloutServiceWithTracer(appStore, agentService, auditService, rolloutTracer, logger)
 
 	// Bootstrap an initial token if auth is enabled and the store has
@@ -302,7 +308,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
 	// worker, and API metrics in a single endpoint. The event broker is
 	// shared with publishers so /events/stream reflects what they emit.
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: config.Auth.Enabled}, configSender, eventBroker, registry, logger)
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: config.Auth.Enabled}, configSender, eventBroker, configsTracer, registry, logger)
 
 	// Start API server in a goroutine
 	go func() {
@@ -342,7 +348,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// reusing the same instance ensures service-layer span events
 	// (pause / resume / abort) land on the same parent span the
 	// engine opened.
-	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, rolloutTelemetry, configSender, eventBroker, rolloutTracer, logger)
+	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, rolloutTelemetry, configSender, eventBroker, rolloutTracer, configsTracer, logger)
 	rolloutEngine.Start()
 	defer func() {
 		if err := rolloutEngine.Stop(10 * time.Second); err != nil {

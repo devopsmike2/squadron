@@ -16,6 +16,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
+	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -51,6 +52,7 @@ type Server struct {
 	authConfig        AuthConfig
 	commander         AgentCommander
 	broker            *events.Broker
+	configsTracer     *configs.Tracer // optional; nil disables config-push spans on direct handler pushes
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -63,7 +65,7 @@ type Server struct {
 // register OpAMP, OTLP, and worker metrics so that /metrics exposes a single,
 // unified view of the process. (Previously this constructor created its own
 // registry, which silently hid every non-API metric from /metrics.)
-func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, auditService services.AuditService, rolloutService services.RolloutService, authService services.AuthService, authConfig AuthConfig, commander AgentCommander, broker *events.Broker, registry *prometheus.Registry, logger *zap.Logger) *Server {
+func NewServer(agentService services.AgentService, telemetryService services.TelemetryQueryService, savedQueryService services.SavedQueryService, alertService services.AlertService, auditService services.AuditService, rolloutService services.RolloutService, authService services.AuthService, authConfig AuthConfig, commander AgentCommander, broker *events.Broker, configsTracer *configs.Tracer, registry *prometheus.Registry, logger *zap.Logger) *Server {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
@@ -98,6 +100,7 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 		authConfig:        authConfig,
 		commander:         commander,
 		broker:            broker,
+		configsTracer:     configsTracer,
 		logger:            logger,
 		metrics:           apiMetrics,
 		registry:          registry,
@@ -137,7 +140,7 @@ func (s *Server) Stop(ctx context.Context) error {
 // registerRoutes registers all API routes
 func (s *Server) registerRoutes() {
 	// Initialize handlers
-	agentHandlers := handlers.NewAgentHandlers(s.agentService, s.commander, s.logger)
+	agentHandlers := handlers.NewAgentHandlersWithTracer(s.agentService, s.commander, s.configsTracer, s.logger)
 	configHandlers := handlers.NewConfigHandlers(s.agentService, s.commander, s.logger)
 	telemetryHandlers := handlers.NewTelemetryHandlers(s.telemetryService, s.logger)
 	squadronQLHandlers := handlers.NewSquadronQLHandlers(s.telemetryService, s.logger)

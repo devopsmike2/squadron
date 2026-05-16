@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -21,17 +22,33 @@ type AgentCommander interface {
 
 // AgentHandlers handles agent-related API endpoints
 type AgentHandlers struct {
-	agentService services.AgentService
-	commander    AgentCommander
-	logger       *zap.Logger
+	agentService  services.AgentService
+	commander     AgentCommander
+	configsTracer *configs.Tracer // optional; nil disables config-push spans
+	logger        *zap.Logger
 }
 
-// NewAgentHandlers creates a new agent handlers instance
+// NewAgentHandlers creates a new agent handlers instance. configsTracer
+// is optional — when nil, push tracing is disabled (matches the test
+// path; production wires the real tracer via NewAgentHandlersWithTracer).
 func NewAgentHandlers(agentService services.AgentService, commander AgentCommander, logger *zap.Logger) *AgentHandlers {
 	return &AgentHandlers{
 		agentService: agentService,
 		commander:    commander,
 		logger:       logger,
+	}
+}
+
+// NewAgentHandlersWithTracer is the production constructor used when
+// telemetry.enabled is true. Mirrors v0.12's NewAuditServiceWithSelfTelemetry
+// pattern — separate constructor avoids adding a nil tracer parameter
+// to every existing test caller.
+func NewAgentHandlersWithTracer(agentService services.AgentService, commander AgentCommander, tracer *configs.Tracer, logger *zap.Logger) *AgentHandlers {
+	return &AgentHandlers{
+		agentService:  agentService,
+		commander:     commander,
+		configsTracer: tracer,
+		logger:        logger,
 	}
 }
 
@@ -271,8 +288,13 @@ func (h *AgentHandlers) HandleSendConfigToAgent(c *gin.Context) {
 		return
 	}
 
-	// 4. Send config to agent via OpAMP
+	// 4. Send config to agent via OpAMP. Wrap in a config.push span
+	// so the operator sees this direct manual push alongside the
+	// rollout-driven pushes in their trace tool.
+	push := h.configsTracer.BeginPush(c.Request.Context(), agentUUID.String(), config.ID, "", configs.SourceDirect)
 	if err := h.commander.SendConfigToAgent(agentUUID, req.Content); err != nil {
+		push.RecordNack(err.Error())
+		push.End()
 		h.logger.Error("Failed to send config to agent",
 			zap.String("agent_id", agentID),
 			zap.String("config_id", config.ID),
@@ -286,6 +308,8 @@ func (h *AgentHandlers) HandleSendConfigToAgent(c *gin.Context) {
 		})
 		return
 	}
+	push.RecordAck()
+	push.End()
 
 	// 5. Return success response
 	h.logger.Info("Configuration sent to agent successfully",

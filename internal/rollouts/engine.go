@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
@@ -67,17 +68,19 @@ type Engine struct {
 	configStore    ConfigStore
 	telemetry      TelemetryReader // optional; nil disables error-rate criteria
 	commander      AgentCommander
-	broker         *events.Broker // optional; nil disables SSE publication
-	httpClient     *http.Client   // for webhook notifications
-	tracer         *Tracer        // optional; nil disables OTel rollout traces
+	broker         *events.Broker  // optional; nil disables SSE publication
+	httpClient     *http.Client    // for webhook notifications
+	tracer         *Tracer         // optional; nil disables OTel rollout traces
+	configsTracer  *configs.Tracer // optional; nil disables OTel config-push spans
 	logger         *zap.Logger
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 }
 
-// NewEngine wires up the engine. auditService, telemetry, broker, and
-// tracer are all optional — pass nil to disable that feature.
+// NewEngine wires up the engine. auditService, telemetry, broker,
+// tracer, and configsTracer are all optional — pass nil to disable
+// that feature.
 func NewEngine(
 	rolloutService services.RolloutService,
 	agentService services.AgentService,
@@ -87,6 +90,7 @@ func NewEngine(
 	commander AgentCommander,
 	broker *events.Broker,
 	tracer *Tracer,
+	configsTracer *configs.Tracer,
 	logger *zap.Logger,
 ) *Engine {
 	return &Engine{
@@ -99,6 +103,7 @@ func NewEngine(
 		broker:         broker,
 		httpClient:     &http.Client{Timeout: 10 * time.Second},
 		tracer:         tracer,
+		configsTracer:  configsTracer,
 		logger:         logger,
 		shutdown:       make(chan struct{}),
 	}
@@ -452,12 +457,21 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 	}
 
 	for _, agent := range canary {
+		// Same per-agent push span as applyStage, with the rollback
+		// source so operators can filter for rollback-driven pushes
+		// specifically.
+		push := e.configsTracer.BeginPush(ctx, agent.ID.String(), r.PreviousConfigID, r.GroupID, configs.SourceRollout)
 		if err := e.commander.SendConfigToAgent(agent.ID, previous.Content); err != nil {
+			push.RecordNack(err.Error())
+			push.End()
 			e.logger.Warn("rollout engine: rollback push failed for agent",
 				zap.String("rollout_id", r.ID),
 				zap.String("agent_id", agent.ID.String()),
 				zap.Error(err))
+			continue
 		}
+		push.RecordAck()
+		push.End()
 	}
 }
 
@@ -503,14 +517,24 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 	ids := make([]uuid.UUID, 0, len(canary))
 	for _, agent := range canary {
 		ids = append(ids, agent.ID)
+		// Each per-agent push gets its own OTel span. Bracketing the
+		// synchronous SendConfigToAgent call captures both the ack
+		// case (RecordAck) and the timeout / agent-not-found case
+		// (RecordNack with the error message as reason).
+		push := e.configsTracer.BeginPush(ctx, agent.ID.String(), r.TargetConfigID, r.GroupID, configs.SourceRollout)
 		if err := e.commander.SendConfigToAgent(agent.ID, target.Content); err != nil {
+			push.RecordNack(err.Error())
+			push.End()
 			e.logger.Warn("rollout engine: stage push failed for agent",
 				zap.String("rollout_id", r.ID),
 				zap.String("agent_id", agent.ID.String()),
 				zap.Error(err))
 			// We tolerate per-agent failures — the next tick can retry
 			// when the agent reconnects. We don't fail the whole stage.
+			continue
 		}
+		push.RecordAck()
+		push.End()
 	}
 	return ids, nil
 }

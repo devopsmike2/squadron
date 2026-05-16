@@ -236,7 +236,11 @@ func (ts *TestServer) initServers() {
 	// API Server — uses the same registry as OpAMP/OTLP metrics, and the
 	// same broker as the agent service so /events/stream sees publishes
 	// from the rest of the harness.
-	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, ts.auditService, ts.rolloutService, ts.authService, api.AuthConfig{Enabled: false}, configSender, ts.broker, ts.registry, ts.logger)
+	// nil configs tracer = no OTel push spans in the integration
+	// harness. The tracer's nil-safety contract is exercised by the
+	// configs unit tests; integration just verifies cross-service
+	// behavior so the no-trace path is the right shape here.
+	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, ts.auditService, ts.rolloutService, ts.authService, api.AuthConfig{Enabled: false}, configSender, ts.broker, nil, ts.registry, ts.logger)
 
 	// Create worker pool for async telemetry processing.
 	// Using default values: queue_size=10000, workers=3, timeout=5s.
