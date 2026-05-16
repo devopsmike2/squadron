@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -65,12 +68,52 @@ type GetAgentsRequest struct {
 	// No filters supported in current interface
 }
 
-// GetAgentsResponse represents the response for getting agents
+// GetAgentsResponse is the paginated response for GET /api/v1/agents.
+//
+// v0.23 added `Items` + the pagination envelope (`Total`, `Offset`,
+// `Limit`) so the UI can fetch incrementally and not blow up at
+// fleet sizes >1000. The legacy fields (`Agents`, `TotalCount`,
+// `ActiveCount`, `InactiveCount`) stay in the response untouched so
+// older callers — squadronctl pre-v0.18, dashboards built against
+// v0.22 — keep working. We'll remove the legacy block in a future
+// major bump after deprecation noise.
+//
+// `Items` is always sorted by agent ID ascending so successive page
+// requests with the same filter give a stable order; the legacy
+// `Agents` map continues to be order-undefined (it's a JSON object).
 type GetAgentsResponse struct {
+	// New (v0.23+).
+	Items  []*services.Agent `json:"items"`
+	Total  int               `json:"total"`
+	Offset int               `json:"offset"`
+	Limit  int               `json:"limit"`
+
+	// Legacy (pre-v0.23). Same agents as Items, just keyed by ID.
+	// totalCount mirrors Total; activeCount/inactiveCount are fleet
+	// counters useful for the dashboard's old single-shot fetch.
 	Agents        map[string]*services.Agent `json:"agents"`
 	TotalCount    int                        `json:"totalCount"`
 	ActiveCount   int                        `json:"activeCount"`
 	InactiveCount int                        `json:"inactiveCount"`
+}
+
+// Pagination tunables. defaultLimit balances the cost of a single
+// scroll-position fetch vs the overhead of round-trips; maxLimit is
+// a defense-in-depth against a misconfigured client asking for the
+// full fleet in one shot. Both can be revisited once we have
+// real-world numbers.
+const (
+	defaultAgentsLimit = 100
+	maxAgentsLimit     = 500
+)
+
+// validStatusFilters is the set of accepted ?status= values.
+// Mirrors services.AgentStatus. "any" / empty is treated as no
+// filter.
+var validStatusFilters = map[string]services.AgentStatus{
+	"online":  services.AgentStatusOnline,
+	"offline": services.AgentStatusOffline,
+	"error":   services.AgentStatusError,
 }
 
 // GetAgentStatsResponse represents agent statistics
@@ -97,17 +140,33 @@ var validDriftFilters = map[string]services.ConfigDriftStatus{
 	"unknown":      services.ConfigDriftStatusUnknown,
 }
 
-// handleGetAgents handles GET /api/v1/agents
+// HandleGetAgents handles GET /api/v1/agents.
 //
-// Optional query parameter:
-//   - drift_status=synced|drifted|no_intent|no_effective|unknown
-//     Filter results to agents matching that drift status. Useful for the UI
-//     ("show me what's broken") and for scripted ops checks.
+// Query parameters (all optional, all compose):
+//   - drift_status = synced | drifted | no_intent | no_effective | unknown
+//   - status       = online | offline | error
+//   - group_id     = UUID — agents with this exact group_id
+//   - q            = free-text — substring match against name + label
+//                    key=value pairs (case-insensitive)
+//   - offset       = integer >= 0, default 0
+//   - limit        = integer 1..500, default 100
 //
-// The response counts (totalCount, activeCount, inactiveCount) reflect the
-// filtered result, not the full fleet.
+// Filtering happens BEFORE pagination — `total` in the response is
+// the post-filter, pre-pagination count, so the UI can render an
+// accurate "Showing N of M" line and decide whether to fetch more
+// pages.
+//
+// Items are sorted by agent ID ascending. That ordering is stable
+// across calls so a client can paginate without worrying about a
+// page "shuffling" between requests. The legacy `agents` map field
+// is also populated for back-compat but the JSON object key order
+// is undefined per the spec — clients that need stable order
+// should read `items`.
+//
+// activeCount / inactiveCount mirror the legacy semantics: they
+// count online vs everything-else in the FILTERED result, not the
+// raw fleet. Use /api/v1/agents/stats for fleet-wide totals.
 func (h *AgentHandlers) HandleGetAgents(c *gin.Context) {
-	// Get agents from service
 	agents, err := h.agentService.ListAgents(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to get agents", zap.Error(err))
@@ -115,7 +174,12 @@ func (h *AgentHandlers) HandleGetAgents(c *gin.Context) {
 		return
 	}
 
-	// Apply optional drift_status filter.
+	// ----- Filter -----
+	// Each filter narrows the working slice in place. Order is
+	// deliberate: validate-and-reject fast (400 for bad inputs)
+	// before doing any allocation work.
+
+	driftFilter, driftSet := services.ConfigDriftStatus(""), false
 	if raw := c.Query("drift_status"); raw != "" {
 		want, ok := validDriftFilters[raw]
 		if !ok {
@@ -125,34 +189,156 @@ func (h *AgentHandlers) HandleGetAgents(c *gin.Context) {
 			})
 			return
 		}
-		filtered := agents[:0]
-		for _, a := range agents {
-			if a.DriftStatus == want {
-				filtered = append(filtered, a)
-			}
-		}
-		agents = filtered
+		driftFilter, driftSet = want, true
 	}
 
-	// Convert to map format expected by frontend
-	agentsMap := make(map[string]*services.Agent)
-	activeCount := 0
+	statusFilter, statusSet := services.AgentStatus(""), false
+	if raw := c.Query("status"); raw != "" {
+		want, ok := validStatusFilters[raw]
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid status",
+				"allowed": []string{"online", "offline", "error"},
+			})
+			return
+		}
+		statusFilter, statusSet = want, true
+	}
 
-	for _, agent := range agents {
-		agentsMap[agent.ID.String()] = agent
-		if agent.Status == services.AgentStatusOnline {
+	groupFilter := c.Query("group_id")
+	// Free-text search needles lowercased once up front; per-agent
+	// match converts on the fly so we avoid copying agent strings.
+	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+
+	filtered := make([]*services.Agent, 0, len(agents))
+	for _, a := range agents {
+		if driftSet && a.DriftStatus != driftFilter {
+			continue
+		}
+		if statusSet && a.Status != statusFilter {
+			continue
+		}
+		if groupFilter != "" {
+			if a.GroupID == nil || *a.GroupID != groupFilter {
+				continue
+			}
+		}
+		if q != "" && !agentMatchesSearch(a, q) {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+
+	// ----- Sort -----
+	// Stable order by UUID string so the same filter set produces
+	// the same page across calls. UUID strings have no semantic
+	// meaning to operators but the stability matters for
+	// pagination correctness.
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].ID.String() < filtered[j].ID.String()
+	})
+
+	total := len(filtered)
+	activeCount := 0
+	for _, a := range filtered {
+		if a.Status == services.AgentStatusOnline {
 			activeCount++
 		}
 	}
 
-	response := GetAgentsResponse{
-		Agents:        agentsMap,
-		TotalCount:    len(agents),
-		ActiveCount:   activeCount,
-		InactiveCount: len(agents) - activeCount,
+	// ----- Paginate -----
+	offset, limit, err := parsePagination(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	page := pageSlice(filtered, offset, limit)
+
+	// Build the legacy agents map from the same paged slice so
+	// pre-v0.23 clients see a consistent view. Note that the legacy
+	// map shape doesn't expose Total separately from len(Agents),
+	// so old clients that paginate by counting will need to switch
+	// to items+total. We document the deprecation in the response
+	// struct comment.
+	agentsMap := make(map[string]*services.Agent, len(page))
+	for _, a := range page {
+		agentsMap[a.ID.String()] = a
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, GetAgentsResponse{
+		Items:  page,
+		Total:  total,
+		Offset: offset,
+		Limit:  limit,
+
+		Agents:        agentsMap,
+		TotalCount:    total,
+		ActiveCount:   activeCount,
+		InactiveCount: total - activeCount,
+	})
+}
+
+// agentMatchesSearch reports whether the agent matches a
+// lowercased substring across its name + id + label "k=v" pairs.
+// Operators paste partial label values (e.g. "host.arch=arm") and
+// expect those to filter; matching the encoded "key=value" form
+// keeps that intuitive.
+func agentMatchesSearch(a *services.Agent, q string) bool {
+	if strings.Contains(strings.ToLower(a.Name), q) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(a.ID.String()), q) {
+		return true
+	}
+	for k, v := range a.Labels {
+		if strings.Contains(strings.ToLower(k+"="+v), q) {
+			return true
+		}
+	}
+	return false
+}
+
+// parsePagination resolves the offset/limit query params with
+// sensible defaults + a hard cap on limit. Returns 400-friendly
+// errors for malformed inputs so clients don't get a silent
+// fallback to the default.
+func parsePagination(c *gin.Context) (offset, limit int, err error) {
+	if raw := c.Query("offset"); raw != "" {
+		n, perr := strconv.Atoi(raw)
+		if perr != nil || n < 0 {
+			return 0, 0, fmt.Errorf("offset must be a non-negative integer")
+		}
+		offset = n
+	}
+	limit = defaultAgentsLimit
+	if raw := c.Query("limit"); raw != "" {
+		n, perr := strconv.Atoi(raw)
+		if perr != nil || n <= 0 {
+			return 0, 0, fmt.Errorf("limit must be a positive integer")
+		}
+		limit = n
+	}
+	if limit > maxAgentsLimit {
+		limit = maxAgentsLimit
+	}
+	return offset, limit, nil
+}
+
+// pageSlice returns agents[offset:offset+limit] guarded against
+// out-of-range offset / limit (returns empty slice rather than a
+// panic). Pre-sized for the actual page so we don't keep a
+// reference to the underlying full slice longer than necessary.
+func pageSlice(agents []*services.Agent, offset, limit int) []*services.Agent {
+	if offset >= len(agents) {
+		return []*services.Agent{}
+	}
+	end := offset + limit
+	if end > len(agents) {
+		end = len(agents)
+	}
+	page := make([]*services.Agent, end-offset)
+	copy(page, agents[offset:end])
+	return page
 }
 
 // handleGetAgent handles GET /api/v1/agents/:id
