@@ -241,7 +241,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	configSender := opamp.NewConfigSender(agents, logger)
 
 	// Create OpAMP server with agent service (for persistence)
-	opampServer, err := opamp.NewServer(agents, agentService, opampMetrics, agentGRPCEndpoint, agentHTTPEndpoint, logger)
+	// OpAMP connection tracer — long-lived span per (agent, connection).
+	// Mirrors the rollout-tracer in-memory active-map pattern: spans
+	// open on the first inbound message from an agent and close on
+	// disconnect, with Shutdown flushing any in-flight ones.
+	opampTracer := opamp.NewTracer(selftelPub.Tracer("squadron/opamp"))
+	opampServer, err := opamp.NewServerWithTracer(agents, agentService, opampMetrics, opampTracer, agentGRPCEndpoint, agentHTTPEndpoint, logger)
 	if err != nil {
 		logger.Fatal("Failed to create OpAMP server", zap.Error(err))
 	}

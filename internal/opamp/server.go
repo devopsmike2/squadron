@@ -56,8 +56,9 @@ type Server struct {
 	agents           *Agents
 	agentService     services.AgentService
 	metrics          *metrics.OpAMPMetrics
-	otlpGRPCEndpoint string // OTLP gRPC endpoint to offer to agents
-	otlpHTTPEndpoint string // OTLP HTTP endpoint to offer to agents
+	tracer           *Tracer // optional; nil disables OTel connection spans
+	otlpGRPCEndpoint string  // OTLP gRPC endpoint to offer to agents
+	otlpHTTPEndpoint string  // OTLP HTTP endpoint to offer to agents
 }
 
 // zapToOpAmpLogger adapts zap.Logger to opamp's logger interface
@@ -74,11 +75,20 @@ func (z *zapToOpAmpLogger) Errorf(ctx context.Context, format string, args ...in
 }
 
 func NewServer(agents *Agents, agentService services.AgentService, metricsInstance *metrics.OpAMPMetrics, otlpGRPCEndpoint, otlpHTTPEndpoint string, logger *zap.Logger) (*Server, error) {
+	return NewServerWithTracer(agents, agentService, metricsInstance, nil, otlpGRPCEndpoint, otlpHTTPEndpoint, logger)
+}
+
+// NewServerWithTracer is the production constructor used when
+// telemetry.enabled is true. Identical to NewServer except for the
+// tracer wiring. Separate constructor keeps existing test callers
+// untouched.
+func NewServerWithTracer(agents *Agents, agentService services.AgentService, metricsInstance *metrics.OpAMPMetrics, tracer *Tracer, otlpGRPCEndpoint, otlpHTTPEndpoint string, logger *zap.Logger) (*Server, error) {
 	s := &Server{
 		logger:           logger,
 		agents:           agents,
 		agentService:     agentService,
 		metrics:          metricsInstance,
+		tracer:           tracer,
 		otlpGRPCEndpoint: otlpGRPCEndpoint,
 		otlpHTTPEndpoint: otlpHTTPEndpoint,
 	}
@@ -128,6 +138,11 @@ func (s *Server) Start(port int) error {
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Info("Stopping OpAMP server...")
 	_ = s.opampServer.Stop(ctx)
+	// Flush any in-flight agent connection spans. The OpAMP layer
+	// just closes connections without firing onDisconnect for each
+	// agent on shutdown, so we flush explicitly to avoid silently
+	// dropping the spans.
+	s.tracer.Shutdown()
 	return nil
 }
 
@@ -142,7 +157,10 @@ func (s *Server) onDisconnect(conn types.Connection) {
 	agentsToMarkOffline := s.agents.connections[conn]
 	s.agents.mux.Unlock()
 
-	// Mark all agents on this connection as offline in storage
+	// Mark all agents on this connection as offline in storage AND
+	// close their tracer spans with the clean "client_disconnected"
+	// reason. Both happen in the same loop so connection-close
+	// observability stays in sync.
 	if s.agentService != nil {
 		ctx := context.Background()
 		for agentId := range agentsToMarkOffline {
@@ -151,6 +169,13 @@ func (s *Server) onDisconnect(conn types.Connection) {
 					zap.String("agentId", agentId.String()),
 					zap.Error(err))
 			}
+			s.tracer.EndAgentConnection(agentId, "client_disconnected")
+		}
+	} else {
+		// AgentService not wired (test harness path); still close
+		// the trace spans so they don't leak into Shutdown.
+		for agentId := range agentsToMarkOffline {
+			s.tracer.EndAgentConnection(agentId, "client_disconnected")
 		}
 	}
 
@@ -180,6 +205,10 @@ func (s *Server) onMessage(ctx context.Context, conn types.Connection, msg *prot
 		}
 		return response
 	}
+	// Open the per-agent connection span on the first message we
+	// see from this instance. Idempotent on subsequent messages so
+	// the span lives for the full connection lifetime.
+	s.tracer.BeginAgentConnection(ctx, instanceId)
 
 	// Update connections gauge
 	if s.metrics != nil {
@@ -190,6 +219,15 @@ func (s *Server) onMessage(ctx context.Context, conn types.Connection, msg *prot
 	if msg.AgentDescription != nil || msg.RemoteConfigStatus != nil {
 		if s.metrics != nil {
 			s.metrics.StatusUpdateReceived.Inc(1)
+		}
+	}
+	// Attach the agent's reported version to the connection span as
+	// soon as it shows up in an AgentDescription. The tracer ignores
+	// empty strings + unknown agent IDs, so this is safe to call
+	// unconditionally on every message that carries a description.
+	if msg.AgentDescription != nil {
+		if v := s.extractAgentVersion(msg.AgentDescription); v != "" {
+			s.tracer.RecordAgentVersion(instanceId, v)
 		}
 	}
 
