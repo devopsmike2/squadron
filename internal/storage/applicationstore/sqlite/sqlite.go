@@ -210,6 +210,14 @@ func (s *Storage) migrate() error {
 		// Nullable — pre-v0.11 tokens upgrade with no expiry and
 		// stay valid until explicitly revoked.
 		`ALTER TABLE api_tokens ADD COLUMN expires_at DATETIME`,
+		// v0.5: rollouts gain an optional notification_url for the
+		// webhook-notifications feature. Missing here in earlier
+		// releases meant any dev DB created before v0.5 stayed
+		// non-functional — the rollout engine's List query
+		// references this column and fails on every tick. Adding
+		// the migration retroactively. NULL is the back-compat
+		// no-webhook default.
+		`ALTER TABLE rollouts ADD COLUMN notification_url TEXT`,
 	}
 
 	for _, migration := range migrations {
