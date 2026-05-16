@@ -51,12 +51,11 @@ auth:
 
 telemetry:
   # When true, Squadron exports its own state changes as OpenTelemetry
-  # traces to the configured OTLP endpoint. Each audit event becomes
-  # one span — operators get to query Squadron's activity alongside
-  # everything else in their observability stack. See
-  # docs/self-monitoring.md for the full picture.
+  # traces AND bridges the Prometheus /metrics surface to OTLP
+  # metrics on the same endpoint. See docs/self-monitoring.md.
   enabled: false
   service_name: squadron
+  metric_interval: 30s  # how often the Prom-to-OTLP bridge scrapes the registry
   otlp:
     endpoint: ""        # e.g. otel-collector:4317 or api.honeycomb.io
     protocol: grpc      # grpc | http

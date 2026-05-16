@@ -22,9 +22,15 @@
 // logs SDK is still stabilizing as of late 2024; we'll add it as a
 // second emitter once the API is solid.
 //
+// As of v0.17, selftel also bridges Squadron's Prometheus /metrics
+// surface to OTLP metric export — every collector registered against
+// the api/opamp/otlp/drift/alerting/worker metric factories shows up
+// on the same OTLP endpoint as the trace export, with no per-metric
+// rewiring. /metrics keeps working in parallel for Prometheus
+// scrapers. See docs/self-monitoring.md "Metrics" for the wire
+// shape.
+//
 // What's NOT in scope:
-//   - Metrics export. Squadron's Prometheus /metrics endpoint is the
-//     primary metrics path; an OTel metrics bridge can come later.
 //   - Trace propagation from agents. Agents emit their own telemetry
 //     to Squadron's OTLP receiver; this package is about Squadron's
 //     control-plane self-monitoring, not agent telemetry forwarding.
@@ -36,36 +42,52 @@ import (
 	"strings"
 	"time"
 
+	promclient "github.com/prometheus/client_golang/prometheus"
+	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
+// defaultMetricInterval is how often the OTel MeterProvider scrapes the
+// Prometheus registry and exports the result. Prometheus scrapes
+// typically run on a 15-30s cadence; matching that here keeps the OTLP
+// side cardinality-equivalent to what a Prometheus scrape would
+// produce. Operators who want different cadences can set
+// telemetry.metric_interval explicitly.
+const defaultMetricInterval = 30 * time.Second
+
 // Config controls a Publisher's behavior. Mirrors internal/config.TelemetryConfig
 // so callers don't drag a config dependency into this package.
 type Config struct {
-	Enabled     bool
-	ServiceName string
-	Endpoint    string
-	Protocol    string            // "grpc" | "http"
-	Headers     map[string]string
-	Insecure    bool
+	Enabled        bool
+	ServiceName    string
+	Endpoint       string
+	Protocol       string // "grpc" | "http"
+	Headers        map[string]string
+	Insecure       bool
+	MetricInterval time.Duration // optional; zero defaults to 30s
 }
 
-// Publisher emits Squadron audit entries as OTel spans. The zero value
-// is a valid no-op publisher — Squadron always constructs one and only
-// the operator's enabled flag controls whether spans actually get
+// Publisher emits Squadron audit entries as OTel spans and Squadron's
+// Prometheus /metrics surface as OTLP metrics. The zero value is a
+// valid no-op publisher — Squadron always constructs one and only
+// the operator's enabled flag controls whether anything actually gets
 // exported.
 type Publisher struct {
 	tp     *sdktrace.TracerProvider
+	mp     *sdkmetric.MeterProvider
 	tracer trace.Tracer
 	logger *zap.Logger
 }
@@ -76,7 +98,12 @@ type Publisher struct {
 // the first export will block briefly to dial; failures fall back to
 // the no-op path with a warning so a wrong endpoint doesn't crash
 // Squadron at startup.
-func New(ctx context.Context, cfg Config, logger *zap.Logger) (*Publisher, error) {
+//
+// promGatherer is optional: when non-nil, the Prometheus bridge wraps
+// it and Squadron's /metrics collectors get exported as OTLP metrics
+// on cfg.MetricInterval (default 30s). When nil, only traces export.
+// Passing the same registry that backs /metrics is the typical wiring.
+func New(ctx context.Context, cfg Config, promGatherer promclient.Gatherer, logger *zap.Logger) (*Publisher, error) {
 	if !cfg.Enabled {
 		logger.Debug("selftel: disabled, no OTLP export")
 		return &Publisher{logger: logger}, nil
@@ -88,14 +115,16 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*Publisher, error
 		cfg.ServiceName = "squadron"
 	}
 
-	exporter, err := buildExporter(ctx, cfg)
+	traceExporter, err := buildExporter(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build OTLP exporter: %w", err)
+		return nil, fmt.Errorf("build OTLP trace exporter: %w", err)
 	}
 
 	// Resource carries the service.name and any future host/version
 	// attributes. semconv.SchemaURL pins the attribute schema version
-	// so downstream tools render expected fields.
+	// so downstream tools render expected fields. Shared between
+	// trace + metric providers so both signals are attributed to the
+	// same service identity.
 	res, err := resource.Merge(
 		resource.Default(),
 		resource.NewWithAttributes(
@@ -111,7 +140,7 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*Publisher, error
 	// state change, not per request. The defaults (5s batch timeout)
 	// match the audit log's "durable then maybe export" expectations.
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithBatcher(traceExporter),
 		sdktrace.WithResource(res),
 	)
 	// Setting the global provider lets other parts of Squadron use
@@ -137,8 +166,46 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*Publisher, error
 		zap.String("protocol", cfg.Protocol),
 		zap.String("service_name", cfg.ServiceName))
 
+	// Optional metrics pipeline: wrap the supplied Prometheus
+	// Gatherer with the contrib bridge Producer, hand it to a
+	// PeriodicReader that scrapes on the configured interval, and
+	// pair the reader with an OTLP metric exporter. Each scrape
+	// publishes the full /metrics surface as OTLP metrics —
+	// counters, gauges, and histograms get translated into their
+	// OTel equivalents with labels preserved as attributes.
+	var mp *sdkmetric.MeterProvider
+	if promGatherer != nil {
+		metricExporter, err := buildMetricExporter(ctx, cfg)
+		if err != nil {
+			// Tear down the trace provider we just built so we don't
+			// leak goroutines on a partial init.
+			_ = tp.Shutdown(context.Background())
+			return nil, fmt.Errorf("build OTLP metric exporter: %w", err)
+		}
+		interval := cfg.MetricInterval
+		if interval <= 0 {
+			interval = defaultMetricInterval
+		}
+		producer := prombridge.NewMetricProducer(prombridge.WithGatherer(promGatherer))
+		reader := sdkmetric.NewPeriodicReader(
+			metricExporter,
+			sdkmetric.WithInterval(interval),
+			sdkmetric.WithProducer(producer),
+		)
+		mp = sdkmetric.NewMeterProvider(
+			sdkmetric.WithReader(reader),
+			sdkmetric.WithResource(res),
+		)
+		otel.SetMeterProvider(mp)
+		logger.Info("selftel: OTLP metric export enabled",
+			zap.String("endpoint", cfg.Endpoint),
+			zap.String("protocol", cfg.Protocol),
+			zap.Duration("interval", interval))
+	}
+
 	return &Publisher{
 		tp:     tp,
+		mp:     mp,
 		tracer: tp.Tracer("squadron/audit"),
 		logger: logger,
 	}, nil
@@ -219,13 +286,28 @@ func (p *Publisher) Tracer(name string) trace.Tracer {
 	return p.tp.Tracer(name)
 }
 
-// Shutdown flushes pending spans and tears down the exporter. Safe to
-// call on a disabled publisher (no-op).
+// Shutdown flushes pending spans + metric scrapes and tears down both
+// exporters. Safe to call on a disabled publisher (no-op). Metric
+// shutdown runs first so the final scrape gets a chance to land
+// before the trace exporter starts shutting down — they share the
+// same OTLP endpoint and tearing both down in parallel sometimes
+// causes the metrics payload to race the connection close.
 func (p *Publisher) Shutdown(ctx context.Context) error {
-	if p == nil || p.tp == nil {
+	if p == nil {
 		return nil
 	}
-	return p.tp.Shutdown(ctx)
+	var firstErr error
+	if p.mp != nil {
+		if err := p.mp.Shutdown(ctx); err != nil {
+			firstErr = err
+		}
+	}
+	if p.tp != nil {
+		if err := p.tp.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // AuditEntry mirrors services.AuditEntry without taking a dependency
@@ -275,6 +357,43 @@ func buildExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, erro
 		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		return otlptrace.New(dialCtx, otlptracehttp.NewClient(opts...))
+	default:
+		return nil, fmt.Errorf("unknown telemetry.otlp.protocol %q (want \"grpc\" or \"http\")", cfg.Protocol)
+	}
+}
+
+// buildMetricExporter is the parallel of buildExporter for metrics.
+// Picks between OTLP gRPC and HTTP based on cfg.Protocol, reusing the
+// same endpoint, insecure flag, and headers as the trace exporter so
+// operators only configure one OTLP destination for both signals.
+func buildMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
+	switch strings.ToLower(cfg.Protocol) {
+	case "", "grpc":
+		opts := []otlpmetricgrpc.Option{
+			otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
+		}
+		if cfg.Insecure {
+			opts = append(opts, otlpmetricgrpc.WithInsecure())
+		}
+		if len(cfg.Headers) > 0 {
+			opts = append(opts, otlpmetricgrpc.WithHeaders(cfg.Headers))
+		}
+		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return otlpmetricgrpc.New(dialCtx, opts...)
+	case "http":
+		opts := []otlpmetrichttp.Option{
+			otlpmetrichttp.WithEndpoint(cfg.Endpoint),
+		}
+		if cfg.Insecure {
+			opts = append(opts, otlpmetrichttp.WithInsecure())
+		}
+		if len(cfg.Headers) > 0 {
+			opts = append(opts, otlpmetrichttp.WithHeaders(cfg.Headers))
+		}
+		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return otlpmetrichttp.New(dialCtx, opts...)
 	default:
 		return nil, fmt.Errorf("unknown telemetry.otlp.protocol %q (want \"grpc\" or \"http\")", cfg.Protocol)
 	}

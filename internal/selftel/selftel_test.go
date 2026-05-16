@@ -41,7 +41,7 @@ func TestPublisher_DisabledIsNoOp(t *testing.T) {
 	// New() with Enabled=false returns a Publisher whose tracer is
 	// nil. PublishAuditEvent must not panic and must not perform any
 	// side effects.
-	p, err := New(t.Context(), Config{Enabled: false}, zap.NewNop())
+	p, err := New(t.Context(), Config{Enabled: false}, nil, zap.NewNop())
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	// The whole point of the no-op path is that callers can mount it
@@ -137,7 +137,7 @@ func TestNew_EmptyEndpointRejected(t *testing.T) {
 	// Enabling self-telemetry without an endpoint is an operator
 	// mistake — Squadron rejects it at startup so the misconfiguration
 	// fails loudly rather than silently dropping every span.
-	_, err := New(t.Context(), Config{Enabled: true}, zap.NewNop())
+	_, err := New(t.Context(), Config{Enabled: true}, nil, zap.NewNop())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "endpoint is required")
 }

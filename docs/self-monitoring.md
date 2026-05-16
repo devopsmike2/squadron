@@ -15,6 +15,7 @@ dogfood version of "telemetry control plane".
 - [OpAMP connection traces](#opamp-connection-traces)
 - [Tracing across the agent boundary](#tracing-across-the-agent-boundary)
 - [Tracing API requests](#tracing-api-requests)
+- [Metrics](#metrics)
 - [Examples](#examples)
 - [What's NOT exported (yet)](#whats-not-exported-yet)
 
@@ -426,6 +427,84 @@ In your trace UI:
   rollout trace — kept as a separate trace tree because it lives
   beyond the API request.
 
+## Metrics
+
+As of v0.17, turning on `telemetry.enabled` also bridges Squadron's
+Prometheus `/metrics` surface to OTLP metrics on the same endpoint
+that receives the traces. Every collector that backs `/metrics` —
+API request counters, OpAMP connection gauges, OTLP receiver
+histograms, drift status gauges, alert evaluation counters, worker
+pool retries / dead letters — shows up on the OTLP side without any
+per-collector rewiring.
+
+The intent is to give operators on OTel-only observability stacks
+(no Prometheus scrape configured) the same fleet view that
+Prometheus operators get from `/metrics`. Operators who already run
+a Prometheus scrape against `/metrics` can keep doing so — both
+exports run in parallel, drawing from the same in-memory registry.
+
+### How it works
+
+The bridge is the contrib package
+[`go.opentelemetry.io/contrib/bridges/prometheus`][bridge] used as
+an OTel metric.Producer. Selftel wraps the registry that backs
+`/metrics`, hands it to a PeriodicReader on a configurable scrape
+interval, and feeds the reader into an OTLP metric exporter that
+shares the trace exporter's endpoint, protocol, headers, and
+insecure flag.
+
+[bridge]: https://pkg.go.dev/go.opentelemetry.io/contrib/bridges/prometheus
+
+The pipeline runs entirely in-process — no second scrape against
+`/metrics`. The bridge reads the underlying `prometheus.Gatherer`
+state directly on each Reader cycle. That means the export cadence
+is independent of any external Prometheus scrape; if you want
+matching cadences, set `telemetry.metric_interval` to whatever your
+Prometheus `scrape_interval` is (most operators run 15s or 30s).
+
+### Naming + label translation
+
+Prometheus metric names and label keys pass through verbatim. A
+counter named `api_requests_total` with label `component=api` lands
+on the OTLP side as a Sum (monotonic) named `api_requests_total`
+with an `api_requests_total{component="api"}` attribute set. There
+is no `squadron.` prefix transformation — operators querying the
+OTLP side will see the same names as in `/metrics`.
+
+Type mapping:
+
+| Prometheus type    | OTLP type                    |
+|--------------------|------------------------------|
+| Counter / CounterVec | Sum (monotonic, cumulative)  |
+| Gauge / GaugeVec     | Gauge                        |
+| Histogram            | Histogram (explicit buckets) |
+| Summary              | Summary (quantiles preserved) |
+
+### Configuration
+
+```yaml
+telemetry:
+  enabled: true
+  service_name: squadron
+  metric_interval: 30s    # optional; default 30s
+  otlp:
+    endpoint: otel-collector.example.com:4317
+    protocol: grpc
+    headers:
+      authorization: "Bearer <your-token>"
+```
+
+The same endpoint serves both traces and metrics, so a single OTLP
+destination receives the full self-telemetry picture.
+
+### What about /metrics?
+
+`/metrics` keeps working unchanged. Operators with established
+Prometheus scrapes don't need to touch their config. The bridge is
+purely additive: if you run only Prometheus, ignore this section;
+if you run only OTel, the bridge gives you parity; if you run
+both, both work.
+
 ## Examples
 
 ### Self-host: feed into an OTel Collector
@@ -484,13 +563,19 @@ the control-plane events. Then narrow further by any attribute:
 
 ## What's NOT exported (yet)
 
-- **Metrics.** Squadron's `/metrics` endpoint is the primary Prometheus
-  scrape path; an OTel-metrics bridge would duplicate the surface
-  area without adding much value. Planned for a future patch — at the
-  point that lands, the four-tier trace story (caller → API → engine
-  → agent) and the parallel metrics story will both be in place.
+As of v0.17, the trace and metrics surfaces are both covered. Inbound
+API requests (caller → Squadron), the engine internals (rollouts,
+alerts, OpAMP, config pushes), and outbound config pushes
+(Squadron → agent) all carry W3C TraceContext; Squadron's
+Prometheus `/metrics` collectors also export as OTLP metrics — see
+[Metrics](#metrics).
 
-As of v0.16, trace propagation reaches all the way to the agent
-boundary — see [Tracing across the agent boundary](#tracing-across-the-agent-boundary).
-Inbound API requests (caller → Squadron) and outbound config pushes
-(Squadron → agent) both carry W3C TraceContext.
+Remaining gaps are operator-facing wrappers rather than fundamental
+plumbing:
+
+- **Outgoing traceparent injection from `squadronctl`.** The CLI
+  talks to the API as a plain HTTP client today; wrapping it with
+  `otel-cli` or any other otelhttp-instrumented runner is the
+  current path (see [Tracing API requests](#tracing-api-requests)).
+  Native injection from `squadronctl` itself is a planned
+  follow-up.

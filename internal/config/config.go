@@ -31,9 +31,10 @@ type Config struct {
 // receiver accepts telemetry FROM agents, this section emits telemetry
 // TO somewhere else.
 type TelemetryConfig struct {
-	Enabled     bool              `yaml:"enabled"`      // master switch
-	ServiceName string            `yaml:"service_name"` // resource attr; default "squadron"
-	OTLP        OTLPExportConfig  `yaml:"otlp"`
+	Enabled        bool             `yaml:"enabled"`         // master switch
+	ServiceName    string           `yaml:"service_name"`    // resource attr; default "squadron"
+	OTLP           OTLPExportConfig `yaml:"otlp"`
+	MetricInterval time.Duration    `yaml:"metric_interval"` // bridge scrape cadence; default 30s. Matches the Prom-scrape cadence operators typically already run.
 }
 
 // OTLPExportConfig points at the OTLP endpoint Squadron exports to.

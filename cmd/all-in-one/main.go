@@ -166,17 +166,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}
 
 	// Self-telemetry publisher: when telemetry.enabled is true Squadron
-	// exports each audit event as an OTel span to the configured OTLP
-	// endpoint. Disabled here means a no-op publisher — the audit
-	// service treats nil and no-op identically.
+	// exports each audit event as an OTel span AND bridges the
+	// Prometheus /metrics surface (registry passed below) to OTLP
+	// metrics on the same endpoint. Disabled here means a no-op
+	// publisher — the audit service treats nil and no-op identically.
 	selftelPub, err := selftel.New(context.Background(), selftel.Config{
-		Enabled:     config.Telemetry.Enabled,
-		ServiceName: config.Telemetry.ServiceName,
-		Endpoint:    config.Telemetry.OTLP.Endpoint,
-		Protocol:    config.Telemetry.OTLP.Protocol,
-		Headers:     config.Telemetry.OTLP.Headers,
-		Insecure:    config.Telemetry.OTLP.Insecure,
-	}, logger)
+		Enabled:        config.Telemetry.Enabled,
+		ServiceName:    config.Telemetry.ServiceName,
+		Endpoint:       config.Telemetry.OTLP.Endpoint,
+		Protocol:       config.Telemetry.OTLP.Protocol,
+		Headers:        config.Telemetry.OTLP.Headers,
+		Insecure:       config.Telemetry.OTLP.Insecure,
+		MetricInterval: config.Telemetry.MetricInterval,
+	}, registry, logger)
 	if err != nil {
 		logger.Fatal("Failed to initialize self-telemetry", zap.Error(err))
 	}
