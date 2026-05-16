@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/alerting"
+	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/events"
@@ -318,7 +319,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Start alert evaluator. Evaluates each enabled rule on its configured
 	// cadence and dispatches firing/resolved notifications, and publishes
 	// AlertFired/AlertResolved events to the broker for the UI's live feed.
-	alertEvaluator := alerting.NewEvaluator(alertService, telemetryService, alertMetrics, eventBroker, auditService, logger)
+	// Alert evaluation tracer — span per evaluation cycle. Reuses
+	// the self-telemetry tracer provider so alert evaluation traces
+	// show up alongside rollouts and audit events. Nil tracer when
+	// selftelPub is disabled.
+	alertsTracer := alerts.NewTracer(selftelPub.Tracer("squadron/alerts"))
+	alertEvaluator := alerting.NewEvaluatorWithTracer(alertService, telemetryService, alertMetrics, eventBroker, auditService, alertsTracer, logger)
 	alertEvaluator.Start()
 	defer func() {
 		if err := alertEvaluator.Stop(10 * time.Second); err != nil {

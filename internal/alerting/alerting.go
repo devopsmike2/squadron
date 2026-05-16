@@ -28,6 +28,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/query"
@@ -51,6 +52,7 @@ type Evaluator struct {
 	logger           *zap.Logger
 	metrics          *metrics.AlertMetrics
 	broker           *events.Broker // optional; nil disables SSE event publishing
+	tracer           *alerts.Tracer // optional; nil disables OTel evaluation spans
 
 	mu       sync.Mutex
 	firing   map[string]bool      // rule id -> currently firing?
@@ -70,6 +72,22 @@ func NewEvaluator(
 	audit services.AuditService,
 	logger *zap.Logger,
 ) *Evaluator {
+	return NewEvaluatorWithTracer(alertService, telemetryService, alertMetrics, broker, audit, nil, logger)
+}
+
+// NewEvaluatorWithTracer is the production constructor used when
+// telemetry.enabled is true. Identical to NewEvaluator except for
+// the tracer wiring. Separate constructor avoids a nil tracer
+// parameter in every existing test caller.
+func NewEvaluatorWithTracer(
+	alertService services.AlertService,
+	telemetryService services.TelemetryQueryService,
+	alertMetrics *metrics.AlertMetrics,
+	broker *events.Broker,
+	audit services.AuditService,
+	tracer *alerts.Tracer,
+	logger *zap.Logger,
+) *Evaluator {
 	if alertMetrics == nil {
 		alertMetrics = metrics.NewAlertMetrics(metrics.NullFactory)
 	}
@@ -82,6 +100,7 @@ func NewEvaluator(
 		logger:           logger,
 		metrics:          alertMetrics,
 		broker:           broker,
+		tracer:           tracer,
 		firing:           make(map[string]bool),
 		lastEval:         make(map[string]time.Time),
 		shutdown:         make(chan struct{}),
@@ -173,9 +192,23 @@ func (e *Evaluator) tick() {
 func (e *Evaluator) evaluateRule(ctx context.Context, rule *services.AlertRule, now time.Time) {
 	e.metrics.EvaluationsTotal.Inc(1)
 
+	// Wrap the whole evaluation cycle in a span. A nil tracer
+	// returns a nil-safe Evaluation so the rest of the function
+	// chains method calls without conditional checks.
+	eval := e.tracer.BeginEvaluation(ctx, alerts.Rule{
+		ID:                rule.ID,
+		Name:              rule.Name,
+		Query:             rule.Query,
+		ThresholdOperator: string(rule.ThresholdOperator),
+		ThresholdValue:    rule.ThresholdValue,
+		Severity:          string(rule.Severity),
+	})
+	defer eval.End()
+
 	value, err := e.queryScalar(ctx, rule.Query)
 	if err != nil {
 		e.metrics.EvaluationErrors.Inc(1)
+		eval.RecordQueryError(err)
 		e.logger.Warn("alert query failed",
 			zap.String("rule_id", rule.ID),
 			zap.String("name", rule.Name),
@@ -184,6 +217,7 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule *services.AlertRule, 
 	}
 
 	shouldFire := compareThreshold(value, rule.ThresholdOperator, rule.ThresholdValue)
+	eval.SetObservedValue(value, shouldFire)
 
 	e.mu.Lock()
 	wasFiring := e.firing[rule.ID]
@@ -193,12 +227,12 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule *services.AlertRule, 
 	switch {
 	case shouldFire && !wasFiring:
 		e.recordFiring(rule.Severity)
-		e.dispatch(ctx, rule, value, "firing", now)
+		e.dispatch(ctx, rule, value, "firing", now, eval)
 		e.publishEvent(events.AlertFired, rule, value, now)
 		e.recordAudit(ctx, rule, value, services.AuditEventAlertFired, "fired")
 	case !shouldFire && wasFiring:
 		e.recordResolved(rule.Severity)
-		e.dispatch(ctx, rule, value, "resolved", now)
+		e.dispatch(ctx, rule, value, "resolved", now, eval)
 		e.publishEvent(events.AlertResolved, rule, value, now)
 		e.recordAudit(ctx, rule, value, services.AuditEventAlertResolved, "resolved")
 	}
@@ -327,7 +361,7 @@ type NotificationPayload struct {
 // dispatch sends an alert notification through every channel configured on the
 // rule. The log channel always runs; the webhook channel runs only if a URL
 // is configured.
-func (e *Evaluator) dispatch(ctx context.Context, rule *services.AlertRule, value float64, state string, at time.Time) {
+func (e *Evaluator) dispatch(ctx context.Context, rule *services.AlertRule, value float64, state string, at time.Time, eval *alerts.Evaluation) {
 	payload := NotificationPayload{
 		RuleID:            rule.ID,
 		RuleName:          rule.Name,
@@ -345,9 +379,13 @@ func (e *Evaluator) dispatch(ctx context.Context, rule *services.AlertRule, valu
 	// alerts vs. a noisy 'info' query don't look the same in journalctl.
 	e.dispatchLog(payload)
 
-	// Webhook channel — opt-in.
+	// Webhook channel — opt-in. The tracer records a
+	// dispatched_to_webhook event on the evaluation span so an
+	// operator can see in the trace which evaluations actually
+	// triggered an external notification (vs. just changing state).
 	if rule.WebhookURL != "" {
 		e.dispatchWebhook(ctx, rule.WebhookURL, payload)
+		eval.RecordWebhookDispatched(rule.WebhookURL, state)
 	}
 }
 
