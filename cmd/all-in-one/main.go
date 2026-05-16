@@ -323,7 +323,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// error-rate criteria, and publishes RolloutStateChanged events to
 	// the broker so the UI sees engine actions in real time.
 	rolloutTelemetry := rollouts.NewTelemetryAdapter(telemetryReader)
-	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, rolloutTelemetry, configSender, eventBroker, logger)
+	// Rollout OTel tracer — bracketing spans per rollout + child
+	// spans per stage. Reuses the self-telemetry tracer provider so
+	// rollout traces show up in the same OTLP endpoint as audit
+	// spans. nil tracer = disabled (selftelPub returns the global
+	// no-op tracer when telemetry.enabled is false).
+	rolloutTracer := rollouts.NewTracer(selftelPub.Tracer("squadron/rollouts"))
+	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, rolloutTelemetry, configSender, eventBroker, rolloutTracer, logger)
 	rolloutEngine.Start()
 	defer func() {
 		if err := rolloutEngine.Stop(10 * time.Second); err != nil {

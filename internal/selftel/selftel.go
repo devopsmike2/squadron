@@ -190,6 +190,22 @@ func (p *Publisher) PublishAuditEvent(ctx context.Context, entry AuditEntry) {
 	span.End()
 }
 
+// Tracer returns an OTel tracer scoped to the given instrumentation
+// name. Callers that want to create their own spans (e.g. the rollout
+// engine wrapping a rollout's lifecycle) reach for this rather than
+// going through PublishAuditEvent.
+//
+// When the publisher is disabled (no provider), returns the global
+// tracer provider's tracer — which is a no-op by default, so callers
+// get a tracer-shaped object that simply discards spans. Callers
+// don't need to nil-check the result.
+func (p *Publisher) Tracer(name string) trace.Tracer {
+	if p == nil || p.tp == nil {
+		return otel.Tracer(name)
+	}
+	return p.tp.Tracer(name)
+}
+
 // Shutdown flushes pending spans and tears down the exporter. Safe to
 // call on a disabled publisher (no-op).
 func (p *Publisher) Shutdown(ctx context.Context) error {

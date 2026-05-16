@@ -69,14 +69,15 @@ type Engine struct {
 	commander      AgentCommander
 	broker         *events.Broker // optional; nil disables SSE publication
 	httpClient     *http.Client   // for webhook notifications
+	tracer         *Tracer        // optional; nil disables OTel rollout traces
 	logger         *zap.Logger
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 }
 
-// NewEngine wires up the engine. auditService, telemetry, and broker are
-// all optional.
+// NewEngine wires up the engine. auditService, telemetry, broker, and
+// tracer are all optional — pass nil to disable that feature.
 func NewEngine(
 	rolloutService services.RolloutService,
 	agentService services.AgentService,
@@ -85,6 +86,7 @@ func NewEngine(
 	telemetry TelemetryReader,
 	commander AgentCommander,
 	broker *events.Broker,
+	tracer *Tracer,
 	logger *zap.Logger,
 ) *Engine {
 	return &Engine{
@@ -96,6 +98,7 @@ func NewEngine(
 		commander:      commander,
 		broker:         broker,
 		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		tracer:         tracer,
 		logger:         logger,
 		shutdown:       make(chan struct{}),
 	}
@@ -196,6 +199,10 @@ func (e *Engine) Stop(timeout time.Duration) error {
 	}()
 	select {
 	case <-done:
+		// Flush any still-open rollout spans so trace exports include
+		// the in-flight rollouts as truncated rather than silently
+		// dropped.
+		e.tracer.Shutdown()
 		e.logger.Info("rollout engine stopped")
 		return nil
 	case <-time.After(timeout):
@@ -245,6 +252,14 @@ func (e *Engine) tick() {
 // process advances one rollout by one step (start, advance, complete, or
 // roll back).
 func (e *Engine) process(ctx context.Context, r *services.Rollout) {
+	// Restart recovery: an in_progress / aborted rollout might have
+	// been started under a previous Squadron process. The trace span
+	// doesn't exist in our in-memory map, so reopen one mid-flight.
+	// The recovered span will be missing the early stages' history
+	// but at least the rest of the lifecycle gets traced.
+	if r.State == services.RolloutStateInProgress || r.State == services.RolloutStateAborted {
+		e.tracer.BeginRollout(ctx, r)
+	}
 	switch r.State {
 	case services.RolloutStatePending:
 		e.start(ctx, r)
@@ -261,6 +276,13 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 	now := time.Now().UTC()
 	r.StageStartedAt = &now
 
+	// Open the parent OTel span before applying. The span stays open
+	// across many engine ticks; end-of-lifecycle handlers (finish,
+	// rollback) close it. If applyStage fails below we leave the span
+	// open — the next tick will retry and the operator will see a
+	// rollout span that's still recording.
+	e.tracer.BeginRollout(ctx, r)
+
 	ids, err := e.applyStage(ctx, r, r.CurrentStage)
 	if err != nil {
 		e.logger.Warn("rollout engine: failed to apply initial stage; will retry next tick",
@@ -271,12 +293,14 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 		e.logger.Warn("rollout engine: failed to persist start", zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
+	e.tracer.BeginStage(r, r.CurrentStage, len(ids))
 	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", stageAuditPayload(r, r.CurrentStage, ids))
 	// Surface zero-canary stages as a distinct audit event so post-mortems
 	// don't have to guess why nothing happened. Common case: label
 	// selector typo at create time, group emptied after creation.
 	if len(ids) == 0 {
 		e.recordAudit(ctx, r, "rollout.empty_canary", "empty_canary", stageAuditPayload(r, r.CurrentStage, ids))
+		e.tracer.RecordEvent(r.ID, "empty_canary", "")
 	}
 	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout started",
@@ -331,7 +355,13 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		e.logger.Warn("rollout engine: failed to persist advance", zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
+	// BeginStage ends the previous stage's span and opens a new one,
+	// so the trace tree shows a clean stage-by-stage progression.
+	e.tracer.BeginStage(r, r.CurrentStage, len(ids))
 	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", stageAuditPayload(r, r.CurrentStage, ids))
+	if len(ids) == 0 {
+		e.tracer.RecordEvent(r.ID, "empty_canary", "")
+	}
 	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout advanced",
 		zap.String("rollout_id", r.ID),
@@ -350,6 +380,7 @@ func (e *Engine) finish(ctx context.Context, r *services.Rollout) {
 	}
 	e.recordAudit(ctx, r, "rollout.succeeded", "succeeded", nil)
 	e.publishStateChange(r, "succeeded")
+	e.tracer.EndRollout(r.ID, services.RolloutStateSucceeded, "")
 	e.logger.Info("rollout succeeded", zap.String("rollout_id", r.ID))
 }
 
@@ -364,6 +395,12 @@ func (e *Engine) triggerAbort(ctx context.Context, r *services.Rollout, reason s
 	}
 	e.recordAudit(ctx, r, "rollout.aborted", "aborted", map[string]any{"reason": reason})
 	e.publishStateChange(r, "aborted")
+	// Mark the rollout span as aborted but DON'T end it here — the
+	// engine's next tick will run rollback() which performs the actual
+	// rollback push and ends the span with the rolled_back state.
+	// Recording the event now means a trace consumer sees the abort
+	// reason while the rollback push is still in flight.
+	e.tracer.RecordEvent(r.ID, "aborted", reason)
 	e.logger.Warn("rollout auto-aborted",
 		zap.String("rollout_id", r.ID),
 		zap.String("reason", reason))
@@ -372,6 +409,7 @@ func (e *Engine) triggerAbort(ctx context.Context, r *services.Rollout, reason s
 // rollback pushes the previous config back to every canary agent and
 // transitions to rolled_back.
 func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
+	e.tracer.RecordEvent(r.ID, "rollback_started", r.AbortReason)
 	defer func() {
 		// Whatever happened in the rollback (success, partial, complete
 		// failure), mark rolled_back and move on. The audit trail captures
@@ -385,6 +423,10 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		}
 		e.recordAudit(ctx, r, "rollout.rolled_back", "rolled_back", nil)
 		e.publishStateChange(r, "rolled_back")
+		// End the rollout span with rolled_back status. The Error
+		// status on the parent span surfaces the reason recorded at
+		// abort time so trace UIs render the failed rollout red.
+		e.tracer.EndRollout(r.ID, services.RolloutStateRolledBack, r.AbortReason)
 	}()
 
 	if r.PreviousConfigID == "" {

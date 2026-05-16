@@ -9,6 +9,7 @@ dogfood version of "telemetry control plane".
 - [Turning it on](#turning-it-on)
 - [What gets emitted](#what-gets-emitted)
 - [Attribute schema](#attribute-schema)
+- [Rollout traces](#rollout-traces)
 - [Examples](#examples)
 - [What's NOT exported (yet)](#whats-not-exported-yet)
 
@@ -97,6 +98,70 @@ Span name is the `event_type` (`rollout.created`,
 `alert.fired`, etc.) so trace-search by name maps directly onto the
 audit event vocabulary.
 
+## Rollout traces
+
+Beyond the per-event spans, Squadron emits a **bracketing span tree
+for each rollout** so operators can see how long each stage took and
+what failed. The tree shape:
+
+```
+rollout.<rollout-name>                      [parent, spans the whole rollout]
+├── rollout.stage_applied  (stage_index=0)  [child, brackets stage 0]
+├── rollout.stage_applied  (stage_index=1)
+├── rollout.stage_applied  (stage_index=2)
+└── (events on the parent: aborted, rollback_started, empty_canary)
+```
+
+The parent span ends with status:
+
+- `Ok` when the rollout succeeded.
+- `Error` (with the abort reason as the status message) when the
+  rollout was rolled back or aborted. Trace UIs render these red.
+
+### Rollout span attributes
+
+| Attribute                                  | Where                  | Example                |
+|--------------------------------------------|------------------------|------------------------|
+| `squadron.target_type`                     | parent + stage         | `rollout`              |
+| `squadron.target_id`                       | parent + stage         | `<rollout-uuid>`       |
+| `squadron.rollout.name`                    | parent + stage         | `ship-v2`              |
+| `squadron.rollout.group_id`                | parent + stage         | `<group-uuid>`         |
+| `squadron.rollout.target_config_id`        | parent + stage         | `<config-uuid>`        |
+| `squadron.rollout.total_stages`            | parent + stage         | `3`                    |
+| `squadron.rollout.stage_index`             | stage                  | `0` `1` `2`            |
+| `squadron.rollout.canary_size`             | stage                  | resolved agent count   |
+| `squadron.rollout.stage.dwell_seconds`     | stage                  | `120`                  |
+| `squadron.rollout.stage.mode`              | stage                  | `percent` or `label`   |
+| `squadron.rollout.stage.percentage`        | stage (percent mode)   | `10`                   |
+| `squadron.rollout.stage.label_selector`    | stage (label mode)     | `region=us-east,role=canary` (sorted) |
+| `squadron.rollout.terminal_state`          | parent (final)         | `succeeded`, `rolled_back`, `aborted` |
+| `squadron.rollout.reason` (on event)       | parent events          | abort reason text      |
+
+Span events on the parent span carry the transition narrative:
+
+| Event name           | When                                                  |
+|----------------------|-------------------------------------------------------|
+| `empty_canary`       | A stage resolved to zero agents (likely selector typo). |
+| `aborted`            | Engine flipped state to aborted; rollback push pending. |
+| `rollback_started`   | Engine began pushing the previous config back.        |
+
+### Restart recovery
+
+When Squadron restarts mid-rollout, the OTel span doesn't carry
+across processes — the new Squadron opens a fresh span when it picks
+up the in-progress rollout on its next tick. The recovered span will
+be missing the early stages' history but the rest of the lifecycle
+gets traced. Document this in your runbook if your operators rely on
+trace continuity across deploys.
+
+### Engine shutdown
+
+`engine.Stop` flushes any in-flight rollout spans before exiting.
+Truncated spans end with status `Error` and message `engine.shutdown`,
+so they're visible in the trace UI rather than silently dropped. The
+rollout itself isn't aborted — on next start the engine resumes from
+the persisted state and opens a new span.
+
 ## Examples
 
 ### Self-host: feed into an OTel Collector
@@ -158,14 +223,19 @@ the control-plane events. Then narrow further by any attribute:
 - **Metrics.** Squadron's `/metrics` endpoint is the primary Prometheus
   scrape path; an OTel-metrics bridge would duplicate the
   surface area without adding much value. Planned for a future patch.
-- **Traces of in-flight operations.** Today's spans are point events
-  derived from audit entries. A future patch will add proper bracketing
-  spans for rollout lifecycles (one parent span per rollout, child
-  spans per stage) so you can see how long each stage took.
+- **Bracketing spans for non-rollout operations.** v0.13 added the
+  rollout span tree. Similar treatment for alert evaluations,
+  long-running config pushes, and OpAMP connection lifecycles is
+  planned but not yet shipped.
 - **OTel logs.** The logs SDK was stabilizing as of late 2024; once
   it's solid we'll add a parallel log emitter so operators who prefer
   log search over trace search can use either.
 - **Trace context propagation from incoming API calls.** A future patch
   will pick up the W3C `traceparent` header on `/api/v1/*` calls so a
   rollout created by `squadronctl` appears under the CLI's trace, not
-  a new root.
+  a new root. Today every rollout span starts a fresh trace.
+- **Pause / resume events on the rollout span.** They appear as
+  point-event spans via the v0.12 audit-event publisher (filterable
+  by `squadron.event_type = rollout.paused`), but they're not yet
+  woven into the rollout's bracketing span as events. Bounded
+  follow-up.
