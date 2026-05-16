@@ -92,6 +92,10 @@ export default function FleetMapPage() {
   const [view, setView] = useState<FleetView>("pipeline");
   const [refreshing, setRefreshing] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // We store the full Agent object alongside the id so the Pipeline
+  // tab can render immediately on click — independent of whether the
+  // page-level /agents SWR fetch has finished yet.
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [groupDrawerOpen, setGroupDrawerOpen] = useState(false);
@@ -132,30 +136,39 @@ export default function FleetMapPage() {
   };
 
   // Pipeline tab needs to know which agent the operator picked. The
-  // DisplaySidebar's onNodeSelect doubles as our selection handler.
+  // DisplaySidebar's onNodeSelect passes the full Agent object via
+  // node.data, so we keep that as our source of truth — going
+  // through `agents.find(a => a.id === selectedAgentId)` is brittle
+  // because the sidebar and the page use different SWR cache keys
+  // ("agents" vs "/agents") and can momentarily diverge.
   const handleNodeSelect = useCallback((node: TopologyNode) => {
     if (node.type === "agent") {
       setSelectedAgentId(node.id);
-      // Stay on the current tab — selection is shared. The drawer
-      // is only summoned by explicit canvas clicks (handled below)
-      // because pipeline view already shows the full per-agent
-      // story without it.
+      setSelectedAgent((node.data as Agent | undefined) ?? null);
     } else if (node.type === "group") {
       setSelectedGroupId(node.id);
     }
   }, []);
 
-  const onCanvasNodeClick = useCallback((_event: unknown, node: { id: string; type?: string }) => {
-    if (node.type === "agent") {
-      const agentId = node.id.replace("agent-", "");
-      setSelectedAgentId(agentId);
-      setDrawerOpen(true);
-    } else if (node.type === "group") {
-      const groupId = node.id.replace("group-", "");
-      setSelectedGroupId(groupId);
-      setGroupDrawerOpen(true);
-    }
-  }, []);
+  const onCanvasNodeClick = useCallback(
+    (_event: unknown, node: { id: string; type?: string; data?: unknown }) => {
+      if (node.type === "agent") {
+        const agentId = node.id.replace("agent-", "");
+        setSelectedAgentId(agentId);
+        // node.data here is the topology projection (TopologyNodeData),
+        // not a full Agent. We don't update selectedAgent so the
+        // Pipeline tab stays on whatever was previously picked from
+        // the sidebar — the canvas click on the Fleet tab is meant
+        // to open the drawer, not switch the pipeline view.
+        setDrawerOpen(true);
+      } else if (node.type === "group") {
+        const groupId = node.id.replace("group-", "");
+        setSelectedGroupId(groupId);
+        setGroupDrawerOpen(true);
+      }
+    },
+    [],
+  );
 
   const rpsByAgent = new Map<string, number>();
   if (topologyData) {
@@ -166,9 +179,13 @@ export default function FleetMapPage() {
     }
   }
 
-  const selectedAgent = selectedAgentId
-    ? agents.find((a) => a.id === selectedAgentId)
-    : undefined;
+  // Keep `selectedAgent` in sync if the agents list refreshes (e.g.
+  // the operator deletes the selected agent in another tab) — but
+  // only update when we have a match; otherwise leave the current
+  // selectedAgent in place so a transient empty list doesn't blank
+  // the canvas.
+  // (Selection is primarily driven by sidebar/thumbnail clicks which
+  // set selectedAgent directly with the Agent object.)
 
   if (error) {
     return (
@@ -283,9 +300,17 @@ export default function FleetMapPage() {
             out correctly — TopologyCanvas in particular relies on a
             flex parent for its own flex-1 sizing. */}
         <div className="relative flex min-h-0 flex-1">
-          {/* PIPELINE TAB */}
+          {/* PIPELINE TAB
+           *
+           * The wrapper is `h-full w-full` (block, not flex) so the
+           * CollectorPipelineView's own `h-full flex flex-col`
+           * resolves correctly. An earlier version used `flex h-full
+           * w-full` here, which made the wrapper a flex parent and
+           * collapsed the child's width to 0 — pipeline rendered
+           * but was invisible because the ReactFlow canvas reported
+           * width=0. */}
           {view === "pipeline" && (
-            <div className="flex h-full w-full">
+            <div className="h-full w-full">
               {selectedAgent ? (
                 <CollectorPipelineView
                   agentId={selectedAgent.id}
@@ -295,15 +320,21 @@ export default function FleetMapPage() {
               ) : (
                 <PipelineThumbnailGrid
                   agents={agents}
-                  onPick={(id) => setSelectedAgentId(id)}
+                  onPick={(agent) => {
+                    setSelectedAgentId(agent.id);
+                    setSelectedAgent(agent);
+                  }}
                 />
               )}
             </div>
           )}
 
-          {/* DATA FLOW TAB */}
+          {/* DATA FLOW TAB
+           *
+           * DataFlowCanvas internally uses ReactFlow which needs a
+           * sized parent. We give it `h-full w-full` directly. */}
           {view === "data-flow" && (
-            <div className="flex h-full w-full">
+            <div className="h-full w-full">
               <ReactFlowProvider>
                 <DataFlowCanvas
                   agents={agents}
@@ -351,7 +382,7 @@ function PipelineThumbnailGrid({
   onPick,
 }: {
   agents: Agent[];
-  onPick: (id: string) => void;
+  onPick: (agent: Agent) => void;
 }) {
   if (agents.length === 0) {
     return (
@@ -368,7 +399,7 @@ function PipelineThumbnailGrid({
           <button
             key={a.id}
             type="button"
-            onClick={() => onPick(a.id)}
+            onClick={() => onPick(a)}
             className="group rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/60 hover:bg-card/80"
           >
             <div className="flex items-center gap-2">
