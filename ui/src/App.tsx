@@ -6,6 +6,7 @@ import AgentsPage from "./pages/Agents";
 import AlertsPage from "./pages/Alerts";
 import AuditPage from "./pages/Audit";
 import ConfigsPage from "./pages/Configs";
+import DashboardPage from "./pages/Dashboard";
 import GroupsPage from "./pages/Groups";
 import LoginPage from "./pages/Login";
 import RolloutsPage from "./pages/Rollouts";
@@ -28,7 +29,7 @@ import { ApiProvider } from "@/providers/ApiProvider";
 
 function App() {
   return (
-    <ThemeProvider defaultTheme="system">
+    <ThemeProvider defaultTheme="dark">
       <SWRProvider>
         <ApiProvider>
           <Router>
@@ -108,7 +109,7 @@ function AuthBoundary() {
       <Routes>
         {/* Main application routes */}
         <Route element={<Layout />}>
-          <Route path="/" element={<AgentsPage />} />
+          <Route path="/" element={<DashboardPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/groups" element={<GroupsPage />} />
           <Route path="/configs" element={<ConfigsPage />} />
