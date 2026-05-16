@@ -10,6 +10,9 @@ dogfood version of "telemetry control plane".
 - [What gets emitted](#what-gets-emitted)
 - [Attribute schema](#attribute-schema)
 - [Rollout traces](#rollout-traces)
+- [Alert evaluation traces](#alert-evaluation-traces)
+- [Config push traces](#config-push-traces)
+- [OpAMP connection traces](#opamp-connection-traces)
 - [Tracing API requests](#tracing-api-requests)
 - [Examples](#examples)
 - [What's NOT exported (yet)](#whats-not-exported-yet)
@@ -165,6 +168,116 @@ so they're visible in the trace UI rather than silently dropped. The
 rollout itself isn't aborted — on next start the engine resumes from
 the persisted state and opens a new span.
 
+## Alert evaluation traces
+
+Each alert rule evaluation cycle produces a span named
+`alert.evaluate`. The evaluator opens the span when it starts the
+Squadron QL query, records the observed value and fired/!fired
+state after the threshold comparison, and closes it once dispatch
+completes.
+
+A fired alert is still a **successful evaluation** from the tracer's
+perspective — the QL query worked, the threshold was applied, the
+rule yielded its result. Status only flips to `Error` when the QL
+query itself errored. Operators filter:
+
+- `squadron.fired = true` — all firing evaluations.
+- `status = Error` — query failures (parse errors, telemetry-store
+  problems, etc.).
+
+### Attribute schema
+
+| Attribute                       | Notes                                    |
+|---------------------------------|------------------------------------------|
+| `squadron.target_type`          | always `rule`                            |
+| `squadron.target_id`            | rule ID                                  |
+| `squadron.rule_id`              | rule ID (duplicate of target_id for filtering ergonomics) |
+| `squadron.rule_name`            | human-readable rule name                 |
+| `squadron.rule.query`           | the Squadron QL query that ran           |
+| `squadron.operator`             | threshold operator (`>`, `>=`, `<`, `<=`, `==`, `!=`) |
+| `squadron.threshold`            | configured threshold value (float)       |
+| `squadron.rule.severity`        | rule severity (`info` / `warning` / `critical`) |
+| `squadron.observed_value`       | the scalar the QL query returned         |
+| `squadron.fired`                | true if the threshold tripped this eval  |
+
+### Span events
+
+| Event name              | When                                              |
+|-------------------------|---------------------------------------------------|
+| `dispatched_to_webhook` | Firing/resolved payload POSTed to a webhook URL.  |
+|                         | Attributes: `squadron.webhook.url`, `squadron.webhook.state` |
+
+## Config push traces
+
+Every per-agent OpAMP config push produces a span named
+`config.push`. The span brackets the synchronous SendConfigToAgent
+call: the ack (or timeout / agent-not-found / no-capability) lands
+as a span event before the span closes.
+
+### Attribute schema
+
+| Attribute                  | Notes                                                  |
+|----------------------------|--------------------------------------------------------|
+| `squadron.target_type`     | always `agent`                                         |
+| `squadron.target_id`       | agent UUID                                             |
+| `squadron.agent_id`        | agent UUID (duplicate of target_id for filtering)      |
+| `squadron.config_id`       | config row ID being pushed                             |
+| `squadron.group_id`        | group ID — omitted entirely for single-agent direct pushes |
+| `squadron.push_source`     | what triggered the push: `rollout` / `direct` / `group` / `drift_remediation` (reserved) |
+
+### Span events
+
+| Event name   | When                                              |
+|--------------|---------------------------------------------------|
+| `opamp_ack`  | Agent confirmed it applied the config.            |
+| `opamp_nack` | Agent rejected or timed out. Attributes: `squadron.nack_reason` |
+
+### Status semantics
+
+- `Ok` on `opamp_ack`.
+- `Error` on `opamp_nack` with the nack reason as the status message.
+
+### Filtering
+
+```
+service.name = squadron AND name = config.push
+  AND squadron.push_source = rollout      # all rollout-driven pushes
+  AND status = Error                       # only failed ones
+```
+
+## OpAMP connection traces
+
+Each connected agent gets a long-lived span named
+`opamp.agent_connection` spanning the lifetime of its OpAMP
+connection. The span opens on the first inbound message (the
+earliest point Squadron knows the agent's instance ID), closes on
+disconnect.
+
+### Attribute schema
+
+| Attribute                                | Notes                                       |
+|------------------------------------------|---------------------------------------------|
+| `squadron.target_type`                   | always `agent`                              |
+| `squadron.target_id`                     | agent instance UUID                         |
+| `squadron.agent_id`                      | agent instance UUID                         |
+| `squadron.agent_version`                 | reported in the first AgentDescription. Omitted if the agent never reports one. |
+| `squadron.disconnect_reason`             | set at End: `client_disconnected`, `server_shutdown`, or a protocol-error string |
+| `squadron.connection_duration_seconds`   | float — derived at End from the span's wall-clock start time |
+
+### Status semantics
+
+- `Ok` for clean disconnects (`client_disconnected`, `normal`, empty).
+- `Error` for everything else (`server_shutdown`, protocol errors).
+
+### Restart caveat
+
+When Squadron restarts, every still-open connection span is
+flushed by `Server.Stop` with reason `server_shutdown`. The agents
+themselves get the OpAMP close frame and reconnect against the new
+process; a fresh span opens for each one. Span identity therefore
+doesn't carry across restarts. Document this in your runbook if
+your operators rely on connection-span continuity across deploys.
+
 ## Tracing API requests
 
 Squadron's API server participates in W3C
@@ -283,15 +396,8 @@ the control-plane events. Then narrow further by any attribute:
 ## What's NOT exported (yet)
 
 - **Metrics.** Squadron's `/metrics` endpoint is the primary Prometheus
-  scrape path; an OTel-metrics bridge would duplicate the
-  surface area without adding much value. Planned for a future patch.
-- **Bracketing spans for non-rollout operations.** v0.13 added the
-  rollout span tree and v0.14 wove pause/resume into it. Similar
-  treatment for alert evaluations, long-running config pushes, and
-  OpAMP connection lifecycles is planned but not yet shipped.
-- **OTel logs.** The logs SDK was stabilizing as of late 2024; once
-  it's solid we'll add a parallel log emitter so operators who prefer
-  log search over trace search can use either.
+  scrape path; an OTel-metrics bridge would duplicate the surface
+  area without adding much value. Planned for a future patch.
 - **Outgoing traceparent injection from squadronctl.** The CLI talks
   to the API as a plain HTTP client today; wrapping it with `otel-cli`
   or any other otelhttp-instrumented runner is the current path
