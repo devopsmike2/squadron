@@ -7,12 +7,12 @@ import AlertsPage from "./pages/Alerts";
 import AuditPage from "./pages/Audit";
 import ConfigsPage from "./pages/Configs";
 import DashboardPage from "./pages/Dashboard";
+import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
 import LoginPage from "./pages/Login";
 import RolloutsPage from "./pages/Rollouts";
 import SettingsTokensPage from "./pages/SettingsTokens";
 import TelemetryPage from "./pages/Telemetry";
-import TopologyPage from "./pages/Topology";
 
 import "./App.css";
 import {
@@ -122,7 +122,10 @@ function AuthBoundary() {
             element={<ConfigsPage mode="edit" />}
           />
           <Route path="/telemetry" element={<TelemetryPage />} />
-          <Route path="/topology" element={<TopologyPage />} />
+          <Route path="/fleet-map" element={<FleetMapPage />} />
+          {/* Back-compat alias for v0.19 bookmarks; Fleet Map is the
+              canonical URL going forward. */}
+          <Route path="/topology" element={<FleetMapPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/rollouts" element={<RolloutsPage />} />
           <Route path="/audit" element={<AuditPage />} />

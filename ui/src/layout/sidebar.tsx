@@ -109,9 +109,9 @@ export function AppSidebar() {
             ) : null,
         },
         {
-          key: "topology",
-          title: "Topology",
-          url: "/topology",
+          key: "fleet-map",
+          title: "Fleet Map",
+          url: "/fleet-map",
           icon: GitBranch,
         },
         {
