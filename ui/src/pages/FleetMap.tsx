@@ -14,12 +14,14 @@
 import { ReactFlowProvider } from "@xyflow/react";
 import * as yaml from "js-yaml";
 import {
+  ArrowLeftIcon,
+  ChevronRightIcon,
   GitForkIcon,
   RefreshCwIcon,
   ShipIcon,
   Workflow,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import useSWR from "swr";
 
 import { getAgents } from "@/api/agents";
@@ -150,6 +152,32 @@ export default function FleetMapPage() {
     }
   }, []);
 
+  // Drop the current agent selection — used by the breadcrumb back
+  // button and the ESC keybinding below. Wrapping in useCallback so
+  // the breadcrumb click handler stays referentially stable across
+  // renders (matters because the header re-renders on every SWR tick).
+  const clearAgentSelection = useCallback(() => {
+    setSelectedAgentId(null);
+    setSelectedAgent(null);
+  }, []);
+
+  // ESC clears the agent drill-down on the Pipeline tab. Scoped to
+  // that tab because on Data Flow and Fleet there's no equivalent
+  // 'drilled into' state and the key would be confusing.
+  // We also skip the binding when a drawer is open so ESC there
+  // closes the drawer first (the drawer's own ESC handler runs and
+  // stopPropagation prevents our handler from firing).
+  useEffect(() => {
+    if (view !== "pipeline" || !selectedAgent) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !drawerOpen && !groupDrawerOpen) {
+        clearAgentSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, selectedAgent, drawerOpen, groupDrawerOpen, clearAgentSelection]);
+
   const onCanvasNodeClick = useCallback(
     (_event: unknown, node: { id: string; type?: string; data?: unknown }) => {
       if (node.type === "agent") {
@@ -207,19 +235,39 @@ export default function FleetMapPage() {
     <div className="-m-4 flex h-full w-full flex-col">
       {/* Header */}
       <header className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-border bg-background/60 px-6 py-3 backdrop-blur">
-        <div>
+        <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             Fleet Map
           </div>
-          <h1 className="text-lg font-semibold tracking-tight text-foreground">
-            {view === "pipeline"
-              ? selectedAgent
-                ? selectedAgent.name + " · Pipeline"
-                : "Collector Pipelines"
-              : view === "data-flow"
-                ? "Data Flow"
-                : "Fleet Overview"}
-          </h1>
+          {view === "pipeline" && selectedAgent ? (
+            // Drill-down state: render a real breadcrumb so the
+            // operator has a one-click way back to the fleet
+            // overview without reaching for the sidebar. The
+            // parent crumb is the same element that would be
+            // rendered as the page title when no agent is
+            // selected, so the navigation feels consistent.
+            <h1 className="flex items-center gap-1.5 text-lg font-semibold tracking-tight text-foreground">
+              <button
+                type="button"
+                onClick={clearAgentSelection}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 -mx-1.5 text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                title="Back to all pipelines (Esc)"
+              >
+                <ArrowLeftIcon className="h-4 w-4" />
+                <span>All pipelines</span>
+              </button>
+              <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground/60" />
+              <span className="truncate">{selectedAgent.name}</span>
+            </h1>
+          ) : (
+            <h1 className="text-lg font-semibold tracking-tight text-foreground">
+              {view === "pipeline"
+                ? "Collector Pipelines"
+                : view === "data-flow"
+                  ? "Data Flow"
+                  : "Fleet Overview"}
+            </h1>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
