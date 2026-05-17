@@ -192,18 +192,47 @@ boundary, and the row-scan helper now accepts `*big.Int` /
 test in `internal/insights/insights_test.go` pins this so a future
 driver upgrade can't sneak the bug back in.
 
-**Not yet measured at 1000 agents.** The insights endpoints
-weren't part of the v0.23 fleetsim baseline — they didn't exist
-yet. A v0.24.x perf pass should add a row to the table above with:
+Perf measured with `./fleetsim --count=1000 --ramp=60s` plus the
+two real demo agents (1002/1002 online at sample time), with the
+`otlp_batches` table populated by the demo collector emitting
+metrics every ~30ms over the prior 24h. Five samples per endpoint;
+cold = first call after the 15s service-cache TTL expires, warm =
+immediate re-call:
 
-- `/insights/volume?window=1h` cold/warm latencies at 1000 agents
-- `/insights/volume/agents?window=1h` (the most expensive query —
-  GROUP BY agent_id with a per-signal split)
-- `/insights/volume/attributes?signal=metrics` — sampler cost at
-  the population sizes a 1000-agent fleet produces
+| Endpoint                                       | Cold | Warm p50 | Gate     |
+|------------------------------------------------|------|----------|----------|
+| `/insights/volume?window=5m`                   | 5 ms | 1 ms     | fleet (<500) |
+| `/insights/volume?window=1h`                   | 9 ms | 1 ms     | fleet (<500) |
+| `/insights/volume?window=24h`                  | 13 ms| 1 ms     | fleet (<500) |
+| `/insights/volume/agents?window=1h&limit=20`   | 8 ms | 1 ms     | fleet (<500) |
+| `/insights/volume/agents/:id?window=24h`       | 16 ms| 1 ms     | **agent (<100)** |
+| `/insights/volume/attributes?signal=metrics`   | 10 ms| 1 ms     | fleet (<500) |
+| `/insights/volume/drops?window=1h`             | 3 ms | 2 ms     | fleet (<500) |
 
-Targets carried over from v0.23: agent-detail queries <100ms,
-fleet-overview queries <500ms.
+**Headline: agent-detail at 16ms is >6× under the 100ms gate;
+worst fleet-overview at 13ms is >38× under the 500ms gate.** The
+15s in-process cache makes warm reads effectively free (~1ms),
+which matches the UI's polling interval — most user-visible
+refreshes will be cache hits.
+
+For reference at the same fleet size, the existing
+`/api/v1/agents?limit=100` was 17-25ms and `/agents/stats` was
+13-21ms; the insights endpoints land in the same ballpark.
+
+Why so far under target: the `otlp_batches` table is narrow (8
+columns, no JSON), the composite indexes on `(agent_id, time)` and
+`(signal_type, time)` cover every WHERE clause, and the `CAST(...
+AS BIGINT)` shrinks the SUM result before it crosses the cgo
+boundary. The top-attributes endpoint pays a slightly higher cost
+(the sampler ORDER BY random() LIMIT 2000 has to actually read
+rows) but is still 10ms cold — well below where caching becomes a
+correctness concern rather than a perf optimization.
+
+What's NOT in this measurement: this is steady-state read latency
+against a populated table. Insights query latency *during* a heavy
+OTLP ingest burst is unmeasured; the cache mostly absorbs that, but
+a v0.24.x stress pass with concurrent `otlp_batches` writers is
+worth doing before any enterprise GA claim.
 
 ### What we deliberately did NOT load-test
 
@@ -211,7 +240,7 @@ fleet-overview queries <500ms.
 |------|--------------|
 | OTLP receiver under load | Different code path from OpAMP. Needs a synthetic OTLP generator. Will be v0.22.x. |
 | DuckDB telemetry write throughput | Tied to the OTLP path above. |
-| Insights API at 1000 agents | See "After v0.24" — the endpoints work end-to-end in dev, but throughput against a populated `otlp_batches` table is unmeasured. Wants a v0.24.x perf pass. |
+| Insights API under concurrent ingest | See "After v0.24" — steady-state reads are measured and well under target, but query latency *during* a heavy OTLP burst is unmeasured. The 15s cache likely absorbs most of it. Wants a v0.24.x stress pass with concurrent `otlp_batches` writers. |
 | Rollout engine under N agents | Tested implicitly (10s tick across 1000 agents had no observable lag), but a dedicated test that creates a 100-stage rollout and watches the tick budget is worth doing. |
 | Long-running stability (24h+) | Not a single-session test. Run fleetsim under a sustained-load harness for a day before any GA claim. |
 
