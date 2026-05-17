@@ -1167,6 +1167,35 @@ func (s *Storage) writeOTLPHistograms(ctx context.Context, histograms []otlp.Met
 	return nil
 }
 
+// WriteBatchMeta inserts one row into otlp_batches. Best-effort —
+// callers don't bubble this error up because the batch's actual
+// telemetry has already been written (or refused) by the time we
+// get here. We log and return so a transient DuckDB hiccup doesn't
+// cascade into a 5xx on the receiver.
+func (s *Storage) WriteBatchMeta(ctx context.Context, meta types.BatchMeta) error {
+	const query = `INSERT INTO otlp_batches (
+		timestamp, agent_id, signal_type, item_count, dropped_count, payload_bytes, status
+	) VALUES (?, ?, ?, ?, ?, ?, ?)`
+
+	if _, err := s.db.ExecContext(ctx,
+		query,
+		meta.Timestamp,
+		meta.AgentID,
+		meta.SignalType,
+		meta.ItemCount,
+		meta.DroppedCount,
+		meta.PayloadBytes,
+		meta.Status,
+	); err != nil {
+		s.logger.Warn("WriteBatchMeta failed (non-fatal)",
+			zap.String("agent_id", meta.AgentID),
+			zap.String("signal_type", meta.SignalType),
+			zap.Error(err))
+		return nil
+	}
+	return nil
+}
+
 // Writer interface implementations for types.Writer
 // These methods directly use OTLP parsed types
 
@@ -1183,4 +1212,17 @@ func (w *Writer) WriteMetrics(ctx context.Context, sums []otlp.MetricSumData, ga
 // WriteLogs implements types.Writer
 func (w *Writer) WriteLogs(ctx context.Context, logs []otlp.LogData) error {
 	return w.Storage.WriteLogsFromOTLP(ctx, logs)
+}
+
+// WriteBatchMeta implements types.Writer. Records one row in the
+// otlp_batches table per inbound OTLP ExportRequest. Best-effort:
+// errors are logged and swallowed because this is bookkeeping —
+// failing here must not block the actual telemetry write.
+//
+// The receiver calls this AFTER deciding whether the worker pool
+// accepted the batch, so dropped_count + status reflect the
+// realized outcome rather than an optimistic "we tried to write
+// N spans" intent.
+func (w *Writer) WriteBatchMeta(ctx context.Context, meta types.BatchMeta) error {
+	return w.Storage.WriteBatchMeta(ctx, meta)
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/otlp"
+	telemetrytypes "github.com/devopsmike2/squadron/internal/storage/telemetrystore/types"
 	"github.com/devopsmike2/squadron/internal/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -39,6 +40,15 @@ func (m *MockTelemetryWriter) WriteLogs(ctx context.Context, logs []otlp.LogData
 	args := m.Called(ctx, logs)
 	err := args.Error(0)
 	return err
+}
+
+// WriteBatchMeta — most existing tests don't care about batch meta
+// accounting, so we return nil unconditionally instead of routing
+// through testify's `.Called(...)` (which would require every test
+// to set up an expectation for it). Tests that DO want to assert
+// on batch meta can shadow this with an embedded mock.
+func (m *MockTelemetryWriter) WriteBatchMeta(ctx context.Context, meta telemetrytypes.BatchMeta) error {
+	return nil
 }
 
 // TestNewPool tests the creation of a new worker pool

@@ -20,6 +20,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
@@ -316,6 +317,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// worker, and API metrics in a single endpoint. The event broker is
 	// shared with publishers so /events/stream reflects what they emit.
 	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: config.Auth.Enabled}, configSender, eventBroker, configsTracer, registry, logger)
+
+	// v0.24 Telemetry Volume Insights — read-only query layer over
+	// the otlp_batches table + sampled row-table aggregates. Wires
+	// to the same telemetryReader used everywhere else, so it
+	// shares DuckDB connection pooling and statement cache.
+	insightsService := insights.NewService(telemetryReader, logger)
+	apiServer.SetInsightsService(insightsService)
 
 	// Start API server in a goroutine
 	go func() {

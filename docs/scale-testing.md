@@ -160,12 +160,58 @@ serialized body is roughly 2× the size of items alone. This is
 v0.23's deliberate back-compat cost; a future major version will
 drop the legacy map and reclaim that overhead.
 
+### After v0.24: telemetry volume insights
+
+v0.24 adds an ingest-side `otlp_batches` accounting table and a
+read-only insights API under `/api/v1/insights/volume`. The query
+layer fans out three GROUP BYs (per signal, per agent, per
+attribute key) with a 15s in-process cache so the UI's polling
+loop doesn't hammer DuckDB.
+
+Verified in a 3-agent dev setup with `demo-supervisor` writing
+metrics every ~30ms over 24h:
+
+| Endpoint                                  | Window | Result |
+|-------------------------------------------|--------|--------|
+| `/insights/volume?window=24h`             | 24h    | 863 MB / 4.35M items / 3 agents — fleet-wide totals |
+| `/insights/volume?window=1h`              | 1h     | 158.8 MB / metrics-dominated (~100%) |
+| `/insights/volume/agents?window=1h`       | 1h     | Outlier ranking: top agent at 158.7 MB (99.9%) |
+| `/insights/volume/agents/:id?window=24h`  | 24h    | otelcol-contrib: 690.2 KB (588.8 KB metrics / 101.4 KB logs) |
+| `/insights/volume/attributes?signal=metrics&window=1h` | 1h | Top attribute keys via sampled extrapolation (~2000 rows) |
+
+Bug caught and fixed while wiring this up: DuckDB widens
+`SUM(BIGINT)` to **HUGEINT** (128-bit), which the
+`marcboeker/go-duckdb` driver reifies as `*big.Int`. The first cut
+of the insights service unboxed rows through a tolerant type-switch
+that only knew native int types — so every aggregated column read
+as zero, even though `otlp_batches` had real rows. Fixed two ways
+(defense in depth): every `SUM()` in the insights queries is now
+wrapped in `CAST(... AS BIGINT)` to collapse the HUGEINT at the DB
+boundary, and the row-scan helper now accepts `*big.Int` /
+`big.Int` and saturates to `MaxInt64` on overflow. A regression
+test in `internal/insights/insights_test.go` pins this so a future
+driver upgrade can't sneak the bug back in.
+
+**Not yet measured at 1000 agents.** The insights endpoints
+weren't part of the v0.23 fleetsim baseline — they didn't exist
+yet. A v0.24.x perf pass should add a row to the table above with:
+
+- `/insights/volume?window=1h` cold/warm latencies at 1000 agents
+- `/insights/volume/agents?window=1h` (the most expensive query —
+  GROUP BY agent_id with a per-signal split)
+- `/insights/volume/attributes?signal=metrics` — sampler cost at
+  the population sizes a 1000-agent fleet produces
+
+Targets carried over from v0.23: agent-detail queries <100ms,
+fleet-overview queries <500ms.
+
 ### What we deliberately did NOT load-test
 
 | Path | Why deferred |
 |------|--------------|
 | OTLP receiver under load | Different code path from OpAMP. Needs a synthetic OTLP generator. Will be v0.22.x. |
 | DuckDB telemetry write throughput | Tied to the OTLP path above. |
+| Insights API at 1000 agents | See "After v0.24" — the endpoints work end-to-end in dev, but throughput against a populated `otlp_batches` table is unmeasured. Wants a v0.24.x perf pass. |
 | Rollout engine under N agents | Tested implicitly (10s tick across 1000 agents had no observable lag), but a dedicated test that creates a 100-stage rollout and watches the tick budget is worth doing. |
 | Long-running stability (24h+) | Not a single-session test. Run fleetsim under a sustained-load harness for a day before any GA claim. |
 

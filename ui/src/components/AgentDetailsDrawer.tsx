@@ -14,6 +14,7 @@ import { AgentConfigPipeline } from "@/components/agent-details/AgentConfigPipel
 import { AgentLogs } from "@/components/agent-details/AgentLogs";
 import { AgentMetrics } from "@/components/agent-details/AgentMetrics";
 import { AgentOverview } from "@/components/agent-details/AgentOverview";
+import { VolumePanel } from "@/components/insights/VolumePanel";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -148,6 +149,14 @@ export function AgentDetailsDrawer({
             </TabsList>
 
             <TabsContent value="overview" className="space-y-4 py-4">
+              {/* v0.24 Volume panel sits at the top of Overview so
+                  the cost/byte story is the first thing the
+                  operator sees when they open the drawer. The
+                  legacy AgentOverview keeps the inventory fields
+                  below it. */}
+              {agentId && (
+                <VolumePanel mode="agent" agentId={agentId} window="24h" compact />
+              )}
               <AgentOverview agent={agent} metrics={metrics} />
             </TabsContent>
 

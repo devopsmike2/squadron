@@ -30,6 +30,33 @@ type Writer interface {
 	WriteTraces(ctx context.Context, traces []otlp.TraceData) error
 	WriteMetrics(ctx context.Context, sums []otlp.MetricSumData, gauges []otlp.MetricGaugeData, histograms []otlp.MetricHistogramData) error
 	WriteLogs(ctx context.Context, logs []otlp.LogData) error
+
+	// WriteBatchMeta records one row of ingest-side volume accounting
+	// per inbound OTLP ExportRequest. Called by the receivers AFTER
+	// they've determined whether the worker pool accepted the batch:
+	// status == "ok" + dropped_count = 0 for clean acceptance,
+	// status == "dropped" + dropped_count = itemCount when the worker
+	// queue rejected the batch outright, status == "partial" when a
+	// partial-success is returned (worker accepts some items, drops
+	// others — not a path Squadron's worker currently exercises but
+	// the column is wired for forward-compat).
+	//
+	// Returns nil on a best-effort failure; this write is bookkeeping
+	// and must never block the actual telemetry write path. Worker
+	// errors here are logged but not propagated.
+	WriteBatchMeta(ctx context.Context, meta BatchMeta) error
+}
+
+// BatchMeta is the per-ExportRequest accounting row written to the
+// otlp_batches table. See Writer.WriteBatchMeta for the contract.
+type BatchMeta struct {
+	Timestamp    time.Time
+	AgentID      string
+	SignalType   string // "traces" | "metrics" | "logs"
+	ItemCount    int64
+	DroppedCount int64
+	PayloadBytes int64
+	Status       string // "ok" | "dropped" | "partial"
 }
 
 // Metric represents a metric data point

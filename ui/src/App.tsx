@@ -6,6 +6,7 @@ import AgentsPage from "./pages/Agents";
 import AlertsPage from "./pages/Alerts";
 import AuditPage from "./pages/Audit";
 import ConfigsPage from "./pages/Configs";
+import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
@@ -122,6 +123,7 @@ function AuthBoundary() {
             element={<ConfigsPage mode="edit" />}
           />
           <Route path="/telemetry" element={<TelemetryPage />} />
+          <Route path="/cost-insights" element={<CostInsightsPage />} />
           <Route path="/fleet-map" element={<FleetMapPage />} />
           {/* Back-compat alias for v0.19 bookmarks; Fleet Map is the
               canonical URL going forward. */}

@@ -84,6 +84,32 @@ CREATE TABLE IF NOT EXISTS traces (
 	links JSON
 );
 
+-- Per-batch ingest accounting, written once per inbound OTLP
+-- ExportRequest. The receiver records the wire-size of each batch
+-- here so the Cost Insights surfaces can answer "how many bytes did
+-- agent X send in the last hour" without re-summing JSON columns
+-- off the row tables. agent_id is the same identifier carried on
+-- the spans/metrics/logs tables; signal_type is one of "traces" |
+-- "metrics" | "logs". item_count records how many spans / data
+-- points / log records were in the batch; dropped_count records
+-- how many of those the worker pool refused to enqueue. payload_bytes
+-- is the post-decompression protobuf payload size.
+--
+-- Added in v0.24 as the foundation for the read-only Telemetry
+-- Volume Insights surface; the v0.25 recommendation engine reads
+-- from this same table.
+CREATE TABLE IF NOT EXISTS otlp_batches (
+	timestamp TIMESTAMP NOT NULL,
+	agent_id VARCHAR NOT NULL,
+	signal_type VARCHAR NOT NULL,
+	item_count BIGINT NOT NULL,
+	dropped_count BIGINT NOT NULL DEFAULT 0,
+	payload_bytes BIGINT NOT NULL,
+	status VARCHAR NOT NULL DEFAULT 'ok'
+);
+CREATE INDEX IF NOT EXISTS idx_otlp_batches_agent_time ON otlp_batches(agent_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_otlp_batches_signal_time ON otlp_batches(signal_type, timestamp);
+
 -- Rollup tables for pre-aggregated data
 CREATE TABLE IF NOT EXISTS rollups_1m (
 	window_start TIMESTAMP NOT NULL,

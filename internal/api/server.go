@@ -18,6 +18,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -60,7 +61,8 @@ type Server struct {
 	authConfig        AuthConfig
 	commander         AgentCommander
 	broker            *events.Broker
-	configsTracer     *configs.Tracer // optional; nil disables config-push spans on direct handler pushes
+	configsTracer     *configs.Tracer  // optional; nil disables config-push spans on direct handler pushes
+	insightsService   *insights.Service // optional; nil disables the /api/v1/insights/* routes (no telemetry reader configured)
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -121,6 +123,35 @@ func NewServer(agentService services.AgentService, telemetryService services.Tel
 	server.registerRoutes()
 
 	return server
+}
+
+// insightsTrampoline late-binds an insights handler call so the
+// route table can be registered before SetInsightsService is
+// called. Returns a gin.HandlerFunc that resolves s.insightsService
+// at request time; 503s with a clear error if still nil.
+func (s *Server) insightsTrampoline(fn func(*handlers.InsightsHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.insightsService == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "Telemetry Volume Insights are not available — no telemetry backend wired",
+			})
+			return
+		}
+		h := handlers.NewInsightsHandlers(s.insightsService, s.logger)
+		fn(h, c)
+	}
+}
+
+// SetInsightsService wires the (optional) insights query service.
+// When unset, the /api/v1/insights/* routes return 503 — operators
+// running without a telemetry backend (e.g. a test harness) don't
+// see the routes break, just respond "not available".
+//
+// Setter pattern rather than a constructor argument so existing
+// callers (test_server.go and friends) don't grow yet another
+// positional parameter for an optional feature.
+func (s *Server) SetInsightsService(svc *insights.Service) {
+	s.insightsService = svc
 }
 
 // Start starts the HTTP server
@@ -324,6 +355,37 @@ func (s *Server) registerRoutes() {
 		v1.GET("/rollout-preview",
 			middleware.RequireScope(services.ScopeRolloutsRead),
 			rolloutHandlers.HandlePreviewRollout)
+
+		// Telemetry Volume Insights (v0.24+). Read-only data
+		// surface for "where are my telemetry bytes going". The
+		// v0.25 cost-recommendation engine reads from these
+		// endpoints; keep the response shapes stable. Mounted
+		// behind ScopeAgentsRead — same scope that gates the
+		// agents list, since the insights are an aggregation of
+		// the same underlying telemetry.
+		//
+		// Routes are registered unconditionally; each handler
+		// re-checks s.insightsService at request time and 503s
+		// if it's still nil. This lets main.go wire the service
+		// via SetInsightsService AFTER NewServer constructs the
+		// route table (the alternative — make every existing
+		// caller of NewServer take another argument — has more
+		// blast radius than this trampoline).
+		v1.GET("/insights/volume",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.insightsTrampoline(func(h *handlers.InsightsHandlers, c *gin.Context) { h.HandleFleetVolume(c) }))
+		v1.GET("/insights/volume/agents",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.insightsTrampoline(func(h *handlers.InsightsHandlers, c *gin.Context) { h.HandleTopAgents(c) }))
+		v1.GET("/insights/volume/agents/:id",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.insightsTrampoline(func(h *handlers.InsightsHandlers, c *gin.Context) { h.HandleAgentVolume(c) }))
+		v1.GET("/insights/volume/attributes",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.insightsTrampoline(func(h *handlers.InsightsHandlers, c *gin.Context) { h.HandleTopAttributes(c) }))
+		v1.GET("/insights/volume/drops",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.insightsTrampoline(func(h *handlers.InsightsHandlers, c *gin.Context) { h.HandleDrops(c) }))
 	}
 
 	// Serve static files for the UI

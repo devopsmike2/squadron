@@ -12,6 +12,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/otlp/parser"
 	"github.com/devopsmike2/squadron/internal/otlp/processor"
 	"github.com/devopsmike2/squadron/internal/services"
+	telemetrytypes "github.com/devopsmike2/squadron/internal/storage/telemetrystore/types"
 	"go.uber.org/zap"
 )
 
@@ -29,6 +30,11 @@ type TelemetryWriter interface {
 	WriteTraces(ctx context.Context, traces []otlp.TraceData) error
 	WriteMetrics(ctx context.Context, sums []otlp.MetricSumData, gauges []otlp.MetricGaugeData, histograms []otlp.MetricHistogramData) error
 	WriteLogs(ctx context.Context, logs []otlp.LogData) error
+
+	// WriteBatchMeta writes one row to otlp_batches for the inbound
+	// ExportRequest. Best-effort accounting; see telemetrytypes.Writer
+	// for the contract.
+	WriteBatchMeta(ctx context.Context, meta telemetrytypes.BatchMeta) error
 }
 
 // WorkItemType represents the type of work item
@@ -206,9 +212,15 @@ func (p *Pool) writeWithRetry(ctx context.Context, signal string, retries, deadL
 // processItem processes a single work item. Parse failures are logged and the
 // item is dropped (no retry — a parse error is deterministic and won't recover).
 // Write failures get retried and, on final failure, dead-lettered with a metric.
+//
+// After the actual telemetry write completes, the worker writes a batch meta
+// row to otlp_batches. That row drives the v0.24+ Telemetry Volume Insights
+// surface. The accounting is best-effort: an error here is logged but does
+// not propagate, since the real telemetry has already been written.
 func (p *Pool) processItem(item WorkItem) {
 	start := time.Now()
 	ctx := context.Background()
+	totalBytes := int64(len(item.RawData))
 
 	switch item.Type {
 	case WorkItemTypeTraces:
@@ -222,6 +234,7 @@ func (p *Pool) processItem(item WorkItem) {
 		writeErr := p.writeWithRetry(ctx, "traces", p.metrics.TraceWriteRetries, p.metrics.TraceDeadLetters, func(c context.Context) error {
 			return p.writer.WriteTraces(c, traces)
 		})
+		p.recordBatchMeta(ctx, "traces", traces, totalBytes, writeErr)
 		p.logger.Debug("Processed traces",
 			zap.Int("count", len(traces)),
 			zap.Duration("duration", time.Since(start)),
@@ -238,6 +251,10 @@ func (p *Pool) processItem(item WorkItem) {
 		writeErr := p.writeWithRetry(ctx, "metrics", p.metrics.MetricWriteRetries, p.metrics.MetricDeadLetters, func(c context.Context) error {
 			return p.writer.WriteMetrics(c, sums, gauges, histograms)
 		})
+		// Metrics batch accounting unions across all metric subtypes —
+		// a single ExportRequest can mix sums, gauges, and histograms.
+		// We emit one BatchMeta per agent_id seen across all three.
+		p.recordMetricsBatchMeta(ctx, sums, gauges, histograms, totalBytes, writeErr)
 		p.logger.Debug("Processed metrics",
 			zap.Int("sums", len(sums)),
 			zap.Int("gauges", len(gauges)),
@@ -256,9 +273,125 @@ func (p *Pool) processItem(item WorkItem) {
 		writeErr := p.writeWithRetry(ctx, "logs", p.metrics.LogWriteRetries, p.metrics.LogDeadLetters, func(c context.Context) error {
 			return p.writer.WriteLogs(c, logs)
 		})
+		p.recordBatchMeta(ctx, "logs", logs, totalBytes, writeErr)
 		p.logger.Debug("Processed logs",
 			zap.Int("count", len(logs)),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(writeErr))
 	}
+}
+
+// recordBatchMeta groups items by agent_id and emits one BatchMeta
+// row per agent for the batch. Bytes are attributed proportionally:
+// agentSlice / totalItems × totalBytes. Approximate but acceptable
+// because mixed-agent batches are uncommon (one collector typically
+// produces one agent_id per ExportRequest).
+//
+// writeErr drives the status field: "ok" on success, "dropped" on
+// terminal write failure (the items got dead-lettered).
+func (p *Pool) recordBatchMeta(ctx context.Context, signal string, items interface{}, totalBytes int64, writeErr error) {
+	counts := countByAgent(items)
+	if len(counts) == 0 {
+		return
+	}
+	totalItems := int64(0)
+	for _, c := range counts {
+		totalItems += c
+	}
+	status := "ok"
+	if writeErr != nil {
+		status = "dropped"
+	}
+	now := time.Now().UTC()
+	for agentID, count := range counts {
+		bytes := int64(0)
+		if totalItems > 0 {
+			bytes = totalBytes * count / totalItems
+		}
+		dropped := int64(0)
+		if writeErr != nil {
+			dropped = count
+		}
+		_ = p.writer.WriteBatchMeta(ctx, telemetrytypes.BatchMeta{
+			Timestamp:    now,
+			AgentID:      agentID,
+			SignalType:   signal,
+			ItemCount:    count,
+			DroppedCount: dropped,
+			PayloadBytes: bytes,
+			Status:       status,
+		})
+	}
+}
+
+// recordMetricsBatchMeta is the metrics variant: a single batch
+// can contain sums, gauges, AND histograms, so we union the agent
+// counts across all three before emitting per-agent rows.
+func (p *Pool) recordMetricsBatchMeta(
+	ctx context.Context,
+	sums []otlp.MetricSumData,
+	gauges []otlp.MetricGaugeData,
+	histograms []otlp.MetricHistogramData,
+	totalBytes int64,
+	writeErr error,
+) {
+	counts := map[string]int64{}
+	for _, m := range sums {
+		counts[m.AgentID]++
+	}
+	for _, m := range gauges {
+		counts[m.AgentID]++
+	}
+	for _, m := range histograms {
+		counts[m.AgentID]++
+	}
+	if len(counts) == 0 {
+		return
+	}
+	totalItems := int64(0)
+	for _, c := range counts {
+		totalItems += c
+	}
+	status := "ok"
+	if writeErr != nil {
+		status = "dropped"
+	}
+	now := time.Now().UTC()
+	for agentID, count := range counts {
+		bytes := int64(0)
+		if totalItems > 0 {
+			bytes = totalBytes * count / totalItems
+		}
+		dropped := int64(0)
+		if writeErr != nil {
+			dropped = count
+		}
+		_ = p.writer.WriteBatchMeta(ctx, telemetrytypes.BatchMeta{
+			Timestamp:    now,
+			AgentID:      agentID,
+			SignalType:   "metrics",
+			ItemCount:    count,
+			DroppedCount: dropped,
+			PayloadBytes: bytes,
+			Status:       status,
+		})
+	}
+}
+
+// countByAgent walks the slice via type switch and tallies AgentID
+// occurrences. Cheaper than reflection; the four switch arms cover
+// every signal type we currently support.
+func countByAgent(items interface{}) map[string]int64 {
+	counts := map[string]int64{}
+	switch v := items.(type) {
+	case []otlp.TraceData:
+		for _, t := range v {
+			counts[t.AgentID]++
+		}
+	case []otlp.LogData:
+		for _, l := range v {
+			counts[l.AgentID]++
+		}
+	}
+	return counts
 }
