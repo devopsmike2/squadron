@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/alerting"
 	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/api"
@@ -353,6 +354,29 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger,
 	)
 	apiServer.SetRecommendationsEngine(recsEngine, appStore)
+
+	// v0.26 AI assist — Anthropic Messages API wrapper. The
+	// service is constructed unconditionally so /api/v1/ai/status
+	// always responds; without an API key it just returns
+	// enabled=false and every other AI route 503s with a clear
+	// opt-in message. ANTHROPIC_API_KEY is the recommended
+	// configuration path; LoadConfig pulls it from env at startup.
+	aiService := ai.NewService(ai.Config{
+		Enabled:      config.AI.Enabled,
+		APIKey:       config.AI.APIKey,
+		BaseURL:      config.AI.BaseURL,
+		ExplainModel: config.AI.ExplainModel,
+		MergeModel:   config.AI.MergeModel,
+		MaxTokens:    config.AI.MaxTokens,
+	}, logger)
+	apiServer.SetAIService(aiService)
+	if aiService.Enabled() {
+		logger.Info("AI assist enabled",
+			zap.String("explain_model", aiService.Capabilities().ExplainModel),
+			zap.String("merge_model", aiService.Capabilities().MergeModel))
+	} else {
+		logger.Info("AI assist not configured (set ANTHROPIC_API_KEY + ai.enabled=true to enable)")
+	}
 
 	// Start API server in a goroutine
 	go func() {

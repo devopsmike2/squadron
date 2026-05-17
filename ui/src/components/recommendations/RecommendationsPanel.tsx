@@ -25,6 +25,7 @@ import {
   EyeOffIcon,
   InfoIcon,
   Loader2Icon,
+  SparklesIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -32,6 +33,7 @@ import useSWR from "swr";
 
 import { formatBytes } from "../insights/VolumePanel";
 
+import { explainSnippet, useAICapabilities } from "@/api/ai";
 import type { InsightsWindow } from "@/api/insights";
 import {
   dismissRecommendation,
@@ -163,9 +165,34 @@ function RecommendationRow({
   rec: Recommendation;
   onChanged: () => void;
 }) {
-  const [busy, setBusy] = useState<"copy" | "dismiss" | null>(null);
+  const [busy, setBusy] = useState<"copy" | "dismiss" | "explain" | null>(null);
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const [explainError, setExplainError] = useState<string | null>(null);
+  const { capabilities } = useAICapabilities();
+  const aiEnabled = capabilities?.enabled === true;
+
+  const handleExplain = async () => {
+    if (busy !== null || !rec.snippet) return;
+    setBusy("explain");
+    setExplainError(null);
+    setExpanded(true); // open the body so the explanation has somewhere to land
+    try {
+      const out = await explainSnippet({
+        snippet: rec.snippet,
+        signal: rec.signal || undefined,
+        goal: rec.title,
+      });
+      setExplanation(out.explanation);
+    } catch (err) {
+      setExplainError(
+        err instanceof Error ? err.message : "AI explain failed.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const handleCopy = async () => {
     if (!rec.snippet) return;
@@ -225,6 +252,36 @@ function RecommendationRow({
           {expanded && (
             <div className="mt-2 text-sm text-muted-foreground">
               {rec.detail}
+              {/* v0.26: AI explanation slot. Renders above the YAML
+                  so the operator sees the plain-English summary
+                  before the raw snippet. Loading + error states
+                  stay inline rather than toast-y. */}
+              {(explanation || explainError || busy === "explain") && (
+                <div
+                  className="mt-3 rounded-md border border-border bg-background/40 p-2 text-sm"
+                  style={{
+                    borderColor:
+                      "color-mix(in oklch, var(--info) 40%, transparent)",
+                    background:
+                      "color-mix(in oklch, var(--info) 8%, transparent)",
+                  }}
+                >
+                  <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <SparklesIcon className="h-3 w-3" />
+                    AI explanation
+                  </div>
+                  {busy === "explain" && !explanation ? (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Loader2Icon className="h-3 w-3 animate-spin" />
+                      Thinking…
+                    </div>
+                  ) : explainError ? (
+                    <div className="text-[var(--destructive)]">{explainError}</div>
+                  ) : (
+                    <div>{explanation}</div>
+                  )}
+                </div>
+              )}
               {rec.snippet && (
                 <pre className="mt-3 max-h-64 overflow-auto rounded-sm bg-muted/60 p-2 font-mono text-[11px] leading-snug">
                   {rec.snippet}
@@ -244,6 +301,26 @@ function RecommendationRow({
         </button>
         {rec.snippet && (
           <>
+            {/* AI: Explain — only renders when /api/v1/ai/status
+                reports enabled=true. Hidden entirely when AI is
+                off (rather than disabled + tooltipped) so the UI
+                doesn't dangle dead controls. */}
+            {aiEnabled && (
+              <button
+                type="button"
+                onClick={handleExplain}
+                disabled={busy !== null}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                title="Ask Claude what this snippet does"
+              >
+                {busy === "explain" ? (
+                  <Loader2Icon className="h-3 w-3 animate-spin" />
+                ) : (
+                  <SparklesIcon className="h-3 w-3" />
+                )}
+                Explain
+              </button>
+            )}
             <button
               type="button"
               onClick={handleCopy}

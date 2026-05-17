@@ -4,6 +4,7 @@ import type { editor } from "monaco-editor";
 import { useCallback, useState, useRef } from "react";
 
 import { CollectorPipelineView } from "@/components/collector-pipeline/CollectorPipelineView";
+import { ConfigAIAssist } from "@/components/configs/ConfigAIAssist";
 import { ConfigLintPanel } from "@/components/configs/ConfigLintPanel";
 import { ConfigTemplatePicker } from "@/components/configs/ConfigTemplatePicker";
 import { useTheme } from "@/components/ThemeProvider";
@@ -98,6 +99,12 @@ export function ConfigEditorSideBySide({
                   <ConfigTemplatePicker
                     currentValue={value}
                     onInsert={onChange}
+                  />
+                  {/* v0.26: AI assist. Returns null when /api/v1/ai/status
+                      reports disabled, so the toolbar stays clean. */}
+                  <ConfigAIAssist
+                    currentValue={value}
+                    onApplyMerge={(merged) => onChange(merged)}
                   />
                 </div>
                 <div className="flex items-center gap-2">

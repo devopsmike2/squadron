@@ -19,6 +19,27 @@ type Config struct {
 	Worker    WorkerConfig    `yaml:"worker"`
 	Auth      AuthConfig      `yaml:"auth"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
+	AI        AIConfig        `yaml:"ai"`
+}
+
+// AIConfig controls v0.26+ AI-assist features (Anthropic Messages
+// API). Disabled by default. APIKey resolves in this order:
+//  1. AIConfig.APIKey from the yaml file (if set)
+//  2. The env var named by APIKeyEnv (default: ANTHROPIC_API_KEY)
+//  3. Empty — the service runs but every call returns ErrDisabled
+//     and the UI hides AI affordances.
+//
+// Model names default to constants in the ai package so a model
+// migration is one file. BaseURL is overridable for self-hosted
+// gateways or mock servers in CI; defaults to api.anthropic.com.
+type AIConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	APIKey       string `yaml:"api_key"`
+	APIKeyEnv    string `yaml:"api_key_env"`
+	BaseURL      string `yaml:"base_url"`
+	ExplainModel string `yaml:"explain_model"`
+	MergeModel   string `yaml:"merge_model"`
+	MaxTokens    int    `yaml:"max_tokens"`
 }
 
 // TelemetryConfig controls Squadron's self-monitoring: when enabled,
@@ -132,7 +153,27 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// v0.26 AI config — resolve API key from env if the yaml didn't
+	// set one. The env-var path is the recommended one (keeps the
+	// key out of squadron.yaml + version control); the yaml field
+	// exists for dev convenience and forward-compat with a future
+	// settings page that writes the file.
+	applyAIEnv(&config.AI)
+
 	return &config, nil
+}
+
+// applyAIEnv fills config.AI.APIKey from the env var when the yaml
+// didn't set one. Also enforces the default env var name when the
+// operator didn't override it. Pure function over the AIConfig, so
+// it's safe to call from tests with arbitrary inputs.
+func applyAIEnv(c *AIConfig) {
+	if c.APIKeyEnv == "" {
+		c.APIKeyEnv = "ANTHROPIC_API_KEY"
+	}
+	if c.APIKey == "" {
+		c.APIKey = os.Getenv(c.APIKeyEnv)
+	}
 }
 
 // DefaultConfig returns default configuration

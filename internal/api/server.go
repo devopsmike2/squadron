@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/configs"
@@ -66,6 +67,7 @@ type Server struct {
 	insightsService   *insights.Service // optional; nil disables the /api/v1/insights/* routes (no telemetry reader configured)
 	recsEngine        *recommendations.Engine
 	recsDismissals    handlers.DismissalStore // optional; nil disables /api/v1/recommendations/* (paired with recsEngine)
+	aiService         *ai.Service             // optional; nil keeps /api/v1/ai/status responsive (returns enabled=false) but mutation routes 503
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -165,6 +167,50 @@ func (s *Server) SetInsightsService(svc *insights.Service) {
 func (s *Server) SetRecommendationsEngine(engine *recommendations.Engine, dismissals handlers.DismissalStore) {
 	s.recsEngine = engine
 	s.recsDismissals = dismissals
+}
+
+// SetAIService wires the (optional) v0.26 AI-assist service. The
+// service is constructed unconditionally in main.go — it
+// short-circuits with ErrDisabled when no API key is configured —
+// so passing a non-nil service here is the right default. The
+// nil-guard exists for the test_server.go path that doesn't wire
+// AI at all.
+func (s *Server) SetAIService(svc *ai.Service) {
+	s.aiService = svc
+}
+
+// aiTrampoline late-binds an AI handler call. Same shape as the
+// other trampolines, but with a softer 503 — the /status route in
+// particular needs to remain responsive even when the service is
+// unwired so the UI's capability probe doesn't fail at app load.
+// We let the /status handler decide its own response shape; other
+// handlers go through the standard nil-check.
+func (s *Server) aiTrampoline(fn func(*handlers.AIHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.aiService == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "AI assist is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewAIHandlers(s.aiService, s.logger)
+		fn(h, c)
+	}
+}
+
+// aiStatusTrampoline is the special case for /api/v1/ai/status —
+// when the service is nil, return enabled=false rather than 503
+// so the UI's capability probe stays simple.
+func (s *Server) aiStatusTrampoline() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.aiService == nil {
+			c.JSON(http.StatusOK, ai.Capabilities{Enabled: false})
+			return
+		}
+		h := handlers.NewAIHandlers(s.aiService, s.logger)
+		h.HandleStatus(c)
+	}
 }
 
 // recommendationsTrampoline late-binds a recs handler call so the
@@ -437,6 +483,26 @@ func (s *Server) registerRoutes() {
 		v1.POST("/recommendations/:id/restore",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.recommendationsTrampoline(func(h *handlers.RecommendationsHandlers, c *gin.Context) { h.HandleRestore(c) }))
+
+		// v0.26 AI assist. Wraps the Anthropic Messages API; off
+		// by default. All routes behind ScopeAgentsRead since
+		// they're read-only assistive surfaces (no state changes,
+		// no fan-out, no agent commands). The /status route stays
+		// responsive even when AI is unwired so the UI's
+		// capability probe is a single round-trip; the other
+		// routes 503 with an opt-in message.
+		v1.GET("/ai/status",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.aiStatusTrampoline())
+		v1.POST("/ai/explain",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleExplainSnippet(c) }))
+		v1.POST("/ai/merge",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleMergeIntoConfig(c) }))
+		v1.POST("/ai/explain-config",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleExplainConfig(c) }))
 	}
 
 	// Serve static files for the UI
