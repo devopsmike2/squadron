@@ -12,6 +12,7 @@ import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
 import LoginPage from "./pages/Login";
 import RolloutsPage from "./pages/Rollouts";
+import SavingsPage from "./pages/Savings";
 import SettingsTokensPage from "./pages/SettingsTokens";
 import TelemetryPage from "./pages/Telemetry";
 
@@ -123,6 +124,7 @@ function AuthBoundary() {
             element={<ConfigsPage mode="edit" />}
           />
           <Route path="/telemetry" element={<TelemetryPage />} />
+          <Route path="/savings" element={<SavingsPage />} />
           <Route path="/cost-insights" element={<CostInsightsPage />} />
           <Route path="/fleet-map" element={<FleetMapPage />} />
           {/* Back-compat alias for v0.19 bookmarks; Fleet Map is the

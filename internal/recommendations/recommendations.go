@@ -106,6 +106,13 @@ type Recommendation struct {
 	// hotspots where the "saving" is reliability, not bytes).
 	EstSavingsBytes int64 `json:"est_savings_bytes"`
 
+	// EstSavingsPerMonthUSD is the bytes saving translated through
+	// the v0.27 pricing model. 0 when the engine wasn't given a
+	// pricing projector, or when EstSavingsBytes is non-positive.
+	// This is the operator-friendly number the Savings dashboard
+	// renders prominently; the byte figure stays for accountability.
+	EstSavingsPerMonthUSD float64 `json:"est_savings_per_month_usd,omitempty"`
+
 	// PctOfSignal is the share of the signal's byte budget the
 	// recommendation targets. Useful for the UI's progress bars.
 	PctOfSignal float64 `json:"pct_of_signal,omitempty"`
@@ -146,6 +153,20 @@ func NoopDismissals() Dismissals { return noopDismissals{} }
 // already has the agent_id and just needs the label.
 type AgentNameResolver func(ctx context.Context, agentID string) string
 
+// Pricer is the narrow slice of pricing.Projector the engine uses.
+// Extracted as an interface so internal/recommendations doesn't
+// import internal/pricing (keeping the dependency arrow pointing
+// from main.go outward); pricing.Projector satisfies it at runtime
+// through a tiny adapter constructed in main.go.
+//
+// MonthlyForBytes is given a byte rate scoped to the engine's
+// evaluation window (the engine normalizes from window to hours
+// before calling). signal is the recommendation's signal; empty
+// string asks the pricer to use the catch-all base rate.
+type Pricer interface {
+	MonthlyForBytesPerHour(bytesPerHour int64, signal string) float64
+}
+
 // InsightsQuerier is the narrow slice of insights.Service that
 // the engine needs. Extracting it as an interface lets us pass a
 // fake in tests without spinning up DuckDB; *insights.Service
@@ -162,6 +183,7 @@ type Engine struct {
 	insights InsightsQuerier
 	dismiss  Dismissals
 	resolve  AgentNameResolver
+	pricer   Pricer // nil → no $ projection on recommendations
 	logger   *zap.Logger
 
 	// Heuristic thresholds. Exposed as fields so a future
@@ -186,6 +208,12 @@ type cachedSnapshot struct {
 	value    []Recommendation
 	key      string
 }
+
+// SetPricer wires the (optional) pricing projector after
+// construction. Setter pattern so the v0.25 NewEngine signature
+// stays back-compat and tests that don't care about pricing don't
+// have to thread a nil pricer through.
+func (e *Engine) SetPricer(p Pricer) { e.pricer = p }
 
 // NewEngine builds the engine. Pass NoopDismissals() if you don't
 // have a dismissals store yet; the resolve fn can be nil and the
@@ -262,6 +290,27 @@ func (e *Engine) Evaluate(ctx context.Context, win insights.Window) ([]Recommend
 		}
 		if !dismissed {
 			kept = append(kept, r)
+		}
+	}
+
+	// v0.27: annotate each recommendation with a $/month figure
+	// before ranking. Done in a single pass so recipes stay
+	// pricing-agnostic and the engine can swap the pricer at
+	// runtime without touching recipe code. The window for the
+	// engine is the insights window (5m/1h/24h); normalize to
+	// bytes-per-hour before asking the pricer.
+	if e.pricer != nil {
+		windowSeconds := int64(0)
+		if dur, err := win.AsDuration(); err == nil {
+			windowSeconds = int64(dur.Seconds())
+		}
+		for i := range kept {
+			if kept[i].EstSavingsBytes <= 0 || windowSeconds <= 0 {
+				continue
+			}
+			bytesPerHour := int64(float64(kept[i].EstSavingsBytes) * 3600.0 / float64(windowSeconds))
+			kept[i].EstSavingsPerMonthUSD = e.pricer.MonthlyForBytesPerHour(
+				bytesPerHour, string(kept[i].Signal))
 		}
 	}
 

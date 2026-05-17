@@ -73,3 +73,23 @@ ai:
   # explain_model: claude-haiku-4-5-20251001
   # merge_model: claude-sonnet-4-6
   # max_tokens: 1024
+
+# v0.27 Pricing — translates the v0.24 byte numbers into $/month
+# figures so the Savings dashboard speaks the operator's language.
+# When enabled with no rules, Squadron uses pricing.DefaultConfig
+# (sensible starter rates for major destinations + $0.30/GB
+# catch-all). Tune the per-destination rates against your actual
+# invoice for accurate projections. See docs/savings.md.
+pricing:
+  enabled: true
+  currency: USD
+  # rules:
+  #   - match: "datadog"      # substring match against destination_key
+  #     label: "Datadog"
+  #     price_per_gb: 0.30
+  #     traces: 1.50           # per-signal overrides (optional)
+  #     logs:   0.10
+  #     metrics: 0.50
+  #   - match: ""              # catch-all; auto-appended if missing
+  #     label: "Other"
+  #     price_per_gb: 0.30

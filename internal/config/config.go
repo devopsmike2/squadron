@@ -20,6 +20,37 @@ type Config struct {
 	Auth      AuthConfig      `yaml:"auth"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
 	AI        AIConfig        `yaml:"ai"`
+	Pricing   PricingConfig   `yaml:"pricing"`
+}
+
+// PricingConfig is the v0.27 dollar-projection layer. Disabled by
+// default so existing v0.24/v0.25 deployments don't suddenly show
+// $0 hero numbers (which look broken) — operators opt in once
+// they've tuned the rules against their own invoice.
+//
+// When Enabled is true and Rules is empty, Squadron uses
+// pricing.DefaultConfig — a conservative starter rule set with
+// per-destination rates for Datadog, Honeycomb, New Relic, SigNoz,
+// Grafana Cloud, Splunk, plus a $0.30/GB catch-all.
+//
+// See docs/savings.md for the full pricing rule shape, the default
+// rates' rationale, and how to tune them.
+type PricingConfig struct {
+	Enabled  bool                 `yaml:"enabled"`
+	Currency string               `yaml:"currency,omitempty"`
+	Rules    []PricingRuleConfig  `yaml:"rules,omitempty"`
+}
+
+// PricingRuleConfig mirrors pricing.Rule but lives in the config
+// package so callers don't have to import internal/pricing just to
+// load the yaml. main.go converts between the two types.
+type PricingRuleConfig struct {
+	Match      string  `yaml:"match"`
+	Label      string  `yaml:"label,omitempty"`
+	PricePerGB float64 `yaml:"price_per_gb"`
+	Traces     float64 `yaml:"traces,omitempty"`
+	Metrics    float64 `yaml:"metrics,omitempty"`
+	Logs       float64 `yaml:"logs,omitempty"`
 }
 
 // AIConfig controls v0.26+ AI-assist features (Anthropic Messages

@@ -21,6 +21,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/metrics"
+	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -68,6 +69,7 @@ type Server struct {
 	recsEngine        *recommendations.Engine
 	recsDismissals    handlers.DismissalStore // optional; nil disables /api/v1/recommendations/* (paired with recsEngine)
 	aiService         *ai.Service             // optional; nil keeps /api/v1/ai/status responsive (returns enabled=false) but mutation routes 503
+	pricer            *pricing.Projector      // optional; v0.27 $/month projection. nil → /api/v1/pricing/* returns enabled=false
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -167,6 +169,34 @@ func (s *Server) SetInsightsService(svc *insights.Service) {
 func (s *Server) SetRecommendationsEngine(engine *recommendations.Engine, dismissals handlers.DismissalStore) {
 	s.recsEngine = engine
 	s.recsDismissals = dismissals
+}
+
+// SetPricer wires the v0.27 pricing projector. Always non-nil at
+// runtime (main.go always constructs one — disabled state lives
+// inside the projector). The pricingTrampoline still guards
+// against nil for the test_server.go path.
+func (s *Server) SetPricer(p *pricing.Projector) { s.pricer = p }
+
+// pricingTrampoline mirrors insightsTrampoline. The /pricing/*
+// routes are read-only and gracefully degrade — when the pricer
+// is unwired we 503; when it's wired but disabled the handler
+// returns enabled=false at 200.
+func (s *Server) pricingTrampoline(fn func(*handlers.PricingHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.pricer == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "Pricing service is not wired",
+				"enabled": false,
+			})
+			return
+		}
+		// PricingHandlers needs insights for the projection
+		// endpoint. Reuse the one already wired via SetInsightsService.
+		// When insights is nil, projection returns zero — that's fine
+		// for the test_server.go path.
+		h := handlers.NewPricingHandlers(s.pricer, s.insightsService, s.logger)
+		fn(h, c)
+	}
 }
 
 // SetAIService wires the (optional) v0.26 AI-assist service. The
@@ -503,6 +533,16 @@ func (s *Server) registerRoutes() {
 		v1.POST("/ai/explain-config",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleExplainConfig(c) }))
+
+		// v0.27 Pricing projection. Turns the v0.24 byte numbers
+		// into $/month figures. Read-only; same scope as the rest
+		// of the cost-insights surface.
+		v1.GET("/pricing/config",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.pricingTrampoline(func(h *handlers.PricingHandlers, c *gin.Context) { h.HandleConfig(c) }))
+		v1.GET("/pricing/projection",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.pricingTrampoline(func(h *handlers.PricingHandlers, c *gin.Context) { h.HandleProjection(c) }))
 	}
 
 	// Serve static files for the UI

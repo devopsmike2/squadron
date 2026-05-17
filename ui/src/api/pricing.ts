@@ -1,0 +1,104 @@
+// API client for v0.27 Pricing projection.
+// Mirrors the Go shapes in internal/pricing/pricing.go. Keep in sync.
+
+import { apiGet } from "./base";
+
+import type { InsightsSignal, InsightsWindow } from "./insights";
+
+export interface PricingRule {
+  match: string;        // empty = catch-all
+  label?: string;
+  price_per_gb: number;
+  traces?: number;
+  metrics?: number;
+  logs?: number;
+}
+
+export interface PricingConfig {
+  enabled: boolean;
+  currency: string;
+  rules: PricingRule[];
+}
+
+export interface PricingProjection {
+  enabled: boolean;
+  currency: string;
+  monthly_usd: number;
+  /** Per-signal $/month at the fleet-wide catch-all rate. Absent
+   * when there's no volume in that window. */
+  by_signal?: Partial<Record<InsightsSignal, number>>;
+  assumptions?: PricingRule[];
+  window?: InsightsWindow;
+  agent_count?: number;
+}
+
+export function getPricingConfig(): Promise<PricingConfig> {
+  return apiGet<PricingConfig>("/pricing/config");
+}
+
+export function getPricingProjection(
+  window: InsightsWindow = "24h",
+): Promise<PricingProjection> {
+  return apiGet<PricingProjection>(`/pricing/projection?window=${window}`);
+}
+
+/**
+ * Match a destination_key against a rule set, returning the first
+ * rule whose `match` is a substring of the key. Catch-all (empty
+ * match) is the fallback. Mirrors pricing.Projector.matchRule in Go
+ * so the UI can do per-destination $ math without a round-trip.
+ */
+export function matchPricingRule(
+  destinationKey: string,
+  rules: PricingRule[],
+): PricingRule {
+  const key = destinationKey.toLowerCase();
+  for (const r of rules) {
+    if (r.match === "") return r;
+    if (key.includes(r.match.toLowerCase())) return r;
+  }
+  // Defensive fallback if no catch-all is present.
+  return { match: "", price_per_gb: 0.3 };
+}
+
+/**
+ * Compute $/month for a byte count observed in `windowSeconds`,
+ * priced at the rule's signal-specific or base rate. Mirrors
+ * pricing.Projector.MonthlyForBytesWindow so the UI can build the
+ * per-destination breakdown locally.
+ */
+export function monthlyUSDFor(
+  bytesInWindow: number,
+  windowSeconds: number,
+  signal: InsightsSignal | "" | undefined,
+  rule: PricingRule,
+): number {
+  if (bytesInWindow <= 0 || windowSeconds <= 0) return 0;
+  const bytesPerHour = (bytesInWindow * 3600) / windowSeconds;
+  const bytesPerGB = 1024 * 1024 * 1024;
+  const hoursPerMonth = 730;
+  const gbPerMonth = (bytesPerHour * hoursPerMonth) / bytesPerGB;
+  let rate = rule.price_per_gb;
+  if (signal === "traces" && rule.traces) rate = rule.traces;
+  else if (signal === "metrics" && rule.metrics) rate = rule.metrics;
+  else if (signal === "logs" && rule.logs) rate = rule.logs;
+  return gbPerMonth * rate;
+}
+
+/** Locale-aware USD formatter. */
+export function formatUSD(amount: number): string {
+  if (!isFinite(amount)) return "$0";
+  if (amount >= 10000) {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(amount);
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
+	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/metrics"
@@ -354,6 +355,43 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger,
 	)
 	apiServer.SetRecommendationsEngine(recsEngine, appStore)
+
+	// v0.27 Pricing — translate byte numbers into $/month. Default
+	// rules cover the major destinations (Datadog/Honeycomb/etc.);
+	// operators tune in squadron.yaml's pricing.rules. We construct
+	// the projector even when disabled so /pricing/* routes can
+	// gracefully report enabled=false rather than 503.
+	pricingCfg := pricing.Config{
+		Enabled:  config.Pricing.Enabled,
+		Currency: config.Pricing.Currency,
+	}
+	if len(config.Pricing.Rules) > 0 {
+		for _, r := range config.Pricing.Rules {
+			pricingCfg.Rules = append(pricingCfg.Rules, pricing.Rule{
+				Match: r.Match, Label: r.Label, PricePerGB: r.PricePerGB,
+				Traces: r.Traces, Metrics: r.Metrics, Logs: r.Logs,
+			})
+		}
+	} else if pricingCfg.Enabled {
+		// Enabled but no rules → use built-in starter set.
+		pricingCfg = pricing.DefaultConfig()
+		pricingCfg.Enabled = true
+	}
+	projector, err := pricing.NewProjector(pricingCfg)
+	if err != nil {
+		logger.Fatal("Failed to construct pricing projector", zap.Error(err))
+	}
+	apiServer.SetPricer(projector)
+	// Plumb the projector into the recommendations engine so each
+	// rec gains a $/month figure alongside the byte estimate.
+	recsEngine.SetPricer(projector)
+	if projector.Enabled() {
+		logger.Info("Pricing projection enabled",
+			zap.String("currency", projector.Currency()),
+			zap.Int("rules", len(projector.Rules())))
+	} else {
+		logger.Info("Pricing projection disabled (set pricing.enabled=true to enable $/month figures)")
+	}
 
 	// v0.26 AI assist — Anthropic Messages API wrapper. The
 	// service is constructed unconditionally so /api/v1/ai/status

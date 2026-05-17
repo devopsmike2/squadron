@@ -31,6 +31,7 @@ import {
   KeyRound,
   LayoutDashboard,
   CoinsIcon,
+  TrendingDownIcon,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -153,6 +154,12 @@ export function AppSidebar() {
           title: "Telemetry",
           url: "/telemetry",
           icon: BarChart3,
+        },
+        {
+          key: "savings",
+          title: "Savings",
+          url: "/savings",
+          icon: TrendingDownIcon,
         },
         {
           key: "cost-insights",
