@@ -58,6 +58,34 @@ type ApplicationStore interface {
 	ListAPITokens(ctx context.Context) ([]*APIToken, error)
 	UpdateAPITokenLastUsed(ctx context.Context, id string, at time.Time) error
 	RevokeAPIToken(ctx context.Context, id string, at time.Time) error
+
+	// Recommendation dismissals (v0.25 cost-recommendations engine).
+	// The dismissals table stores one row per (recommendation_id,
+	// dismissed_by) so an operator can hide a recommendation that
+	// keeps surfacing — and another operator (or the same one after
+	// a config change) can restore it explicitly. IDs are the
+	// engine's deterministic hash, not random UUIDs, so dismissals
+	// stay correlated across re-evaluations.
+	DismissRecommendation(ctx context.Context, d *RecommendationDismissal) error
+	RestoreRecommendation(ctx context.Context, recommendationID string) error
+	IsRecommendationDismissed(ctx context.Context, recommendationID string) (bool, error)
+	ListRecommendationDismissals(ctx context.Context) ([]*RecommendationDismissal, error)
+}
+
+// RecommendationDismissal is one operator-driven hide. The engine
+// keeps regenerating recommendations on every Evaluate; dismissals
+// are how operators say "I know about this, stop showing it".
+// Restoring (UI: "show again" / API: RestoreRecommendation) deletes
+// the row — we don't keep history of restores because the audit
+// log already records both events as RECOMMENDATION_DISMISSED /
+// RECOMMENDATION_RESTORED.
+type RecommendationDismissal struct {
+	// RecommendationID is the engine's deterministic ID. Same input
+	// fleet shape → same ID across runs, so this lookup is stable.
+	RecommendationID string    `json:"recommendation_id"`
+	DismissedAt      time.Time `json:"dismissed_at"`
+	DismissedBy      string    `json:"dismissed_by"`        // actor identifier ("operator:email", "system", etc.)
+	Reason           string    `json:"reason,omitempty"`    // optional free-text reason
 }
 
 // APIToken is one issued bearer token. Plaintext token values are NEVER

@@ -15,6 +15,7 @@ import { AgentLogs } from "@/components/agent-details/AgentLogs";
 import { AgentMetrics } from "@/components/agent-details/AgentMetrics";
 import { AgentOverview } from "@/components/agent-details/AgentOverview";
 import { VolumePanel } from "@/components/insights/VolumePanel";
+import { RecommendationsPanel } from "@/components/recommendations/RecommendationsPanel";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -156,6 +157,13 @@ export function AgentDetailsDrawer({
                   below it. */}
               {agentId && (
                 <VolumePanel mode="agent" agentId={agentId} window="24h" compact />
+              )}
+              {/* v0.25 recommendations scoped to this agent. Sits
+                  right under the byte panel so the "here's what to do
+                  about it" story follows directly from the "here's
+                  what you're spending" one. */}
+              {agentId && (
+                <RecommendationsPanel mode="agent" agentId={agentId} compact limit={4} />
               )}
               <AgentOverview agent={agent} metrics={metrics} />
             </TabsContent>

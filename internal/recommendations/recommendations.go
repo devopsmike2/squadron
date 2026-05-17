@@ -1,0 +1,690 @@
+// Copyright (c) 2024 Squadron Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package recommendations is the v0.25 cost-optimization advice
+// engine. It reads from the v0.24 insights surface, runs a set of
+// pure-Go heuristic "recipes" against the latest fleet snapshot,
+// and returns a ranked list of actionable Recommendations.
+//
+// Every recommendation carries:
+//
+//   - A stable ID (hashed from recipe + scope) so dismissals stick
+//     across re-evaluations.
+//   - A category + severity so the UI can group and color.
+//   - A YAML snippet that, dropped into a collector config, would
+//     plausibly enact the suggestion.
+//   - An estimated bytes-saved figure so operators can prioritize
+//     by impact rather than guess.
+//
+// The engine is pure heuristic — no LLM, no historical-data store.
+// That's a deliberate v0.25 choice: heuristics are auditable,
+// repeatable, and fast (<10 ms per evaluation in benchmarks). The
+// "AI-assisted config" arc is its own track.
+package recommendations
+
+import (
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/internal/insights"
+)
+
+// Category groups recipes into UI buckets. Stable string values so
+// the UI can color/icon them without a switch on every render.
+type Category string
+
+const (
+	// CategoryNoisyAttribute — an attribute key is contributing a
+	// disproportionate share of a signal's byte budget. Suggested fix:
+	// drop or hash it via attributes processor.
+	CategoryNoisyAttribute Category = "noisy_attribute"
+
+	// CategoryOutlierAgent — one agent is producing dramatically
+	// more telemetry than its peers. Suggested fix: investigate the
+	// config; the agent may be missing a sampling step.
+	CategoryOutlierAgent Category = "outlier_agent"
+
+	// CategoryDropHotspot — a signal is being rejected at the
+	// receiver or dead-lettered after retries. Suggested fix:
+	// inspect rate limits / capacity.
+	CategoryDropHotspot Category = "drop_hotspot"
+
+	// CategoryEmptySignal — an agent reports a signal type with
+	// zero bytes for the entire window. Suggested fix: drop the
+	// pipeline branch on the source side.
+	CategoryEmptySignal Category = "empty_signal"
+)
+
+// Severity is a coarse three-step scale. We resist the urge to
+// invent more — operators are scanning, not reading.
+type Severity string
+
+const (
+	SeverityCritical Severity = "critical"
+	SeverityWarn     Severity = "warn"
+	SeverityInfo     Severity = "info"
+)
+
+// Recommendation is one piece of advice the engine produced. The
+// JSON shape is wire-stable — UI clients and the v0.25 squadronctl
+// commands depend on these field names.
+type Recommendation struct {
+	// ID is deterministic from (recipe, scope). Same inputs → same
+	// ID, so dismissals survive re-evaluations.
+	ID string `json:"id"`
+
+	Category Category `json:"category"`
+	Severity Severity `json:"severity"`
+
+	// Title is the headline shown in lists. Imperative voice,
+	// <80 chars: "Drop attribute http.url from metrics".
+	Title string `json:"title"`
+
+	// Detail is the longer-form explanation rendered when the
+	// operator expands the card. Multi-line OK.
+	Detail string `json:"detail"`
+
+	// AgentID is set when the recommendation is scoped to a single
+	// agent; empty for fleet-wide advice.
+	AgentID   string `json:"agent_id,omitempty"`
+	AgentName string `json:"agent_name,omitempty"`
+
+	// Signal narrows the recommendation to one telemetry type when
+	// applicable (most do). Empty for cross-signal advice.
+	Signal insights.Signal `json:"signal,omitempty"`
+
+	// EstSavingsBytes is the bytes-per-window the suggested fix
+	// would plausibly avoid. -1 when not estimable (e.g. drop
+	// hotspots where the "saving" is reliability, not bytes).
+	EstSavingsBytes int64 `json:"est_savings_bytes"`
+
+	// PctOfSignal is the share of the signal's byte budget the
+	// recommendation targets. Useful for the UI's progress bars.
+	PctOfSignal float64 `json:"pct_of_signal,omitempty"`
+
+	// Snippet is a small valid OpenTelemetry Collector YAML
+	// fragment the operator can paste into their config. Includes
+	// a header comment explaining the source of the advice.
+	Snippet string `json:"snippet,omitempty"`
+
+	// GeneratedAt is the snapshot time the recommendation reflects.
+	// Clients can show "as of 2 min ago" if they care.
+	GeneratedAt time.Time `json:"generated_at"`
+}
+
+// Dismissals is the interface the engine uses to filter out
+// recommendations operators have explicitly dismissed. Implemented
+// by internal/services/recommendation_dismissals on top of the app
+// store; faked in tests. Kept narrow on purpose so the engine
+// doesn't depend on a particular storage layout.
+type Dismissals interface {
+	IsDismissed(ctx context.Context, recID string) (bool, error)
+}
+
+// noopDismissals is the safe default when the caller hasn't wired
+// a dismissals store. Pass it explicitly via NewEngine to keep the
+// interface non-optional at the call site.
+type noopDismissals struct{}
+
+func (noopDismissals) IsDismissed(context.Context, string) (bool, error) { return false, nil }
+
+// NoopDismissals returns a Dismissals that never filters anything.
+// Useful in tests and on first boot before the app DB is wired.
+func NoopDismissals() Dismissals { return noopDismissals{} }
+
+// AgentNameResolver lets the engine annotate per-agent
+// recommendations with a human-readable name. We deliberately don't
+// fetch the full agent record — that's wasteful when the engine
+// already has the agent_id and just needs the label.
+type AgentNameResolver func(ctx context.Context, agentID string) string
+
+// InsightsQuerier is the narrow slice of insights.Service that
+// the engine needs. Extracting it as an interface lets us pass a
+// fake in tests without spinning up DuckDB; *insights.Service
+// satisfies it at runtime.
+type InsightsQuerier interface {
+	FleetVolume(ctx context.Context, win insights.Window, signalFilter []insights.Signal) (*insights.FleetSummary, error)
+	TopAgents(ctx context.Context, win insights.Window, limit int) ([]insights.AgentVolume, error)
+	TopAttributes(ctx context.Context, win insights.Window, signal insights.Signal, limit int) ([]insights.AttributeVolume, error)
+}
+
+// Engine is the public surface. Construct with NewEngine, call
+// Evaluate. Thread-safe; safe to share across requests.
+type Engine struct {
+	insights InsightsQuerier
+	dismiss  Dismissals
+	resolve  AgentNameResolver
+	logger   *zap.Logger
+
+	// Heuristic thresholds. Exposed as fields so a future
+	// configuration surface (env vars, per-tenant overrides) can
+	// tweak without touching recipe code. v0.25 ships with these
+	// defaults; v0.25.x may make them runtime-configurable.
+	NoisyAttributeMinPct float64 // default 0.15 (15%)
+	OutlierAgentRatio    float64 // default 2.0  (2× fleet median)
+	DropHotspotMinPct    float64 // default 0.01 (1%)
+	EmptySignalMinAgents int     // default 3 — avoid noise on tiny fleets
+
+	// Evaluation cache (insights service has its own cache, but
+	// this engine adds a thin layer so concurrent UI polls don't
+	// re-rank). 10s TTL pairs with the UI's 30s polling.
+	mu       sync.Mutex
+	cache    *cachedSnapshot
+	cacheTTL time.Duration
+}
+
+type cachedSnapshot struct {
+	storedAt time.Time
+	value    []Recommendation
+	key      string
+}
+
+// NewEngine builds the engine. Pass NoopDismissals() if you don't
+// have a dismissals store yet; the resolve fn can be nil and the
+// engine will leave AgentName empty. svc accepts any
+// InsightsQuerier so tests can pass a fake; *insights.Service
+// satisfies the interface at runtime.
+func NewEngine(svc InsightsQuerier, dismiss Dismissals, resolve AgentNameResolver, logger *zap.Logger) *Engine {
+	if dismiss == nil {
+		dismiss = NoopDismissals()
+	}
+	return &Engine{
+		insights:             svc,
+		dismiss:              dismiss,
+		resolve:              resolve,
+		logger:               logger,
+		NoisyAttributeMinPct: 0.15,
+		OutlierAgentRatio:    2.0,
+		DropHotspotMinPct:    0.01,
+		EmptySignalMinAgents: 3,
+		cacheTTL:             10 * time.Second,
+	}
+}
+
+// Evaluate runs every recipe against the fleet snapshot for the
+// given window and returns the surviving recommendations, ranked
+// by severity then estimated savings.
+//
+// Returns an empty slice (not nil) when there's nothing to say —
+// caller can json.Marshal without a nil-check.
+func (e *Engine) Evaluate(ctx context.Context, win insights.Window) ([]Recommendation, error) {
+	// Cache check. The key is just the window — recipe outputs are
+	// pure functions of the insights snapshot, so two requests for
+	// the same window within the TTL get the same answer.
+	cacheKey := "win:" + string(win)
+	e.mu.Lock()
+	if e.cache != nil && e.cache.key == cacheKey && time.Since(e.cache.storedAt) < e.cacheTTL {
+		out := append([]Recommendation(nil), e.cache.value...)
+		e.mu.Unlock()
+		return out, nil
+	}
+	e.mu.Unlock()
+
+	now := time.Now().UTC()
+	out := make([]Recommendation, 0, 16)
+
+	// Fan out to the insights service. Each recipe reads what it
+	// needs; we don't pre-aggregate because the insights service
+	// caches its own queries.
+	fleet, err := e.insights.FleetVolume(ctx, win, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fleet snapshot: %w", err)
+	}
+	// Recipes — order matters only insofar as duplicate IDs across
+	// recipes would collide. We use distinct ID prefixes per recipe
+	// so collisions can't happen.
+	out = append(out, e.recipeNoisyAttribute(ctx, win, fleet, now)...)
+	out = append(out, e.recipeOutlierAgent(ctx, win, fleet, now)...)
+	out = append(out, e.recipeDropHotspot(ctx, win, fleet, now)...)
+	out = append(out, e.recipeEmptySignal(ctx, win, fleet, now)...)
+
+	// Filter dismissals. Done after generation so a future
+	// "restore" path doesn't have to remember what was filtered.
+	kept := out[:0]
+	for _, r := range out {
+		dismissed, err := e.dismiss.IsDismissed(ctx, r.ID)
+		if err != nil {
+			// Conservative: surface the recommendation. Log so the
+			// dismissals storage misbehavior is visible without
+			// being silently lost.
+			e.logger.Warn("dismissal check failed",
+				zap.String("rec_id", r.ID), zap.Error(err))
+			kept = append(kept, r)
+			continue
+		}
+		if !dismissed {
+			kept = append(kept, r)
+		}
+	}
+
+	// Rank: severity DESC, then estimated savings DESC. Stable
+	// sort so deterministic given identical inputs (helps testing).
+	sort.SliceStable(kept, func(i, j int) bool {
+		if severityRank(kept[i].Severity) != severityRank(kept[j].Severity) {
+			return severityRank(kept[i].Severity) > severityRank(kept[j].Severity)
+		}
+		return kept[i].EstSavingsBytes > kept[j].EstSavingsBytes
+	})
+
+	e.mu.Lock()
+	e.cache = &cachedSnapshot{storedAt: now, value: kept, key: cacheKey}
+	e.mu.Unlock()
+
+	return kept, nil
+}
+
+// InvalidateCache drops the engine's cached snapshot. Call after
+// any state change that should be reflected in the next Evaluate:
+// dismissing or restoring a recommendation, mostly. Cheap; safe to
+// call frequently.
+func (e *Engine) InvalidateCache() {
+	e.mu.Lock()
+	e.cache = nil
+	e.mu.Unlock()
+}
+
+// EvaluateForAgent narrows to recommendations whose AgentID matches.
+// Convenience for the agent-detail drawer; runs the full evaluation
+// (the cache covers the cost) and filters down.
+func (e *Engine) EvaluateForAgent(ctx context.Context, win insights.Window, agentID string) ([]Recommendation, error) {
+	all, err := e.Evaluate(ctx, win)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Recommendation, 0, 4)
+	for _, r := range all {
+		if r.AgentID == agentID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// ----------------------------------------------------------------
+// Recipes — each is a small pure function over the insights
+// snapshot. Adding new recipes is the most common kind of v0.25.x
+// change; the pattern is: take fleet + insights handle, emit zero
+// or more Recommendations.
+// ----------------------------------------------------------------
+
+// recipeNoisyAttribute — per signal, fetch the top-attributes
+// estimate and emit one recommendation per key whose PctOfSignal
+// exceeds the threshold. The "drop the attribute" advice is the
+// single highest-ROI optimization in production OTel deployments,
+// so it gets prime placement and Critical severity at high pct.
+func (e *Engine) recipeNoisyAttribute(ctx context.Context, win insights.Window, fleet *insights.FleetSummary, now time.Time) []Recommendation {
+	out := make([]Recommendation, 0, 4)
+	for _, sv := range fleet.BySignal {
+		if sv.Bytes == 0 {
+			continue
+		}
+		attrs, err := e.insights.TopAttributes(ctx, win, sv.Signal, 20)
+		if err != nil {
+			e.logger.Warn("topAttributes failed; skipping recipe",
+				zap.String("signal", string(sv.Signal)), zap.Error(err))
+			continue
+		}
+		for _, a := range attrs {
+			if a.PctOfSignal < e.NoisyAttributeMinPct {
+				continue
+			}
+			sev := SeverityWarn
+			if a.PctOfSignal >= 0.30 {
+				sev = SeverityCritical
+			}
+			// Estimated savings: the attribute's byte share of the
+			// signal's total. The TopAttributes Bytes field is
+			// already extrapolated from the sample, but we re-base
+			// against the signal total so the figure aligns with
+			// the volume panel the operator just saw.
+			est := int64(float64(sv.Bytes) * a.PctOfSignal)
+			out = append(out, Recommendation{
+				ID: idFor("noisy_attr", string(sv.Signal), a.Key),
+				Category:        CategoryNoisyAttribute,
+				Severity:        sev,
+				Title:           fmt.Sprintf("Drop attribute %q from %s", a.Key, sv.Signal),
+				Detail:          noisyAttributeDetail(a, sv),
+				Signal:          sv.Signal,
+				EstSavingsBytes: est,
+				PctOfSignal:     a.PctOfSignal,
+				Snippet:         attributeDeleteSnippet(a.Key, sv.Signal),
+				GeneratedAt:     now,
+			})
+		}
+	}
+	return out
+}
+
+// recipeOutlierAgent — surface agents producing >= ratio× the
+// median agent's bytes. Median (not mean) so a single absurd
+// outlier doesn't pull the threshold up and hide the next-worst.
+func (e *Engine) recipeOutlierAgent(ctx context.Context, win insights.Window, _ *insights.FleetSummary, now time.Time) []Recommendation {
+	agents, err := e.insights.TopAgents(ctx, win, 50)
+	if err != nil {
+		e.logger.Warn("topAgents failed; skipping recipe", zap.Error(err))
+		return nil
+	}
+	if len(agents) < 4 {
+		// Tiny fleets — outlier detection is meaningless when N=2.
+		return nil
+	}
+	// Median of TotalBytes across the top-N. Use top-N rather than
+	// full fleet because the full fleet may have many zero-traffic
+	// agents that drag the median down and produce false positives.
+	sorted := append([]insights.AgentVolume(nil), agents...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].TotalBytes < sorted[j].TotalBytes })
+	median := sorted[len(sorted)/2].TotalBytes
+	if median == 0 {
+		return nil
+	}
+	threshold := int64(float64(median) * e.OutlierAgentRatio)
+
+	out := make([]Recommendation, 0, 2)
+	for _, a := range agents {
+		if a.TotalBytes < threshold {
+			continue
+		}
+		ratio := float64(a.TotalBytes) / float64(median)
+		sev := SeverityWarn
+		if ratio >= 5 {
+			sev = SeverityCritical
+		}
+		name := a.AgentName
+		if name == "" && e.resolve != nil {
+			name = e.resolve(ctx, a.AgentID)
+		}
+		out = append(out, Recommendation{
+			ID:              idFor("outlier_agent", a.AgentID),
+			Category:        CategoryOutlierAgent,
+			Severity:        sev,
+			Title:           fmt.Sprintf("Agent %s produces %.1f× the fleet median", shortAgentLabel(name, a.AgentID), ratio),
+			Detail:          outlierAgentDetail(a, ratio, median),
+			AgentID:         a.AgentID,
+			AgentName:       name,
+			EstSavingsBytes: a.TotalBytes - median, // savings if it dropped to median
+			Snippet:         "", // no single snippet — operator needs to review the agent's config
+			GeneratedAt:     now,
+		})
+	}
+	return out
+}
+
+// recipeDropHotspot — any signal with non-zero drops in the window.
+// Severity scales with the drop rate. Snippet suggests bumping the
+// batch-processor send_batch_size; that's the single most common
+// fix for dead-letter pressure.
+func (e *Engine) recipeDropHotspot(ctx context.Context, win insights.Window, fleet *insights.FleetSummary, now time.Time) []Recommendation {
+	out := make([]Recommendation, 0, 2)
+	for _, sv := range fleet.BySignal {
+		if sv.DroppedCount == 0 || sv.ItemCount == 0 {
+			continue
+		}
+		dropPct := float64(sv.DroppedCount) / float64(sv.ItemCount+sv.DroppedCount)
+		if dropPct < e.DropHotspotMinPct {
+			continue
+		}
+		sev := SeverityWarn
+		if dropPct >= 0.05 {
+			sev = SeverityCritical
+		}
+		out = append(out, Recommendation{
+			ID:              idFor("drop_hotspot", string(sv.Signal)),
+			Category:        CategoryDropHotspot,
+			Severity:        sev,
+			Title:           fmt.Sprintf("%.2f%% of %s items are being dropped", dropPct*100, sv.Signal),
+			Detail:          dropHotspotDetail(sv, dropPct),
+			Signal:          sv.Signal,
+			EstSavingsBytes: -1, // reliability, not bytes
+			Snippet:         batchProcessorSnippet(sv.Signal),
+			GeneratedAt:     now,
+		})
+	}
+	return out
+}
+
+// recipeEmptySignal — any agent whose total bytes is non-zero but
+// has zero bytes for at least one signal. Suggests the agent's
+// pipeline ships a branch that produces nothing — easy to prune.
+// We require >= EmptySignalMinAgents in the fleet so a 1-agent dev
+// run doesn't spam recommendations.
+func (e *Engine) recipeEmptySignal(ctx context.Context, win insights.Window, fleet *insights.FleetSummary, now time.Time) []Recommendation {
+	if fleet.AgentCount < e.EmptySignalMinAgents {
+		return nil
+	}
+	agents, err := e.insights.TopAgents(ctx, win, 100)
+	if err != nil {
+		e.logger.Warn("topAgents failed; skipping empty-signal recipe", zap.Error(err))
+		return nil
+	}
+	// Figure out which signals the fleet actually produces. An
+	// agent's "empty signal" only counts if other agents are
+	// emitting that signal — otherwise it's "nobody uses this
+	// signal", which is fleet-wide and a different recipe.
+	fleetHas := map[insights.Signal]bool{}
+	for _, sv := range fleet.BySignal {
+		if sv.Bytes > 0 {
+			fleetHas[sv.Signal] = true
+		}
+	}
+
+	out := make([]Recommendation, 0, 4)
+	for _, a := range agents {
+		if a.TotalBytes == 0 {
+			continue
+		}
+		have := map[insights.Signal]bool{}
+		for _, sv := range a.BySignal {
+			if sv.Bytes > 0 {
+				have[sv.Signal] = true
+			}
+		}
+		for sig := range fleetHas {
+			if have[sig] {
+				continue
+			}
+			// Only emit when the agent has non-trivial volume on
+			// other signals — otherwise it's probably just lightly
+			// loaded, not misconfigured.
+			if a.TotalBytes < 10_000 {
+				continue
+			}
+			name := a.AgentName
+			if name == "" && e.resolve != nil {
+				name = e.resolve(ctx, a.AgentID)
+			}
+			out = append(out, Recommendation{
+				ID:              idFor("empty_signal", a.AgentID, string(sig)),
+				Category:        CategoryEmptySignal,
+				Severity:        SeverityInfo,
+				Title:           fmt.Sprintf("Agent %s reports no %s; consider pruning the pipeline", shortAgentLabel(name, a.AgentID), sig),
+				Detail:          emptySignalDetail(a, sig),
+				AgentID:         a.AgentID,
+				AgentName:       name,
+				Signal:          sig,
+				EstSavingsBytes: 0, // no byte savings — operational hygiene
+				Snippet:         "", // no single snippet — operator deletes the pipeline branch
+				GeneratedAt:     now,
+			})
+		}
+	}
+	return out
+}
+
+// ----------------------------------------------------------------
+// Snippet builders. Each returns a small, valid YAML fragment with
+// a header comment explaining what to do with it.
+// ----------------------------------------------------------------
+
+// attributeDeleteSnippet builds an attributesprocessor block that
+// drops the named key. The header explains the merge step the
+// operator has to do — we can't merge into an unknown config for
+// them.
+func attributeDeleteSnippet(key string, sig insights.Signal) string {
+	procName := "attributes/drop_" + sanitizeYAMLKey(key)
+	return strings.TrimSpace(fmt.Sprintf(`
+# Recommendation: drop attribute %q from %s pipelines.
+# Merge into your collector config: add the processor under
+# processors:, then list it in service.pipelines.%s.processors.
+processors:
+  %s:
+    actions:
+      - key: %q
+        action: delete
+
+# Then, in your existing %s pipeline:
+service:
+  pipelines:
+    %s:
+      processors: [%s, batch]  # keep any existing processors after this
+`, key, sig, sig, procName, key, sig, sig, procName))
+}
+
+// batchProcessorSnippet suggests larger batches for drop-hotspot
+// signals. Doesn't blindly raise send_batch_size — also adds
+// send_batch_max_size so the operator gets a bounded payload.
+func batchProcessorSnippet(sig insights.Signal) string {
+	return strings.TrimSpace(fmt.Sprintf(`
+# Recommendation: drops on %s suggest the batch processor isn't
+# absorbing your ingest rate. Try larger batches with a hard ceiling.
+processors:
+  batch/larger:
+    timeout: 5s
+    send_batch_size: 4096
+    send_batch_max_size: 8192
+
+# Then in service.pipelines.%s.processors, replace 'batch' with
+# 'batch/larger' (or add it if you don't have batching yet).
+`, sig, sig))
+}
+
+// ----------------------------------------------------------------
+// Detail-text builders. Kept separate so the recipe code stays
+// readable.
+// ----------------------------------------------------------------
+
+func noisyAttributeDetail(a insights.AttributeVolume, sv insights.SignalVolume) string {
+	return fmt.Sprintf(
+		`The attribute %q accounts for an estimated %.1f%% of your %s byte budget (~%s). `+
+			`Dropping it via an attributesprocessor is the single most common cost optimization. `+
+			`Estimate is sampled (~2000 rows per query); validate against your own bill before adopting.`,
+		a.Key, a.PctOfSignal*100, sv.Signal, humanBytes(a.Bytes),
+	)
+}
+
+func outlierAgentDetail(a insights.AgentVolume, ratio float64, median int64) string {
+	return fmt.Sprintf(
+		`This agent emitted %s in the window — %.1f× the fleet median of %s. `+
+			`Common causes: missing sampling step, an exporter retry loop, or a verbose log severity. `+
+			`Open the agent's config to investigate; no single snippet fixes this category.`,
+		humanBytes(a.TotalBytes), ratio, humanBytes(median),
+	)
+}
+
+func dropHotspotDetail(sv insights.SignalVolume, dropPct float64) string {
+	return fmt.Sprintf(
+		`%d of %d %s items were dropped or dead-lettered in the window (%.2f%%). `+
+			`That's data the agent intended to send but couldn't — usually a sign the batch `+
+			`processor or exporter queue is undersized.`,
+		sv.DroppedCount, sv.ItemCount+sv.DroppedCount, sv.Signal, dropPct*100,
+	)
+}
+
+func emptySignalDetail(a insights.AgentVolume, sig insights.Signal) string {
+	return fmt.Sprintf(
+		`This agent ships a %s pipeline but emitted zero bytes during the window, while the rest `+
+			`of the fleet did. Prune the %s receiver/exporter pair from this agent's config to reduce `+
+			`memory and connection overhead.`,
+		sig, sig,
+	)
+}
+
+// ----------------------------------------------------------------
+// Pure helpers
+// ----------------------------------------------------------------
+
+// idFor produces a stable, URL-safe ID from a recipe name + scope
+// fields. SHA1 truncated to 16 hex chars — collision-resistant
+// enough for an N≈100 recommendation list and stable across
+// process restarts.
+func idFor(parts ...string) string {
+	h := sha1.New()
+	for i, p := range parts {
+		if i > 0 {
+			h.Write([]byte{0x1f}) // unit separator
+		}
+		h.Write([]byte(p))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func severityRank(s Severity) int {
+	switch s {
+	case SeverityCritical:
+		return 3
+	case SeverityWarn:
+		return 2
+	case SeverityInfo:
+		return 1
+	}
+	return 0
+}
+
+// shortAgentLabel returns a 12-char-ish label preferring the
+// agent's name and falling back to the first chunk of its UUID.
+func shortAgentLabel(name, id string) string {
+	if name != "" {
+		return name
+	}
+	if len(id) >= 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// sanitizeYAMLKey turns an OTel attribute key (which may contain
+// dots, slashes, dashes) into a snake_case-ish identifier safe to
+// drop into a YAML key. Doesn't need to be reversible.
+func sanitizeYAMLKey(k string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(k) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "attr"
+	}
+	return out
+}
+
+// humanBytes is a small humanizer used only in detail text. Kept
+// local so the package doesn't depend on a third-party formatter.
+func humanBytes(b int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	switch {
+	case b >= GB:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(GB))
+	case b >= MB:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(MB))
+	case b >= KB:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}

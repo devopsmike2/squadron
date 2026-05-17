@@ -25,19 +25,23 @@ type Store struct {
 	auditEvents  []*types.AuditEvent // append-only; sorted newest-first on read
 	rollouts     map[string]*types.Rollout
 	apiTokens    map[string]*types.APIToken // keyed by ID; secondary index built on the fly for hash lookup
+	// v0.25: recommendation dismissals — keyed by the engine's
+	// deterministic recommendation_id hash.
+	recDismissals map[string]*types.RecommendationDismissal
 }
 
 // NewStore creates a new in-memory store
 func NewStore() *Store {
 	return &Store{
-		agents:       make(map[uuid.UUID]*types.Agent),
-		groups:       make(map[string]*types.Group),
-		configs:      make(map[string]*types.Config),
-		savedQueries: make(map[string]*types.SavedQuery),
-		alertRules:   make(map[string]*types.AlertRule),
-		auditEvents:  make([]*types.AuditEvent, 0, 64),
-		rollouts:     make(map[string]*types.Rollout),
-		apiTokens:    make(map[string]*types.APIToken),
+		agents:        make(map[uuid.UUID]*types.Agent),
+		groups:        make(map[string]*types.Group),
+		configs:       make(map[string]*types.Config),
+		savedQueries:  make(map[string]*types.SavedQuery),
+		alertRules:    make(map[string]*types.AlertRule),
+		auditEvents:   make([]*types.AuditEvent, 0, 64),
+		rollouts:      make(map[string]*types.Rollout),
+		apiTokens:     make(map[string]*types.APIToken),
+		recDismissals: make(map[string]*types.RecommendationDismissal),
 	}
 }
 
@@ -747,4 +751,62 @@ func (s *Store) purge(context.Context) {
 	s.auditEvents = make([]*types.AuditEvent, 0, 64)
 	s.rollouts = make(map[string]*types.Rollout)
 	s.apiTokens = make(map[string]*types.APIToken)
+	s.recDismissals = make(map[string]*types.RecommendationDismissal)
+}
+
+// ----------------------------------------------------------------
+// Recommendation dismissals (v0.25)
+// ----------------------------------------------------------------
+
+func (s *Store) DismissRecommendation(_ context.Context, d *types.RecommendationDismissal) error {
+	if d == nil || d.RecommendationID == "" {
+		return fmt.Errorf("recommendation_id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *d
+	if cp.DismissedAt.IsZero() {
+		cp.DismissedAt = time.Now().UTC()
+	}
+	if cp.DismissedBy == "" {
+		cp.DismissedBy = "system"
+	}
+	s.recDismissals[cp.RecommendationID] = &cp
+	return nil
+}
+
+func (s *Store) RestoreRecommendation(_ context.Context, recommendationID string) error {
+	if recommendationID == "" {
+		return fmt.Errorf("recommendation_id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.recDismissals, recommendationID)
+	return nil
+}
+
+func (s *Store) IsRecommendationDismissed(_ context.Context, recommendationID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.recDismissals[recommendationID]
+	return ok, nil
+}
+
+func (s *Store) ListRecommendationDismissals(_ context.Context) ([]*types.RecommendationDismissal, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.RecommendationDismissal, 0, len(s.recDismissals))
+	for _, d := range s.recDismissals {
+		cp := *d
+		out = append(out, &cp)
+	}
+	// Stable order: newest first to match SQLite.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].DismissedAt.After(out[i].DismissedAt) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out, nil
 }

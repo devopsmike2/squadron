@@ -36,6 +36,7 @@ import {
   parseAgentFlows,
 } from "@/components/fleet-map/exporter-parser";
 import { VolumePanel, formatBytes } from "@/components/insights/VolumePanel";
+import { RecommendationsPanel } from "@/components/recommendations/RecommendationsPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -217,6 +218,11 @@ export default function CostInsightsPage() {
           isLoading={!agentsResp || topAgentsLoading}
         />
       </div>
+
+      {/* Recommendations — v0.25 cost-optimization engine. Sits
+          between fleet summary and outliers so operators see
+          actionable advice before diving into raw rankings. */}
+      <RecommendationsPanel mode="fleet" window={window} limit={6} />
 
       {/* Outliers + attributes */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

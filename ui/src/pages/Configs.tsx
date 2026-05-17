@@ -1,6 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import useSWR from "swr";
 
 import {
@@ -57,6 +57,35 @@ service:
 
 type PageMode = "list" | "create" | "edit";
 
+/**
+ * composePrefillBody builds the initial editor contents for a
+ * deep-link from a v0.25 recommendation. The snippet alone usually
+ * isn't a valid collector config — it's just the processor block
+ * the engine suggests dropping in. We prepend it as a clearly-
+ * marked recommendation header above the default scaffolding so
+ * the operator has both the advice and a working baseline to
+ * paste into.
+ */
+function composePrefillBody(
+  prefill: { prefillSnippet?: string; recommendationId?: string },
+  fallback: string,
+): string {
+  if (!prefill.prefillSnippet) return fallback;
+  const banner = [
+    "# ----------------------------------------------------------",
+    "# Prefilled from a v0.25 cost recommendation.",
+    prefill.recommendationId
+      ? `# Recommendation id: ${prefill.recommendationId}`
+      : null,
+    "# Merge the processor block below into the scaffolding,",
+    "# rename if you'd like, then Save + roll out as usual.",
+    "# ----------------------------------------------------------",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return `${banner}\n${prefill.prefillSnippet}\n\n# --- baseline scaffolding below (edit freely) ---\n${fallback}`;
+}
+
 interface ConfigsPageProps {
   mode?: PageMode;
   configId?: string;
@@ -67,7 +96,20 @@ export default function ConfigsPage({
   configId: propConfigId,
 }: ConfigsPageProps = {}) {
   const navigate = useNavigate();
+  const location = useLocation();
   const params = useParams<{ configId?: string; mode?: string }>();
+
+  // v0.25 deep-link from a recommendation. RecommendationsPanel
+  // navigates here with location.state populated; we seed the editor
+  // and rename the draft so the operator lands on something
+  // recognisably theirs rather than the generic DEFAULT_CONFIG.
+  type PrefillState = {
+    prefillName?: string;
+    prefillSnippet?: string;
+    source?: string;
+    recommendationId?: string;
+  };
+  const prefill = (location.state || {}) as PrefillState;
 
   // Determine mode from props or URL params
   const mode: PageMode =
@@ -80,8 +122,12 @@ export default function ConfigsPage({
   const configId = propConfigId || params.configId;
 
   const [refreshing, setRefreshing] = useState(false);
-  const [editorContent, setEditorContent] = useState(DEFAULT_CONFIG);
-  const [configName, setConfigName] = useState("New Config");
+  const [editorContent, setEditorContent] = useState(() =>
+    composePrefillBody(prefill, DEFAULT_CONFIG),
+  );
+  const [configName, setConfigName] = useState(
+    prefill.prefillName?.trim() || "New Config",
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
@@ -107,18 +153,32 @@ export default function ConfigsPage({
       selectedGroupId ? getConfigVersions({ group_id: selectedGroupId }) : null,
   );
 
-  // Load config into editor when in edit mode
+  // Load config into editor when in edit mode. In create mode we
+  // reset to defaults UNLESS the route was reached with prefill
+  // state (the v0.25 "Open in editor" deep-link from a
+  // recommendation). Without the guard, this effect runs after
+  // useState's initializer and silently clobbers the prefill —
+  // caught by manual testing of the recommendation deep-link.
   useEffect(() => {
     if (mode === "edit" && currentConfigData) {
       setEditorContent(currentConfigData.content);
       setConfigName(currentConfigData.name || "New Config");
       setSelectedGroupId(currentConfigData.group_id || "");
     } else if (mode === "create") {
-      setEditorContent(DEFAULT_CONFIG);
-      setConfigName("New Config");
+      if (prefill.prefillSnippet) {
+        setEditorContent(composePrefillBody(prefill, DEFAULT_CONFIG));
+        setConfigName(prefill.prefillName?.trim() || "New Config");
+      } else {
+        setEditorContent(DEFAULT_CONFIG);
+        setConfigName("New Config");
+      }
       setSelectedGroupId("");
     }
-  }, [mode, currentConfigData]);
+    // prefill is derived from location.state; including the
+    // recommendationId in deps means a different recommendation
+    // reopening the same route triggers a re-prefill.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, currentConfigData, prefill.recommendationId]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

@@ -20,6 +20,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/metrics"
+	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -63,6 +64,8 @@ type Server struct {
 	broker            *events.Broker
 	configsTracer     *configs.Tracer  // optional; nil disables config-push spans on direct handler pushes
 	insightsService   *insights.Service // optional; nil disables the /api/v1/insights/* routes (no telemetry reader configured)
+	recsEngine        *recommendations.Engine
+	recsDismissals    handlers.DismissalStore // optional; nil disables /api/v1/recommendations/* (paired with recsEngine)
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -152,6 +155,33 @@ func (s *Server) insightsTrampoline(fn func(*handlers.InsightsHandlers, *gin.Con
 // positional parameter for an optional feature.
 func (s *Server) SetInsightsService(svc *insights.Service) {
 	s.insightsService = svc
+}
+
+// SetRecommendationsEngine wires the v0.25 recommendations engine
+// + its dismissals store. Both go together — an engine without a
+// store can still Evaluate but can't honor dismissals. When unset,
+// the /api/v1/recommendations/* routes return 503 with a clear
+// message (same trampoline pattern as the insights routes).
+func (s *Server) SetRecommendationsEngine(engine *recommendations.Engine, dismissals handlers.DismissalStore) {
+	s.recsEngine = engine
+	s.recsDismissals = dismissals
+}
+
+// recommendationsTrampoline late-binds a recs handler call so the
+// route table can be registered before SetRecommendationsEngine
+// runs. Mirrors insightsTrampoline; 503s with a clear error
+// message when the engine is still nil.
+func (s *Server) recommendationsTrampoline(fn func(*handlers.RecommendationsHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.recsEngine == nil || s.recsDismissals == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "Cost Recommendations are not available — engine not wired",
+			})
+			return
+		}
+		h := handlers.NewRecommendationsHandlers(s.recsEngine, s.recsDismissals, s.logger)
+		fn(h, c)
+	}
 }
 
 // Start starts the HTTP server
@@ -386,6 +416,27 @@ func (s *Server) registerRoutes() {
 		v1.GET("/insights/volume/drops",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.insightsTrampoline(func(h *handlers.InsightsHandlers, c *gin.Context) { h.HandleDrops(c) }))
+
+		// Cost Recommendations (v0.25). Heuristic advice layered on
+		// top of the v0.24 insights surface. Reads are
+		// ScopeAgentsRead (same gating as the underlying volume
+		// data); dismiss/restore mutations require ScopeAgentsWrite
+		// because they shape what other operators see.
+		v1.GET("/recommendations",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.recommendationsTrampoline(func(h *handlers.RecommendationsHandlers, c *gin.Context) { h.HandleList(c) }))
+		v1.GET("/recommendations/agents/:id",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.recommendationsTrampoline(func(h *handlers.RecommendationsHandlers, c *gin.Context) { h.HandleListForAgent(c) }))
+		v1.GET("/recommendations/dismissals",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.recommendationsTrampoline(func(h *handlers.RecommendationsHandlers, c *gin.Context) { h.HandleListDismissals(c) }))
+		v1.POST("/recommendations/:id/dismiss",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.recommendationsTrampoline(func(h *handlers.RecommendationsHandlers, c *gin.Context) { h.HandleDismiss(c) }))
+		v1.POST("/recommendations/:id/restore",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.recommendationsTrampoline(func(h *handlers.RecommendationsHandlers, c *gin.Context) { h.HandleRestore(c) }))
 	}
 
 	// Serve static files for the UI

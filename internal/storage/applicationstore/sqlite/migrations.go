@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -140,8 +140,27 @@ END;
 INSERT OR IGNORE INTO schema_version (version) VALUES (2);
 `
 
+// RecommendationDismissalsSchema adds the v0.25 dismissals table.
+// The recommendation_id is the engine's deterministic hash (SHA-1
+// truncated to 16 hex chars) — same fleet shape produces the same
+// id across re-evaluations, so dismissals stick. No FK constraint
+// because recommendations are computed on-demand, not stored.
+const RecommendationDismissalsSchema = `
+CREATE TABLE IF NOT EXISTS recommendation_dismissals (
+	recommendation_id TEXT PRIMARY KEY,
+	dismissed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	dismissed_by TEXT NOT NULL DEFAULT 'system',
+	reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rec_dismissals_dismissed_at ON recommendation_dismissals(dismissed_at);
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (3);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
 	AlertRulesSchema,
+	RecommendationDismissalsSchema,
 }

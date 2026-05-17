@@ -183,6 +183,18 @@ func (s *Storage) migrate() error {
 	-- Fast lookup by hash for every authenticated request.
 	CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(hash);
 
+	-- v0.25 recommendation dismissals. PK is the engine's
+	-- deterministic recommendation_id hash, so dismissals correlate
+	-- across re-evaluations. No FK — recommendations are computed
+	-- on-demand, not stored.
+	CREATE TABLE IF NOT EXISTS recommendation_dismissals (
+		recommendation_id TEXT PRIMARY KEY,
+		dismissed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		dismissed_by TEXT NOT NULL DEFAULT 'system',
+		reason TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_rec_dismissals_dismissed_at ON recommendation_dismissals(dismissed_at);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -1410,6 +1422,96 @@ func (s *Storage) RevokeAPIToken(ctx context.Context, id string, at time.Time) e
 	// distinction by doing a List/Get before the revoke if needed.
 	_ = res
 	return nil
+}
+
+// ----------------------------------------------------------------
+// Recommendation dismissals (v0.25)
+// ----------------------------------------------------------------
+//
+// The dismissals table is a tiny lookup the recommendations engine
+// consults at the tail end of every Evaluate to filter out advice
+// the operator has explicitly hidden. Inserts use ON CONFLICT
+// REPLACE so a second dismissal (perhaps with a new reason) just
+// updates the row; restore is a plain DELETE.
+
+// DismissRecommendation inserts or updates a dismissal row.
+// Repeat dismissals just refresh dismissed_at + reason.
+func (s *Storage) DismissRecommendation(ctx context.Context, d *types.RecommendationDismissal) error {
+	if d == nil || d.RecommendationID == "" {
+		return fmt.Errorf("recommendation_id required")
+	}
+	when := d.DismissedAt
+	if when.IsZero() {
+		when = time.Now().UTC()
+	}
+	by := d.DismissedBy
+	if by == "" {
+		by = "system"
+	}
+	stmt := `INSERT INTO recommendation_dismissals (recommendation_id, dismissed_at, dismissed_by, reason)
+	         VALUES (?, ?, ?, ?)
+	         ON CONFLICT(recommendation_id) DO UPDATE SET
+	             dismissed_at = excluded.dismissed_at,
+	             dismissed_by = excluded.dismissed_by,
+	             reason       = excluded.reason`
+	if _, err := s.db.ExecContext(ctx, stmt, d.RecommendationID, when, by, d.Reason); err != nil {
+		return fmt.Errorf("failed to dismiss recommendation: %w", err)
+	}
+	return nil
+}
+
+// RestoreRecommendation removes the dismissal row. Idempotent —
+// restoring an already-restored (or never-dismissed) ID is a no-op.
+func (s *Storage) RestoreRecommendation(ctx context.Context, recommendationID string) error {
+	if recommendationID == "" {
+		return fmt.Errorf("recommendation_id required")
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM recommendation_dismissals WHERE recommendation_id = ?`,
+		recommendationID); err != nil {
+		return fmt.Errorf("failed to restore recommendation: %w", err)
+	}
+	return nil
+}
+
+// IsRecommendationDismissed is the hot path — the engine calls it
+// once per generated recommendation. Tiny indexed PK lookup, so
+// no caching needed at this layer.
+func (s *Storage) IsRecommendationDismissed(ctx context.Context, recommendationID string) (bool, error) {
+	if recommendationID == "" {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM recommendation_dismissals WHERE recommendation_id = ?`,
+		recommendationID).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("failed to check dismissal: %w", err)
+	}
+	return n > 0, nil
+}
+
+// ListRecommendationDismissals returns the full set, newest first.
+// Cheap because operators only ever accumulate dozens of these in
+// practice — not paginated for v0.25.
+func (s *Storage) ListRecommendationDismissals(ctx context.Context) ([]*types.RecommendationDismissal, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT recommendation_id, dismissed_at, dismissed_by, COALESCE(reason, '')
+		 FROM recommendation_dismissals
+		 ORDER BY dismissed_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list dismissals: %w", err)
+	}
+	defer rows.Close()
+	out := []*types.RecommendationDismissal{}
+	for rows.Next() {
+		d := &types.RecommendationDismissal{}
+		if err := rows.Scan(&d.RecommendationID, &d.DismissedAt, &d.DismissedBy, &d.Reason); err != nil {
+			return nil, fmt.Errorf("failed to scan dismissal row: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // Close closes the database connection

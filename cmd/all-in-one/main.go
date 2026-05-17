@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -21,6 +22,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
+	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
@@ -325,6 +327,33 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	insightsService := insights.NewService(telemetryReader, logger)
 	apiServer.SetInsightsService(insightsService)
 
+	// v0.25 Cost Recommendations — heuristic engine that turns the
+	// insights surface into actionable advice (noisy attributes,
+	// outlier agents, drop hotspots, empty signal branches). The
+	// dismissals store lets operators hide a recommendation they've
+	// already evaluated; the engine consults it via a tiny adapter.
+	//
+	// AgentNameResolver looks up labels for per-agent
+	// recommendations. Best-effort: if the lookup fails or the
+	// agent is unknown, the engine falls back to a short ID prefix.
+	recsEngine := recommendations.NewEngine(
+		insightsService,
+		recsDismissalsAdapter{store: appStore},
+		func(ctx context.Context, agentID string) string {
+			parsed, err := uuid.Parse(agentID)
+			if err != nil {
+				return ""
+			}
+			a, err := appStore.GetAgent(ctx, parsed)
+			if err != nil || a == nil {
+				return ""
+			}
+			return a.Name
+		},
+		logger,
+	)
+	apiServer.SetRecommendationsEngine(recsEngine, appStore)
+
 	// Start API server in a goroutine
 	go func() {
 		if err := apiServer.Start(fmt.Sprintf("%d", config.Server.HTTPPort)); err != nil {
@@ -601,4 +630,19 @@ func cleanupRetention(r config.RetentionConfig, logger *zap.Logger) time.Duratio
 		return fallback
 	}
 	return max
+}
+
+// recsDismissalsAdapter bridges the application store's dismissals
+// CRUD to the recommendations.Dismissals interface. The engine has
+// no reason to know about the wider applicationstore — keeping this
+// adapter tiny and in main.go means the engine package stays
+// import-free of the storage layer.
+type recsDismissalsAdapter struct {
+	store interface {
+		IsRecommendationDismissed(ctx context.Context, recommendationID string) (bool, error)
+	}
+}
+
+func (a recsDismissalsAdapter) IsDismissed(ctx context.Context, recID string) (bool, error) {
+	return a.store.IsRecommendationDismissed(ctx, recID)
 }
