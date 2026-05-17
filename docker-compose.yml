@@ -29,6 +29,12 @@ services:
       - LOG_LEVEL=debug
       - LOG_FORMAT=console
       - TZ=UTC
+      # v0.26 AI assist: passes the host's ANTHROPIC_API_KEY
+      # through to the container. Set it in your shell or in a
+      # .env file at the repo root (docker-compose auto-loads
+      # .env). Empty when not set — squadron logs AI as disabled
+      # at startup and the UI hides AI affordances.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

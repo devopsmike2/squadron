@@ -61,3 +61,15 @@ telemetry:
     protocol: grpc      # grpc | http
     insecure: false     # set true for plaintext local OTLP
     headers: {}         # e.g. authorization: "Bearer <api-key>"
+
+# v0.26 AI assist. Wraps the Anthropic Messages API. Off by
+# default. See docs/ai-assist.md for the full setup, model
+# defaults, cost shape, and what's sent to Anthropic per action.
+ai:
+  enabled: true
+  # api_key: ""                    # NOT recommended; prefer the env var below
+  api_key_env: ANTHROPIC_API_KEY   # name of the env var to read the key from
+  # base_url: https://api.anthropic.com
+  # explain_model: claude-haiku-4-5-20251001
+  # merge_model: claude-sonnet-4-6
+  # max_tokens: 1024
