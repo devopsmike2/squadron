@@ -30,6 +30,9 @@ type Store struct {
 	recDismissals map[string]*types.RecommendationDismissal
 	// v0.28: outcomes from Apply clicks, keyed by outcome.ID.
 	recOutcomes map[string]*types.RecommendationOutcome
+	// v0.29: cost-spike events, keyed by event.ID. Ordered list
+	// is rebuilt on read; spike volume is tiny so this is fine.
+	costSpikes map[string]*types.CostSpikeEvent
 }
 
 // NewStore creates a new in-memory store
@@ -45,6 +48,7 @@ func NewStore() *Store {
 		apiTokens:     make(map[string]*types.APIToken),
 		recDismissals: make(map[string]*types.RecommendationDismissal),
 		recOutcomes:   make(map[string]*types.RecommendationOutcome),
+		costSpikes:    make(map[string]*types.CostSpikeEvent),
 	}
 }
 
@@ -874,4 +878,98 @@ func (s *Store) ListRecommendationDismissals(_ context.Context) ([]*types.Recomm
 		}
 	}
 	return out, nil
+}
+
+// ===================================================================
+// v0.29 cost-spike events
+// ===================================================================
+
+func (s *Store) CreateCostSpikeEvent(_ context.Context, e *types.CostSpikeEvent) error {
+	if e == nil || e.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *e
+	if cp.StartedAt.IsZero() {
+		cp.StartedAt = time.Now().UTC()
+	}
+	if cp.Severity == "" {
+		cp.Severity = "warn"
+	}
+	s.costSpikes[cp.ID] = &cp
+	return nil
+}
+
+func (s *Store) UpdateCostSpikeEvent(_ context.Context, e *types.CostSpikeEvent) error {
+	if e == nil || e.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.costSpikes[e.ID]
+	if !ok {
+		return fmt.Errorf("cost spike not found")
+	}
+	updated := *e
+	updated.StartedAt = existing.StartedAt // preserve creation time
+	s.costSpikes[e.ID] = &updated
+	return nil
+}
+
+func (s *Store) GetCostSpikeEvent(_ context.Context, id string) (*types.CostSpikeEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.costSpikes[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *e
+	return &cp, nil
+}
+
+func (s *Store) ListCostSpikeEvents(_ context.Context, filter types.CostSpikeFilter) ([]*types.CostSpikeEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.CostSpikeEvent, 0, len(s.costSpikes))
+	for _, e := range s.costSpikes {
+		switch filter.Status {
+		case "open":
+			if e.EndedAt != nil {
+				continue
+			}
+		case "closed":
+			if e.EndedAt == nil {
+				continue
+			}
+		}
+		cp := *e
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+func (s *Store) LatestOpenCostSpike(_ context.Context) (*types.CostSpikeEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var latest *types.CostSpikeEvent
+	for _, e := range s.costSpikes {
+		if e.EndedAt != nil {
+			continue
+		}
+		if latest == nil || e.StartedAt.After(latest.StartedAt) {
+			latest = e
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	cp := *latest
+	return &cp, nil
 }

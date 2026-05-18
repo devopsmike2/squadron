@@ -21,6 +21,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/metrics"
+	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -71,6 +72,8 @@ type Server struct {
 	recsDismissals    handlers.DismissalStore // optional; nil disables /api/v1/recommendations/* (paired with recsEngine)
 	aiService         *ai.Service             // optional; nil keeps /api/v1/ai/status responsive (returns enabled=false) but mutation routes 503
 	pricer            *pricing.Projector      // optional; v0.27 $/month projection. nil → /api/v1/pricing/* returns enabled=false
+	costSpikes        handlers.CostSpikeStore // optional; v0.29 cost-spike alerting storage
+	costSpikeDetector *costspikes.Detector    // optional; nil disables /tick + the background detector loop
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -184,6 +187,16 @@ func (s *Server) SetOpAMPPort(p int) { s.opampPort = p }
 // inside the projector). The pricingTrampoline still guards
 // against nil for the test_server.go path.
 func (s *Server) SetPricer(p *pricing.Projector) { s.pricer = p }
+
+// SetCostSpikes wires the v0.29 cost-spike alerting layer: the
+// storage slice (always the application store) + an optional
+// detector. When the detector is non-nil, the server's Start
+// will also launch the background Tick loop. When the store is
+// nil, the /alerts/cost-spikes routes 503.
+func (s *Server) SetCostSpikes(store handlers.CostSpikeStore, det *costspikes.Detector) {
+	s.costSpikes = store
+	s.costSpikeDetector = det
+}
 
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
 // routes are read-only and gracefully degrade — when the pricer
@@ -599,6 +612,45 @@ func (s *Server) registerRoutes() {
 				}
 				h := handlers.NewSavingsHandlers(store, s.recsEngine, s.insightsService, s.pricer, s.logger)
 				h.HandleRealized(c)
+			})
+
+		// v0.29 Cost-spike alerting. Detector runs in the
+		// background (started in main.go) and writes events to
+		// the application store. These routes are pure reads
+		// against that store plus an operator-driven Acknowledge.
+		// Tick is exposed for tests + the demo path that needs
+		// to provoke a detection without waiting the full minute.
+		v1.GET("/alerts/cost-spikes",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				if s.costSpikes == nil {
+					c.JSON(http.StatusOK, gin.H{
+						"items": []any{}, "count": 0, "status": "open", "enabled": false,
+					})
+					return
+				}
+				h := handlers.NewCostSpikesHandlers(s.costSpikes, s.costSpikeDetector)
+				h.HandleList(c)
+			})
+		v1.POST("/alerts/cost-spikes/:id/acknowledge",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			func(c *gin.Context) {
+				if s.costSpikes == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "cost spikes disabled"})
+					return
+				}
+				h := handlers.NewCostSpikesHandlers(s.costSpikes, s.costSpikeDetector)
+				h.HandleAcknowledge(c)
+			})
+		v1.POST("/alerts/cost-spikes/tick",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			func(c *gin.Context) {
+				if s.costSpikes == nil || s.costSpikeDetector == nil {
+					c.JSON(http.StatusOK, gin.H{"ok": false, "reason": "detector disabled"})
+					return
+				}
+				h := handlers.NewCostSpikesHandlers(s.costSpikes, s.costSpikeDetector)
+				h.HandleTick(c)
 			})
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.

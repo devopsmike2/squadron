@@ -19,7 +19,9 @@ import (
 	"github.com/devopsmike2/squadron/internal/alerting"
 	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/api"
+	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/config"
+	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
@@ -395,6 +397,40 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			zap.Int("rules", len(projector.Rules())))
 	} else {
 		logger.Info("Pricing projection disabled (set pricing.enabled=true to enable $/month figures)")
+	}
+
+	// v0.29 cost-spike alerting. Detector polls the pricer + insights
+	// every minute and opens a CostSpikeEvent when the projection
+	// exceeds the warn/critical thresholds. Only wired when both
+	// pricing and insights are present — without those two upstream
+	// signals there's nothing meaningful to detect.
+	if appStoreCostSpikes, ok := appStore.(handlers.CostSpikeStore); ok && projector.Enabled() && insightsService != nil {
+		spikeStore, _ := appStore.(costspikes.SpikeStore)
+		detector := costspikes.New(costspikes.DefaultConfig(), spikeStore, projector, insightsService)
+		apiServer.SetCostSpikes(appStoreCostSpikes, detector)
+		// Detector loop. Uses Background — main.go's shutdown
+		// path closes the API server and then the process exits;
+		// a stray tick during shutdown is harmless because
+		// Detector.Tick is pure (no goroutines of its own).
+		detectorCtx := context.Background()
+		go func() {
+			t := time.NewTicker(60 * time.Second)
+			defer t.Stop()
+			for range t.C {
+				if err := detector.Tick(detectorCtx); err != nil {
+					logger.Warn("cost-spike detector tick failed", zap.Error(err))
+				}
+			}
+		}()
+		logger.Info("Cost-spike alerting enabled (detector running every 60s)")
+	} else {
+		// Wire the read paths only — the routes still need a store
+		// reference to serve list/ack even when the detector is off
+		// (e.g. an operator viewing historical spikes).
+		if storeForReads, ok := appStore.(handlers.CostSpikeStore); ok {
+			apiServer.SetCostSpikes(storeForReads, nil)
+		}
+		logger.Info("Cost-spike alerting disabled (requires pricing.enabled + insights service)")
 	}
 
 	// v0.26 AI assist — Anthropic Messages API wrapper. The

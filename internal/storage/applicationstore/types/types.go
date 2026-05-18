@@ -79,6 +79,20 @@ type ApplicationStore interface {
 	CreateRecommendationOutcome(ctx context.Context, o *RecommendationOutcome) error
 	UpdateRecommendationOutcome(ctx context.Context, o *RecommendationOutcome) error
 	ListRecommendationOutcomes(ctx context.Context) ([]*RecommendationOutcome, error)
+
+	// Cost-spike events (v0.29 cost-spike alerting). One row per
+	// detected anomaly. Open spikes have EndedAt == nil; the
+	// detector closes a spike when the current projection drops
+	// back below the warn threshold. AcknowledgedAt is operator
+	// action — the spike continues to track until it auto-closes.
+	CreateCostSpikeEvent(ctx context.Context, e *CostSpikeEvent) error
+	UpdateCostSpikeEvent(ctx context.Context, e *CostSpikeEvent) error
+	GetCostSpikeEvent(ctx context.Context, id string) (*CostSpikeEvent, error)
+	ListCostSpikeEvents(ctx context.Context, filter CostSpikeFilter) ([]*CostSpikeEvent, error)
+	// LatestOpenCostSpike returns the most recent open spike (no
+	// ended_at), or nil if none exists. Used by the detector to
+	// decide whether to append a peak update or open a fresh event.
+	LatestOpenCostSpike(ctx context.Context) (*CostSpikeEvent, error)
 }
 
 // RecommendationOutcome is the post-apply tracking record for the
@@ -399,4 +413,46 @@ type SavedQuery struct {
 	Tags        []string `json:"tags"`
 	CreatedAt   time.Time        `json:"created_at"`
 	UpdatedAt   time.Time        `json:"updated_at"`
+}
+
+// CostSpikeEvent records a detected anomaly in the fleet's
+// $/month projection. v0.29 cost-spike alerting writes one row
+// per spike — open until the projection drops back below the
+// warn threshold. AttributionJSON is a compact summary of which
+// agents / attributes drove the spike, captured at fire time so
+// the operator sees a stable picture even hours later when the
+// live insights state has moved on.
+//
+// Severity transitions:
+//
+//	warn     — projection ≥ baseline × (1 + warn_pct)
+//	critical — projection ≥ baseline × (1 + critical_pct)
+//
+// A spike that crosses from warn to critical is updated in place
+// (peak_pct grows); no new row is created until the spike closes.
+type CostSpikeEvent struct {
+	ID                   string     `json:"id"`
+	StartedAt            time.Time  `json:"started_at"`
+	EndedAt              *time.Time `json:"ended_at,omitempty"`
+	Severity             string     `json:"severity"` // "warn" | "critical"
+	Signal               string     `json:"signal,omitempty"`
+	BaselineMonthlyUSD   float64    `json:"baseline_monthly_usd"`
+	PeakMonthlyUSD       float64    `json:"peak_monthly_usd"`
+	PeakPctAboveBaseline float64    `json:"peak_pct_above_baseline"`
+	// AttributionJSON is a tiny JSON object: { "top_agents":[…],
+	// "top_attributes":[…] } populated at fire time. Stored as
+	// string for forward-compat — the detector can extend the
+	// shape without a migration.
+	AttributionJSON string     `json:"attribution_json,omitempty"`
+	AcknowledgedAt  *time.Time `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy  string     `json:"acknowledged_by,omitempty"`
+}
+
+// CostSpikeFilter restricts ListCostSpikeEvents.
+type CostSpikeFilter struct {
+	// Status: "open" (ended_at IS NULL), "closed" (ended_at IS
+	// NOT NULL), "all" (default). Anything else falls through to
+	// "all".
+	Status string
+	Limit  int
 }

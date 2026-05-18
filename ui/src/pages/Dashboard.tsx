@@ -40,6 +40,7 @@ import { listAlertRules } from "@/api/alerts";
 import { listAuditEvents } from "@/api/audit";
 import { listRollouts } from "@/api/rollouts";
 import { SquadronMark } from "@/components/brand/SquadronMark";
+import { CostSpikesBanner } from "@/components/cost-spikes/CostSpikesPanel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Agent, ConfigDriftStatus } from "@/types/agent";
@@ -620,6 +621,12 @@ export default function DashboardPage() {
           </div>
         </div>
       </header>
+
+      {/* v0.29 cost-spike heads-up. Renders only when there are
+          open, unacknowledged spikes — otherwise null. Lives above
+          the first-run banner so an active spike beats out the
+          "no agents yet" nudge if both somehow fire. */}
+      <CostSpikesBanner />
 
       {/* v0.27.1 first-run banner. Only renders when no agent has
           ever connected; once the first agent shows up, this

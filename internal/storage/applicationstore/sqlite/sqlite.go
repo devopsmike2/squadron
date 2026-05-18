@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -219,6 +220,28 @@ func (s *Storage) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_rec_outcomes_applied_at ON recommendation_outcomes(applied_at);
 	CREATE INDEX IF NOT EXISTS idx_rec_outcomes_status ON recommendation_outcomes(status);
+
+	-- v0.29 cost-spike events. One row per detected anomaly; open
+	-- spikes have ended_at IS NULL. AttributionJSON is freeform —
+	-- a tiny JSON blob captured at fire time with the top
+	-- agents/attributes that drove the spike. Acknowledgement is
+	-- operator-only and doesn't close the spike (the detector
+	-- closes when the projection drops back below threshold).
+	CREATE TABLE IF NOT EXISTS cost_spike_events (
+		id TEXT PRIMARY KEY,
+		started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		ended_at DATETIME,
+		severity TEXT NOT NULL DEFAULT 'warn',
+		signal TEXT NOT NULL DEFAULT '',
+		baseline_monthly_usd REAL NOT NULL DEFAULT 0,
+		peak_monthly_usd REAL NOT NULL DEFAULT 0,
+		peak_pct_above_baseline REAL NOT NULL DEFAULT 0,
+		attribution_json TEXT NOT NULL DEFAULT '',
+		acknowledged_at DATETIME,
+		acknowledged_by TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_cost_spikes_started_at ON cost_spike_events(started_at);
+	CREATE INDEX IF NOT EXISTS idx_cost_spikes_open ON cost_spike_events(ended_at) WHERE ended_at IS NULL;
 
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
@@ -1642,6 +1665,169 @@ func (s *Storage) ListRecommendationOutcomes(ctx context.Context) ([]*types.Reco
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// ===================================================================
+// v0.29 cost-spike events
+// ===================================================================
+
+// CreateCostSpikeEvent inserts a new spike. The detector calls this
+// only when crossing from baseline-normal to over-threshold;
+// in-progress severity escalations update the existing row instead.
+func (s *Storage) CreateCostSpikeEvent(ctx context.Context, e *types.CostSpikeEvent) error {
+	if e == nil || e.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	if e.StartedAt.IsZero() {
+		e.StartedAt = time.Now().UTC()
+	}
+	if e.Severity == "" {
+		e.Severity = "warn"
+	}
+	stmt := `INSERT INTO cost_spike_events
+		(id, started_at, ended_at, severity, signal,
+		 baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
+		 attribution_json, acknowledged_at, acknowledged_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := s.db.ExecContext(ctx, stmt,
+		e.ID, e.StartedAt.UTC(), nullableTime(e.EndedAt),
+		e.Severity, e.Signal, e.BaselineMonthlyUSD, e.PeakMonthlyUSD,
+		e.PeakPctAboveBaseline, e.AttributionJSON,
+		nullableTime(e.AcknowledgedAt), e.AcknowledgedBy)
+	if err != nil {
+		return fmt.Errorf("failed to create cost spike event: %w", err)
+	}
+	return nil
+}
+
+// UpdateCostSpikeEvent overwrites the mutable fields of an existing
+// spike. Used to bump the peak, close the spike (set EndedAt), or
+// record an acknowledgement.
+func (s *Storage) UpdateCostSpikeEvent(ctx context.Context, e *types.CostSpikeEvent) error {
+	if e == nil || e.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	stmt := `UPDATE cost_spike_events SET
+		ended_at = ?, severity = ?, signal = ?,
+		baseline_monthly_usd = ?, peak_monthly_usd = ?,
+		peak_pct_above_baseline = ?, attribution_json = ?,
+		acknowledged_at = ?, acknowledged_by = ?
+		WHERE id = ?`
+	_, err := s.db.ExecContext(ctx, stmt,
+		nullableTime(e.EndedAt), e.Severity, e.Signal,
+		e.BaselineMonthlyUSD, e.PeakMonthlyUSD, e.PeakPctAboveBaseline,
+		e.AttributionJSON, nullableTime(e.AcknowledgedAt),
+		e.AcknowledgedBy, e.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update cost spike event: %w", err)
+	}
+	return nil
+}
+
+// GetCostSpikeEvent returns one spike by id, or nil if not found.
+func (s *Storage) GetCostSpikeEvent(ctx context.Context, id string) (*types.CostSpikeEvent, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, started_at, ended_at, severity, signal,
+		       baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
+		       attribution_json, acknowledged_at, acknowledged_by
+		FROM cost_spike_events WHERE id = ?`, id)
+	e := &types.CostSpikeEvent{}
+	var endedAt, ackAt sql.NullTime
+	if err := row.Scan(&e.ID, &e.StartedAt, &endedAt, &e.Severity, &e.Signal,
+		&e.BaselineMonthlyUSD, &e.PeakMonthlyUSD, &e.PeakPctAboveBaseline,
+		&e.AttributionJSON, &ackAt, &e.AcknowledgedBy); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get cost spike event: %w", err)
+	}
+	if endedAt.Valid {
+		e.EndedAt = &endedAt.Time
+	}
+	if ackAt.Valid {
+		e.AcknowledgedAt = &ackAt.Time
+	}
+	return e, nil
+}
+
+// ListCostSpikeEvents returns events newest-first. Filter.Status
+// scopes to open/closed/all (default all).
+func (s *Storage) ListCostSpikeEvents(ctx context.Context, filter types.CostSpikeFilter) ([]*types.CostSpikeEvent, error) {
+	q := `SELECT id, started_at, ended_at, severity, signal,
+		       baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
+		       attribution_json, acknowledged_at, acknowledged_by
+		FROM cost_spike_events`
+	switch filter.Status {
+	case "open":
+		q += " WHERE ended_at IS NULL"
+	case "closed":
+		q += " WHERE ended_at IS NOT NULL"
+	}
+	q += " ORDER BY started_at DESC"
+	if filter.Limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", filter.Limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list cost spike events: %w", err)
+	}
+	defer rows.Close()
+	var out []*types.CostSpikeEvent
+	for rows.Next() {
+		e := &types.CostSpikeEvent{}
+		var endedAt, ackAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.StartedAt, &endedAt, &e.Severity, &e.Signal,
+			&e.BaselineMonthlyUSD, &e.PeakMonthlyUSD, &e.PeakPctAboveBaseline,
+			&e.AttributionJSON, &ackAt, &e.AcknowledgedBy); err != nil {
+			return nil, fmt.Errorf("failed to scan cost spike event: %w", err)
+		}
+		if endedAt.Valid {
+			e.EndedAt = &endedAt.Time
+		}
+		if ackAt.Valid {
+			e.AcknowledgedAt = &ackAt.Time
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// LatestOpenCostSpike returns the newest spike with no ended_at,
+// or nil if none. The detector uses it to decide append-vs-create.
+func (s *Storage) LatestOpenCostSpike(ctx context.Context) (*types.CostSpikeEvent, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, started_at, ended_at, severity, signal,
+		       baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
+		       attribution_json, acknowledged_at, acknowledged_by
+		FROM cost_spike_events
+		WHERE ended_at IS NULL
+		ORDER BY started_at DESC LIMIT 1`)
+	e := &types.CostSpikeEvent{}
+	var endedAt, ackAt sql.NullTime
+	if err := row.Scan(&e.ID, &e.StartedAt, &endedAt, &e.Severity, &e.Signal,
+		&e.BaselineMonthlyUSD, &e.PeakMonthlyUSD, &e.PeakPctAboveBaseline,
+		&e.AttributionJSON, &ackAt, &e.AcknowledgedBy); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query latest open cost spike: %w", err)
+	}
+	if endedAt.Valid {
+		e.EndedAt = &endedAt.Time
+	}
+	if ackAt.Valid {
+		e.AcknowledgedAt = &ackAt.Time
+	}
+	return e, nil
+}
+
+// nullableTime converts a *time.Time to sql.NullTime for INSERT/UPDATE
+// of nullable DATETIME columns.
+func nullableTime(t *time.Time) sql.NullTime {
+	if t == nil || t.IsZero() {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: t.UTC(), Valid: true}
 }
 
 // Close closes the database connection

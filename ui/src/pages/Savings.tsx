@@ -61,6 +61,7 @@ import {
   type Recommendation,
 } from "@/api/recommendations";
 import { getRealizedSavings, type RealizedSavingsResponse } from "@/api/savings";
+import { CostSpikesPanel } from "@/components/cost-spikes/CostSpikesPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -233,6 +234,11 @@ export default function SavingsPage() {
           </Button>
         </div>
       </header>
+
+      {/* v0.29 cost-spike alerts. Renders above the hero block
+          so operators see "the bill is about to spike" before
+          they see the current projection. */}
+      <CostSpikesPanel />
 
       {/* Hero block */}
       {!pricingEnabled ? (
