@@ -11,6 +11,7 @@ import DashboardPage from "./pages/Dashboard";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
 import LoginPage from "./pages/Login";
+import QuickstartPage from "./pages/Quickstart";
 import RolloutsPage from "./pages/Rollouts";
 import SavingsPage from "./pages/Savings";
 import SettingsTokensPage from "./pages/SettingsTokens";
@@ -112,6 +113,7 @@ function AuthBoundary() {
         {/* Main application routes */}
         <Route element={<Layout />}>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/quickstart" element={<QuickstartPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/groups" element={<GroupsPage />} />
           <Route path="/configs" element={<ConfigsPage />} />

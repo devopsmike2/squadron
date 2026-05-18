@@ -32,6 +32,7 @@ import {
   LayoutDashboard,
   CoinsIcon,
   TrendingDownIcon,
+  RocketIcon,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -91,6 +92,12 @@ export function AppSidebar() {
     {
       label: "Fleet",
       items: [
+        {
+          key: "quickstart",
+          title: "Quickstart",
+          url: "/quickstart",
+          icon: RocketIcon,
+        },
         {
           key: "dashboard",
           title: "Fleet Status",

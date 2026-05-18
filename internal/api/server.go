@@ -65,6 +65,7 @@ type Server struct {
 	commander         AgentCommander
 	broker            *events.Broker
 	configsTracer     *configs.Tracer  // optional; nil disables config-push spans on direct handler pushes
+	opampPort         int               // v0.27.1: the OpAMP port we tell quickstart-generated agents to dial
 	insightsService   *insights.Service // optional; nil disables the /api/v1/insights/* routes (no telemetry reader configured)
 	recsEngine        *recommendations.Engine
 	recsDismissals    handlers.DismissalStore // optional; nil disables /api/v1/recommendations/* (paired with recsEngine)
@@ -170,6 +171,13 @@ func (s *Server) SetRecommendationsEngine(engine *recommendations.Engine, dismis
 	s.recsEngine = engine
 	s.recsDismissals = dismissals
 }
+
+// SetOpAMPPort tells the Server which port the OpAMP server is
+// listening on. v0.27.1 uses this to construct the dial URL that
+// the Quickstart wizard hands to operators (the API runs on a
+// different port from OpAMP, so the request Host alone isn't
+// enough). Defaults to 4320 if never set.
+func (s *Server) SetOpAMPPort(p int) { s.opampPort = p }
 
 // SetPricer wires the v0.27 pricing projector. Always non-nil at
 // runtime (main.go always constructs one — disabled state lives
@@ -543,6 +551,40 @@ func (s *Server) registerRoutes() {
 		v1.GET("/pricing/projection",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.pricingTrampoline(func(h *handlers.PricingHandlers, c *gin.Context) { h.HandleProjection(c) }))
+
+		// v0.27.1 Quickstart. Pure config-generation; no state.
+		// All read-only so ScopeAgentsRead is the natural gate.
+		// Handler is constructed inline since it's cheap and the
+		// late-bind dance isn't needed (port is always available
+		// once SetOpAMPPort runs, which happens in NewServer
+		// callers before Start).
+		v1.GET("/quickstart/backends",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				port := s.opampPort
+				if port == 0 {
+					port = 4320
+				}
+				handlers.NewQuickstartHandlers(port, s.logger).HandleCatalog(c)
+			})
+		v1.GET("/quickstart/starter-config",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				port := s.opampPort
+				if port == 0 {
+					port = 4320
+				}
+				handlers.NewQuickstartHandlers(port, s.logger).HandleStarterConfig(c)
+			})
+		v1.GET("/quickstart/opamp-snippet",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				port := s.opampPort
+				if port == 0 {
+					port = 4320
+				}
+				handlers.NewQuickstartHandlers(port, s.logger).HandleOpAMPSnippet(c)
+			})
 	}
 
 	// Serve static files for the UI

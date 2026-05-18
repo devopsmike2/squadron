@@ -621,6 +621,38 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      {/* v0.27.1 first-run banner. Only renders when no agent has
+          ever connected; once the first agent shows up, this
+          quietly disappears for the rest of the install's life. */}
+      {stats?.totalAgents === 0 && (
+        <Link to="/quickstart" className="block">
+          <Card className="border-[var(--info)]/40 bg-[var(--info)]/10 transition-colors hover:bg-[var(--info)]/15">
+            <CardContent className="flex items-center justify-between p-4">
+              <div className="flex items-center gap-3">
+                <div className="rounded-md border border-border bg-background/40 p-2">
+                  <RocketIcon
+                    className="h-4 w-4"
+                    style={{ color: "var(--info)" }}
+                  />
+                </div>
+                <div>
+                  <div className="text-sm font-medium">
+                    No agents yet — let's get your first one connected
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    The Quickstart wizard takes a few minutes whether
+                    you're starting fresh or already have collectors running.
+                  </div>
+                </div>
+              </div>
+              <div className="text-xs font-medium text-foreground/80">
+                Open Quickstart →
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+      )}
+
       {/* Hero metrics */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {heroStats.map((s) => (

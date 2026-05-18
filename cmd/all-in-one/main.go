@@ -322,6 +322,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// shared with publishers so /events/stream reflects what they emit.
 	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: config.Auth.Enabled}, configSender, eventBroker, configsTracer, registry, logger)
 
+	// v0.27.1 Quickstart needs to know the OpAMP port so the
+	// generated agent configs dial back to the right place.
+	apiServer.SetOpAMPPort(config.Server.OpAMPPort)
+
 	// v0.24 Telemetry Volume Insights — read-only query layer over
 	// the otlp_batches table + sampled row-table aggregates. Wires
 	// to the same telemetryReader used everywhere else, so it
