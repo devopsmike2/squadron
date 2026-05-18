@@ -1,148 +1,223 @@
 # Squadron
 
-**The control plane for your OpenTelemetry fleet.**
+**The open-source OpenTelemetry control plane that pays for itself.**
 
-Squadron is an open-source platform for managing OpenTelemetry collectors at
-scale. It speaks OpAMP to your agents, ingests their telemetry over OTLP, and
-ships a built-in UI for fleet management, configuration, and observability —
-all from a single self-hosted binary.
+Squadron is for small and mid-sized teams running OpenTelemetry
+collectors and watching the telemetry bill climb. It tells you
+where your bytes are going, what to fix, and how much you'd save
+— in dollars, not megabytes — then deploys the fix through a safe
+staged rollout. AI explains every recommendation in plain English
+and can merge suggested snippets into your existing configs.
 
-> Squadron is a fork of and derivative work based on
-> [Lawrence OSS](https://github.com/getlawrence/lawrence-oss), licensed under
-> Apache 2.0. See [`NOTICE`](NOTICE) for full upstream attribution.
-
-## Why Squadron
-
-Running an OpenTelemetry fleet at scale is currently a do-it-yourself problem.
-You end up gluing together collector configs by hand, deploying via your own
-pipeline, and flying blind on what each agent is actually doing.
-
-Squadron handles the operational layer:
-
-- **Remote agent management** over OpAMP — push configs, restart collectors,
-  organize agents into groups, detect drift.
-- **Built-in telemetry backend** — collectors send their own telemetry to
-  Squadron over OTLP, so you can see how the fleet is performing without
-  standing up a separate observability stack.
-- **Query and explore** — Squadron QL plus a topology view for traces, metrics,
-  and logs.
-- **Single binary, no dependencies** — runs as a Go binary or Docker container
-  with embedded SQLite + DuckDB. Drop it on a box and you have an OTel control
-  plane.
-
-## Project status
-
-Squadron is in active development. The OSS core under Apache 2.0 is free for
-any size fleet and self-hostable. A commercial Enterprise tier (advanced agent
-management, SSO/RBAC, alerting, priority support) is on the roadmap; a hosted
-Squadron Cloud will follow.
-
-## Getting started
-
-### Docker
+Self-hosted. Free. One Docker command to start.
 
 ```bash
-docker pull ghcr.io/devopsmike2/squadron:latest
-
-docker run -d \
-  --name squadron \
-  -p 8080:8080 \
-  -p 4320:4320 \
-  -p 4317:4317 \
-  -p 4318:4318 \
-  -v squadron-data:/data \
-  ghcr.io/devopsmike2/squadron:latest
-
-open http://localhost:8080
+docker compose up -d
+open http://localhost:8080/quickstart
 ```
 
-### Docker Compose
+> Squadron is a fork of and derivative work based on
+> [Lawrence OSS](https://github.com/getlawrence/lawrence-oss),
+> licensed under Apache 2.0. See [`NOTICE`](NOTICE) for full
+> upstream attribution.
+
+## What you get
+
+**Cost optimization in dollars, not bytes.** The Savings dashboard
+projects your $/month spend from observed ingest rates × the
+per-GB rates of your backend (Datadog, Honeycomb, etc.). Quick
+Wins ranks each recommendation by $ saved with a one-click Apply
+that drops you into the config editor with the fix pre-filled.
+
+**AI-assisted config editing.** Click "Explain" on any
+recommendation to get a 2-3 sentence summary of what the YAML
+fragment does. Open the config editor's "Merge snippet" flow to
+have Claude integrate a fix into your existing collector config
+— with the merged YAML running through Squadron's existing lint,
+diff preview, and staged rollout before reaching production. AI
+is off by default; you opt in by setting `ANTHROPIC_API_KEY`.
+
+**Minutes to first agent.** The Quickstart wizard has two paths:
+*Start fresh* (pick a backend → get a starter collector config +
+Docker/systemd/Helm install command) and *I have collectors
+running* (paste the OpAMP snippet into your existing configs +
+restart). Bulk mode generates one ssh-ready one-liner per host
+for fleet adoption.
+
+**Safe rollouts with auto-abort.** Stages (percent or
+label-based), per-stage dwell, abort criteria (drift, drop rate,
+error logs, exporter errors). Pause/resume, webhook notifications,
+trace-instrumented engine. The grown-up deployment story shipped
+as OSS.
+
+**Modern UX.** Fleet Map with pipeline/dataflow/topology tabs,
+real-time Cost Insights, ⌘K command palette, keyboard shortcuts,
+saved filters, dark/light theme audit. Most competitors run on
+2018-era admin UIs.
+
+**Self-instrumented.** Squadron's own audit events, rollout
+engine, alert evaluator, and AI service emit OpenTelemetry traces.
+Bridges its Prometheus `/metrics` surface to OTLP. Debug Squadron
+with the same tools you debug everything else with.
+
+## Who Squadron is for
+
+You're probably a fit if:
+
+- You're 1–3 engineers running OpenTelemetry collectors and
+  paying a SaaS observability vendor (Datadog, Honeycomb, New
+  Relic, Grafana Cloud, SigNoz, or similar).
+- The telemetry bill has gotten everyone's attention.
+- You don't have a dedicated observability team to tune the
+  pipelines, and you'd rather ship product than read the OTel
+  spec.
+- You want a tool that works after `docker compose up`, not after
+  a sales call and a multi-week integration.
+
+You're probably **not** the target operator if:
+
+- You're running multi-thousand-agent fleets with multi-region
+  HA + SOC 2 + mandatory SSO requirements. Look at Bindplane Cloud
+  or Grafana Fleet Management.
+- You don't use OpenTelemetry. (We don't translate from Fluentd,
+  Logstash, or vendor-specific agents.)
+- You want a single tool to be both your control plane AND your
+  telemetry backend. Squadron does the first job; the second is
+  better handled by Honeycomb / Datadog / Tempo / Loki / Mimir.
+
+## Quick start
 
 ```bash
 git clone https://github.com/devopsmike2/squadron.git
 cd squadron
-docker compose up -d squadron
-open http://localhost:8080
+docker compose up -d
+open http://localhost:5173/quickstart
 ```
 
-### Connect a collector
+The Quickstart wizard takes it from there: pick your backend
+(or paste the OpAMP snippet into an existing collector config),
+follow the install command, watch the dashboard light up when
+your first agent connects.
 
-Point your OpenTelemetry collector at Squadron's OpAMP endpoint and OTLP
-receiver:
+Want to enable the AI features? Add your Anthropic API key:
 
-```yaml
-extensions:
-  opamp:
-    server:
-      ws:
-        endpoint: ws://localhost:4320/v1/opamp
-
-exporters:
-  otlp:
-    endpoint: localhost:4317
-    tls:
-      insecure: true
-
-service:
-  extensions: [opamp]
-  telemetry:
-    metrics:
-      readers:
-        - periodic:
-            exporter:
-              otlp:
-                protocol: grpc
-                endpoint: localhost:4317
-                tls:
-                  insecure: true
+```bash
+echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
+docker compose restart squadron
 ```
 
-Start your collector and it will register with Squadron automatically.
+The AI buttons appear in the UI as soon as `/api/v1/ai/status`
+sees the key.
 
-## Documentation
-
-Full documentation lives under [`/docs`](./docs/README.md):
-
-- [Getting started](./docs/getting-started.md) — install Squadron, connect
-  a collector, push your first config.
-- [Concepts](./docs/concepts.md) — agents, groups, configs, drift.
-- [Rollouts](./docs/rollouts.md) — staged deploys with canary selection,
-  auto-abort, preview/diff, recipes, templates.
-- [Alerts](./docs/alerts.md) — threshold rules over telemetry and fleet
-  state, with webhooks.
-- [Audit log](./docs/audit-log.md) — every state change, filterable.
-- [Authentication](./docs/auth.md) — Bearer tokens, bootstrap flow,
-  token lifecycle.
-- [Self-monitoring](./docs/self-monitoring.md) — emit Squadron's own
-  state changes as OTel traces.
-- [squadronctl CLI](./docs/squadronctl.md) — command-line client for
-  CI pipelines and scripting.
-- [Operating Squadron](./docs/operating.md) — env vars, prod checklist,
-  backup, upgrade notes.
-- [API reference](./docs/api-reference.md) — REST endpoints with curl
-  examples.
-
-## Architecture
+## The Squadron stack
 
 Squadron runs as a single process composed of:
 
-- **OpAMP server** (port 4320) — manages collectors via WebSocket, distributes
-  configurations, tracks status and capabilities.
-- **OTLP receiver** (ports 4317/4318) — accepts traces, metrics, and logs over
-  gRPC and HTTP. Receivers hand raw bytes to a bounded worker pool for parsing,
-  enrichment, and storage.
-- **Storage layer** — SQLite for application data (agents, groups, configs),
-  DuckDB for raw telemetry and rollups. The factory pattern makes the storage
-  backends pluggable.
-- **REST API** (port 8080) — Gin-based JSON API plus the Squadron QL query
-  endpoint, with a Prometheus `/metrics` endpoint and SPA-served UI.
-- **Web UI** — React/Vite frontend for agent management, configuration
-  editing, telemetry exploration, and topology visualization.
+- **OpAMP server** on port `4320` — manages collectors via
+  WebSocket, distributes configurations, tracks status and
+  capabilities.
+- **OTLP receiver** on ports `4317`/`4318` — accepts traces,
+  metrics, and logs over gRPC and HTTP. A bounded worker pool
+  parses + enriches + persists.
+- **REST + UI** on port `8080` — Gin-based JSON API, embedded
+  React UI, Prometheus `/metrics` surface.
+- **Storage** — SQLite for application data (agents, groups,
+  configs, audit, dismissals), DuckDB for telemetry + rollups.
+- **CLI** — `squadronctl` for CI scripting + management
+  automation.
+
+Optional: enable `ai.enabled` + `pricing.enabled` in
+`squadron.yaml` for the cost + AI features.
+
+## Documentation
+
+Full docs under [`/docs`](./docs/README.md):
+
+**Start here**
+- [Quickstart](./docs/quickstart.md) — the wizard flow walked
+  through in detail
+- [Getting started](./docs/getting-started.md) — installing,
+  connecting your first collector
+- [Concepts](./docs/concepts.md) — agents, groups, configs, drift
+
+**Save money**
+- [Savings](./docs/savings.md) — dollar projections, pricing
+  rules, Quick Wins
+- [Recommendations](./docs/recommendations.md) — the four v0.25
+  recipes + how to add new ones
+- [AI assist](./docs/ai-assist.md) — Explain + Merge + what gets
+  sent to Anthropic + cost shape
+
+**Manage your fleet**
+- [Rollouts](./docs/rollouts.md) — staged deploys, abort
+  criteria, preview/diff, recipes, templates
+- [Alerts](./docs/alerts.md) — threshold rules over fleet state
+  + webhooks
+- [Audit log](./docs/audit-log.md) — every state change,
+  filterable
+- [Authentication](./docs/auth.md) — Bearer tokens, scopes,
+  expiration
+- [Operating Squadron](./docs/operating.md) — env vars, prod
+  checklist, backup, upgrade
+
+**Reference**
+- [Scale testing](./docs/scale-testing.md) — fleetsim, 1000-agent
+  numbers, perf gates
+- [Self-monitoring](./docs/self-monitoring.md) — Squadron's own
+  OTel traces
+- [squadronctl CLI](./docs/squadronctl.md) — command-line client
+- [API reference](./docs/api-reference.md) — REST endpoints
+
+## How Squadron compares
+
+Honest, audience-specific notes — see
+[`docs/positioning.md`](./docs/positioning.md) for the longer
+version.
+
+**vs Bindplane.** Bindplane is the mature enterprise option —
+better at 10k+ agent scale, formal compliance, larger curated
+processor library. Squadron is the OSS-first SMB option —
+AI-assisted, cost-first, modern UX, minutes to set up. Small
+team with a painful telemetry bill → probably Squadron. Enterprise
+RFP → probably Bindplane.
+
+**vs Grafana Fleet Management.** Grafana Fleet is great if you're
+already deep in Grafana Cloud / Loki / Tempo / Mimir and use
+Alloy. Squadron is standalone, OTel-first, and doesn't pull you
+into a broader ecosystem. We complement Grafana on the
+control-plane side rather than competing on telemetry storage.
+
+**vs Datadog Observability Pipelines / Cribl.** Those are
+Vector/Cribl-based and shine on data transformation and routing.
+Squadron is OTel-native and shines on cost analysis + AI-assisted
+config editing for OpenTelemetry collectors specifically. Use
+Cribl/DD-Pipelines if your needs are "complex routing across many
+non-OTel sources". Use Squadron if you're standardized on OTel
+and want the OTel-specific cost story.
+
+## Project status
+
+Squadron is in active development. The OSS core under Apache 2.0
+is free for any size fleet and self-hostable forever. A future
+commercial tier will target enterprise concerns (multi-tenancy,
+HA, SSO/RBAC depth, audit retention SLAs, priority support) — the
+SMB experience stays free.
+
+Release tags so far:
+
+- `v0.27.1` — Quickstart wizard (fresh install + adopt existing)
+- `v0.27.0` — Savings dashboard ($/month projection)
+- `v0.26.0` — AI assist (Explain + Merge)
+- `v0.25.0` — Cost recommendations engine
+- `v0.24.0` — Telemetry volume insights
+- earlier — rollouts, alerts, audit log, OpAMP, OTel
+  instrumentation, fleet UI redesign
 
 ## Development
 
-The development container runs the Go backend with hot reload via
-[Air](https://github.com/air-verse/air) and the Vite dev server side by side.
+The dev container runs the Go backend with hot reload via
+[Air](https://github.com/air-verse/air) and the Vite UI dev
+server side by side.
 
 ```bash
 docker compose up -d
@@ -151,14 +226,16 @@ docker compose logs -f squadron
 # UI dev server on http://localhost:5173, API on http://localhost:8080
 ```
 
-Local without Docker (requires Go 1.24+, GCC/G++, SQLite dev libraries):
+Local without Docker (requires Go 1.24+, GCC/G++, SQLite dev
+libraries):
 
 ```bash
 go install github.com/air-verse/air@latest
 make dev
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution guide.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution
+guide.
 
 ## License
 
