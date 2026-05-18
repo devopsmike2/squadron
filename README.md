@@ -16,6 +16,17 @@ docker compose up -d
 open http://localhost:8080/quickstart
 ```
 
+## See it in action
+
+| | |
+|---|---|
+| **Quickstart** — fresh install or adopt your existing collectors. | **Savings** — projected $/month spend + recommendations ranked by $ saved. |
+| ![Quickstart](./marketing/scenes/01-quickstart-landing.png) | ![Savings dashboard](./marketing/scenes/02-savings-hero.png) |
+| **Cost Insights** — where your bytes are going, by signal, by agent, by attribute. | **Recommendations** — actionable fixes with copy-snippet + apply-via-rollout. |
+| ![Cost Insights](./marketing/scenes/03-cost-insights.png) | ![Recommendations](./marketing/scenes/04-recommendations.png) |
+| **Fleet Status** — live overview of agents, drift, alerts, and recent activity. | **Config Editor** — Monaco-powered with AI Assist + Squadron Lint + live pipeline view. |
+| ![Fleet Status](./marketing/scenes/05-fleet-status.png) | ![Config Editor](./marketing/scenes/06-config-editor.png) |
+
 > Squadron is a fork of and derivative work based on
 > [Lawrence OSS](https://github.com/getlawrence/lawrence-oss),
 > licensed under Apache 2.0. See [`NOTICE`](NOTICE) for full

@@ -1,0 +1,5 @@
+# Local node modules + lockfile for the screenshot tooling.
+# The capture.mjs script + package.json are committed; deps install via
+# `npm install` from a clean clone.
+node_modules/
+package-lock.json
