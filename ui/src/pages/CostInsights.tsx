@@ -15,7 +15,6 @@
 
 import {
   AlertCircleIcon,
-  ArrowRightIcon,
   RefreshCwIcon,
   ServerIcon,
 } from "lucide-react";

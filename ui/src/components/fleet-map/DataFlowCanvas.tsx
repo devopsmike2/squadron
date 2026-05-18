@@ -93,7 +93,10 @@ const DEST_ICON: Record<DestinationKind, React.ComponentType<{ className?: strin
 // Custom nodes
 // ============================================================
 
-interface AgentSourceData {
+// @xyflow/react requires custom node data to extend Record<string,
+// unknown> (its generic constraint). The index signature satisfies
+// that without losing the typed fields downstream.
+interface AgentSourceData extends Record<string, unknown> {
   agentName: string;
   agentStatus: string;
   signalCount: number;
@@ -143,7 +146,7 @@ function AgentSourceNode({ data }: NodeProps<Node<AgentSourceData>>) {
   );
 }
 
-interface DestinationNodeData {
+interface DestinationNodeData extends Record<string, unknown> {
   kind: DestinationKind;
   label: string;
   signals: Set<Signal>;
@@ -198,7 +201,7 @@ function DestinationNode({ data }: NodeProps<Node<DestinationNodeData>>) {
 // Custom edge with animated flow indicator
 // ============================================================
 
-interface FlowEdgeData {
+interface FlowEdgeData extends Record<string, unknown> {
   signal: Signal;
   rps: number;
   active: boolean;
