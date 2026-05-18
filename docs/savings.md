@@ -120,11 +120,64 @@ The recommendation endpoints also gain a new field on every item:
 Existing clients that don't know about the field ignore it; the
 v0.25 wire shape is otherwise unchanged.
 
+## Retrospective tracker (v0.28)
+
+The Quick Wins ranking tells you what *could* save. The new
+**Saved this month** tile on the Savings page tells you what
+*did*. Click Apply on a recommendation and Squadron snapshots the
+affected attribute's current byte rate as a baseline. On every
+subsequent visit to the page (which lazily re-queries insights)
+the baseline is compared to the current rate; the realized monthly
+savings is `(baseline - observed) bytes/hour × $/GB`.
+
+Outcome states:
+
+- **pending** — applied less than an hour ago, byte rate hasn't
+  settled yet.
+- **realized** — current byte rate is below the baseline. We're
+  counting the delta toward "Saved this month."
+- **not_observed** — more than an hour after Apply and the byte
+  rate hasn't dropped. Either the rollout didn't land or the fix
+  didn't move the needle.
+- **reverted** — placeholder for future un-apply tooling.
+
+The full audit-trail panel on the Savings page lists every
+applied recommendation with baseline / observed bytes, the
+operator who clicked Apply, and the post-apply status. This is
+the v0.28 ground truth for "did we actually save anything?"
+
+Only `noisy_attribute` recommendations get re-observed against
+live data today — they have a clean affected scope (one attribute
+key on one signal). `outlier_agent` and `drop_hotspot` outcomes
+fall through to a coarser "settled after 1 hour → assume realized
+at the apply-time estimate" rule. High-cardinality outcomes show
+up in the trail with status `pending`; the per-series cost
+side-channel doesn't translate cleanly to a byte-savings.
+
+### API
+
+| Endpoint                                       | What it does                              |
+|------------------------------------------------|-------------------------------------------|
+| `POST /api/v1/recommendations/:id/applied`     | Records the click; snapshots baseline    |
+| `GET /api/v1/savings/realized`                 | Lazy-refreshes observations and returns total + per-outcome rows |
+
+The realized response shape:
+
+```json
+{
+  "monthly_realized_usd": 32.12,
+  "currency": "USD",
+  "counts": {"realized": 1, "pending": 0, "not_observed": 0, "total": 1},
+  "outcomes": [/* RecommendationOutcome rows */]
+}
+```
+
+Re-observation happens lazily on the GET — there's no background
+goroutine. At v0.28 scale (small outcome rows; cached
+TopAttributes call) this is plenty.
+
 ## What's NOT in v0.27.0
 
-- **Retrospective tracker** ("you saved $X last month after
-  applying these fixes"). Needs audit-log integration to know when
-  each rec was applied; targeted for v0.27.1.
 - **Settings UI for rates.** Today it's `squadron.yaml` only; UI
   editor with live preview is v0.27.x.
 - **Per-destination signal split** in the Savings dashboard's

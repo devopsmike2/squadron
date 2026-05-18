@@ -552,6 +552,55 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.pricingTrampoline(func(h *handlers.PricingHandlers, c *gin.Context) { h.HandleProjection(c) }))
 
+		// v0.28 Retrospective savings. Two endpoints: one to record
+		// an Apply click (UI fires this when operator clicks the
+		// recommendation's Apply button), one to fetch the
+		// aggregated realized savings + per-outcome breakdown for
+		// the Savings dashboard.
+		v1.POST("/recommendations/:id/applied",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			func(c *gin.Context) {
+				if s.recsEngine == nil || s.recsDismissals == nil || s.pricer == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"error":   "Retrospective savings tracking is not wired (engine + pricer required)",
+						"enabled": false,
+					})
+					return
+				}
+				// recsDismissals doubles as the OutcomeStore — both
+				// implemented by the application store. We pass the
+				// store directly via an interface match.
+				store, ok := s.recsDismissals.(handlers.OutcomeStore)
+				if !ok {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error": "store does not implement OutcomeStore",
+					})
+					return
+				}
+				h := handlers.NewSavingsHandlers(store, s.recsEngine, s.insightsService, s.pricer, s.logger)
+				h.HandleApplied(c)
+			})
+		v1.GET("/savings/realized",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				if s.recsEngine == nil || s.recsDismissals == nil || s.pricer == nil {
+					c.JSON(http.StatusOK, gin.H{
+						"monthly_realized_usd": 0,
+						"enabled":              false,
+					})
+					return
+				}
+				store, ok := s.recsDismissals.(handlers.OutcomeStore)
+				if !ok {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error": "store does not implement OutcomeStore",
+					})
+					return
+				}
+				h := handlers.NewSavingsHandlers(store, s.recsEngine, s.insightsService, s.pricer, s.logger)
+				h.HandleRealized(c)
+			})
+
 		// v0.27.1 Quickstart. Pure config-generation; no state.
 		// All read-only so ScopeAgentsRead is the natural gate.
 		// Handler is constructed inline since it's cheap and the

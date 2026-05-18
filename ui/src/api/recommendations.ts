@@ -15,7 +15,8 @@ export type RecommendationCategory =
   | "noisy_attribute"
   | "outlier_agent"
   | "drop_hotspot"
-  | "empty_signal";
+  | "empty_signal"
+  | "high_cardinality";
 
 export type RecommendationSeverity = "critical" | "warn" | "info";
 
@@ -31,6 +32,11 @@ export interface Recommendation {
   /** Bytes-per-window the fix would plausibly avoid. -1 when the
    * recommendation isn't a byte-savings (e.g. drop hotspots). */
   est_savings_bytes: number;
+  /** Projected $/month the fix would save under current pricing
+   * assumptions. 0 when pricing is disabled or the recipe doesn't
+   * map to a byte-savings (high-cardinality is per-series cost,
+   * not per-byte). */
+  est_savings_per_month_usd?: number;
   /** Share of the signal's byte budget the recommendation targets.
    * Useful for the per-card progress bar. */
   pct_of_signal?: number;
@@ -84,6 +90,51 @@ export function getRecommendationsForAgent(
   const q = new URLSearchParams({ window });
   return apiGet<AgentRecommendationsResponse>(
     `/recommendations/agents/${encodeURIComponent(agentId)}?${q}`,
+  );
+}
+
+/**
+ * Record that the operator clicked Apply on a recommendation.
+ * Snapshots the recommendation + baseline byte rate server-side so
+ * Squadron can later compute realized savings against the live
+ * post-apply byte rate. Optional body lets the UI freeze a view in
+ * case the engine has stopped producing this recommendation by the
+ * time the click lands.
+ */
+export interface ApplyRecommendationBody {
+  title?: string;
+  category?: RecommendationCategory;
+  signal?: InsightsSignal | "";
+  est_savings_per_month_usd?: number;
+  est_savings_bytes?: number;
+  attribute_key?: string;
+}
+
+export interface RecommendationOutcome {
+  id: string;
+  recommendation_id: string;
+  applied_at: string;
+  applied_by: string;
+  title: string;
+  category: string;
+  signal?: string;
+  attribute_key?: string;
+  baseline_bytes_per_hour: number;
+  est_savings_per_month_usd_at_apply: number;
+  last_observed_bytes_per_hour: number;
+  last_observed_at?: string;
+  realized_savings_per_month_usd: number;
+  /** pending | realized | not_observed | reverted */
+  status: "pending" | "realized" | "not_observed" | "reverted";
+}
+
+export function applyRecommendation(
+  id: string,
+  body?: ApplyRecommendationBody,
+): Promise<RecommendationOutcome> {
+  return apiPost<RecommendationOutcome>(
+    `/recommendations/${encodeURIComponent(id)}/applied`,
+    body ?? {},
   );
 }
 

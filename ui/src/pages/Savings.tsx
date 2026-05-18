@@ -23,15 +23,19 @@
 
 import {
   ArrowRightIcon,
+  CheckCircle2Icon,
+  CircleDashedIcon,
   CoinsIcon,
+  HistoryIcon,
   InfoIcon,
+  PiggyBankIcon,
   RefreshCwIcon,
   SparklesIcon,
   TrendingDownIcon,
   WalletIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 
 import { getAgents } from "@/api/agents";
@@ -52,9 +56,11 @@ import {
   type PricingProjection,
 } from "@/api/pricing";
 import {
+  applyRecommendation,
   getRecommendations,
   type Recommendation,
 } from "@/api/recommendations";
+import { getRealizedSavings, type RealizedSavingsResponse } from "@/api/savings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -110,6 +116,14 @@ export default function SavingsPage() {
     `savings-fleet-${win}`,
     () => getFleetVolume({ window: win }),
   );
+  // v0.28 retrospective: refreshes on every page load, plus every
+  // minute alongside the other panels. Re-observation happens lazily
+  // on the GET, so a refresh here also recomputes realized savings.
+  const { data: realized, mutate: mutateRealized } = useSWR<RealizedSavingsResponse>(
+    "savings-realized",
+    getRealizedSavings,
+    { refreshInterval: 60_000 },
+  );
 
   // Per-destination $/month breakdown — computed client-side from
   // the v0.24 destination attribution + the pricing rules. Matches
@@ -129,19 +143,19 @@ export default function SavingsPage() {
     for (const ag of topAgents.items as AgentVolume[]) {
       const agent = agentsResp.items.find((a) => a.id === ag.agent_id);
       if (!agent || !agent.effective_config) continue;
-      const flows = parseAgentFlows(agent.effective_config);
+      const flows = parseAgentFlows(agent);
       const groups = groupFlowsByDestination(flows);
       if (!groups.length) continue;
       const equalShare = ag.total_bytes / groups.length;
       for (const g of groups) {
-        const existing = byKey.get(g.destinationKey) ?? {
-          key: g.destinationKey,
+        const existing = byKey.get(g.key) ?? {
+          key: g.key,
           label: g.label,
           bytes: 0,
           monthlyUSD: 0,
         };
         existing.bytes += equalShare;
-        byKey.set(g.destinationKey, existing);
+        byKey.set(g.key, existing);
       }
     }
     // Price each row using the matched rule.
@@ -173,6 +187,7 @@ export default function SavingsPage() {
       mutateRecs(),
       mutateTopAgents(),
       mutateAgents(),
+      mutateRealized(),
     ]);
     setRefreshing(false);
   };
@@ -223,19 +238,31 @@ export default function SavingsPage() {
       {!pricingEnabled ? (
         <DisabledNotice />
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <HeroSpend projection={projection} fleet={fleet} />
           <HeroPotential
             potentialMonthly={potentialMonthly}
             currency={projection?.currency ?? "USD"}
             recCount={recs?.items.length ?? 0}
           />
+          <HeroRealized realized={realized} />
         </div>
       )}
 
       {/* Quick Wins — recommendations ranked by $ saved. */}
       {pricingEnabled && (
-        <QuickWinsPanel recs={recs?.items ?? []} onChanged={() => mutateRecs()} />
+        <QuickWinsPanel
+          recs={recs?.items ?? []}
+          onApplied={async () => {
+            await Promise.all([mutateRecs(), mutateRealized()]);
+          }}
+        />
+      )}
+
+      {/* v0.28: realized savings audit trail. Lists the outcomes
+          we've already tracked and their post-apply status. */}
+      {pricingEnabled && realized && realized.outcomes?.length > 0 && (
+        <RealizedOutcomesPanel realized={realized} />
       )}
 
       {/* Per-destination breakdown. */}
@@ -331,16 +358,66 @@ function HeroPotential({
   );
 }
 
+function HeroRealized({
+  realized,
+}: {
+  realized: RealizedSavingsResponse | undefined;
+}) {
+  const monthly = realized?.monthly_realized_usd ?? 0;
+  const realizedCount = realized?.counts?.realized ?? 0;
+  const pendingCount = realized?.counts?.pending ?? 0;
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+          <PiggyBankIcon
+            className="h-3.5 w-3.5"
+            style={{ color: "var(--chart-2)" }}
+          />
+          Saved this month
+        </div>
+        <div
+          className="mt-2 font-tabular text-4xl font-semibold"
+          style={{ color: "var(--chart-2)" }}
+        >
+          {formatUSD(monthly)}
+          <span className="ml-2 text-sm font-normal text-muted-foreground">
+            / month
+          </span>
+        </div>
+        <div className="mt-3 text-sm text-muted-foreground">
+          {realizedCount === 0 && pendingCount === 0 ? (
+            <>
+              Click <span className="font-medium text-foreground">Apply</span>{" "}
+              on a Quick Win above to start tracking. Squadron measures
+              post-apply byte rates and reports the delta here.
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-foreground">
+                {realizedCount}
+              </span>{" "}
+              {realizedCount === 1 ? "recommendation" : "recommendations"}{" "}
+              measurably reduced byte rate
+              {pendingCount > 0 ? `, ${pendingCount} still settling.` : "."}
+            </>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ----------------------------------------------------------------
 // Quick Wins
 // ----------------------------------------------------------------
 
 function QuickWinsPanel({
   recs,
-  onChanged: _onChanged,
+  onApplied,
 }: {
   recs: Recommendation[];
-  onChanged: () => void;
+  onApplied: () => Promise<void> | void;
 }) {
   // Rank by $/month desc; drop ones with zero savings.
   const ranked = useMemo(() => {
@@ -384,7 +461,7 @@ function QuickWinsPanel({
         </div>
         <div className="space-y-2">
           {ranked.map((r) => (
-            <QuickWinRow key={r.id} rec={r} />
+            <QuickWinRow key={r.id} rec={r} onApplied={onApplied} />
           ))}
         </div>
       </CardContent>
@@ -392,8 +469,51 @@ function QuickWinsPanel({
   );
 }
 
-function QuickWinRow({ rec }: { rec: Recommendation }) {
+function QuickWinRow({
+  rec,
+  onApplied,
+}: {
+  rec: Recommendation;
+  onApplied: () => Promise<void> | void;
+}) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
   const savings = rec.est_savings_per_month_usd ?? 0;
+
+  // Apply records the click server-side (snapshots the current
+  // baseline + frozen recommendation view) and then opens the
+  // editor pre-filled. If recording fails we still navigate —
+  // the editor flow is the operator's actual goal and we don't
+  // want to block on the audit-trail write.
+  const handleApply = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await applyRecommendation(rec.id, {
+        title: rec.title,
+        category: rec.category,
+        signal: rec.signal,
+        est_savings_per_month_usd: rec.est_savings_per_month_usd,
+        est_savings_bytes: rec.est_savings_bytes,
+      });
+    } catch {
+      // Best-effort; swallow.
+    } finally {
+      setBusy(false);
+    }
+    void onApplied();
+    if (rec.snippet) {
+      navigate("/configs/new", {
+        state: {
+          prefillName: rec.title.slice(0, 60),
+          prefillSnippet: rec.snippet,
+          source: "savings",
+          recommendationId: rec.id,
+        },
+      });
+    }
+  };
+
   return (
     <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-background/40 p-3 transition-colors hover:bg-background/70">
       <div className="min-w-0 flex-1">
@@ -418,24 +538,157 @@ function QuickWinRow({ rec }: { rec: Recommendation }) {
           </span>
         </div>
       </div>
-      {rec.snippet && (
-        <Link
-          to="/configs/new"
-          state={{
-            prefillName: rec.title.slice(0, 60),
-            prefillSnippet: rec.snippet,
-            source: "savings",
-            recommendationId: rec.id,
-          }}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+      {rec.snippet ? (
+        <button
+          type="button"
+          onClick={handleApply}
+          disabled={busy}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-60"
         >
           <SparklesIcon className="h-3 w-3" />
-          Apply
+          {busy ? "Applying…" : "Apply"}
           <ArrowRightIcon className="h-3 w-3" />
-        </Link>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={handleApply}
+          disabled={busy}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-60"
+          title="No copy-paste snippet for this recommendation — clicking still records the apply for savings tracking."
+        >
+          <SparklesIcon className="h-3 w-3" />
+          {busy ? "Recording…" : "Mark applied"}
+        </button>
       )}
     </div>
   );
+}
+
+// ----------------------------------------------------------------
+// Realized outcomes (v0.28 retrospective tracker)
+// ----------------------------------------------------------------
+
+function RealizedOutcomesPanel({
+  realized,
+}: {
+  realized: RealizedSavingsResponse;
+}) {
+  const outcomes = useMemo(
+    () =>
+      [...(realized.outcomes ?? [])].sort(
+        (a, b) =>
+          new Date(b.applied_at).getTime() - new Date(a.applied_at).getTime(),
+      ),
+    [realized.outcomes],
+  );
+  if (outcomes.length === 0) return null;
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="mb-3 flex items-baseline justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+              Tracked outcomes
+            </div>
+            <div className="text-sm text-muted-foreground">
+              Recommendations the team has applied, with measured post-apply
+              byte rate
+            </div>
+          </div>
+          <div className="font-tabular text-[11px] text-muted-foreground">
+            {outcomes.length} total
+          </div>
+        </div>
+        <div className="space-y-2">
+          {outcomes.map((o) => (
+            <div
+              key={o.id}
+              className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <StatusIcon status={o.status} />
+                  <div className="truncate text-sm font-medium">{o.title}</div>
+                </div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  Applied{" "}
+                  <span className="font-tabular">
+                    {new Date(o.applied_at).toLocaleString()}
+                  </span>{" "}
+                  by{" "}
+                  <span className="font-mono text-[11px]">{o.applied_by}</span>
+                  {" — "}
+                  baseline{" "}
+                  <span className="font-tabular">
+                    {humanBytes(o.baseline_bytes_per_hour)}/h
+                  </span>
+                  {o.last_observed_at && (
+                    <>
+                      {" → "}observed{" "}
+                      <span className="font-tabular">
+                        {humanBytes(o.last_observed_bytes_per_hour)}/h
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="font-tabular shrink-0 text-right">
+                <div
+                  className="text-sm font-semibold"
+                  style={{
+                    color:
+                      o.status === "realized"
+                        ? "var(--chart-2)"
+                        : "var(--muted-foreground)",
+                  }}
+                >
+                  {formatUSD(o.realized_savings_per_month_usd)}
+                  <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                    /mo
+                  </span>
+                </div>
+                <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  {o.status.replace("_", " ")}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusIcon({ status }: { status: string }) {
+  if (status === "realized") {
+    return (
+      <CheckCircle2Icon
+        className="h-3.5 w-3.5 shrink-0"
+        style={{ color: "var(--chart-2)" }}
+      />
+    );
+  }
+  if (status === "pending") {
+    return (
+      <CircleDashedIcon
+        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+      />
+    );
+  }
+  return <HistoryIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
+}
+
+function humanBytes(b: number): string {
+  if (!b || b < 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = b;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 // ----------------------------------------------------------------

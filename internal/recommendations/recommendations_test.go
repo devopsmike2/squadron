@@ -18,10 +18,11 @@ import (
 // engine only depends on the three methods below, so a struct of
 // canned answers is enough — no DuckDB, no fixtures, no flake.
 type fakeInsights struct {
-	fleet    *insights.FleetSummary
-	agents   []insights.AgentVolume
-	attrs    map[insights.Signal][]insights.AttributeVolume
-	attrsErr error
+	fleet       *insights.FleetSummary
+	agents      []insights.AgentVolume
+	attrs       map[insights.Signal][]insights.AttributeVolume
+	attrsErr    error
+	cardinality []insights.MetricCardinality // v0.28 high-cardinality recipe stub
 }
 
 func (f *fakeInsights) FleetVolume(_ context.Context, win insights.Window, _ []insights.Signal) (*insights.FleetSummary, error) {
@@ -43,6 +44,14 @@ func (f *fakeInsights) TopAttributes(_ context.Context, _ insights.Window, sig i
 		return nil, f.attrsErr
 	}
 	return f.attrs[sig], nil
+}
+
+// TopMetricCardinality stub — v0.28 added this to the querier
+// interface. The existing recipe tests don't exercise the
+// high-cardinality recipe, so returning an empty slice keeps them
+// passing while still satisfying the interface contract.
+func (f *fakeInsights) TopMetricCardinality(_ context.Context, _ insights.Window, _ int, _ int64) ([]insights.MetricCardinality, error) {
+	return f.cardinality, nil
 }
 
 // newEngine constructs the engine with a fake insights querier
@@ -260,6 +269,66 @@ func TestEmptySignal(t *testing.T) {
 	}
 }
 
+// TestHighCardinality covers the v0.28 recipe. The fake returns
+// two metrics — one above the critical threshold (10k combos) and
+// one above the warn threshold (2k combos). Both should surface;
+// the bigger one should be critical, the smaller warn. Snippet
+// must include the metric name and reference the highest-card
+// label hint.
+func TestHighCardinality(t *testing.T) {
+	fi := &fakeInsights{
+		fleet: &insights.FleetSummary{
+			BySignal: []insights.SignalVolume{
+				{Signal: insights.SignalMetrics, Bytes: 1_000_000},
+			},
+		},
+		cardinality: []insights.MetricCardinality{
+			{
+				MetricName:       "http_requests_total",
+				DistinctCombos:   42_000,
+				TotalSamples:     500_000,
+				HighestCardLabel: "user_id",
+			},
+			{
+				MetricName:       "rpc_duration_seconds",
+				DistinctCombos:   3_500,
+				TotalSamples:     20_000,
+				HighestCardLabel: "trace_id",
+			},
+		},
+	}
+	recs, err := newEngine(t, fi).Evaluate(context.Background(), insights.Window1h)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	cards := filterByCategory(recs, CategoryHighCardinality)
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 high-cardinality recs, got %d", len(cards))
+	}
+	bySev := map[Severity]int{}
+	for _, r := range cards {
+		bySev[r.Severity]++
+		if !strings.Contains(r.Snippet, "metricstransform") {
+			t.Errorf("snippet missing metricstransform: %s", r.Snippet)
+		}
+	}
+	if bySev[SeverityCritical] != 1 || bySev[SeverityWarn] != 1 {
+		t.Errorf("expected 1 critical + 1 warn, got %v", bySev)
+	}
+	// Find the http_requests_total rec and confirm the user_id
+	// hint made it into the title/detail.
+	for _, r := range cards {
+		if strings.Contains(r.Title, "http_requests_total") {
+			if !strings.Contains(r.Detail, "user_id") {
+				t.Errorf("detail missing user_id hint: %s", r.Detail)
+			}
+			if !strings.Contains(r.Snippet, "user_id") {
+				t.Errorf("snippet missing user_id label: %s", r.Snippet)
+			}
+		}
+	}
+}
+
 // TestDismissals: a recommendation present in one run should be
 // suppressed on the next when the dismissals store says so.
 func TestDismissals(t *testing.T) {
@@ -412,6 +481,9 @@ func (c *callTracker) TopAgents(ctx context.Context, w insights.Window, l int) (
 func (c *callTracker) TopAttributes(ctx context.Context, w insights.Window, sig insights.Signal, l int) ([]insights.AttributeVolume, error) {
 	*c.called = true
 	return c.inner.TopAttributes(ctx, w, sig, l)
+}
+func (c *callTracker) TopMetricCardinality(ctx context.Context, w insights.Window, limit int, minCombos int64) ([]insights.MetricCardinality, error) {
+	return c.inner.TopMetricCardinality(ctx, w, limit, minCombos)
 }
 
 func filterByCategory(recs []Recommendation, cat Category) []Recommendation {

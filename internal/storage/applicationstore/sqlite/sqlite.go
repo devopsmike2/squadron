@@ -195,6 +195,31 @@ func (s *Storage) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_rec_dismissals_dismissed_at ON recommendation_dismissals(dismissed_at);
 
+	-- v0.28 recommendation outcomes. One row per Apply click;
+	-- tracks the realized byte/dollar savings post-apply by polling
+	-- the insights surface for the affected attribute's current rate.
+	-- Frozen snapshot fields (title, signal, attribute_key, baseline,
+	-- est_savings_at_apply) let us describe the outcome even after
+	-- the engine stops producing this exact recommendation.
+	CREATE TABLE IF NOT EXISTS recommendation_outcomes (
+		id TEXT PRIMARY KEY,
+		recommendation_id TEXT NOT NULL,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		applied_by TEXT NOT NULL DEFAULT 'system',
+		title TEXT NOT NULL,
+		category TEXT NOT NULL,
+		signal TEXT NOT NULL DEFAULT '',
+		attribute_key TEXT NOT NULL DEFAULT '',
+		baseline_bytes_per_hour INTEGER NOT NULL DEFAULT 0,
+		est_savings_per_month_usd_at_apply REAL NOT NULL DEFAULT 0,
+		last_observed_bytes_per_hour INTEGER NOT NULL DEFAULT 0,
+		last_observed_at DATETIME,
+		realized_savings_per_month_usd REAL NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'pending'
+	);
+	CREATE INDEX IF NOT EXISTS idx_rec_outcomes_applied_at ON recommendation_outcomes(applied_at);
+	CREATE INDEX IF NOT EXISTS idx_rec_outcomes_status ON recommendation_outcomes(status);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -1510,6 +1535,111 @@ func (s *Storage) ListRecommendationDismissals(ctx context.Context) ([]*types.Re
 			return nil, fmt.Errorf("failed to scan dismissal row: %w", err)
 		}
 		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ----------------------------------------------------------------
+// Recommendation outcomes (v0.28)
+// ----------------------------------------------------------------
+
+// CreateRecommendationOutcome inserts a new row. Generated on every
+// Apply click. ID is supplied by the caller (typically a uuid) so
+// the caller can immediately reference the row in the response.
+func (s *Storage) CreateRecommendationOutcome(ctx context.Context, o *types.RecommendationOutcome) error {
+	if o == nil || o.ID == "" || o.RecommendationID == "" {
+		return fmt.Errorf("id + recommendation_id required")
+	}
+	if o.AppliedAt.IsZero() {
+		o.AppliedAt = time.Now().UTC()
+	}
+	if o.Status == "" {
+		o.Status = "pending"
+	}
+	if o.AppliedBy == "" {
+		o.AppliedBy = "system"
+	}
+	stmt := `INSERT INTO recommendation_outcomes
+		(id, recommendation_id, applied_at, applied_by, title, category,
+		 signal, attribute_key, baseline_bytes_per_hour,
+		 est_savings_per_month_usd_at_apply, last_observed_bytes_per_hour,
+		 last_observed_at, realized_savings_per_month_usd, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	var lastObs interface{}
+	if !o.LastObservedAt.IsZero() {
+		lastObs = o.LastObservedAt
+	}
+	_, err := s.db.ExecContext(ctx, stmt,
+		o.ID, o.RecommendationID, o.AppliedAt, o.AppliedBy, o.Title, o.Category,
+		o.Signal, o.AttributeKey, o.BaselineBytesPerHour,
+		o.EstSavingsPerMonthUSDAtApply, o.LastObservedBytesPerHour,
+		lastObs, o.RealizedSavingsPerMonthUSD, o.Status)
+	if err != nil {
+		return fmt.Errorf("failed to create recommendation outcome: %w", err)
+	}
+	return nil
+}
+
+// UpdateRecommendationOutcome refreshes the running observation
+// fields. The periodic computation reads each outcome, queries the
+// insights surface for the current byte rate of the affected
+// attribute, and writes back. Only the observation columns are
+// updated (status, last_observed_*, realized_savings); the frozen
+// snapshot fields stay immutable.
+func (s *Storage) UpdateRecommendationOutcome(ctx context.Context, o *types.RecommendationOutcome) error {
+	if o == nil || o.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	stmt := `UPDATE recommendation_outcomes SET
+		last_observed_bytes_per_hour = ?,
+		last_observed_at = ?,
+		realized_savings_per_month_usd = ?,
+		status = ?
+		WHERE id = ?`
+	_, err := s.db.ExecContext(ctx, stmt,
+		o.LastObservedBytesPerHour, o.LastObservedAt,
+		o.RealizedSavingsPerMonthUSD, o.Status, o.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update outcome: %w", err)
+	}
+	return nil
+}
+
+// ListRecommendationOutcomes returns every recorded outcome,
+// newest applies first. Small table in practice; no pagination
+// concern at the v0.28 scale.
+func (s *Storage) ListRecommendationOutcomes(ctx context.Context) ([]*types.RecommendationOutcome, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, recommendation_id, applied_at, applied_by, title, category,
+		        signal, attribute_key, baseline_bytes_per_hour,
+		        est_savings_per_month_usd_at_apply, last_observed_bytes_per_hour,
+		        last_observed_at, realized_savings_per_month_usd, status
+		 FROM recommendation_outcomes
+		 ORDER BY applied_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list outcomes: %w", err)
+	}
+	defer rows.Close()
+	out := []*types.RecommendationOutcome{}
+	for rows.Next() {
+		o := &types.RecommendationOutcome{}
+		// last_observed_at is nullable; the mattn/sqlite driver
+		// hands it back as a *time.Time-friendly nullable when we
+		// use sql.NullTime. Earlier I tried COALESCE to applied_at
+		// to dodge the null, but SQLite's loose typing returned a
+		// string from COALESCE that the driver couldn't decode.
+		var lastObs sql.NullTime
+		if err := rows.Scan(&o.ID, &o.RecommendationID, &o.AppliedAt, &o.AppliedBy,
+			&o.Title, &o.Category, &o.Signal, &o.AttributeKey,
+			&o.BaselineBytesPerHour, &o.EstSavingsPerMonthUSDAtApply,
+			&o.LastObservedBytesPerHour, &lastObs,
+			&o.RealizedSavingsPerMonthUSD, &o.Status); err != nil {
+			return nil, fmt.Errorf("failed to scan outcome row: %w", err)
+		}
+		if lastObs.Valid {
+			o.LastObservedAt = lastObs.Time
+		}
+		out = append(out, o)
 	}
 	return out, rows.Err()
 }

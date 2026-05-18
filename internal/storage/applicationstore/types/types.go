@@ -70,6 +70,53 @@ type ApplicationStore interface {
 	RestoreRecommendation(ctx context.Context, recommendationID string) error
 	IsRecommendationDismissed(ctx context.Context, recommendationID string) (bool, error)
 	ListRecommendationDismissals(ctx context.Context) ([]*RecommendationDismissal, error)
+
+	// Recommendation outcomes (v0.28 retrospective savings tracker).
+	// Each row records ONE Apply click on a recommendation, with
+	// a frozen snapshot of the engine's view at that moment and a
+	// running update of the actual observed byte rate. Realized
+	// savings is computed from (baseline - observed) × pricing.
+	CreateRecommendationOutcome(ctx context.Context, o *RecommendationOutcome) error
+	UpdateRecommendationOutcome(ctx context.Context, o *RecommendationOutcome) error
+	ListRecommendationOutcomes(ctx context.Context) ([]*RecommendationOutcome, error)
+}
+
+// RecommendationOutcome is the post-apply tracking record for the
+// v0.28 retrospective savings dashboard. Each Apply click creates
+// one row; a background poller (or on-demand on /savings/realized
+// hits) updates LastObservedBytesPerHour + RealizedSavingsPerMonthUSD
+// against the latest insights snapshot.
+//
+// Status lifecycle:
+//   pending      → just created, no observation yet
+//   realized     → observed byte rate dropped below baseline; savings active
+//   not_observed → 24h+ since apply, byte rate hasn't dropped (operator
+//                  may have decided not to roll out, or the rollout
+//                  hasn't reached the affected agents yet)
+//   reverted     → observed byte rate is back near baseline AFTER once
+//                  being realized (rollback or config drift)
+type RecommendationOutcome struct {
+	ID               string    `json:"id"`
+	RecommendationID string    `json:"recommendation_id"` // engine's deterministic hash
+	AppliedAt        time.Time `json:"applied_at"`
+	AppliedBy        string    `json:"applied_by"` // actor string
+
+	// Frozen snapshot at apply time. We freeze these because the
+	// engine may stop producing this exact recommendation after the
+	// fix lands (which is the whole point) — we still need to
+	// describe the outcome in the UI.
+	Title                        string  `json:"title"`
+	Category                     string  `json:"category"`
+	Signal                       string  `json:"signal,omitempty"`        // 'metrics' | 'logs' | 'traces' | ''
+	AttributeKey                 string  `json:"attribute_key,omitempty"` // for noisy_attribute recs
+	BaselineBytesPerHour         int64   `json:"baseline_bytes_per_hour"`
+	EstSavingsPerMonthUSDAtApply float64 `json:"est_savings_per_month_usd_at_apply"`
+
+	// Running observations. Updated periodically.
+	LastObservedBytesPerHour   int64     `json:"last_observed_bytes_per_hour"`
+	LastObservedAt             time.Time `json:"last_observed_at,omitempty"`
+	RealizedSavingsPerMonthUSD float64   `json:"realized_savings_per_month_usd"`
+	Status                     string    `json:"status"` // pending|realized|not_observed|reverted
 }
 
 // RecommendationDismissal is one operator-driven hide. The engine

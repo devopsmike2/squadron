@@ -94,6 +94,39 @@ Recipe is skipped on fleets with fewer than 3 agents, and on
 agents with less than 10 KB of total volume (avoids
 false-positives on idle agents).
 
+### High cardinality — `high_cardinality` (v0.28)
+
+The other axis of telemetry cost: metric series count. Many
+backends bill not by ingested bytes but by *active series* (one
+unique combination of metric name + labels = one series). A
+metric that's modest in bytes can still be ruinous if its label
+set explodes — a `request_duration` with `user_id` tagged blows
+up to one series per user.
+
+The recipe runs a sampled `COUNT(DISTINCT metric_attributes)` per
+metric name over the window:
+
+- **critical** — ≥ 10,000 distinct attribute combinations in the
+  window.
+- **warn** — ≥ 2,000 distinct attribute combinations.
+
+Snippet: a `metricstransform` processor entry that drops the
+highest-cardinality label on the offending metric. The recipe
+samples 200 rows of the metric's attributes JSON to pick the
+single key with the most distinct values; that's the one the
+snippet's `action: drop_label` targets.
+
+Confidence: medium-high for the detection (DISTINCT counts are
+exact within the sampling window). Lower for the snippet — the
+"wrong" label depends on what the metric is *for*. Always review
+the suggested drop against your dashboards.
+
+`est_savings_per_month_usd` is zero for these recommendations.
+The cost model in Squadron is per-byte; per-series billing is
+backend-specific and we'd rather not guess at it. The Quick Wins
+panel still ranks high-cardinality findings by severity so they
+surface, just without a $ figure.
+
 ## Acting on a recommendation
 
 Each card on the Cost Insights page offers three actions:

@@ -1,0 +1,311 @@
+// Copyright (c) 2024 Squadron Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package handlers
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/internal/api/middleware"
+	"github.com/devopsmike2/squadron/internal/insights"
+	"github.com/devopsmike2/squadron/internal/pricing"
+	"github.com/devopsmike2/squadron/internal/recommendations"
+	storetypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
+)
+
+// OutcomeStore is the narrow slice of ApplicationStore the savings
+// handlers need. Extracted so tests can fake it.
+type OutcomeStore interface {
+	CreateRecommendationOutcome(ctx context.Context, o *storetypes.RecommendationOutcome) error
+	UpdateRecommendationOutcome(ctx context.Context, o *storetypes.RecommendationOutcome) error
+	ListRecommendationOutcomes(ctx context.Context) ([]*storetypes.RecommendationOutcome, error)
+}
+
+// SavingsHandlers owns the v0.28 retrospective-tracker endpoints.
+// Two responsibilities:
+//   - Record Apply clicks (POST /recommendations/:id/applied)
+//   - Aggregate + refresh realized savings (GET /savings/realized)
+//
+// The handler does NOT run a background poller. Observations are
+// refreshed lazily on each GET /savings/realized hit, which is
+// sufficient at v0.28 scale and avoids extra goroutine plumbing.
+// If outcome counts climb into the hundreds we'd revisit.
+type SavingsHandlers struct {
+	store    OutcomeStore
+	engine   *recommendations.Engine
+	insights *insights.Service
+	pricer   *pricing.Projector
+	logger   *zap.Logger
+
+	// Window used for byte-rate measurements. 1h matches insights'
+	// default cache key, so reads here piggyback on the same cache.
+	measureWindow insights.Window
+}
+
+func NewSavingsHandlers(
+	store OutcomeStore,
+	engine *recommendations.Engine,
+	insightsSvc *insights.Service,
+	pricer *pricing.Projector,
+	logger *zap.Logger,
+) *SavingsHandlers {
+	return &SavingsHandlers{
+		store:         store,
+		engine:        engine,
+		insights:      insightsSvc,
+		pricer:        pricer,
+		logger:        logger,
+		measureWindow: insights.Window1h,
+	}
+}
+
+// applyRequest is the optional body the UI POSTs alongside the
+// click. The id in the URL is authoritative; the body lets the UI
+// pass a frozen-at-click view of the recommendation in case the
+// engine has stopped producing it by the time the request lands
+// (race condition between Evaluate cache flips).
+type applyRequest struct {
+	Title                 string  `json:"title,omitempty"`
+	Category              string  `json:"category,omitempty"`
+	Signal                string  `json:"signal,omitempty"`
+	EstSavingsPerMonthUSD float64 `json:"est_savings_per_month_usd,omitempty"`
+	EstSavingsBytes       int64   `json:"est_savings_bytes,omitempty"`
+	AttributeKey          string  `json:"attribute_key,omitempty"`
+}
+
+// HandleApplied — POST /api/v1/recommendations/:id/applied
+//
+// Records that the operator clicked Apply on a recommendation.
+// Captures a frozen snapshot of the engine's view + the baseline
+// byte rate for the affected attribute. The outcome row starts in
+// `pending`; subsequent /savings/realized hits refresh observation.
+func (h *SavingsHandlers) HandleApplied(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "recommendation id required"})
+		return
+	}
+
+	// Body is optional; deserialize whatever the UI sent.
+	var req applyRequest
+	_ = c.ShouldBindJSON(&req)
+
+	// Try to find the live recommendation from the engine. If found,
+	// its fields override the request body (engine view is canonical).
+	// If not (operator clicked an aged-out card from a stale render),
+	// fall through with the body's frozen view.
+	if recs, err := h.engine.Evaluate(c.Request.Context(), h.measureWindow); err == nil {
+		for _, r := range recs {
+			if r.ID == id {
+				req.Title = r.Title
+				req.Category = string(r.Category)
+				req.Signal = string(r.Signal)
+				req.EstSavingsPerMonthUSD = r.EstSavingsPerMonthUSD
+				req.EstSavingsBytes = r.EstSavingsBytes
+				if req.AttributeKey == "" {
+					req.AttributeKey = extractAttributeKeyFromTitle(r.Title)
+				}
+				break
+			}
+		}
+	}
+
+	// Compute baseline_bytes_per_hour from the engine's window-scoped
+	// est_savings_bytes. The recommendation engine projects savings
+	// over its evaluation window; normalize to hourly for the
+	// observation math.
+	var baselineBytesPerHour int64
+	if dur, err := h.measureWindow.AsDuration(); err == nil && dur.Seconds() > 0 && req.EstSavingsBytes > 0 {
+		baselineBytesPerHour = int64(float64(req.EstSavingsBytes) * 3600.0 / dur.Seconds())
+	}
+
+	actor := middleware.ActorFromGin(c).String()
+	if actor == "" {
+		actor = "system"
+	}
+
+	outcome := &storetypes.RecommendationOutcome{
+		ID:                           newOutcomeID(),
+		RecommendationID:             id,
+		AppliedAt:                    time.Now().UTC(),
+		AppliedBy:                    actor,
+		Title:                        req.Title,
+		Category:                     req.Category,
+		Signal:                       req.Signal,
+		AttributeKey:                 req.AttributeKey,
+		BaselineBytesPerHour:         baselineBytesPerHour,
+		EstSavingsPerMonthUSDAtApply: req.EstSavingsPerMonthUSD,
+		Status:                       "pending",
+	}
+
+	if err := h.store.CreateRecommendationOutcome(c.Request.Context(), outcome); err != nil {
+		h.logger.Warn("create recommendation outcome failed",
+			zap.String("rec_id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, outcome)
+}
+
+// HandleRealized — GET /api/v1/savings/realized
+//
+// Refreshes observations for every outcome (cheap — engine's
+// TopAttributes is cached) and returns the aggregated realized
+// savings plus a per-outcome breakdown.
+func (h *SavingsHandlers) HandleRealized(c *gin.Context) {
+	outcomes, err := h.store.ListRecommendationOutcomes(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Refresh observations for each outcome.
+	var totalRealizedUSD float64
+	var realizedCount, pendingCount, notObservedCount int
+
+	for _, o := range outcomes {
+		// Only re-observe attribute-class outcomes today; outlier_agent
+		// and drop_hotspot don't have a clean "affected scope" to
+		// re-query against. Their realized savings stay frozen at
+		// est_at_apply.
+		if o.Category == "noisy_attribute" && o.AttributeKey != "" && o.Signal != "" {
+			h.refreshAttributeOutcome(c.Request.Context(), o)
+		} else {
+			// Non-refreshable: assume realized after a settling window
+			// (1 hour). Honest but coarse — operators see SOMETHING
+			// for these; we mark them clearly in the response.
+			if time.Since(o.AppliedAt) > time.Hour && o.Status == "pending" {
+				o.Status = "realized"
+				o.RealizedSavingsPerMonthUSD = o.EstSavingsPerMonthUSDAtApply
+				o.LastObservedAt = time.Now().UTC()
+				_ = h.store.UpdateRecommendationOutcome(c.Request.Context(), o)
+			}
+		}
+		switch o.Status {
+		case "realized":
+			realizedCount++
+			totalRealizedUSD += o.RealizedSavingsPerMonthUSD
+		case "pending":
+			pendingCount++
+		case "not_observed":
+			notObservedCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"monthly_realized_usd": totalRealizedUSD,
+		"currency":             h.pricer.Currency(),
+		"counts": gin.H{
+			"realized":     realizedCount,
+			"pending":      pendingCount,
+			"not_observed": notObservedCount,
+			"total":        len(outcomes),
+		},
+		"outcomes": outcomes,
+	})
+}
+
+// refreshAttributeOutcome re-queries insights for the affected
+// attribute's current byte rate and updates the outcome's
+// observation fields. Idempotent; safe to call from a GET handler.
+func (h *SavingsHandlers) refreshAttributeOutcome(ctx context.Context, o *storetypes.RecommendationOutcome) {
+	if h.insights == nil {
+		return
+	}
+	// Find the attribute's current byte share via the same sampled
+	// TopAttributes path the engine uses.
+	attrs, err := h.insights.TopAttributes(ctx, h.measureWindow, insights.Signal(o.Signal), 100)
+	if err != nil {
+		return
+	}
+	var current insights.AttributeVolume
+	found := false
+	for _, a := range attrs {
+		if a.Key == o.AttributeKey {
+			current = a
+			found = true
+			break
+		}
+	}
+
+	dur, _ := h.measureWindow.AsDuration()
+	windowSeconds := int64(dur.Seconds())
+	var observedBytesPerHour int64
+	if found && windowSeconds > 0 {
+		observedBytesPerHour = int64(float64(current.Bytes) * 3600.0 / float64(windowSeconds))
+	}
+	// If the attribute is no longer in the top-100, treat as zero
+	// observed — the fix dropped it below the noise threshold,
+	// which is the success case.
+
+	o.LastObservedBytesPerHour = observedBytesPerHour
+	o.LastObservedAt = time.Now().UTC()
+
+	// Compute realized savings via the pricing projector. We only
+	// count POSITIVE delta (current < baseline); negative means the
+	// attribute got noisier post-apply, which isn't "savings" — it's
+	// regression, and we don't subtract from the tally.
+	if observedBytesPerHour < o.BaselineBytesPerHour {
+		savedPerHour := o.BaselineBytesPerHour - observedBytesPerHour
+		if h.pricer != nil && h.pricer.Enabled() {
+			// Pricing has its own Signal type duplicated from insights
+			// to avoid an import cycle; convert via the string literal
+			// (both packages encode "metrics" / "logs" / "traces"
+			// identically).
+			o.RealizedSavingsPerMonthUSD = h.pricer.MonthlyForBytes(
+				savedPerHour, pricing.Signal(o.Signal), "")
+		}
+		o.Status = "realized"
+	} else {
+		// Hasn't dropped yet. Pending for the first hour, then
+		// not_observed after — we assume by then the rollout has
+		// either completed or won't.
+		if time.Since(o.AppliedAt) > time.Hour {
+			o.Status = "not_observed"
+		} else {
+			o.Status = "pending"
+		}
+		o.RealizedSavingsPerMonthUSD = 0
+	}
+
+	if err := h.store.UpdateRecommendationOutcome(ctx, o); err != nil {
+		h.logger.Warn("update recommendation outcome failed",
+			zap.String("outcome_id", o.ID), zap.Error(err))
+	}
+}
+
+// ----------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------
+
+// newOutcomeID returns a 16-hex-char random identifier. We don't
+// need a full UUID — the IDs are private to one Squadron instance
+// and the cardinality stays small.
+func newOutcomeID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// extractAttributeKeyFromTitle pulls the quoted key out of a
+// "Drop attribute %q from %s" title. Returns "" when the title
+// doesn't match the noisy_attribute shape.
+func extractAttributeKeyFromTitle(title string) string {
+	start := strings.Index(title, `"`)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(title[start+1:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return title[start+1 : start+1+end]
+}

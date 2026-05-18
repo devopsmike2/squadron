@@ -558,6 +558,231 @@ func (s *Service) TopAttributes(ctx context.Context, win Window, signal Signal, 
 	return out, nil
 }
 
+// MetricCardinality is one row of the v0.28 high-cardinality
+// surface: per metric name, how many DISTINCT label-set combinations
+// exist in the window. Metrics with huge cardinality are the OTHER
+// big OTel cost killer alongside verbose attributes, because every
+// distinct combo becomes its own time-series in the metric backend.
+type MetricCardinality struct {
+	MetricName     string `json:"metric_name"`
+	DistinctCombos int64  `json:"distinct_combos"`
+	TotalSamples   int64  `json:"total_samples"`
+	// EstimatedHighCardLabels is a hint at WHICH label is driving
+	// the cardinality. Sampled — we look at the first ~100 rows of
+	// this metric, count distinct values per attribute key, and
+	// return the top one. The metricstransform snippet the
+	// recommendation generates uses this to suggest which label
+	// to drop / aggregate over.
+	HighestCardLabel string `json:"highest_card_label,omitempty"`
+}
+
+// TopMetricCardinality returns the metrics with the highest
+// distinct-combo counts in the window, ordered descending. limit
+// caps the response; default 20. minCombos filters out small
+// metrics whose cardinality isn't operationally interesting.
+//
+// Implementation notes:
+//   - DuckDB's COUNT(DISTINCT metric_attributes) on a JSON column
+//     is expensive but feasible at v0.24 fleet sizes. We cache
+//     aggressively (same cacheTTL as the other insights queries).
+//   - We only scan metrics_sum for v0.28; metrics_gauge and
+//     metrics_histogram add complexity (UNION ALL with different
+//     metric-name columns) and the v0.28 recipe is the same advice
+//     regardless. If operators ask, v0.28.x extends to all three.
+func (s *Service) TopMetricCardinality(ctx context.Context, win Window, limit int, minCombos int64) ([]MetricCardinality, error) {
+	dur, err := win.AsDuration()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if minCombos <= 0 {
+		minCombos = 2000
+	}
+	cacheKey := fmt.Sprintf("metricCardinality:%s:%d:%d", win, limit, minCombos)
+	if cached := s.fromCache(cacheKey); cached != nil {
+		if v, ok := cached.([]MetricCardinality); ok {
+			return v, nil
+		}
+	}
+
+	start := time.Now().UTC().Add(-dur)
+	q := `
+		SELECT
+			metric_name,
+			CAST(COUNT(DISTINCT metric_attributes) AS BIGINT) AS combos,
+			CAST(COUNT(*) AS BIGINT)                          AS samples
+		FROM metrics_sum
+		WHERE timestamp >= ?
+		GROUP BY metric_name
+		HAVING combos >= ?
+		ORDER BY combos DESC
+		LIMIT ?
+	`
+	rows, err := s.reader.QueryRaw(ctx, q, start, minCombos, limit)
+	if err != nil {
+		return nil, fmt.Errorf("top metric cardinality: %w", err)
+	}
+
+	out := make([]MetricCardinality, 0, len(rows))
+	for _, r := range rows {
+		mc := MetricCardinality{
+			MetricName:     stringOf(r["metric_name"]),
+			DistinctCombos: int64Of(r["combos"]),
+			TotalSamples:   int64Of(r["samples"]),
+		}
+		// Best-effort "which label drives this" hint. Sample 200
+		// rows from the metric, scan their attributes JSON, count
+		// distinct values per key, pick the highest. Cheap because
+		// it's bounded by the sample size, not the population.
+		mc.HighestCardLabel = s.findHighestCardLabel(ctx, mc.MetricName, start)
+		out = append(out, mc)
+	}
+
+	s.intoCache(cacheKey, out)
+	return out, nil
+}
+
+// findHighestCardLabel samples a metric's recent rows and returns
+// the attribute key with the most distinct values. Returns "" when
+// the sample is empty or all rows share a single label set. Best-
+// effort; correctness of the hint isn't safety-critical (the
+// recommendation snippet still surfaces the metric name so the
+// operator can confirm).
+func (s *Service) findHighestCardLabel(ctx context.Context, metricName string, since time.Time) string {
+	rows, err := s.reader.QueryRaw(ctx,
+		`SELECT metric_attributes FROM metrics_sum
+		 WHERE timestamp >= ? AND metric_name = ?
+		 ORDER BY random()
+		 LIMIT 200`, since, metricName)
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+	distinctVals := map[string]map[string]struct{}{}
+	for _, row := range rows {
+		var attrs string
+		switch v := row["metric_attributes"].(type) {
+		case string:
+			attrs = v
+		case []byte:
+			attrs = string(v)
+		default:
+			continue
+		}
+		// Reuse the minimal JSON scanner from accumulateKeyBytes
+		// to walk top-level keys + capture values. We only need
+		// the (key, value) pair, so a tiny adapter does.
+		walkJSONKeys(attrs, func(k, v string) {
+			set, ok := distinctVals[k]
+			if !ok {
+				set = map[string]struct{}{}
+				distinctVals[k] = set
+			}
+			set[v] = struct{}{}
+		})
+	}
+	var bestKey string
+	var bestCount int
+	for k, set := range distinctVals {
+		if len(set) > bestCount {
+			bestCount = len(set)
+			bestKey = k
+		}
+	}
+	return bestKey
+}
+
+// walkJSONKeys is a minimal scanner that calls fn for each
+// top-level "key": value pair in a JSON object. Values are passed
+// verbatim (including quotes for strings). Same defensive parsing
+// as accumulateKeyBytes — failures silently no-op.
+func walkJSONKeys(jsonStr string, fn func(key, value string)) {
+	in := []byte(jsonStr)
+	i := 0
+	n := len(in)
+	for i < n && (in[i] == ' ' || in[i] == '\t' || in[i] == '\n') {
+		i++
+	}
+	if i >= n || in[i] != '{' {
+		return
+	}
+	i++
+	for i < n {
+		for i < n && (in[i] == ' ' || in[i] == '\t' || in[i] == '\n' || in[i] == ',') {
+			i++
+		}
+		if i >= n || in[i] == '}' {
+			return
+		}
+		if in[i] != '"' {
+			return
+		}
+		keyStart := i + 1
+		i++
+		for i < n && in[i] != '"' {
+			if in[i] == '\\' && i+1 < n {
+				i += 2
+				continue
+			}
+			i++
+		}
+		if i >= n {
+			return
+		}
+		key := string(in[keyStart:i])
+		i++
+		for i < n && (in[i] == ':' || in[i] == ' ' || in[i] == '\t') {
+			i++
+		}
+		valStart := i
+		switch {
+		case i < n && in[i] == '"':
+			i++
+			for i < n && in[i] != '"' {
+				if in[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				i++
+			}
+			if i < n {
+				i++
+			}
+		case i < n && (in[i] == '{' || in[i] == '['):
+			open := in[i]
+			closeByte := byte('}')
+			if open == '[' {
+				closeByte = ']'
+			}
+			depth := 1
+			i++
+			for i < n && depth > 0 {
+				if in[i] == '"' {
+					i++
+					for i < n && in[i] != '"' {
+						if in[i] == '\\' && i+1 < n {
+							i += 2
+							continue
+						}
+						i++
+					}
+				} else if in[i] == open {
+					depth++
+				} else if in[i] == closeByte {
+					depth--
+				}
+				i++
+			}
+		default:
+			for i < n && in[i] != ',' && in[i] != '}' && in[i] != '\n' {
+				i++
+			}
+		}
+		fn(key, string(in[valStart:i]))
+	}
+}
+
 // Drops returns the drop count per signal across the window.
 // Currently a thin wrapper around the same otlp_batches table —
 // drops live alongside successful ingest counts so we don't need

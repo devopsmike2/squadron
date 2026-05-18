@@ -61,6 +61,13 @@ const (
 	// zero bytes for the entire window. Suggested fix: drop the
 	// pipeline branch on the source side.
 	CategoryEmptySignal Category = "empty_signal"
+
+	// CategoryHighCardinality (v0.28) — a metric has so many
+	// distinct label-set combinations that it's almost certainly
+	// driving outsized storage cost in the metric backend.
+	// Suggested fix: metricstransform/aggregate_labels to drop the
+	// highest-cardinality dimension.
+	CategoryHighCardinality Category = "high_cardinality"
 )
 
 // Severity is a coarse three-step scale. We resist the urge to
@@ -175,6 +182,10 @@ type InsightsQuerier interface {
 	FleetVolume(ctx context.Context, win insights.Window, signalFilter []insights.Signal) (*insights.FleetSummary, error)
 	TopAgents(ctx context.Context, win insights.Window, limit int) ([]insights.AgentVolume, error)
 	TopAttributes(ctx context.Context, win insights.Window, signal insights.Signal, limit int) ([]insights.AttributeVolume, error)
+	// v0.28 — high-cardinality detection. Optional: implementations
+	// that don't have a metric-name × distinct-combos query can
+	// return (nil, nil) and the recipe will skip cleanly.
+	TopMetricCardinality(ctx context.Context, win insights.Window, limit int, minCombos int64) ([]insights.MetricCardinality, error)
 }
 
 // Engine is the public surface. Construct with NewEngine, call
@@ -273,6 +284,7 @@ func (e *Engine) Evaluate(ctx context.Context, win insights.Window) ([]Recommend
 	out = append(out, e.recipeOutlierAgent(ctx, win, fleet, now)...)
 	out = append(out, e.recipeDropHotspot(ctx, win, fleet, now)...)
 	out = append(out, e.recipeEmptySignal(ctx, win, fleet, now)...)
+	out = append(out, e.recipeHighCardinality(ctx, win, now)...)
 
 	// Filter dismissals. Done after generation so a future
 	// "restore" path doesn't have to remember what was filtered.
@@ -567,6 +579,54 @@ func (e *Engine) recipeEmptySignal(ctx context.Context, win insights.Window, fle
 	return out
 }
 
+// recipeHighCardinality (v0.28) — flag metrics with absurd numbers
+// of distinct label-set combinations. The threshold is intentionally
+// SMB-friendly:
+//
+//   >= 10,000 distinct combos → critical (almost certainly costing
+//     significant $ in metric storage)
+//   >= 2,000 distinct combos  → warn (worth reviewing)
+//
+// Backends differ wildly in how cardinality maps to cost. Datadog
+// charges per "custom metric" (a unique metric+tagset combo);
+// Honeycomb's event model is more forgiving; Prometheus-style
+// (Mimir/Cortex) gets expensive at series counts. The recipe
+// surfaces the count + the highest-cardinality label so the operator
+// can decide whether to keep it; the snippet shows the
+// metricstransform/aggregate_labels pattern.
+//
+// We don't compute a $/month estimate because the byte cost isn't
+// the right unit here (cardinality cost is per-series, not
+// per-byte). EstSavingsBytes stays 0 so the engine's pricing pass
+// doesn't overpromise.
+func (e *Engine) recipeHighCardinality(ctx context.Context, win insights.Window, now time.Time) []Recommendation {
+	// minCombos = 2000 matches the recipe's warn threshold.
+	cards, err := e.insights.TopMetricCardinality(ctx, win, 20, 2000)
+	if err != nil {
+		e.logger.Warn("topMetricCardinality failed; skipping recipe", zap.Error(err))
+		return nil
+	}
+	out := make([]Recommendation, 0, len(cards))
+	for _, c := range cards {
+		sev := SeverityWarn
+		if c.DistinctCombos >= 10_000 {
+			sev = SeverityCritical
+		}
+		out = append(out, Recommendation{
+			ID:              idFor("high_card", c.MetricName),
+			Category:        CategoryHighCardinality,
+			Severity:        sev,
+			Title:           fmt.Sprintf("Metric %q has %s distinct label combinations", c.MetricName, humanCount(c.DistinctCombos)),
+			Detail:          highCardinalityDetail(c),
+			Signal:          insights.SignalMetrics,
+			EstSavingsBytes: 0, // not byte-bounded; cost is per-series
+			Snippet:         metricstransformSnippet(c),
+			GeneratedAt:     now,
+		})
+	}
+	return out
+}
+
 // ----------------------------------------------------------------
 // Snippet builders. Each returns a small, valid YAML fragment with
 // a header comment explaining what to do with it.
@@ -594,6 +654,46 @@ service:
     %s:
       processors: [%s, batch]  # keep any existing processors after this
 `, key, sig, sig, procName, key, sig, sig, procName))
+}
+
+// metricstransformSnippet builds a metricstransform processor
+// block that aggregates over the highest-cardinality label,
+// effectively dropping it from the time-series identity. The
+// `include: <metric>` clause narrows the rule so we don't
+// accidentally aggregate other metrics. The aggregation_type is
+// sum — safe for counters and most gauges; operators using
+// distributions may want to swap to mean or max.
+func metricstransformSnippet(c insights.MetricCardinality) string {
+	procName := "metricstransform/cap_" + sanitizeYAMLKey(c.MetricName)
+	label := c.HighestCardLabel
+	if label == "" {
+		label = "<the high-cardinality label>"
+	}
+	return strings.TrimSpace(fmt.Sprintf(`
+# Recommendation: metric %q has high cardinality (%s distinct combinations).
+# The dominant driver looks like the %q label.
+#
+# This metricstransform block aggregates over %q, collapsing
+# every combo that differs only in that label into one series.
+# Saves significant $$ on metric backends that charge per series
+# (Datadog custom metrics, Prometheus-style stores).
+#
+# Review BEFORE applying: aggregating loses the ability to filter
+# or alert on %q values. If you need those, consider an
+# attributes/delete that drops %q on a SAMPLED subset instead.
+processors:
+  %s:
+    transforms:
+      - include: %s
+        action: update
+        operations:
+          - action: aggregate_labels
+            aggregation_type: sum
+            # Keep these labels; anything else is dropped, including %s.
+            label_set: []     # FIXME: list the labels you want to keep
+
+# Then in service.pipelines.metrics.processors, add %s before batch.
+`, c.MetricName, humanCount(c.DistinctCombos), label, label, label, label, procName, c.MetricName, label, procName))
 }
 
 // batchProcessorSnippet suggests larger batches for drop-hotspot
@@ -643,6 +743,21 @@ func dropHotspotDetail(sv insights.SignalVolume, dropPct float64) string {
 			`That's data the agent intended to send but couldn't — usually a sign the batch `+
 			`processor or exporter queue is undersized.`,
 		sv.DroppedCount, sv.ItemCount+sv.DroppedCount, sv.Signal, dropPct*100,
+	)
+}
+
+func highCardinalityDetail(c insights.MetricCardinality) string {
+	hint := ""
+	if c.HighestCardLabel != "" {
+		hint = fmt.Sprintf(" Sampled inspection suggests the %q label is the dominant driver.", c.HighestCardLabel)
+	}
+	return fmt.Sprintf(
+		`%q has %s distinct label-set combinations in the window across %s samples. `+
+			`Each unique combination is a separate time-series in your metric backend, `+
+			`which is the most common driver of unexpected metric storage costs.%s `+
+			`A metricstransform/aggregate_labels rule is the standard fix — review the `+
+			`snippet, list the labels you actually need to filter/alert on, and drop the rest.`,
+		c.MetricName, humanCount(c.DistinctCombos), humanCount(c.TotalSamples), hint,
 	)
 }
 
@@ -716,6 +831,20 @@ func sanitizeYAMLKey(k string) string {
 		return "attr"
 	}
 	return out
+}
+
+// humanCount is a small humanizer for cardinality numbers. 12,500
+// becomes "12.5k"; 2,300,000 becomes "2.3M". Reads better than raw
+// integers when the recipe is talking about distinct-combo counts.
+func humanCount(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // humanBytes is a small humanizer used only in detail text. Kept

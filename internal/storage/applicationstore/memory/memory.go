@@ -28,6 +28,8 @@ type Store struct {
 	// v0.25: recommendation dismissals — keyed by the engine's
 	// deterministic recommendation_id hash.
 	recDismissals map[string]*types.RecommendationDismissal
+	// v0.28: outcomes from Apply clicks, keyed by outcome.ID.
+	recOutcomes map[string]*types.RecommendationOutcome
 }
 
 // NewStore creates a new in-memory store
@@ -42,6 +44,7 @@ func NewStore() *Store {
 		rollouts:      make(map[string]*types.Rollout),
 		apiTokens:     make(map[string]*types.APIToken),
 		recDismissals: make(map[string]*types.RecommendationDismissal),
+		recOutcomes:   make(map[string]*types.RecommendationOutcome),
 	}
 }
 
@@ -752,6 +755,7 @@ func (s *Store) purge(context.Context) {
 	s.rollouts = make(map[string]*types.Rollout)
 	s.apiTokens = make(map[string]*types.APIToken)
 	s.recDismissals = make(map[string]*types.RecommendationDismissal)
+	s.recOutcomes = make(map[string]*types.RecommendationOutcome)
 }
 
 // ----------------------------------------------------------------
@@ -790,6 +794,67 @@ func (s *Store) IsRecommendationDismissed(_ context.Context, recommendationID st
 	defer s.mu.RUnlock()
 	_, ok := s.recDismissals[recommendationID]
 	return ok, nil
+}
+
+// ----------------------------------------------------------------
+// Recommendation outcomes (v0.28)
+// ----------------------------------------------------------------
+
+func (s *Store) CreateRecommendationOutcome(_ context.Context, o *types.RecommendationOutcome) error {
+	if o == nil || o.ID == "" || o.RecommendationID == "" {
+		return fmt.Errorf("id + recommendation_id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *o
+	if cp.AppliedAt.IsZero() {
+		cp.AppliedAt = time.Now().UTC()
+	}
+	if cp.Status == "" {
+		cp.Status = "pending"
+	}
+	if cp.AppliedBy == "" {
+		cp.AppliedBy = "system"
+	}
+	s.recOutcomes[cp.ID] = &cp
+	return nil
+}
+
+func (s *Store) UpdateRecommendationOutcome(_ context.Context, o *types.RecommendationOutcome) error {
+	if o == nil || o.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.recOutcomes[o.ID]
+	if !ok {
+		return fmt.Errorf("outcome not found: %s", o.ID)
+	}
+	// Mutate only the observation fields; the frozen snapshot fields stay.
+	existing.LastObservedBytesPerHour = o.LastObservedBytesPerHour
+	existing.LastObservedAt = o.LastObservedAt
+	existing.RealizedSavingsPerMonthUSD = o.RealizedSavingsPerMonthUSD
+	existing.Status = o.Status
+	return nil
+}
+
+func (s *Store) ListRecommendationOutcomes(_ context.Context) ([]*types.RecommendationOutcome, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.RecommendationOutcome, 0, len(s.recOutcomes))
+	for _, o := range s.recOutcomes {
+		cp := *o
+		out = append(out, &cp)
+	}
+	// Newest first to mirror SQLite.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].AppliedAt.After(out[i].AppliedAt) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) ListRecommendationDismissals(_ context.Context) ([]*types.RecommendationDismissal, error) {
