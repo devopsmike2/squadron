@@ -1,0 +1,20 @@
+# Cluster-internal service. The Route exposes only the API/UI
+# port (8080). Collectors in the same cluster reach the OpAMP
+# server via this Service DNS:
+#   squadron.<namespace>.svc.cluster.local:4320
+#
+# Collectors in OTHER clusters need a separate Route for the
+# OpAMP port — see deploy/openshift/overlays/external-collectors.
+apiVersion: v1
+kind: Service
+metadata:
+  name: squadron
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: squadron
+  ports:
+    - { name: api,        port: 8080, targetPort: api,       protocol: TCP }
+    - { name: opamp,      port: 4320, targetPort: opamp,     protocol: TCP }
+    - { name: otlp-grpc,  port: 4317, targetPort: otlp-grpc, protocol: TCP }
+    - { name: otlp-http,  port: 4318, targetPort: otlp-http, protocol: TCP }

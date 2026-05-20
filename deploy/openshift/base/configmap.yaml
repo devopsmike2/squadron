@@ -1,0 +1,45 @@
+# Squadron's runtime config. Overlay patches the host-specific
+# bits (storage paths under /data, OpAMP server URL operators
+# see in the Quickstart wizard).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: squadron-config
+data:
+  squadron.yaml: |
+    # Application data — sqlite + duckdb files. Lives on the PVC.
+    storage:
+      application:
+        path: /data/squadron.db
+      telemetry:
+        path: /data/telemetry.duckdb
+        retention_hours: 168    # 7 days; tune per cluster
+
+    api:
+      listen: ":8080"
+      # Auth defaults to disabled until you generate a bootstrap
+      # token (see docs/auth.md). Flip to true once you've put
+      # the token in the squadron-secrets Secret.
+      auth_enabled: false
+
+    opamp:
+      listen: ":4320"
+
+    otlp:
+      grpc_listen: ":4317"
+      http_listen: ":4318"
+
+    pricing:
+      enabled: true
+      currency: USD
+      # Default rule set ships in the binary; override per
+      # destination here if you know your actual rates.
+
+    # v0.26: AI assist. Only used when ANTHROPIC_API_KEY is
+    # present in the squadron-secrets Secret. The model defaults
+    # are tuned for cost — Haiku for the Explain path, Sonnet
+    # for the Merge path.
+    ai:
+      enabled: true
+      explain_model: claude-haiku-4-5-20251001
+      merge_model: claude-sonnet-4-6

@@ -77,9 +77,16 @@ RUN apt-get update && apt-get install -y \
     libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
+# OpenShift-friendly user setup. The image runs as UID 1001 by
+# default, but on platforms like OpenShift that enforce a random
+# non-root UID (restricted-v2 SCC), the USER directive is ignored
+# and the pod runs under an arbitrary UID. Standard mitigation:
+# put files in group 0 (root group), which every OpenShift random
+# UID belongs to by default, and make writable paths group-writable.
+# Result: the image works under both vanilla Docker (UID 1001) and
+# OpenShift (random UID + GID 0).
 RUN groupadd -g 1001 squadron && \
-    useradd -u 1001 -g squadron -s /bin/bash -m squadron
+    useradd -u 1001 -g 0 -s /bin/bash -m squadron
 
 # Set working directory
 WORKDIR /app
@@ -95,14 +102,23 @@ COPY squadron.yaml .
 
 # Copy runtime entrypoint for injecting frontend config
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && chown squadron:squadron /entrypoint.sh
 
-# Create data directory
-RUN mkdir -p /app/data && \
-    chown -R squadron:squadron /app
+# Create data directory + harden ownership for OpenShift. The
+# entrypoint writes squadron-config.js back into /app/ui/dist at
+# startup; /app/data holds SQLite + DuckDB at runtime. Both need
+# to be writable by the assigned UID, which on OpenShift is random
+# but always has GID 0.
+RUN chmod +x /entrypoint.sh && \
+    mkdir -p /app/data && \
+    chown -R 1001:0 /app /entrypoint.sh && \
+    chmod -R g=u /app && \
+    chmod g=u /entrypoint.sh
 
-# Switch to non-root user
-USER squadron
+# Use the numeric UID so OpenShift's "no root" check passes
+# (USER squadron would also work but numeric is more explicit
+# and survives `oc adm pod-network` and similar tooling that
+# resolves uids rather than names).
+USER 1001
 
 # Expose ports
 # 8080 - HTTP API
