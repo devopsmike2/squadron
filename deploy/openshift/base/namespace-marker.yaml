@@ -1,0 +1,18 @@
+# Empty marker. Kustomize doesn't ship a "no-namespace" object,
+# but we don't want to manage the namespace itself from these
+# manifests — the cluster admin owns project creation in
+# OpenShift. Overlays use `namespace:` to target whichever
+# project they're being applied into.
+#
+# Keeping the file (rather than dropping it from the resources
+# list) makes the layout symmetric with the other six resources
+# and avoids confusion when listing the base directory.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: squadron-namespace-marker
+data:
+  note: |
+    This ConfigMap is a Kustomize layout marker, not application
+    config. Squadron reads its real config from the
+    `squadron-config` ConfigMap. Safe to ignore.

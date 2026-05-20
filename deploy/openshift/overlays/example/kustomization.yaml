@@ -1,0 +1,61 @@
+# Example overlay tuned for the 46830-otel-nfs-ua project on
+# the southernco.com OpenShift cluster. Copy this directory,
+# rename to overlays/<env>, and edit the patches for your
+# environment.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: 46830-otel-nfs-ua
+
+resources:
+  - ../../base
+
+# Image swap: point at the cluster's internal registry (the same
+# pattern your existing Lawrence deployment uses). Mirror the
+# Squadron image into the registry first with:
+#
+#   oc registry login
+#   docker tag ghcr.io/devopsmike2/squadron:v0.30.0 \
+#     image-registry.openshift-image-registry.svc:5000/46830-otel-nfs-ua/squadron:v0.30.0
+#   docker push image-registry.openshift-image-registry.svc:5000/46830-otel-nfs-ua/squadron:v0.30.0
+#
+# Or use an OpenShift BuildConfig to build from the GitHub repo
+# directly inside the cluster.
+images:
+  - name: squadron
+    newName: image-registry.openshift-image-registry.svc:5000/46830-otel-nfs-ua/squadron
+    newTag: v0.30.0
+
+patches:
+  # Set the PVC's storage class to PowerStore XFS with Retain
+  # reclaim policy. Safer than the default for production data.
+  - target:
+      kind: PersistentVolumeClaim
+      name: squadron-data
+    patch: |
+      - op: add
+        path: /spec/storageClassName
+        value: powerstore-xfs-retain
+
+  # Set the Route's hostname. Update this to match your cluster's
+  # apps wildcard domain — confirm by running:
+  #   oc get route -n <any-namespace-you-have-access-to>
+  - target:
+      kind: Route
+      name: squadron
+    patch: |
+      - op: add
+        path: /spec/host
+        value: squadron-46830-otel-nfs-ua.apps.osxgpch504np.southernco.com
+
+  # Tell the UI bundle which host the API is on, so the browser
+  # makes API calls to the right address. Must match the Route
+  # host above with https:// prefix.
+  - target:
+      kind: Deployment
+      name: squadron
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2/value
+        value: https://squadron-46830-otel-nfs-ua.apps.osxgpch504np.southernco.com

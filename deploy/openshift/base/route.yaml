@@ -1,0 +1,28 @@
+# Squadron Route — exposes the UI + API on standard HTTPS.
+#
+# The overlay sets spec.host to a real cluster apps domain, e.g.
+# squadron.apps.osxgpch504np.example.com. The base leaves host
+# empty so OpenShift auto-assigns the wildcard hostname.
+#
+# Edge TLS termination is the safest default: the router does
+# TLS using the cluster's wildcard cert, traffic to the pod is
+# plain HTTP inside the cluster. If you need end-to-end TLS,
+# switch to reencrypt and add the cert annotations.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: squadron
+  annotations:
+    # Keep WebSocket connections (used by SSE + OpAMP if exposed
+    # via Route) alive for the rollout/audit-stream paths.
+    haproxy.router.openshift.io/timeout: 4h
+spec:
+  to:
+    kind: Service
+    name: squadron
+    weight: 100
+  port:
+    targetPort: api
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

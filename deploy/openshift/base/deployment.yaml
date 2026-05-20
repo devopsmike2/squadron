@@ -1,0 +1,121 @@
+# Squadron deployment. Single replica, Recreate strategy —
+# SQLite + DuckDB are file-backed, two pods would step on each
+# other. If you ever need HA, the v0.30+ multi-tenancy work
+# swaps these for Postgres + ClickHouse.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: squadron
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: squadron
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: squadron
+    spec:
+      # OpenShift's restricted-v2 SCC injects runAsUser from the
+      # project's UID range. We DON'T set runAsUser explicitly —
+      # that would conflict with the SCC. fsGroup makes the PVC
+      # group-writable for whatever UID OpenShift picks.
+      securityContext:
+        fsGroup: 0
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: squadron
+          # Overlay replaces this with the registry-qualified
+          # image. For our cluster:
+          #   image-registry.openshift-image-registry.svc:5000/<project>/squadron:v0.30.0
+          image: squadron:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: api,        containerPort: 8080, protocol: TCP }
+            - { name: opamp,      containerPort: 4320, protocol: TCP }
+            - { name: otlp-grpc,  containerPort: 4317, protocol: TCP }
+            - { name: otlp-http,  containerPort: 4318, protocol: TCP }
+          env:
+            - name: GIN_MODE
+              value: release
+            - name: TZ
+              value: UTC
+            # BACKEND_URL is read by the entrypoint script and
+            # injected into the static UI bundle so the browser
+            # talks to the right host. Overlay sets this to the
+            # cluster Route hostname.
+            - name: BACKEND_URL
+              value: ""
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: squadron-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: SQUADRON_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: squadron-secrets
+                  key: BOOTSTRAP_TOKEN
+                  optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /app/squadron.yaml
+              subPath: squadron.yaml
+              readOnly: true
+          # Resources sized for a small-to-medium fleet (~50–200
+          # collectors). DuckDB needs headroom for analytical
+          # queries; under-provisioned memory is the second most
+          # common OpenShift crash mode (after SCC issues).
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          # Probes calibrated to Squadron's cold-start time
+          # (~3–5s for the Go binary + DuckDB init). Generous
+          # initialDelaySeconds so the liveness probe doesn't
+          # kill the pod before it's ready.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: api
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: api
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            # Container-level. Belt-and-suspenders with the pod
+            # securityContext above.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # entrypoint writes to /app/ui/dist
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: squadron-data
+        - name: config
+          configMap:
+            name: squadron-config
+            items:
+              - key: squadron.yaml
+                path: squadron.yaml

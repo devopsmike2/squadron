@@ -1,0 +1,29 @@
+# Squadron base Kustomize layer for OpenShift.
+#
+# This base is intentionally minimal and assumes the OpenShift
+# defaults (restricted-v2 SCC, GID-0 fsGroup auto-assignment).
+# Per-cluster overrides live in deploy/openshift/overlays/<name>/.
+#
+# Apply with:
+#   oc apply -k deploy/openshift/overlays/example
+#
+# Do NOT apply the base directly — the overlay sets the image
+# tag and the cluster's apps domain, both of which are environment
+# specific.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace-marker.yaml
+  - configmap.yaml
+  - secret.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - route.yaml
+
+commonLabels:
+  app.kubernetes.io/name: squadron
+  app.kubernetes.io/component: control-plane
+  app.kubernetes.io/part-of: observability

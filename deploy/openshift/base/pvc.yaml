@@ -1,0 +1,26 @@
+# Persistent volume for Squadron's application + telemetry state.
+# Single replica, single mount — ReadWriteOnce is enough.
+#
+# StorageClass is left unset in the base; the overlay supplies
+# it via patch. Recommendation for clusters running Dell
+# PowerStore CSI (like ours):
+#   - powerstore-xfs-retain  ← preferred; Retain reclaim policy
+#                              keeps the volume around if the PVC
+#                              is accidentally deleted.
+#   - powerstore-xfs-delete  ← cluster default; volume is wiped on
+#                              PVC delete. Fine for sandbox.
+#
+# If your cluster uses NFS for shared OTel infra projects, prefer
+# the PowerStore block storage classes over NFS — NFS + SCC random
+# UIDs is a fragile combination. Block storage with fsGroup works
+# cleanly under restricted-v2.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: squadron-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
