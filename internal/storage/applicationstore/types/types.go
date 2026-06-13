@@ -93,6 +93,47 @@ type ApplicationStore interface {
 	// ended_at), or nil if none exists. Used by the detector to
 	// decide whether to append a peak update or open a fresh event.
 	LatestOpenCostSpike(ctx context.Context) (*CostSpikeEvent, error)
+
+	// Expected agents (v0.32 inventory reconciliation). The CI/CD
+	// pipeline that deploys OTel collectors POSTs its target host
+	// list to /api/v1/inventory/expected — we store it here. The
+	// reconciliation service then diffs the expected list against
+	// the actual agent table to flag missing hosts (in the expected
+	// list, never connected or quiet) and unexpected hosts (showing
+	// up at OpAMP but not in the expected list).
+	//
+	// Source identifies which pipeline submitted the entry — a
+	// single Squadron can serve multiple deployment pipelines, each
+	// owning a slice of the inventory.
+	UpsertExpectedAgent(ctx context.Context, e *ExpectedAgent) error
+	DeleteExpectedAgent(ctx context.Context, hostname string) error
+	ListExpectedAgents(ctx context.Context, source string) ([]*ExpectedAgent, error)
+	// ReplaceExpectedAgentsForSource is the atomic "rotate" used by
+	// CI: delete every entry with this source, then bulk-insert the
+	// new list. Idempotent on the wire.
+	ReplaceExpectedAgentsForSource(ctx context.Context, source string, entries []*ExpectedAgent) error
+}
+
+// ExpectedAgent is one row of the v0.32 inventory table — a host
+// some CI/CD pipeline promised would be running a collector. The
+// reconciliation service diffs this against the actual agent table
+// to produce the "missing hosts" and "unexpected hosts" views.
+//
+// Hostname is the natural key. We don't try to correlate by IP or
+// UUID because the CI pipeline only knows the hostname it deployed
+// to; the OpAMP-discovered agent UUID isn't known until the
+// collector dials in.
+type ExpectedAgent struct {
+	Hostname      string            `json:"hostname"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Source        string            `json:"source"` // which pipeline pushed this row
+	ExpectedSince time.Time         `json:"expected_since"`
+	UpdatedAt     time.Time         `json:"updated_at"`
+	// Notes is a free-form human-readable hint the pipeline can
+	// pass through ("staging", "canary", "from job#1234"). Surfaced
+	// on the reconciliation panel so an operator triaging a missing
+	// host has the context they need.
+	Notes string `json:"notes,omitempty"`
 }
 
 // RecommendationOutcome is the post-apply tracking record for the

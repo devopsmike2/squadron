@@ -41,6 +41,7 @@ import { listAuditEvents } from "@/api/audit";
 import { listRollouts } from "@/api/rollouts";
 import { SquadronMark } from "@/components/brand/SquadronMark";
 import { CostSpikesBanner } from "@/components/cost-spikes/CostSpikesPanel";
+import { InventorySummary } from "@/components/inventory/InventoryPanel";
 import { FleetHealthSummary } from "@/components/pipeline-health/PipelineHealthPanel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -635,6 +636,13 @@ export default function DashboardPage() {
           every 10s. Returns null when no samples exist yet, so a
           brand-new install doesn't see an empty bar. */}
       <FleetHealthSummary />
+
+      {/* v0.32 inventory reconciliation summary. One-row stacked
+          bar of how many tracked hosts are healthy / missing /
+          unexpected — derived from the expected-vs-actual diff,
+          refreshes every 30s. Returns null when no CI pipeline has
+          ever submitted an expected list. */}
+      <InventorySummary />
 
       {/* v0.27.1 first-run banner. Only renders when no agent has
           ever connected; once the first agent shows up, this

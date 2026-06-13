@@ -33,6 +33,9 @@ type Store struct {
 	// v0.29: cost-spike events, keyed by event.ID. Ordered list
 	// is rebuilt on read; spike volume is tiny so this is fine.
 	costSpikes map[string]*types.CostSpikeEvent
+	// v0.32: expected agents (inventory reconciliation), keyed by
+	// hostname. Source filtering at read time.
+	expectedAgents map[string]*types.ExpectedAgent
 }
 
 // NewStore creates a new in-memory store
@@ -49,6 +52,7 @@ func NewStore() *Store {
 		recDismissals: make(map[string]*types.RecommendationDismissal),
 		recOutcomes:   make(map[string]*types.RecommendationOutcome),
 		costSpikes:    make(map[string]*types.CostSpikeEvent),
+		expectedAgents: make(map[string]*types.ExpectedAgent),
 	}
 }
 
@@ -972,4 +976,77 @@ func (s *Store) LatestOpenCostSpike(_ context.Context) (*types.CostSpikeEvent, e
 	}
 	cp := *latest
 	return &cp, nil
+}
+
+// ===================================================================
+// v0.32 expected agents (inventory reconciliation)
+// ===================================================================
+
+func (s *Store) UpsertExpectedAgent(_ context.Context, e *types.ExpectedAgent) error {
+	if e == nil || e.Hostname == "" {
+		return fmt.Errorf("hostname required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if e.ExpectedSince.IsZero() {
+		e.ExpectedSince = now
+	}
+	e.UpdatedAt = now
+	cp := *e
+	s.expectedAgents[e.Hostname] = &cp
+	return nil
+}
+
+func (s *Store) DeleteExpectedAgent(_ context.Context, hostname string) error {
+	if hostname == "" {
+		return fmt.Errorf("hostname required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.expectedAgents, hostname)
+	return nil
+}
+
+func (s *Store) ListExpectedAgents(_ context.Context, source string) ([]*types.ExpectedAgent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.ExpectedAgent, 0, len(s.expectedAgents))
+	for _, e := range s.expectedAgents {
+		if source != "" && e.Source != source {
+			continue
+		}
+		cp := *e
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Hostname < out[j].Hostname })
+	return out, nil
+}
+
+func (s *Store) ReplaceExpectedAgentsForSource(_ context.Context, source string, entries []*types.ExpectedAgent) error {
+	if source == "" {
+		return fmt.Errorf("source required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Remove every entry tagged with this source.
+	for hostname, e := range s.expectedAgents {
+		if e.Source == source {
+			delete(s.expectedAgents, hostname)
+		}
+	}
+	now := time.Now().UTC()
+	for _, e := range entries {
+		if e == nil || e.Hostname == "" {
+			continue
+		}
+		cp := *e
+		cp.Source = source
+		if cp.ExpectedSince.IsZero() {
+			cp.ExpectedSince = now
+		}
+		cp.UpdatedAt = now
+		s.expectedAgents[cp.Hostname] = &cp
+	}
+	return nil
 }

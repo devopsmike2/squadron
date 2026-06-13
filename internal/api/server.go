@@ -20,6 +20,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
+	"github.com/devopsmike2/squadron/internal/inventory"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/pipelinehealth"
@@ -76,6 +77,7 @@ type Server struct {
 	costSpikes        handlers.CostSpikeStore // optional; v0.29 cost-spike alerting storage
 	costSpikeDetector *costspikes.Detector    // optional; nil disables /tick + the background detector loop
 	pipelineHealth    *pipelinehealth.Service // optional; v0.31 collector self-metrics surface — nil → /api/v1/pipeline-health/* returns 503
+	inventory         *inventory.Service      // optional; v0.32 expected-vs-actual reconciliation — nil → /api/v1/inventory/* returns 503
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -206,6 +208,14 @@ func (s *Server) SetCostSpikes(store handlers.CostSpikeStore, det *costspikes.De
 // telemetry reader, since the service needs DuckDB to function.
 func (s *Server) SetPipelineHealth(svc *pipelinehealth.Service) {
 	s.pipelineHealth = svc
+}
+
+// SetInventory wires the v0.32 expected-vs-actual reconciliation
+// surface. Always non-nil at production runtime (main.go constructs
+// it unconditionally against the application store). The
+// nil-guard exists for the test_server.go path.
+func (s *Server) SetInventory(svc *inventory.Service) {
+	s.inventory = svc
 }
 
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
@@ -701,6 +711,55 @@ func (s *Server) registerRoutes() {
 					return
 				}
 				handlers.NewPipelineHealthHandlers(s.pipelineHealth, s.logger).HandleAgentTimeseries(c)
+			})
+
+		// v0.32 Inventory reconciliation — expected vs. actual diff.
+		// The list/replace surfaces are designed so a CI/CD pipeline
+		// can rotate its target hostlist with a single PUT.
+		v1.GET("/inventory/reconciliation",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				if s.inventory == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "inventory unavailable"})
+					return
+				}
+				handlers.NewInventoryHandlers(s.inventory, s.logger).HandleReconcile(c)
+			})
+		v1.GET("/inventory/expected",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				if s.inventory == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "inventory unavailable"})
+					return
+				}
+				handlers.NewInventoryHandlers(s.inventory, s.logger).HandleListExpected(c)
+			})
+		v1.POST("/inventory/expected",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			func(c *gin.Context) {
+				if s.inventory == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "inventory unavailable"})
+					return
+				}
+				handlers.NewInventoryHandlers(s.inventory, s.logger).HandleUpsertExpected(c)
+			})
+		v1.PUT("/inventory/expected",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			func(c *gin.Context) {
+				if s.inventory == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "inventory unavailable"})
+					return
+				}
+				handlers.NewInventoryHandlers(s.inventory, s.logger).HandleReplaceExpected(c)
+			})
+		v1.DELETE("/inventory/expected/:hostname",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			func(c *gin.Context) {
+				if s.inventory == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "inventory unavailable"})
+					return
+				}
+				handlers.NewInventoryHandlers(s.inventory, s.logger).HandleDeleteExpected(c)
 			})
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.

@@ -1,0 +1,169 @@
+/**
+ * Inventory Reconciliation surface — v0.32.
+ *
+ * Two components, both reading /api/v1/inventory/reconciliation:
+ *
+ *   - <InventorySummary/>   stacked bar + counts; lives on the Dashboard
+ *   - <InventoryDetails/>   per-host table; lives on a dedicated page
+ *
+ * The status bucket distinction matters:
+ *   healthy    — expected & recently seen
+ *   missing    — expected but never connected, or quiet for > 10 min
+ *   unexpected — connected but not in the expected list
+ *
+ * Refresh interval is 30s (matches the typical OpAMP heartbeat) so
+ * the dashboard doesn't lag too far behind a real outage but also
+ * doesn't pester DuckDB every 5 seconds.
+ */
+
+import { useMemo } from "react";
+import useSWR from "swr";
+
+import {
+  fetchInventoryReport,
+  statusColor,
+  statusLabel,
+  type InventoryStatus,
+} from "@/api/inventory";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+
+const REFRESH_MS = 30_000;
+
+export function InventorySummary() {
+  const { data } = useSWR("inventory-report", () => fetchInventoryReport(""), {
+    refreshInterval: REFRESH_MS,
+    shouldRetryOnError: false,
+  });
+  if (!data || data.total === 0) {
+    return null;
+  }
+  const segs: { status: InventoryStatus; count: number }[] = [
+    { status: "missing", count: data.missing },
+    { status: "unexpected", count: data.unexpected },
+    { status: "healthy", count: data.healthy },
+  ];
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">Fleet inventory</h3>
+          <span className="text-xs text-muted-foreground">
+            {data.total} tracked
+          </span>
+        </div>
+        <div className="flex h-3 w-full overflow-hidden rounded">
+          {segs.map((s) =>
+            s.count === 0 ? null : (
+              <div
+                key={s.status}
+                title={`${s.count} ${s.status}`}
+                style={{
+                  background: statusColor(s.status),
+                  width: `${(s.count / data.total) * 100}%`,
+                }}
+              />
+            ),
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-[11px]">
+          {segs.map((s) => (
+            <div key={s.status} className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: statusColor(s.status) }}
+              />
+              <span className="font-tabular">{s.count}</span>
+              <span className="text-muted-foreground">{statusLabel(s.status)}</span>
+            </div>
+          ))}
+        </div>
+        {data.missing > 0 && (
+          <div className="text-xs text-muted-foreground">
+            {data.missing} expected{" "}
+            {data.missing === 1 ? "host hasn't" : "hosts haven't"} checked in
+            recently. See <a href="/inventory" className="underline">Inventory</a>{" "}
+            for details.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function InventoryDetails() {
+  const { data } = useSWR("inventory-report-detail", () => fetchInventoryReport(""), {
+    refreshInterval: REFRESH_MS,
+  });
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+  if (!data) {
+    return (
+      <Card>
+        <CardContent className="p-4 text-sm text-muted-foreground">
+          Loading inventory…
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!rows.length) {
+    return (
+      <Card>
+        <CardContent className="p-4 text-sm text-muted-foreground">
+          <p className="font-medium">No inventory yet.</p>
+          <p className="mt-1">
+            Your CI/CD pipeline can register the hosts it deployed by
+            POSTing to <code>/api/v1/inventory/expected</code>.
+            Squadron will then diff that list against connected agents
+            and flag missing or unexpected hosts.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <table className="w-full text-sm">
+          <thead className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2">Hostname</th>
+              <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Source</th>
+              <th className="px-3 py-2">Last seen</th>
+              <th className="px-3 py-2">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.hostname} className="border-b">
+                <td className="px-3 py-2 font-mono text-xs">{r.hostname}</td>
+                <td className="px-3 py-2">
+                  <Badge
+                    variant="outline"
+                    style={{
+                      borderColor: statusColor(r.status),
+                      color: statusColor(r.status),
+                    }}
+                  >
+                    {statusLabel(r.status)}
+                  </Badge>
+                </td>
+                <td className="px-3 py-2 text-xs text-muted-foreground">
+                  {r.source || "—"}
+                </td>
+                <td className="px-3 py-2 text-xs font-tabular text-muted-foreground">
+                  {r.last_seen
+                    ? new Date(r.last_seen).toLocaleString()
+                    : "never"}
+                </td>
+                <td className="px-3 py-2 text-xs text-muted-foreground">
+                  {r.notes || ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
