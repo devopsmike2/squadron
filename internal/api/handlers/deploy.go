@@ -35,6 +35,7 @@ type targetBody struct {
 	GitHubBranch   string            `json:"github_branch"`
 	DefaultInputs  map[string]string `json:"default_inputs,omitempty"`
 	ConfigID       string            `json:"config_id,omitempty"`
+	InventoryPath  string            `json:"inventory_path,omitempty"`
 	PAT            string            `json:"pat,omitempty"`
 }
 
@@ -99,6 +100,7 @@ func (h *DeployHandlers) HandleCreateTarget(c *gin.Context) {
 		GitHubBranch:   body.GitHubBranch,
 		DefaultInputs:  body.DefaultInputs,
 		ConfigID:       body.ConfigID,
+		InventoryPath:  body.InventoryPath,
 	}
 	if err := h.service.CreateTarget(c.Request.Context(), t, body.PAT); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -132,6 +134,7 @@ func (h *DeployHandlers) HandleUpdateTarget(c *gin.Context) {
 	existing.GitHubBranch = body.GitHubBranch
 	existing.DefaultInputs = body.DefaultInputs
 	existing.ConfigID = body.ConfigID
+	existing.InventoryPath = body.InventoryPath
 	if err := h.service.UpdateTarget(c.Request.Context(), existing, body.PAT); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -232,6 +235,38 @@ func (h *DeployHandlers) HandleGetRun(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, run)
+}
+
+// HandleInventoryPreview is GET /api/v1/deploy/targets/:id/inventory.
+// Returns the parsed host list from the target's configured
+// inventory.ini. UI uses this to render the trigger sheet's
+// "deploys to these hosts" read-only display before the operator
+// fires the deploy.
+//
+// Returns 200 with an empty hosts list when no inventory_path is
+// configured — caller's UI falls back to the manual host textarea.
+// Returns 200 with a fetch_error message (and empty hosts) when the
+// path is set but the fetch failed, so the trigger sheet can show
+// a "couldn't read inventory.ini: 404" tooltip without blowing up.
+func (h *DeployHandlers) HandleInventoryPreview(c *gin.Context) {
+	if !h.guard(c) {
+		return
+	}
+	id := c.Param("id")
+	path, hosts, err := h.service.FetchInventory(c.Request.Context(), id)
+	out := gin.H{
+		"path":  path,
+		"hosts": hosts,
+	}
+	if err != nil {
+		// Don't 500 — surface the error in the body so the UI can
+		// render it next to the (empty) host list.
+		out["fetch_error"] = err.Error()
+		h.logger.Debug("inventory preview fetch error",
+			zap.String("target_id", id),
+			zap.Error(err))
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // HandleLintConfig is POST /api/v1/deploy/targets/:id/lint. UI uses

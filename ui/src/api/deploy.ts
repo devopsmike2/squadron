@@ -14,8 +14,23 @@ export interface DeployTarget {
   has_credential: boolean;
   default_inputs?: Record<string, string>;
   config_id?: string;
+  inventory_path?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface InventoryPreview {
+  path: string;
+  hosts: string[] | null;
+  fetch_error?: string;
+}
+
+export function fetchDeployInventory(
+  id: string,
+): Promise<InventoryPreview> {
+  return apiGet<InventoryPreview>(
+    `/deploy/targets/${encodeURIComponent(id)}/inventory`,
+  );
 }
 
 export interface DeployRun {
@@ -66,6 +81,7 @@ export function createDeployTarget(body: {
   github_branch?: string;
   default_inputs?: Record<string, string>;
   config_id?: string;
+  inventory_path?: string;
   pat: string;
 }): Promise<DeployTarget> {
   return apiPost<DeployTarget>("/deploy/targets", body);

@@ -102,32 +102,95 @@ Token needs `deploy:trigger` scope.
 ## Workflow-side requirements
 
 Your GitHub Actions workflow needs `on: workflow_dispatch` with the
-inputs declared. Example:
+inputs declared. If you POST inputs that aren't declared in the
+workflow file, GitHub returns 422 — Squadron surfaces that as a
+clear error.
+
+### Pattern A: Hosts live in `inventory.ini` (Ansible)
+
+This is the Southern Company-style pattern. The host list is a
+checked-in file; the workflow's only input is whatever knobs the
+operator twiddles per run (e.g. `filelog: yes/no`). Squadron reads
+the inventory at trigger time and uses the parsed host list to
+register expected agents.
+
+The workflow:
 
 ```yaml
-name: Deploy OTel collectors
+name: Deploy otelcol to Windows
+
 on:
   workflow_dispatch:
     inputs:
-      region:
-        description: AWS region
-        type: choice
-        options: [us-east-1, us-west-2, eu-west-1]
-      environment:
-        description: Target environment
-        type: string
+      filelog:
+        description: "Collect Filelog [SouthernCo and IIS] data? (yes or no)"
+        required: true
+        default: "no"
+
+env:
+  VAULT_PASS: ${{ secrets.VAULT_PASS }}
+  A_ACCOUNT: ${{ secrets.A_ACCOUNT }}
+  A_ACCOUNT_PASSWD: ${{ secrets.A_ACCOUNT_PASSWD }}
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  run-ansible:
+    runs-on: build-ghel
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy
-        run: ./scripts/deploy-otel.sh "${{ inputs.region }}" "${{ inputs.environment }}"
+
+      - name: Set vault password to temporary file
+        run: echo "$VAULT_PASS" > /tmp/.vault_pass
+
+      - name: Run Ansible Playbook
+        run: |
+          ansible-playbook winOtel/ansible/otel-deploy.yml \
+            -i winOtel/ansible/inventory.ini \
+            --vault-password-file /tmp/.vault_pass \
+            -e "a_account=$A_ACCOUNT a_account_passwd=$A_ACCOUNT_PASSWD collect_filelog=${{ github.event.inputs.filelog }}" \
+            -vvv
+
+      - name: Remove temporary file
+        run: rm -f /tmp/.vault_pass
 ```
 
-If you POST inputs that aren't declared in the workflow file,
-GitHub returns 422 — Squadron surfaces that as a clear error.
+The Squadron target setup for this workflow:
+
+- **Owner / Repo / Workflow / Branch** — your real values + `main`.
+- **Inventory path** — `winOtel/ansible/inventory.ini`. Squadron
+  reads this from GitHub via the Contents API at trigger time.
+- **Default inputs** — `{"filelog": "no"}` (matches the workflow's
+  default).
+- **PAT scope** — `actions:write` + `contents:read`.
+
+The trigger sheet renders the parsed host list read-only, so the
+operator sees the deploy scope before clicking Run. Hosts that
+don't check in within 10 minutes of a successful deploy will
+trigger v0.33 silent-agent webhooks via the v0.32 inventory
+reconciliation surface.
+
+`inventory.ini` format is standard Ansible INI:
+
+```
+[windows]
+host01
+host02.example.com
+# 10.10.40.7  (commented entries are ignored)
+GAXGPAP158UA
+
+[windows:vars]
+ansible_user=svc-deploy  ; vars sections are ignored for host parsing
+```
+
+### Pattern B: Hosts pushed as a workflow input
+
+Useful when there's no inventory file and the workflow generates
+its own at runtime from a `target_hosts` input. Leave the target's
+inventory path empty and the trigger sheet will show a manual
+hosts textarea instead. The operator types hosts → Squadron passes
+them in the `expected_hosts` request body → the GHA workflow reads
+them from `${{ inputs.target_hosts }}`. (You'd configure your
+workflow with a `target_hosts` input and have the first job step
+write it to an inventory file.)
 
 ## Closing the inventory loop
 

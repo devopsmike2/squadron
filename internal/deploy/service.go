@@ -168,6 +168,22 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (*apptypes.De
 	}
 	defer zeroize(pat)
 
+	// Step 2.5 (v0.34.1): when the target has an inventory path, fetch
+	// the file from GitHub and use the parsed hosts as the deploy's
+	// expected-host list. This matches the SouthernCo-style workflow
+	// where inventory.ini is checked in and the workflow's ansible
+	// step reads it via -i. The caller's req.ExpectedHosts is
+	// IGNORED in this mode — the checked-in file is the source of
+	// truth, and silently allowing the request to override would let
+	// the inventory view and the actual deploy diverge.
+	if target.InventoryPath != "" {
+		raw, fetchErr := s.provider.FetchFile(ctx, target, string(pat), target.InventoryPath)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("fetch inventory %q: %w", target.InventoryPath, fetchErr)
+		}
+		req.ExpectedHosts = ParseInventoryHosts(raw)
+	}
+
 	// Step 3: merge inputs. Request overrides defaults so an operator
 	// can twiddle one knob without re-typing everything.
 	merged := map[string]string{}
@@ -333,6 +349,44 @@ func (s *Service) DeleteTarget(ctx context.Context, id string) error {
 }
 func (s *Service) ListRuns(ctx context.Context, filter apptypes.DeployRunFilter) ([]*apptypes.DeployRun, error) {
 	return s.store.ListDeployRuns(ctx, filter)
+}
+
+// FetchInventory pulls the configured inventory.ini from GitHub and
+// returns the parsed host list. Used by the trigger sheet's preview
+// (so the operator sees what hosts the deploy is about to hit) and
+// by an explicit "Refresh" affordance.
+//
+// Returns ("", nil, nil) when the target has no inventory path
+// configured — caller renders the manual host-entry UI in that case.
+// Returns (path, nil, err) on a fetch/decrypt failure so the UI can
+// distinguish "feature disabled" from "GitHub responded unhappy".
+func (s *Service) FetchInventory(ctx context.Context, targetID string) (string, []string, error) {
+	if !s.Enabled() {
+		return "", nil, ErrKeyMissing
+	}
+	target, err := s.store.GetDeployTarget(ctx, targetID)
+	if err != nil {
+		return "", nil, fmt.Errorf("get target: %w", err)
+	}
+	if target == nil {
+		return "", nil, fmt.Errorf("target not found")
+	}
+	if target.InventoryPath == "" {
+		return "", nil, nil
+	}
+	if len(target.EncryptedCredential) == 0 {
+		return target.InventoryPath, nil, fmt.Errorf("target has no credential set")
+	}
+	pat, err := s.crypter.Decrypt(target.EncryptedCredential)
+	if err != nil {
+		return target.InventoryPath, nil, fmt.Errorf("decrypt PAT: %w", err)
+	}
+	defer zeroize(pat)
+	raw, err := s.provider.FetchFile(ctx, target, string(pat), target.InventoryPath)
+	if err != nil {
+		return target.InventoryPath, nil, err
+	}
+	return target.InventoryPath, ParseInventoryHosts(raw), nil
 }
 
 // LintConfig is exposed so the UI can preview lint findings before

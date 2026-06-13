@@ -86,6 +86,7 @@ type fakeProvider struct {
 	dispatched     []map[string]string
 	latest         *RunStatus
 	getRunResponse *RunStatus
+	fetched        map[string][]byte // path → content for FetchFile
 }
 
 func (p *fakeProvider) Dispatch(_ context.Context, _ *apptypes.DeployTarget, _ string, inputs map[string]string) (string, error) {
@@ -97,6 +98,15 @@ func (p *fakeProvider) GetRun(_ context.Context, _ *apptypes.DeployTarget, _ str
 }
 func (p *fakeProvider) LatestRunSince(_ context.Context, _ *apptypes.DeployTarget, _ string, _ time.Time) (*RunStatus, error) {
 	return p.latest, nil
+}
+func (p *fakeProvider) FetchFile(_ context.Context, _ *apptypes.DeployTarget, _ string, path string) ([]byte, error) {
+	if p.fetched == nil {
+		return nil, nil
+	}
+	if v, ok := p.fetched[path]; ok {
+		return v, nil
+	}
+	return nil, nil
 }
 
 func TestService_Trigger_LintHardBlock(t *testing.T) {
@@ -223,6 +233,77 @@ func TestService_SyncRun_AutoRegistersExpectedHosts(t *testing.T) {
 		if !strings.HasPrefix(e.Source, "squadron-deploy:") {
 			t.Errorf("expected source prefix, got %q", e.Source)
 		}
+	}
+}
+
+func TestService_Trigger_UsesInventoryPathWhenSet(t *testing.T) {
+	store := newFakeStore()
+	crypter := testCrypter(t)
+	sealed, _ := crypter.Encrypt([]byte("ghp_fake"))
+	store.targets["t1"] = &apptypes.DeployTarget{
+		ID:                  "t1",
+		Name:                "inventory-driven",
+		GitHubOwner:         "o",
+		GitHubRepo:          "r",
+		GitHubWorkflow:      "w.yml",
+		GitHubBranch:        "main",
+		EncryptedCredential: sealed,
+		InventoryPath:       "winOtel/ansible/inventory.ini",
+	}
+	provider := &fakeProvider{
+		fetched: map[string][]byte{
+			"winOtel/ansible/inventory.ini": []byte("[windows]\n#10.10.40.7\nGAXGPAP158UA\n"),
+		},
+	}
+	svc := NewService(store, provider, crypter, zap.NewNop())
+
+	// Even though the caller passes ExpectedHosts, the inventory file
+	// is the source of truth and overrides them.
+	run, err := svc.Trigger(context.Background(), TriggerRequest{
+		TargetID:      "t1",
+		ExpectedHosts: []string{"hacker-injected-host"},
+	})
+	if err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+	if len(run.ExpectedHosts) != 1 || run.ExpectedHosts[0] != "GAXGPAP158UA" {
+		t.Fatalf("expected hosts from inventory.ini, got %v", run.ExpectedHosts)
+	}
+}
+
+func TestService_FetchInventory(t *testing.T) {
+	store := newFakeStore()
+	crypter := testCrypter(t)
+	sealed, _ := crypter.Encrypt([]byte("ghp_fake"))
+	store.targets["t1"] = &apptypes.DeployTarget{
+		ID:                  "t1",
+		Name:                "inv preview",
+		EncryptedCredential: sealed,
+		InventoryPath:       "winOtel/ansible/inventory.ini",
+	}
+	provider := &fakeProvider{
+		fetched: map[string][]byte{
+			"winOtel/ansible/inventory.ini": []byte("[windows]\nGAXGPAP158UA\nhost02\n"),
+		},
+	}
+	svc := NewService(store, provider, crypter, zap.NewNop())
+	path, hosts, err := svc.FetchInventory(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if path != "winOtel/ansible/inventory.ini" {
+		t.Errorf("path = %q", path)
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("hosts = %v", hosts)
+	}
+
+	// Target with no inventory_path returns empty without error.
+	store.targets["t2"] = &apptypes.DeployTarget{
+		ID: "t2", EncryptedCredential: sealed,
+	}
+	if path, hosts, err := svc.FetchInventory(context.Background(), "t2"); err != nil || path != "" || hosts != nil {
+		t.Fatalf("no-inventory target: path=%q hosts=%v err=%v", path, hosts, err)
 	}
 }
 

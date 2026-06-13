@@ -35,6 +35,12 @@ type Provider interface {
 	Dispatch(ctx context.Context, target *apptypes.DeployTarget, pat string, inputs map[string]string) (runRef string, err error)
 	GetRun(ctx context.Context, target *apptypes.DeployTarget, pat string, runID int64) (*RunStatus, error)
 	LatestRunSince(ctx context.Context, target *apptypes.DeployTarget, pat string, since time.Time) (*RunStatus, error)
+
+	// FetchFile reads a file from the target's repo at the configured
+	// branch. Used by v0.34.1 to pull inventory.ini at trigger time
+	// (and exposed via /deploy/targets/:id/inventory so the trigger
+	// sheet can render the host list read-only before firing).
+	FetchFile(ctx context.Context, target *apptypes.DeployTarget, pat string, path string) ([]byte, error)
 }
 
 // RunStatus is the normalized status snapshot the provider returns.
