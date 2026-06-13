@@ -30,6 +30,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/rollouts"
+	"github.com/devopsmike2/squadron/internal/silentagents"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
@@ -456,6 +457,23 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	inventorySvc := inventory.NewService(appStore, logger)
 	apiServer.SetInventory(inventorySvc)
 	logger.Info("Inventory reconciliation surface enabled")
+
+	// v0.33 silent-agent watcher. Polls the agent table and fires
+	// a webhook on healthy↔silent transitions. Disabled by default
+	// — an operator opts in by setting silent_agents.enabled=true
+	// + a webhook URL in squadron.yaml. The shape is the
+	// silentagents.Event JSON, which an operator's webhook receiver
+	// can handle alongside the existing alerting.NotificationPayload.
+	if config.SilentAgents.Enabled {
+		watcher := silentagents.New(silentagents.Config{
+			SilenceThreshold: config.SilentAgents.SilenceThreshold,
+			PollInterval:     config.SilentAgents.PollInterval,
+			WebhookURL:       config.SilentAgents.WebhookURL,
+		}, appStore, logger)
+		go watcher.Run(context.Background())
+	} else {
+		logger.Info("Silent-agent watcher disabled (set silent_agents.enabled=true to enable)")
+	}
 
 	// v0.26 AI assist — Anthropic Messages API wrapper. The
 	// service is constructed unconditionally so /api/v1/ai/status
