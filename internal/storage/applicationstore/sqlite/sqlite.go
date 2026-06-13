@@ -243,6 +243,20 @@ func (s *Storage) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_cost_spikes_started_at ON cost_spike_events(started_at);
 	CREATE INDEX IF NOT EXISTS idx_cost_spikes_open ON cost_spike_events(ended_at) WHERE ended_at IS NULL;
 
+	-- Expected agents (v0.32 inventory reconciliation). One row per
+	-- (hostname) tracked by some CI/CD pipeline. Hostname is the
+	-- natural key — CI knows hostnames, not OpAMP-discovered UUIDs.
+	-- labels_json is the standard map[string]string serialization.
+	CREATE TABLE IF NOT EXISTS expected_agents (
+		hostname TEXT PRIMARY KEY,
+		labels_json TEXT NOT NULL DEFAULT '{}',
+		source TEXT NOT NULL DEFAULT '',
+		expected_since DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		notes TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_expected_agents_source ON expected_agents(source);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -1819,6 +1833,132 @@ func (s *Storage) LatestOpenCostSpike(ctx context.Context) (*types.CostSpikeEven
 		e.AcknowledgedAt = &ackAt.Time
 	}
 	return e, nil
+}
+
+// ===================================================================
+// v0.32 expected agents (inventory reconciliation)
+// ===================================================================
+
+// UpsertExpectedAgent inserts or updates a single expected-agent
+// row. Used for one-off additions from squadronctl or the UI; the
+// bulk-rotate path used by CI is ReplaceExpectedAgentsForSource.
+func (s *Storage) UpsertExpectedAgent(ctx context.Context, e *types.ExpectedAgent) error {
+	if e == nil || e.Hostname == "" {
+		return fmt.Errorf("hostname required")
+	}
+	if e.ExpectedSince.IsZero() {
+		e.ExpectedSince = time.Now().UTC()
+	}
+	e.UpdatedAt = time.Now().UTC()
+	labelsJSON, _ := json.Marshal(e.Labels)
+	stmt := `INSERT INTO expected_agents (hostname, labels_json, source, expected_since, updated_at, notes)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(hostname) DO UPDATE SET
+			labels_json = excluded.labels_json,
+			source = excluded.source,
+			updated_at = excluded.updated_at,
+			notes = excluded.notes`
+	if _, err := s.db.ExecContext(ctx, stmt,
+		e.Hostname, string(labelsJSON), e.Source,
+		e.ExpectedSince.UTC(), e.UpdatedAt.UTC(), e.Notes); err != nil {
+		return fmt.Errorf("failed to upsert expected agent: %w", err)
+	}
+	return nil
+}
+
+// DeleteExpectedAgent removes a single hostname from the inventory.
+// Used when CI decommissions a host and wants to stop flagging it
+// as missing.
+func (s *Storage) DeleteExpectedAgent(ctx context.Context, hostname string) error {
+	if hostname == "" {
+		return fmt.Errorf("hostname required")
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM expected_agents WHERE hostname = ?`, hostname); err != nil {
+		return fmt.Errorf("failed to delete expected agent: %w", err)
+	}
+	return nil
+}
+
+// ListExpectedAgents returns every expected entry, optionally
+// filtered to one source pipeline. An empty source returns all.
+func (s *Storage) ListExpectedAgents(ctx context.Context, source string) ([]*types.ExpectedAgent, error) {
+	q := `SELECT hostname, labels_json, source, expected_since, updated_at, notes FROM expected_agents`
+	args := []interface{}{}
+	if source != "" {
+		q += ` WHERE source = ?`
+		args = append(args, source)
+	}
+	q += ` ORDER BY hostname`
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list expected agents: %w", err)
+	}
+	defer rows.Close()
+	out := []*types.ExpectedAgent{}
+	for rows.Next() {
+		e := &types.ExpectedAgent{}
+		var labelsJSON string
+		if err := rows.Scan(&e.Hostname, &labelsJSON, &e.Source,
+			&e.ExpectedSince, &e.UpdatedAt, &e.Notes); err != nil {
+			return nil, fmt.Errorf("scan expected agent: %w", err)
+		}
+		if labelsJSON != "" {
+			_ = json.Unmarshal([]byte(labelsJSON), &e.Labels)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// ReplaceExpectedAgentsForSource is the atomic bulk-rotate used by
+// CI: drop everything tagged with the given source, then re-insert
+// the new list. Wrapped in a transaction so a partial failure leaves
+// the previous inventory intact.
+func (s *Storage) ReplaceExpectedAgentsForSource(ctx context.Context, source string, entries []*types.ExpectedAgent) error {
+	if source == "" {
+		return fmt.Errorf("source required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM expected_agents WHERE source = ?`, source); err != nil {
+		return fmt.Errorf("delete by source: %w", err)
+	}
+
+	prepared, err := tx.PrepareContext(ctx,
+		`INSERT OR REPLACE INTO expected_agents
+			(hostname, labels_json, source, expected_since, updated_at, notes)
+			VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer func() { _ = prepared.Close() }()
+
+	now := time.Now().UTC()
+	for _, e := range entries {
+		if e == nil || e.Hostname == "" {
+			continue
+		}
+		labelsJSON, _ := json.Marshal(e.Labels)
+		expected := e.ExpectedSince
+		if expected.IsZero() {
+			expected = now
+		}
+		if _, err := prepared.ExecContext(ctx,
+			e.Hostname, string(labelsJSON), source,
+			expected.UTC(), now, e.Notes); err != nil {
+			return fmt.Errorf("insert %s: %w", e.Hostname, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // nullableTime converts a *time.Time to sql.NullTime for INSERT/UPDATE

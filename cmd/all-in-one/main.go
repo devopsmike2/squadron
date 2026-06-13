@@ -25,6 +25,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
+	"github.com/devopsmike2/squadron/internal/inventory"
 	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
@@ -447,6 +448,14 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	)
 	apiServer.SetPipelineHealth(pipelineHealthSvc)
 	logger.Info("Pipeline health surface enabled (collector self-metrics extracted into pipeline_health_samples)")
+
+	// v0.32 inventory reconciliation — diff CI's expected hostlist
+	// against the actual agents table. Always wired; the
+	// reconciliation endpoint surfaces an empty report when neither
+	// side has anything.
+	inventorySvc := inventory.NewService(appStore, logger)
+	apiServer.SetInventory(inventorySvc)
+	logger.Info("Inventory reconciliation surface enabled")
 
 	// v0.26 AI assist — Anthropic Messages API wrapper. The
 	// service is constructed unconditionally so /api/v1/ai/status
