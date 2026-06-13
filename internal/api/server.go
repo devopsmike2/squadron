@@ -19,6 +19,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
 	"github.com/devopsmike2/squadron/internal/metrics"
@@ -78,6 +79,7 @@ type Server struct {
 	costSpikeDetector *costspikes.Detector    // optional; nil disables /tick + the background detector loop
 	pipelineHealth    *pipelinehealth.Service // optional; v0.31 collector self-metrics surface — nil → /api/v1/pipeline-health/* returns 503
 	inventory         *inventory.Service      // optional; v0.32 expected-vs-actual reconciliation — nil → /api/v1/inventory/* returns 503
+	deploy            *deploy.Service         // optional; v0.34 GitHub Actions deploy trigger — nil or Enabled()==false → /api/v1/deploy/* returns 503
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -216,6 +218,14 @@ func (s *Server) SetPipelineHealth(svc *pipelinehealth.Service) {
 // nil-guard exists for the test_server.go path.
 func (s *Server) SetInventory(svc *inventory.Service) {
 	s.inventory = svc
+}
+
+// SetDeploy wires the v0.34 GitHub Actions deploy surface. Pass
+// nil (or a service whose Enabled() returns false) to disable the
+// /api/v1/deploy/* routes (they 503). Disabled is the right state
+// when SQUADRON_DEPLOY_KEY is unset — main.go decides.
+func (s *Server) SetDeploy(svc *deploy.Service) {
+	s.deploy = svc
 }
 
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
@@ -761,6 +771,39 @@ func (s *Server) registerRoutes() {
 				}
 				handlers.NewInventoryHandlers(s.inventory, s.logger).HandleDeleteExpected(c)
 			})
+
+		// v0.34 Deploy surface (GitHub Actions integration).
+		// All endpoints behind ScopeDeployRead except Trigger +
+		// target mutations which need ScopeDeployTrigger.
+		deployRead := middleware.RequireScope(services.ScopeDeployRead)
+		deployWrite := middleware.RequireScope(services.ScopeDeployTrigger)
+		v1.GET("/deploy/targets", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleListTargets(c)
+		})
+		v1.GET("/deploy/targets/:id", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleGetTarget(c)
+		})
+		v1.POST("/deploy/targets", deployWrite, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleCreateTarget(c)
+		})
+		v1.PUT("/deploy/targets/:id", deployWrite, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleUpdateTarget(c)
+		})
+		v1.DELETE("/deploy/targets/:id", deployWrite, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleDeleteTarget(c)
+		})
+		v1.POST("/deploy/targets/:id/lint", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleLintConfig(c)
+		})
+		v1.GET("/deploy/runs", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleListRuns(c)
+		})
+		v1.GET("/deploy/runs/:id", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleGetRun(c)
+		})
+		v1.POST("/deploy/runs", deployWrite, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleTriggerRun(c)
+		})
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.
 		// All read-only so ScopeAgentsRead is the natural gate.

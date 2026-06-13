@@ -257,6 +257,47 @@ func (s *Storage) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_expected_agents_source ON expected_agents(source);
 
+	-- Deploy targets (v0.34 GitHub Actions integration). encrypted_credential
+	-- holds the PAT in nonce(24)||ciphertext form; the deploy package
+	-- never persists plaintext. default_inputs is JSON map[string]string.
+	CREATE TABLE IF NOT EXISTS deploy_targets (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		provider TEXT NOT NULL DEFAULT 'github',
+		github_owner TEXT NOT NULL DEFAULT '',
+		github_repo TEXT NOT NULL DEFAULT '',
+		github_workflow TEXT NOT NULL DEFAULT '',
+		github_branch TEXT NOT NULL DEFAULT 'main',
+		encrypted_credential BLOB,
+		default_inputs_json TEXT NOT NULL DEFAULT '{}',
+		config_id TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	-- Deploy runs. github_run_id starts at 0 (we resolve it after the
+	-- first poll because workflow_dispatch returns 204 with no id).
+	-- expected_hosts_json is the set we register into expected_agents
+	-- on success — closes the v0.32 inventory loop.
+	CREATE TABLE IF NOT EXISTS deploy_runs (
+		id TEXT PRIMARY KEY,
+		target_id TEXT NOT NULL,
+		requested_by TEXT NOT NULL DEFAULT '',
+		requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		inputs_json TEXT NOT NULL DEFAULT '{}',
+		github_run_id INTEGER NOT NULL DEFAULT 0,
+		github_run_url TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'queued',
+		conclusion TEXT NOT NULL DEFAULT '',
+		completed_at DATETIME,
+		expected_hosts_json TEXT NOT NULL DEFAULT '[]',
+		verification_state TEXT NOT NULL DEFAULT '',
+		verified_at DATETIME,
+		notes TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_deploy_runs_target_time ON deploy_runs(target_id, requested_at);
+	CREATE INDEX IF NOT EXISTS idx_deploy_runs_status ON deploy_runs(status);
+
 	CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
@@ -1959,6 +2000,302 @@ func (s *Storage) ReplaceExpectedAgentsForSource(ctx context.Context, source str
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// ===================================================================
+// v0.34 deploy targets + runs (GitHub Actions integration)
+// ===================================================================
+
+func (s *Storage) CreateDeployTarget(ctx context.Context, t *types.DeployTarget) error {
+	if t == nil || t.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	if t.Provider == "" {
+		t.Provider = "github"
+	}
+	if t.GitHubBranch == "" {
+		t.GitHubBranch = "main"
+	}
+	if t.DefaultInputs == nil {
+		t.DefaultInputs = map[string]string{}
+	}
+	now := time.Now().UTC()
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = now
+	}
+	t.UpdatedAt = now
+	inputsJSON, _ := json.Marshal(t.DefaultInputs)
+	stmt := `INSERT INTO deploy_targets (
+		id, name, provider, github_owner, github_repo, github_workflow,
+		github_branch, encrypted_credential, default_inputs_json,
+		config_id, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	if _, err := s.db.ExecContext(ctx, stmt,
+		t.ID, t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo,
+		t.GitHubWorkflow, t.GitHubBranch, t.EncryptedCredential,
+		string(inputsJSON), t.ConfigID, t.CreatedAt.UTC(), t.UpdatedAt.UTC(),
+	); err != nil {
+		return fmt.Errorf("failed to create deploy target: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) UpdateDeployTarget(ctx context.Context, t *types.DeployTarget) error {
+	if t == nil || t.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	t.UpdatedAt = time.Now().UTC()
+	inputsJSON, _ := json.Marshal(t.DefaultInputs)
+	// Only update the credential when it's been re-supplied. The
+	// "leave the existing credential alone" path is critical so the
+	// UI can render edit forms without round-tripping the secret.
+	if len(t.EncryptedCredential) > 0 {
+		_, err := s.db.ExecContext(ctx, `UPDATE deploy_targets SET
+			name = ?, provider = ?, github_owner = ?, github_repo = ?, github_workflow = ?,
+			github_branch = ?, encrypted_credential = ?, default_inputs_json = ?,
+			config_id = ?, updated_at = ? WHERE id = ?`,
+			t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
+			t.GitHubBranch, t.EncryptedCredential, string(inputsJSON), t.ConfigID,
+			t.UpdatedAt.UTC(), t.ID)
+		if err != nil {
+			return fmt.Errorf("update deploy target (with credential): %w", err)
+		}
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE deploy_targets SET
+		name = ?, provider = ?, github_owner = ?, github_repo = ?, github_workflow = ?,
+		github_branch = ?, default_inputs_json = ?,
+		config_id = ?, updated_at = ? WHERE id = ?`,
+		t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
+		t.GitHubBranch, string(inputsJSON), t.ConfigID,
+		t.UpdatedAt.UTC(), t.ID)
+	if err != nil {
+		return fmt.Errorf("update deploy target: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.DeployTarget, error) {
+	if id == "" {
+		return nil, fmt.Errorf("id required")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT
+		id, name, provider, github_owner, github_repo, github_workflow,
+		github_branch, encrypted_credential, default_inputs_json,
+		config_id, created_at, updated_at
+		FROM deploy_targets WHERE id = ?`, id)
+	t := &types.DeployTarget{}
+	var inputsJSON string
+	var cred []byte
+	if err := row.Scan(&t.ID, &t.Name, &t.Provider, &t.GitHubOwner, &t.GitHubRepo,
+		&t.GitHubWorkflow, &t.GitHubBranch, &cred, &inputsJSON,
+		&t.ConfigID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get deploy target: %w", err)
+	}
+	t.EncryptedCredential = cred
+	t.HasCredential = len(cred) > 0
+	if inputsJSON != "" {
+		_ = json.Unmarshal([]byte(inputsJSON), &t.DefaultInputs)
+	}
+	return t, nil
+}
+
+func (s *Storage) ListDeployTargets(ctx context.Context) ([]*types.DeployTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		id, name, provider, github_owner, github_repo, github_workflow,
+		github_branch, encrypted_credential, default_inputs_json,
+		config_id, created_at, updated_at
+		FROM deploy_targets ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("list deploy targets: %w", err)
+	}
+	defer rows.Close()
+	out := []*types.DeployTarget{}
+	for rows.Next() {
+		t := &types.DeployTarget{}
+		var inputsJSON string
+		var cred []byte
+		if err := rows.Scan(&t.ID, &t.Name, &t.Provider, &t.GitHubOwner, &t.GitHubRepo,
+			&t.GitHubWorkflow, &t.GitHubBranch, &cred, &inputsJSON,
+			&t.ConfigID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan deploy target: %w", err)
+		}
+		t.HasCredential = len(cred) > 0
+		// Strip the credential bytes from list responses; the caller
+		// asks for it explicitly via GetDeployTarget when needed for
+		// a dispatch.
+		t.EncryptedCredential = nil
+		if inputsJSON != "" {
+			_ = json.Unmarshal([]byte(inputsJSON), &t.DefaultInputs)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Storage) DeleteDeployTarget(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("id required")
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM deploy_targets WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("delete deploy target: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) CreateDeployRun(ctx context.Context, r *types.DeployRun) error {
+	if r == nil || r.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	if r.Status == "" {
+		r.Status = "queued"
+	}
+	if r.RequestedAt.IsZero() {
+		r.RequestedAt = time.Now().UTC()
+	}
+	if r.Inputs == nil {
+		r.Inputs = map[string]string{}
+	}
+	if r.ExpectedHosts == nil {
+		r.ExpectedHosts = []string{}
+	}
+	inputsJSON, _ := json.Marshal(r.Inputs)
+	hostsJSON, _ := json.Marshal(r.ExpectedHosts)
+	stmt := `INSERT INTO deploy_runs (
+		id, target_id, requested_by, requested_at, inputs_json,
+		github_run_id, github_run_url, status, conclusion, completed_at,
+		expected_hosts_json, verification_state, verified_at, notes
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := s.db.ExecContext(ctx, stmt,
+		r.ID, r.TargetID, r.RequestedBy, r.RequestedAt.UTC(), string(inputsJSON),
+		r.GitHubRunID, r.GitHubRunURL, r.Status, r.Conclusion, nullableTime(r.CompletedAt),
+		string(hostsJSON), r.VerificationState, nullableTime(r.VerifiedAt), r.Notes,
+	)
+	if err != nil {
+		return fmt.Errorf("create deploy run: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) UpdateDeployRun(ctx context.Context, r *types.DeployRun) error {
+	if r == nil || r.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	if r.Inputs == nil {
+		r.Inputs = map[string]string{}
+	}
+	if r.ExpectedHosts == nil {
+		r.ExpectedHosts = []string{}
+	}
+	inputsJSON, _ := json.Marshal(r.Inputs)
+	hostsJSON, _ := json.Marshal(r.ExpectedHosts)
+	_, err := s.db.ExecContext(ctx, `UPDATE deploy_runs SET
+		inputs_json = ?, github_run_id = ?, github_run_url = ?, status = ?,
+		conclusion = ?, completed_at = ?, expected_hosts_json = ?,
+		verification_state = ?, verified_at = ?, notes = ?
+		WHERE id = ?`,
+		string(inputsJSON), r.GitHubRunID, r.GitHubRunURL, r.Status,
+		r.Conclusion, nullableTime(r.CompletedAt), string(hostsJSON),
+		r.VerificationState, nullableTime(r.VerifiedAt), r.Notes, r.ID)
+	if err != nil {
+		return fmt.Errorf("update deploy run: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) GetDeployRun(ctx context.Context, id string) (*types.DeployRun, error) {
+	if id == "" {
+		return nil, fmt.Errorf("id required")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT
+		id, target_id, requested_by, requested_at, inputs_json,
+		github_run_id, github_run_url, status, conclusion, completed_at,
+		expected_hosts_json, verification_state, verified_at, notes
+		FROM deploy_runs WHERE id = ?`, id)
+	r := &types.DeployRun{}
+	var inputsJSON, hostsJSON string
+	var completedAt, verifiedAt sql.NullTime
+	if err := row.Scan(&r.ID, &r.TargetID, &r.RequestedBy, &r.RequestedAt, &inputsJSON,
+		&r.GitHubRunID, &r.GitHubRunURL, &r.Status, &r.Conclusion, &completedAt,
+		&hostsJSON, &r.VerificationState, &verifiedAt, &r.Notes); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get deploy run: %w", err)
+	}
+	if completedAt.Valid {
+		t := completedAt.Time
+		r.CompletedAt = &t
+	}
+	if verifiedAt.Valid {
+		t := verifiedAt.Time
+		r.VerifiedAt = &t
+	}
+	if inputsJSON != "" {
+		_ = json.Unmarshal([]byte(inputsJSON), &r.Inputs)
+	}
+	if hostsJSON != "" {
+		_ = json.Unmarshal([]byte(hostsJSON), &r.ExpectedHosts)
+	}
+	return r, nil
+}
+
+func (s *Storage) ListDeployRuns(ctx context.Context, filter types.DeployRunFilter) ([]*types.DeployRun, error) {
+	q := `SELECT
+		id, target_id, requested_by, requested_at, inputs_json,
+		github_run_id, github_run_url, status, conclusion, completed_at,
+		expected_hosts_json, verification_state, verified_at, notes
+		FROM deploy_runs WHERE 1=1`
+	args := []interface{}{}
+	if filter.TargetID != "" {
+		q += " AND target_id = ?"
+		args = append(args, filter.TargetID)
+	}
+	if filter.Status != "" {
+		q += " AND status = ?"
+		args = append(args, filter.Status)
+	}
+	q += " ORDER BY requested_at DESC"
+	if filter.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, filter.Limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list deploy runs: %w", err)
+	}
+	defer rows.Close()
+	out := []*types.DeployRun{}
+	for rows.Next() {
+		r := &types.DeployRun{}
+		var inputsJSON, hostsJSON string
+		var completedAt, verifiedAt sql.NullTime
+		if err := rows.Scan(&r.ID, &r.TargetID, &r.RequestedBy, &r.RequestedAt, &inputsJSON,
+			&r.GitHubRunID, &r.GitHubRunURL, &r.Status, &r.Conclusion, &completedAt,
+			&hostsJSON, &r.VerificationState, &verifiedAt, &r.Notes); err != nil {
+			return nil, fmt.Errorf("scan deploy run: %w", err)
+		}
+		if completedAt.Valid {
+			t := completedAt.Time
+			r.CompletedAt = &t
+		}
+		if verifiedAt.Valid {
+			t := verifiedAt.Time
+			r.VerifiedAt = &t
+		}
+		if inputsJSON != "" {
+			_ = json.Unmarshal([]byte(inputsJSON), &r.Inputs)
+		}
+		if hostsJSON != "" {
+			_ = json.Unmarshal([]byte(hostsJSON), &r.ExpectedHosts)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // nullableTime converts a *time.Time to sql.NullTime for INSERT/UPDATE

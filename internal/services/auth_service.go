@@ -63,6 +63,13 @@ const (
 	ScopeAuditRead      = "audit:read"
 	ScopeAuthRead       = "auth:read"
 	ScopeAuthWrite      = "auth:write"
+	// v0.34 deploy integration. Deploy:read shows targets + run
+	// history; deploy:trigger is what's required to actually fire
+	// a workflow on the operator's behalf — guarded narrowly so
+	// rotating a write-only token doesn't accidentally regrant
+	// deploy authority.
+	ScopeDeployRead     = "deploy:read"
+	ScopeDeployTrigger  = "deploy:trigger"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -78,6 +85,7 @@ func AllScopes() []string {
 		ScopeRolloutsRead, ScopeRolloutsWrite,
 		ScopeAuditRead,
 		ScopeAuthRead, ScopeAuthWrite,
+		ScopeDeployRead, ScopeDeployTrigger,
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/configs"
+	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
@@ -466,6 +467,29 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	inventorySvc := inventory.NewService(appStore, logger)
 	apiServer.SetInventory(inventorySvc)
 	logger.Info("Inventory reconciliation surface enabled")
+
+	// v0.34 deploy integration (GitHub Actions). Disabled when
+	// SQUADRON_DEPLOY_KEY is missing — the API will 503 with a
+	// clear "set the key" message, and the UI hides deploy
+	// affordances.
+	if crypter, err := deploy.NewCrypterFromEnv(); err != nil {
+		logger.Info("Deploy integration disabled (SQUADRON_DEPLOY_KEY unset). Generate with: head -c 32 /dev/urandom | base64")
+	} else {
+		ghProvider := deploy.NewGitHubProvider("")
+		deploySvc := deploy.NewService(appStore, ghProvider, crypter, logger)
+		apiServer.SetDeploy(deploySvc)
+		// Polling loop: every 60s the service walks queued +
+		// in_progress runs and refreshes their status. v0.35 adds
+		// a webhook receiver so this drops to a sync fallback.
+		go func() {
+			t := time.NewTicker(60 * time.Second)
+			defer t.Stop()
+			for range t.C {
+				_ = deploySvc.SyncOpenRuns(context.Background())
+			}
+		}()
+		logger.Info("Deploy integration enabled (GitHub Actions, polling every 60s)")
+	}
 
 	// v0.33 silent-agent watcher. Polls the agent table and fires
 	// a webhook on healthy↔silent transitions. Disabled by default

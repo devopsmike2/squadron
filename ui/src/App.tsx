@@ -12,6 +12,7 @@ import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
 import LoginPage from "./pages/Login";
 import QuickstartPage from "./pages/Quickstart";
+import DeployPage from "./pages/Deploy";
 import RolloutsPage from "./pages/Rollouts";
 import SavingsPage from "./pages/Savings";
 import SettingsTokensPage from "./pages/SettingsTokens";
@@ -134,6 +135,7 @@ function AuthBoundary() {
           <Route path="/topology" element={<FleetMapPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/rollouts" element={<RolloutsPage />} />
+          <Route path="/deploy" element={<DeployPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/settings/tokens" element={<SettingsTokensPage />} />
         </Route>
