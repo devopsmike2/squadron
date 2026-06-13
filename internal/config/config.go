@@ -20,7 +20,23 @@ type Config struct {
 	Auth      AuthConfig      `yaml:"auth"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
 	AI        AIConfig        `yaml:"ai"`
-	Pricing   PricingConfig   `yaml:"pricing"`
+	Pricing       PricingConfig       `yaml:"pricing"`
+	SilentAgents  SilentAgentsConfig  `yaml:"silent_agents,omitempty"`
+}
+
+// SilentAgentsConfig controls the v0.33 silent-agent watcher. The
+// watcher polls the agents table on a fixed interval and fires
+// webhook notifications when an agent's last_seen falls outside the
+// silence threshold (and again when it recovers).
+//
+// Defaults: enabled=false, silence_threshold=10m, poll_interval=60s.
+// Disabled by default so existing deployments don't suddenly spam
+// a webhook URL the operator hasn't tested.
+type SilentAgentsConfig struct {
+	Enabled          bool          `yaml:"enabled"`
+	SilenceThreshold time.Duration `yaml:"silence_threshold,omitempty"`
+	PollInterval     time.Duration `yaml:"poll_interval,omitempty"`
+	WebhookURL       string        `yaml:"webhook_url,omitempty"`
 }
 
 // PricingConfig is the v0.27 dollar-projection layer. Disabled by
