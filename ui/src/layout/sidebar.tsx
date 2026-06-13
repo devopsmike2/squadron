@@ -32,6 +32,7 @@ import {
   LayoutDashboard,
   CoinsIcon,
   TrendingDownIcon,
+  UploadCloudIcon,
   RocketIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -145,6 +146,12 @@ export function AppSidebar() {
           title: "Rollouts",
           url: "/rollouts",
           icon: Rocket,
+        },
+        {
+          key: "deploy",
+          title: "Deploy",
+          url: "/deploy",
+          icon: UploadCloudIcon,
         },
         {
           key: "alerts",

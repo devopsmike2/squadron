@@ -36,6 +36,10 @@ type Store struct {
 	// v0.32: expected agents (inventory reconciliation), keyed by
 	// hostname. Source filtering at read time.
 	expectedAgents map[string]*types.ExpectedAgent
+	// v0.34: deploy targets + runs (GitHub Actions integration).
+	// Targets keyed by ID, runs keyed by ID.
+	deployTargets map[string]*types.DeployTarget
+	deployRuns    map[string]*types.DeployRun
 }
 
 // NewStore creates a new in-memory store
@@ -53,6 +57,8 @@ func NewStore() *Store {
 		recOutcomes:   make(map[string]*types.RecommendationOutcome),
 		costSpikes:    make(map[string]*types.CostSpikeEvent),
 		expectedAgents: make(map[string]*types.ExpectedAgent),
+		deployTargets: make(map[string]*types.DeployTarget),
+		deployRuns:    make(map[string]*types.DeployRun),
 	}
 }
 
@@ -1020,6 +1026,158 @@ func (s *Store) ListExpectedAgents(_ context.Context, source string) ([]*types.E
 		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Hostname < out[j].Hostname })
+	return out, nil
+}
+
+// ===================================================================
+// v0.34 deploy targets + runs (GitHub Actions integration)
+// ===================================================================
+
+func (s *Store) CreateDeployTarget(_ context.Context, t *types.DeployTarget) error {
+	if t == nil || t.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t.Provider == "" {
+		t.Provider = "github"
+	}
+	if t.GitHubBranch == "" {
+		t.GitHubBranch = "main"
+	}
+	now := time.Now().UTC()
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = now
+	}
+	t.UpdatedAt = now
+	cp := *t
+	s.deployTargets[t.ID] = &cp
+	return nil
+}
+
+func (s *Store) UpdateDeployTarget(_ context.Context, t *types.DeployTarget) error {
+	if t == nil || t.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.deployTargets[t.ID]
+	if !ok {
+		return fmt.Errorf("deploy target not found")
+	}
+	t.UpdatedAt = time.Now().UTC()
+	cp := *t
+	// Preserve the existing credential when the update doesn't carry
+	// a new one — mirrors the sqlite "leave the secret alone" path.
+	if len(cp.EncryptedCredential) == 0 {
+		cp.EncryptedCredential = existing.EncryptedCredential
+	}
+	s.deployTargets[t.ID] = &cp
+	return nil
+}
+
+func (s *Store) GetDeployTarget(_ context.Context, id string) (*types.DeployTarget, error) {
+	if id == "" {
+		return nil, fmt.Errorf("id required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.deployTargets[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *t
+	cp.HasCredential = len(t.EncryptedCredential) > 0
+	return &cp, nil
+}
+
+func (s *Store) ListDeployTargets(_ context.Context) ([]*types.DeployTarget, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.DeployTarget, 0, len(s.deployTargets))
+	for _, t := range s.deployTargets {
+		cp := *t
+		cp.HasCredential = len(t.EncryptedCredential) > 0
+		cp.EncryptedCredential = nil // mirror sqlite behavior: list never carries the secret
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Store) DeleteDeployTarget(_ context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.deployTargets, id)
+	return nil
+}
+
+func (s *Store) CreateDeployRun(_ context.Context, r *types.DeployRun) error {
+	if r == nil || r.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r.Status == "" {
+		r.Status = "queued"
+	}
+	if r.RequestedAt.IsZero() {
+		r.RequestedAt = time.Now().UTC()
+	}
+	cp := *r
+	s.deployRuns[r.ID] = &cp
+	return nil
+}
+
+func (s *Store) UpdateDeployRun(_ context.Context, r *types.DeployRun) error {
+	if r == nil || r.ID == "" {
+		return fmt.Errorf("id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.deployRuns[r.ID]; !ok {
+		return fmt.Errorf("deploy run not found")
+	}
+	cp := *r
+	s.deployRuns[r.ID] = &cp
+	return nil
+}
+
+func (s *Store) GetDeployRun(_ context.Context, id string) (*types.DeployRun, error) {
+	if id == "" {
+		return nil, fmt.Errorf("id required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.deployRuns[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *r
+	return &cp, nil
+}
+
+func (s *Store) ListDeployRuns(_ context.Context, filter types.DeployRunFilter) ([]*types.DeployRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.DeployRun, 0, len(s.deployRuns))
+	for _, r := range s.deployRuns {
+		if filter.TargetID != "" && r.TargetID != filter.TargetID {
+			continue
+		}
+		if filter.Status != "" && r.Status != filter.Status {
+			continue
+		}
+		cp := *r
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RequestedAt.After(out[j].RequestedAt) })
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
 	return out, nil
 }
 

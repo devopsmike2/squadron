@@ -112,6 +112,84 @@ type ApplicationStore interface {
 	// CI: delete every entry with this source, then bulk-insert the
 	// new list. Idempotent on the wire.
 	ReplaceExpectedAgentsForSource(ctx context.Context, source string, entries []*ExpectedAgent) error
+
+	// Deploy targets + runs (v0.34 GitHub Actions integration).
+	// A target encapsulates "the workflow Squadron is allowed to
+	// dispatch on your behalf" — the GitHub coordinates plus the
+	// encrypted credential. A run records one dispatch with its
+	// lifecycle, the resolved inputs, and the expected-hostname set
+	// so v0.32 inventory reconciliation can close the loop after the
+	// deploy completes.
+	CreateDeployTarget(ctx context.Context, t *DeployTarget) error
+	UpdateDeployTarget(ctx context.Context, t *DeployTarget) error
+	GetDeployTarget(ctx context.Context, id string) (*DeployTarget, error)
+	ListDeployTargets(ctx context.Context) ([]*DeployTarget, error)
+	DeleteDeployTarget(ctx context.Context, id string) error
+
+	CreateDeployRun(ctx context.Context, r *DeployRun) error
+	UpdateDeployRun(ctx context.Context, r *DeployRun) error
+	GetDeployRun(ctx context.Context, id string) (*DeployRun, error)
+	ListDeployRuns(ctx context.Context, filter DeployRunFilter) ([]*DeployRun, error)
+}
+
+// DeployTarget describes one GitHub Actions workflow Squadron is
+// authorized to dispatch. The encrypted PAT lives in
+// EncryptedCredential; nothing outside the deploy package decrypts
+// it. Default inputs are merged with the trigger request at runtime
+// so common boilerplate (region, env, etc.) can be set once.
+//
+// Provider is currently always "github" — the column exists so a
+// future Jenkins/GitLab provider can sit alongside without a
+// migration.
+type DeployTarget struct {
+	ID                  string            `json:"id"`
+	Name                string            `json:"name"`
+	Provider            string            `json:"provider"`
+	GitHubOwner         string            `json:"github_owner"`
+	GitHubRepo          string            `json:"github_repo"`
+	GitHubWorkflow      string            `json:"github_workflow"` // workflow file name e.g. "deploy-otel.yml"
+	GitHubBranch        string            `json:"github_branch"`   // ref to dispatch on; default "main"
+	EncryptedCredential []byte            `json:"-"`               // nonce(24) || ciphertext; not surfaced via JSON
+	HasCredential       bool              `json:"has_credential"`  // computed at read time so the UI can render a "Replace token" affordance without seeing the bytes
+	DefaultInputs       map[string]string `json:"default_inputs,omitempty"`
+	ConfigID            string            `json:"config_id,omitempty"` // optional pinned Squadron config that gets lint-checked
+	CreatedAt           time.Time         `json:"created_at"`
+	UpdatedAt           time.Time         `json:"updated_at"`
+}
+
+// DeployRun is one workflow_dispatch firing. Status tracks the
+// GitHub Actions lifecycle (queued → in_progress → completed) and
+// Conclusion the terminal outcome (success / failure / cancelled /
+// timed_out / skipped).
+//
+// ExpectedHosts is the set Squadron auto-registers into the v0.32
+// expected_agents table on success — closing the loop so the
+// inventory reconciliation surface flags any host that the workflow
+// claimed to deploy but never checks in via OpAMP.
+type DeployRun struct {
+	ID                string            `json:"id"`
+	TargetID          string            `json:"target_id"`
+	TargetName        string            `json:"target_name,omitempty"` // resolved on read for the UI
+	RequestedBy       string            `json:"requested_by"`
+	RequestedAt       time.Time         `json:"requested_at"`
+	Inputs            map[string]string `json:"inputs,omitempty"`
+	GitHubRunID       int64             `json:"github_run_id,omitempty"`
+	GitHubRunURL      string            `json:"github_run_url,omitempty"`
+	Status            string            `json:"status"`               // "queued" | "in_progress" | "completed"
+	Conclusion        string            `json:"conclusion,omitempty"` // "success" | "failure" | "cancelled" | "timed_out" | "skipped"
+	CompletedAt       *time.Time        `json:"completed_at,omitempty"`
+	ExpectedHosts     []string          `json:"expected_hosts,omitempty"`
+	VerificationState string            `json:"verification_state,omitempty"` // "pending" | "verified" | "missing_agents"
+	VerifiedAt        *time.Time        `json:"verified_at,omitempty"`
+	Notes             string            `json:"notes,omitempty"`
+}
+
+// DeployRunFilter narrows ListDeployRuns. All fields are optional;
+// the zero filter lists every run newest-first.
+type DeployRunFilter struct {
+	TargetID string
+	Status   string
+	Limit    int
 }
 
 // ExpectedAgent is one row of the v0.32 inventory table — a host
