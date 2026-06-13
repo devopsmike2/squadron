@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -294,8 +296,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		_ = opampServer.Stop(ctx)
 	}()
 
-	// Initialize OTLP receivers (parsing and enrichment happen in worker pool)
-	grpcServer, err := receiver.NewGRPCServer(4317, otlpMetrics, workerPool, logger)
+	// Initialize OTLP receivers. Ports come from the OTLP config so
+	// operators can shift them when 4317/4318 conflict with a Docker
+	// host port mapping or another collector on the box.
+	// The yaml carries "host:port" strings; we parse the port off
+	// and fall back to the defaults when unset.
+	grpcPort := parseOTLPPort(config.OTLP.GRPCEndpoint, 4317)
+	httpPort := parseOTLPPort(config.OTLP.HTTPEndpoint, 4318)
+
+	grpcServer, err := receiver.NewGRPCServer(grpcPort, otlpMetrics, workerPool, logger)
 	if err != nil {
 		logger.Fatal("Failed to create gRPC server", zap.Error(err))
 	}
@@ -308,7 +317,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		_ = grpcServer.Stop(ctx)
 	}()
 
-	httpServer, err := receiver.NewHTTPServer(4318, otlpMetrics, workerPool, logger)
+	httpServer, err := receiver.NewHTTPServer(httpPort, otlpMetrics, workerPool, logger)
 	if err != nil {
 		logger.Fatal("Failed to create HTTP server", zap.Error(err))
 	}
@@ -550,8 +559,8 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 
 	logger.Info("Squadron is running",
 		zap.Int("opamp_port", config.Server.OpAMPPort),
-		zap.Int("otlp_grpc_port", 4317),
-		zap.Int("otlp_http_port", 4318),
+		zap.Int("otlp_grpc_port", grpcPort),
+		zap.Int("otlp_http_port", httpPort),
 		zap.Int("api_port", config.Server.HTTPPort))
 
 	// Wait for interrupt signal
@@ -789,6 +798,25 @@ type recsDismissalsAdapter struct {
 
 func (a recsDismissalsAdapter) IsDismissed(ctx context.Context, recID string) (bool, error) {
 	return a.store.IsRecommendationDismissed(ctx, recID)
+}
+
+// parseOTLPPort extracts the port from a "host:port" string. Empty
+// or malformed values fall through to the supplied default. Used to
+// honor the otlp.grpc_endpoint / otlp.http_endpoint config so
+// operators can shift ports without editing the binary.
+func parseOTLPPort(endpoint string, def int) int {
+	if endpoint == "" {
+		return def
+	}
+	_, portStr, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return def
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 {
+		return def
+	}
+	return port
 }
 
 // pipelineHealthAgentLister wraps the application store as a
