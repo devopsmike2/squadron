@@ -795,6 +795,12 @@ func (s *Server) registerRoutes() {
 		v1.POST("/deploy/targets/:id/lint", deployRead, func(c *gin.Context) {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleLintConfig(c)
 		})
+		// v0.34.1: preview the host list parsed from the target's
+		// configured inventory.ini. Read-only; the actual auto-population
+		// also happens server-side at trigger time.
+		v1.GET("/deploy/targets/:id/inventory", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleInventoryPreview(c)
+		})
 		v1.GET("/deploy/runs", deployRead, func(c *gin.Context) {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleListRuns(c)
 		})

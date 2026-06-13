@@ -153,8 +153,17 @@ type DeployTarget struct {
 	HasCredential       bool              `json:"has_credential"`  // computed at read time so the UI can render a "Replace token" affordance without seeing the bytes
 	DefaultInputs       map[string]string `json:"default_inputs,omitempty"`
 	ConfigID            string            `json:"config_id,omitempty"` // optional pinned Squadron config that gets lint-checked
-	CreatedAt           time.Time         `json:"created_at"`
-	UpdatedAt           time.Time         `json:"updated_at"`
+	// InventoryPath points at an Ansible inventory file inside the
+	// target repo (e.g. "winOtel/ansible/inventory.ini"). When set,
+	// Squadron fetches that file from GitHub at trigger time, parses
+	// the host list out, and auto-populates ExpectedHosts on the
+	// resulting deploy run. The trigger UI shows the parsed hosts
+	// read-only so the operator can verify the deploy scope before
+	// firing. Matches the workflow pattern where inventory.ini is a
+	// checked-in file rather than a workflow_dispatch input.
+	InventoryPath string    `json:"inventory_path,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // DeployRun is one workflow_dispatch firing. Status tracks the

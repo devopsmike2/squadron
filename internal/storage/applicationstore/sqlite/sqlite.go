@@ -271,6 +271,7 @@ func (s *Storage) migrate() error {
 		encrypted_credential BLOB,
 		default_inputs_json TEXT NOT NULL DEFAULT '{}',
 		config_id TEXT NOT NULL DEFAULT '',
+		inventory_path TEXT NOT NULL DEFAULT '',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -333,6 +334,12 @@ func (s *Storage) migrate() error {
 		// the migration retroactively. NULL is the back-compat
 		// no-webhook default.
 		`ALTER TABLE rollouts ADD COLUMN notification_url TEXT`,
+		// v0.34.1: deploy_targets gain an optional inventory_path
+		// that points at an Ansible inventory file inside the
+		// target repo. When set, Squadron auto-derives the
+		// expected-host list from the file at trigger time. Empty
+		// is the back-compat default (manual host entry).
+		`ALTER TABLE deploy_targets ADD COLUMN inventory_path TEXT NOT NULL DEFAULT ''`,
 	}
 
 	for _, migration := range migrations {
@@ -2028,12 +2035,13 @@ func (s *Storage) CreateDeployTarget(ctx context.Context, t *types.DeployTarget)
 	stmt := `INSERT INTO deploy_targets (
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
-		config_id, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		config_id, inventory_path, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		t.ID, t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo,
 		t.GitHubWorkflow, t.GitHubBranch, t.EncryptedCredential,
-		string(inputsJSON), t.ConfigID, t.CreatedAt.UTC(), t.UpdatedAt.UTC(),
+		string(inputsJSON), t.ConfigID, t.InventoryPath,
+		t.CreatedAt.UTC(), t.UpdatedAt.UTC(),
 	); err != nil {
 		return fmt.Errorf("failed to create deploy target: %w", err)
 	}
@@ -2053,10 +2061,10 @@ func (s *Storage) UpdateDeployTarget(ctx context.Context, t *types.DeployTarget)
 		_, err := s.db.ExecContext(ctx, `UPDATE deploy_targets SET
 			name = ?, provider = ?, github_owner = ?, github_repo = ?, github_workflow = ?,
 			github_branch = ?, encrypted_credential = ?, default_inputs_json = ?,
-			config_id = ?, updated_at = ? WHERE id = ?`,
+			config_id = ?, inventory_path = ?, updated_at = ? WHERE id = ?`,
 			t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
 			t.GitHubBranch, t.EncryptedCredential, string(inputsJSON), t.ConfigID,
-			t.UpdatedAt.UTC(), t.ID)
+			t.InventoryPath, t.UpdatedAt.UTC(), t.ID)
 		if err != nil {
 			return fmt.Errorf("update deploy target (with credential): %w", err)
 		}
@@ -2065,10 +2073,10 @@ func (s *Storage) UpdateDeployTarget(ctx context.Context, t *types.DeployTarget)
 	_, err := s.db.ExecContext(ctx, `UPDATE deploy_targets SET
 		name = ?, provider = ?, github_owner = ?, github_repo = ?, github_workflow = ?,
 		github_branch = ?, default_inputs_json = ?,
-		config_id = ?, updated_at = ? WHERE id = ?`,
+		config_id = ?, inventory_path = ?, updated_at = ? WHERE id = ?`,
 		t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
 		t.GitHubBranch, string(inputsJSON), t.ConfigID,
-		t.UpdatedAt.UTC(), t.ID)
+		t.InventoryPath, t.UpdatedAt.UTC(), t.ID)
 	if err != nil {
 		return fmt.Errorf("update deploy target: %w", err)
 	}
@@ -2082,14 +2090,14 @@ func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.Deploy
 	row := s.db.QueryRowContext(ctx, `SELECT
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
-		config_id, created_at, updated_at
+		config_id, inventory_path, created_at, updated_at
 		FROM deploy_targets WHERE id = ?`, id)
 	t := &types.DeployTarget{}
 	var inputsJSON string
 	var cred []byte
 	if err := row.Scan(&t.ID, &t.Name, &t.Provider, &t.GitHubOwner, &t.GitHubRepo,
 		&t.GitHubWorkflow, &t.GitHubBranch, &cred, &inputsJSON,
-		&t.ConfigID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.ConfigID, &t.InventoryPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2107,7 +2115,7 @@ func (s *Storage) ListDeployTargets(ctx context.Context) ([]*types.DeployTarget,
 	rows, err := s.db.QueryContext(ctx, `SELECT
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
-		config_id, created_at, updated_at
+		config_id, inventory_path, created_at, updated_at
 		FROM deploy_targets ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list deploy targets: %w", err)
@@ -2120,7 +2128,7 @@ func (s *Storage) ListDeployTargets(ctx context.Context) ([]*types.DeployTarget,
 		var cred []byte
 		if err := rows.Scan(&t.ID, &t.Name, &t.Provider, &t.GitHubOwner, &t.GitHubRepo,
 			&t.GitHubWorkflow, &t.GitHubBranch, &cred, &inputsJSON,
-			&t.ConfigID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.ConfigID, &t.InventoryPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan deploy target: %w", err)
 		}
 		t.HasCredential = len(cred) > 0

@@ -24,6 +24,7 @@ import useSWR from "swr";
 import {
   createDeployTarget,
   deleteDeployTarget,
+  fetchDeployInventory,
   listDeployRuns,
   listDeployTargets,
   runColor,
@@ -305,6 +306,7 @@ function NewTargetSheet({
   const [pat, setPat] = useState("");
   const [defaultInputsJSON, setDefaultInputsJSON] = useState("{}");
   const [configID, setConfigID] = useState("");
+  const [inventoryPath, setInventoryPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -328,6 +330,7 @@ function NewTargetSheet({
         github_branch: branch,
         default_inputs: parsed,
         config_id: configID || undefined,
+        inventory_path: inventoryPath || undefined,
         pat,
       });
       onCreated();
@@ -368,6 +371,19 @@ function NewTargetSheet({
           </Field>
           <Field label="GitHub PAT (actions:write + contents:read)">
             <Input value={pat} onChange={(e) => setPat(e.target.value)} type="password" placeholder="ghp_…" />
+          </Field>
+          <Field label="Inventory path (optional — Ansible inventory.ini inside the repo)">
+            <Input
+              value={inventoryPath}
+              onChange={(e) => setInventoryPath(e.target.value)}
+              placeholder="winOtel/ansible/inventory.ini"
+              className="font-mono text-xs"
+            />
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              When set, Squadron reads this file at trigger time and uses the
+              parsed host list as the deploy's expected hosts. Match your
+              workflow's <code>-i</code> path.
+            </div>
           </Field>
           <Field label="Pinned config ID (optional — lint-checks before deploy)">
             <Input value={configID} onChange={(e) => setConfigID(e.target.value)} placeholder="" />
@@ -412,6 +428,19 @@ function TriggerSheet({
   const [error, setError] = useState<string | null>(null);
   const [lintFindings, setLintFindings] = useState<LintFinding[] | null>(null);
 
+  // v0.34.1: when the target points at an inventory file, fetch
+  // the parsed host list from GitHub so the operator can see
+  // what's about to be deployed to. SWR refreshes on the modal
+  // re-open, which is exactly when the file may have changed.
+  const inventoryQ = useSWR(
+    target.inventory_path
+      ? ["deploy-inventory", target.id]
+      : null,
+    () => fetchDeployInventory(target.id),
+    { revalidateOnFocus: false },
+  );
+  const usingInventoryFile = Boolean(target.inventory_path);
+
   async function fire() {
     setBusy(true);
     setError(null);
@@ -425,10 +454,16 @@ function TriggerSheet({
         setBusy(false);
         return;
       }
-      const hosts = hostsRaw
-        .split(/[\s,]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+      // When the target uses an inventory file, the server reads
+      // it at trigger time and ignores whatever client sends here —
+      // we explicitly omit expected_hosts to make that intent clear
+      // in the request log.
+      const hosts = usingInventoryFile
+        ? undefined
+        : hostsRaw
+            .split(/[\s,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
       await triggerDeployRun({
         target_id: target.id,
         inputs,
@@ -472,19 +507,55 @@ function TriggerSheet({
               className="font-mono text-xs"
             />
           </Field>
-          <Field label="Expected hosts (comma- or whitespace-separated)">
-            <Textarea
-              value={hostsRaw}
-              onChange={(e) => setHostsRaw(e.target.value)}
-              rows={3}
-              placeholder="host01, host02, host03"
-              className="font-mono text-xs"
-            />
-            <div className="mt-1 text-[11px] text-muted-foreground">
-              These get registered into expected_agents on success, so v0.32
-              inventory reconciliation can flag any that don't check in.
-            </div>
-          </Field>
+          {usingInventoryFile ? (
+            <Field label={`Hosts from inventory file (${target.inventory_path})`}>
+              <div className="rounded border bg-muted/40 p-2 text-xs font-mono max-h-40 overflow-auto">
+                {inventoryQ.isLoading ? (
+                  <span className="text-muted-foreground">Loading inventory…</span>
+                ) : inventoryQ.data?.fetch_error ? (
+                  <span className="text-destructive">
+                    Couldn't read inventory.ini: {inventoryQ.data.fetch_error}
+                  </span>
+                ) : inventoryQ.data?.hosts && inventoryQ.data.hosts.length > 0 ? (
+                  <ul className="space-y-0.5">
+                    {inventoryQ.data.hosts.map((h) => (
+                      <li key={h}>{h}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="text-muted-foreground">
+                    No hosts parsed from {target.inventory_path}.
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                Squadron re-fetches this file from GitHub at trigger time and
+                registers the parsed hosts into expected_agents so v0.32
+                reconciliation can flag any that don't check in.{" "}
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={() => inventoryQ.mutate()}
+                >
+                  Refresh
+                </button>
+              </div>
+            </Field>
+          ) : (
+            <Field label="Expected hosts (comma- or whitespace-separated)">
+              <Textarea
+                value={hostsRaw}
+                onChange={(e) => setHostsRaw(e.target.value)}
+                rows={3}
+                placeholder="host01, host02, host03"
+                className="font-mono text-xs"
+              />
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                These get registered into expected_agents on success, so v0.32
+                inventory reconciliation can flag any that don't check in.
+              </div>
+            </Field>
+          )}
           <Field label="Notes (optional)">
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="canary batch 3" />
           </Field>

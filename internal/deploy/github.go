@@ -6,11 +6,13 @@ package deploy
 import (
 	"bytes"
 	"context"
+	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -210,6 +212,95 @@ func (g *GitHubProvider) LatestRunSince(
 		rs.CompletedAt = &t
 	}
 	return rs, nil
+}
+
+// FetchFile pulls a file from the target's repo via the GitHub
+// Contents API. Used by v0.34.1 to read inventory.ini at trigger
+// time. The PAT needs `contents:read` (already granted alongside
+// `actions:write` for the dispatch path, so no separate token
+// configuration needed).
+//
+// Returns the decoded file bytes. Files larger than the Contents
+// API's 1MB cap can't be fetched this way — GitHub serves them via
+// the Git blob API instead — but inventory files are far below that
+// limit so we don't fall back.
+func (g *GitHubProvider) FetchFile(
+	ctx context.Context,
+	target *apptypes.DeployTarget,
+	pat string,
+	path string,
+) ([]byte, error) {
+	if pat == "" {
+		return nil, fmt.Errorf("PAT required")
+	}
+	if path == "" {
+		return nil, fmt.Errorf("path required")
+	}
+	branch := target.GitHubBranch
+	if branch == "" {
+		branch = "main"
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
+		g.BaseURL,
+		url.PathEscape(target.GitHubOwner),
+		url.PathEscape(target.GitHubRepo),
+		// Path segments must NOT be URL-escaped wholesale (would
+		// turn slashes into %2F and 404 the request) but the
+		// individual segments do need encoding for spaces etc.
+		encodePathSegments(path),
+		url.QueryEscape(branch),
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build contents request: %w", err)
+	}
+	g.setAuthHeaders(req, pat)
+	resp, err := g.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("contents request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyError(resp)
+	}
+	var body struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+		Size     int64  `json:"size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode contents: %w", err)
+	}
+	if body.Encoding != "base64" {
+		return nil, fmt.Errorf("unexpected content encoding %q (expected base64)", body.Encoding)
+	}
+	// GitHub wraps the base64 content in newlines every 60 chars;
+	// base64.StdEncoding.DecodeString tolerates them with the
+	// strings.ReplaceAll. RawStdEncoding wouldn't.
+	decoded, err := base64Decode(body.Content)
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode: %w", err)
+	}
+	return decoded, nil
+}
+
+// encodePathSegments escapes each path segment between '/'s but
+// preserves the slashes themselves. url.PathEscape on the whole
+// path would turn slashes into %2F and produce a 404.
+func encodePathSegments(p string) string {
+	parts := strings.Split(p, "/")
+	for i, s := range parts {
+		parts[i] = url.PathEscape(s)
+	}
+	return strings.Join(parts, "/")
+}
+
+// base64Decode strips the GitHub Contents API's wrap-newlines and
+// decodes. Separated out so we don't pull a heavy import alias into
+// every other function.
+func base64Decode(s string) ([]byte, error) {
+	cleaned := strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
+	return b64.StdEncoding.DecodeString(cleaned)
 }
 
 // setAuthHeaders sets the standard set of headers GitHub expects:
