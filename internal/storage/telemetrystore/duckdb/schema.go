@@ -110,6 +110,34 @@ CREATE TABLE IF NOT EXISTS otlp_batches (
 CREATE INDEX IF NOT EXISTS idx_otlp_batches_agent_time ON otlp_batches(agent_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_otlp_batches_signal_time ON otlp_batches(signal_type, timestamp);
 
+-- Pipeline health samples (v0.31+). Collector self-metrics (otelcol_*)
+-- are extracted from the regular metrics ingest path into this table so
+-- the UI can compute per-agent health verdicts (queue saturation,
+-- send-failed rate, processor drops) without re-scanning the wide
+-- metrics_sum / metrics_gauge tables.
+--
+-- One row per (agent_id, metric_name, labels) tuple per sample. The
+-- labels JSON disambiguates exporters and receivers within an agent
+-- (e.g. otelcol_exporter_send_failed_metric_points has a "exporter"
+-- label whose value identifies the destination).
+--
+-- The pipeline_health service treats the latest row per
+-- (agent_id, metric_name, labels) as the current state; the time series
+-- is used for sparklines on the agent detail panel.
+CREATE TABLE IF NOT EXISTS pipeline_health_samples (
+	timestamp TIMESTAMP NOT NULL,
+	agent_id VARCHAR NOT NULL,
+	metric_name VARCHAR NOT NULL,
+	labels_json JSON,
+	labels_hash VARCHAR NOT NULL,
+	value DOUBLE NOT NULL,
+	unit VARCHAR
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_health_agent_time
+	ON pipeline_health_samples(agent_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_pipeline_health_lookup
+	ON pipeline_health_samples(agent_id, metric_name, labels_hash, timestamp);
+
 -- Rollup tables for pre-aggregated data
 CREATE TABLE IF NOT EXISTS rollups_1m (
 	window_start TIMESTAMP NOT NULL,

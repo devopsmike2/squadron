@@ -11,6 +11,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/otlp"
 	"github.com/devopsmike2/squadron/internal/otlp/parser"
 	"github.com/devopsmike2/squadron/internal/otlp/processor"
+	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/services"
 	telemetrytypes "github.com/devopsmike2/squadron/internal/storage/telemetrystore/types"
 	"go.uber.org/zap"
@@ -35,6 +36,11 @@ type TelemetryWriter interface {
 	// ExportRequest. Best-effort accounting; see telemetrytypes.Writer
 	// for the contract.
 	WriteBatchMeta(ctx context.Context, meta telemetrytypes.BatchMeta) error
+
+	// WritePipelineHealth writes collector self-metrics extracted
+	// from the regular metrics ingest stream. Best-effort; see
+	// telemetrytypes.Writer for the contract.
+	WritePipelineHealth(ctx context.Context, samples []telemetrytypes.PipelineHealthSample) error
 }
 
 // WorkItemType represents the type of work item
@@ -255,6 +261,24 @@ func (p *Pool) processItem(item WorkItem) {
 		// a single ExportRequest can mix sums, gauges, and histograms.
 		// We emit one BatchMeta per agent_id seen across all three.
 		p.recordMetricsBatchMeta(ctx, sums, gauges, histograms, totalBytes, writeErr)
+
+		// Pipeline-health extraction (v0.31+): if the batch contains
+		// otelcol_* self-metrics, fork them into the dedicated
+		// pipeline_health_samples table so the dashboard can query
+		// without re-scanning the wide metrics tables. The regular
+		// write above still includes these data points in
+		// metrics_sum / metrics_gauge for SquadronQL power users.
+		if pipelinehealth.HasAny(sums, gauges) {
+			samples := pipelinehealth.Extract(sums, gauges)
+			if len(samples) > 0 {
+				if err := p.writer.WritePipelineHealth(ctx, samples); err != nil {
+					p.logger.Warn("pipeline-health write failed (non-fatal)",
+						zap.Int("samples", len(samples)),
+						zap.Error(err))
+				}
+			}
+		}
+
 		p.logger.Debug("Processed metrics",
 			zap.Int("sums", len(sums)),
 			zap.Int("gauges", len(gauges)),

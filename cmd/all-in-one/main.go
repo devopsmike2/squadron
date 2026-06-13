@@ -25,6 +25,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
+	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/rollouts"
@@ -433,6 +434,20 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Info("Cost-spike alerting disabled (requires pricing.enabled + insights service)")
 	}
 
+	// v0.31 Pipeline Health — collector self-metrics surface. Reads
+	// from the dedicated pipeline_health_samples table populated by
+	// the worker pool's extractor. Needs an AgentLister so the fleet
+	// summary can distinguish "agent reports OpAMP but no metrics
+	// yet" (Unknown) from "the metric set is empty across the board"
+	// (no agents).
+	pipelineHealthSvc := pipelinehealth.NewService(
+		telemetryReader,
+		pipelineHealthAgentLister{store: appStore},
+		logger,
+	)
+	apiServer.SetPipelineHealth(pipelineHealthSvc)
+	logger.Info("Pipeline health surface enabled (collector self-metrics extracted into pipeline_health_samples)")
+
 	// v0.26 AI assist — Anthropic Messages API wrapper. The
 	// service is constructed unconditionally so /api/v1/ai/status
 	// always responds; without an API key it just returns
@@ -747,4 +762,34 @@ type recsDismissalsAdapter struct {
 
 func (a recsDismissalsAdapter) IsDismissed(ctx context.Context, recID string) (bool, error) {
 	return a.store.IsRecommendationDismissed(ctx, recID)
+}
+
+// pipelineHealthAgentLister wraps the application store as a
+// pipelinehealth.AgentLister. Keeping this adapter in main.go keeps
+// the pipelinehealth package import-free of the storage layer — the
+// service only needs string IDs, not full Agent records, so we map
+// down to that shape here.
+type pipelineHealthAgentLister struct {
+	store interface {
+		ListAgents(ctx context.Context) ([]*applicationstore.Agent, error)
+	}
+}
+
+// AllAgentIDs returns every known agent UUID as a string. Errors
+// from the underlying store are propagated — the pipeline-health
+// service treats them as non-fatal and falls back to surfacing only
+// agents with samples.
+func (a pipelineHealthAgentLister) AllAgentIDs(ctx context.Context) ([]string, error) {
+	agents, err := a.store.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(agents))
+	for _, ag := range agents {
+		if ag == nil {
+			continue
+		}
+		ids = append(ids, ag.ID.String())
+	}
+	return ids, nil
 }
