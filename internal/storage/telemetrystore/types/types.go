@@ -45,6 +45,36 @@ type Writer interface {
 	// and must never block the actual telemetry write path. Worker
 	// errors here are logged but not propagated.
 	WriteBatchMeta(ctx context.Context, meta BatchMeta) error
+
+	// WritePipelineHealth records collector self-metrics (otelcol_*)
+	// extracted from the regular metrics ingest stream. Each sample is
+	// one (agent_id, metric_name, labels) observation at a point in
+	// time. Best-effort like WriteBatchMeta: errors are logged but
+	// must not block the regular telemetry write path.
+	//
+	// Added in v0.31 for the per-agent pipeline-health surface.
+	WritePipelineHealth(ctx context.Context, samples []PipelineHealthSample) error
+}
+
+// PipelineHealthSample is one (agent, metric, labels) value observed
+// at Timestamp. The label set distinguishes per-exporter or
+// per-receiver dimensions within a single agent — the collector
+// reports e.g. otelcol_exporter_send_failed_metric_points once per
+// exporter, so a single agent contributes multiple rows for that
+// metric name.
+//
+// LabelsHash is a stable digest of the Labels map used as an index
+// lookup key. The pipeline_health service treats
+// (AgentID, MetricName, LabelsHash) as the natural identity of a
+// time series.
+type PipelineHealthSample struct {
+	Timestamp  time.Time
+	AgentID    string
+	MetricName string
+	Labels     map[string]string
+	LabelsHash string
+	Value      float64
+	Unit       string
 }
 
 // BatchMeta is the per-ExportRequest accounting row written to the

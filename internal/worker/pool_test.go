@@ -51,6 +51,13 @@ func (m *MockTelemetryWriter) WriteBatchMeta(ctx context.Context, meta telemetry
 	return nil
 }
 
+// WritePipelineHealth — like WriteBatchMeta this is bookkeeping the
+// existing tests don't care about. Pipeline-health-aware tests can
+// shadow this method.
+func (m *MockTelemetryWriter) WritePipelineHealth(ctx context.Context, samples []telemetrytypes.PipelineHealthSample) error {
+	return nil
+}
+
 // TestNewPool tests the creation of a new worker pool
 func TestNewPool(t *testing.T) {
 	logger := zaptest.NewLogger(t)

@@ -1226,3 +1226,66 @@ func (w *Writer) WriteLogs(ctx context.Context, logs []otlp.LogData) error {
 func (w *Writer) WriteBatchMeta(ctx context.Context, meta types.BatchMeta) error {
 	return w.Storage.WriteBatchMeta(ctx, meta)
 }
+
+// WritePipelineHealth implements types.Writer. Best-effort bulk
+// insert into pipeline_health_samples. Errors are logged and
+// swallowed; the regular telemetry write has already happened by
+// the time we get here, and we don't want a hiccup on this
+// bookkeeping table to cascade into a 5xx on the OTLP receiver.
+//
+// Added in v0.31 for the per-agent pipeline-health surface.
+func (w *Writer) WritePipelineHealth(ctx context.Context, samples []types.PipelineHealthSample) error {
+	return w.Storage.WritePipelineHealth(ctx, samples)
+}
+
+// WritePipelineHealth inserts pipeline-health rows in one
+// transaction. The collector emits its self-metrics on a single
+// reporting interval (10s by default), so a typical batch is at
+// most a few dozen rows per agent — well below the threshold where
+// COPY would be worth the indirection.
+func (s *Storage) WritePipelineHealth(ctx context.Context, samples []types.PipelineHealthSample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	const stmt = `INSERT INTO pipeline_health_samples (
+		timestamp, agent_id, metric_name, labels_json, labels_hash, value, unit
+	) VALUES (?, ?, ?, ?, ?, ?, ?)`
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.Warn("pipeline-health write: BeginTx failed (non-fatal)", zap.Error(err))
+		return nil
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	prepared, err := tx.PrepareContext(ctx, stmt)
+	if err != nil {
+		s.logger.Warn("pipeline-health write: Prepare failed (non-fatal)", zap.Error(err))
+		return nil
+	}
+	defer func() { _ = prepared.Close() }()
+
+	for _, sample := range samples {
+		labelsJSON, _ := json.Marshal(sample.Labels)
+		if _, err := prepared.ExecContext(ctx,
+			sample.Timestamp,
+			sample.AgentID,
+			sample.MetricName,
+			string(labelsJSON),
+			sample.LabelsHash,
+			sample.Value,
+			sample.Unit,
+		); err != nil {
+			s.logger.Warn("pipeline-health write: Exec failed (non-fatal)",
+				zap.String("agent_id", sample.AgentID),
+				zap.String("metric", sample.MetricName),
+				zap.Error(err))
+			return nil
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.logger.Warn("pipeline-health write: Commit failed (non-fatal)", zap.Error(err))
+		return nil
+	}
+	return nil
+}

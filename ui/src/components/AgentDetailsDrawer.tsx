@@ -15,6 +15,7 @@ import { AgentLogs } from "@/components/agent-details/AgentLogs";
 import { AgentMetrics } from "@/components/agent-details/AgentMetrics";
 import { AgentOverview } from "@/components/agent-details/AgentOverview";
 import { VolumePanel } from "@/components/insights/VolumePanel";
+import { PipelineHealthAgentPanel } from "@/components/pipeline-health/PipelineHealthPanel";
 import { RecommendationsPanel } from "@/components/recommendations/RecommendationsPanel";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -158,6 +159,12 @@ export function AgentDetailsDrawer({
               {agentId && (
                 <VolumePanel mode="agent" agentId={agentId} window="24h" compact />
               )}
+              {/* v0.31 pipeline health for this agent. Sits between the
+                  volume panel and the recommendations so an operator
+                  triaging "where's my data?" first sees throughput
+                  ($ + bytes), then sees whether the pipeline is
+                  healthy, then sees what to do about either. */}
+              {agentId && <PipelineHealthAgentPanel agentID={agentId} />}
               {/* v0.25 recommendations scoped to this agent. Sits
                   right under the byte panel so the "here's what to do
                   about it" story follows directly from the "here's

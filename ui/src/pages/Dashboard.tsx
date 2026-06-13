@@ -41,6 +41,7 @@ import { listAuditEvents } from "@/api/audit";
 import { listRollouts } from "@/api/rollouts";
 import { SquadronMark } from "@/components/brand/SquadronMark";
 import { CostSpikesBanner } from "@/components/cost-spikes/CostSpikesPanel";
+import { FleetHealthSummary } from "@/components/pipeline-health/PipelineHealthPanel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Agent, ConfigDriftStatus } from "@/types/agent";
@@ -627,6 +628,13 @@ export default function DashboardPage() {
           the first-run banner so an active spike beats out the
           "no agents yet" nudge if both somehow fire. */}
       <CostSpikesBanner />
+
+      {/* v0.31 fleet pipeline-health summary. One-row stacked bar
+          of how many agents are healthy / degraded / broken /
+          unknown — derived from collector self-metrics, refreshes
+          every 10s. Returns null when no samples exist yet, so a
+          brand-new install doesn't see an empty bar. */}
+      <FleetHealthSummary />
 
       {/* v0.27.1 first-run banner. Only renders when no agent has
           ever connected; once the first agent shows up, this

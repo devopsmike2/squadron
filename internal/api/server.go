@@ -22,6 +22,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/costspikes"
+	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -74,6 +75,7 @@ type Server struct {
 	pricer            *pricing.Projector      // optional; v0.27 $/month projection. nil → /api/v1/pricing/* returns enabled=false
 	costSpikes        handlers.CostSpikeStore // optional; v0.29 cost-spike alerting storage
 	costSpikeDetector *costspikes.Detector    // optional; nil disables /tick + the background detector loop
+	pipelineHealth    *pipelinehealth.Service // optional; v0.31 collector self-metrics surface — nil → /api/v1/pipeline-health/* returns 503
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -196,6 +198,14 @@ func (s *Server) SetPricer(p *pricing.Projector) { s.pricer = p }
 func (s *Server) SetCostSpikes(store handlers.CostSpikeStore, det *costspikes.Detector) {
 	s.costSpikes = store
 	s.costSpikeDetector = det
+}
+
+// SetPipelineHealth wires the v0.31 collector-self-metrics surface.
+// nil disables the /api/v1/pipeline-health/* routes (503) — this is
+// the right state for the test_server.go path that doesn't have a
+// telemetry reader, since the service needs DuckDB to function.
+func (s *Server) SetPipelineHealth(svc *pipelinehealth.Service) {
+	s.pipelineHealth = svc
 }
 
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
@@ -651,6 +661,46 @@ func (s *Server) registerRoutes() {
 				}
 				h := handlers.NewCostSpikesHandlers(s.costSpikes, s.costSpikeDetector)
 				h.HandleTick(c)
+			})
+
+		// v0.31 Pipeline Health surface — collector self-metrics
+		// extracted from the regular OTLP ingest path. All read-only
+		// so the natural scope is ScopeAgentsRead. Handlers are
+		// constructed inline behind a nil-guard: when no telemetry
+		// reader is wired (test_server.go path), the routes 503
+		// rather than panicking on the nil service.
+		v1.GET("/pipeline-health/fleet",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				if s.pipelineHealth == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"error": "pipeline health unavailable (no telemetry reader)",
+					})
+					return
+				}
+				handlers.NewPipelineHealthHandlers(s.pipelineHealth, s.logger).HandleFleetSummary(c)
+			})
+		v1.GET("/pipeline-health/agents/:agentID",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				if s.pipelineHealth == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"error": "pipeline health unavailable (no telemetry reader)",
+					})
+					return
+				}
+				handlers.NewPipelineHealthHandlers(s.pipelineHealth, s.logger).HandleAgentSnapshot(c)
+			})
+		v1.GET("/pipeline-health/agents/:agentID/timeseries",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				if s.pipelineHealth == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"error": "pipeline health unavailable (no telemetry reader)",
+					})
+					return
+				}
+				handlers.NewPipelineHealthHandlers(s.pipelineHealth, s.logger).HandleAgentTimeseries(c)
 			})
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.
