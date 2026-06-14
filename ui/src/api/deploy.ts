@@ -17,12 +17,63 @@ export interface DeployTarget {
   inventory_path?: string;
   created_at: string;
   updated_at: string;
+  /** v0.35: latest run for this target — undefined if never deployed. */
+  last_run?: DeployRun;
+}
+
+/** v0.35: live OpAMP status for each parsed inventory host. */
+export interface HostLiveStatus {
+  hostname: string;
+  status: "healthy" | "silent" | "never_seen";
+  agent_id?: string;
+  last_seen?: string;
+  silence_for?: string;
 }
 
 export interface InventoryPreview {
   path: string;
-  hosts: string[] | null;
+  hosts: HostLiveStatus[] | null;
   fetch_error?: string;
+}
+
+/** v0.35: per-check validation result. */
+export interface CheckStatus {
+  status: "ok" | "warn" | "fail" | "skip";
+  message: string;
+}
+
+export interface ValidationResult {
+  github_auth: CheckStatus;
+  workflow_exists: CheckStatus;
+  inventory: CheckStatus;
+  lint_check: CheckStatus;
+  overall_ok: boolean;
+}
+
+export function validateDeployTarget(id: string): Promise<ValidationResult> {
+  return apiPost<ValidationResult>(
+    `/deploy/targets/${encodeURIComponent(id)}/validate`,
+    {},
+  );
+}
+
+export function redeployRun(id: string): Promise<DeployRun> {
+  return apiPost<DeployRun>(
+    `/deploy/runs/${encodeURIComponent(id)}/redeploy`,
+    {},
+  );
+}
+
+/** Color for host-status badge. */
+export function hostStatusColor(s: HostLiveStatus["status"]): string {
+  switch (s) {
+    case "healthy":
+      return "var(--status-healthy, #22c55e)";
+    case "silent":
+      return "var(--status-warn, #eab308)";
+    case "never_seen":
+      return "var(--status-critical, #ef4444)";
+  }
 }
 
 export function fetchDeployInventory(

@@ -21,6 +21,7 @@ type fakeStore struct {
 	runs     map[string]*apptypes.DeployRun
 	configs  map[string]*apptypes.Config
 	expected map[string]*apptypes.ExpectedAgent
+	agents   []*apptypes.Agent
 }
 
 func newFakeStore() *fakeStore {
@@ -79,14 +80,19 @@ func (f *fakeStore) UpsertExpectedAgent(_ context.Context, e *apptypes.ExpectedA
 	f.expected[e.Hostname] = e
 	return nil
 }
+func (f *fakeStore) ListAgents(_ context.Context) ([]*apptypes.Agent, error) {
+	return f.agents, nil
+}
 
 // fakeProvider records every Dispatch call and returns a canned
 // status from GetRun / LatestRunSince.
 type fakeProvider struct {
-	dispatched     []map[string]string
-	latest         *RunStatus
-	getRunResponse *RunStatus
-	fetched        map[string][]byte // path → content for FetchFile
+	dispatched       []map[string]string
+	latest           *RunStatus
+	getRunResponse   *RunStatus
+	fetched          map[string][]byte // path → content for FetchFile
+	probeAuthErr     error
+	probeWorkflowErr error
 }
 
 func (p *fakeProvider) Dispatch(_ context.Context, _ *apptypes.DeployTarget, _ string, inputs map[string]string) (string, error) {
@@ -107,6 +113,18 @@ func (p *fakeProvider) FetchFile(_ context.Context, _ *apptypes.DeployTarget, _ 
 		return v, nil
 	}
 	return nil, nil
+}
+func (p *fakeProvider) ProbeAuth(_ context.Context, _ *apptypes.DeployTarget, _ string) error {
+	if p.probeAuthErr != nil {
+		return p.probeAuthErr
+	}
+	return nil
+}
+func (p *fakeProvider) ProbeWorkflow(_ context.Context, _ *apptypes.DeployTarget, _ string) error {
+	if p.probeWorkflowErr != nil {
+		return p.probeWorkflowErr
+	}
+	return nil
 }
 
 func TestService_Trigger_LintHardBlock(t *testing.T) {

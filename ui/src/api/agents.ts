@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost } from "./base";
+import { apiDelete, apiGet, apiPatch, apiPost } from "./base";
 
 import type { Agent, AgentStats } from "@/types/agent";
 
@@ -104,4 +104,13 @@ export const restartAgent = (
   agentId: string,
 ): Promise<RestartAgentResponse> => {
   return apiPost<RestartAgentResponse>(`/agents/${agentId}/restart`, {});
+};
+
+/** v0.35: hard-delete an agent record. Used for retiring physically
+ * decommissioned hosts so they don't pollute the inventory view
+ * forever. Telemetry already written for that agent stays in DuckDB. */
+export const decommissionAgent = (
+  agentId: string,
+): Promise<{ ok: boolean; agent_id: string }> => {
+  return apiDelete<{ ok: boolean; agent_id: string }>(`/agents/${agentId}`);
 };

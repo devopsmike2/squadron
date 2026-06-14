@@ -477,6 +477,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	} else {
 		ghProvider := deploy.NewGitHubProvider("")
 		deploySvc := deploy.NewService(appStore, ghProvider, crypter, logger)
+		deploySvc.SetCompletionWebhook(config.Deploy.CompletionWebhookURL)
 		apiServer.SetDeploy(deploySvc)
 		// Polling loop: every 60s the service walks queued +
 		// in_progress runs and refreshes their status. v0.35 adds

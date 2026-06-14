@@ -284,6 +284,75 @@ func (g *GitHubProvider) FetchFile(
 	return decoded, nil
 }
 
+// ProbeAuth verifies the PAT can read the repo. Issues
+// GET /repos/{owner}/{repo} which is the cheapest authenticated
+// call against a private repo. 200 = good, 401 = revoked, 404 =
+// PAT can't see the repo (most likely fine-grained PAT scoped
+// to a different repo).
+func (g *GitHubProvider) ProbeAuth(
+	ctx context.Context,
+	target *apptypes.DeployTarget,
+	pat string,
+) error {
+	if pat == "" {
+		return fmt.Errorf("PAT required")
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s",
+		g.BaseURL,
+		url.PathEscape(target.GitHubOwner),
+		url.PathEscape(target.GitHubRepo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build auth probe: %w", err)
+	}
+	g.setAuthHeaders(req, pat)
+	resp, err := g.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("auth probe: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return classifyError(resp)
+	}
+	return nil
+}
+
+// ProbeWorkflow confirms the workflow file exists at the configured
+// branch. GET /repos/{owner}/{repo}/actions/workflows/{file}.
+// Returns the standard classifyError shape on 404 so the UI surfaces
+// the actual GitHub error message rather than a generic "not found."
+func (g *GitHubProvider) ProbeWorkflow(
+	ctx context.Context,
+	target *apptypes.DeployTarget,
+	pat string,
+) error {
+	if pat == "" {
+		return fmt.Errorf("PAT required")
+	}
+	if target.GitHubWorkflow == "" {
+		return fmt.Errorf("workflow file not configured")
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s",
+		g.BaseURL,
+		url.PathEscape(target.GitHubOwner),
+		url.PathEscape(target.GitHubRepo),
+		url.PathEscape(target.GitHubWorkflow))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build workflow probe: %w", err)
+	}
+	g.setAuthHeaders(req, pat)
+	resp, err := g.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("workflow probe: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return classifyError(resp)
+	}
+	return nil
+}
+
 // encodePathSegments escapes each path segment between '/'s but
 // preserves the slashes themselves. url.PathEscape on the whole
 // path would turn slashes into %2F and produce a 404.

@@ -8,7 +8,7 @@ import {
 import { useState } from "react";
 import useSWR from "swr";
 
-import { restartAgent } from "@/api/agents";
+import { decommissionAgent, restartAgent } from "@/api/agents";
 import { getAgentTopology } from "@/api/topology";
 import { AgentConfigPipeline } from "@/components/agent-details/AgentConfigPipeline";
 import { AgentLogs } from "@/components/agent-details/AgentLogs";
@@ -110,19 +110,44 @@ export function AgentDetailsDrawer({
               </SheetTitle>
               <SheetDescription>{agent?.name || "Loading..."}</SheetDescription>
             </div>
-            {agent && supportsRestart && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRestart}
-                disabled={agent.status !== "online" || isRestarting}
-              >
-                <RotateCw
-                  className={`h-4 w-4 mr-2 ${isRestarting ? "animate-spin" : ""}`}
-                />
-                {isRestarting ? "Restarting..." : "Restart"}
-              </Button>
-            )}
+            <div className="flex gap-2">
+              {agent && supportsRestart && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRestart}
+                  disabled={agent.status !== "online" || isRestarting}
+                >
+                  <RotateCw
+                    className={`h-4 w-4 mr-2 ${isRestarting ? "animate-spin" : ""}`}
+                  />
+                  {isRestarting ? "Restarting..." : "Restart"}
+                </Button>
+              )}
+              {agent && agentId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  title="Hard-delete this agent record. Used when the host has been physically retired from the fleet — without this, offline agents linger forever in the inventory view."
+                  onClick={async () => {
+                    if (
+                      !confirm(
+                        `Decommission "${agent.name}"?\n\nThis hard-deletes the agent record. If the host ever checks in again via OpAMP, it'll re-register as a new agent. Telemetry already in DuckDB stays.`,
+                      )
+                    )
+                      return;
+                    try {
+                      await decommissionAgent(agentId);
+                      onOpenChange(false);
+                    } catch (e) {
+                      alert(String((e as Error).message ?? e));
+                    }
+                  }}
+                >
+                  Decommission
+                </Button>
+              )}
+            </div>
           </div>
         </SheetHeader>
 
