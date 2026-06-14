@@ -386,6 +386,10 @@ func (s *Server) registerRoutes() {
 			agents.PATCH("/:id/group", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleUpdateAgentGroup)
 			agents.POST("/:id/config", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleSendConfigToAgent)
 			agents.POST("/:id/restart", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleRestartAgent)
+			// v0.35: hard-delete the agent record for hosts that
+			// have been retired from the fleet. Audit-logged via
+			// the agent service's existing event publish.
+			agents.DELETE("/:id", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleDecommissionAgent)
 		}
 
 		// Config routes. validate/lint/templates are read-shaped (they
@@ -800,6 +804,19 @@ func (s *Server) registerRoutes() {
 		// also happens server-side at trigger time.
 		v1.GET("/deploy/targets/:id/inventory", deployRead, func(c *gin.Context) {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleInventoryPreview(c)
+		})
+		// v0.35.0: pre-flight validation that exercises every read
+		// path without firing a workflow. Operator clicks "Validate"
+		// to confirm the target is wired correctly before the first
+		// real deploy. Idempotent + cheap.
+		v1.POST("/deploy/targets/:id/validate", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleValidate(c)
+		})
+		// v0.35.0: redeploy with a past run's inputs. Same lint gate
+		// applies — if the pinned config has degraded since the last
+		// successful deploy, the redeploy still gets blocked.
+		v1.POST("/deploy/runs/:id/redeploy", deployWrite, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleRedeploy(c)
 		})
 		v1.GET("/deploy/runs", deployRead, func(c *gin.Context) {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleListRuns(c)

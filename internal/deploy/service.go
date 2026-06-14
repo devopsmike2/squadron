@@ -4,8 +4,11 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -36,6 +39,10 @@ type Store interface {
 
 	// For auto-registering expected hosts after a successful deploy.
 	UpsertExpectedAgent(ctx context.Context, e *apptypes.ExpectedAgent) error
+
+	// For v0.35 live-host-status cross-referencing the inventory
+	// preview against connected agents.
+	ListAgents(ctx context.Context) ([]*apptypes.Agent, error)
 }
 
 // Service is the public surface. NewService wires it up; Trigger
@@ -46,12 +53,31 @@ type Service struct {
 	provider Provider
 	crypter  *Crypter
 	logger   *zap.Logger
+
+	// v0.35: completion webhook. Empty means logging-only (still
+	// useful in dev). Set via SetCompletionWebhook from main.go
+	// based on deploy.completion_webhook_url in squadron.yaml.
+	completionWebhookURL string
+	httpClient           *http.Client
 }
 
 // NewService constructs the service. Pass nil for crypter to
 // disable the feature (the API layer will 503 in that case).
 func NewService(store Store, provider Provider, crypter *Crypter, logger *zap.Logger) *Service {
-	return &Service{store: store, provider: provider, crypter: crypter, logger: logger}
+	return &Service{
+		store:      store,
+		provider:   provider,
+		crypter:    crypter,
+		logger:     logger,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// SetCompletionWebhook configures the v0.35 deploy-completion
+// webhook destination. Idempotent — call from main.go after
+// reading squadron.yaml.
+func (s *Service) SetCompletionWebhook(url string) {
+	s.completionWebhookURL = url
 }
 
 // Enabled reports whether the deploy feature is wired up. False
@@ -290,6 +316,11 @@ func (s *Service) SyncRun(ctx context.Context, runID string) (*apptypes.DeployRu
 		run.CompletedAt = status.CompletedAt
 	}
 
+	// Detect the terminal-state transition so the completion
+	// webhook fires exactly once even if SyncRun is called many
+	// times after a run completes.
+	wasOpen := run.Status != "completed"
+
 	// On terminal success, auto-register expected hosts so v0.32
 	// reconciliation can flag any that don't check in.
 	if run.Status == "completed" && run.Conclusion == "success" && len(run.ExpectedHosts) > 0 && run.VerificationState == "" {
@@ -309,7 +340,92 @@ func (s *Service) SyncRun(ctx context.Context, runID string) (*apptypes.DeployRu
 	if err := s.store.UpdateDeployRun(ctx, run); err != nil {
 		return run, fmt.Errorf("update run: %w", err)
 	}
+
+	// v0.35: completion webhook on the queued/in_progress → completed
+	// edge. Best-effort: a failed webhook never blocks the sync path.
+	if wasOpen && run.Status == "completed" {
+		s.fireCompletionWebhook(ctx, target, run)
+	}
 	return run, nil
+}
+
+// CompletionEvent is the payload Squadron POSTs on deploy
+// terminal-state transitions. Shape mirrors the alerting +
+// silent-agent payloads so a single webhook receiver can route by
+// the `kind` field.
+type CompletionEvent struct {
+	Kind          string    `json:"kind"`           // "deploy_completed"
+	State         string    `json:"state"`          // "success" | "failure" | "cancelled" | "timed_out" | "skipped"
+	RunID         string    `json:"run_id"`
+	TargetID      string    `json:"target_id"`
+	TargetName    string    `json:"target_name"`
+	RequestedBy   string    `json:"requested_by"`
+	GitHubRunID   int64     `json:"github_run_id,omitempty"`
+	GitHubRunURL  string    `json:"github_run_url,omitempty"`
+	ExpectedHosts []string  `json:"expected_hosts,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+	CompletedAt   time.Time `json:"completed_at"`
+	At            time.Time `json:"at"`
+}
+
+// fireCompletionWebhook dispatches the v0.35 completion event. Best
+// effort — logging is the always-on channel; the HTTP channel runs
+// only when a URL is configured.
+func (s *Service) fireCompletionWebhook(ctx context.Context, target *apptypes.DeployTarget, run *apptypes.DeployRun) {
+	state := run.Conclusion
+	if state == "" {
+		state = "completed"
+	}
+	completed := time.Now().UTC()
+	if run.CompletedAt != nil {
+		completed = *run.CompletedAt
+	}
+	evt := CompletionEvent{
+		Kind:          "deploy_completed",
+		State:         state,
+		RunID:         run.ID,
+		TargetID:      target.ID,
+		TargetName:    target.Name,
+		RequestedBy:   run.RequestedBy,
+		GitHubRunID:   run.GitHubRunID,
+		GitHubRunURL:  run.GitHubRunURL,
+		ExpectedHosts: run.ExpectedHosts,
+		StartedAt:     run.RequestedAt,
+		CompletedAt:   completed,
+		At:            time.Now().UTC(),
+	}
+	s.logger.Info("deploy completed",
+		zap.String("run_id", evt.RunID),
+		zap.String("target", evt.TargetName),
+		zap.String("state", evt.State),
+		zap.Int64("github_run_id", evt.GitHubRunID))
+	if s.completionWebhookURL == "" {
+		return
+	}
+	body, err := json.Marshal(evt)
+	if err != nil {
+		s.logger.Warn("deploy completion webhook marshal failed", zap.Error(err))
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.completionWebhookURL, bytes.NewReader(body))
+	if err != nil {
+		s.logger.Warn("deploy completion webhook build failed", zap.Error(err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Squadron/deploy-completion")
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		s.logger.Warn("deploy completion webhook POST failed",
+			zap.Error(err), zap.String("url", s.completionWebhookURL))
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		s.logger.Warn("deploy completion webhook returned non-2xx",
+			zap.Int("status", resp.StatusCode))
+	}
 }
 
 // SyncOpenRuns is the polling pass. Walks every run in queued or
@@ -349,6 +465,162 @@ func (s *Service) DeleteTarget(ctx context.Context, id string) error {
 }
 func (s *Service) ListRuns(ctx context.Context, filter apptypes.DeployRunFilter) ([]*apptypes.DeployRun, error) {
 	return s.store.ListDeployRuns(ctx, filter)
+}
+func (s *Service) GetRun(ctx context.Context, id string) (*apptypes.DeployRun, error) {
+	return s.store.GetDeployRun(ctx, id)
+}
+
+// ValidationResult is what the Validate endpoint returns. Each
+// check is independent — a target with no pinned config still
+// reports LintCheck.Skipped rather than a generic OK so the UI can
+// be explicit about what was actually verified.
+type ValidationResult struct {
+	GitHubAuth     CheckStatus `json:"github_auth"`
+	WorkflowExists CheckStatus `json:"workflow_exists"`
+	Inventory      CheckStatus `json:"inventory"`
+	LintCheck      CheckStatus `json:"lint_check"`
+	OverallOK      bool        `json:"overall_ok"`
+}
+
+// CheckStatus is one validation finding. Status is one of "ok",
+// "warn", "fail", or "skip" (when the check doesn't apply — e.g.
+// no inventory_path configured). Message is short and human.
+type CheckStatus struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// Validate exercises every read path on a target without firing a
+// workflow_dispatch. Useful as a pre-flight before the first real
+// deploy: catches PAT typos, wrong workflow names, unreadable
+// inventory paths, broken pinned configs. UI renders the result as
+// a checklist.
+//
+// Implementation notes:
+//   - GitHub auth is verified by hitting /repos/{owner}/{repo} —
+//     cheapest call that proves the PAT can see the repo.
+//   - Workflow existence uses GET /repos/{owner}/{repo}/actions/
+//     workflows/{file}, which 404s on the wrong file name.
+//   - Inventory check pulls the file via the Contents API and
+//     parses it; reports the host count.
+//   - Lint check runs configlint on the pinned config if set.
+//
+// Failures don't abort each other — every check runs so the UI
+// shows everything at once instead of "fix this, then run again,
+// then see the next thing."
+func (s *Service) Validate(ctx context.Context, targetID string) (*ValidationResult, error) {
+	if !s.Enabled() {
+		return nil, ErrKeyMissing
+	}
+	target, err := s.store.GetDeployTarget(ctx, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("get target: %w", err)
+	}
+	if target == nil {
+		return nil, fmt.Errorf("target not found")
+	}
+	result := &ValidationResult{}
+
+	if len(target.EncryptedCredential) == 0 {
+		result.GitHubAuth = CheckStatus{Status: "fail", Message: "PAT not configured"}
+		result.WorkflowExists = CheckStatus{Status: "skip", Message: "no PAT to test with"}
+		result.Inventory = CheckStatus{Status: "skip", Message: "no PAT to test with"}
+		// Lint can still run since it's local.
+		result.LintCheck = s.lintCheckStatus(ctx, target)
+		return result, nil
+	}
+	pat, err := s.crypter.Decrypt(target.EncryptedCredential)
+	if err != nil {
+		result.GitHubAuth = CheckStatus{Status: "fail", Message: "PAT decryption failed (key rotated?)"}
+		result.WorkflowExists = CheckStatus{Status: "skip", Message: "no usable PAT"}
+		result.Inventory = CheckStatus{Status: "skip", Message: "no usable PAT"}
+		result.LintCheck = s.lintCheckStatus(ctx, target)
+		return result, nil
+	}
+	defer zeroize(pat)
+
+	// Check 1: GitHub auth via cheap repo metadata fetch.
+	if probeErr := s.provider.ProbeAuth(ctx, target, string(pat)); probeErr != nil {
+		result.GitHubAuth = CheckStatus{Status: "fail", Message: probeErr.Error()}
+	} else {
+		result.GitHubAuth = CheckStatus{Status: "ok", Message: "PAT can read the repo"}
+	}
+
+	// Check 2: workflow file exists (only meaningful if auth passed).
+	if result.GitHubAuth.Status == "ok" {
+		if probeErr := s.provider.ProbeWorkflow(ctx, target, string(pat)); probeErr != nil {
+			result.WorkflowExists = CheckStatus{Status: "fail", Message: probeErr.Error()}
+		} else {
+			result.WorkflowExists = CheckStatus{
+				Status:  "ok",
+				Message: fmt.Sprintf("%s exists on branch %s", target.GitHubWorkflow, branchOrMain(target)),
+			}
+		}
+	} else {
+		result.WorkflowExists = CheckStatus{Status: "skip", Message: "auth failed; skipping"}
+	}
+
+	// Check 3: inventory readable (if path configured).
+	if target.InventoryPath == "" {
+		result.Inventory = CheckStatus{Status: "skip", Message: "no inventory_path configured"}
+	} else if result.GitHubAuth.Status != "ok" {
+		result.Inventory = CheckStatus{Status: "skip", Message: "auth failed; skipping"}
+	} else {
+		raw, ferr := s.provider.FetchFile(ctx, target, string(pat), target.InventoryPath)
+		if ferr != nil {
+			result.Inventory = CheckStatus{Status: "fail", Message: ferr.Error()}
+		} else {
+			hosts := ParseInventoryHosts(raw)
+			if len(hosts) == 0 {
+				result.Inventory = CheckStatus{
+					Status:  "warn",
+					Message: "file readable but parsed zero hosts",
+				}
+			} else {
+				result.Inventory = CheckStatus{
+					Status:  "ok",
+					Message: fmt.Sprintf("parsed %d host(s)", len(hosts)),
+				}
+			}
+		}
+	}
+
+	// Check 4: lint pinned config.
+	result.LintCheck = s.lintCheckStatus(ctx, target)
+
+	result.OverallOK = result.GitHubAuth.Status != "fail" &&
+		result.WorkflowExists.Status != "fail" &&
+		result.Inventory.Status != "fail" &&
+		result.LintCheck.Status != "fail"
+	return result, nil
+}
+
+// lintCheckStatus runs configlint over the target's pinned config
+// and produces the per-check status. Pulled out so the no-PAT
+// path can call it independently.
+func (s *Service) lintCheckStatus(ctx context.Context, target *apptypes.DeployTarget) CheckStatus {
+	if target.ConfigID == "" {
+		return CheckStatus{Status: "skip", Message: "no pinned config"}
+	}
+	cfg, err := s.store.GetConfig(ctx, target.ConfigID)
+	if err != nil || cfg == nil {
+		return CheckStatus{Status: "fail", Message: "pinned config not found"}
+	}
+	findings := filterErrors(configlint.Lint(cfg.Content))
+	if len(findings) > 0 {
+		return CheckStatus{
+			Status:  "fail",
+			Message: fmt.Sprintf("%d lint error(s) — would block deploy", len(findings)),
+		}
+	}
+	return CheckStatus{Status: "ok", Message: "lint passes"}
+}
+
+func branchOrMain(t *apptypes.DeployTarget) string {
+	if t.GitHubBranch == "" {
+		return "main"
+	}
+	return t.GitHubBranch
 }
 
 // FetchInventory pulls the configured inventory.ini from GitHub and
@@ -422,6 +694,77 @@ func zeroize(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// HostLiveStatus is the v0.35 inventory-preview enrichment: for
+// each hostname parsed from inventory.ini, the operator gets to
+// see whether that host is currently checking in via OpAMP. Lets
+// them spot "the deploy I'm about to fire would hit a host that's
+// been silent for 30 minutes" before clicking Run.
+type HostLiveStatus struct {
+	Hostname  string     `json:"hostname"`
+	Status    string     `json:"status"`    // "healthy" | "silent" | "never_seen"
+	AgentID   string     `json:"agent_id,omitempty"`
+	LastSeen  *time.Time `json:"last_seen,omitempty"`
+	SilenceFor string    `json:"silence_for,omitempty"`
+}
+
+// SilentThresholdForInventory is the wall-clock gap after which a
+// known-agent host is flagged "silent" in the inventory preview.
+// Mirrors the v0.32 inventory reconciliation threshold so the two
+// surfaces report the same verdict.
+const SilentThresholdForInventory = 10 * time.Minute
+
+// HostsWithLiveStatus pairs the parsed inventory hostnames with
+// their current OpAMP status. Hostname normalization mirrors the
+// v0.32 inventory reconciliation hostKey (lowercase + strip FQDN
+// suffix) so a checked-in `GAXGPAP158UA` matches an OpAMP agent
+// reporting as `gaxgpap158ua.example.com`.
+func (s *Service) HostsWithLiveStatus(ctx context.Context, targetID string) (string, []HostLiveStatus, error) {
+	path, hosts, err := s.FetchInventory(ctx, targetID)
+	if err != nil {
+		return path, nil, err
+	}
+	if len(hosts) == 0 {
+		return path, nil, nil
+	}
+	agents, _ := s.store.ListAgents(ctx)
+	byKey := map[string]*apptypes.Agent{}
+	for _, a := range agents {
+		if a == nil {
+			continue
+		}
+		byKey[hostKey(a.Name)] = a
+	}
+	now := time.Now().UTC()
+	out := make([]HostLiveStatus, 0, len(hosts))
+	for _, h := range hosts {
+		entry := HostLiveStatus{Hostname: h, Status: "never_seen"}
+		if a, ok := byKey[hostKey(h)]; ok {
+			ls := a.LastSeen
+			entry.AgentID = a.ID.String()
+			entry.LastSeen = &ls
+			if now.Sub(a.LastSeen) > SilentThresholdForInventory {
+				entry.Status = "silent"
+				entry.SilenceFor = now.Sub(a.LastSeen).Round(time.Second).String()
+			} else {
+				entry.Status = "healthy"
+			}
+		}
+		out = append(out, entry)
+	}
+	return path, out, nil
+}
+
+// hostKey duplicates internal/inventory.hostKey logic to avoid an
+// import cycle. Lowercase + strip the first '.' onward so short
+// names match FQDNs.
+func hostKey(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if idx := strings.IndexByte(s, '.'); idx > 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 // SanitizeHost normalizes a hostname for the ExpectedHosts list.

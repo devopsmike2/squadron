@@ -50,7 +50,9 @@ func (h *DeployHandlers) guard(c *gin.Context) bool {
 	return true
 }
 
-// HandleListTargets is GET /api/v1/deploy/targets.
+// HandleListTargets is GET /api/v1/deploy/targets. v0.35 augments
+// each target with a `last_run` summary so the card grid can show
+// "Last deployed: 2h ago — Success" without a per-card fetch.
 func (h *DeployHandlers) HandleListTargets(c *gin.Context) {
 	if !h.guard(c) {
 		return
@@ -60,7 +62,27 @@ func (h *DeployHandlers) HandleListTargets(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": targets, "count": len(targets), "enabled": true})
+	// Pull the most recent run per target. List once and bucket in
+	// memory rather than N+1 round-trips. Caps at 500 most-recent
+	// runs across all targets; if a target's last run is older than
+	// that cap, the card just won't show a recency badge — degrades
+	// gracefully.
+	runs, _ := h.service.ListRuns(c.Request.Context(), apptypes.DeployRunFilter{Limit: 500})
+	latest := map[string]*apptypes.DeployRun{}
+	for _, r := range runs {
+		if _, seen := latest[r.TargetID]; !seen {
+			latest[r.TargetID] = r
+		}
+	}
+	type cardItem struct {
+		*apptypes.DeployTarget
+		LastRun *apptypes.DeployRun `json:"last_run,omitempty"`
+	}
+	out := make([]cardItem, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, cardItem{DeployTarget: t, LastRun: latest[t.ID]})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out, "count": len(out), "enabled": true})
 }
 
 // HandleGetTarget is GET /api/v1/deploy/targets/:id.
@@ -237,6 +259,67 @@ func (h *DeployHandlers) HandleGetRun(c *gin.Context) {
 	c.JSON(http.StatusOK, run)
 }
 
+// HandleValidate is POST /api/v1/deploy/targets/:id/validate. The
+// v0.35 pre-flight: tests GitHub auth, workflow existence, inventory
+// readability, and configlint without firing a workflow_dispatch.
+// Always returns 200 with the result payload — individual checks
+// report their own status — so the UI can render a checklist.
+func (h *DeployHandlers) HandleValidate(c *gin.Context) {
+	if !h.guard(c) {
+		return
+	}
+	id := c.Param("id")
+	result, err := h.service.Validate(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// HandleRedeploy is POST /api/v1/deploy/runs/:id/redeploy. Replays
+// a past run's inputs as a new deploy. Operator's "incident
+// response" panic button — known-good config + known-good inputs,
+// one click.
+func (h *DeployHandlers) HandleRedeploy(c *gin.Context) {
+	if !h.guard(c) {
+		return
+	}
+	id := c.Param("id")
+	prev, err := h.service.GetRun(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if prev == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
+		return
+	}
+	req := deploy.TriggerRequest{
+		TargetID:    prev.TargetID,
+		RequestedBy: actorFromContext(c),
+		Inputs:      prev.Inputs,
+		Notes:       "redeploy of " + prev.ID,
+	}
+	// Don't pass ExpectedHosts — if the target has an inventory file
+	// the service will repopulate from the current file at trigger
+	// time (which may have changed since the previous run).
+	run, err := h.service.Trigger(c.Request.Context(), req)
+	if err != nil {
+		var lerr *deploy.LintGateError
+		if errors.As(err, &lerr) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error":         "config lint blocked redeploy",
+				"lint_findings": lerr.Findings,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, run)
+}
+
 // HandleInventoryPreview is GET /api/v1/deploy/targets/:id/inventory.
 // Returns the parsed host list from the target's configured
 // inventory.ini. UI uses this to render the trigger sheet's
@@ -253,10 +336,10 @@ func (h *DeployHandlers) HandleInventoryPreview(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	path, hosts, err := h.service.FetchInventory(c.Request.Context(), id)
+	path, statuses, err := h.service.HostsWithLiveStatus(c.Request.Context(), id)
 	out := gin.H{
 		"path":  path,
-		"hosts": hosts,
+		"hosts": statuses,
 	}
 	if err != nil {
 		// Don't 500 — surface the error in the body so the UI can

@@ -17,21 +17,36 @@
  * and retry without leaving the page.
  */
 
-import { GitBranchIcon, PlayIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
-import { useState } from "react";
+import {
+  AlertTriangleIcon,
+  CheckCircle2Icon,
+  GitBranchIcon,
+  PlayIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  RotateCcwIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
+  XCircleIcon,
+} from "lucide-react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 
 import {
   createDeployTarget,
   deleteDeployTarget,
   fetchDeployInventory,
+  hostStatusColor,
   listDeployRuns,
   listDeployTargets,
+  redeployRun,
   runColor,
   runLabel,
   triggerDeployRun,
+  validateDeployTarget,
   type DeployTarget,
   type LintFinding,
+  type ValidationResult,
 } from "@/api/deploy";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -91,6 +106,14 @@ export default function DeployPage() {
   const targets = targetsQ.data?.items ?? [];
   const runs = runsQ.data?.items ?? [];
 
+  // v0.35: highlight any deploy currently moving through the
+  // pipeline so the operator doesn't fire a second one
+  // accidentally.
+  const inFlight = useMemo(
+    () => runs.filter((r) => r.status === "queued" || r.status === "in_progress"),
+    [runs],
+  );
+
   return (
     <div className="space-y-6 p-6">
       <header className="flex items-end justify-between">
@@ -106,14 +129,62 @@ export default function DeployPage() {
         </Button>
       </header>
 
+      {inFlight.length > 0 && (
+        <Card style={{ borderColor: "var(--info, #3b82f6)" }}>
+          <CardContent className="flex items-center gap-3 p-3 text-sm">
+            <span
+              className="inline-block h-2 w-2 animate-pulse rounded-full"
+              style={{ background: "var(--info, #3b82f6)" }}
+            />
+            <span>
+              <span className="font-medium">{inFlight.length}</span> deploy
+              {inFlight.length === 1 ? " is" : "s are"} in flight.{" "}
+              {inFlight.slice(0, 3).map((r, i) => {
+                const t = targets.find((tt) => tt.id === r.target_id);
+                return (
+                  <span key={r.id} className="text-muted-foreground">
+                    {i > 0 ? ", " : ""}
+                    {t?.name ?? r.target_id} ({r.status})
+                  </span>
+                );
+              })}
+            </span>
+          </CardContent>
+        </Card>
+      )}
+
       <section className="space-y-3">
         <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
           Targets
         </h2>
         {targets.length === 0 ? (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
-              No deploy targets yet. Click "New target" to register a workflow.
+            <CardContent className="space-y-3 p-6 text-sm">
+              <div className="text-base font-medium">
+                Your first deploy in 3 steps
+              </div>
+              <ol className="list-decimal space-y-2 pl-5 text-muted-foreground">
+                <li>
+                  Mint a fine-grained GitHub PAT on the repo with{" "}
+                  <code className="font-mono">actions:write</code> +{" "}
+                  <code className="font-mono">contents:read</code>.
+                </li>
+                <li>
+                  Click <span className="font-medium text-foreground">New target</span> and fill in
+                  owner / repo / workflow file / branch + paste the PAT. If your
+                  workflow uses an Ansible-style{" "}
+                  <code className="font-mono">inventory.ini</code>, set its path
+                  too — Squadron reads it at trigger time.
+                </li>
+                <li>
+                  Click <span className="font-medium text-foreground">Validate</span> on the
+                  resulting card to confirm Squadron can reach the workflow and
+                  read the inventory before your first real deploy.
+                </li>
+              </ol>
+              <Button className="mt-2" onClick={() => setShowNew(true)}>
+                <PlusIcon className="mr-2 h-4 w-4" /> New target
+              </Button>
             </CardContent>
           </Card>
         ) : (
@@ -171,7 +242,28 @@ export default function DeployPage() {
                         <td className="px-3 py-2 font-tabular text-xs text-muted-foreground">
                           {new Date(r.requested_at).toLocaleString()}
                         </td>
-                        <td className="px-3 py-2">{target?.name ?? r.target_id}</td>
+                        <td className="px-3 py-2">
+                          {target?.name ?? r.target_id}
+                          {r.status === "completed" && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="ml-2 h-6 px-2 text-[11px]"
+                              title="Re-fire this exact deploy with the same inputs"
+                              onClick={async () => {
+                                if (!confirm("Redeploy with the same inputs as this run?")) return;
+                                try {
+                                  await redeployRun(r.id);
+                                  runsQ.mutate();
+                                } catch (e) {
+                                  alert(String((e as Error).message ?? e));
+                                }
+                              }}
+                            >
+                              <RotateCcwIcon className="mr-1 h-3 w-3" /> Redeploy
+                            </Button>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">
                           {r.requested_by || "—"}
                         </td>
@@ -244,6 +336,35 @@ function TargetCard({
   onDelete: () => void;
   onTrigger: () => void;
 }) {
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [validating, setValidating] = useState(false);
+  const last = target.last_run;
+  const lastTone = last
+    ? last.status !== "completed"
+      ? "var(--info, #3b82f6)"
+      : last.conclusion === "success"
+        ? "var(--status-healthy, #22c55e)"
+        : "var(--status-critical, #ef4444)"
+    : "var(--muted-foreground)";
+  const lastWhen = last ? new Date(last.requested_at).toLocaleString() : null;
+  const lastVerb = last
+    ? last.status !== "completed"
+      ? "running"
+      : last.conclusion === "success"
+        ? "succeeded"
+        : last.conclusion || "completed"
+    : "never deployed";
+
+  async function runValidate() {
+    setValidating(true);
+    try {
+      const r = await validateDeployTarget(target.id);
+      setValidation(r);
+    } finally {
+      setValidating(false);
+    }
+  }
+
   return (
     <Card>
       <CardContent className="space-y-3 p-4">
@@ -260,7 +381,7 @@ function TargetCard({
             {target.github_branch}
           </Badge>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           {target.has_credential ? (
             <Badge variant="outline" style={{ color: "var(--status-healthy, #22c55e)" }}>
               PAT set
@@ -270,8 +391,24 @@ function TargetCard({
               PAT missing
             </Badge>
           )}
-          {target.config_id && <span>config pinned</span>}
+          {target.inventory_path && (
+            <Badge variant="outline" className="text-muted-foreground">
+              inventory: {target.inventory_path.split("/").pop()}
+            </Badge>
+          )}
+          {target.config_id && (
+            <Badge variant="outline" className="text-muted-foreground">
+              config pinned
+            </Badge>
+          )}
+          <Badge variant="outline" style={{ color: lastTone, borderColor: lastTone }}>
+            Last: {lastVerb}
+            {lastWhen ? ` · ${lastWhen}` : ""}
+          </Badge>
         </div>
+        {validation && (
+          <ValidationChecklist result={validation} onDismiss={() => setValidation(null)} />
+        )}
         <div className="flex gap-2">
           <Button
             size="sm"
@@ -280,12 +417,79 @@ function TargetCard({
           >
             <PlayIcon className="mr-2 h-3.5 w-3.5" /> Run deployment
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!target.has_credential || validating}
+            onClick={runValidate}
+            title="Probe GitHub auth + workflow + inventory + lint without firing a deploy"
+          >
+            <ShieldCheckIcon className="mr-2 h-3.5 w-3.5" />
+            {validating ? "Validating…" : "Validate"}
+          </Button>
           <Button size="sm" variant="outline" onClick={onDelete}>
             <Trash2Icon className="h-3.5 w-3.5" />
           </Button>
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ValidationChecklist({
+  result,
+  onDismiss,
+}: {
+  result: ValidationResult;
+  onDismiss: () => void;
+}) {
+  const rows: { key: string; label: string; check: ValidationResult["github_auth"] }[] = [
+    { key: "auth", label: "GitHub auth", check: result.github_auth },
+    { key: "wf", label: "Workflow exists", check: result.workflow_exists },
+    { key: "inv", label: "Inventory readable", check: result.inventory },
+    { key: "lint", label: "Lint check", check: result.lint_check },
+  ];
+  return (
+    <div className="rounded border bg-muted/30 p-2 text-xs">
+      <div className="mb-1 flex items-center justify-between">
+        <div className="font-medium">
+          {result.overall_ok ? "All checks passed" : "Some checks failed"}
+        </div>
+        <button
+          type="button"
+          className="text-[10px] text-muted-foreground underline"
+          onClick={onDismiss}
+        >
+          dismiss
+        </button>
+      </div>
+      <ul className="space-y-1">
+        {rows.map((r) => {
+          const Icon =
+            r.check.status === "ok"
+              ? CheckCircle2Icon
+              : r.check.status === "fail"
+                ? XCircleIcon
+                : AlertTriangleIcon;
+          const color =
+            r.check.status === "ok"
+              ? "var(--status-healthy, #22c55e)"
+              : r.check.status === "fail"
+                ? "var(--status-critical, #ef4444)"
+                : r.check.status === "skip"
+                  ? "var(--muted-foreground)"
+                  : "var(--status-warn, #eab308)";
+          return (
+            <li key={r.key} className="flex items-start gap-2">
+              <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color }} aria-hidden />
+              <span>
+                <span className="font-medium">{r.label}:</span> {r.check.message}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -509,7 +713,7 @@ function TriggerSheet({
           </Field>
           {usingInventoryFile ? (
             <Field label={`Hosts from inventory file (${target.inventory_path})`}>
-              <div className="rounded border bg-muted/40 p-2 text-xs font-mono max-h-40 overflow-auto">
+              <div className="rounded border bg-muted/40 p-2 text-xs max-h-48 overflow-auto">
                 {inventoryQ.isLoading ? (
                   <span className="text-muted-foreground">Loading inventory…</span>
                 ) : inventoryQ.data?.fetch_error ? (
@@ -517,9 +721,36 @@ function TriggerSheet({
                     Couldn't read inventory.ini: {inventoryQ.data.fetch_error}
                   </span>
                 ) : inventoryQ.data?.hosts && inventoryQ.data.hosts.length > 0 ? (
-                  <ul className="space-y-0.5">
+                  <ul className="space-y-1 font-mono">
                     {inventoryQ.data.hosts.map((h) => (
-                      <li key={h}>{h}</li>
+                      <li key={h.hostname} className="flex items-center gap-2">
+                        <span
+                          className="inline-block h-2 w-2 shrink-0 rounded-full"
+                          style={{ background: hostStatusColor(h.status) }}
+                          title={
+                            h.status === "healthy"
+                              ? `Healthy — last seen ${
+                                  h.last_seen
+                                    ? new Date(h.last_seen).toLocaleString()
+                                    : "?"
+                                }`
+                              : h.status === "silent"
+                                ? `Silent for ${h.silence_for}`
+                                : "Never seen by Squadron"
+                          }
+                        />
+                        <span>{h.hostname}</span>
+                        {h.status === "silent" && (
+                          <span className="text-[10px] text-muted-foreground">
+                            silent {h.silence_for}
+                          </span>
+                        )}
+                        {h.status === "never_seen" && (
+                          <span className="text-[10px] text-muted-foreground">
+                            never seen
+                          </span>
+                        )}
+                      </li>
                     ))}
                   </ul>
                 ) : (
@@ -529,9 +760,10 @@ function TriggerSheet({
                 )}
               </div>
               <div className="mt-1 text-[11px] text-muted-foreground">
-                Squadron re-fetches this file from GitHub at trigger time and
-                registers the parsed hosts into expected_agents so v0.32
-                reconciliation can flag any that don't check in.{" "}
+                Green = healthy / yellow = silent / red = never seen by Squadron.
+                Re-fetched from GitHub at trigger time and registered into
+                expected_agents so v0.32 reconciliation can flag any that don't
+                check in.{" "}
                 <button
                   type="button"
                   className="underline"

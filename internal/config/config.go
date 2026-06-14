@@ -22,6 +22,20 @@ type Config struct {
 	AI        AIConfig        `yaml:"ai"`
 	Pricing       PricingConfig       `yaml:"pricing"`
 	SilentAgents  SilentAgentsConfig  `yaml:"silent_agents,omitempty"`
+	Deploy        DeployConfig        `yaml:"deploy,omitempty"`
+}
+
+// DeployConfig is the v0.35+ deploy integration tuning. The deploy
+// feature itself is gated by SQUADRON_DEPLOY_KEY at the env-var
+// level (so it can't accidentally be enabled by a yaml typo without
+// the operator also setting up the encryption key). This block is
+// for the optional knobs.
+type DeployConfig struct {
+	// CompletionWebhookURL fires a JSON event on every deploy
+	// terminal-state transition (success / failure / cancelled).
+	// Reuses the v0.33 silent-agent webhook receiver shape — same
+	// receiver handles both, keyed on the `kind` field.
+	CompletionWebhookURL string `yaml:"completion_webhook_url,omitempty"`
 }
 
 // SilentAgentsConfig controls the v0.33 silent-agent watcher. The

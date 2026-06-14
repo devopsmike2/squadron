@@ -218,14 +218,59 @@ Squadron, your PagerDuty receiver gets paged.
 | GET    | `/api/v1/deploy/runs/:id`           | `deploy:read`    | Inline syncs from GitHub before returning. |
 | POST   | `/api/v1/deploy/runs`               | `deploy:trigger` | Hot path. 422 if lint blocks. |
 
+## v0.35 additions
+
+- **Validate target** — pre-flight checklist that exercises every
+  read path without firing a deploy: GitHub auth, workflow exists,
+  inventory readable, lint passes. Click "Validate" on a target
+  card to confirm setup is correct before your first deploy.
+- **Last-deployed badge** — target cards show "Last: succeeded ·
+  2h ago" so you can see fleet activity at a glance.
+- **Live host status in inventory preview** — when you open the
+  trigger sheet, each parsed inventory host has a green/yellow/red
+  dot for healthy / silent / never-seen. Lets you spot "host02
+  has been quiet for 30 minutes" before clicking Run.
+- **In-progress deploy banner** — a pulsing indicator at the top
+  of `/deploy` when any deploy is queued or running.
+- **Redeploy button** — every completed run has a "Redeploy" link
+  that re-fires with the same inputs. Incident-response panic
+  button.
+- **Completion webhook** — set `deploy.completion_webhook_url` in
+  squadron.yaml to receive a JSON POST on every terminal state
+  transition (success/failure). Same shape as the v0.33
+  silent-agent webhook, key on `kind: "deploy_completed"`.
+- **Decommission agent** — Agent drawer gets a "Decommission"
+  button for hard-deleting agent records when hosts are retired
+  from the fleet. Keeps the inventory view from accumulating
+  ghost offline agents.
+
+## Webhook receiver shape
+
+```json
+{
+  "kind": "deploy_completed",
+  "state": "success",
+  "run_id": "uuid",
+  "target_id": "uuid",
+  "target_name": "Deploy otelcol to Windows",
+  "requested_by": "miheanacho",
+  "github_run_id": 4209876543,
+  "github_run_url": "https://github.com/.../runs/4209876543",
+  "expected_hosts": ["GAXGPAP158UA"],
+  "started_at": "2026-06-13T22:14:33Z",
+  "completed_at": "2026-06-13T22:16:07Z",
+  "at": "2026-06-13T22:16:07Z"
+}
+```
+
 ## Roadmap
 
-- **v0.35** — GitHub App support (org-scoped credentials, better
+- **v0.36** — GitHub App support (org-scoped credentials, better
   audit trails than PATs).
-- **v0.36** — Webhook receiver at `/api/v1/deploy/github-webhook`
+- **v0.37** — Webhook receiver at `/api/v1/deploy/github-webhook`
   for instant status updates (today's 60s polling becomes the
   fallback).
-- **v0.37** — Jenkins + GitLab providers behind the same Provider
+- **v0.38** — Jenkins + GitLab providers behind the same Provider
   interface.
 
 ## Security notes

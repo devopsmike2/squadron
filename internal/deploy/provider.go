@@ -41,6 +41,15 @@ type Provider interface {
 	// (and exposed via /deploy/targets/:id/inventory so the trigger
 	// sheet can render the host list read-only before firing).
 	FetchFile(ctx context.Context, target *apptypes.DeployTarget, pat string, path string) ([]byte, error)
+
+	// ProbeAuth issues a cheap authenticated request (repo metadata)
+	// to verify the PAT works against the target's repo. Used by the
+	// v0.35 Validate endpoint as a pre-flight before any other read.
+	ProbeAuth(ctx context.Context, target *apptypes.DeployTarget, pat string) error
+	// ProbeWorkflow confirms the configured workflow file exists at
+	// the target's branch (404 means wrong file name, the most
+	// common setup mistake).
+	ProbeWorkflow(ctx context.Context, target *apptypes.DeployTarget, pat string) error
 }
 
 // RunStatus is the normalized status snapshot the provider returns.

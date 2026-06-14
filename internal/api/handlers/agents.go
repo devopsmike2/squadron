@@ -517,6 +517,37 @@ func (h *AgentHandlers) HandleSendConfigToAgent(c *gin.Context) {
 	})
 }
 
+// HandleDecommissionAgent is DELETE /api/v1/agents/:id. v0.35
+// affordance for cleaning up agents that have been retired from
+// the fleet — without this, an offline Windows host that's been
+// physically decommissioned sits forever in the agents table as
+// "offline" and clutters the inventory reconciliation view.
+//
+// The agent record is hard-deleted; the audit log retains the
+// decommission event for trail. Telemetry rows in the
+// metrics_*/logs/traces tables are unaffected (they carry an
+// agent_id but are not foreign-keyed). The next OpAMP heartbeat
+// from the same UUID would re-create the agent — which is what we
+// want if the host wasn't actually retired.
+func (h *AgentHandlers) HandleDecommissionAgent(c *gin.Context) {
+	agentID := c.Param("id")
+	if agentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Agent ID is required"})
+		return
+	}
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID format"})
+		return
+	}
+	if err := h.agentService.DeleteAgent(c.Request.Context(), agentUUID); err != nil {
+		h.logger.Error("decommission agent failed", zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decommission agent"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "agent_id": agentID})
+}
+
 // RestartAgentResponse represents the response after restarting an agent
 type RestartAgentResponse struct {
 	Success bool   `json:"success"`
