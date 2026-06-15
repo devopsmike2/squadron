@@ -183,6 +183,10 @@ func (s *Service) AgentSnapshot(ctx context.Context, agentID string) (*AgentSnap
 		AgentID: agentID,
 		Verdict: VerdictUnknown,
 		Latest:  map[string][]MetricRow{},
+		// Signals always serialized as a JSON array, never null —
+		// the UI does .signals.length unconditionally and would
+		// crash on null.
+		Signals: []Signal{},
 	}
 	if len(rows) == 0 {
 		s.cachePut("agent:"+agentID, snap)

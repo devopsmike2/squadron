@@ -221,6 +221,9 @@ func (s *Service) FleetVolume(ctx context.Context, win Window, signalFilter []Si
 		Window:    win,
 		StartTime: start,
 		EndTime:   now,
+		// Always-array so the UI's .by_signal.map(...) won't crash
+		// on a window with no telemetry.
+		BySignal: []SignalVolume{},
 	}
 	agentSet := map[string]struct{}{} // collected separately via second tiny query
 	var totalBytes, totalItems, totalDropped int64
@@ -294,7 +297,7 @@ func (s *Service) AgentVolume(ctx context.Context, agentID string, win Window) (
 		return nil, fmt.Errorf("agent volume query: %w", err)
 	}
 
-	out := &AgentVolume{AgentID: agentID}
+	out := &AgentVolume{AgentID: agentID, BySignal: []SignalVolume{}}
 	for _, row := range rows {
 		b := int64Of(row["bytes"])
 		out.BySignal = append(out.BySignal, SignalVolume{
