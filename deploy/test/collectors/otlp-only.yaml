@@ -1,0 +1,43 @@
+# OTLP-only collector — sends telemetry to Squadron but does NOT
+# open an OpAMP connection.
+#
+# This is the equivalent of a "rogue" collector in your real
+# environment: someone installed it before Squadron existed, with
+# no supervisor block, but it's still exporting OTLP to your
+# collector backend.
+#
+# v0.36.0 passive discovery should pick it up automatically. Look
+# for it in the agents list with a yellow "Telemetry-only" badge —
+# its name will be "test-rogue-01" (from OTEL_RESOURCE_ATTRIBUTES
+# in docker-compose.yml) and its service.instance.id is the fixed
+# UUID 11111111-1111-1111-1111-111111111111 so successive restarts
+# don't create dupes.
+
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu: {}
+      memory: {}
+      load: {}
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  otlp/squadron:
+    endpoint: host.docker.internal:4327
+    tls:
+      insecure: true
+
+service:
+  # Notice: no opamp extension. Squadron sees only the telemetry,
+  # not a control channel. Confirms v0.36.0's "telemetry-only"
+  # path works end-to-end.
+  pipelines:
+    metrics:
+      receivers: [hostmetrics]
+      processors: [batch]
+      exporters: [otlp/squadron]

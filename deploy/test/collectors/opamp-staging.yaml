@@ -1,0 +1,49 @@
+# Identical structure to opamp-prod.yaml but with a different
+# instance_uid and labels so it shows up as a separate agent in
+# Squadron's fleet view. Use this one to test the v0.31 rollout
+# UI's group/label selectors — give "deployment.environment=staging"
+# a different config and watch Squadron push only to this agent.
+
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ws://host.docker.internal:4330/v1/opamp
+    instance_uid: 11111111-2222-3333-4444-555555555555
+
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu: {}
+      memory: {}
+      load: {}
+  prometheus/self:
+    config:
+      scrape_configs:
+        - job_name: "otelcol-self"
+          scrape_interval: 30s
+          static_configs:
+            - targets: ["127.0.0.1:8888"]
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  otlp/squadron:
+    endpoint: host.docker.internal:4327
+    tls:
+      insecure: true
+
+service:
+  extensions: [opamp]
+  telemetry:
+    metrics:
+      address: 127.0.0.1:8888
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, prometheus/self]
+      processors: [batch]
+      exporters: [otlp/squadron]

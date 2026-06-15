@@ -1,0 +1,16 @@
+# Multi-stage Dockerfile for the webhook-echo helper used by the
+# v0.37 local test environment. ~10MB final image, statically
+# linked, alpine-based so it boots in ~50ms when you start the
+# test compose.
+
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/webhook-echo ./cmd/webhook-echo
+
+FROM alpine:3.20
+COPY --from=build /out/webhook-echo /usr/local/bin/webhook-echo
+EXPOSE 9001
+ENTRYPOINT ["/usr/local/bin/webhook-echo", "-addr", ":9001"]
