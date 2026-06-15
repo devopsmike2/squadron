@@ -284,6 +284,99 @@ func (g *GitHubProvider) FetchFile(
 	return decoded, nil
 }
 
+// ListSuccessfulRuns enumerates past successful workflow_dispatch
+// runs of the target's workflow that ran on or after `since`. The
+// GHA history walker uses this to find historical inventory
+// snapshots to backfill.
+//
+// Pagination: GitHub's runs API supports `per_page` up to 100.
+// We request 100 here; callers wanting a larger window iterate
+// with the `page` query param (TODO when we have a real install
+// that needs > 100 runs in the lookback).
+func (g *GitHubProvider) ListSuccessfulRuns(
+	ctx context.Context,
+	target *apptypes.DeployTarget,
+	pat string,
+	since time.Time,
+) ([]WorkflowRunSummary, error) {
+	if pat == "" {
+		return nil, fmt.Errorf("PAT required")
+	}
+	branch := target.GitHubBranch
+	if branch == "" {
+		branch = "main"
+	}
+	params := url.Values{}
+	params.Set("event", "workflow_dispatch")
+	params.Set("status", "success")
+	params.Set("per_page", "100")
+	params.Set("branch", branch)
+	if !since.IsZero() {
+		params.Set("created", ">="+since.UTC().Format(time.RFC3339))
+	}
+
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/runs?%s",
+		g.BaseURL,
+		url.PathEscape(target.GitHubOwner),
+		url.PathEscape(target.GitHubRepo),
+		url.PathEscape(target.GitHubWorkflow),
+		params.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build runs request: %w", err)
+	}
+	g.setAuthHeaders(req, pat)
+	resp, err := g.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("runs request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyError(resp)
+	}
+	var page struct {
+		WorkflowRuns []struct {
+			ID         int64     `json:"id"`
+			HeadSHA    string    `json:"head_sha"`
+			HeadBranch string    `json:"head_branch"`
+			CreatedAt  time.Time `json:"created_at"`
+			HTMLURL    string    `json:"html_url"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, fmt.Errorf("decode runs: %w", err)
+	}
+	out := make([]WorkflowRunSummary, 0, len(page.WorkflowRuns))
+	for _, r := range page.WorkflowRuns {
+		out = append(out, WorkflowRunSummary{
+			RunID:     r.ID,
+			HeadSHA:   r.HeadSHA,
+			Branch:    r.HeadBranch,
+			CreatedAt: r.CreatedAt,
+			URL:       r.HTMLURL,
+		})
+	}
+	return out, nil
+}
+
+// FetchFileAtRef is FetchFile but at an arbitrary git ref (branch,
+// tag, or commit SHA). Used by the GHA walker to pull historical
+// inventory.ini snapshots.
+func (g *GitHubProvider) FetchFileAtRef(
+	ctx context.Context,
+	target *apptypes.DeployTarget,
+	pat string,
+	path string,
+	ref string,
+) ([]byte, error) {
+	// FetchFile takes the branch off the target. Swap the target's
+	// branch for the requested ref via a shallow copy so we don't
+	// duplicate the request-building logic.
+	clone := *target
+	clone.GitHubBranch = ref
+	return g.FetchFile(ctx, &clone, pat, path)
+}
+
 // ProbeAuth verifies the PAT can read the repo. Issues
 // GET /repos/{owner}/{repo} which is the cheapest authenticated
 // call against a private repo. 200 = good, 401 = revoked, 404 =

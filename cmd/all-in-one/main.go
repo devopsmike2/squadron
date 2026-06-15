@@ -500,6 +500,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			}
 		}()
 		logger.Info("Deploy integration enabled (GitHub Actions, polling every 60s)")
+
+		// v0.36.1 GHA history walker. Periodically replays the deploy
+		// target's workflow history and registers historical inventory
+		// hosts as expected_agents. Composes with v0.32 reconciliation
+		// — hosts seen in past deploys but not currently checking in
+		// surface automatically.
+		walker := discovery.NewGHAWalker(appStore, deploySvc, ghProvider,
+			discovery.DefaultGHAWalkInterval, discovery.DefaultGHALookback, logger)
+		go walker.Run(context.Background())
 	}
 
 	// v0.33 silent-agent watcher. Polls the agent table and fires
