@@ -6,7 +6,8 @@ import { apiDelete, apiGet, apiPost, apiPut } from "./base";
 export interface DeployTarget {
   id: string;
   name: string;
-  provider: "github";
+  /** v0.41 — "github" or "azure_devops" (Azure DevOps Pipelines). */
+  provider: "github" | "azure_devops";
   github_owner: string;
   github_repo: string;
   github_workflow: string;
@@ -126,6 +127,8 @@ export function getDeployTarget(id: string): Promise<DeployTarget> {
 
 export function createDeployTarget(body: {
   name: string;
+  /** v0.41 — "github" (default) or "azure_devops". */
+  provider?: "github" | "azure_devops";
   github_owner: string;
   github_repo: string;
   github_workflow: string;

@@ -485,8 +485,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	if crypter, err := deploy.NewCrypterFromEnv(); err != nil {
 		logger.Info("Deploy integration disabled (SQUADRON_DEPLOY_KEY unset). Generate with: head -c 32 /dev/urandom | base64")
 	} else {
+		// v0.41 — multi-provider router. GitHub Actions remains the
+		// default; Azure DevOps Pipelines now sits alongside as a
+		// peer backend. Both are constructed unconditionally because
+		// the upstream PAT is per-target, not per-provider, and the
+		// HTTP clients are cheap.
 		ghProvider := deploy.NewGitHubProvider("")
-		deploySvc := deploy.NewService(appStore, ghProvider, crypter, logger)
+		adoProvider := deploy.NewAzureDevOpsProvider("")
+		provider := deploy.NewMultiProvider(ghProvider, adoProvider)
+		deploySvc := deploy.NewService(appStore, provider, crypter, logger)
 		deploySvc.SetCompletionWebhook(config.Deploy.CompletionWebhookURL)
 		apiServer.SetDeploy(deploySvc)
 		// Polling loop: every 60s the service walks queued +
