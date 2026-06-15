@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/configlint"
+	"github.com/devopsmike2/squadron/internal/quickstart"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -39,6 +40,8 @@ type Store interface {
 
 	// For auto-registering expected hosts after a successful deploy.
 	UpsertExpectedAgent(ctx context.Context, e *apptypes.ExpectedAgent) error
+	// v0.46: For ResolveAdoptionHosts label enrichment.
+	ListExpectedAgents(ctx context.Context, source string) ([]*apptypes.ExpectedAgent, error)
 
 	// For v0.35 live-host-status cross-referencing the inventory
 	// preview against connected agents.
@@ -254,6 +257,174 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (*apptypes.De
 		zap.Int64("github_run_id", run.GitHubRunID),
 		zap.String("requested_by", req.RequestedBy),
 		zap.Int("expected_hosts", len(req.ExpectedHosts)))
+	return run, nil
+}
+
+// ResolveAdoptionHosts enriches a list of bare hostnames with the
+// labels Squadron has on file for each one — either from the
+// expected_agents table (CI/CD pipelines register hosts there at
+// deploy time) or from an existing agent row if the host happens to
+// already be reporting. Hostnames that aren't found in either store
+// pass through with empty labels — the snippet still works, the
+// agent_description block just has only host.name baked in.
+//
+// Pulled into its own method (vs done inline in the handler) so
+// the deploy package owns the store access — the handler stays
+// store-agnostic, which keeps the test surface tight.
+//
+// Added in v0.46.0.
+func (s *Service) ResolveAdoptionHosts(ctx context.Context, hostnames []string) []AdoptHost {
+	out := make([]AdoptHost, 0, len(hostnames))
+
+	// Pull the expected_agents list once and index by hostname.
+	// At our scale (a few hundred hosts) this is cheaper than N
+	// lookups and our store interface doesn't expose a single-row
+	// lookup anyway.
+	expected, _ := s.store.ListExpectedAgents(ctx, "")
+	byHost := make(map[string]map[string]string, len(expected))
+	for _, e := range expected {
+		byHost[strings.ToLower(strings.TrimSpace(e.Hostname))] = e.Labels
+	}
+
+	for _, h := range hostnames {
+		key := strings.ToLower(strings.TrimSpace(h))
+		labels := map[string]string{}
+		for k, v := range byHost[key] {
+			labels[k] = v
+		}
+		out = append(out, AdoptHost{Hostname: h, Labels: labels})
+	}
+	return out
+}
+
+// AdoptRequest is the input to TriggerAdoption — a target plus the
+// list of hosts to adopt, each with its inventory labels. v0.46.
+type AdoptRequest struct {
+	TargetID    string
+	Hosts       []AdoptHost
+	RequestedBy string
+	Notes       string
+	// OpAMPServerURL is the URL the snippets will reference. The
+	// caller (handler) resolves this from the running Squadron's
+	// own host header / ?host= override so the snippet works from
+	// where the operator's pipeline can reach Squadron.
+	OpAMPServerURL string
+}
+
+// AdoptHost is one entry in the batch — hostname plus optional
+// labels that get baked into the snippet's agent_description block.
+type AdoptHost struct {
+	Hostname string
+	Labels   map[string]string
+}
+
+// TriggerAdoption fires a deploy that ADOPTS a batch of discovered
+// agents rather than pushing a full config. The flow:
+//
+//  1. Build a bulk JSON payload — one per-host snippet block,
+//     keyed by hostname.
+//  2. Pack the payload into a single workflow_dispatch input named
+//     "adoption_payload". The customer's adoption pipeline reads
+//     this input, parses the JSON, and applies each snippet to
+//     the matching host without further calls to Squadron.
+//  3. Persist a deploy_run with ExpectedHosts = the adopted hosts
+//     so the v0.32 inventory reconciliation surface tracks the
+//     batch.
+//
+// Skips the configlint pre-flight (no config involved — the body is
+// a snippet) and the inventory file fetch (the caller is the source
+// of truth for which hosts to adopt).
+//
+// The contract for the receiving pipeline is documented inline
+// where BulkAdoptionPayload is defined.
+//
+// Added in v0.46.0.
+func (s *Service) TriggerAdoption(ctx context.Context, req AdoptRequest) (*apptypes.DeployRun, error) {
+	if !s.Enabled() {
+		return nil, ErrKeyMissing
+	}
+	if len(req.Hosts) == 0 {
+		return nil, fmt.Errorf("at least one host is required")
+	}
+	if req.OpAMPServerURL == "" {
+		return nil, fmt.Errorf("opamp_server_url is required")
+	}
+	target, err := s.store.GetDeployTarget(ctx, req.TargetID)
+	if err != nil {
+		return nil, fmt.Errorf("get target: %w", err)
+	}
+	if target == nil {
+		return nil, fmt.Errorf("deploy target not found")
+	}
+	if len(target.EncryptedCredential) == 0 {
+		return nil, fmt.Errorf("deploy target has no credential set; configure a PAT first")
+	}
+	pat, err := s.crypter.Decrypt(target.EncryptedCredential)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt credential: %w", err)
+	}
+
+	// Build the bulk payload.
+	hosts := make([]quickstart.HostAdoption, 0, len(req.Hosts))
+	hostnames := make([]string, 0, len(req.Hosts))
+	for _, h := range req.Hosts {
+		if h.Hostname == "" {
+			continue
+		}
+		hosts = append(hosts, quickstart.HostAdoption{
+			Hostname: h.Hostname,
+			Labels:   h.Labels,
+		})
+		hostnames = append(hostnames, h.Hostname)
+	}
+	payload, err := quickstart.BulkAdoptionPayload(req.OpAMPServerURL, hosts)
+	if err != nil {
+		return nil, fmt.Errorf("bulk payload: %w", err)
+	}
+
+	// Merge inputs: target defaults + adoption_payload. The
+	// adoption_payload key is the contract the receiving pipeline
+	// reads; we don't want a target with a default of the same name
+	// to mask it, so we set it AFTER merging defaults.
+	merged := map[string]string{}
+	for k, v := range target.DefaultInputs {
+		merged[k] = v
+	}
+	merged["adoption_payload"] = payload
+	// Hint flag so the receiving pipeline can branch on "this is an
+	// adoption deploy, do the merge-into-existing path" vs the
+	// normal "replace the config" path.
+	merged["adoption_mode"] = "true"
+
+	dispatchedAt := time.Now().UTC()
+	if _, err := s.provider.Dispatch(ctx, target, string(pat), merged); err != nil {
+		return nil, fmt.Errorf("dispatch: %w", err)
+	}
+
+	run := &apptypes.DeployRun{
+		ID:            uuid.NewString(),
+		TargetID:      target.ID,
+		TargetName:    target.Name,
+		RequestedBy:   req.RequestedBy,
+		RequestedAt:   dispatchedAt,
+		Inputs:        merged,
+		Status:        "queued",
+		ExpectedHosts: hostnames,
+		Notes:         req.Notes,
+	}
+	if rs, err := s.provider.LatestRunSince(ctx, target, string(pat), dispatchedAt.Add(-30*time.Second)); err == nil && rs != nil {
+		run.GitHubRunID = rs.GitHubRunID
+		run.GitHubRunURL = rs.GitHubRunURL
+		run.Status = rs.Status
+	}
+	if err := s.store.CreateDeployRun(ctx, run); err != nil {
+		return nil, fmt.Errorf("create run: %w", err)
+	}
+	s.logger.Info("adoption deploy dispatched",
+		zap.String("run_id", run.ID),
+		zap.String("target", target.Name),
+		zap.Int("hosts", len(hostnames)),
+		zap.String("requested_by", req.RequestedBy))
 	return run, nil
 }
 

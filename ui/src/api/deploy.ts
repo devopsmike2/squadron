@@ -183,6 +183,22 @@ export function triggerDeployRun(body: {
   return apiPost<DeployRun>("/deploy/runs", body);
 }
 
+// v0.46 — bulk adopt via the configured adoption pipeline.
+
+export function adoptDeployRun(
+  targetID: string,
+  body: {
+    hostnames: string[];
+    notes?: string;
+    opamp_server_url?: string;
+  },
+): Promise<DeployRun> {
+  return apiPost<DeployRun>(
+    `/deploy/targets/${encodeURIComponent(targetID)}/adopt`,
+    body,
+  );
+}
+
 /** Color for a run's status badge. */
 export function runColor(r: DeployRun): string {
   if (r.status !== "completed") return "var(--info, #3b82f6)";

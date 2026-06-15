@@ -1,0 +1,90 @@
+# Reference adoption pipeline for Squadron's v0.46 bulk-adopt flow.
+#
+# When the operator triggers a bulk adoption from Squadron's
+# Inventory page, Squadron fires `workflow_dispatch` against this
+# workflow with two inputs:
+#
+#   adoption_payload: JSON string. Shape:
+#     {
+#       "opamp_server_url": "ws://squadron.your-co.com/v1/opamp",
+#       "hosts": [
+#         {"hostname": "host01.prod", "snippet": "<yaml>"},
+#         {"hostname": "host02.prod", "snippet": "<yaml>"}
+#       ]
+#     }
+#
+#   adoption_mode: "true". Flag for the workflow to branch into the
+#   merge-into-existing-config path instead of the default
+#   replace-the-config path.
+#
+# The receiving workflow's job is to:
+#   1. Parse the JSON
+#   2. For each host, SSH in (or Ansible / WinRM / whatever your
+#      transport is), open the existing collector config, merge the
+#      snippet in (don't replace), and restart the collector.
+#   3. The host shows up in Squadron's fleet view within seconds.
+#
+# This file is intentionally minimal — your real pipeline will have
+# secrets management, error handling, and SSH key wiring. The point
+# is to show the input shape and the per-host iteration pattern.
+
+name: Adopt OTel collectors
+on:
+  workflow_dispatch:
+    inputs:
+      adoption_payload:
+        description: JSON batch (Squadron generates this)
+        required: true
+        type: string
+      adoption_mode:
+        description: '"true" — fires only via Squadron bulk adoption'
+        required: true
+        default: "true"
+        type: string
+
+jobs:
+  adopt:
+    runs-on: ubuntu-latest
+    if: inputs.adoption_mode == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse adoption payload
+        id: payload
+        run: |
+          echo '${{ inputs.adoption_payload }}' > /tmp/adoption.json
+          jq -r '.hosts[] | .hostname' /tmp/adoption.json > /tmp/hosts.txt
+          echo "host_count=$(wc -l < /tmp/hosts.txt)" >> $GITHUB_OUTPUT
+
+      # Real pipelines use a matrix or a per-host loop here. The
+      # shape below is the simplest readable version — iterate, ssh,
+      # merge, restart. Customize the transport and the merge tool
+      # (yq, ansible.builtin.lineinfile, etc.) for your environment.
+      - name: Apply per-host snippets
+        env:
+          # Your SSH key / Ansible inventory / WinRM creds go here.
+          # Pull from secrets, not inputs.
+          SSH_KEY: ${{ secrets.OTEL_DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          host_count=$(jq '.hosts | length' /tmp/adoption.json)
+          echo "Adopting $host_count hosts"
+          for i in $(seq 0 $((host_count - 1))); do
+            hostname=$(jq -r ".hosts[$i].hostname" /tmp/adoption.json)
+            snippet=$(jq -r ".hosts[$i].snippet" /tmp/adoption.json)
+            echo "==> $hostname"
+            # Stage the snippet locally.
+            echo "$snippet" > /tmp/squadron-adopt.yaml
+            # Transport choice goes here. Example with ssh + yq:
+            #
+            #   scp /tmp/squadron-adopt.yaml $hostname:/tmp/
+            #   ssh $hostname "yq eval-all '. as \$item ireduce ({}; . *+ \$item)' \
+            #     /etc/otelcol-contrib/config.yaml /tmp/squadron-adopt.yaml \
+            #     > /tmp/merged.yaml && sudo mv /tmp/merged.yaml /etc/otelcol-contrib/config.yaml \
+            #     && sudo systemctl restart otelcol-contrib"
+            #
+            # For SC's Ansible-driven shop, this would be an
+            # ansible-playbook run that uses ansible.builtin.blockinfile
+            # to insert the snippet under a Squadron-managed marker.
+            echo "(stub: would apply snippet to $hostname)"
+          done

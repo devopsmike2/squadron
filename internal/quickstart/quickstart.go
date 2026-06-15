@@ -26,6 +26,7 @@
 package quickstart
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -226,6 +227,84 @@ func sortStrings(s []string) {
 			s[j-1], s[j] = s[j], s[j-1]
 		}
 	}
+}
+
+// HostAdoption is one entry in the bulk adoption batch — a hostname
+// to target plus the labels to bake into that host's snippet.
+type HostAdoption struct {
+	Hostname string            `json:"hostname"`
+	Labels   map[string]string `json:"labels,omitempty"`
+}
+
+// BulkAdoptionPayload returns a single JSON document containing one
+// snippet per host. The intended consumer is a customer-side GitHub
+// Actions (or Ansible Tower / Azure DevOps) pipeline triggered by
+// Squadron via workflow_dispatch with this payload as a single
+// input. The pipeline parses, iterates, and applies each entry to
+// the matching host without re-calling Squadron.
+//
+// JSON because the workflow_dispatch input system serializes well
+// to JSON and most pipelines have native parsing. Operators who
+// prefer YAML can run a yq one-liner; we'd rather not maintain two
+// emitters.
+//
+// Shape:
+//
+//	{
+//	  "opamp_server_url": "ws://squadron.example/v1/opamp",
+//	  "hosts": [
+//	    {"hostname": "host01.prod", "snippet": "<yaml>"},
+//	    {"hostname": "host02.prod", "snippet": "<yaml>"}
+//	  ]
+//	}
+//
+// Each `snippet` is a complete merge-into-existing-config block —
+// the receiving pipeline can `yq merge` it into the host's current
+// config without further transformation.
+//
+// Added in v0.46.0 (bulk adoption via deploy pipeline).
+func BulkAdoptionPayload(opampServerURL string, hosts []HostAdoption) (string, error) {
+	if opampServerURL == "" {
+		return "", fmt.Errorf("opamp_server_url is required")
+	}
+	if len(hosts) == 0 {
+		return "", fmt.Errorf("at least one host is required")
+	}
+
+	type entry struct {
+		Hostname string `json:"hostname"`
+		Snippet  string `json:"snippet"`
+	}
+	out := struct {
+		OpAMPServerURL string  `json:"opamp_server_url"`
+		Hosts          []entry `json:"hosts"`
+	}{OpAMPServerURL: opampServerURL}
+
+	for _, h := range hosts {
+		if h.Hostname == "" {
+			// Skip rows without a hostname rather than erroring —
+			// in practice an inventory row with no hostname is a
+			// data bug we don't want to fail the whole batch on.
+			continue
+		}
+		snippet, err := AdoptionSnippet(opampServerURL, h.Hostname, h.Labels)
+		if err != nil {
+			return "", fmt.Errorf("host %s: %w", h.Hostname, err)
+		}
+		out.Hosts = append(out.Hosts, entry{
+			Hostname: h.Hostname,
+			Snippet:  snippet,
+		})
+	}
+	if len(out.Hosts) == 0 {
+		return "", fmt.Errorf("no usable hosts in batch")
+	}
+
+	buf, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }
 
 // ----------------------------------------------------------------
