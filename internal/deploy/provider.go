@@ -50,6 +50,31 @@ type Provider interface {
 	// the target's branch (404 means wrong file name, the most
 	// common setup mistake).
 	ProbeWorkflow(ctx context.Context, target *apptypes.DeployTarget, pat string) error
+
+	// ListSuccessfulRuns returns successful workflow_dispatch runs
+	// of the target's workflow whose creation falls within the given
+	// window. Used by the v0.36.1 GHA history walker to enumerate
+	// past deploys for inventory replay. Capped at the API's
+	// page-size limit (~100); larger windows take multiple calls
+	// from the caller's side.
+	ListSuccessfulRuns(ctx context.Context, target *apptypes.DeployTarget, pat string, since time.Time) ([]WorkflowRunSummary, error)
+
+	// FetchFileAtRef reads a file at a specific commit SHA (rather
+	// than the configured branch tip). Lets the GHA walker pull
+	// inventory.ini exactly as it existed at the moment of each
+	// past deploy, even if it has been edited since.
+	FetchFileAtRef(ctx context.Context, target *apptypes.DeployTarget, pat string, path string, ref string) ([]byte, error)
+}
+
+// WorkflowRunSummary is the slice of a GitHub workflow_run record
+// the GHA walker needs. The HeadSHA is the key — that's the ref we
+// pass to FetchFileAtRef to get the inventory.ini snapshot.
+type WorkflowRunSummary struct {
+	RunID     int64     `json:"run_id"`
+	HeadSHA   string    `json:"head_sha"`
+	Branch    string    `json:"branch"`
+	CreatedAt time.Time `json:"created_at"`
+	URL       string    `json:"url"`
 }
 
 // RunStatus is the normalized status snapshot the provider returns.

@@ -623,6 +623,28 @@ func branchOrMain(t *apptypes.DeployTarget) string {
 	return t.GitHubBranch
 }
 
+// DecryptedPAT exposes the PAT decryption path to other Squadron
+// packages (notably v0.36.1's GHA walker). The plaintext is returned
+// directly; the caller is responsible for not logging it. Don't
+// expose this through the API layer — that's why there's no
+// HTTP handler that wraps it.
+func (s *Service) DecryptedPAT(ctx context.Context, target *apptypes.DeployTarget) (string, error) {
+	if !s.Enabled() {
+		return "", ErrKeyMissing
+	}
+	if target == nil {
+		return "", fmt.Errorf("target nil")
+	}
+	if len(target.EncryptedCredential) == 0 {
+		return "", fmt.Errorf("target has no credential")
+	}
+	pt, err := s.crypter.Decrypt(target.EncryptedCredential)
+	if err != nil {
+		return "", err
+	}
+	return string(pt), nil
+}
+
 // FetchInventory pulls the configured inventory.ini from GitHub and
 // returns the parsed host list. Used by the trigger sheet's preview
 // (so the operator sees what hosts the deploy is about to hit) and

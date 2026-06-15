@@ -91,6 +91,8 @@ type fakeProvider struct {
 	latest           *RunStatus
 	getRunResponse   *RunStatus
 	fetched          map[string][]byte // path → content for FetchFile
+	refFetched       map[string][]byte // "ref:path" → content for FetchFileAtRef
+	runsList         []WorkflowRunSummary
 	probeAuthErr     error
 	probeWorkflowErr error
 }
@@ -125,6 +127,17 @@ func (p *fakeProvider) ProbeWorkflow(_ context.Context, _ *apptypes.DeployTarget
 		return p.probeWorkflowErr
 	}
 	return nil
+}
+func (p *fakeProvider) ListSuccessfulRuns(_ context.Context, _ *apptypes.DeployTarget, _ string, _ time.Time) ([]WorkflowRunSummary, error) {
+	return p.runsList, nil
+}
+func (p *fakeProvider) FetchFileAtRef(_ context.Context, _ *apptypes.DeployTarget, _ string, path string, ref string) ([]byte, error) {
+	if p.refFetched != nil {
+		if v, ok := p.refFetched[ref+":"+path]; ok {
+			return v, nil
+		}
+	}
+	return nil, nil
 }
 
 func TestService_Trigger_LintHardBlock(t *testing.T) {

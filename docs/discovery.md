@@ -98,12 +98,64 @@ and rebuild. The discovery hook is wired through `SetDiscovery`
 specifically so it's easy to skip without surgery on the worker
 hot path.
 
-## Roadmap
+## GitHub Actions history walker (v0.36.1)
 
-- **v0.36.1** — GitHub Actions history walker. Squadron walks
-  past successful deploy runs, fetches `inventory.ini` at each
-  commit SHA, and registers hosts as expected so missing
-  agents surface automatically.
+When a deploy target has an `inventory_path` configured, Squadron
+periodically replays the workflow's successful run history and
+auto-registers every host that's appeared in any past
+`inventory.ini` as an expected agent.
+
+The flow:
+
+1. Every 6 hours (configurable), the walker iterates every deploy
+   target with an inventory path.
+2. For each, it calls GitHub's REST API to list successful
+   `workflow_dispatch` runs within a lookback window (default 30
+   days).
+3. For each unique commit SHA in those runs, it fetches the
+   inventory file *at that exact commit* (via the Contents API's
+   `?ref=<sha>` parameter).
+4. Each parsed host gets upserted into `expected_agents` with
+   `source: "gha-history:<target-id>"` and a note like
+   "from Deploy otelcol to Windows run #95 (sha 8541e9b)".
+
+The result: Squadron's expected-host set is **derived from your
+actual deploy history**, not from a manually-maintained list.
+Hosts in the inventory.ini at any point in the last 30 days are
+registered; a host removed from the inventory and not redeployed
+falls off the expected list naturally as the lookback window
+slides forward.
+
+### Composability
+
+This layer composes cleanly with everything else:
+
+- **v0.32 reconciliation**: hosts discovered via history but not
+  currently checking in surface in the missing-hosts view
+- **v0.33 silent-agent webhook**: fires if a historically-known
+  host doesn't recheck-in
+- **v0.36.0 OTLP discovery**: agents flow in via OTLP get
+  matched against the GHA-history expected list automatically
+
+### When to use it
+
+Best fit: teams that have been deploying via GitHub Actions for a
+while and want Squadron to "wake up" with knowledge of every host
+that has been deployed to, without manually backfilling the
+inventory list.
+
+Skip it if: you're only using Squadron for new deploys going
+forward, and your CI pushes the expected list explicitly via the
+v0.32 PUT endpoint.
+
+### Tuning
+
+Walker interval and lookback window have sensible defaults
+(6 hours / 30 days). To tune, edit the `discovery.NewGHAWalker(...)`
+call in `cmd/all-in-one/main.go`.
+
+### Roadmap
+
 - **v0.36.2** — Active host probing. For expected hosts that
   haven't checked in, Squadron tries scraping
   `http://<host>:8888/metrics` to detect collectors running
