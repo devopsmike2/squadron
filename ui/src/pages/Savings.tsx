@@ -40,6 +40,10 @@ import useSWR from "swr";
 
 import { getAgents } from "@/api/agents";
 import {
+  fetchBillingSnapshot,
+  formatBytes,
+} from "@/api/billing";
+import {
   getFleetVolume,
   getTopAgents,
   type AgentVolume,
@@ -262,6 +266,11 @@ export default function SavingsPage() {
               with a progress indicator showing how much of the
               month has already been spent. */}
           <ForecastStrip />
+          {/* v0.42 billing connector — surfaces ACTUAL ingest from
+              the destination's billing API (Splunk for v0.42).
+              Silently hides when no connector is configured (the
+              fetcher returns null on 204). */}
+          <BillingStrip />
         </>
       )}
 
@@ -291,6 +300,70 @@ export default function SavingsPage() {
         <AssumptionsFooter rules={projection.assumptions} />
       )}
     </div>
+  );
+}
+
+// ----------------------------------------------------------------
+// v0.42 billing-connector strip
+// ----------------------------------------------------------------
+//
+// Renders the ACTUAL ingest reported by the configured billing
+// connector (Splunk for v0.42) next to the estimated number from
+// Squadron's own receiver. Hidden silently when no connector is
+// configured — the API returns 204 / null and fetchBillingSnapshot
+// surfaces that as null.
+
+function BillingStrip() {
+  const { data } = useSWR("billing-snapshot", fetchBillingSnapshot, {
+    refreshInterval: 60_000,
+  });
+  if (!data) return null;
+  return (
+    <Card>
+      <CardContent className="space-y-2 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              Actual ingest · {data.provider} · {data.window}
+            </div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <div className="font-tabular text-3xl font-semibold text-foreground">
+                {formatBytes(data.bytes)}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                reported by destination
+              </div>
+            </div>
+          </div>
+          <div className="text-right text-[11px] text-muted-foreground">
+            <div>
+              Collected{" "}
+              <span className="font-tabular text-foreground">
+                {new Date(data.at).toLocaleString()}
+              </span>
+            </div>
+            {data.source_url && (
+              <div>
+                <a
+                  href={data.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  Open in {data.provider}
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          Compares against the estimated ingest above. If the
+          destination number is materially lower, your dedup /
+          filtering rules are eating the difference — usually a
+          good thing.
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

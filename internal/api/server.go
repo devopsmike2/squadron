@@ -19,6 +19,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/billing"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
@@ -80,6 +81,7 @@ type Server struct {
 	pipelineHealth    *pipelinehealth.Service // optional; v0.31 collector self-metrics surface — nil → /api/v1/pipeline-health/* returns 503
 	inventory         *inventory.Service      // optional; v0.32 expected-vs-actual reconciliation — nil → /api/v1/inventory/* returns 503
 	deploy            *deploy.Service         // optional; v0.34 GitHub Actions deploy trigger — nil or Enabled()==false → /api/v1/deploy/* returns 503
+	billingProvider   billing.SnapshotProvider // optional; v0.42 — nil → /api/v1/billing/snapshot returns 204
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -224,6 +226,13 @@ func (s *Server) SetInventory(svc *inventory.Service) {
 // nil (or a service whose Enabled() returns false) to disable the
 // /api/v1/deploy/* routes (they 503). Disabled is the right state
 // when SQUADRON_DEPLOY_KEY is unset — main.go decides.
+// SetBillingProvider wires the v0.42 billing connector. Pass nil to
+// disable — the /api/v1/billing/snapshot endpoint returns 204 in
+// that case and the UI's billing tile silently hides.
+func (s *Server) SetBillingProvider(p billing.SnapshotProvider) {
+	s.billingProvider = p
+}
+
 func (s *Server) SetDeploy(svc *deploy.Service) {
 	s.deploy = svc
 }
@@ -621,6 +630,16 @@ func (s *Server) registerRoutes() {
 		v1.GET("/pricing/forecast",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.pricingTrampoline(func(h *handlers.PricingHandlers, c *gin.Context) { h.HandleForecast(c) }))
+
+		// v0.42 — actual billing snapshot from the configured
+		// destination's billing API (Splunk for v0.42). Reuses the
+		// agents-read scope since it's tied to the Savings page,
+		// not a new auth surface.
+		v1.GET("/billing/snapshot",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				handlers.NewBillingHandlers(s.billingProvider, s.logger).HandleSnapshot(c)
+			})
 
 		// v0.28 Retrospective savings. Two endpoints: one to record
 		// an Apply click (UI fires this when operator clicks the
