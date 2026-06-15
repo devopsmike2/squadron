@@ -346,6 +346,19 @@ func (s *Storage) migrate() error {
 		// agents discovered via the OTLP receiver. "opamp" is the
 		// back-compat default — every pre-v0.36 agent was OpAMP.
 		`ALTER TABLE agents ADD COLUMN discovery_source TEXT NOT NULL DEFAULT 'opamp'`,
+		// v0.47.0: rollouts gain approval-workflow columns. When
+		// require_approval = 1 the engine refuses to advance until
+		// approved_by is set (which the two-person rule enforces
+		// can't equal requested_by). All defaults are NULL / 0 so
+		// pre-v0.47 rollouts still work — no approval required for
+		// rollouts created on older Squadron versions.
+		`ALTER TABLE rollouts ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE rollouts ADD COLUMN requested_by TEXT`,
+		`ALTER TABLE rollouts ADD COLUMN approved_by TEXT`,
+		`ALTER TABLE rollouts ADD COLUMN approved_at DATETIME`,
+		`ALTER TABLE rollouts ADD COLUMN rejected_by TEXT`,
+		`ALTER TABLE rollouts ADD COLUMN rejected_at DATETIME`,
+		`ALTER TABLE rollouts ADD COLUMN approval_notes TEXT`,
 	}
 
 	for _, migration := range migrations {
@@ -1251,8 +1264,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		r.UpdatedAt = r.CreatedAt
 	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -1262,6 +1275,14 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		string(r.State), r.CurrentStage,
 		r.StageStartedAt, nullableString(r.AbortReason),
 		r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+		// v0.47 approval columns.
+		boolToInt(r.RequireApproval),
+		nullableString(r.RequestedBy),
+		nullableString(r.ApprovedBy),
+		r.ApprovedAt,
+		nullableString(r.RejectedBy),
+		r.RejectedAt,
+		nullableString(r.ApprovalNotes),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -1269,8 +1290,11 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 	return nil
 }
 
+// boolToInt is reused from alerts CRUD above — sqlite stores bools
+// as ints, so the same helper handles rollouts.require_approval.
+
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1287,7 +1311,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1332,7 +1356,9 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		SET name = ?, group_id = ?, target_config_id = ?, previous_config_id = ?,
 		    stages = ?, abort_criteria = ?, notification_url = ?,
 		    state = ?, current_stage = ?,
-		    stage_started_at = ?, abort_reason = ?, updated_at = ?, completed_at = ?
+		    stage_started_at = ?, abort_reason = ?, updated_at = ?, completed_at = ?,
+		    require_approval = ?, requested_by = ?, approved_by = ?, approved_at = ?,
+		    rejected_by = ?, rejected_at = ?, approval_notes = ?
 		WHERE id = ?
 	`
 	res, err := s.db.ExecContext(ctx, stmt,
@@ -1343,6 +1369,13 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		string(r.State), r.CurrentStage,
 		r.StageStartedAt, nullableString(r.AbortReason),
 		r.UpdatedAt, r.CompletedAt,
+		boolToInt(r.RequireApproval),
+		nullableString(r.RequestedBy),
+		nullableString(r.ApprovedBy),
+		r.ApprovedAt,
+		nullableString(r.RejectedBy),
+		r.RejectedAt,
+		nullableString(r.ApprovalNotes),
 		r.ID,
 	)
 	if err != nil {
@@ -1371,6 +1404,15 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		stageStartedAt   sql.NullTime
 		abortReason      sql.NullString
 		completedAt      sql.NullTime
+		// v0.47 approval columns. Nullable / int because the
+		// migration leaves them empty for pre-v0.47 rollouts.
+		requireApprovalInt int
+		requestedBy        sql.NullString
+		approvedBy         sql.NullString
+		approvedAt         sql.NullTime
+		rejectedBy         sql.NullString
+		rejectedAt         sql.NullTime
+		approvalNotes      sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -1378,6 +1420,8 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&stateStr, &r.CurrentStage,
 		&stageStartedAt, &abortReason,
 		&r.CreatedAt, &r.UpdatedAt, &completedAt,
+		&requireApprovalInt, &requestedBy, &approvedBy, &approvedAt,
+		&rejectedBy, &rejectedAt, &approvalNotes,
 	); err != nil {
 		return nil, err
 	}
@@ -1386,6 +1430,27 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 	}
 	if notificationURL.Valid {
 		r.NotificationURL = notificationURL.String
+	}
+	r.RequireApproval = requireApprovalInt != 0
+	if requestedBy.Valid {
+		r.RequestedBy = requestedBy.String
+	}
+	if approvedBy.Valid {
+		r.ApprovedBy = approvedBy.String
+	}
+	if approvedAt.Valid {
+		t := approvedAt.Time
+		r.ApprovedAt = &t
+	}
+	if rejectedBy.Valid {
+		r.RejectedBy = rejectedBy.String
+	}
+	if rejectedAt.Valid {
+		t := rejectedAt.Time
+		r.RejectedAt = &t
+	}
+	if approvalNotes.Valid {
+		r.ApprovalNotes = approvalNotes.String
 	}
 	if err := json.Unmarshal([]byte(stagesJSON), &r.Stages); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal rollout stages: %w", err)

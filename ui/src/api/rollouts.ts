@@ -93,3 +93,30 @@ export const pauseRollout = async (id: string): Promise<Rollout> => {
 export const resumeRollout = async (id: string): Promise<Rollout> => {
   return simpleRequest<Rollout>(`/rollouts/${id}/resume`, { method: "POST" });
 };
+
+// approveRollout — v0.47. Transitions a rollout from pending_approval
+// to pending so the engine picks it up. The actor is the authenticated
+// caller (taken from the gin auth context server-side); the two-person
+// rule (requester ≠ approver) is enforced in the service, so callers
+// don't need to plumb the requester identity through.
+export const approveRollout = async (
+  id: string,
+  notes?: string,
+): Promise<Rollout> => {
+  return simpleRequest<Rollout>(`/rollouts/${id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ notes: notes ?? "" }),
+  });
+};
+
+// rejectRollout — v0.47. Terminal state. The requester has to clone
+// the rollout to retry. Same two-person rule as approve.
+export const rejectRollout = async (
+  id: string,
+  notes?: string,
+): Promise<Rollout> => {
+  return simpleRequest<Rollout>(`/rollouts/${id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ notes: notes ?? "" }),
+  });
+};

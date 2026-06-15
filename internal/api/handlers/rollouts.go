@@ -80,6 +80,12 @@ func (h *RolloutHandlers) HandleCreateRollout(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body", "detail": err.Error()})
 		return
 	}
+	// v0.47 — record the requester so the two-person rule has
+	// something to compare against at approval time. Falls back to
+	// "anonymous" in dev / token-less mode; the approver also has
+	// to be non-anonymous for the rule to be meaningful, but we
+	// don't enforce that here — leave it to deployment policy.
+	input.RequestedBy = actorFromContext(c)
 	r, err := h.rolloutService.Create(c.Request.Context(), input)
 	if err != nil {
 		if isRolloutValidationError(err) {
@@ -235,6 +241,88 @@ func (h *RolloutHandlers) HandleAbortRollout(c *gin.Context) {
 		}
 		h.logger.Error("failed to abort rollout", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to abort rollout"})
+		return
+	}
+	c.JSON(http.StatusOK, r)
+}
+
+// HandleApproveRollout serves POST /api/v1/rollouts/:id/approve.
+//
+// Body (optional): {notes: string}. The approver actor is taken from
+// the gin auth context — never from the body — so the two-person rule
+// is enforced against the authenticated identity, not a self-asserted
+// value.
+//
+// Returns 200 with the updated rollout (state=pending — the engine
+// picks it up on its next tick), 404 if the rollout doesn't exist,
+// 409 if the rollout is in a state that can't be approved (already
+// approved, rejected, in_progress, etc.) or the approver is the same
+// actor that requested the rollout (two-person rule violation).
+//
+// Added in v0.47.0.
+func (h *RolloutHandlers) HandleApproveRollout(c *gin.Context) {
+	id := c.Param("id")
+	var body struct {
+		Notes string `json:"notes"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	approver := actorFromContext(c)
+
+	r, err := h.rolloutService.Approve(c.Request.Context(), id, approver, body.Notes)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": msg})
+			return
+		}
+		if strings.Contains(msg, "cannot approve") ||
+			strings.Contains(msg, "two-person rule") {
+			c.JSON(http.StatusConflict, gin.H{"error": msg})
+			return
+		}
+		h.logger.Error("failed to approve rollout", zap.String("id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to approve rollout"})
+		return
+	}
+	c.JSON(http.StatusOK, r)
+}
+
+// HandleRejectRollout serves POST /api/v1/rollouts/:id/reject.
+//
+// Body (optional): {notes: string}. The rejecter actor is taken from
+// the gin auth context. Two-person rule applies — a requester cannot
+// reject their own rollout, which forces a real approval cycle even
+// for a cancel-this gesture (the requester should abort instead if
+// they have any state to roll back, or just let the rollout sit until
+// someone else rejects it).
+//
+// Returns 200 with the rolled-out rollout (state=rejected, terminal),
+// 404 if the rollout doesn't exist, 409 if the state can't be rejected
+// or the rejecter is the requester.
+//
+// Added in v0.47.0.
+func (h *RolloutHandlers) HandleRejectRollout(c *gin.Context) {
+	id := c.Param("id")
+	var body struct {
+		Notes string `json:"notes"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	rejecter := actorFromContext(c)
+
+	r, err := h.rolloutService.Reject(c.Request.Context(), id, rejecter, body.Notes)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": msg})
+			return
+		}
+		if strings.Contains(msg, "cannot reject") ||
+			strings.Contains(msg, "two-person rule") {
+			c.JSON(http.StatusConflict, gin.H{"error": msg})
+			return
+		}
+		h.logger.Error("failed to reject rollout", zap.String("id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reject rollout"})
 		return
 	}
 	c.JSON(http.StatusOK, r)

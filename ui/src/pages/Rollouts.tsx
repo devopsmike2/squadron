@@ -11,7 +11,7 @@
 // The form toggles between the two; live match-count against the target
 // group gives operators feedback before they click Start.
 
-import { ChevronDown, ChevronRight, Pause, Play, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Pause, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 
@@ -19,11 +19,13 @@ import { getAgents } from "@/api/agents";
 import { getGroups, type Group } from "@/api/groups";
 import {
   abortRollout,
+  approveRollout,
   createRollout,
   listAbortCriteriaRecipes,
   listRolloutTemplates,
   listRollouts,
   pauseRollout,
+  rejectRollout,
   resumeRollout,
 } from "@/api/rollouts";
 import { AuditTimeline } from "@/components/AuditTimeline";
@@ -65,6 +67,12 @@ const stateBadge: Record<RolloutState, string> = {
   succeeded: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
   aborted: "bg-amber-500/10 text-amber-700 border-amber-500/20",
   rolled_back: "bg-red-500/10 text-red-700 border-red-500/20",
+  // v0.47 — approval workflow. Pending-approval gets a warm tone so it
+  // stands out in the list (operators looking through a long list need
+  // to spot the "needs me" entries fast). Rejected is muted — terminal,
+  // and the requester usually wants to look past it on to the new run.
+  pending_approval: "bg-orange-500/10 text-orange-700 border-orange-500/20",
+  rejected: "bg-zinc-500/10 text-zinc-700 border-zinc-500/20",
 };
 
 interface GroupsList {
@@ -104,6 +112,12 @@ interface FormState {
   recipe_id: string;
   template_id: string;
   notification_url: string;
+  // v0.47 — when true, the rollout enters pending_approval and waits
+  // for an Approve API call before the engine advances. Operators with
+  // SCM (NERC CIP) or change-management requirements turn this on as
+  // a hard guarantee that no one (including the requester themselves)
+  // can ship without a second pair of eyes.
+  require_approval: boolean;
 }
 
 const emptyPercentStage = (percentage: string, dwell: string): FormStage => ({
@@ -130,6 +144,7 @@ const emptyInput = (): FormState => ({
   recipe_id: "",
   template_id: "",
   notification_url: "",
+  require_approval: false,
 });
 
 // applyTemplate returns a FormState with the template's stages,
@@ -293,6 +308,7 @@ export default function RolloutsPage() {
           parseInt(form.min_dwell_seconds_before_abort, 10) || 0,
       },
       notification_url: form.notification_url.trim(),
+      require_approval: form.require_approval,
     };
 
     try {
@@ -330,6 +346,37 @@ export default function RolloutsPage() {
       await mutate(ROLLOUTS_KEY);
     } catch (e) {
       alert(e instanceof Error ? e.message : "pause/resume failed");
+    }
+  };
+
+  // v0.47 — approve / reject. Both prompt for optional notes that
+  // land in the audit log payload. The two-person rule is enforced
+  // server-side; here we just surface the 409 if the approver is
+  // also the requester.
+  const handleApprove = async (r: Rollout) => {
+    const notes = window.prompt(
+      `Approve rollout "${r.name || r.id.slice(0, 8)}"?\n\nOptional approval notes (recorded in the audit log):`,
+      "",
+    );
+    if (notes === null) return;
+    try {
+      await approveRollout(r.id, notes);
+      await mutate(ROLLOUTS_KEY);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "approve failed");
+    }
+  };
+  const handleReject = async (r: Rollout) => {
+    const notes = window.prompt(
+      `Reject rollout "${r.name || r.id.slice(0, 8)}"?\n\nThis is terminal — the requester will have to clone the rollout to retry.\n\nOptional rejection notes:`,
+      "",
+    );
+    if (notes === null) return;
+    try {
+      await rejectRollout(r.id, notes);
+      await mutate(ROLLOUTS_KEY);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "reject failed");
     }
   };
 
@@ -714,6 +761,36 @@ export default function RolloutsPage() {
               </p>
             </div>
 
+            {/* v0.47 — approval workflow toggle. Defaults off so the
+                form behaves as it did before. When checked, the rollout
+                enters pending_approval; a second person (not the
+                requester) has to call Approve on it before the engine
+                advances. The two-person rule is enforced server-side. */}
+            <div className="space-y-2 rounded-md border border-orange-500/20 bg-orange-500/5 p-3">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  checked={form.require_approval}
+                  onChange={(e) =>
+                    setForm({ ...form, require_approval: e.target.checked })
+                  }
+                />
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium">
+                    Require approval before rollout starts
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    The rollout will enter <code>pending_approval</code> and
+                    won't advance until a different operator approves it
+                    (two-person rule). Use this for production-impacting or
+                    NERC CIP–regulated changes that require change-control
+                    sign-off.
+                  </p>
+                </div>
+              </label>
+            </div>
+
             {submitError && (
               <div className="text-sm text-red-600">{submitError}</div>
             )}
@@ -757,6 +834,8 @@ export default function RolloutsPage() {
             groupName={groupName(r.group_id)}
             onAbort={handleAbort}
             onPauseResume={handlePauseResume}
+            onApprove={handleApprove}
+            onReject={handleReject}
           />
         ))}
     </div>
@@ -963,6 +1042,10 @@ interface RolloutCardProps {
   groupName: string;
   onAbort: (r: Rollout) => void;
   onPauseResume: (r: Rollout) => void;
+  // v0.47 — approval workflow. Only used when rollout.state ===
+  // "pending_approval"; the card hides them otherwise.
+  onApprove: (r: Rollout) => void;
+  onReject: (r: Rollout) => void;
 }
 
 function RolloutCard({
@@ -970,6 +1053,8 @@ function RolloutCard({
   groupName,
   onAbort,
   onPauseResume,
+  onApprove,
+  onReject,
 }: RolloutCardProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const totalStages = r.stages.length;
@@ -1059,6 +1144,31 @@ function RolloutCard({
               </Button>
             </div>
           )}
+          {/* v0.47 — approval action buttons. The server enforces the
+              two-person rule (requester ≠ approver); we surface a
+              tooltip so the requester knows why the buttons will 409. */}
+          {r.state === "pending_approval" && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1 border-emerald-500/30 text-emerald-700 hover:bg-emerald-500/10"
+                onClick={() => onApprove(r)}
+              >
+                <Check className="h-3.5 w-3.5" />
+                Approve
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1 border-red-500/30 text-red-700 hover:bg-red-500/10"
+                onClick={() => onReject(r)}
+              >
+                <X className="h-3.5 w-3.5" />
+                Reject
+              </Button>
+            </div>
+          )}
           {r.state === "rolled_back" && (
             <Badge variant="outline" className="gap-1 text-xs">
               <RotateCcw className="h-3 w-3" />
@@ -1083,6 +1193,44 @@ function RolloutCard({
           })}
         </div>
         <div className="text-xs text-muted-foreground">{currentSummary}</div>
+
+        {/* v0.47 — approval banner. Surfaces the requester (for the
+            two-person comparison) and, once an approval/rejection has
+            happened, who did it and when. */}
+        {(r.require_approval || r.state === "pending_approval" || r.approved_by || r.rejected_by) && (
+          <div className="rounded border border-orange-500/20 bg-orange-500/5 px-2.5 py-1.5 text-[11px] space-y-0.5">
+            {r.requested_by && (
+              <div>
+                <span className="text-muted-foreground">Requested by:</span>{" "}
+                <span className="font-mono">{r.requested_by}</span>
+              </div>
+            )}
+            {r.state === "pending_approval" && (
+              <div className="text-orange-700">
+                Waiting on a second approver. The requester cannot approve
+                their own rollout.
+              </div>
+            )}
+            {r.approved_by && (
+              <div className="text-emerald-700">
+                Approved by{" "}
+                <span className="font-mono">{r.approved_by}</span>
+                {r.approved_at &&
+                  ` · ${new Date(r.approved_at).toLocaleString()}`}
+                {r.approval_notes && ` · "${r.approval_notes}"`}
+              </div>
+            )}
+            {r.rejected_by && (
+              <div className="text-red-700">
+                Rejected by{" "}
+                <span className="font-mono">{r.rejected_by}</span>
+                {r.rejected_at &&
+                  ` · ${new Date(r.rejected_at).toLocaleString()}`}
+                {r.approval_notes && ` · "${r.approval_notes}"`}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* History toggle — mounts an AuditTimeline filtered to this
             rollout. Includes the per-stage resolved agent IDs so a

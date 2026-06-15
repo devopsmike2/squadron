@@ -519,6 +519,12 @@ func (s *Server) registerRoutes() {
 			rollouts.POST("/:id/abort", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleAbortRollout)
 			rollouts.POST("/:id/pause", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandlePauseRollout)
 			rollouts.POST("/:id/resume", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleResumeRollout)
+			// v0.47 — approval workflow. Same write scope as the
+			// other state-change endpoints; the two-person rule
+			// (requester ≠ approver) is enforced inside the
+			// service.
+			rollouts.POST("/:id/approve", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleApproveRollout)
+			rollouts.POST("/:id/reject", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleRejectRollout)
 		}
 
 		// Rollout recipe cookbook. Sibling of /rollouts (not nested)

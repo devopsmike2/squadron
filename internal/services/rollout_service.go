@@ -36,6 +36,15 @@ type RolloutService interface {
 	Resume(ctx context.Context, id string) (*Rollout, error)
 	Preview(ctx context.Context, groupID, targetConfigID string) (*RolloutPreview, error)
 
+	// v0.47 — approval workflow.
+	// Approve transitions a rollout from pending_approval to
+	// pending (which the engine then advances). approver must not
+	// equal the rollout's RequestedBy; ErrSelfApproval otherwise.
+	Approve(ctx context.Context, id, approver, notes string) (*Rollout, error)
+	// Reject is a terminal transition — the requester has to clone
+	// the rollout to retry.
+	Reject(ctx context.Context, id, rejecter, notes string) (*Rollout, error)
+
 	// Persist is used by the engine to write back transitions discovered
 	// during evaluation. Service-layer guard so the engine doesn't reach
 	// into the application store directly.
@@ -97,6 +106,15 @@ const (
 	RolloutStateSucceeded  RolloutState = "succeeded"
 	RolloutStateAborted    RolloutState = "aborted"
 	RolloutStateRolledBack RolloutState = "rolled_back"
+	// v0.47 — created with require_approval=true. The engine
+	// refuses to advance from this state; an approver has to call
+	// the Approve endpoint first, which transitions us to "pending"
+	// and the normal lifecycle kicks in.
+	RolloutStatePendingApproval RolloutState = "pending_approval"
+	// v0.47 — terminal state when an approver explicitly rejects
+	// the rollout. Engine ignores it; the requester can clone the
+	// rollout with adjustments and re-submit.
+	RolloutStateRejected RolloutState = "rejected"
 )
 
 // RolloutStageMode mirrors applicationstore.RolloutStageMode.
@@ -140,6 +158,18 @@ type Rollout struct {
 	StageStartedAt *time.Time   `json:"stage_started_at,omitempty"`
 	AbortReason    string       `json:"abort_reason,omitempty"`
 
+	// v0.47 — approval workflow. When RequireApproval is true,
+	// rollouts created via Create start in RolloutStatePendingApproval
+	// and the engine refuses to advance them until an approver
+	// transitions the state.
+	RequireApproval bool       `json:"require_approval,omitempty"`
+	RequestedBy     string     `json:"requested_by,omitempty"`
+	ApprovedBy      string     `json:"approved_by,omitempty"`
+	ApprovedAt      *time.Time `json:"approved_at,omitempty"`
+	RejectedBy      string     `json:"rejected_by,omitempty"`
+	RejectedAt      *time.Time `json:"rejected_at,omitempty"`
+	ApprovalNotes   string     `json:"approval_notes,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -155,6 +185,17 @@ type RolloutInput struct {
 	Stages          []RolloutStage       `json:"stages"`
 	AbortCriteria   RolloutAbortCriteria `json:"abort_criteria"`
 	NotificationURL string               `json:"notification_url"`
+	// v0.47 — when true, the rollout enters pending_approval and
+	// waits for an Approve call before the engine advances. A
+	// second person must approve (the requester can't approve
+	// their own rollout — enforced in ApproveRollout).
+	RequireApproval bool `json:"require_approval,omitempty"`
+	// v0.47 — auth actor of the request, populated by the handler
+	// from the gin.Context. Stored as RequestedBy on the rollout
+	// so the two-person rule can compare against it at approval
+	// time. Empty in dev / token-less mode (the two-person rule
+	// then matches on the audit actor placeholder).
+	RequestedBy string `json:"-"`
 }
 
 // RolloutFilter narrows List queries.

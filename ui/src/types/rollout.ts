@@ -6,7 +6,10 @@ export type RolloutState =
   | "paused"
   | "succeeded"
   | "aborted"
-  | "rolled_back";
+  | "rolled_back"
+  // v0.47 — approval workflow states.
+  | "pending_approval"
+  | "rejected";
 
 // Stage mode mirrors services.RolloutStageMode. "percent" picks the first
 // N% of agents in the group; "label" matches by key=value equality.
@@ -39,6 +42,16 @@ export interface Rollout {
   current_stage: number;
   stage_started_at?: string;
   abort_reason?: string;
+  // v0.47 — approval workflow. When require_approval was set at
+  // create time, the rollout enters pending_approval and the engine
+  // refuses to advance until an approver transitions the state.
+  require_approval?: boolean;
+  requested_by?: string;
+  approved_by?: string;
+  approved_at?: string;
+  rejected_by?: string;
+  rejected_at?: string;
+  approval_notes?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string;
@@ -51,6 +64,9 @@ export interface RolloutInput {
   stages: RolloutStage[];
   abort_criteria: RolloutAbortCriteria;
   notification_url: string;
+  // v0.47 — when true, the rollout enters pending_approval and waits
+  // for an Approve call before the engine advances.
+  require_approval?: boolean;
 }
 
 // AbortCriteriaRecipe mirrors services.AbortCriteriaRecipe. The
