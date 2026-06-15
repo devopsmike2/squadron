@@ -71,7 +71,11 @@ const (
 // verdict.
 func ComputeVerdict(latest map[string][]MetricRow) (Verdict, []Signal) {
 	if len(latest) == 0 {
-		return VerdictUnknown, nil
+		// Empty slice (not nil) so the JSON response carries `[]`
+		// rather than `null` — the UI was reading `.signals.length`
+		// and crashing on null. Defensive: always-array also
+		// matches the AgentSnapshot.Signals type's intent.
+		return VerdictUnknown, []Signal{}
 	}
 	signals := []Signal{}
 	worst := VerdictHealthy
