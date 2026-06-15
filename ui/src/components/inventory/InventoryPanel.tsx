@@ -27,6 +27,7 @@ import {
 } from "@/api/inventory";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 
 const REFRESH_MS = 30_000;
 
@@ -47,7 +48,18 @@ export function InventorySummary() {
     <Card>
       <CardContent className="space-y-3 p-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Fleet inventory</h3>
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-sm font-semibold">Fleet inventory</h3>
+            <InfoTooltip label="About fleet inventory" maxWidth={320}>
+              Reconciliation between your declared inventory (e.g.
+              an Ansible <code>inventory.ini</code> file) and the
+              agents that actually checked in. <b>Missing</b> means a
+              host was declared but hasn't checked in for ~10 minutes
+              — often expected during a deploy, but worth checking
+              afterward. <b>Unexpected</b> means an agent showed up
+              that isn't in your declared inventory.
+            </InfoTooltip>
+          </div>
           <span className="text-xs text-muted-foreground">
             {data.total} tracked
           </span>
