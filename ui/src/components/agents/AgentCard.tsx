@@ -115,6 +115,19 @@ export function AgentCard({
             {groupName ?? agent.group_id.slice(0, 8)}
           </span>
         ) : null}
+        {agent.discovery_source === "otlp" && (
+          <Badge
+            variant="outline"
+            className="text-[10px] font-medium"
+            style={{
+              color: "var(--status-warn, #eab308)",
+              borderColor: "color-mix(in oklch, #eab308 40%, transparent)",
+            }}
+            title="Telemetry-only: Squadron sees this agent's data on the OTLP receiver but never opened an OpAMP control connection. Configs can't be pushed to it until it's brought under management."
+          >
+            Telemetry-only
+          </Badge>
+        )}
       </div>
 
       {/* Row 3: labels + relative last-seen */}

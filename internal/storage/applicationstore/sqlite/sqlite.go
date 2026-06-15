@@ -72,6 +72,7 @@ func (s *Storage) migrate() error {
 			version TEXT,
 			capabilities TEXT,
 			effective_config TEXT,
+			discovery_source TEXT NOT NULL DEFAULT 'opamp',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
@@ -340,6 +341,11 @@ func (s *Storage) migrate() error {
 		// expected-host list from the file at trigger time. Empty
 		// is the back-compat default (manual host entry).
 		`ALTER TABLE deploy_targets ADD COLUMN inventory_path TEXT NOT NULL DEFAULT ''`,
+		// v0.36.0: agents gain a discovery_source column to
+		// distinguish OpAMP-managed agents from telemetry-only
+		// agents discovered via the OTLP receiver. "opamp" is the
+		// back-compat default — every pre-v0.36 agent was OpAMP.
+		`ALTER TABLE agents ADD COLUMN discovery_source TEXT NOT NULL DEFAULT 'opamp'`,
 	}
 
 	for _, migration := range migrations {
@@ -373,9 +379,13 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	labelsJSON, _ := json.Marshal(agent.Labels)
 	capabilitiesJSON, _ := json.Marshal(agent.Capabilities)
 
+	source := agent.DiscoverySource
+	if source == "" {
+		source = "opamp"
+	}
 	query := `
-		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -388,6 +398,7 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 		agent.GroupName,
 		agent.Version,
 		string(capabilitiesJSON),
+		source,
 		agent.CreatedAt,
 		agent.UpdatedAt,
 	)
@@ -402,7 +413,7 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 
 func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, error) {
 	query := `
-		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, created_at, updated_at
+		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
 		FROM agents WHERE id = ?
 	`
 
@@ -410,6 +421,7 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 	var labelsJSON, capabilitiesJSON string
 	var agentIDStr string
 	var effectiveConfig sql.NullString
+	var discoverySource sql.NullString
 
 	err := s.db.QueryRowContext(ctx, query, id.String()).Scan(
 		&agentIDStr,
@@ -422,6 +434,7 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 		&agent.Version,
 		&capabilitiesJSON,
 		&effectiveConfig,
+		&discoverySource,
 		&agent.CreatedAt,
 		&agent.UpdatedAt,
 	)
@@ -439,13 +452,16 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 	if effectiveConfig.Valid {
 		agent.EffectiveConfig = effectiveConfig.String
 	}
+	if discoverySource.Valid {
+		agent.DiscoverySource = discoverySource.String
+	}
 
 	return &agent, nil
 }
 
 func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 	query := `
-		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, created_at, updated_at
+		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
 		FROM agents ORDER BY created_at DESC
 	`
 
@@ -461,6 +477,7 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 		var labelsJSON, capabilitiesJSON string
 		var agentIDStr string
 		var effectiveConfig sql.NullString
+		var discoverySource sql.NullString
 
 		err := rows.Scan(
 			&agentIDStr,
@@ -473,6 +490,7 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 			&agent.Version,
 			&capabilitiesJSON,
 			&effectiveConfig,
+			&discoverySource,
 			&agent.CreatedAt,
 			&agent.UpdatedAt,
 		)
@@ -485,6 +503,9 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 		_ = json.Unmarshal([]byte(capabilitiesJSON), &agent.Capabilities)
 		if effectiveConfig.Valid {
 			agent.EffectiveConfig = effectiveConfig.String
+		}
+		if discoverySource.Valid {
+			agent.DiscoverySource = discoverySource.String
 		}
 
 		agents = append(agents, &agent)

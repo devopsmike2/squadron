@@ -26,6 +26,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/deploy"
+	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
@@ -280,6 +281,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Initialize worker pool for async telemetry processing.
 	// Pass workerMetrics so retry/dead-letter counters land on /metrics.
 	workerPool := worker.NewPool(config.Worker.QueueSize, config.Worker.Workers, workerTimeout, telemetryWriter, agentService, workerMetrics, logger)
+
+	// v0.36: passive OTLP discovery. The worker pool calls
+	// discoverySvc.RegisterIfUnknown for each unique agent_id
+	// it sees in incoming OTLP batches. Unknown ids become
+	// "telemetry_only" agents in the agents list.
+	discoverySvc := discovery.NewService(appStore, discovery.DefaultDedupWindow, logger)
+	workerPool.SetDiscovery(discoverySvc)
+	logger.Info("Passive OTLP discovery enabled (telemetry-only agents auto-register)")
+
 	workerPool.Start()
 	defer func() {
 		if err := workerPool.Stop(30 * time.Second); err != nil {

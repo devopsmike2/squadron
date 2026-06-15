@@ -38,6 +38,11 @@ export interface Agent {
   config_intent?: ConfigIntent;
   drift_status?: ConfigDriftStatus;
   drift_details?: ConfigDriftDetails;
+  /** v0.36: how Squadron first learned of this agent. "opamp"
+   * means the supervisor opened a control connection; "otlp"
+   * means we only see telemetry from it (no control channel,
+   * no config push, no rollouts). */
+  discovery_source?: "opamp" | "otlp";
 }
 
 export interface AgentStats {

@@ -491,8 +491,16 @@ type Agent struct {
 	Version         string            `json:"version"`
 	Capabilities    []string          `json:"capabilities"`
 	EffectiveConfig string            `json:"effective_config,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	// DiscoverySource records how Squadron first learned about this
+	// agent. v0.36 introduces "otlp" for collectors that send
+	// telemetry to Squadron but never open an OpAMP connection;
+	// "opamp" is the back-compat default for everything else.
+	// Telemetry-only agents are observable but not manageable —
+	// the UI surfaces this distinction so operators know they
+	// can't push config to them until they're brought under OpAMP.
+	DiscoverySource string    `json:"discovery_source,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // AgentStatus represents the status of an agent
