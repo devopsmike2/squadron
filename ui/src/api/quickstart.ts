@@ -65,3 +65,29 @@ export function getOpAMPSnippet(
     `/quickstart/opamp-snippet${qs ? "?" + qs : ""}`,
   );
 }
+
+// v0.45 — per-host adoption snippet.
+
+export interface AdoptionSnippet {
+  opamp_server_url: string;
+  hostname: string;
+  labels: Record<string, string>;
+  yaml: string;
+}
+
+export function getAdoptionSnippet(args: {
+  hostname?: string;
+  labels?: Record<string, string>;
+  host?: string;
+}): Promise<AdoptionSnippet> {
+  const q = new URLSearchParams();
+  if (args.host) q.set("host", args.host);
+  if (args.hostname) q.set("hostname", args.hostname);
+  for (const [k, v] of Object.entries(args.labels ?? {})) {
+    q.append("label", `${k}=${v}`);
+  }
+  const qs = q.toString();
+  return apiGet<AdoptionSnippet>(
+    `/quickstart/adoption-snippet${qs ? "?" + qs : ""}`,
+  );
+}

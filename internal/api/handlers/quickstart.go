@@ -85,6 +85,48 @@ func (h *QuickstartHandlers) HandleOpAMPSnippet(c *gin.Context) {
 	})
 }
 
+// HandleAdoptionSnippet — GET /api/v1/quickstart/adoption-snippet?host=...&hostname=...&label=k=v&label=k2=v2
+//
+// Per-host adoption snippet for the v0.45 "bring this existing
+// agent under management" workflow. Same extension config as
+// /opamp-snippet but optionally tagged with a hostname + labels
+// that get registered as agent attributes so Squadron sees this
+// agent as the right inventory row instead of just "another
+// collector that connected."
+//
+// The query params:
+//
+//	host:     optional — overrides the OpAMP URL host segment
+//	          (same semantics as /opamp-snippet)
+//	hostname: optional — registered as host.name attribute
+//	label:    repeatable — k=v pairs registered as non-identifying
+//	          attributes. Skips entries missing the "=" separator.
+//
+// Added in v0.45.0 (adoption workflow).
+func (h *QuickstartHandlers) HandleAdoptionSnippet(c *gin.Context) {
+	opampURL := h.resolveOpAMPURL(c)
+	hostname := c.Query("hostname")
+	labels := map[string]string{}
+	for _, kv := range c.QueryArray("label") {
+		idx := strings.Index(kv, "=")
+		if idx <= 0 || idx == len(kv)-1 {
+			continue
+		}
+		labels[kv[:idx]] = kv[idx+1:]
+	}
+	snippet, err := quickstart.AdoptionSnippet(opampURL, hostname, labels)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"opamp_server_url": opampURL,
+		"hostname":         hostname,
+		"labels":           labels,
+		"yaml":             snippet,
+	})
+}
+
 // resolveOpAMPURL builds the ws://host:port/v1/opamp URL the
 // generated configs reference.
 //

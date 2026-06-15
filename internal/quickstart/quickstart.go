@@ -124,18 +124,76 @@ func StarterConfig(b Backend, opampServerURL string) (string, error) {
 // the operator merges into their existing config. The Comment
 // header explains the merge.
 func OpAMPExtensionSnippet(opampServerURL string) (string, error) {
+	return AdoptionSnippet(opampServerURL, "", nil)
+}
+
+// AdoptionSnippet builds a per-host adoption snippet — the OpAMP
+// extension config plus an optional agent_description block that
+// identifies this agent to Squadron with the supplied labels.
+//
+// Use this when bringing an EXISTING collector under Squadron
+// management. The snippet adds the OpAMP extension and registers
+// the agent identity; it doesn't touch receivers, processors,
+// exporters, or pipelines, so the operator's custom config
+// (different log file paths per host, custom processors, etc.)
+// is preserved.
+//
+// Inputs:
+//
+//   - opampServerURL: ws://host:port/v1/opamp — required.
+//   - hostname:       optional. When set, registered as a
+//     non-identifying attribute "host.name". The OpAMP supervisor
+//     reports the OS hostname by default, but having Squadron know
+//     the canonical CMDB hostname (which sometimes differs) makes
+//     the inventory reconciliation reliable.
+//   - labels:         optional kv map. Each becomes a non-identifying
+//     attribute on the agent. Use for environment / region / etc.
+//
+// Added in v0.45.0. The original OpAMPExtensionSnippet is preserved
+// as a one-line caller of this with empty hostname + labels.
+func AdoptionSnippet(opampServerURL string, hostname string, labels map[string]string) (string, error) {
 	if opampServerURL == "" {
 		return "", fmt.Errorf("opamp_server_url is required")
 	}
-	return strings.TrimSpace(fmt.Sprintf(`
-# Squadron OpAMP extension — paste this into your existing
+
+	// Build the agent_description block conditionally. The OpAMP
+	// extension in otelcol-contrib supports
+	// `agent_description.non_identifying_attributes` as an arbitrary
+	// kv map; Squadron renders these as labels on the agent card.
+	var agentDesc string
+	if hostname != "" || len(labels) > 0 {
+		agentDesc = "    agent_description:\n"
+		agentDesc += "      non_identifying_attributes:\n"
+		if hostname != "" {
+			agentDesc += fmt.Sprintf("        host.name: %q\n", hostname)
+		}
+		// Stable iteration order so the snippet is byte-deterministic
+		// for the same inputs — important for diff-based tests and
+		// for operators reviewing what changed.
+		keys := make([]string, 0, len(labels))
+		for k := range labels {
+			keys = append(keys, k)
+		}
+		sortStrings(keys)
+		for _, k := range keys {
+			agentDesc += fmt.Sprintf("        %s: %q\n", k, labels[k])
+		}
+	}
+
+	header := `# Squadron adoption snippet — paste this into your existing
 # collector config. Adds two things: the extension definition
 # under extensions:, and a reference to it under
 # service.extensions: so the collector actually starts it.
 #
+# Your existing receivers / processors / exporters / pipelines
+# are NOT touched. Squadron registers this agent and starts
+# managing it; your custom config (log paths, sampling, etc.)
+# stays exactly as you have it.
+#
 # Restart the collector after merging. It will show up in
-# Squadron's fleet view within a few seconds.
+# Squadron's fleet view within a few seconds.`
 
+	body := fmt.Sprintf(`
 extensions:
   opamp:
     server:
@@ -149,12 +207,25 @@ extensions:
       reports_health: true
       accepts_remote_config: true
       accepts_packages: false
-
+%s
 service:
   # Append "opamp" to your existing service.extensions list if
   # you already have one (don't replace the list).
   extensions: [opamp]
-`, opampServerURL)), nil
+`, opampServerURL, agentDesc)
+
+	return strings.TrimSpace(header + "\n" + body), nil
+}
+
+// sortStrings is sort.Strings without pulling in the sort package
+// for a single call site. Keeps the import footprint of this
+// package small.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }
 
 // ----------------------------------------------------------------

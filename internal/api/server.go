@@ -920,6 +920,20 @@ func (s *Server) registerRoutes() {
 				}
 				handlers.NewQuickstartHandlers(port, s.logger).HandleOpAMPSnippet(c)
 			})
+		// v0.45 — per-host adoption snippet. Same shape as the
+		// /opamp-snippet endpoint but accepts hostname + repeatable
+		// label query params, used by the Inventory page to give
+		// operators a paste-into-existing-config snippet for each
+		// missing host.
+		v1.GET("/quickstart/adoption-snippet",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			func(c *gin.Context) {
+				port := s.opampPort
+				if port == 0 {
+					port = 4320
+				}
+				handlers.NewQuickstartHandlers(port, s.logger).HandleAdoptionSnippet(c)
+			})
 	}
 
 	// Serve static files for the UI
