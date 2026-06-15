@@ -69,6 +69,20 @@ type SilentAgentsConfig struct {
 	SilenceThreshold time.Duration `yaml:"silence_threshold,omitempty"`
 	PollInterval     time.Duration `yaml:"poll_interval,omitempty"`
 	WebhookURL       string        `yaml:"webhook_url,omitempty"`
+	// v0.43 — vendor-aware webhook formatting. Empty / "generic"
+	// preserves the legacy plain-JSON shape so existing receivers
+	// don't break on upgrade. Supported: "slack", "teams",
+	// "pagerduty", "opsgenie", "generic".
+	DestinationType string `yaml:"destination_type,omitempty"`
+	// DestinationExtra is vendor-specific config. For pagerduty,
+	// set routing_key. For opsgenie, set api_key (and optionally
+	// region: "us" or "eu"). Slack/Teams need only WebhookURL.
+	DestinationExtra map[string]string `yaml:"destination_extra,omitempty"`
+	// PublicBaseURL is the externally-reachable Squadron base URL.
+	// Used to build "Open in Squadron" deep links inside vendor-
+	// formatted messages. Leave empty in dev — the link is just
+	// dropped from the body.
+	PublicBaseURL string `yaml:"public_base_url,omitempty"`
 }
 
 // PricingConfig is the v0.27 dollar-projection layer. Disabled by
