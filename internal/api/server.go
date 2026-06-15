@@ -598,6 +598,13 @@ func (s *Server) registerRoutes() {
 		v1.GET("/pricing/projection",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.pricingTrampoline(func(h *handlers.PricingHandlers, c *gin.Context) { h.HandleProjection(c) }))
+		// v0.39.0 month-end spend forecast. Same projection math
+		// pro-rated across the calendar month into elapsed +
+		// remaining buckets so the Savings page can render a
+		// "projected $X by EOM" tile.
+		v1.GET("/pricing/forecast",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.pricingTrampoline(func(h *handlers.PricingHandlers, c *gin.Context) { h.HandleForecast(c) }))
 
 		// v0.28 Retrospective savings. Two endpoints: one to record
 		// an Apply click (UI fires this when operator clicks the
@@ -826,6 +833,12 @@ func (s *Server) registerRoutes() {
 		})
 		v1.POST("/deploy/runs", deployWrite, func(c *gin.Context) {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleTriggerRun(c)
+		})
+
+		// v0.39.0 DORA-style deploy metrics. Computed in-process
+		// over the deploy_runs ledger — no new schema. Read-only.
+		v1.GET("/deploy/metrics", deployRead, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleMetrics(c)
 		})
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.

@@ -48,6 +48,7 @@ import {
   type LintFinding,
   type ValidationResult,
 } from "@/api/deploy";
+import { DeployMetricsPanel } from "@/components/deploy/DeployMetricsPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -152,6 +153,14 @@ export default function DeployPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* v0.39 DORA metrics strip. Sits above Targets so an SRE
+          director glancing at this page sees the operational
+          health of the deploy pipeline before the per-target
+          rows. Hidden gracefully (renders "—" tiles) when no runs
+          exist yet, since the visual KPI tile is more informative
+          than an extra "no data" placeholder. */}
+      <DeployMetricsPanel />
 
       <section className="space-y-3">
         <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
