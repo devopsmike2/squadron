@@ -17,6 +17,7 @@ import RolloutsPage from "./pages/Rollouts";
 import SavingsPage from "./pages/Savings";
 import SettingsTokensPage from "./pages/SettingsTokens";
 import TelemetryPage from "./pages/Telemetry";
+import TimelinePage from "./pages/Timeline";
 
 import "./App.css";
 import {
@@ -143,6 +144,9 @@ function AuthBoundary() {
           <Route path="/rollouts" element={<RolloutsPage />} />
           <Route path="/deploy" element={<DeployPage />} />
           <Route path="/audit" element={<AuditPage />} />
+          {/* v0.40 postmortem timeline — merges audit, deploy,
+              cost-spike events onto one horizontal axis. */}
+          <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/settings/tokens" element={<SettingsTokensPage />} />
         </Route>
       </Routes>

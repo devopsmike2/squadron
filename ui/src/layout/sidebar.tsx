@@ -28,6 +28,7 @@ import {
   Bell,
   Rocket,
   ScrollText,
+  ClockIcon,
   KeyRound,
   LayoutDashboard,
   CoinsIcon,
@@ -186,6 +187,16 @@ export function AppSidebar() {
     {
       label: "Admin",
       items: [
+        {
+          key: "timeline",
+          // v0.40 — postmortem timeline. Sits in Admin next to
+          // Audit because they're cousins: both are about
+          // "what happened, in time order," but Timeline pulls
+          // from multiple sources at once.
+          title: "Timeline",
+          url: "/timeline",
+          icon: ClockIcon,
+        },
         {
           key: "audit",
           title: "Audit",
