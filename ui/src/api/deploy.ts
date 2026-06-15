@@ -198,3 +198,61 @@ export function runLabel(r: DeployRun): string {
   if (r.conclusion === "timed_out") return "Timed out";
   return r.status;
 }
+
+// ============================================================
+// v0.39.0 — DORA-style deploy metrics
+// ============================================================
+//
+// Deploy frequency / change failure rate / MTTR / lead time —
+// computed in-process from deploy_runs by the backend. The UI
+// presents these as a 4-tile KPI strip on the Deploy page.
+
+export type DORAWindow = "7d" | "30d" | "90d";
+
+export interface TargetDORA {
+  target_id: string;
+  target_name?: string;
+  total_runs: number;
+  successful_runs: number;
+  failed_runs: number;
+  change_failure_rate: number; // 0..1
+  mttr_minutes: number;
+  lead_time_minutes: number;
+}
+
+export interface DORAMetrics {
+  window: DORAWindow;
+  total_runs: number;
+  completed_runs: number;
+  successful_runs: number;
+  failed_runs: number;
+  deploys_per_day: number;
+  change_failure_rate: number; // 0..1
+  mttr_minutes: number;
+  lead_time_minutes: number;
+  per_target: TargetDORA[];
+}
+
+export function fetchDeployMetrics(
+  window: DORAWindow = "30d",
+): Promise<DORAMetrics> {
+  return apiGet<DORAMetrics>(`/deploy/metrics?window=${window}`);
+}
+
+/**
+ * Format a minutes-as-float into a "1h 23m" style label. Numbers
+ * larger than 24h roll up into days. Zero or NaN returns "—".
+ */
+export function formatMinutes(min: number | undefined): string {
+  if (!min || !Number.isFinite(min) || min <= 0) return "—";
+  if (min < 1) return "<1m";
+  if (min < 60) return `${Math.round(min)}m`;
+  const hours = min / 60;
+  if (hours < 24) {
+    const h = Math.floor(hours);
+    const m = Math.round(min - h * 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  const days = hours / 24;
+  return `${days.toFixed(1)}d`;
+}

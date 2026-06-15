@@ -42,6 +42,34 @@ export function getPricingProjection(
   return apiGet<PricingProjection>(`/pricing/projection?window=${window}`);
 }
 
+// v0.39.0 — Month-end spend forecast. The backend pro-rates the
+// steady-state monthly figure across the actual calendar month and
+// splits it into elapsed + remaining. The UI uses this to render a
+// "projected $X by EOM" tile next to the existing "estimated
+// monthly" tile, plus a delta vs the rate.
+export interface PricingForecast {
+  enabled: boolean;
+  currency: string;
+  /** Steady-state monthly USD at current rate, 30-day baseline. */
+  steady_state_usd?: number;
+  /** Adjusted to actual days in this calendar month. */
+  forecast_usd?: number;
+  /** Spend already incurred this month at current rate. */
+  spent_so_far_usd?: number;
+  /** Remaining spend until end of month. */
+  remaining_usd?: number;
+  /** 0..1 — share of the month already elapsed by seconds. */
+  fraction_elapsed?: number;
+  days_in_month?: number;
+  days_elapsed?: number;
+  calendar_month?: string;
+  agent_count?: number;
+}
+
+export function getPricingForecast(): Promise<PricingForecast> {
+  return apiGet<PricingForecast>(`/pricing/forecast`);
+}
+
 /**
  * Match a destination_key against a rule set, returning the first
  * rule whose `match` is a substring of the key. Catch-all (empty

@@ -259,6 +259,30 @@ func (h *DeployHandlers) HandleGetRun(c *gin.Context) {
 	c.JSON(http.StatusOK, run)
 }
 
+// HandleMetrics is GET /api/v1/deploy/metrics?window=30d.
+//
+// Returns the DORA-style summary (deploy frequency, change failure
+// rate, MTTR, lead time) computed in-process from the deploy_runs
+// ledger. Window defaults to 30d if missing or unrecognized.
+//
+// Added in v0.39.0 — directors and SRE leads asked for the standard
+// DORA dashboard. Computing in-handler from existing ledger data
+// avoids any new schema, and the result is cheap to recompute on
+// every poll because the underlying slice is bounded.
+func (h *DeployHandlers) HandleMetrics(c *gin.Context) {
+	if !h.guard(c) {
+		return
+	}
+	windowParam := c.DefaultQuery("window", "30d")
+	window := deploy.DORAWindow(windowParam)
+	metrics, err := h.service.Metrics(c.Request.Context(), window)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, metrics)
+}
+
 // HandleValidate is POST /api/v1/deploy/targets/:id/validate. The
 // v0.35 pre-flight: tests GitHub auth, workflow existence, inventory
 // readability, and configlint without firing a workflow_dispatch.

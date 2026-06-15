@@ -49,6 +49,7 @@ import {
 import {
   formatUSD,
   getPricingConfig,
+  getPricingForecast,
   getPricingProjection,
   matchPricingRule,
   monthlyUSDFor,
@@ -244,15 +245,24 @@ export default function SavingsPage() {
       {!pricingEnabled ? (
         <DisabledNotice />
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <HeroSpend projection={projection} fleet={fleet} />
-          <HeroPotential
-            potentialMonthly={potentialMonthly}
-            currency={projection?.currency ?? "USD"}
-            recCount={recs?.items.length ?? 0}
-          />
-          <HeroRealized realized={realized} />
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <HeroSpend projection={projection} fleet={fleet} />
+            <HeroPotential
+              potentialMonthly={potentialMonthly}
+              currency={projection?.currency ?? "USD"}
+              recCount={recs?.items.length ?? 0}
+            />
+            <HeroRealized realized={realized} />
+          </div>
+          {/* v0.39 month-end forecast strip. Sits below the hero
+              tiles because it derives from the same projection, but
+              tells a different story: 'at the current rate, here's
+              where you'll land by the end of the calendar month'
+              with a progress indicator showing how much of the
+              month has already been spent. */}
+          <ForecastStrip />
+        </>
       )}
 
       {/* Quick Wins — recommendations ranked by $ saved. */}
@@ -281,6 +291,101 @@ export default function SavingsPage() {
         <AssumptionsFooter rules={projection.assumptions} />
       )}
     </div>
+  );
+}
+
+// ----------------------------------------------------------------
+// v0.39 forecast strip
+// ----------------------------------------------------------------
+//
+// Horizontal panel sitting under the three hero tiles. Two columns:
+// the left shows the projected calendar-month spend with a delta vs
+// the steady-state, the right shows a progress bar split into
+// elapsed ($ already spent this month) and remaining ($ to go).
+//
+// Intentionally minimalist — this is one of those panels operators
+// will glance at and either care about (because the forecast is
+// climbing) or completely ignore. No chart, no animations, no
+// destination breakdown.
+
+function ForecastStrip() {
+  const { data, isLoading } = useSWR(
+    "pricing-forecast",
+    getPricingForecast,
+    { refreshInterval: 60_000 },
+  );
+
+  // Hide when pricing is off or first poll is in-flight. We don't
+  // want a flickering "—" tile to confuse first-time visitors.
+  if (!data || !data.enabled || isLoading) return null;
+
+  const forecast = data.forecast_usd ?? 0;
+  const spent = data.spent_so_far_usd ?? 0;
+  const remaining = data.remaining_usd ?? 0;
+  const fraction = Math.min(Math.max(data.fraction_elapsed ?? 0, 0), 1);
+  const month = data.calendar_month ?? "this month";
+
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              Forecasted spend · {month}
+            </div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <div className="font-tabular text-3xl font-semibold text-foreground">
+                {formatUSD(forecast)}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                projected at current rate
+              </div>
+            </div>
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            <div>
+              <span className="font-tabular text-foreground">
+                {formatUSD(spent)}
+              </span>{" "}
+              spent so far
+            </div>
+            <div>
+              <span className="font-tabular text-foreground">
+                {formatUSD(remaining)}
+              </span>{" "}
+              remaining
+            </div>
+          </div>
+        </div>
+        {/* Progress bar. Two segments — spent (cyan) + remaining
+            (muted) — proportional to elapsed vs remaining fraction
+            of the month. The width snaps to whole percent for stable
+            rendering when fraction nudges between polls. */}
+        <div className="flex h-2 w-full overflow-hidden rounded">
+          <div
+            style={{
+              width: `${Math.round(fraction * 100)}%`,
+              background: "var(--primary)",
+            }}
+          />
+          <div
+            style={{
+              width: `${100 - Math.round(fraction * 100)}%`,
+              background: "color-mix(in oklch, var(--muted-foreground) 30%, transparent)",
+            }}
+          />
+        </div>
+        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+          <span>
+            Day {Math.floor(data.days_elapsed ?? 0) + 1} of {data.days_in_month}
+          </span>
+          <span>
+            Linear extrapolation from the last 24h ingest rate. Real
+            invoices will vary.
+          </span>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
