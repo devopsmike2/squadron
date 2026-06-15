@@ -26,16 +26,23 @@ import (
 //
 // Added in v0.41.0 (connectors part 1: Azure DevOps).
 type MultiProvider struct {
-	github      Provider
-	azureDevOps Provider
+	github       Provider
+	azureDevOps  Provider
+	ansibleTower Provider
 }
 
-// NewMultiProvider constructs a router holding both backends. Either
-// argument may be nil — calls routed to a nil backend return a
-// typed error so the UI surfaces "provider not configured" rather
-// than a runtime panic.
-func NewMultiProvider(github, azureDevOps Provider) *MultiProvider {
-	return &MultiProvider{github: github, azureDevOps: azureDevOps}
+// NewMultiProvider constructs a router holding the registered
+// backends. Any argument may be nil — calls routed to a nil backend
+// return a typed error so the UI surfaces "provider not configured"
+// rather than a runtime panic.
+//
+// v0.42 added ansibleTower as a third backend.
+func NewMultiProvider(github, azureDevOps, ansibleTower Provider) *MultiProvider {
+	return &MultiProvider{
+		github:       github,
+		azureDevOps:  azureDevOps,
+		ansibleTower: ansibleTower,
+	}
 }
 
 // pick returns the right provider for a target, or an error if no
@@ -52,6 +59,11 @@ func (m *MultiProvider) pick(target *apptypes.DeployTarget) (Provider, error) {
 			return nil, fmt.Errorf("azure_devops provider not configured")
 		}
 		return m.azureDevOps, nil
+	case "ansible_tower":
+		if m.ansibleTower == nil {
+			return nil, fmt.Errorf("ansible_tower provider not configured")
+		}
+		return m.ansibleTower, nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", target.Provider)
 	}

@@ -23,6 +23,24 @@ type Config struct {
 	Pricing       PricingConfig       `yaml:"pricing"`
 	SilentAgents  SilentAgentsConfig  `yaml:"silent_agents,omitempty"`
 	Deploy        DeployConfig        `yaml:"deploy,omitempty"`
+	Billing       BillingConfig       `yaml:"billing,omitempty"`
+}
+
+// BillingConfig wires the v0.42 billing connectors (Splunk for now;
+// Datadog / Honeycomb / New Relic slot in here later). All sections
+// are optional — omit any block and the connector silently disables.
+type BillingConfig struct {
+	Splunk SplunkBillingConfig `yaml:"splunk,omitempty"`
+}
+
+// SplunkBillingConfig is the per-deployment Splunk billing wiring.
+// Maps onto billing.SplunkConfig in main.go after env var expansion.
+type SplunkBillingConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	SearchHead         string `yaml:"search_head"`
+	Token              string `yaml:"token"`
+	WindowDays         int    `yaml:"window_days,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"`
 }
 
 // DeployConfig is the v0.35+ deploy integration tuning. The deploy

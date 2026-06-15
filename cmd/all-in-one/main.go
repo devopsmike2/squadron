@@ -25,6 +25,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/configs"
+	"github.com/devopsmike2/squadron/internal/billing"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/events"
@@ -492,7 +493,8 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// HTTP clients are cheap.
 		ghProvider := deploy.NewGitHubProvider("")
 		adoProvider := deploy.NewAzureDevOpsProvider("")
-		provider := deploy.NewMultiProvider(ghProvider, adoProvider)
+		towerProvider := deploy.NewAnsibleTowerProvider()
+		provider := deploy.NewMultiProvider(ghProvider, adoProvider, towerProvider)
 		deploySvc := deploy.NewService(appStore, provider, crypter, logger)
 		deploySvc.SetCompletionWebhook(config.Deploy.CompletionWebhookURL)
 		apiServer.SetDeploy(deploySvc)
@@ -516,6 +518,25 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		walker := discovery.NewGHAWalker(appStore, deploySvc, ghProvider,
 			discovery.DefaultGHAWalkInterval, discovery.DefaultGHALookback, logger)
 		go walker.Run(context.Background())
+	}
+
+	// v0.42 Billing connectors. Splunk is the v0.42 ship; Datadog,
+	// Honeycomb, New Relic slot in here later. Each connector is
+	// optional — without config, the UI billing tile silently
+	// disables.
+	if config.Billing.Splunk.Enabled {
+		splunkProvider, err := billing.NewSplunkSnapshotProvider(billing.SplunkConfig{
+			SearchHead:         config.Billing.Splunk.SearchHead,
+			Token:              config.Billing.Splunk.Token,
+			WindowDays:         config.Billing.Splunk.WindowDays,
+			InsecureSkipVerify: config.Billing.Splunk.InsecureSkipVerify,
+		})
+		if err != nil {
+			logger.Warn("Splunk billing connector disabled", zap.Error(err))
+		} else {
+			apiServer.SetBillingProvider(splunkProvider)
+			logger.Info("Splunk billing connector enabled")
+		}
 	}
 
 	// v0.33 silent-agent watcher. Polls the agent table and fires

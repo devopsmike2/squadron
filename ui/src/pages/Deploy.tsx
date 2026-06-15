@@ -515,9 +515,9 @@ function NewTargetSheet({
   // v0.41 — provider selector. "github" is the default to preserve
   // legacy behavior; "azure_devops" routes through the Azure DevOps
   // Pipelines provider. The same backend column stores both.
-  const [provider, setProvider] = useState<"github" | "azure_devops">(
-    "github",
-  );
+  const [provider, setProvider] = useState<
+    "github" | "azure_devops" | "ansible_tower"
+  >("github");
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const [workflow, setWorkflow] = useState("");
@@ -534,34 +534,48 @@ function NewTargetSheet({
   // workflow file vs pipeline ID), and operators get confused if
   // we just call everything "GitHub" in the form. Swap labels
   // based on the picker so each provider's mental model is honored.
-  const isADO = provider === "azure_devops";
-  const labels = isADO
-    ? {
-        sectionTitle: "Azure DevOps Pipelines workflow",
-        sectionHelp:
-          "Register an Azure DevOps Pipelines run that Squadron is allowed to dispatch. The PAT is encrypted at rest.",
-        owner: "Organization",
-        ownerPlaceholder: "my-azdo-org",
-        repo: "Project (or Project/Repo)",
-        repoPlaceholder: "MyProject",
-        workflow: "Pipeline ID (numeric)",
-        workflowPlaceholder: "42",
-        patHint: "Azure DevOps PAT (Build: read & execute, Code: read)",
-        patPlaceholder: "azp_…",
-      }
-    : {
-        sectionTitle: "GitHub Actions workflow",
-        sectionHelp:
-          "Register a GitHub Actions workflow that Squadron is allowed to dispatch. The PAT is encrypted at rest.",
-        owner: "Owner",
-        ownerPlaceholder: "my-org",
-        repo: "Repo",
-        repoPlaceholder: "otel-deploy",
-        workflow: "Workflow file",
-        workflowPlaceholder: "deploy-otel.yml",
-        patHint: "GitHub PAT (actions:write + contents:read)",
-        patPlaceholder: "ghp_…",
-      };
+  // Per-provider field labels. Each backend uses very different
+  // language for the same conceptual fields; swapping labels keeps
+  // each provider's mental model intact.
+  const labelsByProvider = {
+    github: {
+      sectionHelp:
+        "Register a GitHub Actions workflow that Squadron is allowed to dispatch. The PAT is encrypted at rest.",
+      owner: "Owner",
+      ownerPlaceholder: "my-org",
+      repo: "Repo",
+      repoPlaceholder: "otel-deploy",
+      workflow: "Workflow file",
+      workflowPlaceholder: "deploy-otel.yml",
+      patHint: "GitHub PAT (actions:write + contents:read)",
+      patPlaceholder: "ghp_…",
+    },
+    azure_devops: {
+      sectionHelp:
+        "Register an Azure DevOps Pipelines run that Squadron is allowed to dispatch. The PAT is encrypted at rest.",
+      owner: "Organization",
+      ownerPlaceholder: "my-azdo-org",
+      repo: "Project (or Project/Repo)",
+      repoPlaceholder: "MyProject",
+      workflow: "Pipeline ID (numeric)",
+      workflowPlaceholder: "42",
+      patHint: "Azure DevOps PAT (Build: read & execute, Code: read)",
+      patPlaceholder: "azp_…",
+    },
+    ansible_tower: {
+      sectionHelp:
+        "Register an Ansible Tower / AWX job template that Squadron is allowed to launch. The token is encrypted at rest.",
+      owner: "Tower host",
+      ownerPlaceholder: "tower.your-co.com",
+      repo: "(not used)",
+      repoPlaceholder: "",
+      workflow: "Job template ID (numeric)",
+      workflowPlaceholder: "42",
+      patHint: "Tower OAuth2 token (Bearer auth)",
+      patPlaceholder: "token…",
+    },
+  } as const;
+  const labels = labelsByProvider[provider];
 
   async function submit() {
     setError(null);
@@ -611,11 +625,12 @@ function NewTargetSheet({
               halfway through the form before discovering they
               picked the wrong one. */}
           <Field label="Provider">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {(
                 [
                   { id: "github", title: "GitHub Actions", sub: "workflow_dispatch + Contents API" },
                   { id: "azure_devops", title: "Azure DevOps", sub: "Pipelines + Git Items API" },
+                  { id: "ansible_tower", title: "Ansible Tower", sub: "Job templates + Bearer auth" },
                 ] as const
               ).map((opt) => (
                 <button
