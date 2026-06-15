@@ -27,6 +27,7 @@ import {
   type InventoryStatus,
 } from "@/api/inventory";
 import { AdoptDrawer } from "@/components/inventory/AdoptDrawer";
+import { BulkAdoptModal } from "@/components/inventory/BulkAdoptModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -123,6 +124,12 @@ export function InventoryDetails() {
     hostname: string;
     labels: Record<string, string>;
   } | null>(null);
+  // v0.46 — bulk adoption via deploy pipeline.
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const missingHosts = useMemo(
+    () => rows.filter((r) => r.status === "missing").map((r) => r.hostname),
+    [rows],
+  );
   if (!data) {
     return (
       <Card>
@@ -149,6 +156,26 @@ export function InventoryDetails() {
   }
   return (
     <Card>
+      {/* v0.46 — Bulk adopt button appears in the table header when
+          there are missing hosts to act on. Fires the configured
+          adoption pipeline against the selected hosts. */}
+      {missingHosts.length > 0 && (
+        <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
+          <span className="text-xs text-muted-foreground">
+            {missingHosts.length} missing host
+            {missingHosts.length === 1 ? "" : "s"} eligible for
+            bulk adoption
+          </span>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={() => setBulkOpen(true)}
+            className="h-7 px-3 text-xs"
+          >
+            Bulk adopt via pipeline…
+          </Button>
+        </div>
+      )}
       <CardContent className="p-0">
         <table className="w-full text-sm">
           <thead className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -218,6 +245,11 @@ export function InventoryDetails() {
         onClose={() => setAdoptHost(null)}
         hostname={adoptHost?.hostname ?? ""}
         labels={adoptHost?.labels}
+      />
+      <BulkAdoptModal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        candidates={missingHosts}
       />
     </Card>
   );

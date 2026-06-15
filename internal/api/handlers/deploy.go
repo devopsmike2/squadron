@@ -259,6 +259,75 @@ func (h *DeployHandlers) HandleGetRun(c *gin.Context) {
 	c.JSON(http.StatusOK, run)
 }
 
+// adoptBody is the JSON shape POSTed to /deploy/targets/:id/adopt.
+// The handler resolves each hostname against the inventory store to
+// pick up any labels the CI/CD pipeline registered with the host
+// when it was discovered, so the snippet's agent_description block
+// carries through the pipeline-set metadata.
+type adoptBody struct {
+	Hostnames []string `json:"hostnames"`
+	Notes     string   `json:"notes,omitempty"`
+	// OpAMPServerURL lets the caller override the URL baked into
+	// each snippet. Empty falls back to ws://<request-host>:<opamp-port>/v1/opamp
+	// which is right for dev but wrong for production where the
+	// adoption pipeline runs from a CI runner that can't reach
+	// localhost. Operators should explicitly set this in prod.
+	OpAMPServerURL string `json:"opamp_server_url,omitempty"`
+}
+
+// HandleAdopt is POST /api/v1/deploy/targets/:id/adopt.
+//
+// Fires the configured adoption pipeline with a single
+// adoption_payload input containing one per-host snippet block per
+// requested hostname. Used by the v0.46 bulk adoption flow from the
+// Inventory page.
+//
+// The hostnames in the body are the source of truth for who gets
+// adopted. The handler enriches each one with labels from any
+// matching expected_agents row so the snippet carries the same
+// metadata the CI/CD pipeline originally registered.
+//
+// Added in v0.46.0.
+func (h *DeployHandlers) HandleAdopt(c *gin.Context) {
+	if !h.guard(c) {
+		return
+	}
+	id := c.Param("id")
+	var body adoptBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(body.Hostnames) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "hostnames required"})
+		return
+	}
+	// Resolve labels via the deploy service's inventory accessor.
+	// We don't pull this from the store directly — the deploy.Service
+	// owns its store handle, so we ask it.
+	hosts := h.service.ResolveAdoptionHosts(c.Request.Context(), body.Hostnames)
+	opampURL := body.OpAMPServerURL
+	if opampURL == "" {
+		// Best-effort fallback: use the host from the request and
+		// the standard OpAMP port. Works for dev; production
+		// operators should set this explicitly.
+		opampURL = "ws://" + c.Request.Host + "/v1/opamp"
+	}
+	actor := actorFromContext(c)
+	run, err := h.service.TriggerAdoption(c.Request.Context(), deploy.AdoptRequest{
+		TargetID:       id,
+		Hosts:          hosts,
+		RequestedBy:    actor,
+		Notes:          body.Notes,
+		OpAMPServerURL: opampURL,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, run)
+}
+
 // HandleMetrics is GET /api/v1/deploy/metrics?window=30d.
 //
 // Returns the DORA-style summary (deploy frequency, change failure

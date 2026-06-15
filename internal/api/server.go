@@ -881,6 +881,14 @@ func (s *Server) registerRoutes() {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleTriggerRun(c)
 		})
 
+		// v0.46.0 Bulk adoption deploy — fires the configured
+		// adoption pipeline with a single adoption_payload input
+		// containing per-host snippet blocks. Write scope: this
+		// dispatches a workflow.
+		v1.POST("/deploy/targets/:id/adopt", deployWrite, func(c *gin.Context) {
+			handlers.NewDeployHandlers(s.deploy, s.logger).HandleAdopt(c)
+		})
+
 		// v0.39.0 DORA-style deploy metrics. Computed in-process
 		// over the deploy_runs ledger — no new schema. Read-only.
 		v1.GET("/deploy/metrics", deployRead, func(c *gin.Context) {
