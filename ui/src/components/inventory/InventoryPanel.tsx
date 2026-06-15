@@ -16,7 +16,7 @@
  * doesn't pester DuckDB every 5 seconds.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import useSWR from "swr";
 
@@ -26,7 +26,9 @@ import {
   statusLabel,
   type InventoryStatus,
 } from "@/api/inventory";
+import { AdoptDrawer } from "@/components/inventory/AdoptDrawer";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 
@@ -115,6 +117,12 @@ export function InventoryDetails() {
     refreshInterval: REFRESH_MS,
   });
   const rows = useMemo(() => data?.rows ?? [], [data]);
+  // v0.45 — adoption drawer state. Opens when the operator clicks
+  // "Adopt" on a missing row and shows the per-host snippet.
+  const [adoptHost, setAdoptHost] = useState<{
+    hostname: string;
+    labels: Record<string, string>;
+  } | null>(null);
   if (!data) {
     return (
       <Card>
@@ -150,6 +158,7 @@ export function InventoryDetails() {
               <th className="px-3 py-2">Source</th>
               <th className="px-3 py-2">Last seen</th>
               <th className="px-3 py-2">Notes</th>
+              <th className="px-3 py-2 text-right">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -178,11 +187,54 @@ export function InventoryDetails() {
                 <td className="px-3 py-2 text-xs text-muted-foreground">
                   {r.notes || ""}
                 </td>
+                <td className="px-3 py-2 text-right">
+                  {/* v0.45 — Adopt only shows for missing hosts.
+                      For healthy and unexpected hosts the action
+                      doesn't apply (healthy is already managed;
+                      unexpected is already checked in via OpAMP). */}
+                  {r.status === "missing" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() =>
+                        setAdoptHost({
+                          hostname: r.hostname,
+                          labels: extractAdoptionLabels(r),
+                        })
+                      }
+                    >
+                      Adopt
+                    </Button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </CardContent>
+      <AdoptDrawer
+        open={adoptHost !== null}
+        onClose={() => setAdoptHost(null)}
+        hostname={adoptHost?.hostname ?? ""}
+        labels={adoptHost?.labels}
+      />
     </Card>
   );
+}
+
+// extractAdoptionLabels pulls the kv labels we want to bake into the
+// per-host snippet. The inventory row carries a source string (which
+// CI/CD pipeline registered the host) and any labels the pipeline
+// attached. We forward both so Squadron's agent card shows the same
+// labels you set at deploy time.
+function extractAdoptionLabels(
+  r: { source?: string; labels?: Record<string, string> },
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (r.source) out["squadron.source"] = r.source;
+  for (const [k, v] of Object.entries(r.labels ?? {})) {
+    out[k] = v;
+  }
+  return out;
 }
