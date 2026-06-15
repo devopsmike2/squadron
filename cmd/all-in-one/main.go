@@ -550,6 +550,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			SilenceThreshold: config.SilentAgents.SilenceThreshold,
 			PollInterval:     config.SilentAgents.PollInterval,
 			WebhookURL:       config.SilentAgents.WebhookURL,
+			// v0.43 ChatOps. When DestinationType is unset, the
+			// watcher preserves the legacy plain-JSON shape so
+			// existing receivers don't break on upgrade.
+			DestinationType:  config.SilentAgents.DestinationType,
+			DestinationExtra: config.SilentAgents.DestinationExtra,
+			PublicBaseURL:    config.SilentAgents.PublicBaseURL,
 		}, appStore, logger)
 		go watcher.Run(context.Background())
 	} else {

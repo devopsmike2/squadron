@@ -31,6 +31,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/notify"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -51,6 +52,18 @@ type Config struct {
 	// will add per-source webhook routing keyed on the
 	// expected_agents.source field.
 	WebhookURL string
+	// DestinationType picks the v0.43 vendor formatter — "slack",
+	// "teams", "pagerduty", "opsgenie", or "" / "generic" for the
+	// legacy plain-JSON shape.
+	DestinationType string
+	// DestinationExtra is vendor-specific config (routing_key for
+	// PagerDuty, api_key for Opsgenie). Empty for Slack/Teams/Generic.
+	DestinationExtra map[string]string
+	// PublicBaseURL is the externally-reachable Squadron URL used to
+	// build deep links inside the formatted notification (e.g.
+	// "Open in Squadron" → /agents/<id>). Falls back to "" — vendor
+	// formatters drop the link block in that case.
+	PublicBaseURL string
 }
 
 // Store is the slice of the application store the watcher needs.
@@ -63,10 +76,11 @@ type Store interface {
 // healthy↔silent transitions. Construct one with New and call
 // Run in a goroutine; Stop closes the loop cleanly.
 type Watcher struct {
-	cfg    Config
-	store  Store
-	logger *zap.Logger
-	http   *http.Client
+	cfg        Config
+	store      Store
+	logger     *zap.Logger
+	http       *http.Client
+	dispatcher *notify.Dispatcher // v0.43 — vendor-aware webhook router
 
 	mu        sync.Mutex
 	lastState map[string]state // hostKey → last observed state, used to detect transitions
@@ -107,12 +121,13 @@ func New(cfg Config, store Store, logger *zap.Logger) *Watcher {
 		cfg.PollInterval = 60 * time.Second
 	}
 	return &Watcher{
-		cfg:       cfg,
-		store:     store,
-		logger:    logger,
-		http:      &http.Client{Timeout: 10 * time.Second},
-		lastState: map[string]state{},
-		stop:      make(chan struct{}),
+		cfg:        cfg,
+		store:      store,
+		logger:     logger,
+		http:       &http.Client{Timeout: 10 * time.Second},
+		dispatcher: notify.NewDispatcher(),
+		lastState:  map[string]state{},
+		stop:       make(chan struct{}),
 	}
 }
 
@@ -239,29 +254,104 @@ func (w *Watcher) dispatch(ctx context.Context, evt Event) {
 	if w.cfg.WebhookURL == "" {
 		return
 	}
-	body, err := json.Marshal(evt)
-	if err != nil {
-		w.logger.Warn("silent-agent webhook marshal failed", zap.Error(err))
+
+	// v0.43 — if a destination_type is configured, route through the
+	// notify.Dispatcher so Slack/Teams/PagerDuty/Opsgenie get the
+	// vendor-shaped body. Empty / "generic" preserves the legacy
+	// plain-JSON shape so existing operator-built receivers don't
+	// break on upgrade.
+	dest := notify.Destination{
+		URL:   w.cfg.WebhookURL,
+		Type:  notify.DestinationType(strings.ToLower(w.cfg.DestinationType)),
+		Extra: w.cfg.DestinationExtra,
+	}
+	if dest.Type == "" || dest.Type == notify.TypeGeneric {
+		// Legacy path: ship the raw Event JSON like we always did.
+		// Falls through to the dispatcher's generic branch which
+		// json-marshals whatever you hand it; we pre-marshal so the
+		// shape on the wire is identical to pre-v0.43.
+		raw, err := json.Marshal(evt)
+		if err != nil {
+			w.logger.Warn("silent-agent webhook marshal failed", zap.Error(err))
+			return
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			w.cfg.WebhookURL, bytes.NewReader(raw))
+		if err != nil {
+			w.logger.Warn("silent-agent webhook build failed", zap.Error(err))
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "Squadron/silent-agents")
+		resp, err := w.http.Do(req)
+		if err != nil {
+			w.logger.Warn("silent-agent webhook POST failed",
+				zap.Error(err), zap.String("url", w.cfg.WebhookURL))
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode/100 != 2 {
+			w.logger.Warn("silent-agent webhook returned non-2xx",
+				zap.Int("status", resp.StatusCode),
+				zap.String("url", w.cfg.WebhookURL))
+		}
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.cfg.WebhookURL, bytes.NewReader(body))
-	if err != nil {
-		w.logger.Warn("silent-agent webhook build failed", zap.Error(err))
-		return
+
+	// v0.43 dispatcher path. Translate the Event into the canonical
+	// notify.Event shape so the formatter doesn't need to know about
+	// our internal struct.
+	severity := notify.SeverityWarning
+	if evt.State == "resolved" {
+		severity = notify.SeverityInfo
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Squadron/silent-agents")
-	resp, err := w.http.Do(req)
-	if err != nil {
-		w.logger.Warn("silent-agent webhook POST failed",
-			zap.Error(err), zap.String("url", w.cfg.WebhookURL))
-		return
+	action := "trigger"
+	if evt.State == "resolved" {
+		action = "resolve"
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		w.logger.Warn("silent-agent webhook returned non-2xx",
-			zap.Int("status", resp.StatusCode),
-			zap.String("url", w.cfg.WebhookURL))
+	link := ""
+	if w.cfg.PublicBaseURL != "" && evt.AgentID != "" {
+		link = strings.TrimRight(w.cfg.PublicBaseURL, "/") + "/agents/" + evt.AgentID
+	}
+	title := fmt.Sprintf("Silent agent: %s", evt.Hostname)
+	if evt.State == "resolved" {
+		title = fmt.Sprintf("Silent agent resolved: %s", evt.Hostname)
+	}
+	summary := ""
+	if evt.SilenceFor != "" {
+		summary = fmt.Sprintf("Hasn't reported for %s.", evt.SilenceFor)
+	}
+	fields := []notify.Field{
+		{Key: "Hostname", Value: evt.Hostname},
+	}
+	if evt.AgentID != "" {
+		fields = append(fields, notify.Field{Key: "Agent ID", Value: evt.AgentID})
+	}
+	if evt.Source != "" {
+		fields = append(fields, notify.Field{Key: "Source", Value: evt.Source})
+	}
+	if !evt.LastSeen.IsZero() {
+		fields = append(fields, notify.Field{
+			Key:   "Last seen",
+			Value: evt.LastSeen.UTC().Format("Jan 2 15:04 MST"),
+		})
+	}
+	canonical := notify.Event{
+		Title:    title,
+		Summary:  summary,
+		Severity: severity,
+		Kind:     "silent_agent." + evt.State,
+		DedupKey: evt.AgentID,
+		Action:   action,
+		Link:     link,
+		Fields:   fields,
+		At:       time.Now().UTC(),
+	}
+	if err := w.dispatcher.Dispatch(ctx, dest, canonical); err != nil {
+		w.logger.Warn("silent-agent webhook dispatch failed",
+			zap.Error(err),
+			zap.String("type", string(dest.Type)),
+			zap.String("url", dest.URL))
 	}
 }
 
