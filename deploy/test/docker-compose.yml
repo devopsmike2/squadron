@@ -1,0 +1,111 @@
+# v0.37.0 local test environment.
+#
+# Spins up a realistic Squadron-managed fleet on your laptop — no
+# OpenShift required. Designed to exercise every major feature that
+# would otherwise need real internal hosts:
+#
+#   * v0.31 pipeline health — collectors export their own otelcol_*
+#     metrics back to Squadron
+#   * v0.32 inventory reconciliation — when you stop a container,
+#     Squadron correctly flags the host as missing
+#   * v0.33 silent-agent webhooks — same, fires to webhook-echo
+#   * v0.36.0 passive OTLP discovery — collector-otlp-only sends
+#     telemetry without OpAMP; appears in agents list with the
+#     "Telemetry-only" badge
+#
+# Squadron runs as the local binary (NOT containerized) so you can
+# iterate code without rebuilding the image. The collectors talk to
+# your laptop via host.docker.internal — start Squadron first with
+# `make test-env-up` so the OpAMP + OTLP ports are listening.
+#
+# Usage:
+#   make test-env-up         # start Squadron + all collectors
+#   make test-env-fleetsim   # add 50 synthetic OpAMP agents
+#   make test-env-logs       # follow logs from one collector
+#   make test-env-down       # stop everything, keep data
+#   make test-env-reset      # stop + wipe Squadron's local data dir
+
+version: "3.9"
+
+# Networking note: containers reach the host's Squadron via
+# host.docker.internal:<port>. On Linux this requires the
+# `extra_hosts` block below. On macOS / Windows Docker Desktop it
+# resolves automatically; the extra_hosts is a no-op there.
+x-host-gateway: &host-gateway
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+
+  # --- Two OpAMP-managed collectors ---------------------------------
+  # These are real otelcol-contrib binaries running with the OpAMP
+  # supervisor extension pointed at the Squadron OpAMP server
+  # listening on your laptop. They register themselves automatically
+  # on startup; you'll see them appear in the agents list within
+  # a few seconds.
+
+  collector-prod:
+    image: otel/opentelemetry-collector-contrib:0.110.0
+    container_name: squadron-test-collector-prod
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./collectors/opamp-prod.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      # The OpAMP supervisor reads these to populate the
+      # AgentDescription. Squadron uses them to give the agent a
+      # human-readable name and group labels in the UI.
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=test-prod-01,service.name=otelcol,deployment.environment=prod
+    <<: *host-gateway
+    restart: unless-stopped
+
+  collector-staging:
+    image: otel/opentelemetry-collector-contrib:0.110.0
+    container_name: squadron-test-collector-staging
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./collectors/opamp-staging.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=test-staging-01,service.name=otelcol,deployment.environment=staging
+    <<: *host-gateway
+    restart: unless-stopped
+
+  # --- One OTLP-only collector (no OpAMP) ---------------------------
+  # This one has NO OpAMP supervisor — it just exports telemetry to
+  # Squadron's OTLP receiver. v0.36.0 passive discovery should pick
+  # it up automatically and register it with discovery_source=otlp.
+  # In the UI it'll show a yellow "Telemetry-only" badge to
+  # distinguish it from the OpAMP-managed ones above.
+
+  collector-otlp-only:
+    image: otel/opentelemetry-collector-contrib:0.110.0
+    container_name: squadron-test-collector-otlp-only
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./collectors/otlp-only.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=test-rogue-01,service.name=otelcol,service.instance.id=11111111-1111-1111-1111-111111111111
+    <<: *host-gateway
+    restart: unless-stopped
+
+  # --- Webhook echo server ------------------------------------------
+  # Receives v0.33 silent-agent webhooks and v0.35 deploy-completion
+  # webhooks. Prints every incoming POST to stdout so you can see
+  # exactly what payload Squadron is sending.
+  #
+  # Configure Squadron to send to http://host.docker.internal:9001
+  # (or http://localhost:9001 if you're running Squadron on your
+  # host, which is the recommended pattern here).
+
+  webhook-echo:
+    build:
+      context: ../..
+      dockerfile: deploy/test/Dockerfile.webhook-echo
+    image: squadron-webhook-echo:local
+    container_name: squadron-test-webhook-echo
+    ports:
+      - "9001:9001"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: squadron-test

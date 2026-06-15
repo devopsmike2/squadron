@@ -1,0 +1,62 @@
+# OTel collector config with OpAMP supervisor pointing at Squadron.
+# Used by collector-prod in docker-compose.yml.
+#
+# Key bits:
+#   * extensions.opamp configures the supervisor — Squadron will
+#     see this container as an agent in the fleet within seconds.
+#   * receivers.hostmetrics + a prometheus scrape of the collector's
+#     own metrics give Squadron something to chart on the agent
+#     details drawer.
+#   * exporters.otlp/squadron pushes everything back to Squadron's
+#     OTLP receiver, which lets pipeline-health and cost-insights
+#     work with real data.
+
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ws://host.docker.internal:4330/v1/opamp
+    # The supervisor uses a random instance_uid by default. Setting
+    # it here makes the agent show up as the same record across
+    # container restarts, which is what you want for testing
+    # configurations.
+    instance_uid: 01234567-89ab-cdef-0123-456789abcdef
+
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu: {}
+      memory: {}
+      load: {}
+  # Self-scrape so otelcol_* metrics flow to Squadron and v0.31
+  # pipeline health shows real data.
+  prometheus/self:
+    config:
+      scrape_configs:
+        - job_name: "otelcol-self"
+          scrape_interval: 30s
+          static_configs:
+            - targets: ["127.0.0.1:8888"]
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  otlp/squadron:
+    endpoint: host.docker.internal:4327
+    tls:
+      insecure: true
+
+service:
+  extensions: [opamp]
+  telemetry:
+    metrics:
+      address: 127.0.0.1:8888
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, prometheus/self]
+      processors: [batch]
+      exporters: [otlp/squadron]

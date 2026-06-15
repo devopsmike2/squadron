@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean
+.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo
 
 # Variables
 BINARY_NAME=squadron
@@ -176,3 +176,73 @@ docker-shell:
 # Shell into UI container
 docker-shell-ui:
 	docker compose exec ui sh
+
+# ===================================================================
+# v0.37 local test environment
+# ===================================================================
+#
+# Spins up a realistic Squadron-managed fleet on your laptop:
+#   * 2 OpAMP-enabled OTel collectors (one prod, one staging)
+#   * 1 OTLP-only collector (no OpAMP — for v0.36.0 discovery)
+#   * 1 webhook-echo server (for v0.33 + v0.35 webhook payloads)
+#
+# Squadron itself runs as the local binary (NOT containerized) so
+# you can iterate code without rebuilding. The collectors talk to
+# your host via host.docker.internal.
+#
+# See docs/testing.md for the full walkthrough including the
+# personal GitHub test repo recipe.
+
+# test-env-up: build the binary if needed, start Squadron in the
+# background, then bring up the docker-compose fleet.
+test-env-up: build-backend webhook-echo
+	@mkdir -p $(DATA_DIR)
+	@if [ -z "$$SQUADRON_DEPLOY_KEY" ]; then \
+		export SQUADRON_DEPLOY_KEY=$$(head -c 32 /dev/urandom | base64); \
+		echo "Generated SQUADRON_DEPLOY_KEY for this session."; \
+		echo "To persist it: export SQUADRON_DEPLOY_KEY=$$SQUADRON_DEPLOY_KEY"; \
+	fi
+	@echo "Starting test fleet via docker compose..."
+	@cd deploy/test && docker compose up -d --build
+	@echo ""
+	@echo "Test environment ready."
+	@echo "  Squadron UI:    http://localhost:8090"
+	@echo "  Webhook echo:   http://localhost:9001  (POST anything, see container logs)"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  make test-env-fleetsim   # add 50 synthetic OpAMP agents"
+	@echo "  make test-env-logs       # tail one collector's logs"
+	@echo "  make test-env-down       # stop the fleet"
+
+# test-env-down: stop the docker-compose fleet but keep Squadron's
+# data dir intact for the next start.
+test-env-down:
+	@cd deploy/test && docker compose down
+	@echo "Test fleet stopped. Squadron's data dir is preserved."
+	@echo "Run 'make test-env-reset' to wipe state for a fresh start."
+
+# test-env-logs: tail all collector + webhook logs. Useful for
+# watching Squadron config pushes land in real time.
+test-env-logs:
+	@cd deploy/test && docker compose logs -f
+
+# test-env-reset: full reset — stops the fleet AND wipes Squadron's
+# local data dir. The next test-env-up starts from a blank slate.
+test-env-reset:
+	@cd deploy/test && docker compose down -v
+	@rm -rf $(DATA_DIR)
+	@echo "Test fleet stopped and Squadron data wiped."
+
+# test-env-fleetsim: add 50 synthetic OpAMP agents on top of the
+# real docker collectors. Lets you stress-test scrolling /
+# filtering / rollout selection on the agents page.
+test-env-fleetsim: fleetsim
+	@echo "Connecting 50 synthetic agents to local Squadron..."
+	@./$(BUILD_DIR)/fleetsim --count=50 --target=ws://localhost:4330/v1/opamp --ramp=10s
+
+# webhook-echo: build the tiny webhook receiver helper. Standalone
+# binary so you can run it without docker if you prefer.
+webhook-echo:
+	@echo "Building webhook-echo..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 go build -o $(BUILD_DIR)/webhook-echo ./cmd/webhook-echo
