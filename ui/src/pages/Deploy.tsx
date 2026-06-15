@@ -512,6 +512,12 @@ function NewTargetSheet({
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
+  // v0.41 — provider selector. "github" is the default to preserve
+  // legacy behavior; "azure_devops" routes through the Azure DevOps
+  // Pipelines provider. The same backend column stores both.
+  const [provider, setProvider] = useState<"github" | "azure_devops">(
+    "github",
+  );
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const [workflow, setWorkflow] = useState("");
@@ -522,6 +528,40 @@ function NewTargetSheet({
   const [inventoryPath, setInventoryPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Per-provider field labels. The shared backend columns map to
+  // very different concepts (GitHub repo vs Azure DevOps project,
+  // workflow file vs pipeline ID), and operators get confused if
+  // we just call everything "GitHub" in the form. Swap labels
+  // based on the picker so each provider's mental model is honored.
+  const isADO = provider === "azure_devops";
+  const labels = isADO
+    ? {
+        sectionTitle: "Azure DevOps Pipelines workflow",
+        sectionHelp:
+          "Register an Azure DevOps Pipelines run that Squadron is allowed to dispatch. The PAT is encrypted at rest.",
+        owner: "Organization",
+        ownerPlaceholder: "my-azdo-org",
+        repo: "Project (or Project/Repo)",
+        repoPlaceholder: "MyProject",
+        workflow: "Pipeline ID (numeric)",
+        workflowPlaceholder: "42",
+        patHint: "Azure DevOps PAT (Build: read & execute, Code: read)",
+        patPlaceholder: "azp_…",
+      }
+    : {
+        sectionTitle: "GitHub Actions workflow",
+        sectionHelp:
+          "Register a GitHub Actions workflow that Squadron is allowed to dispatch. The PAT is encrypted at rest.",
+        owner: "Owner",
+        ownerPlaceholder: "my-org",
+        repo: "Repo",
+        repoPlaceholder: "otel-deploy",
+        workflow: "Workflow file",
+        workflowPlaceholder: "deploy-otel.yml",
+        patHint: "GitHub PAT (actions:write + contents:read)",
+        patPlaceholder: "ghp_…",
+      };
 
   async function submit() {
     setError(null);
@@ -537,6 +577,7 @@ function NewTargetSheet({
       }
       await createDeployTarget({
         name,
+        provider,
         github_owner: owner,
         github_repo: repo,
         github_workflow: workflow,
@@ -559,31 +600,75 @@ function NewTargetSheet({
       <SheetContent className="w-[480px] sm:max-w-[480px]">
         <SheetHeader>
           <SheetTitle>New deploy target</SheetTitle>
-          <SheetDescription>
-            Register a GitHub Actions workflow that Squadron is allowed to
-            dispatch. The PAT is encrypted at rest.
-          </SheetDescription>
+          <SheetDescription>{labels.sectionHelp}</SheetDescription>
         </SheetHeader>
         <div className="space-y-4 p-4">
           <Field label="Name">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Prod OTel deploy" />
           </Field>
+          {/* v0.41 — provider picker. Two cards side-by-side so the
+              choice is visible up-front and operators don't get
+              halfway through the form before discovering they
+              picked the wrong one. */}
+          <Field label="Provider">
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  { id: "github", title: "GitHub Actions", sub: "workflow_dispatch + Contents API" },
+                  { id: "azure_devops", title: "Azure DevOps", sub: "Pipelines + Git Items API" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setProvider(opt.id)}
+                  className={`rounded-md border px-3 py-2 text-left text-xs transition-colors ${
+                    provider === opt.id
+                      ? "border-primary/60 bg-primary/10 text-foreground"
+                      : "border-border bg-card/40 text-muted-foreground hover:bg-accent/30"
+                  }`}
+                >
+                  <div className="font-medium text-foreground">{opt.title}</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {opt.sub}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </Field>
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Owner">
-              <Input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="my-org" />
+            <Field label={labels.owner}>
+              <Input
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+                placeholder={labels.ownerPlaceholder}
+              />
             </Field>
-            <Field label="Repo">
-              <Input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="otel-deploy" />
+            <Field label={labels.repo}>
+              <Input
+                value={repo}
+                onChange={(e) => setRepo(e.target.value)}
+                placeholder={labels.repoPlaceholder}
+              />
             </Field>
           </div>
-          <Field label="Workflow file">
-            <Input value={workflow} onChange={(e) => setWorkflow(e.target.value)} placeholder="deploy-otel.yml" />
+          <Field label={labels.workflow}>
+            <Input
+              value={workflow}
+              onChange={(e) => setWorkflow(e.target.value)}
+              placeholder={labels.workflowPlaceholder}
+            />
           </Field>
           <Field label="Branch">
             <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
           </Field>
-          <Field label="GitHub PAT (actions:write + contents:read)">
-            <Input value={pat} onChange={(e) => setPat(e.target.value)} type="password" placeholder="ghp_…" />
+          <Field label={labels.patHint}>
+            <Input
+              value={pat}
+              onChange={(e) => setPat(e.target.value)}
+              type="password"
+              placeholder={labels.patPlaceholder}
+            />
           </Field>
           <Field label="Inventory path (optional — Ansible inventory.ini inside the repo)">
             <Input
