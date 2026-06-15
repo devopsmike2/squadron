@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/otlp"
 	"github.com/devopsmike2/squadron/internal/otlp/parser"
@@ -72,7 +73,17 @@ type Pool struct {
 	queueSize     int
 	workerCount   int
 	submitTimeout time.Duration
+	// v0.36: passive OTLP discovery. Optional — nil disables the
+	// discovery hook so the worker pool's hot path is unchanged for
+	// installs that don't want it.
+	discovery     *discovery.Service
 }
+
+// SetDiscovery wires the v0.36 passive OTLP discovery service.
+// nil disables it (and the worker pool's hot path is unchanged).
+// Called from main.go after construction so the existing
+// NewPool signature stays back-compat.
+func (p *Pool) SetDiscovery(svc *discovery.Service) { p.discovery = svc }
 
 // NewPool creates a new worker pool with configurable workers.
 //
@@ -241,6 +252,13 @@ func (p *Pool) processItem(item WorkItem) {
 			return p.writer.WriteTraces(c, traces)
 		})
 		p.recordBatchMeta(ctx, "traces", traces, totalBytes, writeErr)
+		// v0.36 discovery: register agents we see in incoming
+		// telemetry even if they never opened an OpAMP session.
+		// Only attempt on successful write — a failed batch isn't
+		// evidence the agent exists.
+		if writeErr == nil && p.discovery != nil {
+			p.discoverFromTraces(ctx, traces)
+		}
 		p.logger.Debug("Processed traces",
 			zap.Int("count", len(traces)),
 			zap.Duration("duration", time.Since(start)),
@@ -261,6 +279,11 @@ func (p *Pool) processItem(item WorkItem) {
 		// a single ExportRequest can mix sums, gauges, and histograms.
 		// We emit one BatchMeta per agent_id seen across all three.
 		p.recordMetricsBatchMeta(ctx, sums, gauges, histograms, totalBytes, writeErr)
+
+		// v0.36 discovery on the metrics path.
+		if writeErr == nil && p.discovery != nil {
+			p.discoverFromMetrics(ctx, sums, gauges, histograms)
+		}
 
 		// Pipeline-health extraction (v0.31+): if the batch contains
 		// otelcol_* self-metrics, fork them into the dedicated
@@ -298,6 +321,9 @@ func (p *Pool) processItem(item WorkItem) {
 			return p.writer.WriteLogs(c, logs)
 		})
 		p.recordBatchMeta(ctx, "logs", logs, totalBytes, writeErr)
+		if writeErr == nil && p.discovery != nil {
+			p.discoverFromLogs(ctx, logs)
+		}
 		p.logger.Debug("Processed logs",
 			zap.Int("count", len(logs)),
 			zap.Duration("duration", time.Since(start)),
@@ -399,6 +425,98 @@ func (p *Pool) recordMetricsBatchMeta(
 			PayloadBytes: bytes,
 			Status:       status,
 		})
+	}
+}
+
+// discoverFrom{Traces,Metrics,Logs} extract one observation per
+// unique agent_id seen in the batch and feed it to the v0.36
+// discovery service. The service's own LRU dedup means we don't
+// need to deduplicate per-batch — the worst case is a Map allocation
+// + a noop lookup, both cheap. Hostname is taken from the
+// host.name resource attribute, falling back to service.name.
+
+func (p *Pool) discoverFromTraces(ctx context.Context, traces []otlp.TraceData) {
+	seen := map[string]struct{}{}
+	for i := range traces {
+		t := &traces[i]
+		if t.AgentID == "" {
+			continue
+		}
+		if _, dup := seen[t.AgentID]; dup {
+			continue
+		}
+		seen[t.AgentID] = struct{}{}
+		p.discovery.RegisterIfUnknown(ctx, obsFromResource(t.AgentID, t.ResourceAttributes))
+	}
+}
+
+func (p *Pool) discoverFromMetrics(
+	ctx context.Context,
+	sums []otlp.MetricSumData,
+	gauges []otlp.MetricGaugeData,
+	histograms []otlp.MetricHistogramData,
+) {
+	seen := map[string]struct{}{}
+	for i := range sums {
+		m := &sums[i]
+		if m.AgentID == "" {
+			continue
+		}
+		if _, dup := seen[m.AgentID]; dup {
+			continue
+		}
+		seen[m.AgentID] = struct{}{}
+		p.discovery.RegisterIfUnknown(ctx, obsFromResource(m.AgentID, m.ResourceAttributes))
+	}
+	for i := range gauges {
+		m := &gauges[i]
+		if m.AgentID == "" {
+			continue
+		}
+		if _, dup := seen[m.AgentID]; dup {
+			continue
+		}
+		seen[m.AgentID] = struct{}{}
+		p.discovery.RegisterIfUnknown(ctx, obsFromResource(m.AgentID, m.ResourceAttributes))
+	}
+	for i := range histograms {
+		m := &histograms[i]
+		if m.AgentID == "" {
+			continue
+		}
+		if _, dup := seen[m.AgentID]; dup {
+			continue
+		}
+		seen[m.AgentID] = struct{}{}
+		p.discovery.RegisterIfUnknown(ctx, obsFromResource(m.AgentID, m.ResourceAttributes))
+	}
+}
+
+func (p *Pool) discoverFromLogs(ctx context.Context, logs []otlp.LogData) {
+	seen := map[string]struct{}{}
+	for i := range logs {
+		l := &logs[i]
+		if l.AgentID == "" {
+			continue
+		}
+		if _, dup := seen[l.AgentID]; dup {
+			continue
+		}
+		seen[l.AgentID] = struct{}{}
+		p.discovery.RegisterIfUnknown(ctx, obsFromResource(l.AgentID, l.ResourceAttributes))
+	}
+}
+
+// obsFromResource builds a discovery.Observation from the standard
+// OTel resource attributes. service.name + host.name are the two
+// the collector emits by default; everything else is gravy.
+func obsFromResource(agentID string, resource map[string]string) discovery.Observation {
+	return discovery.Observation{
+		AgentID:     agentID,
+		Hostname:    resource["host.name"],
+		ServiceName: resource["service.name"],
+		Version:     resource["service.version"],
+		OS:          resource["os.type"],
 	}
 }
 
