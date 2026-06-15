@@ -485,6 +485,22 @@ func (s *Server) registerRoutes() {
 			audit.GET("/events", auditHandlers.HandleListAuditEvents)
 		}
 
+		// v0.40.0 Timeline — postmortem view that merges audit,
+		// deploy, and cost-spike events into one chronologically
+		// sorted stream. Read-only; gated by audit-read since the
+		// merged data is a strict subset of what the audit log
+		// already exposes.
+		v1.GET("/timeline",
+			middleware.RequireScope(services.ScopeAuditRead),
+			func(c *gin.Context) {
+				handlers.NewTimelineHandlers(
+					s.auditService,
+					s.deploy,
+					s.costSpikes,
+					s.logger,
+				).HandleList(c)
+			})
+
 		// Rollouts — safe staged config deployment with automatic rollback.
 		rollouts := v1.Group("/rollouts")
 		{
