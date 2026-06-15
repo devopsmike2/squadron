@@ -12,9 +12,13 @@ import {
   CheckCircle2,
   Info,
   Loader2,
+  SparklesIcon,
 } from "lucide-react";
+import { useState } from "react";
 
+import { remediateLint, useAICapabilities } from "@/api/ai";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useConfigLint } from "@/hooks/useConfigLint";
 import type { LintFinding, LintSeverity } from "@/types/config-tools";
 
@@ -22,6 +26,14 @@ interface ConfigLintPanelProps {
   value: string;
   /** Called when the user clicks a finding row; jumps the editor to that line. */
   onJumpToLine?: (line: number) => void;
+  /**
+   * v0.44 — called with a Claude-remediated YAML when the operator
+   * clicks "Auto-fix with AI". The parent applies the fixed YAML to
+   * the editor (typically by setValue) and the lint refreshes on the
+   * next debounce. Hidden when AI is disabled or there are no
+   * actionable findings.
+   */
+  onRemediate?: (fixedYAML: string, summary: string) => void;
 }
 
 const severityOrder: Record<LintSeverity, number> = {
@@ -55,8 +67,19 @@ const severityBadge = (sev: LintSeverity) => {
   );
 };
 
-export function ConfigLintPanel({ value, onJumpToLine }: ConfigLintPanelProps) {
+export function ConfigLintPanel({
+  value,
+  onJumpToLine,
+  onRemediate,
+}: ConfigLintPanelProps) {
   const { findings, isLinting, error } = useConfigLint(value);
+  // v0.44 — only fire the Remediate affordance when AI is enabled
+  // and there's something to fix. Same pattern as the existing
+  // AI-Assist dropdowns: no buttons that 503 on click.
+  const { capabilities } = useAICapabilities();
+  const aiEnabled = capabilities?.enabled ?? false;
+  const [remediating, setRemediating] = useState(false);
+  const [remediateErr, setRemediateErr] = useState<string | null>(null);
 
   const sorted = [...findings].sort(
     (a, b) => severityOrder[a.severity] - severityOrder[b.severity],
@@ -64,6 +87,31 @@ export function ConfigLintPanel({ value, onJumpToLine }: ConfigLintPanelProps) {
 
   const errorCount = findings.filter((f) => f.severity === "error").length;
   const warningCount = findings.filter((f) => f.severity === "warning").length;
+  const actionable = findings.filter(
+    (f) => f.severity === "warning" || f.severity === "error",
+  );
+
+  const handleRemediate = async () => {
+    if (!onRemediate || remediating || actionable.length === 0) return;
+    setRemediating(true);
+    setRemediateErr(null);
+    try {
+      const resp = await remediateLint({
+        yaml: value,
+        findings: actionable.map((f) => ({
+          severity: f.severity as "warning" | "error",
+          code: f.rule,
+          message: f.message,
+          path: f.path,
+        })),
+      });
+      onRemediate(resp.fixed_yaml, resp.summary);
+    } catch (e) {
+      setRemediateErr(String((e as Error).message ?? e));
+    } finally {
+      setRemediating(false);
+    }
+  };
 
   return (
     <div className="flex flex-col border-t bg-muted/20">
@@ -100,8 +148,28 @@ export function ConfigLintPanel({ value, onJumpToLine }: ConfigLintPanelProps) {
               {warningCount} warning{warningCount !== 1 ? "s" : ""}
             </Badge>
           )}
+          {/* v0.44 — Auto-fix with AI. Only shows when AI is
+              configured, there's something to fix, and the parent
+              exposed a remediate callback to apply the result. */}
+          {aiEnabled && actionable.length > 0 && onRemediate && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRemediate}
+              disabled={remediating}
+              className="h-7 gap-1.5 px-2 text-xs"
+            >
+              <SparklesIcon className="h-3 w-3 text-primary/80" />
+              {remediating ? "Fixing…" : "Auto-fix with AI"}
+            </Button>
+          )}
         </div>
       </div>
+      {remediateErr && (
+        <div className="px-4 py-2 text-xs text-red-600">
+          Auto-fix failed: {remediateErr}
+        </div>
+      )}
 
       {error && (
         <div className="px-4 py-2 text-xs text-red-600">

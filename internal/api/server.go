@@ -613,6 +613,17 @@ func (s *Server) registerRoutes() {
 		v1.POST("/ai/explain-config",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleExplainConfig(c) }))
+		// v0.44 — natural-language fleet query. Same agents-read
+		// scope since the result is just filter params for /agents.
+		v1.POST("/ai/fleet-query",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleFleetQuery(c) }))
+		// v0.44 — auto-remediate lint warnings. The remediated YAML
+		// flows through the normal save / rollout path, so no new
+		// scope is needed — config-write happens at save time.
+		v1.POST("/ai/remediate-lint",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleRemediateLint(c) }))
 
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest

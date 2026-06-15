@@ -52,6 +52,7 @@ import {
 import { getGroups } from "@/api/groups";
 import { AgentDetailsDrawer } from "@/components/AgentDetailsDrawer";
 import { AgentCard } from "@/components/agents/AgentCard";
+import { AskAIStrip } from "@/components/agents/AskAIStrip";
 import { SavedFilters } from "@/components/agents/SavedFilters";
 import { GroupDetailsDrawer } from "@/components/GroupDetailsDrawer";
 import { Badge } from "@/components/ui/badge";
@@ -436,6 +437,28 @@ export default function AgentsPage() {
           </Button>
         </div>
       </header>
+
+      {/* v0.44 — natural language fleet query. The model translates
+          plain English into the same filter atoms the SavedFilters
+          strip stores, so applying one is exactly like clicking a
+          saved chip. Hidden entirely when AI is disabled. */}
+      <AskAIStrip
+        labelKeys={Array.from(
+          new Set(
+            agents.flatMap((a) => Object.keys(a.labels ?? {})),
+          ),
+        ).slice(0, 30)}
+        groupNames={(groupsData?.groups ?? []).map((g) => g.name)}
+        onApply={(resp) => {
+          if (resp.drift_status) setDrift(resp.drift_status);
+          if (resp.status) setStatus(resp.status);
+          if (resp.group_id) setGroupId(resp.group_id);
+          if (resp.q !== undefined) {
+            setSearchInput(resp.q);
+            setSearch(resp.q);
+          }
+        }}
+      />
 
       {/* Saved filter chips. v0.38 — operators name the questions
           they ask every day and recall them with one click. */}

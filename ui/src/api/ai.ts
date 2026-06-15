@@ -77,6 +77,64 @@ export function explainConfig(
   return apiPost<ExplainConfigResponse>("/ai/explain-config", req);
 }
 
+// v0.44 — natural-language fleet query.
+
+export interface FleetQuerySchema {
+  label_keys?: string[];
+  groups?: string[];
+}
+
+export interface FleetQueryRequest {
+  query: string;
+  schema?: FleetQuerySchema;
+}
+
+export interface FleetQueryResponse {
+  status?: "online" | "offline" | "error";
+  drift_status?: "synced" | "drifted" | "no_intent" | "no_effective";
+  group_id?: string;
+  q?: string;
+  explanation: string;
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+export function translateFleetQuery(
+  req: FleetQueryRequest,
+): Promise<FleetQueryResponse> {
+  return apiPost<FleetQueryResponse>("/ai/fleet-query", req);
+}
+
+// v0.44 — auto-remediate lint warnings.
+
+export interface LintFinding {
+  severity: "warning" | "error";
+  code: string;
+  message: string;
+  path?: string;
+}
+
+export interface RemediateLintRequest {
+  yaml: string;
+  findings: LintFinding[];
+}
+
+export interface RemediateLintResponse {
+  fixed_yaml: string;
+  summary: string;
+  unaddressed?: string[];
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+export function remediateLint(
+  req: RemediateLintRequest,
+): Promise<RemediateLintResponse> {
+  return apiPost<RemediateLintResponse>("/ai/remediate-lint", req);
+}
+
 /**
  * useAICapabilities — single shared probe of /api/v1/ai/status.
  * Cached for the whole session (5min revalidation); operators

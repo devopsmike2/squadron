@@ -222,8 +222,16 @@ export function ConfigEditorSideBySide({
 
               {/* Squadron server-side lint findings — sits beneath the editor
                   and updates on debounce as the YAML changes. Clicking a
-                  finding jumps the editor to the offending line. */}
-              <ConfigLintPanel value={value} onJumpToLine={jumpToLine} />
+                  finding jumps the editor to the offending line.
+                  v0.44 — onRemediate hooks the Auto-fix-with-AI affordance
+                  to the editor's onChange so the model's output is applied
+                  immediately; the operator reviews via the lint panel
+                  refresh and can save / discard via the normal flow. */}
+              <ConfigLintPanel
+                value={value}
+                onJumpToLine={jumpToLine}
+                onRemediate={(fixed) => onChange(fixed)}
+              />
             </div>
           </ResizablePanel>
 
