@@ -612,11 +612,15 @@ function NewTargetSheet({
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-[480px] sm:max-w-[480px]">
-        <SheetHeader>
+        <SheetHeader className="flex-shrink-0">
           <SheetTitle>New deploy target</SheetTitle>
           <SheetDescription>{labels.sectionHelp}</SheetDescription>
         </SheetHeader>
-        <div className="space-y-4 p-4">
+        {/* v0.44.1 — flex-1 + overflow-y-auto so the form scrolls
+            inside the sheet when the viewport is short. Without
+            this, the bottom (Save / Cancel buttons) gets clipped
+            on small windows. */}
+        <div className="flex-1 space-y-4 overflow-y-auto p-4">
           <Field label="Name">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Prod OTel deploy" />
           </Field>
@@ -800,7 +804,7 @@ function TriggerSheet({
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-[520px] sm:max-w-[520px]">
-        <SheetHeader>
+        <SheetHeader className="flex-shrink-0">
           <SheetTitle>Run "{target.name}"</SheetTitle>
           <SheetDescription>
             Dispatches{" "}
@@ -811,7 +815,7 @@ function TriggerSheet({
             <code className="font-mono">{target.github_workflow}</code>.
           </SheetDescription>
         </SheetHeader>
-        <div className="space-y-4 p-4">
+        <div className="flex-1 space-y-4 overflow-y-auto p-4">
           <Field label="Inputs (merged with the target's defaults)">
             <Textarea
               value={inputsJSON}
