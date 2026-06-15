@@ -17,6 +17,7 @@
  */
 
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import useSWR from "swr";
 
 import {
@@ -94,7 +95,13 @@ export function InventorySummary() {
           <div className="text-xs text-muted-foreground">
             {data.missing} expected{" "}
             {data.missing === 1 ? "host hasn't" : "hosts haven't"} checked in
-            recently. See <a href="/inventory" className="underline">Inventory</a>{" "}
+            recently. See{" "}
+            <Link
+              to="/inventory"
+              className="underline hover:text-foreground"
+            >
+              Inventory
+            </Link>{" "}
             for details.
           </div>
         )}

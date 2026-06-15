@@ -10,6 +10,7 @@ import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
+import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
 import QuickstartPage from "./pages/Quickstart";
 import DeployPage from "./pages/Deploy";
@@ -144,6 +145,11 @@ function AuthBoundary() {
           <Route path="/rollouts" element={<RolloutsPage />} />
           <Route path="/deploy" element={<DeployPage />} />
           <Route path="/audit" element={<AuditPage />} />
+          {/* v0.41.1 — full Inventory drill-in page. The "See
+              inventory for details" link on Fleet Status pointed
+              here before but the route didn't exist, so the link
+              rendered blank. */}
+          <Route path="/inventory" element={<InventoryPage />} />
           {/* v0.40 postmortem timeline — merges audit, deploy,
               cost-spike events onto one horizontal axis. */}
           <Route path="/timeline" element={<TimelinePage />} />
