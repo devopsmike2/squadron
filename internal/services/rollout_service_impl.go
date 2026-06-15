@@ -6,6 +6,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -97,6 +98,13 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 	}
 
 	now := time.Now().UTC()
+	// v0.47 — RequireApproval gates the initial state. With
+	// approval required, the engine refuses to advance the
+	// rollout until an approver calls Approve.
+	initialState := RolloutStatePending
+	if input.RequireApproval {
+		initialState = RolloutStatePendingApproval
+	}
 	rollout := &Rollout{
 		ID:               uuid.New().String(),
 		Name:             input.Name,
@@ -106,8 +114,10 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		Stages:           normalizeStages(input.Stages),
 		AbortCriteria:    input.AbortCriteria,
 		NotificationURL:  input.NotificationURL,
-		State:            RolloutStatePending,
+		State:            initialState,
 		CurrentStage:     0,
+		RequireApproval:  input.RequireApproval,
+		RequestedBy:      input.RequestedBy,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -332,6 +342,99 @@ func (s *RolloutServiceImpl) Persist(ctx context.Context, rollout *Rollout) erro
 	return s.appStore.UpdateRollout(ctx, toStorageRollout(rollout))
 }
 
+// Approve transitions a rollout from pending_approval to pending so the
+// engine can pick it up on the next tick. v0.47 — two-person rule:
+// the approver must not equal the rollout's RequestedBy. We compare
+// case-insensitively because tokens / SSO can emit the same actor in
+// either case depending on the issuer.
+func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes string) (*Rollout, error) {
+	stored, err := s.appStore.GetRollout(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		return nil, fmt.Errorf("rollout not found: %s", id)
+	}
+	if stored.State != applicationstore.RolloutStatePendingApproval {
+		return toServiceRollout(stored), fmt.Errorf("cannot approve rollout in state %q", stored.State)
+	}
+	if strings.EqualFold(strings.TrimSpace(approver), strings.TrimSpace(stored.RequestedBy)) {
+		return toServiceRollout(stored), fmt.Errorf("two-person rule: requester %q cannot approve their own rollout", stored.RequestedBy)
+	}
+
+	now := time.Now().UTC()
+	stored.State = applicationstore.RolloutStatePending
+	stored.ApprovedBy = approver
+	stored.ApprovedAt = &now
+	stored.ApprovalNotes = notes
+	if err := s.appStore.UpdateRollout(ctx, stored); err != nil {
+		return nil, fmt.Errorf("failed to persist approval: %w", err)
+	}
+	s.logger.Info("rollout approved",
+		zap.String("rollout_id", id),
+		zap.String("approver", approver))
+	if s.auditService != nil {
+		_ = s.auditService.Record(ctx, AuditEntry{
+			Actor:      approver,
+			EventType:  "rollout.approved",
+			TargetType: "rollout",
+			TargetID:   id,
+			Action:     "approved",
+			Payload:    map[string]any{"notes": notes},
+		})
+	}
+	if s.tracer != nil {
+		s.tracer.RecordEvent(id, "approved", approver)
+	}
+	return toServiceRollout(stored), nil
+}
+
+// Reject terminates a rollout that was waiting for approval. Same
+// two-person rule as Approve. Terminal state — the requester has to
+// clone the rollout to retry.
+func (s *RolloutServiceImpl) Reject(ctx context.Context, id, rejecter, notes string) (*Rollout, error) {
+	stored, err := s.appStore.GetRollout(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		return nil, fmt.Errorf("rollout not found: %s", id)
+	}
+	if stored.State != applicationstore.RolloutStatePendingApproval {
+		return toServiceRollout(stored), fmt.Errorf("cannot reject rollout in state %q", stored.State)
+	}
+	if strings.EqualFold(strings.TrimSpace(rejecter), strings.TrimSpace(stored.RequestedBy)) {
+		return toServiceRollout(stored), fmt.Errorf("two-person rule: requester %q cannot reject their own rollout", stored.RequestedBy)
+	}
+
+	now := time.Now().UTC()
+	stored.State = applicationstore.RolloutStateRejected
+	stored.RejectedBy = rejecter
+	stored.RejectedAt = &now
+	stored.ApprovalNotes = notes
+	stored.CompletedAt = &now
+	if err := s.appStore.UpdateRollout(ctx, stored); err != nil {
+		return nil, fmt.Errorf("failed to persist rejection: %w", err)
+	}
+	s.logger.Info("rollout rejected",
+		zap.String("rollout_id", id),
+		zap.String("rejecter", rejecter))
+	if s.auditService != nil {
+		_ = s.auditService.Record(ctx, AuditEntry{
+			Actor:      rejecter,
+			EventType:  "rollout.rejected",
+			TargetType: "rollout",
+			TargetID:   id,
+			Action:     "rejected",
+			Payload:    map[string]any{"notes": notes},
+		})
+	}
+	if s.tracer != nil {
+		s.tracer.RecordEvent(id, "rejected", rejecter)
+	}
+	return toServiceRollout(stored), nil
+}
+
 // Preview returns a side-by-side view of what creating a rollout against
 // (groupID, targetConfigID) would do: the group's current effective
 // config, the target, a line-level diff, and lint findings against the
@@ -551,6 +654,14 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		CurrentStage:    r.CurrentStage,
 		StageStartedAt:  r.StageStartedAt,
 		AbortReason:     r.AbortReason,
+		// v0.47 approval fields.
+		RequireApproval: r.RequireApproval,
+		RequestedBy:     r.RequestedBy,
+		ApprovedBy:      r.ApprovedBy,
+		ApprovedAt:      r.ApprovedAt,
+		RejectedBy:      r.RejectedBy,
+		RejectedAt:      r.RejectedAt,
+		ApprovalNotes:   r.ApprovalNotes,
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
 		CompletedAt:     r.CompletedAt,
@@ -584,6 +695,14 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		CurrentStage:    r.CurrentStage,
 		StageStartedAt:  r.StageStartedAt,
 		AbortReason:     r.AbortReason,
+		// v0.47 approval fields.
+		RequireApproval: r.RequireApproval,
+		RequestedBy:     r.RequestedBy,
+		ApprovedBy:      r.ApprovedBy,
+		ApprovedAt:      r.ApprovedAt,
+		RejectedBy:      r.RejectedBy,
+		RejectedAt:      r.RejectedAt,
+		ApprovalNotes:   r.ApprovalNotes,
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
 		CompletedAt:     r.CompletedAt,

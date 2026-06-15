@@ -316,12 +316,14 @@ type APIToken struct {
 type RolloutState string
 
 const (
-	RolloutStatePending     RolloutState = "pending"      // created but engine hasn't picked it up yet
-	RolloutStateInProgress  RolloutState = "in_progress"  // actively advancing through stages
-	RolloutStatePaused      RolloutState = "paused"       // operator paused — engine no-ops, no advance, no auto-abort
-	RolloutStateSucceeded   RolloutState = "succeeded"    // final stage completed cleanly
-	RolloutStateAborted     RolloutState = "aborted"      // operator clicked Abort or criteria fired; rollback in progress
-	RolloutStateRolledBack  RolloutState = "rolled_back"  // previous config restored; terminal
+	RolloutStatePending         RolloutState = "pending"          // created but engine hasn't picked it up yet
+	RolloutStateInProgress      RolloutState = "in_progress"      // actively advancing through stages
+	RolloutStatePaused          RolloutState = "paused"           // operator paused — engine no-ops, no advance, no auto-abort
+	RolloutStateSucceeded       RolloutState = "succeeded"        // final stage completed cleanly
+	RolloutStateAborted         RolloutState = "aborted"          // operator clicked Abort or criteria fired; rollback in progress
+	RolloutStateRolledBack      RolloutState = "rolled_back"      // previous config restored; terminal
+	RolloutStatePendingApproval RolloutState = "pending_approval" // v0.47 — created with require_approval=true; waiting for approver
+	RolloutStateRejected        RolloutState = "rejected"         // v0.47 — approver rejected; terminal
 )
 
 // RolloutStageMode controls how the engine picks the canary set for a
@@ -392,6 +394,19 @@ type Rollout struct {
 	CurrentStage   int          `json:"current_stage"`              // index into Stages
 	StageStartedAt *time.Time   `json:"stage_started_at,omitempty"` // when CurrentStage began dwelling
 	AbortReason    string       `json:"abort_reason,omitempty"`     // populated when State transitions to aborted
+
+	// v0.47 approval workflow. RequireApproval is set at create time;
+	// when true the rollout starts in state "pending_approval" and
+	// the engine refuses to advance it until Approve transitions it
+	// to "pending". RequestedBy / ApprovedBy enforce the two-person
+	// rule.
+	RequireApproval bool       `json:"require_approval,omitempty"`
+	RequestedBy     string     `json:"requested_by,omitempty"`
+	ApprovedBy      string     `json:"approved_by,omitempty"`
+	ApprovedAt      *time.Time `json:"approved_at,omitempty"`
+	RejectedBy      string     `json:"rejected_by,omitempty"`
+	RejectedAt      *time.Time `json:"rejected_at,omitempty"`
+	ApprovalNotes   string     `json:"approval_notes,omitempty"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`

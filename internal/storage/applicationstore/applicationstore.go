@@ -41,12 +41,14 @@ const (
 	ThresholdEqual          = types.ThresholdEqual
 	ThresholdNotEqual       = types.ThresholdNotEqual
 
-	RolloutStatePending    = types.RolloutStatePending
-	RolloutStateInProgress = types.RolloutStateInProgress
-	RolloutStatePaused     = types.RolloutStatePaused
-	RolloutStateSucceeded  = types.RolloutStateSucceeded
-	RolloutStateAborted    = types.RolloutStateAborted
-	RolloutStateRolledBack = types.RolloutStateRolledBack
+	RolloutStatePending         = types.RolloutStatePending
+	RolloutStateInProgress      = types.RolloutStateInProgress
+	RolloutStatePaused          = types.RolloutStatePaused
+	RolloutStateSucceeded       = types.RolloutStateSucceeded
+	RolloutStateAborted         = types.RolloutStateAborted
+	RolloutStateRolledBack      = types.RolloutStateRolledBack
+	RolloutStatePendingApproval = types.RolloutStatePendingApproval
+	RolloutStateRejected        = types.RolloutStateRejected
 
 	RolloutStageModePercent = types.RolloutStageModePercent
 	RolloutStageModeLabel   = types.RolloutStageModeLabel
