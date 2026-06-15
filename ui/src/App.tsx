@@ -25,6 +25,7 @@ import {
   subscribeAuthChange,
 } from "@/api/auth-store";
 import { CommandPalette } from "@/components/CommandPalette";
+import { CommandPaletteHint } from "@/components/CommandPaletteHint";
 import { EventSubscriber } from "@/components/EventSubscriber";
 import { KeyboardShortcutsHelp } from "@/components/KeyboardShortcutsHelp";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -104,6 +105,11 @@ function AuthBoundary() {
       {/* Global ⌘K command palette. Mounted inside the Router so its
           items can use useNavigate. */}
       <CommandPalette />
+      {/* First-session hint pointing at ⌘K. localStorage-flagged so
+          it fires exactly once per browser. v0.38 — discoverability
+          pass after the command palette went underutilized in
+          early usage. */}
+      <CommandPaletteHint />
       {/* SSE-driven cache invalidator. Listens to Squadron's event
           stream and revalidates the relevant SWR caches so pages stay
           live without each one wiring its own subscription. */}

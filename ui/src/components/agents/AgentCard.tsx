@@ -39,6 +39,39 @@ const DRIFT_TONE: Record<
   default: { label: "Unknown", color: "var(--muted-foreground)" },
 };
 
+// Environment color stripe across the top of the card. The mapping
+// covers the standard deployment.environment values we see in the
+// wild; everything else falls back to a neutral muted stripe so the
+// strip is always present but never alarming.
+//
+// Added in v0.38 — operators with 100+ identical-looking
+// synthetic-collector cards in a grid couldn't tell at a glance
+// which environment they were scanning.
+function envColor(env: string | undefined): string {
+  switch ((env ?? "").toLowerCase()) {
+    case "prod":
+    case "production":
+      return "var(--chart-1, #06b6d4)"; // cyan
+    case "staging":
+    case "stage":
+      return "var(--chart-3, #eab308)"; // amber
+    case "dev":
+    case "development":
+      return "var(--chart-2, #a855f7)"; // purple
+    case "test":
+    case "qa":
+      return "var(--chart-4, #f97316)"; // orange
+    default:
+      return "var(--border)";
+  }
+}
+
+// Recency threshold for the staleness fade. The collector OpAMP
+// heartbeat is typically 30s; we give it 10x that before considering
+// the card stale enough to dim. Tight enough to flag silent agents,
+// loose enough to ignore network blips.
+const STALE_MS = 5 * 60 * 1000;
+
 interface AgentCardProps {
   agent: Agent;
   groupName?: string;
@@ -58,12 +91,39 @@ export function AgentCard({
   const visibleLabels = labels.slice(0, 3);
   const overflow = labels.length - visibleLabels.length;
 
+  // Environment from labels — the OTel convention is
+  // deployment.environment (e.g. "prod", "staging"). Some collectors
+  // use a flat "env" alias. Take whichever shows up first.
+  const env =
+    agent.labels?.["deployment.environment"] ??
+    agent.labels?.["env"] ??
+    undefined;
+  const envStripe = envColor(env);
+
+  // Staleness fade: dim the entire card when the agent hasn't been
+  // heard from in STALE_MS. Compute once at render — the live clock
+  // doesn't need to tick second-by-second; a parent SWR refresh
+  // re-renders us anyway.
+  const lastSeenMs = new Date(agent.last_seen).getTime();
+  const isStale =
+    !Number.isNaN(lastSeenMs) && Date.now() - lastSeenMs > STALE_MS;
+
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group relative flex flex-col gap-2 rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-primary/50 hover:bg-card/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring overflow-hidden"
+      className={`group relative flex flex-col gap-2 rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-primary/50 hover:bg-card/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring overflow-hidden ${
+        isStale ? "opacity-60 hover:opacity-100" : ""
+      }`}
     >
+      {/* Environment stripe along the top edge. v0.38 visual
+          differentiation — prod/staging/dev call themselves out
+          before the operator reads any text. */}
+      <span
+        aria-hidden
+        className="absolute left-0 right-0 top-0 h-[3px]"
+        style={{ background: envStripe }}
+      />
       {/* Drift accent strip on the left edge. Subtle but the
           fastest visual cue when scanning a wall of cards. */}
       <span

@@ -52,6 +52,7 @@ import {
 import { getGroups } from "@/api/groups";
 import { AgentDetailsDrawer } from "@/components/AgentDetailsDrawer";
 import { AgentCard } from "@/components/agents/AgentCard";
+import { SavedFilters } from "@/components/agents/SavedFilters";
 import { GroupDetailsDrawer } from "@/components/GroupDetailsDrawer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -341,6 +342,27 @@ export default function AgentsPage() {
     setSearch("");
   };
 
+  // Saved-filter integration: flatten the four filter atoms into a
+  // single params object that SavedFilters can store and recall.
+  // Empty strings serialize away on the SavedFilters side via
+  // paramsMatch, so two combos with the same effective filter set
+  // compare equal even if one has explicit empties.
+  const filterParams: Record<string, string> = {
+    drift: drift === "any" ? "" : drift,
+    status: status === "any" ? "" : status,
+    group_id: groupId === "any" ? "" : groupId,
+    q: search.trim(),
+  };
+  const applySaved = (params: Record<string, string>) => {
+    const d = (params.drift || "any") as DriftFilter;
+    if (DRIFT_OPTIONS.some((o) => o.value === d)) setDrift(d);
+    const s = (params.status || "any") as StatusFilter;
+    if (STATUS_OPTIONS.some((o) => o.value === s)) setStatus(s);
+    setGroupId(params.group_id || "any");
+    setSearchInput(params.q || "");
+    setSearch(params.q || "");
+  };
+
   // Infinite-scroll: when the bottom sentinel comes into view, ask
   // SWR for the next page. The handler is shared between the
   // virtualized + non-virtualized paths.
@@ -414,6 +436,15 @@ export default function AgentsPage() {
           </Button>
         </div>
       </header>
+
+      {/* Saved filter chips. v0.38 — operators name the questions
+          they ask every day and recall them with one click. */}
+      <SavedFilters
+        scope="agents"
+        currentParams={filterParams}
+        onApply={applySaved}
+        hasAnyFilter={hasAnyFilter}
+      />
 
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2 backdrop-blur">

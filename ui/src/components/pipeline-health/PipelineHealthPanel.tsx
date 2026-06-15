@@ -31,6 +31,7 @@ import {
 } from "@/api/pipelinehealth";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 
 const REFRESH_MS = 10_000;
 
@@ -283,7 +284,18 @@ export function FleetHealthSummary() {
     <Card>
       <CardContent className="space-y-3 p-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Pipeline health</h3>
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-sm font-semibold">Pipeline health</h3>
+            <InfoTooltip label="About pipeline health" maxWidth={320}>
+              Each agent's verdict comes from its OTel collector
+              self-metrics (queue depth, send failures, processor
+              drops). <b>Unknown</b> just means we haven't received
+              self-metrics from that agent yet — it's normal on fresh
+              installs and not an alarm. <b>Degraded</b> and{" "}
+              <b>Broken</b> mean we observed a real threshold breach
+              and the agent should be investigated.
+            </InfoTooltip>
+          </div>
           <span className="text-xs text-muted-foreground">
             {data.total} agent{data.total === 1 ? "" : "s"}
           </span>
