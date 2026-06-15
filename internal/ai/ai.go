@@ -383,6 +383,234 @@ func (s *Service) ExplainConfig(ctx context.Context, req ExplainConfigRequest) (
 }
 
 // ----------------------------------------------------------------
+// v0.44 — Natural-language fleet query
+// ----------------------------------------------------------------
+//
+// "Show me prod agents that haven't checked in for an hour" →
+// structured GetAgentsParams. The model translates between the
+// operator's mental model and the API the UI already speaks.
+//
+// We deliberately keep the output space tight — Claude returns ONLY
+// fields the existing /agents endpoint already understands. New
+// filter dimensions need a Squadron-side schema change first; the
+// AI doesn't get to invent endpoints.
+
+// FleetQueryRequest is the input. Schema is a per-deployment hint:
+// available label keys, group names, etc. The model uses it to
+// ground its answers (e.g. recognizing "Windows" maps to
+// host.os.type=windows for THIS fleet's actual label vocabulary).
+type FleetQueryRequest struct {
+	Query  string       `json:"query"`
+	Schema FleetSchema  `json:"schema,omitempty"`
+}
+
+// FleetSchema is the small grounding hint passed alongside the
+// query. All fields are optional — the model degrades gracefully.
+type FleetSchema struct {
+	LabelKeys []string `json:"label_keys,omitempty"`
+	Groups    []string `json:"groups,omitempty"`
+}
+
+// FleetQueryResponse is the structured filter the UI applies. Mirror
+// of GetAgentsParams + a short "explanation" line shown to the
+// operator so they understand what the AI thought they meant.
+type FleetQueryResponse struct {
+	Status      string `json:"status,omitempty"`       // "online" | "offline" | "error"
+	DriftStatus string `json:"drift_status,omitempty"` // "synced" | "drifted" | "no_intent" | "no_effective"
+	GroupID     string `json:"group_id,omitempty"`
+	Q           string `json:"q,omitempty"` // freetext search
+	Explanation string `json:"explanation"`
+	Model       string `json:"model"`
+	TokensIn    int    `json:"tokens_in"`
+	TokensOut   int    `json:"tokens_out"`
+}
+
+// TranslateFleetQuery asks Claude to convert a natural language
+// query into structured filter params. The translation is
+// constrained by a JSON schema so the model can't invent fields the
+// UI doesn't know how to apply.
+func (s *Service) TranslateFleetQuery(ctx context.Context, req FleetQueryRequest) (*FleetQueryResponse, error) {
+	if !s.Enabled() {
+		return nil, ErrDisabled
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		return nil, errors.New("query is required")
+	}
+
+	system := `You translate plain-English fleet queries into Squadron filter parameters.
+
+Output ONLY a JSON object with these fields (omit any you don't infer):
+  "status":       "online" | "offline" | "error"
+  "drift_status": "synced" | "drifted" | "no_intent" | "no_effective"
+  "group_id":     a group name from the schema hint, or empty
+  "q":            a freetext substring to match against agent name or label values
+  "explanation":  one sentence telling the operator what you understood, in plain English
+
+Rules:
+- Use ONLY the four filter fields above. Do not invent endpoints.
+- If the user mentions a state you can't infer, leave that field empty.
+- The freetext "q" is your escape hatch for "name contains X" or "label value contains Y" patterns.
+- Be conservative: it's better to under-filter (return more agents) than to misclassify a query and hide rows the operator wanted.`
+
+	userMsg := "Query: " + strings.TrimSpace(req.Query)
+	if len(req.Schema.LabelKeys) > 0 {
+		userMsg += "\n\nAvailable label keys: " + strings.Join(req.Schema.LabelKeys, ", ")
+	}
+	if len(req.Schema.Groups) > 0 {
+		userMsg += "\n\nGroup names: " + strings.Join(req.Schema.Groups, ", ")
+	}
+
+	resp, err := s.callMessages(ctx, callOpts{
+		Model:    s.cfg.ExplainModel, // Haiku — query translation is short
+		System:   system,
+		UserText: userMsg,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fleet query: %w", err)
+	}
+
+	type body struct {
+		Status      string `json:"status"`
+		DriftStatus string `json:"drift_status"`
+		GroupID     string `json:"group_id"`
+		Q           string `json:"q"`
+		Explanation string `json:"explanation"`
+	}
+	var b body
+	if err := json.Unmarshal([]byte(extractJSONBlock(resp.Text)), &b); err != nil {
+		s.logger.Warn("TranslateFleetQuery: non-JSON response", zap.Error(err))
+		// Defensive fallback: show the operator the raw text so they
+		// can refine the question. They'll see this in the
+		// explanation field.
+		b.Explanation = strings.TrimSpace(resp.Text)
+	}
+	return &FleetQueryResponse{
+		Status:      b.Status,
+		DriftStatus: b.DriftStatus,
+		GroupID:     b.GroupID,
+		Q:           b.Q,
+		Explanation: b.Explanation,
+		Model:       resp.Model,
+		TokensIn:    resp.TokensIn,
+		TokensOut:   resp.TokensOut,
+	}, nil
+}
+
+// ----------------------------------------------------------------
+// v0.44 — Auto-remediate lint warnings
+// ----------------------------------------------------------------
+//
+// Takes a collector config + the configlint findings and asks the
+// model to return a fixed config. We constrain the change set
+// strictly — the model is told to ONLY fix the listed warnings and
+// leave everything else alone. Output is a JSON object with the
+// remediated YAML + a one-line summary; the UI surfaces a diff so
+// the operator reviews before saving.
+
+type RemediateLintRequest struct {
+	YAML     string         `json:"yaml"`
+	Findings []LintFinding  `json:"findings"`
+}
+
+// LintFinding mirrors internal/configlint.Finding's shape but lives
+// here so the AI package doesn't depend on configlint. The handler
+// layer adapts between the two.
+type LintFinding struct {
+	Severity string `json:"severity"`     // "warning" | "error"
+	Code     string `json:"code"`         // e.g. "localhost-exporter"
+	Message  string `json:"message"`
+	Path     string `json:"path,omitempty"` // YAML path the lint flagged
+}
+
+type RemediateLintResponse struct {
+	FixedYAML string `json:"fixed_yaml"`
+	Summary   string `json:"summary"`
+	// Unaddressed lists findings the model declined to touch — usually
+	// because the fix would change runtime behavior in a way the
+	// operator should decide on (e.g. "we recommend deleting this
+	// exporter but you might want it for an audit trail").
+	Unaddressed []string `json:"unaddressed,omitempty"`
+	Model       string   `json:"model"`
+	TokensIn    int      `json:"tokens_in"`
+	TokensOut   int      `json:"tokens_out"`
+}
+
+// RemediateLintWarnings asks Claude to apply targeted fixes for the
+// supplied lint findings. The system prompt narrows the scope to
+// "fix only what's listed" so the model doesn't gold-plate the
+// config with unrelated changes.
+func (s *Service) RemediateLintWarnings(ctx context.Context, req RemediateLintRequest) (*RemediateLintResponse, error) {
+	if !s.Enabled() {
+		return nil, ErrDisabled
+	}
+	if strings.TrimSpace(req.YAML) == "" {
+		return nil, errors.New("yaml is required")
+	}
+	if len(req.Findings) == 0 {
+		// Nothing to do — return the input as-is. Saves a round trip
+		// when the UI fires Remediate on a clean config.
+		return &RemediateLintResponse{
+			FixedYAML: req.YAML,
+			Summary:   "No lint findings to fix.",
+		}, nil
+	}
+
+	system := `You are a senior OpenTelemetry Collector engineer. You fix lint warnings in collector configs.
+
+Output ONLY a JSON object with these fields:
+  "fixed_yaml":  the complete remediated YAML (no markdown, no code fences)
+  "summary":     one sentence describing the change set as a whole
+  "unaddressed": optional array of finding codes you declined to fix because
+                 the fix would have changed runtime behavior in ways the
+                 operator should decide
+
+Rules:
+- Fix ONLY the listed findings. Do not refactor unrelated sections.
+- Preserve every receiver/processor/exporter/extension/connector and pipeline that exists in the original.
+- Keep the YAML's structure and ordering as close to the original as you reasonably can.
+- If a fix would be destructive (deleting an exporter, changing an endpoint to something other than what the warning recommended), put the finding's code in unaddressed and explain in the summary.`
+
+	userMsg := "Config:\n```yaml\n" + req.YAML + "\n```\n\nLint findings to fix:\n"
+	for _, f := range req.Findings {
+		line := "- [" + f.Severity + "] " + f.Code + ": " + f.Message
+		if f.Path != "" {
+			line += " (at " + f.Path + ")"
+		}
+		userMsg += line + "\n"
+	}
+
+	resp, err := s.callMessages(ctx, callOpts{
+		Model:    s.cfg.MergeModel, // Sonnet — touch real YAML carefully
+		System:   system,
+		UserText: userMsg,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("remediate lint: %w", err)
+	}
+
+	type body struct {
+		FixedYAML   string   `json:"fixed_yaml"`
+		Summary     string   `json:"summary"`
+		Unaddressed []string `json:"unaddressed"`
+	}
+	var b body
+	if err := json.Unmarshal([]byte(extractJSONBlock(resp.Text)), &b); err != nil || b.FixedYAML == "" {
+		s.logger.Warn("RemediateLintWarnings: non-JSON response; surfacing raw",
+			zap.Error(err), zap.Int("response_len", len(resp.Text)))
+		b.FixedYAML = strings.TrimSpace(resp.Text)
+		b.Summary = "Remediated via AI (response shape was non-JSON; review carefully)."
+	}
+	return &RemediateLintResponse{
+		FixedYAML:   b.FixedYAML,
+		Summary:     b.Summary,
+		Unaddressed: b.Unaddressed,
+		Model:       resp.Model,
+		TokensIn:    resp.TokensIn,
+		TokensOut:   resp.TokensOut,
+	}, nil
+}
+
+// ----------------------------------------------------------------
 // Anthropic HTTP plumbing
 // ----------------------------------------------------------------
 

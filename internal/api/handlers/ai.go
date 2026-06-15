@@ -80,6 +80,43 @@ func (h *AIHandlers) HandleExplainConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// HandleFleetQuery — POST /api/v1/ai/fleet-query
+//
+// Translates a plain-English fleet query into structured filter
+// params the UI can apply. v0.44 addition.
+func (h *AIHandlers) HandleFleetQuery(c *gin.Context) {
+	var req ai.FleetQueryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	resp, err := h.svc.TranslateFleetQuery(c.Request.Context(), req)
+	if err != nil {
+		h.writeAIError(c, err, "FleetQuery")
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// HandleRemediateLint — POST /api/v1/ai/remediate-lint
+//
+// Takes a YAML config + lint findings and returns a remediated YAML
+// with a one-line summary and a list of any findings the model
+// declined to fix. v0.44 addition.
+func (h *AIHandlers) HandleRemediateLint(c *gin.Context) {
+	var req ai.RemediateLintRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	resp, err := h.svc.RemediateLintWarnings(c.Request.Context(), req)
+	if err != nil {
+		h.writeAIError(c, err, "RemediateLint")
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 // writeAIError maps service-layer errors to HTTP status codes.
 // ErrDisabled becomes a 503 (not enabled / no key); everything
 // else becomes 500 with the message surfaced verbatim so the UI
