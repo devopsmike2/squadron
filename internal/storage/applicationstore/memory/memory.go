@@ -40,6 +40,8 @@ type Store struct {
 	// Targets keyed by ID, runs keyed by ID.
 	deployTargets map[string]*types.DeployTarget
 	deployRuns    map[string]*types.DeployRun
+	// v0.50: SIEM destinations, keyed by ID.
+	siemDestinations map[string]*types.SiemDestination
 }
 
 // NewStore creates a new in-memory store
@@ -57,8 +59,9 @@ func NewStore() *Store {
 		recOutcomes:   make(map[string]*types.RecommendationOutcome),
 		costSpikes:    make(map[string]*types.CostSpikeEvent),
 		expectedAgents: make(map[string]*types.ExpectedAgent),
-		deployTargets: make(map[string]*types.DeployTarget),
-		deployRuns:    make(map[string]*types.DeployRun),
+		deployTargets:    make(map[string]*types.DeployTarget),
+		deployRuns:       make(map[string]*types.DeployRun),
+		siemDestinations: make(map[string]*types.SiemDestination),
 	}
 }
 
@@ -1226,5 +1229,81 @@ func (s *Store) ReplaceExpectedAgentsForSource(_ context.Context, source string,
 		cp.UpdatedAt = now
 		s.expectedAgents[cp.Hostname] = &cp
 	}
+	return nil
+}
+
+// --- SIEM destinations (v0.50) ----------------------------------------
+
+func (s *Store) CreateSiemDestination(ctx context.Context, d *types.SiemDestination) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.siemDestinations[d.ID]; exists {
+		return fmt.Errorf("siem destination already exists: %s", d.ID)
+	}
+	cp := *d
+	s.siemDestinations[d.ID] = &cp
+	return nil
+}
+
+func (s *Store) GetSiemDestination(ctx context.Context, id string) (*types.SiemDestination, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.siemDestinations[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *d
+	return &cp, nil
+}
+
+func (s *Store) ListSiemDestinations(ctx context.Context) ([]*types.SiemDestination, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.SiemDestination, 0, len(s.siemDestinations))
+	for _, d := range s.siemDestinations {
+		cp := *d
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateSiemDestination(ctx context.Context, d *types.SiemDestination) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.siemDestinations[d.ID]
+	if !ok {
+		return fmt.Errorf("siem destination not found: %s", d.ID)
+	}
+	// Preserve dispatcher-owned status fields — UpdateSiemDestination
+	// is the operator path and shouldn't clobber telemetry.
+	d.LastEventSentAt = existing.LastEventSentAt
+	d.LastError = existing.LastError
+	d.LastErrorAt = existing.LastErrorAt
+	d.CreatedAt = existing.CreatedAt
+	cp := *d
+	s.siemDestinations[d.ID] = &cp
+	return nil
+}
+
+func (s *Store) DeleteSiemDestination(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.siemDestinations[id]; !ok {
+		return fmt.Errorf("siem destination not found: %s", id)
+	}
+	delete(s.siemDestinations, id)
+	return nil
+}
+
+func (s *Store) UpdateSiemDestinationStatus(ctx context.Context, id string, sentAt *time.Time, errMsg string, errAt *time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.siemDestinations[id]
+	if !ok {
+		return fmt.Errorf("siem destination not found: %s", id)
+	}
+	existing.LastEventSentAt = sentAt
+	existing.LastError = errMsg
+	existing.LastErrorAt = errAt
 	return nil
 }

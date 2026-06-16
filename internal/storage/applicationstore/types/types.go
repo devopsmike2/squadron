@@ -134,6 +134,21 @@ type ApplicationStore interface {
 	UpdateDeployRun(ctx context.Context, r *DeployRun) error
 	GetDeployRun(ctx context.Context, id string) (*DeployRun, error)
 	ListDeployRuns(ctx context.Context, filter DeployRunFilter) ([]*DeployRun, error)
+
+	// SIEM destinations (v0.50 audit export). One row per configured
+	// downstream SIEM (Splunk HEC, signed webhook). Secret is the
+	// encrypted-at-rest credential — never returned to the API layer
+	// in plaintext.
+	CreateSiemDestination(ctx context.Context, d *SiemDestination) error
+	GetSiemDestination(ctx context.Context, id string) (*SiemDestination, error)
+	ListSiemDestinations(ctx context.Context) ([]*SiemDestination, error)
+	UpdateSiemDestination(ctx context.Context, d *SiemDestination) error
+	DeleteSiemDestination(ctx context.Context, id string) error
+	// UpdateSiemDestinationStatus is a narrow update path the
+	// dispatcher uses to write LastEventSentAt / LastError / LastErrorAt
+	// without touching the rest of the row (avoids racing with an
+	// operator's concurrent edit).
+	UpdateSiemDestinationStatus(ctx context.Context, id string, sentAt *time.Time, errMsg string, errAt *time.Time) error
 }
 
 // DeployTarget describes one GitHub Actions workflow Squadron is
@@ -635,4 +650,38 @@ type CostSpikeFilter struct {
 	// "all".
 	Status string
 	Limit  int
+}
+
+// SiemDestination is one configured downstream SIEM (Splunk HEC,
+// signed webhook). Mirrors siem.Destination but lives at the storage
+// layer; the service layer translates between the two shapes.
+//
+// Type values match siem.DestinationType strings: "splunk_hec",
+// "webhook". The dispatcher dispatches an Event to a destination if
+// the event's type starts with any of the EventTypePrefixesJSON
+// (empty = forward everything).
+//
+// Secret is encrypted at rest. Format: nonce(24) || ciphertext from
+// internal/siem/secrets.go. Never returned in API responses; the API
+// layer only exposes HasSecret to the UI.
+//
+// LastEventSentAt / LastError / LastErrorAt are operational
+// telemetry the dispatcher writes via UpdateSiemDestinationStatus so
+// the UI can show "last delivered 30s ago" / "401 unauthorized" at
+// a glance.
+//
+// Added in v0.50 for compliance-grade audit retention.
+type SiemDestination struct {
+	ID                     string     `json:"id"`
+	Name                   string     `json:"name"`
+	Type                   string     `json:"type"`
+	URL                    string     `json:"url"`
+	Secret                 []byte     `json:"-"` // ciphertext
+	Enabled                bool       `json:"enabled"`
+	EventTypePrefixesJSON  string     `json:"event_type_prefixes_json,omitempty"`
+	LastEventSentAt        *time.Time `json:"last_event_sent_at,omitempty"`
+	LastError              string     `json:"last_error,omitempty"`
+	LastErrorAt            *time.Time `json:"last_error_at,omitempty"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
