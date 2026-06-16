@@ -34,6 +34,13 @@ export const ALL_SCOPES: ReadonlyArray<{ id: string; label: string; group: strin
   // Grant to a change-management or reviewer group only.
   { id: "rollouts:approve", label: "Approve / reject pending rollouts (two-person rule)", group: "Rollouts" },
   { id: "audit:read", label: "Read audit log + event stream", group: "Audit" },
+  // v0.50 — SIEM destination management. Read = list / view (no
+  // secrets ever); write = create / update / delete / test. Grant
+  // write only to a small change-management group; rotating an
+  // audit destination is a sensitive operation that should be
+  // explicitly authorized.
+  { id: "siem:read", label: "View SIEM destinations", group: "Audit" },
+  { id: "siem:write", label: "Manage SIEM destinations (create / rotate / test)", group: "Audit" },
   { id: "auth:read", label: "View API tokens", group: "Auth" },
   { id: "auth:write", label: "Create / revoke API tokens", group: "Auth" },
 ];
