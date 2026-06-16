@@ -690,9 +690,12 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		RejectedBy:      r.RejectedBy,
 		RejectedAt:      r.RejectedAt,
 		ApprovalNotes:   r.ApprovalNotes,
-		CreatedAt:       r.CreatedAt,
-		UpdatedAt:       r.UpdatedAt,
-		CompletedAt:     r.CompletedAt,
+		// v0.49 blackout fields.
+		LastBlackoutReason: r.LastBlackoutReason,
+		LastBlackoutAt:     r.LastBlackoutAt,
+		CreatedAt:          r.CreatedAt,
+		UpdatedAt:          r.UpdatedAt,
+		CompletedAt:        r.CompletedAt,
 	}
 }
 
@@ -731,8 +734,11 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		RejectedBy:      r.RejectedBy,
 		RejectedAt:      r.RejectedAt,
 		ApprovalNotes:   r.ApprovalNotes,
-		CreatedAt:       r.CreatedAt,
-		UpdatedAt:       r.UpdatedAt,
-		CompletedAt:     r.CompletedAt,
+		// v0.49 blackout fields.
+		LastBlackoutReason: r.LastBlackoutReason,
+		LastBlackoutAt:     r.LastBlackoutAt,
+		CreatedAt:          r.CreatedAt,
+		UpdatedAt:          r.UpdatedAt,
+		CompletedAt:        r.CompletedAt,
 	}
 }

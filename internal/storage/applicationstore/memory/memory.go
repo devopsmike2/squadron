@@ -257,7 +257,8 @@ func (s *Store) ListGroups(ctx context.Context) ([]*types.Group, error) {
 }
 
 // UpdateGroup writes mutable fields onto the stored group. Added in
-// v0.48 for the approval-policy toggle on Groups settings.
+// v0.48 for the approval-policy toggle; extended in v0.49 to
+// round-trip ChangeWindowsJSON.
 func (s *Store) UpdateGroup(ctx context.Context, group *types.Group) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -270,6 +271,7 @@ func (s *Store) UpdateGroup(ctx context.Context, group *types.Group) error {
 	existing.Name = group.Name
 	existing.Labels = group.Labels
 	existing.RequireApproval = group.RequireApproval
+	existing.ChangeWindowsJSON = group.ChangeWindowsJSON
 	existing.UpdatedAt = group.UpdatedAt
 	return nil
 }

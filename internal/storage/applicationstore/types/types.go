@@ -412,6 +412,14 @@ type Rollout struct {
 	RejectedAt      *time.Time `json:"rejected_at,omitempty"`
 	ApprovalNotes   string     `json:"approval_notes,omitempty"`
 
+	// v0.49 — last blackout the engine hit on this rollout. Set
+	// transiently when a tick refuses to advance because the
+	// target group has an active change window; cleared on the
+	// next successful advancement so the UI badge disappears
+	// when the window closes.
+	LastBlackoutReason string     `json:"last_blackout_reason,omitempty"`
+	LastBlackoutAt     *time.Time `json:"last_blackout_at,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // set on terminal state
@@ -544,9 +552,17 @@ type Group struct {
 	// policy. Set this on production-tier groups so operators
 	// can't accidentally (or intentionally) ship to prod without
 	// the two-person rule firing.
-	RequireApproval bool      `json:"require_approval"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	RequireApproval bool `json:"require_approval"`
+	// v0.49 — change windows. Recurring blackout periods that block
+	// rollout advancement during change-restricted times (utility
+	// peak demand hours, storm-response windows, quarterly freezes).
+	// Stored as a JSON-serialized blob so the operator can manage
+	// the list as one unit. Stored as []byte at this layer to keep
+	// types.Group cleanly serializable; the changewindow package
+	// owns the higher-level Window struct.
+	ChangeWindowsJSON string    `json:"change_windows,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // Config represents an agent configuration

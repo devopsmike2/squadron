@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -294,13 +295,26 @@ func (s *AgentServiceImpl) DeleteAgent(ctx context.Context, id uuid.UUID) error 
 
 // CreateGroup creates a group
 func (s *AgentServiceImpl) CreateGroup(ctx context.Context, group *Group) error {
+	// v0.49 — serialize change windows to JSON for storage. The
+	// changewindow package owns the type; storage just keeps the
+	// blob. Validation happens at the handler boundary so a bad
+	// window never reaches CreateGroup.
+	cwJSON := "[]"
+	if len(group.ChangeWindows) > 0 {
+		raw, err := json.Marshal(group.ChangeWindows)
+		if err != nil {
+			return fmt.Errorf("failed to marshal change_windows: %w", err)
+		}
+		cwJSON = string(raw)
+	}
 	storageGroup := &applicationstore.Group{
-		ID:              group.ID,
-		Name:            group.Name,
-		Labels:          group.Labels,
-		RequireApproval: group.RequireApproval,
-		CreatedAt:       group.CreatedAt,
-		UpdatedAt:       group.UpdatedAt,
+		ID:                group.ID,
+		Name:              group.Name,
+		Labels:            group.Labels,
+		RequireApproval:   group.RequireApproval,
+		ChangeWindowsJSON: cwJSON,
+		CreatedAt:         group.CreatedAt,
+		UpdatedAt:         group.UpdatedAt,
 	}
 	return s.appStore.CreateGroup(ctx, storageGroup)
 }
@@ -351,17 +365,27 @@ func (s *AgentServiceImpl) ListGroups(ctx context.Context) ([]*Group, error) {
 }
 
 // UpdateGroup writes mutable fields to the existing group. v0.48
-// added this for the approval-policy toggle on Groups settings.
-// UpdatedAt is bumped here so the storage layer doesn't have to.
+// added this for the approval-policy toggle; v0.49 extended to
+// round-trip change windows. UpdatedAt is bumped here so the
+// storage layer doesn't have to.
 func (s *AgentServiceImpl) UpdateGroup(ctx context.Context, group *Group) error {
 	group.UpdatedAt = time.Now().UTC()
+	cwJSON := "[]"
+	if len(group.ChangeWindows) > 0 {
+		raw, err := json.Marshal(group.ChangeWindows)
+		if err != nil {
+			return fmt.Errorf("failed to marshal change_windows: %w", err)
+		}
+		cwJSON = string(raw)
+	}
 	storageGroup := &applicationstore.Group{
-		ID:              group.ID,
-		Name:            group.Name,
-		Labels:          group.Labels,
-		RequireApproval: group.RequireApproval,
-		CreatedAt:       group.CreatedAt,
-		UpdatedAt:       group.UpdatedAt,
+		ID:                group.ID,
+		Name:              group.Name,
+		Labels:            group.Labels,
+		RequireApproval:   group.RequireApproval,
+		ChangeWindowsJSON: cwJSON,
+		CreatedAt:         group.CreatedAt,
+		UpdatedAt:         group.UpdatedAt,
 	}
 	return s.appStore.UpdateGroup(ctx, storageGroup)
 }
@@ -373,9 +397,11 @@ func (s *AgentServiceImpl) DeleteGroup(ctx context.Context, id string) error {
 
 // groupToService is the storage→service projection. Kept local so
 // the various Get* methods can share it without leaking the storage
-// type beyond this file.
+// type beyond this file. v0.49 — parses ChangeWindowsJSON into the
+// typed slice so callers (engine, handlers) don't have to deal with
+// the storage blob.
 func groupToService(g *applicationstore.Group) *Group {
-	return &Group{
+	out := &Group{
 		ID:              g.ID,
 		Name:            g.Name,
 		Labels:          g.Labels,
@@ -383,6 +409,14 @@ func groupToService(g *applicationstore.Group) *Group {
 		CreatedAt:       g.CreatedAt,
 		UpdatedAt:       g.UpdatedAt,
 	}
+	if g.ChangeWindowsJSON != "" && g.ChangeWindowsJSON != "[]" {
+		// Failing closed (empty slice) on malformed JSON is the safe
+		// choice — a bad blob in storage shouldn't take the whole
+		// group list down. Operators see "no windows" in the UI
+		// and can re-set policy.
+		_ = json.Unmarshal([]byte(g.ChangeWindowsJSON), &out.ChangeWindows)
+	}
+	return out
 }
 
 // CreateConfig creates a configuration

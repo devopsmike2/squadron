@@ -3,6 +3,19 @@ import type { Agent } from "../types/agent";
 import { apiGet, apiPost, apiPut, apiDelete } from "./base";
 import type { Config } from "./configs";
 
+// v0.49 — recurring blackout window. Mirror of
+// internal/changewindow.Window. Semantics: rollouts to the parent
+// group can't advance while a window is active.
+export interface ChangeWindow {
+  name: string;
+  days_of_week?: number[]; // 0=Sun..6=Sat. Empty means every day.
+  start_local: string; // "HH:MM"
+  end_local: string; // "HH:MM"; if <= start_local, window wraps past midnight
+  timezone: string; // IANA name, e.g. "America/Chicago"
+  effective_from?: string; // RFC3339, optional
+  effective_to?: string; // RFC3339, optional
+}
+
 export interface Group {
   id: string;
   name: string;
@@ -14,6 +27,10 @@ export interface Group {
   // set on the rollout form. Surfaces as a "policy-protected" badge
   // and locks the create-form approval checkbox.
   require_approval?: boolean;
+  // v0.49 — recurring blackout windows. Empty/missing means no
+  // change-window restrictions. The engine refuses to advance
+  // rollouts while any window is active.
+  change_windows?: ChangeWindow[];
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +49,10 @@ export interface UpdateGroupRequest {
   name?: string;
   labels?: Record<string, string>;
   require_approval?: boolean;
+  // v0.49 — pass the full list of windows (PUT semantics), not a
+  // delta. Omit to leave existing windows untouched; pass [] to
+  // clear all blackouts.
+  change_windows?: ChangeWindow[];
 }
 
 export interface AssignConfigRequest {

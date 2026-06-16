@@ -254,7 +254,8 @@ func (m *MockAgentService) DeleteGroup(ctx context.Context, id string) error {
 }
 
 // UpdateGroup implements services.AgentService. Added in v0.48 for
-// the approval-policy toggle on Groups.
+// the approval-policy toggle; v0.49 extended to round-trip
+// ChangeWindows.
 func (m *MockAgentService) UpdateGroup(ctx context.Context, group *services.Group) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -265,6 +266,7 @@ func (m *MockAgentService) UpdateGroup(ctx context.Context, group *services.Grou
 	existing.Name = group.Name
 	existing.Labels = group.Labels
 	existing.RequireApproval = group.RequireApproval
+	existing.ChangeWindows = group.ChangeWindows
 	existing.UpdatedAt = group.UpdatedAt
 	return nil
 }

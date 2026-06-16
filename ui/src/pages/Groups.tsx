@@ -1,10 +1,11 @@
-import { Plus, RefreshCw, Server, ShieldCheck, Trash2, Users } from "lucide-react";
+import { CalendarClock, Plus, RefreshCw, Server, ShieldCheck, Trash2, Users } from "lucide-react";
 import { useState } from "react";
 import useSWR from "swr";
 
 import { getGroups, createGroup, deleteGroup, updateGroup } from "@/api/groups";
 import type { Group, CreateGroupRequest } from "@/api/groups";
 import { GroupDetailsDrawer } from "@/components/GroupDetailsDrawer";
+import { ChangeWindowsModal } from "@/components/groups/ChangeWindowsModal";
 import { PageTable } from "@/components/shared/PageTable";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +35,10 @@ export default function GroupsPage() {
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [groupDrawerOpen, setGroupDrawerOpen] = useState(false);
+  // v0.49 — change-windows modal. Keyed by group so opening from
+  // a different row re-snapshots the windows.
+  const [windowsGroup, setWindowsGroup] = useState<Group | null>(null);
+  const [windowsOpen, setWindowsOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateGroupRequest>({
     name: "",
     labels: {},
@@ -187,24 +192,47 @@ export default function GroupsPage() {
                   regardless of what the requester sets on the create
                   form. The badge is intentionally clickable (rather
                   than a row-action) so policy changes are one click
-                  from the list view. */}
-              <button
-                type="button"
-                onClick={(e) => handleToggleApprovalPolicy(group, e)}
-                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                  group.require_approval
-                    ? "border-orange-500/30 bg-orange-500/10 text-orange-700 hover:bg-orange-500/20"
-                    : "border-border bg-muted/40 text-muted-foreground hover:bg-muted"
-                }`}
-                title={
-                  group.require_approval
-                    ? "Approval required — click to disable"
-                    : "Approval optional — click to require for all rollouts"
-                }
-              >
-                <ShieldCheck className="h-3 w-3" />
-                {group.require_approval ? "Required" : "Optional"}
-              </button>
+                  from the list view.
+                  v0.49 — change-windows count + edit button. The
+                  count badge surfaces 'this group has N blackout
+                  rules' so operators can see policy density before
+                  drilling in. */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={(e) => handleToggleApprovalPolicy(group, e)}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    group.require_approval
+                      ? "border-orange-500/30 bg-orange-500/10 text-orange-700 hover:bg-orange-500/20"
+                      : "border-border bg-muted/40 text-muted-foreground hover:bg-muted"
+                  }`}
+                  title={
+                    group.require_approval
+                      ? "Approval required — click to disable"
+                      : "Approval optional — click to require for all rollouts"
+                  }
+                >
+                  <ShieldCheck className="h-3 w-3" />
+                  {group.require_approval ? "Required" : "Optional"}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setWindowsGroup(group);
+                    setWindowsOpen(true);
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    (group.change_windows?.length ?? 0) > 0
+                      ? "border-orange-500/30 bg-orange-500/10 text-orange-700 hover:bg-orange-500/20"
+                      : "border-border bg-muted/40 text-muted-foreground hover:bg-muted"
+                  }`}
+                  title="Manage change windows"
+                >
+                  <CalendarClock className="h-3 w-3" />
+                  {group.change_windows?.length ?? 0}
+                </button>
+              </div>
             </TableCell>
             <TableCell>
               {new Date(group.created_at).toLocaleDateString()}
@@ -349,6 +377,18 @@ export default function GroupsPage() {
         groupId={selectedGroupId}
         open={groupDrawerOpen}
         onOpenChange={setGroupDrawerOpen}
+      />
+
+      {/* v0.49 — change-windows modal. Opens from the policy
+          column's calendar badge. Saves via PUT /groups/:id; the
+          mutate refreshes the list so the count badge updates. */}
+      <ChangeWindowsModal
+        group={windowsGroup}
+        open={windowsOpen}
+        onClose={() => setWindowsOpen(false)}
+        onSaved={() => {
+          void mutateGroups();
+        }}
       />
     </>
   );
