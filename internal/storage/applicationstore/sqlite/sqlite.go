@@ -407,6 +407,12 @@ func (s *Storage) migrate() error {
 		// never need to query "which groups have a window active
 		// right now" — always the other direction.
 		`ALTER TABLE groups ADD COLUMN change_windows TEXT NOT NULL DEFAULT '[]'`,
+		// v0.51.0: agents gain a tombstone column. DeleteAgent flips
+		// it to a timestamp instead of removing the row; ListAgents
+		// hides tombstoned rows but the audit trail (agent.created,
+		// agent.config_pushed, agent.decommissioned) still resolves
+		// by ID. This is the CIP-007-6 R4.3 / R4.4 evidence path.
+		`ALTER TABLE agents ADD COLUMN deleted_at DATETIME`,
 	}
 
 	for _, migration := range migrations {
@@ -473,9 +479,12 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 }
 
 func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, error) {
+	// v0.51 — tombstoned rows are excluded from the operational
+	// view. Audit events keyed by ID still resolve via the
+	// audit_events table.
 	query := `
 		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
-		FROM agents WHERE id = ?
+		FROM agents WHERE id = ? AND deleted_at IS NULL
 	`
 
 	var agent types.Agent
@@ -521,9 +530,12 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 }
 
 func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
+	// v0.51 — exclude tombstoned (soft-deleted) agents by default.
+	// The audit trail for the agent persists indefinitely; the
+	// operational view shows only live agents.
 	query := `
 		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
-		FROM agents ORDER BY created_at DESC
+		FROM agents WHERE deleted_at IS NULL ORDER BY created_at DESC
 	`
 
 	rows, err := s.db.QueryContext(ctx, query)
@@ -626,6 +638,28 @@ func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, 
 }
 
 func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
+	// v0.51 — soft delete. UPDATE the tombstone column instead of
+	// DELETE so the row remains for audit history (CIP-007-6 R4.3).
+	// The agent.decommissioned audit event carries the operator's
+	// identity and timing; the row carries the tombstone marker.
+	query := `UPDATE agents SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, query, now, now, id.String())
+	if err != nil {
+		return fmt.Errorf("failed to delete agent: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("agent not found: %s", id.String())
+	}
+	return nil
+}
+
+// hardDeleteAgentLegacy kept around as a method that we are no longer
+// wiring through the public interface. If a future operator wants
+// real deletion for storage hygiene, expose this as a separate
+// purge call gated by an admin scope.
+func (s *Storage) hardDeleteAgentLegacy(ctx context.Context, id uuid.UUID) error {
 	query := `DELETE FROM agents WHERE id = ?`
 
 	result, err := s.db.ExecContext(ctx, query, id.String())

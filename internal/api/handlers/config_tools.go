@@ -4,12 +4,15 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/devopsmike2/squadron/internal/configlint"
 	"github.com/devopsmike2/squadron/internal/configtemplates"
+	"github.com/devopsmike2/squadron/internal/services"
 )
 
 // LintConfigRequest is the body of POST /api/v1/configs/lint.
@@ -42,7 +45,54 @@ func (h *ConfigHandlers) HandleLintConfig(c *gin.Context) {
 	if findings == nil {
 		findings = []configlint.Finding{}
 	}
+	// v0.51 — persist a config.lint_evaluated audit event when the
+	// lint actually produced findings, so the evidence trail for
+	// NIST CSF PR.PS-06 (configuration management) and SOC 2 CC8.1
+	// (change management) shows that the org evaluated proposed
+	// changes against guardrails before they shipped. We don't
+	// persist the full YAML (sometimes operator-sensitive) — only
+	// the rule IDs and severities, which is the "what did the
+	// gating say" auditors actually want.
+	if h.audit != nil && len(findings) > 0 {
+		var errCount, warnCount int
+		ruleHits := make([]string, 0, len(findings))
+		for _, f := range findings {
+			switch f.Severity {
+			case configlint.SeverityError:
+				errCount++
+			case configlint.SeverityWarning:
+				warnCount++
+			}
+			ruleHits = append(ruleHits, f.Rule)
+		}
+		_ = h.audit.Record(c.Request.Context(), services.AuditEntry{
+			EventType:  "config.lint_evaluated",
+			TargetType: "config",
+			TargetID:   "ad-hoc", // editor lint runs are not yet
+			// associated with a specific config row; once the editor
+			// gains a "save draft" affordance we can pass the draft
+			// ID through here and stop using "ad-hoc".
+			Action: "lint_evaluated",
+			Payload: map[string]any{
+				"errors":    errCount,
+				"warnings":  warnCount,
+				"rule_hits": ruleHits,
+				// Hash of the content so an auditor can confirm two
+				// events refer to the same proposal without us
+				// storing the YAML itself.
+				"content_sha256": sha256Hex(req.Content),
+			},
+		})
+	}
 	c.JSON(http.StatusOK, LintConfigResponse{Findings: findings})
+}
+
+// sha256Hex returns the hex sha256 of s. Used by the lint audit
+// payload so two events that referred to the same proposed config
+// are correlatable without persisting the YAML body itself.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // HandleGetConfigTemplates returns the catalog of curated YAML snippets.

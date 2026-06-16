@@ -1,0 +1,30 @@
+# DCO sign-off check.
+#
+# Every commit on a PR must end with a Signed-off-by trailer. Without
+# this trailer the maintainers cannot tell, post hoc, whether a given
+# patch was contributed under the Developer Certificate of Origin
+# (https://developercertificate.org/). Regulated downstream users
+# rely on that machine-checkable record when they ship Squadron into
+# environments under NERC CIP, HIPAA, or SOC 2.
+#
+# We use the well-known dco-check action rather than a homebrew
+# script so the failure UX (and the bypass story for maintainers) is
+# the same one contributors have seen on other CNCF projects.
+
+name: dco
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run DCO check
+        uses: tim-actions/dco@2fd0504dc0d27b33f542867c300c84840c2da97e
+        with:
+          commits: ${{ github.event.pull_request.commits }}

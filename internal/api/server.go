@@ -356,6 +356,9 @@ func (s *Server) registerRoutes() {
 	// Initialize handlers
 	agentHandlers := handlers.NewAgentHandlersWithTracer(s.agentService, s.commander, s.configsTracer, s.logger)
 	configHandlers := handlers.NewConfigHandlers(s.agentService, s.commander, s.logger)
+	// v0.51 — wire the audit service so HandleLintConfig can persist
+	// config.lint_evaluated events when findings show up. nil-safe.
+	configHandlers.SetAuditService(s.auditService)
 	telemetryHandlers := handlers.NewTelemetryHandlers(s.telemetryService, s.logger)
 	squadronQLHandlers := handlers.NewSquadronQLHandlers(s.telemetryService, s.logger)
 	groupHandlers := handlers.NewGroupHandlers(s.agentService, s.commander, s.logger)
@@ -380,6 +383,12 @@ func (s *Server) registerRoutes() {
 		// When auth is enabled, every /api/v1/* request must carry a
 		// valid Bearer token. /metrics and /health above stay public.
 		v1.Use(middleware.RequireBearer(s.authService, s.logger))
+		// v0.51 — record an api.request audit event for every mutating
+		// request that an authenticated actor makes. Reads are skipped
+		// by default because they're high volume and rarely interesting
+		// for compliance evidence; the service-layer events still own
+		// the substantive state-change record.
+		v1.Use(middleware.APIAccessAudit(s.auditService, false))
 	}
 	{
 		// Auth token management lives under /api/v1/auth/tokens.
