@@ -288,9 +288,40 @@ func (s *AgentServiceImpl) recordDriftTransition(agentID uuid.UUID, from, to Con
 	}
 }
 
-// DeleteAgent deletes an agent
+// DeleteAgent soft-deletes (tombstones) an agent. v0.51 — the row is
+// retained so historical audit events still resolve by ID; an
+// agent.decommissioned event is emitted so the operator who took the
+// action is captured in the evidence path that CIP-007-6 R4.3 / R4.4
+// auditors look at.
 func (s *AgentServiceImpl) DeleteAgent(ctx context.Context, id uuid.UUID) error {
-	return s.appStore.DeleteAgent(ctx, id)
+	// Snapshot the row before tombstoning so the audit event can
+	// include name + group context. Best-effort: if the lookup
+	// fails we still proceed with the delete and emit a minimal
+	// event, because the delete itself is the operator's intent.
+	pre, _ := s.appStore.GetAgent(ctx, id)
+	if err := s.appStore.DeleteAgent(ctx, id); err != nil {
+		return err
+	}
+	if s.audit != nil {
+		payload := map[string]any{
+			"reason": "operator decommission",
+		}
+		if pre != nil {
+			payload["name"] = pre.Name
+			if pre.GroupName != nil {
+				payload["group"] = *pre.GroupName
+			}
+			payload["last_seen"] = pre.LastSeen.Format(time.RFC3339)
+		}
+		_ = s.audit.Record(ctx, AuditEntry{
+			EventType:  "agent.decommissioned",
+			TargetType: AuditTargetAgent,
+			TargetID:   id.String(),
+			Action:     "decommissioned",
+			Payload:    payload,
+		})
+	}
+	return nil
 }
 
 // CreateGroup creates a group

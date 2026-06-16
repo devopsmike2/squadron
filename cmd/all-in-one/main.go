@@ -224,6 +224,16 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 	alertService := services.NewAlertService(appStore, logger)
 	authService := services.NewAuthService(appStore, logger)
+	// v0.51 — wire audit fan-out for token issuance / revocation.
+	// AuthServiceImpl exposes SetAuditService so the audit service
+	// (constructed earlier in the graph) can be plugged in after the
+	// fact. nil-safe: if the cast fails we just don't emit the
+	// api_token.* events, which is the same behavior as before.
+	if a, ok := authService.(interface {
+		SetAuditService(services.AuditService)
+	}); ok {
+		a.SetAuditService(auditService)
+	}
 
 	// Rollout OTel tracer — bracketing spans per rollout + child
 	// spans per stage. Reuses the self-telemetry tracer provider so

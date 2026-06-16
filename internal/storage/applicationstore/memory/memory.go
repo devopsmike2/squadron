@@ -114,6 +114,12 @@ func (s *Store) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, error
 		copy(agentCopy.Capabilities, agent.Capabilities)
 	}
 
+	// v0.51 — tombstoned agents are hidden from GetAgent for the
+	// operational view. The audit trail keyed by ID still resolves
+	// via the audit_events table.
+	if agentCopy.DeletedAt != nil {
+		return nil, nil
+	}
 	return &agentCopy, nil
 }
 
@@ -123,6 +129,11 @@ func (s *Store) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 
 	agents := make([]*types.Agent, 0, len(s.agents))
 	for _, agent := range s.agents {
+		// v0.51 — tombstoned agents stay in the map for audit
+		// resolution but are hidden from the operational list.
+		if agent.DeletedAt != nil {
+			continue
+		}
 		// Deep copy
 		agentCopy := *agent
 		if agent.Labels != nil {
@@ -187,11 +198,15 @@ func (s *Store) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.agents[id]; !exists {
+	agent, exists := s.agents[id]
+	if !exists {
 		return fmt.Errorf("agent not found: %s", id)
 	}
-
-	delete(s.agents, id)
+	// v0.51 — soft delete. Keep the row so audit events still
+	// resolve by ID; ListAgents filters tombstones out.
+	now := time.Now().UTC()
+	agent.DeletedAt = &now
+	agent.UpdatedAt = now
 	return nil
 }
 

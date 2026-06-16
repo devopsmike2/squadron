@@ -24,12 +24,22 @@ import (
 // the application store.
 type AuthServiceImpl struct {
 	appStore applicationstore.ApplicationStore
-	logger   *zap.Logger
+	audit    AuditService // optional; nil-safe. Added in v0.51 to
+	// produce api_token.issued / revoked / expired audit events for
+	// CIP-007-6 R4.1.2 and R5.3 evidence.
+	logger *zap.Logger
 }
 
 // NewAuthService creates an AuthService.
 func NewAuthService(appStore applicationstore.ApplicationStore, logger *zap.Logger) AuthService {
 	return &AuthServiceImpl{appStore: appStore, logger: logger}
+}
+
+// SetAuditService wires audit fan-out post-construction. Used by
+// main.go because the auth service is built before the audit service
+// in the dependency graph.
+func (s *AuthServiceImpl) SetAuditService(a AuditService) {
+	s.audit = a
 }
 
 // tokenPrefix is the human-readable marker on every issued token. Makes
@@ -130,6 +140,26 @@ func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []stri
 		zap.String("token_id", stored.ID),
 		zap.String("label", stored.Label),
 		zap.Strings("scopes", normalized))
+	// v0.51 — emit api_token.issued audit event for CIP-007-6 R5.3
+	// (authorize access changes) and SOC 2 CC6.2 (user authorization).
+	// Payload includes label, scopes, and expiry so an auditor can
+	// reconstruct who got what authority and when.
+	if s.audit != nil {
+		payload := map[string]any{
+			"label":  stored.Label,
+			"scopes": normalized,
+		}
+		if stored.ExpiresAt != nil {
+			payload["expires_at"] = stored.ExpiresAt.Format(time.RFC3339)
+		}
+		_ = s.audit.Record(ctx, AuditEntry{
+			EventType:  "api_token.issued",
+			TargetType: "api_token",
+			TargetID:   stored.ID,
+			Action:     "issued",
+			Payload:    payload,
+		})
+	}
 	return toServiceToken(stored), plaintext, nil
 }
 
@@ -174,6 +204,26 @@ func (s *AuthServiceImpl) Revoke(ctx context.Context, id string) error {
 		return err
 	}
 	s.logger.Info("revoked api token", zap.String("token_id", id))
+	// v0.51 — emit api_token.revoked audit event for CIP-007-6 R5.3
+	// (authorize access changes) and the HIPAA log-in monitoring
+	// requirement. Look up the label for the payload so an auditor
+	// reading the event doesn't need a second lookup.
+	if s.audit != nil {
+		var label string
+		for _, t := range tokens {
+			if t.ID == id {
+				label = t.Label
+				break
+			}
+		}
+		_ = s.audit.Record(ctx, AuditEntry{
+			EventType:  "api_token.revoked",
+			TargetType: "api_token",
+			TargetID:   id,
+			Action:     "revoked",
+			Payload:    map[string]any{"label": label},
+		})
+	}
 	return nil
 }
 

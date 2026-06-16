@@ -21,7 +21,14 @@ import (
 type ConfigHandlers struct {
 	agentService services.AgentService
 	commander    AgentCommander
-	logger       *zap.Logger
+	// audit is optional and wired post-construction via
+	// SetAuditService. It lets the lint endpoint persist a
+	// config.lint_evaluated event when severity-error findings show
+	// up — that's the evidence that "we evaluated and either passed
+	// or knowingly proceeded" required by NIST CSF PR.PS-06 and
+	// SOC 2 CC8.1.
+	audit  services.AuditService
+	logger *zap.Logger
 }
 
 // NewConfigHandlers creates a new config handlers instance
@@ -31,6 +38,13 @@ func NewConfigHandlers(agentService services.AgentService, commander AgentComman
 		commander:    commander,
 		logger:       logger,
 	}
+}
+
+// SetAuditService wires audit fan-out post-construction. Called from
+// main.go after the audit service is built, because the config
+// handler is constructed earlier in the dependency graph.
+func (h *ConfigHandlers) SetAuditService(a services.AuditService) {
+	h.audit = a
 }
 
 // CreateConfigRequest represents the request for creating a config

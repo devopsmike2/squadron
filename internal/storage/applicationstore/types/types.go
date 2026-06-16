@@ -540,9 +540,17 @@ type Agent struct {
 	// Telemetry-only agents are observable but not manageable —
 	// the UI surfaces this distinction so operators know they
 	// can't push config to them until they're brought under OpAMP.
-	DiscoverySource string    `json:"discovery_source,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	DiscoverySource string `json:"discovery_source,omitempty"`
+	// v0.51 — soft-delete tombstone. When set, the agent is
+	// considered decommissioned. Squadron retains the row indefinitely
+	// for audit history (CIP-007-6 R4.3 / R4.4) but ListAgents
+	// excludes tombstones by default. The decommissioning operator's
+	// identity is captured in the agent.decommissioned audit event,
+	// not on the row itself; correlate by (TargetID == agent ID,
+	// EventType == "agent.decommissioned").
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // AgentStatus represents the status of an agent
