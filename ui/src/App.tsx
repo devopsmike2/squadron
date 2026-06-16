@@ -16,6 +16,7 @@ import QuickstartPage from "./pages/Quickstart";
 import DeployPage from "./pages/Deploy";
 import RolloutsPage from "./pages/Rollouts";
 import SavingsPage from "./pages/Savings";
+import SettingsSiemPage from "./pages/SettingsSiem";
 import SettingsTokensPage from "./pages/SettingsTokens";
 import TelemetryPage from "./pages/Telemetry";
 import TimelinePage from "./pages/Timeline";
@@ -154,6 +155,7 @@ function AuthBoundary() {
               cost-spike events onto one horizontal axis. */}
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/settings/tokens" element={<SettingsTokensPage />} />
+          <Route path="/settings/siem" element={<SettingsSiemPage />} />
         </Route>
       </Routes>
       {/* hasToken is referenced so React's lint doesn't strip the
