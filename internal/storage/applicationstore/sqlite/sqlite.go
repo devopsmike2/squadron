@@ -314,6 +314,24 @@ func (s *Storage) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
 		CREATE INDEX IF NOT EXISTS idx_configs_group_id ON configs(group_id);
 		CREATE INDEX IF NOT EXISTS idx_configs_config_hash ON configs(config_hash);
+
+		-- SIEM destinations (v0.50). secret holds nonce(24)||ciphertext;
+		-- the siem package owns encryption. event_type_prefixes_json is
+		-- a JSON array of string prefixes; empty/null means forward all.
+		CREATE TABLE IF NOT EXISTS siem_destinations (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			type TEXT NOT NULL,
+			url TEXT NOT NULL,
+			secret BLOB,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			event_type_prefixes_json TEXT NOT NULL DEFAULT '[]',
+			last_event_sent_at DATETIME,
+			last_error TEXT,
+			last_error_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
 	`
 
 	if _, err := s.db.Exec(createTables); err != nil {
@@ -2504,4 +2522,152 @@ func (s *Storage) Close() error {
 	}
 	s.logger.Info("SQLite storage closed")
 	return nil
+}
+
+// --- SIEM destinations (v0.50) ----------------------------------------
+
+func (s *Storage) CreateSiemDestination(ctx context.Context, d *types.SiemDestination) error {
+	if d.CreatedAt.IsZero() {
+		d.CreatedAt = time.Now().UTC()
+	}
+	if d.UpdatedAt.IsZero() {
+		d.UpdatedAt = d.CreatedAt
+	}
+	prefixes := d.EventTypePrefixesJSON
+	if prefixes == "" {
+		prefixes = "[]"
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO siem_destinations (
+			id, name, type, url, secret, enabled, event_type_prefixes_json,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		d.ID, d.Name, d.Type, d.URL, d.Secret,
+		boolToInt(d.Enabled), prefixes,
+		d.CreatedAt, d.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create siem destination: %w", err)
+	}
+	return nil
+}
+
+func (s *Storage) GetSiemDestination(ctx context.Context, id string) (*types.SiemDestination, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, type, url, secret, enabled, event_type_prefixes_json,
+		       last_event_sent_at, last_error, last_error_at, created_at, updated_at
+		FROM siem_destinations WHERE id = ?
+	`, id)
+	d, err := scanSiemDestination(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return d, err
+}
+
+func (s *Storage) ListSiemDestinations(ctx context.Context) ([]*types.SiemDestination, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, type, url, secret, enabled, event_type_prefixes_json,
+		       last_event_sent_at, last_error, last_error_at, created_at, updated_at
+		FROM siem_destinations ORDER BY name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list siem destinations: %w", err)
+	}
+	defer rows.Close()
+	var out []*types.SiemDestination
+	for rows.Next() {
+		d, err := scanSiemDestination(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+func (s *Storage) UpdateSiemDestination(ctx context.Context, d *types.SiemDestination) error {
+	d.UpdatedAt = time.Now().UTC()
+	prefixes := d.EventTypePrefixesJSON
+	if prefixes == "" {
+		prefixes = "[]"
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE siem_destinations
+		SET name = ?, type = ?, url = ?, secret = ?, enabled = ?,
+		    event_type_prefixes_json = ?, updated_at = ?
+		WHERE id = ?
+	`,
+		d.Name, d.Type, d.URL, d.Secret, boolToInt(d.Enabled),
+		prefixes, d.UpdatedAt, d.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update siem destination: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("siem destination not found: %s", d.ID)
+	}
+	return nil
+}
+
+func (s *Storage) DeleteSiemDestination(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM siem_destinations WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete siem destination: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("siem destination not found: %s", id)
+	}
+	return nil
+}
+
+// UpdateSiemDestinationStatus narrow-updates only the dispatcher-
+// owned status columns. Separate from UpdateSiemDestination so the
+// dispatcher's writes don't race with an operator editing the URL
+// or secret at the same moment.
+func (s *Storage) UpdateSiemDestinationStatus(ctx context.Context, id string, sentAt *time.Time, errMsg string, errAt *time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE siem_destinations
+		SET last_event_sent_at = ?, last_error = ?, last_error_at = ?
+		WHERE id = ?
+	`, sentAt, nullableString(errMsg), errAt, id)
+	if err != nil {
+		return fmt.Errorf("failed to update siem destination status: %w", err)
+	}
+	return nil
+}
+
+func scanSiemDestination(sc scanner) (*types.SiemDestination, error) {
+	d := &types.SiemDestination{}
+	var (
+		enabledInt int
+		prefixes   sql.NullString
+		sentAt     sql.NullTime
+		lastErr    sql.NullString
+		errAt      sql.NullTime
+	)
+	if err := sc.Scan(
+		&d.ID, &d.Name, &d.Type, &d.URL, &d.Secret,
+		&enabledInt, &prefixes,
+		&sentAt, &lastErr, &errAt, &d.CreatedAt, &d.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	d.Enabled = enabledInt != 0
+	if prefixes.Valid {
+		d.EventTypePrefixesJSON = prefixes.String
+	}
+	if sentAt.Valid {
+		t := sentAt.Time
+		d.LastEventSentAt = &t
+	}
+	if lastErr.Valid {
+		d.LastError = lastErr.String
+	}
+	if errAt.Valid {
+		t := errAt.Time
+		d.LastErrorAt = &t
+	}
+	return d, nil
 }
