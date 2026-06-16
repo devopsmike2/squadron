@@ -24,7 +24,43 @@ type AuditServiceImpl struct {
 	appStore  applicationstore.ApplicationStore
 	broker    *events.Broker             // optional
 	selftel   SelfTelemetryPublisher     // optional
+	siem      SiemDispatcher             // optional, v0.50
 	logger    *zap.Logger
+}
+
+// SiemDispatcher is the slim contract AuditServiceImpl uses to fan
+// audit events out to external SIEM destinations. Defined here (not
+// as a direct reference to siem.Dispatcher) so services/ doesn't
+// take a build-time dependency on internal/siem — the real
+// dispatcher satisfies this interface. Nil-safe: a nil dispatcher
+// means SIEM export is disabled.
+//
+// Added in v0.50 for centralized audit retention at regulated
+// environments (NERC CIP, SOX, etc.) that need 3-7 year audit
+// retention outside Squadron's local DB.
+type SiemDispatcher interface {
+	Dispatch(ev SiemEvent)
+}
+
+// SiemEvent is the contract shape SiemDispatcher receives. Mirrors
+// the on-the-wire shape (siem.Event) without taking a build-time
+// dependency on the siem package.
+type SiemEvent struct {
+	ID         string
+	Timestamp  time.Time
+	Actor      string
+	EventType  string
+	TargetType string
+	TargetID   string
+	Action     string
+	Payload    map[string]any
+}
+
+// SetSiemDispatcher swaps the SIEM fan-out target post-construction.
+// Used so main.go can build the dispatcher after the audit service
+// (audit service is wired earlier in the dependency graph).
+func (s *AuditServiceImpl) SetSiemDispatcher(d SiemDispatcher) {
+	s.siem = d
 }
 
 // SelfTelemetryPublisher is the slim contract AuditServiceImpl needs to
@@ -137,6 +173,22 @@ func (s *AuditServiceImpl) Record(ctx context.Context, entry AuditEntry) error {
 	// truth, OTel export is a convenience for external observability.
 	if s.selftel != nil {
 		s.selftel.PublishAuditEvent(ctx, SelfTelemetryEntry{
+			Actor:      actor,
+			EventType:  entry.EventType,
+			TargetType: entry.TargetType,
+			TargetID:   entry.TargetID,
+			Action:     entry.Action,
+			Payload:    entry.Payload,
+		})
+	}
+	// v0.50 — SIEM fan-out. Best-effort, non-blocking: the
+	// dispatcher's bounded queues drop on overflow rather than
+	// stalling the audit write path. Local SQLite is the source
+	// of truth; SIEM is a convenience for compliance retention.
+	if s.siem != nil {
+		s.siem.Dispatch(SiemEvent{
+			ID:         stored.ID,
+			Timestamp:  now,
 			Actor:      actor,
 			EventType:  entry.EventType,
 			TargetType: entry.TargetType,
