@@ -23,6 +23,7 @@ type RolloutAbortCriteria = types.RolloutAbortCriteria
 type RolloutState = types.RolloutState
 type RolloutFilter = types.RolloutFilter
 type APIToken = types.APIToken
+type SiemDestination = types.SiemDestination
 
 // Re-export constants
 const (
