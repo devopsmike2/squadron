@@ -40,6 +40,8 @@ import (
 	"github.com/devopsmike2/squadron/internal/opamp"
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
 	"github.com/devopsmike2/squadron/internal/selftel"
+	"github.com/devopsmike2/squadron/internal/siem"
+	"github.com/devopsmike2/squadron/internal/siemwire"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/telemetrystore"
@@ -518,6 +520,28 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		walker := discovery.NewGHAWalker(appStore, deploySvc, ghProvider,
 			discovery.DefaultGHAWalkInterval, discovery.DefaultGHALookback, logger)
 		go walker.Run(context.Background())
+	}
+
+	// v0.50 SIEM export. Same disabled-on-missing-key pattern as
+	// deploy: if SQUADRON_SIEM_KEY isn't set, log + continue. The
+	// /api/v1/siem/* routes return 503 in that state (clean UX
+	// instead of a 500). When enabled, the dispatcher hot-reloads
+	// destinations from storage every 60s so operator edits in the
+	// UI apply without a process restart.
+	if siemCrypter, err := siem.NewCrypterFromEnv(); err != nil {
+		logger.Info("SIEM export disabled (SQUADRON_SIEM_KEY unset). Generate with: head -c 32 /dev/urandom | base64")
+	} else {
+		siemSvc := services.NewSiemService(appStore, siemCrypter, auditService, logger)
+		apiServer.SetSiemService(siemSvc)
+		siemDispatcher := siem.NewDispatcher(siemSvc, 60*time.Second, logger)
+		siemDispatcher.Start(context.Background())
+		// Connect the dispatcher into the audit service via the
+		// adapter in internal/siemwire (separate package to break
+		// the services↔siem cycle).
+		if impl, ok := auditService.(*services.AuditServiceImpl); ok {
+			impl.SetSiemDispatcher(&siemwire.DispatcherAdapter{Dispatcher: siemDispatcher})
+		}
+		logger.Info("SIEM export enabled (dispatcher reloading every 60s)")
 	}
 
 	// v0.42 Billing connectors. Splunk is the v0.42 ship; Datadog,
