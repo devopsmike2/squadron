@@ -82,6 +82,7 @@ type Server struct {
 	inventory         *inventory.Service      // optional; v0.32 expected-vs-actual reconciliation — nil → /api/v1/inventory/* returns 503
 	deploy            *deploy.Service         // optional; v0.34 GitHub Actions deploy trigger — nil or Enabled()==false → /api/v1/deploy/* returns 503
 	billingProvider   billing.SnapshotProvider // optional; v0.42 — nil → /api/v1/billing/snapshot returns 204
+	siemService       services.SiemService    // optional; v0.50.2 — nil → /api/v1/siem/* returns 503
 	logger            *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
@@ -235,6 +236,14 @@ func (s *Server) SetBillingProvider(p billing.SnapshotProvider) {
 
 func (s *Server) SetDeploy(svc *deploy.Service) {
 	s.deploy = svc
+}
+
+// SetSiemService wires the v0.50.2 SIEM export management surface.
+// Pass nil to disable — the /api/v1/siem/* routes return 503 in that
+// case (correct state when SQUADRON_SIEM_KEY is unset and the
+// crypter couldn't be built).
+func (s *Server) SetSiemService(svc services.SiemService) {
+	s.siemService = svc
 }
 
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
@@ -906,6 +915,29 @@ func (s *Server) registerRoutes() {
 		v1.GET("/deploy/metrics", deployRead, func(c *gin.Context) {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleMetrics(c)
 		})
+
+		// v0.50.2 — SIEM destination management. Late-bound via
+		// s.siemService so tests + dev runs without
+		// SQUADRON_SIEM_KEY get a clean 503 instead of crashing.
+		// Read scope returns the destination list (no secrets, ever);
+		// write scope is needed for create / update / delete / test.
+		siemRead := middleware.RequireScope(services.ScopeSiemRead)
+		siemWrite := middleware.RequireScope(services.ScopeSiemWrite)
+		siemTrampoline := func(fn func(*handlers.SiemHandlers, *gin.Context)) gin.HandlerFunc {
+			return func(c *gin.Context) {
+				if s.siemService == nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SIEM export disabled (SQUADRON_SIEM_KEY unset)"})
+					return
+				}
+				fn(handlers.NewSiemHandlers(s.siemService, s.logger), c)
+			}
+		}
+		v1.GET("/siem/destinations", siemRead, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleListSiem(c) }))
+		v1.GET("/siem/destinations/:id", siemRead, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleGetSiem(c) }))
+		v1.POST("/siem/destinations", siemWrite, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleCreateSiem(c) }))
+		v1.PUT("/siem/destinations/:id", siemWrite, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleUpdateSiem(c) }))
+		v1.DELETE("/siem/destinations/:id", siemWrite, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleDeleteSiem(c) }))
+		v1.POST("/siem/destinations/:id/test", siemWrite, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleTestSiem(c) }))
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.
 		// All read-only so ScopeAgentsRead is the natural gate.

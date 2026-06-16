@@ -81,6 +81,13 @@ const (
 	// deploy authority.
 	ScopeDeployRead     = "deploy:read"
 	ScopeDeployTrigger  = "deploy:trigger"
+	// v0.50 — SIEM destination management. siem:read returns the
+	// list and per-destination view (no plaintext secrets, ever).
+	// siem:write covers create / update / delete / test. Sized
+	// like alerts: most operators need read; a smaller circle
+	// touches write.
+	ScopeSiemRead  = "siem:read"
+	ScopeSiemWrite = "siem:write"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -97,6 +104,7 @@ func AllScopes() []string {
 		ScopeAuditRead,
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,
+		ScopeSiemRead, ScopeSiemWrite,
 	}
 }
 
