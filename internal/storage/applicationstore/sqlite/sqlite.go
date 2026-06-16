@@ -85,6 +85,11 @@ func (s *Storage) migrate() error {
 			-- into pending_approval at create time, regardless of
 			-- what the requester sets on the rollout input.
 			require_approval INTEGER NOT NULL DEFAULT 0,
+			-- v0.49: JSON-serialized []changewindow.Window. Empty
+			-- array means no blackouts; otherwise the engine
+			-- refuses to advance rollouts to this group while
+			-- any window is active.
+			change_windows TEXT NOT NULL DEFAULT '[]',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
@@ -363,6 +368,12 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE rollouts ADD COLUMN rejected_by TEXT`,
 		`ALTER TABLE rollouts ADD COLUMN rejected_at DATETIME`,
 		`ALTER TABLE rollouts ADD COLUMN approval_notes TEXT`,
+		// v0.49.0: rollouts get last_blackout_reason / at columns so
+		// the engine can record why advancement was skipped (active
+		// change window) and the UI can render a badge. Both
+		// nullable — empty when not in a blackout.
+		`ALTER TABLE rollouts ADD COLUMN last_blackout_reason TEXT`,
+		`ALTER TABLE rollouts ADD COLUMN last_blackout_at DATETIME`,
 		// v0.48.0: groups gain a require_approval policy column.
 		// When set to 1, every rollout created against the group
 		// is forced into pending_approval regardless of what the
@@ -371,6 +382,13 @@ func (s *Storage) migrate() error {
 		// enforced policy. Default 0 so existing groups carry
 		// forward unchanged.
 		`ALTER TABLE groups ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0`,
+		// v0.49.0: groups gain a change_windows column for recurring
+		// blackout periods (peak demand, storm response, quarterly
+		// freezes). Stored as a JSON-serialized []changewindow.Window
+		// since the operator manages the list as one unit and we
+		// never need to query "which groups have a window active
+		// right now" — always the other direction.
+		`ALTER TABLE groups ADD COLUMN change_windows TEXT NOT NULL DEFAULT '[]'`,
 	}
 
 	for _, migration := range migrations {
@@ -609,10 +627,14 @@ func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 // Group management
 func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 	labelsJSON, _ := json.Marshal(group.Labels)
+	cw := group.ChangeWindowsJSON
+	if cw == "" {
+		cw = "[]"
+	}
 
 	query := `
-		INSERT INTO groups (id, name, labels, require_approval, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO groups (id, name, labels, require_approval, change_windows, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -620,6 +642,7 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 		group.Name,
 		string(labelsJSON),
 		boolToInt(group.RequireApproval),
+		cw,
 		group.CreatedAt,
 		group.UpdatedAt,
 	)
@@ -633,7 +656,7 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 }
 
 func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error) {
-	query := `SELECT id, name, labels, require_approval, created_at, updated_at FROM groups WHERE id = ?`
+	query := `SELECT id, name, labels, require_approval, change_windows, created_at, updated_at FROM groups WHERE id = ?`
 
 	var group types.Group
 	var labelsJSON string
@@ -644,6 +667,7 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 		&group.Name,
 		&labelsJSON,
 		&requireApproval,
+		&group.ChangeWindowsJSON,
 		&group.CreatedAt,
 		&group.UpdatedAt,
 	)
@@ -661,7 +685,7 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 }
 
 func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
-	query := `SELECT id, name, labels, require_approval, created_at, updated_at FROM groups ORDER BY created_at DESC`
+	query := `SELECT id, name, labels, require_approval, change_windows, created_at, updated_at FROM groups ORDER BY created_at DESC`
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -680,6 +704,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 			&group.Name,
 			&labelsJSON,
 			&requireApproval,
+			&group.ChangeWindowsJSON,
 			&group.CreatedAt,
 			&group.UpdatedAt,
 		)
@@ -697,18 +722,24 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 
 // UpdateGroup writes mutable fields. ID and CreatedAt are immutable;
 // the caller (service layer) is expected to bump UpdatedAt before
-// calling. Added in v0.48 to support the approval-policy toggle.
+// calling. Added in v0.48 to support the approval-policy toggle;
+// v0.49 extended to round-trip change_windows.
 func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 	labelsJSON, _ := json.Marshal(group.Labels)
+	cw := group.ChangeWindowsJSON
+	if cw == "" {
+		cw = "[]"
+	}
 	query := `
 		UPDATE groups
-		SET name = ?, labels = ?, require_approval = ?, updated_at = ?
+		SET name = ?, labels = ?, require_approval = ?, change_windows = ?, updated_at = ?
 		WHERE id = ?
 	`
 	result, err := s.db.ExecContext(ctx, query,
 		group.Name,
 		string(labelsJSON),
 		boolToInt(group.RequireApproval),
+		cw,
 		group.UpdatedAt,
 		group.ID,
 	)
@@ -1310,8 +1341,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		r.UpdatedAt = r.CreatedAt
 	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -1329,6 +1360,10 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(r.RejectedBy),
 		r.RejectedAt,
 		nullableString(r.ApprovalNotes),
+		// v0.49 blackout columns. Empty at create — the engine
+		// only ever sets them later.
+		nullableString(r.LastBlackoutReason),
+		r.LastBlackoutAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -1340,7 +1375,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1357,7 +1392,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1404,7 +1439,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    state = ?, current_stage = ?,
 		    stage_started_at = ?, abort_reason = ?, updated_at = ?, completed_at = ?,
 		    require_approval = ?, requested_by = ?, approved_by = ?, approved_at = ?,
-		    rejected_by = ?, rejected_at = ?, approval_notes = ?
+		    rejected_by = ?, rejected_at = ?, approval_notes = ?,
+		    last_blackout_reason = ?, last_blackout_at = ?
 		WHERE id = ?
 	`
 	res, err := s.db.ExecContext(ctx, stmt,
@@ -1422,6 +1458,9 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(r.RejectedBy),
 		r.RejectedAt,
 		nullableString(r.ApprovalNotes),
+		// v0.49 blackout columns.
+		nullableString(r.LastBlackoutReason),
+		r.LastBlackoutAt,
 		r.ID,
 	)
 	if err != nil {
@@ -1459,6 +1498,9 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		rejectedBy         sql.NullString
 		rejectedAt         sql.NullTime
 		approvalNotes      sql.NullString
+		// v0.49 blackout columns.
+		lastBlackoutReason sql.NullString
+		lastBlackoutAt     sql.NullTime
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -1468,8 +1510,16 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&r.CreatedAt, &r.UpdatedAt, &completedAt,
 		&requireApprovalInt, &requestedBy, &approvedBy, &approvedAt,
 		&rejectedBy, &rejectedAt, &approvalNotes,
+		&lastBlackoutReason, &lastBlackoutAt,
 	); err != nil {
 		return nil, err
+	}
+	if lastBlackoutReason.Valid {
+		r.LastBlackoutReason = lastBlackoutReason.String
+	}
+	if lastBlackoutAt.Valid {
+		t := lastBlackoutAt.Time
+		r.LastBlackoutAt = &t
 	}
 	if previousConfigID.Valid {
 		r.PreviousConfigID = previousConfigID.String

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/changewindow"
 	"github.com/google/uuid"
 )
 
@@ -122,9 +123,16 @@ type Group struct {
 	// compliance control: it turns v0.47's per-rollout checkbox
 	// into per-group enforced policy. Set on production-tier
 	// groups for NERC CIP-style separation of duties.
-	RequireApproval bool      `json:"require_approval"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	RequireApproval bool `json:"require_approval"`
+	// v0.49 — recurring blackout windows. The rollout engine
+	// refuses to advance rollouts to this group while any of
+	// these windows is active. See changewindow.Window for the
+	// per-window fields and semantics. Empty (or nil) means no
+	// blackouts apply. Nil-safe — JSON marshaller emits null
+	// which the UI handles.
+	ChangeWindows []changewindow.Window `json:"change_windows,omitempty"`
+	CreatedAt     time.Time             `json:"created_at"`
+	UpdatedAt     time.Time             `json:"updated_at"`
 }
 
 // Config represents an agent configuration

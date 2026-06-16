@@ -170,6 +170,16 @@ type Rollout struct {
 	RejectedAt      *time.Time `json:"rejected_at,omitempty"`
 	ApprovalNotes   string     `json:"approval_notes,omitempty"`
 
+	// v0.49 — change-window enforcement. Set by the rollout engine
+	// when a tick skips advancement because the target group has
+	// an active blackout (peak demand hours, storm response, etc).
+	// UI shows this on the rollout card so operators understand
+	// why a rollout is sitting in pending or not advancing through
+	// stages. Cleared automatically on the next successful
+	// advancement so the badge disappears when the window closes.
+	LastBlackoutReason string     `json:"last_blackout_reason,omitempty"`
+	LastBlackoutAt     *time.Time `json:"last_blackout_at,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`

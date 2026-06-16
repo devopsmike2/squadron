@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/changewindow"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -272,6 +273,20 @@ func (e *Engine) process(ctx context.Context, r *services.Rollout) {
 	if r.State == services.RolloutStateInProgress || r.State == services.RolloutStateAborted {
 		e.tracer.BeginRollout(ctx, r)
 	}
+	// v0.49 — change-window enforcement. Before advancement (start
+	// or advanceOrCheck), check whether the target group has an
+	// active blackout window. If so, skip this tick. The blackout
+	// reason is persisted on the rollout so the UI can render a
+	// badge; cleared on the next successful advancement. The
+	// aborted path is exempt — rollbacks proceed even during
+	// blackouts because the situation that triggered the abort
+	// (drift threshold breach, error spike) is more urgent than
+	// the change-window policy.
+	if r.State == services.RolloutStatePending || r.State == services.RolloutStateInProgress {
+		if e.applyBlackoutCheck(ctx, r) {
+			return
+		}
+	}
 	switch r.State {
 	case services.RolloutStatePending:
 		e.start(ctx, r)
@@ -280,6 +295,70 @@ func (e *Engine) process(ctx context.Context, r *services.Rollout) {
 	case services.RolloutStateAborted:
 		e.rollback(ctx, r)
 	}
+}
+
+// applyBlackoutCheck inspects the target group's change windows and,
+// if one is active, persists the blackout reason on the rollout and
+// returns true (= skip this tick's advancement). If no window is
+// active and the rollout was previously in a blackout, clears the
+// reason so the UI badge disappears.
+//
+// Debounced audit: only records "rollout.blackout_blocked" the first
+// time we hit a blackout for a given (rollout, window) pair. The
+// tracer span event fires every check so the trace shows the full
+// gap; the audit event is once-per-window to keep the audit log
+// readable.
+//
+// Added in v0.49.
+func (e *Engine) applyBlackoutCheck(ctx context.Context, r *services.Rollout) bool {
+	group, err := e.agentService.GetGroup(ctx, r.GroupID)
+	if err != nil || group == nil {
+		// No group means no policy — fail open. A storage hiccup
+		// shouldn't strand a rollout indefinitely.
+		return false
+	}
+	if len(group.ChangeWindows) == 0 {
+		return false
+	}
+	active := changewindow.FirstActive(group.ChangeWindows, time.Now())
+	if active == nil {
+		// No active window. If we were previously blocked, clear
+		// the reason so the badge disappears.
+		if r.LastBlackoutReason != "" {
+			r.LastBlackoutReason = ""
+			r.LastBlackoutAt = nil
+			if err := e.rolloutService.Persist(ctx, r); err != nil {
+				e.logger.Warn("rollout engine: failed to clear blackout reason",
+					zap.String("rollout_id", r.ID), zap.Error(err))
+			}
+		}
+		return false
+	}
+	// Active blackout — refuse to advance. Persist the reason
+	// (idempotent — same reason on consecutive ticks is fine).
+	previousReason := r.LastBlackoutReason
+	now := time.Now().UTC()
+	r.LastBlackoutReason = active.Name
+	r.LastBlackoutAt = &now
+	if err := e.rolloutService.Persist(ctx, r); err != nil {
+		e.logger.Warn("rollout engine: failed to persist blackout reason",
+			zap.String("rollout_id", r.ID), zap.Error(err))
+	}
+	// Audit once per (rollout, window) pair so the log doesn't
+	// thrash every 5s. Detect via reason change.
+	if previousReason != active.Name {
+		e.recordAudit(ctx, r, "rollout.blackout_blocked", "blackout_blocked",
+			map[string]any{
+				"window_name":     active.Name,
+				"window_timezone": active.Timezone,
+				"window_start":    active.StartLocal,
+				"window_end":      active.EndLocal,
+			})
+	}
+	// Tracer span event every tick so the trace shows the duration
+	// the rollout sat in blackout. Nil-safe — tracer may be no-op.
+	e.tracer.RecordEvent(r.ID, "blackout_blocked", active.Name)
+	return true
 }
 
 // start transitions a pending rollout to in_progress and applies stage 0.

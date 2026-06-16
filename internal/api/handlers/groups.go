@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/changewindow"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -147,6 +148,12 @@ type UpdateGroupRequest struct {
 	Name            *string            `json:"name"`
 	Labels          *map[string]string `json:"labels"`
 	RequireApproval *bool              `json:"require_approval"`
+	// v0.49 — change windows. Sent as a complete replacement
+	// (semantics of PUT) — pass the full list, not a delta.
+	// Nil means "don't touch"; empty slice means "clear all
+	// windows". Validated at the handler boundary before it
+	// reaches the service.
+	ChangeWindows *[]changewindow.Window `json:"change_windows"`
 }
 
 // HandleUpdateGroup serves PUT /api/v1/groups/:id.
@@ -179,6 +186,16 @@ func (h *GroupHandlers) HandleUpdateGroup(c *gin.Context) {
 	}
 	if req.RequireApproval != nil {
 		existing.RequireApproval = *req.RequireApproval
+	}
+	if req.ChangeWindows != nil {
+		// Validate at the boundary — a bad window must never reach
+		// the engine. Reject the whole request on first error so
+		// the operator can fix the row and retry.
+		if err := changewindow.ValidateAll(*req.ChangeWindows); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid change_windows: %s", err.Error())})
+			return
+		}
+		existing.ChangeWindows = *req.ChangeWindows
 	}
 	if err := h.agentService.UpdateGroup(c.Request.Context(), existing); err != nil {
 		h.logger.Error("Failed to update group", zap.String("group_id", groupID), zap.Error(err))

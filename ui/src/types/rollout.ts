@@ -52,6 +52,12 @@ export interface Rollout {
   rejected_by?: string;
   rejected_at?: string;
   approval_notes?: string;
+  // v0.49 — change-window enforcement. Set by the engine when a
+  // tick skips advancement because the target group has an active
+  // blackout window. Cleared on the next successful advancement.
+  // UI shows a 'In blackout' badge on the rollout card when set.
+  last_blackout_reason?: string;
+  last_blackout_at?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string;

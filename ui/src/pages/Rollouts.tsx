@@ -1135,6 +1135,24 @@ function RolloutCard({
               <Badge variant="outline" className={stateBadge[r.state]}>
                 {r.state.replace("_", " ")}
               </Badge>
+              {/* v0.49 — blackout badge. Set by the engine when a
+                  tick refuses to advance because the target group
+                  has an active change window. Cleared on the next
+                  successful advancement, so badge disappears when
+                  the window closes. */}
+              {r.last_blackout_reason && (
+                <Badge
+                  variant="outline"
+                  className="bg-orange-500/10 text-orange-700 border-orange-500/30"
+                  title={
+                    r.last_blackout_at
+                      ? `Blocked at ${new Date(r.last_blackout_at).toLocaleString()}`
+                      : undefined
+                  }
+                >
+                  In blackout: {r.last_blackout_reason}
+                </Badge>
+              )}
             </div>
             <div className="text-xs text-muted-foreground">
               Group{" "}
