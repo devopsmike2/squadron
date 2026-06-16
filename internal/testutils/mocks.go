@@ -5,6 +5,7 @@ package testutils
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -249,6 +250,22 @@ func (m *MockAgentService) DeleteGroup(ctx context.Context, id string) error {
 	}
 
 	delete(m.groups, id)
+	return nil
+}
+
+// UpdateGroup implements services.AgentService. Added in v0.48 for
+// the approval-policy toggle on Groups.
+func (m *MockAgentService) UpdateGroup(ctx context.Context, group *services.Group) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.groups[group.ID]
+	if !ok {
+		return fmt.Errorf("group not found: %s", group.ID)
+	}
+	existing.Name = group.Name
+	existing.Labels = group.Labels
+	existing.RequireApproval = group.RequireApproval
+	existing.UpdatedAt = group.UpdatedAt
 	return nil
 }
 

@@ -1,8 +1,8 @@
-import { Plus, RefreshCw, Server, Trash2, Users } from "lucide-react";
+import { Plus, RefreshCw, Server, ShieldCheck, Trash2, Users } from "lucide-react";
 import { useState } from "react";
 import useSWR from "swr";
 
-import { getGroups, createGroup, deleteGroup } from "@/api/groups";
+import { getGroups, createGroup, deleteGroup, updateGroup } from "@/api/groups";
 import type { Group, CreateGroupRequest } from "@/api/groups";
 import { GroupDetailsDrawer } from "@/components/GroupDetailsDrawer";
 import { PageTable } from "@/components/shared/PageTable";
@@ -37,6 +37,7 @@ export default function GroupsPage() {
   const [createForm, setCreateForm] = useState<CreateGroupRequest>({
     name: "",
     labels: {},
+    require_approval: false,
   });
 
   const {
@@ -55,10 +56,32 @@ export default function GroupsPage() {
     try {
       await createGroup(createForm);
       setCreateDrawerOpen(false);
-      setCreateForm({ name: "", labels: {} });
+      setCreateForm({ name: "", labels: {}, require_approval: false });
       await mutateGroups();
     } catch (error) {
       console.error("Failed to create group:", error);
+    }
+  };
+
+  // v0.48 — toggle the require_approval policy on an existing group.
+  // The list refetches afterward so the badge updates immediately.
+  // Errors are surfaced via window.alert because the table row has
+  // no obvious place to put a toast — UX can iterate on this later.
+  const handleToggleApprovalPolicy = async (
+    group: Group,
+    e: React.MouseEvent,
+  ) => {
+    e.stopPropagation();
+    try {
+      await updateGroup(group.id, { require_approval: !group.require_approval });
+      await mutateGroups();
+    } catch (error) {
+      console.error("Failed to update group policy:", error);
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Failed to update approval policy",
+      );
     }
   };
 
@@ -130,6 +153,7 @@ export default function GroupsPage() {
           { header: "Name", key: "name" },
           { header: "Agents", key: "agents" },
           { header: "Config", key: "config" },
+          { header: "Policy", key: "policy" },
           { header: "Created", key: "created" },
           { header: "Updated", key: "updated" },
           { header: "Labels", key: "labels" },
@@ -155,6 +179,32 @@ export default function GroupsPage() {
               ) : (
                 <span className="text-xs text-muted-foreground">No config</span>
               )}
+            </TableCell>
+            <TableCell>
+              {/* v0.48 — approval-policy toggle. Click flips the
+                  require_approval flag on this group; when on, every
+                  rollout to this group is forced into pending_approval
+                  regardless of what the requester sets on the create
+                  form. The badge is intentionally clickable (rather
+                  than a row-action) so policy changes are one click
+                  from the list view. */}
+              <button
+                type="button"
+                onClick={(e) => handleToggleApprovalPolicy(group, e)}
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                  group.require_approval
+                    ? "border-orange-500/30 bg-orange-500/10 text-orange-700 hover:bg-orange-500/20"
+                    : "border-border bg-muted/40 text-muted-foreground hover:bg-muted"
+                }`}
+                title={
+                  group.require_approval
+                    ? "Approval required — click to disable"
+                    : "Approval optional — click to require for all rollouts"
+                }
+              >
+                <ShieldCheck className="h-3 w-3" />
+                {group.require_approval ? "Required" : "Optional"}
+              </button>
             </TableCell>
             <TableCell>
               {new Date(group.created_at).toLocaleDateString()}
@@ -222,6 +272,39 @@ export default function GroupsPage() {
                 }
                 placeholder="Enter group name"
               />
+            </div>
+            {/* v0.48 — approval-policy toggle. Defaults off so the
+                form behaves as it did before. When on, every rollout
+                to this group is forced into pending_approval at
+                create time regardless of what the rollout form sets.
+                Used to mark production-tier groups for NERC CIP-style
+                separation of duties. */}
+            <div className="rounded-md border border-orange-500/20 bg-orange-500/5 p-3">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  checked={createForm.require_approval ?? false}
+                  onChange={(e) =>
+                    setCreateForm({
+                      ...createForm,
+                      require_approval: e.target.checked,
+                    })
+                  }
+                />
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium">
+                    Require approval for all rollouts to this group
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Forces every rollout targeting this group into
+                    pending_approval. A second operator (not the
+                    requester) must approve before the engine
+                    advances. Use for production-tier or NERC
+                    CIP-regulated groups.
+                  </p>
+                </div>
+              </label>
             </div>
           </div>
           <SheetFooter className="mt-6">

@@ -519,12 +519,18 @@ func (s *Server) registerRoutes() {
 			rollouts.POST("/:id/abort", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleAbortRollout)
 			rollouts.POST("/:id/pause", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandlePauseRollout)
 			rollouts.POST("/:id/resume", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleResumeRollout)
-			// v0.47 — approval workflow. Same write scope as the
-			// other state-change endpoints; the two-person rule
-			// (requester ≠ approver) is enforced inside the
-			// service.
-			rollouts.POST("/:id/approve", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleApproveRollout)
-			rollouts.POST("/:id/reject", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleRejectRollout)
+			// v0.47 — approval workflow.
+			// v0.48 — separated scope: approval requires the
+			// dedicated rollouts:approve grant, not rollouts:write.
+			// This is the runtime separation of duties — an
+			// operator with only rollouts:write can fire a
+			// rollout but can't approve it; an approver needs an
+			// explicit grant. The two-person rule (requester ≠
+			// approver) is still enforced inside the service for
+			// the case where someone legitimately holds both
+			// scopes.
+			rollouts.POST("/:id/approve", middleware.RequireScope(services.ScopeRolloutsApprove), rolloutHandlers.HandleApproveRollout)
+			rollouts.POST("/:id/reject", middleware.RequireScope(services.ScopeRolloutsApprove), rolloutHandlers.HandleRejectRollout)
 		}
 
 		// Rollout recipe cookbook. Sibling of /rollouts (not nested)

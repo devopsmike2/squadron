@@ -295,11 +295,12 @@ func (s *AgentServiceImpl) DeleteAgent(ctx context.Context, id uuid.UUID) error 
 // CreateGroup creates a group
 func (s *AgentServiceImpl) CreateGroup(ctx context.Context, group *Group) error {
 	storageGroup := &applicationstore.Group{
-		ID:        group.ID,
-		Name:      group.Name,
-		Labels:    group.Labels,
-		CreatedAt: group.CreatedAt,
-		UpdatedAt: group.UpdatedAt,
+		ID:              group.ID,
+		Name:            group.Name,
+		Labels:          group.Labels,
+		RequireApproval: group.RequireApproval,
+		CreatedAt:       group.CreatedAt,
+		UpdatedAt:       group.UpdatedAt,
 	}
 	return s.appStore.CreateGroup(ctx, storageGroup)
 }
@@ -315,13 +316,7 @@ func (s *AgentServiceImpl) GetGroup(ctx context.Context, id string) (*Group, err
 		return nil, nil
 	}
 
-	return &Group{
-		ID:        group.ID,
-		Name:      group.Name,
-		Labels:    group.Labels,
-		CreatedAt: group.CreatedAt,
-		UpdatedAt: group.UpdatedAt,
-	}, nil
+	return groupToService(group), nil
 }
 
 // GetGroupByName gets a group by name
@@ -333,13 +328,7 @@ func (s *AgentServiceImpl) GetGroupByName(ctx context.Context, name string) (*Gr
 
 	for _, group := range groups {
 		if group.Name == name {
-			return &Group{
-				ID:        group.ID,
-				Name:      group.Name,
-				Labels:    group.Labels,
-				CreatedAt: group.CreatedAt,
-				UpdatedAt: group.UpdatedAt,
-			}, nil
+			return groupToService(group), nil
 		}
 	}
 
@@ -355,21 +344,45 @@ func (s *AgentServiceImpl) ListGroups(ctx context.Context) ([]*Group, error) {
 
 	result := make([]*Group, len(groups))
 	for i, group := range groups {
-		result[i] = &Group{
-			ID:        group.ID,
-			Name:      group.Name,
-			Labels:    group.Labels,
-			CreatedAt: group.CreatedAt,
-			UpdatedAt: group.UpdatedAt,
-		}
+		result[i] = groupToService(group)
 	}
 
 	return result, nil
 }
 
+// UpdateGroup writes mutable fields to the existing group. v0.48
+// added this for the approval-policy toggle on Groups settings.
+// UpdatedAt is bumped here so the storage layer doesn't have to.
+func (s *AgentServiceImpl) UpdateGroup(ctx context.Context, group *Group) error {
+	group.UpdatedAt = time.Now().UTC()
+	storageGroup := &applicationstore.Group{
+		ID:              group.ID,
+		Name:            group.Name,
+		Labels:          group.Labels,
+		RequireApproval: group.RequireApproval,
+		CreatedAt:       group.CreatedAt,
+		UpdatedAt:       group.UpdatedAt,
+	}
+	return s.appStore.UpdateGroup(ctx, storageGroup)
+}
+
 // DeleteGroup deletes a group
 func (s *AgentServiceImpl) DeleteGroup(ctx context.Context, id string) error {
 	return s.appStore.DeleteGroup(ctx, id)
+}
+
+// groupToService is the storage→service projection. Kept local so
+// the various Get* methods can share it without leaking the storage
+// type beyond this file.
+func groupToService(g *applicationstore.Group) *Group {
+	return &Group{
+		ID:              g.ID,
+		Name:            g.Name,
+		Labels:          g.Labels,
+		RequireApproval: g.RequireApproval,
+		CreatedAt:       g.CreatedAt,
+		UpdatedAt:       g.UpdatedAt,
+	}
 }
 
 // CreateConfig creates a configuration

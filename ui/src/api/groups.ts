@@ -1,6 +1,6 @@
 import type { Agent } from "../types/agent";
 
-import { apiGet, apiPost, apiDelete } from "./base";
+import { apiGet, apiPost, apiPut, apiDelete } from "./base";
 import type { Config } from "./configs";
 
 export interface Group {
@@ -9,6 +9,11 @@ export interface Group {
   labels: Record<string, string>;
   agent_count: number;
   config_name?: string;
+  // v0.48 — when true, every rollout to this group is forced into
+  // pending_approval at create time regardless of what the requester
+  // set on the rollout form. Surfaces as a "policy-protected" badge
+  // and locks the create-form approval checkbox.
+  require_approval?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -16,6 +21,17 @@ export interface Group {
 export interface CreateGroupRequest {
   name: string;
   labels?: Record<string, string>;
+  require_approval?: boolean;
+}
+
+// UpdateGroupRequest — partial update. Send only the fields you want
+// to change; omit (or undefined) leaves the existing value untouched.
+// require_approval: false IS a meaningful value (toggling policy off),
+// so callers must send false explicitly rather than omit.
+export interface UpdateGroupRequest {
+  name?: string;
+  labels?: Record<string, string>;
+  require_approval?: boolean;
 }
 
 export interface AssignConfigRequest {
@@ -50,6 +66,16 @@ export const getGroup = (id: string): Promise<Group> => {
 // Create new group
 export const createGroup = (data: CreateGroupRequest): Promise<Group> => {
   return apiPost<Group>("/groups", data);
+};
+
+// Update group — v0.48. Used by the Groups settings page to toggle
+// the require_approval policy. The handler does partial updates so
+// passing only { require_approval: true } leaves name/labels intact.
+export const updateGroup = (
+  id: string,
+  data: UpdateGroupRequest,
+): Promise<Group> => {
+  return apiPut<Group>(`/groups/${id}`, data);
 };
 
 // Delete group

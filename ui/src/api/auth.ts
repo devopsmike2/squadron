@@ -28,7 +28,11 @@ export const ALL_SCOPES: ReadonlyArray<{ id: string; label: string; group: strin
   { id: "alerts:read", label: "View alert rules", group: "Alerts" },
   { id: "alerts:write", label: "Manage alert rules", group: "Alerts" },
   { id: "rollouts:read", label: "View rollouts", group: "Rollouts" },
-  { id: "rollouts:write", label: "Create / abort rollouts", group: "Rollouts" },
+  { id: "rollouts:write", label: "Create / abort / pause / resume rollouts", group: "Rollouts" },
+  // v0.48 — separation of duties. Distinct from rollouts:write so a
+  // single operator with create authority can't also approve.
+  // Grant to a change-management or reviewer group only.
+  { id: "rollouts:approve", label: "Approve / reject pending rollouts (two-person rule)", group: "Rollouts" },
   { id: "audit:read", label: "Read audit log + event stream", group: "Audit" },
   { id: "auth:read", label: "View API tokens", group: "Auth" },
   { id: "auth:write", label: "Create / revoke API tokens", group: "Auth" },

@@ -21,6 +21,10 @@ type ApplicationStore interface {
 	CreateGroup(ctx context.Context, group *Group) error
 	GetGroup(ctx context.Context, id string) (*Group, error)
 	ListGroups(ctx context.Context) ([]*Group, error)
+	// UpdateGroup mutates name, labels, require_approval on an
+	// existing group. Added in v0.48 for the approval-policy
+	// toggle on Groups settings.
+	UpdateGroup(ctx context.Context, group *Group) error
 	DeleteGroup(ctx context.Context, id string) error
 
 	// Config management
@@ -529,11 +533,20 @@ const (
 
 // Group represents a group of agents
 type Group struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Labels    map[string]string `json:"labels"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	ID     string            `json:"id"`
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels"`
+	// v0.48 — when true, every rollout created against this group
+	// is forced into pending_approval regardless of what the
+	// requester sets on the rollout input. This is the actual
+	// compliance control: it converts the requester-set
+	// require_approval checkbox from honor system to enforced
+	// policy. Set this on production-tier groups so operators
+	// can't accidentally (or intentionally) ship to prod without
+	// the two-person rule firing.
+	RequireApproval bool      `json:"require_approval"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Config represents an agent configuration

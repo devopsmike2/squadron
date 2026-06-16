@@ -400,6 +400,21 @@ export default function RolloutsPage() {
   const mixedModes =
     new Set(form.stages.map((s) => s.mode)).size > 1;
 
+  // v0.48 — does the selected group have policy-enforced approval?
+  // If so, lock the require_approval checkbox on. The backend
+  // enforces this on Create anyway, but locking the UI tells
+  // operators *why* they're being forced into pending_approval —
+  // otherwise they'd check the box, see the form unchanged, and
+  // wonder if their click registered.
+  const selectedGroup = form.group_id
+    ? groupsResp?.groups?.find((g) => g.id === form.group_id)
+    : undefined;
+  const policyEnforcedApproval = Boolean(selectedGroup?.require_approval);
+  // Effective checkbox value: forced true when policy says so,
+  // operator-controlled otherwise.
+  const effectiveRequireApproval =
+    policyEnforcedApproval || form.require_approval;
+
   return (
     <div className="space-y-4 p-6">
       <div className="flex items-center justify-between">
@@ -765,13 +780,22 @@ export default function RolloutsPage() {
                 form behaves as it did before. When checked, the rollout
                 enters pending_approval; a second person (not the
                 requester) has to call Approve on it before the engine
-                advances. The two-person rule is enforced server-side. */}
+                advances. The two-person rule is enforced server-side.
+                v0.48 — if the selected group has policy=required, the
+                checkbox is forced on and disabled; the backend would
+                enforce it anyway but we surface the *why* here so
+                operators don't think their click was ignored. */}
             <div className="space-y-2 rounded-md border border-orange-500/20 bg-orange-500/5 p-3">
-              <label className="flex items-start gap-2 cursor-pointer">
+              <label
+                className={`flex items-start gap-2 ${
+                  policyEnforcedApproval ? "cursor-not-allowed" : "cursor-pointer"
+                }`}
+              >
                 <input
                   type="checkbox"
                   className="mt-0.5 h-4 w-4"
-                  checked={form.require_approval}
+                  checked={effectiveRequireApproval}
+                  disabled={policyEnforcedApproval}
                   onChange={(e) =>
                     setForm({ ...form, require_approval: e.target.checked })
                   }
@@ -779,13 +803,29 @@ export default function RolloutsPage() {
                 <div className="space-y-0.5">
                   <div className="text-sm font-medium">
                     Require approval before rollout starts
+                    {policyEnforcedApproval && (
+                      <span className="ml-2 rounded-full border border-orange-500/30 bg-orange-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-orange-700">
+                        Enforced by group policy
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    The rollout will enter <code>pending_approval</code> and
-                    won't advance until a different operator approves it
-                    (two-person rule). Use this for production-impacting or
-                    NERC CIP–regulated changes that require change-control
-                    sign-off.
+                    {policyEnforcedApproval ? (
+                      <>
+                        Group <code>{selectedGroup?.name ?? form.group_id}</code> has
+                        approval policy enabled. Every rollout to this group
+                        enters <code>pending_approval</code> regardless of this
+                        setting. Change policy on the Groups page.
+                      </>
+                    ) : (
+                      <>
+                        The rollout will enter <code>pending_approval</code>{" "}
+                        and won't advance until a different operator approves
+                        it (two-person rule). Use this for production-impacting
+                        or NERC CIP–regulated changes that require
+                        change-control sign-off.
+                      </>
+                    )}
                   </p>
                 </div>
               </label>

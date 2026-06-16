@@ -541,3 +541,59 @@ func TestRolloutService_AbortMissing(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+// TestRolloutService_GroupPolicyForcesApproval verifies the v0.48
+// compliance control: when the target group has require_approval=true,
+// the rollout must enter pending_approval even if the requester
+// explicitly sets RequireApproval=false on the input. This is the
+// difference between an honor-system checkbox and an enforced
+// policy — auditors require the latter.
+func TestRolloutService_GroupPolicyForcesApproval(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	// Seed a group with policy enabled.
+	require.NoError(t, store.CreateGroup(ctx, &applicationstore.Group{
+		ID:              "group-a",
+		Name:            "prod-windows",
+		RequireApproval: true,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}))
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	in := validRolloutInput(t, store)
+	in.GroupID = "group-a"
+	// Operator did NOT request approval — the policy must force it on.
+	in.RequireApproval = false
+	in.RequestedBy = "alice@example.com"
+
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	assert.True(t, r.RequireApproval, "group policy should force RequireApproval=true")
+	assert.Equal(t, RolloutStatePendingApproval, r.State, "rollout should be pending_approval per group policy")
+}
+
+// TestRolloutService_GroupPolicyOffPreservesInput verifies the negative
+// path: with policy off, the requester's RequireApproval setting is
+// preserved (both true and false). Without this check we could
+// accidentally make every rollout require approval.
+func TestRolloutService_GroupPolicyOffPreservesInput(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	require.NoError(t, store.CreateGroup(ctx, &applicationstore.Group{
+		ID:              "group-b",
+		Name:            "dev-fleet",
+		RequireApproval: false,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}))
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	in := validRolloutInput(t, store)
+	in.GroupID = "group-b"
+	in.RequireApproval = false
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	assert.False(t, r.RequireApproval)
+	assert.Equal(t, RolloutStatePending, r.State)
+}

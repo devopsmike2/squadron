@@ -81,6 +81,10 @@ func (s *Storage) migrate() error {
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			labels TEXT,
+			-- v0.48: when 1, every rollout to this group is forced
+			-- into pending_approval at create time, regardless of
+			-- what the requester sets on the rollout input.
+			require_approval INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
@@ -359,6 +363,14 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE rollouts ADD COLUMN rejected_by TEXT`,
 		`ALTER TABLE rollouts ADD COLUMN rejected_at DATETIME`,
 		`ALTER TABLE rollouts ADD COLUMN approval_notes TEXT`,
+		// v0.48.0: groups gain a require_approval policy column.
+		// When set to 1, every rollout created against the group
+		// is forced into pending_approval regardless of what the
+		// requester set on the rollout input — this is the
+		// compliance control that turns v0.47's checkbox into
+		// enforced policy. Default 0 so existing groups carry
+		// forward unchanged.
+		`ALTER TABLE groups ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0`,
 	}
 
 	for _, migration := range migrations {
@@ -599,14 +611,15 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 	labelsJSON, _ := json.Marshal(group.Labels)
 
 	query := `
-		INSERT INTO groups (id, name, labels, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO groups (id, name, labels, require_approval, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
 		group.ID,
 		group.Name,
 		string(labelsJSON),
+		boolToInt(group.RequireApproval),
 		group.CreatedAt,
 		group.UpdatedAt,
 	)
@@ -620,15 +633,17 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 }
 
 func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error) {
-	query := `SELECT id, name, labels, created_at, updated_at FROM groups WHERE id = ?`
+	query := `SELECT id, name, labels, require_approval, created_at, updated_at FROM groups WHERE id = ?`
 
 	var group types.Group
 	var labelsJSON string
+	var requireApproval int
 
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&group.ID,
 		&group.Name,
 		&labelsJSON,
+		&requireApproval,
 		&group.CreatedAt,
 		&group.UpdatedAt,
 	)
@@ -640,12 +655,13 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 		return nil, fmt.Errorf("failed to get group: %w", err)
 	}
 
+	group.RequireApproval = requireApproval != 0
 	_ = json.Unmarshal([]byte(labelsJSON), &group.Labels)
 	return &group, nil
 }
 
 func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
-	query := `SELECT id, name, labels, created_at, updated_at FROM groups ORDER BY created_at DESC`
+	query := `SELECT id, name, labels, require_approval, created_at, updated_at FROM groups ORDER BY created_at DESC`
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -657,11 +673,13 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 	for rows.Next() {
 		var group types.Group
 		var labelsJSON string
+		var requireApproval int
 
 		err := rows.Scan(
 			&group.ID,
 			&group.Name,
 			&labelsJSON,
+			&requireApproval,
 			&group.CreatedAt,
 			&group.UpdatedAt,
 		)
@@ -669,11 +687,39 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 			return nil, fmt.Errorf("failed to scan group: %w", err)
 		}
 
+		group.RequireApproval = requireApproval != 0
 		_ = json.Unmarshal([]byte(labelsJSON), &group.Labels)
 		groups = append(groups, &group)
 	}
 
 	return groups, nil
+}
+
+// UpdateGroup writes mutable fields. ID and CreatedAt are immutable;
+// the caller (service layer) is expected to bump UpdatedAt before
+// calling. Added in v0.48 to support the approval-policy toggle.
+func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
+	labelsJSON, _ := json.Marshal(group.Labels)
+	query := `
+		UPDATE groups
+		SET name = ?, labels = ?, require_approval = ?, updated_at = ?
+		WHERE id = ?
+	`
+	result, err := s.db.ExecContext(ctx, query,
+		group.Name,
+		string(labelsJSON),
+		boolToInt(group.RequireApproval),
+		group.UpdatedAt,
+		group.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update group: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("group not found: %s", group.ID)
+	}
+	return nil
 }
 
 func (s *Storage) DeleteGroup(ctx context.Context, id string) error {

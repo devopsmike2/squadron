@@ -256,6 +256,24 @@ func (s *Store) ListGroups(ctx context.Context) ([]*types.Group, error) {
 	return groups, nil
 }
 
+// UpdateGroup writes mutable fields onto the stored group. Added in
+// v0.48 for the approval-policy toggle on Groups settings.
+func (s *Store) UpdateGroup(ctx context.Context, group *types.Group) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.groups[group.ID]
+	if !ok {
+		return fmt.Errorf("group not found: %s", group.ID)
+	}
+	// Preserve immutable fields (ID, CreatedAt) so a careless caller
+	// can't rewrite them. Anything else on group overwrites.
+	existing.Name = group.Name
+	existing.Labels = group.Labels
+	existing.RequireApproval = group.RequireApproval
+	existing.UpdatedAt = group.UpdatedAt
+	return nil
+}
+
 func (s *Store) DeleteGroup(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
