@@ -215,7 +215,11 @@ export default function SettingsTokensPage() {
                   pipeline that pushes configs and creates rollouts wants{" "}
                   <span className="font-mono">configs:write</span> +{" "}
                   <span className="font-mono">rollouts:write</span>, not
-                  full access.
+                  full access. For NERC CIP-style separation of duties,
+                  grant{" "}
+                  <span className="font-mono">rollouts:approve</span> to a
+                  distinct change-management group — operators with
+                  rollouts:write can fire rollouts but can't approve them.
                 </p>
               </div>
 

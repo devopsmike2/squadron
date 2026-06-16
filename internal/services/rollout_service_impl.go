@@ -97,6 +97,25 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		previousID = prev.ID
 	}
 
+	// v0.48 — per-group approval policy. If the target group has
+	// require_approval set, we force input.RequireApproval=true here
+	// so the requester cannot bypass policy by unchecking the form
+	// box. This is the actual compliance control: it turns v0.47's
+	// honor-system checkbox into per-group enforced policy. Failing
+	// open on a lookup error (storage hiccup) is safer than failing
+	// closed — operators can recover from "didn't enforce" with an
+	// audit, but a hard block on a transient DB blip prevents
+	// legitimate ops work during an incident. We log the override
+	// so the audit trail is explicit.
+	enforcedByPolicy := false
+	if group, err := s.appStore.GetGroup(ctx, input.GroupID); err == nil && group != nil && group.RequireApproval && !input.RequireApproval {
+		input.RequireApproval = true
+		enforcedByPolicy = true
+		s.logger.Info("forcing rollout into pending_approval per group policy",
+			zap.String("group_id", input.GroupID),
+			zap.String("requested_by", input.RequestedBy))
+	}
+
 	now := time.Now().UTC()
 	// v0.47 — RequireApproval gates the initial state. With
 	// approval required, the engine refuses to advance the
@@ -147,6 +166,15 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 			"group_id":         rollout.GroupID,
 			"target_config_id": rollout.TargetConfigID,
 			"stage_count":      len(rollout.Stages),
+		}
+		if rollout.RequireApproval {
+			payload["require_approval"] = true
+			// v0.48 — surface whether approval was set because
+			// the requester checked the box (false) or because
+			// the group policy enforced it (true). Auditors
+			// need this distinction to prove that policy was
+			// actually doing work.
+			payload["approval_enforced_by_policy"] = enforcedByPolicy
 		}
 		// Diff fingerprint — small enough to keep in the audit log so
 		// a post-mortem can answer "how big a change was this?" without

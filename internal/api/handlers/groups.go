@@ -133,10 +133,59 @@ func (h *GroupHandlers) HandleGetGroup(c *gin.Context) {
 	c.JSON(http.StatusOK, group)
 }
 
-// handleUpdateGroup handles PUT /api/v1/groups/:id
+// UpdateGroupRequest is the body of PUT /api/v1/groups/:id.
+//
+// All fields are optional pointers; the handler fetches the existing
+// group and overlays whichever fields were provided. Pointer types
+// let us distinguish "operator omitted this field" from "operator
+// sent the zero value" — important for RequireApproval since
+// `false` is a meaningful value (toggling policy off).
+//
+// Added in v0.48 to support the approval-policy switch on the
+// Groups settings page.
+type UpdateGroupRequest struct {
+	Name            *string            `json:"name"`
+	Labels          *map[string]string `json:"labels"`
+	RequireApproval *bool              `json:"require_approval"`
+}
+
+// HandleUpdateGroup serves PUT /api/v1/groups/:id.
 func (h *GroupHandlers) HandleUpdateGroup(c *gin.Context) {
-	// Not implemented in current interface
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Group update not implemented"})
+	groupID := c.Param("id")
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Group ID is required"})
+		return
+	}
+	var req UpdateGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data", "details": err.Error()})
+		return
+	}
+	existing, err := h.agentService.GetGroup(c.Request.Context(), groupID)
+	if err != nil {
+		h.logger.Error("Failed to get group", zap.String("group_id", groupID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load group"})
+		return
+	}
+	if existing == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
+		return
+	}
+	if req.Name != nil {
+		existing.Name = *req.Name
+	}
+	if req.Labels != nil {
+		existing.Labels = *req.Labels
+	}
+	if req.RequireApproval != nil {
+		existing.RequireApproval = *req.RequireApproval
+	}
+	if err := h.agentService.UpdateGroup(c.Request.Context(), existing); err != nil {
+		h.logger.Error("Failed to update group", zap.String("group_id", groupID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update group"})
+		return
+	}
+	c.JSON(http.StatusOK, existing)
 }
 
 // handleDeleteGroup handles DELETE /api/v1/groups/:id

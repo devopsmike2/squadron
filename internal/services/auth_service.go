@@ -60,6 +60,17 @@ const (
 	ScopeAlertsWrite    = "alerts:write"
 	ScopeRolloutsRead   = "rollouts:read"
 	ScopeRolloutsWrite  = "rollouts:write"
+	// v0.48 — separation of duties for approval workflows.
+	// rollouts:write covers Create/Abort/Pause/Resume; the new
+	// rollouts:approve covers Approve/Reject. Splitting these
+	// means a single stolen rollouts:write token can't bypass
+	// the two-person rule by both creating and approving (from
+	// distinct sessions). For NERC CIP-style controls, grant
+	// rollouts:write to operators and rollouts:approve to a
+	// distinct change-management group. A reviewer can hold
+	// both — the runtime two-person rule still blocks
+	// self-approval based on the persisted RequestedBy.
+	ScopeRolloutsApprove = "rollouts:approve"
 	ScopeAuditRead      = "audit:read"
 	ScopeAuthRead       = "auth:read"
 	ScopeAuthWrite      = "auth:write"
@@ -82,7 +93,7 @@ func AllScopes() []string {
 		ScopeConfigsRead, ScopeConfigsWrite,
 		ScopeTelemetryRead,
 		ScopeAlertsRead, ScopeAlertsWrite,
-		ScopeRolloutsRead, ScopeRolloutsWrite,
+		ScopeRolloutsRead, ScopeRolloutsWrite, ScopeRolloutsApprove,
 		ScopeAuditRead,
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,

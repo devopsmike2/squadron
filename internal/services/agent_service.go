@@ -23,6 +23,12 @@ type AgentService interface {
 	GetGroup(ctx context.Context, id string) (*Group, error)
 	GetGroupByName(ctx context.Context, name string) (*Group, error)
 	ListGroups(ctx context.Context) ([]*Group, error)
+	// UpdateGroup writes a partial set of mutable fields to the
+	// existing group: Name, Labels, RequireApproval. ID and
+	// CreatedAt are immutable; UpdatedAt is set by the service.
+	// Added in v0.48 for the approval-policy toggle on Groups
+	// settings.
+	UpdateGroup(ctx context.Context, group *Group) error
 	DeleteGroup(ctx context.Context, id string) error
 
 	// Config operations
@@ -110,8 +116,15 @@ type Group struct {
 	Labels     map[string]string `json:"labels"`
 	AgentCount int               `json:"agent_count"`
 	ConfigName string            `json:"config_name,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	// v0.48 — when true, every rollout created against this
+	// group is forced into pending_approval regardless of what
+	// the requester sets on the rollout input. This is the
+	// compliance control: it turns v0.47's per-rollout checkbox
+	// into per-group enforced policy. Set on production-tier
+	// groups for NERC CIP-style separation of duties.
+	RequireApproval bool      `json:"require_approval"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Config represents an agent configuration

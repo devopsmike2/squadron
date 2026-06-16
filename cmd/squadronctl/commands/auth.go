@@ -161,6 +161,7 @@ Expiry flags (optional — defaults to no expiry):
 Common bundles to copy:
   read-only viewer:   --scope agents:read --scope rollouts:read --scope audit:read
   CI deploy pipeline: --scope configs:write --scope rollouts:write --scope rollouts:read
+  rollout approver:   --scope rollouts:read --scope rollouts:approve --scope audit:read
   alerts manager:     --scope alerts:read --scope alerts:write --scope audit:read`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if label == "" {
