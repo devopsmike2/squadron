@@ -33,6 +33,11 @@ func NewGroupHandlers(agentService services.AgentService, commander AgentCommand
 type CreateGroupRequest struct {
 	Name   string            `json:"name" binding:"required"`
 	Labels map[string]string `json:"labels,omitempty"`
+	// v0.50.5 — accept require_approval at create time so the
+	// policy can be set in one round-trip instead of requiring a
+	// follow-up PUT. The v0.48 work added the storage + service
+	// support but the create handler was never extended.
+	RequireApproval bool `json:"require_approval,omitempty"`
 }
 
 // handleGetGroups handles GET /api/v1/groups
@@ -92,11 +97,12 @@ func (h *GroupHandlers) HandleCreateGroup(c *gin.Context) {
 
 	// Create group
 	group := &services.Group{
-		ID:        groupID,
-		Name:      req.Name,
-		Labels:    req.Labels,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:              groupID,
+		Name:            req.Name,
+		Labels:          req.Labels,
+		RequireApproval: req.RequireApproval,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
 	}
 
 	// Save group to storage
