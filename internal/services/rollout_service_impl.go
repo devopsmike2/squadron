@@ -158,21 +158,37 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 	if input.RequireApproval {
 		initialState = RolloutStatePendingApproval
 	}
+	// v0.53 — proposal provenance. Default to operator so existing
+	// callers behave unchanged. AI proposers set ProposedBy="ai"
+	// plus reasoning + evidence; validation prevents unknown values.
+	proposedBy := input.ProposedBy
+	if proposedBy == "" {
+		proposedBy = RolloutProposedByOperator
+	}
+	switch proposedBy {
+	case RolloutProposedByOperator, RolloutProposedByAI, RolloutProposedBySystem:
+		// allowed
+	default:
+		return nil, fmt.Errorf("invalid proposed_by %q (must be one of operator, ai, system)", proposedBy)
+	}
 	rollout := &Rollout{
-		ID:               uuid.New().String(),
-		Name:             input.Name,
-		GroupID:          input.GroupID,
-		TargetConfigID:   input.TargetConfigID,
-		PreviousConfigID: previousID,
-		Stages:           normalizeStages(input.Stages),
-		AbortCriteria:    input.AbortCriteria,
-		NotificationURL:  input.NotificationURL,
-		State:            initialState,
-		CurrentStage:     0,
-		RequireApproval:  input.RequireApproval,
-		RequestedBy:      input.RequestedBy,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                uuid.New().String(),
+		Name:              input.Name,
+		GroupID:           input.GroupID,
+		TargetConfigID:    input.TargetConfigID,
+		PreviousConfigID:  previousID,
+		Stages:            normalizeStages(input.Stages),
+		AbortCriteria:     input.AbortCriteria,
+		NotificationURL:   input.NotificationURL,
+		State:             initialState,
+		CurrentStage:      0,
+		RequireApproval:   input.RequireApproval,
+		RequestedBy:       input.RequestedBy,
+		ProposedBy:        proposedBy,
+		ProposalReasoning: input.ProposalReasoning,
+		EvidenceRefs:      input.EvidenceRefs,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
 	if err := s.appStore.CreateRollout(ctx, toStorageRollout(rollout)); err != nil {
@@ -727,10 +743,51 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		// v0.49 blackout fields.
 		LastBlackoutReason: r.LastBlackoutReason,
 		LastBlackoutAt:     r.LastBlackoutAt,
-		CreatedAt:          r.CreatedAt,
-		UpdatedAt:          r.UpdatedAt,
-		CompletedAt:        r.CompletedAt,
+		// v0.53 proposal provenance.
+		ProposedBy:        r.ProposedBy,
+		ProposalReasoning: r.ProposalReasoning,
+		EvidenceRefs:      toStorageEvidenceRefs(r.EvidenceRefs),
+		CreatedAt:         r.CreatedAt,
+		UpdatedAt:         r.UpdatedAt,
+		CompletedAt:       r.CompletedAt,
 	}
+}
+
+// toStorageEvidenceRefs lifts the service-layer evidence type into
+// its applicationstore counterpart. Shape is identical; the
+// conversion keeps the service package from leaking the storage
+// type to handlers.
+func toStorageEvidenceRefs(in []EvidenceRef) []applicationstore.RolloutEvidenceRef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]applicationstore.RolloutEvidenceRef, len(in))
+	for i, e := range in {
+		out[i] = applicationstore.RolloutEvidenceRef{
+			Kind:        e.Kind,
+			ID:          e.ID,
+			URL:         e.URL,
+			Description: e.Description,
+		}
+	}
+	return out
+}
+
+// toServiceEvidenceRefs is the inverse of toStorageEvidenceRefs.
+func toServiceEvidenceRefs(in []applicationstore.RolloutEvidenceRef) []EvidenceRef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]EvidenceRef, len(in))
+	for i, e := range in {
+		out[i] = EvidenceRef{
+			Kind:        e.Kind,
+			ID:          e.ID,
+			URL:         e.URL,
+			Description: e.Description,
+		}
+	}
+	return out
 }
 
 func toServiceRollout(r *applicationstore.Rollout) *Rollout {
@@ -771,8 +828,12 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		// v0.49 blackout fields.
 		LastBlackoutReason: r.LastBlackoutReason,
 		LastBlackoutAt:     r.LastBlackoutAt,
-		CreatedAt:          r.CreatedAt,
-		UpdatedAt:          r.UpdatedAt,
-		CompletedAt:        r.CompletedAt,
+		// v0.53 proposal provenance.
+		ProposedBy:        r.ProposedBy,
+		ProposalReasoning: r.ProposalReasoning,
+		EvidenceRefs:      toServiceEvidenceRefs(r.EvidenceRefs),
+		CreatedAt:         r.CreatedAt,
+		UpdatedAt:         r.UpdatedAt,
+		CompletedAt:       r.CompletedAt,
 	}
 }

@@ -22,6 +22,7 @@ type RolloutStageMode = types.RolloutStageMode
 type RolloutAbortCriteria = types.RolloutAbortCriteria
 type RolloutState = types.RolloutState
 type RolloutFilter = types.RolloutFilter
+type RolloutEvidenceRef = types.RolloutEvidenceRef
 type APIToken = types.APIToken
 type SiemDestination = types.SiemDestination
 

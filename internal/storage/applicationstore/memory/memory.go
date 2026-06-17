@@ -615,11 +615,12 @@ func (s *Store) CreateRollout(ctx context.Context, r *types.Rollout) error {
 	if _, exists := s.rollouts[r.ID]; exists {
 		return fmt.Errorf("rollout already exists: %s", r.ID)
 	}
-	rolloutCopy := *r
-	// Deep-copy slice + map fields to insulate stored state.
-	if r.Stages != nil {
-		rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
-		copy(rolloutCopy.Stages, r.Stages)
+	rolloutCopy := copyRollout(r)
+	// v0.53 — default proposed_by at the storage boundary so callers
+	// that don't set it (legacy or test code) carry operator
+	// semantics.
+	if rolloutCopy.ProposedBy == "" {
+		rolloutCopy.ProposedBy = types.RolloutProposedByOperator
 	}
 	s.rollouts[r.ID] = &rolloutCopy
 	return nil
@@ -632,12 +633,26 @@ func (s *Store) GetRollout(ctx context.Context, id string) (*types.Rollout, erro
 	if !ok {
 		return nil, nil
 	}
-	rolloutCopy := *r
+	out := copyRollout(r)
+	return &out, nil
+}
+
+// copyRollout makes a deep enough copy of a rollout that callers
+// can mutate the returned value without affecting stored state.
+// Centralized so every read/write path agrees on which fields need
+// deep copies (Stages, EvidenceRefs) and which are safe to alias
+// (time pointers — the engine reads these as values).
+func copyRollout(r *types.Rollout) types.Rollout {
+	out := *r
 	if r.Stages != nil {
-		rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
-		copy(rolloutCopy.Stages, r.Stages)
+		out.Stages = make([]types.RolloutStage, len(r.Stages))
+		copy(out.Stages, r.Stages)
 	}
-	return &rolloutCopy, nil
+	if r.EvidenceRefs != nil {
+		out.EvidenceRefs = make([]types.RolloutEvidenceRef, len(r.EvidenceRefs))
+		copy(out.EvidenceRefs, r.EvidenceRefs)
+	}
+	return out
 }
 
 func (s *Store) ListRollouts(ctx context.Context, filter types.RolloutFilter) ([]*types.Rollout, error) {
@@ -661,12 +676,8 @@ func (s *Store) ListRollouts(ctx context.Context, filter types.RolloutFilter) ([
 		if filter.State != "" && r.State != filter.State {
 			continue
 		}
-		rolloutCopy := *r
-		if r.Stages != nil {
-			rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
-			copy(rolloutCopy.Stages, r.Stages)
-		}
-		matches = append(matches, &rolloutCopy)
+		out := copyRollout(r)
+		matches = append(matches, &out)
 	}
 	sort.Slice(matches, func(i, j int) bool {
 		return matches[i].CreatedAt.After(matches[j].CreatedAt)
@@ -683,10 +694,10 @@ func (s *Store) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	if _, ok := s.rollouts[r.ID]; !ok {
 		return fmt.Errorf("rollout not found: %s", r.ID)
 	}
-	rolloutCopy := *r
-	if r.Stages != nil {
-		rolloutCopy.Stages = make([]types.RolloutStage, len(r.Stages))
-		copy(rolloutCopy.Stages, r.Stages)
+	rolloutCopy := copyRollout(r)
+	// v0.53 — preserve proposed_by semantics on update too.
+	if rolloutCopy.ProposedBy == "" {
+		rolloutCopy.ProposedBy = types.RolloutProposedByOperator
 	}
 	s.rollouts[r.ID] = &rolloutCopy
 	return nil

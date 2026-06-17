@@ -413,6 +413,19 @@ func (s *Storage) migrate() error {
 		// agent.config_pushed, agent.decommissioned) still resolves
 		// by ID. This is the CIP-007-6 R4.3 / R4.4 evidence path.
 		`ALTER TABLE agents ADD COLUMN deleted_at DATETIME`,
+		// v0.53: rollouts gain proposal provenance columns. Every
+		// rollout is conceptually a proposal; these capture who or
+		// what originated it. Default proposed_by to 'operator' so
+		// existing rows carry forward with the right semantics.
+		// proposal_reasoning is the natural-language justification
+		// (used by AI-originated proposals). evidence_refs is a
+		// JSON array of RolloutEvidenceRef objects pointing at the
+		// alerts, metrics, configlint findings, or recommendations
+		// that informed the proposal. See Squadron Move 1 in
+		// docs/roadmap-post-v0.52.md.
+		`ALTER TABLE rollouts ADD COLUMN proposed_by TEXT NOT NULL DEFAULT 'operator'`,
+		`ALTER TABLE rollouts ADD COLUMN proposal_reasoning TEXT`,
+		`ALTER TABLE rollouts ADD COLUMN evidence_refs TEXT`,
 	}
 
 	for _, migration := range migrations {
@@ -1392,9 +1405,26 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 	if r.UpdatedAt.IsZero() {
 		r.UpdatedAt = r.CreatedAt
 	}
+	// v0.53 — proposal provenance. Default proposed_by to "operator"
+	// at the storage layer so old callers that don't set it carry
+	// the right semantics. Marshal evidence refs to JSON; the empty
+	// slice marshals to "null" via Go's json package which we coerce
+	// to the explicit empty string so the column stays NULL.
+	proposedBy := r.ProposedBy
+	if proposedBy == "" {
+		proposedBy = types.RolloutProposedByOperator
+	}
+	evidenceJSON := ""
+	if len(r.EvidenceRefs) > 0 {
+		buf, err := json.Marshal(r.EvidenceRefs)
+		if err != nil {
+			return fmt.Errorf("failed to marshal rollout evidence refs: %w", err)
+		}
+		evidenceJSON = string(buf)
+	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -1416,6 +1446,10 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		// only ever sets them later.
 		nullableString(r.LastBlackoutReason),
 		r.LastBlackoutAt,
+		// v0.53 proposal provenance columns.
+		proposedBy,
+		nullableString(r.ProposalReasoning),
+		nullableString(evidenceJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -1427,7 +1461,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1444,7 +1478,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1484,6 +1518,19 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		return fmt.Errorf("failed to marshal rollout abort criteria: %w", err)
 	}
 	r.UpdatedAt = time.Now().UTC()
+	// v0.53 — same evidence/proposed_by encoding as CreateRollout.
+	proposedBy := r.ProposedBy
+	if proposedBy == "" {
+		proposedBy = types.RolloutProposedByOperator
+	}
+	evidenceJSON := ""
+	if len(r.EvidenceRefs) > 0 {
+		buf, mErr := json.Marshal(r.EvidenceRefs)
+		if mErr != nil {
+			return fmt.Errorf("failed to marshal rollout evidence refs: %w", mErr)
+		}
+		evidenceJSON = string(buf)
+	}
 	stmt := `
 		UPDATE rollouts
 		SET name = ?, group_id = ?, target_config_id = ?, previous_config_id = ?,
@@ -1492,7 +1539,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    stage_started_at = ?, abort_reason = ?, updated_at = ?, completed_at = ?,
 		    require_approval = ?, requested_by = ?, approved_by = ?, approved_at = ?,
 		    rejected_by = ?, rejected_at = ?, approval_notes = ?,
-		    last_blackout_reason = ?, last_blackout_at = ?
+		    last_blackout_reason = ?, last_blackout_at = ?,
+		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?
 		WHERE id = ?
 	`
 	res, err := s.db.ExecContext(ctx, stmt,
@@ -1513,6 +1561,10 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		// v0.49 blackout columns.
 		nullableString(r.LastBlackoutReason),
 		r.LastBlackoutAt,
+		// v0.53 proposal provenance columns.
+		proposedBy,
+		nullableString(r.ProposalReasoning),
+		nullableString(evidenceJSON),
 		r.ID,
 	)
 	if err != nil {
@@ -1553,6 +1605,10 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		// v0.49 blackout columns.
 		lastBlackoutReason sql.NullString
 		lastBlackoutAt     sql.NullTime
+		// v0.53 proposal provenance.
+		proposedBy        sql.NullString
+		proposalReasoning sql.NullString
+		evidenceRefsJSON  sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -1563,8 +1619,24 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&requireApprovalInt, &requestedBy, &approvedBy, &approvedAt,
 		&rejectedBy, &rejectedAt, &approvalNotes,
 		&lastBlackoutReason, &lastBlackoutAt,
+		&proposedBy, &proposalReasoning, &evidenceRefsJSON,
 	); err != nil {
 		return nil, err
+	}
+	// v0.53 — proposal provenance decoding.
+	if proposedBy.Valid && proposedBy.String != "" {
+		r.ProposedBy = proposedBy.String
+	} else {
+		// Pre-v0.53 rows fall back to operator semantics.
+		r.ProposedBy = types.RolloutProposedByOperator
+	}
+	if proposalReasoning.Valid {
+		r.ProposalReasoning = proposalReasoning.String
+	}
+	if evidenceRefsJSON.Valid && evidenceRefsJSON.String != "" {
+		if err := json.Unmarshal([]byte(evidenceRefsJSON.String), &r.EvidenceRefs); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal evidence refs: %w", err)
+		}
 	}
 	if lastBlackoutReason.Valid {
 		r.LastBlackoutReason = lastBlackoutReason.String
