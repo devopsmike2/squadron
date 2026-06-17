@@ -180,10 +180,44 @@ type Rollout struct {
 	LastBlackoutReason string     `json:"last_blackout_reason,omitempty"`
 	LastBlackoutAt     *time.Time `json:"last_blackout_at,omitempty"`
 
+	// v0.53 — proposal provenance. Every rollout is a proposal.
+	// ProposedBy records the origin: "operator" (default), "ai",
+	// or "system". ProposalReasoning carries the natural-language
+	// justification (used by AI proposers; usually empty for
+	// operator-originated rollouts). EvidenceRefs points at the
+	// alerts, metrics, configlint findings, or recommendations
+	// that informed the proposal. The UI surfaces all three in
+	// the approval drawer and audit log, and the SIEM fan-out
+	// includes them in every audit event so external systems can
+	// reconstruct the full chain. Squadron Move 1.
+	ProposedBy        string         `json:"proposed_by,omitempty"`
+	ProposalReasoning string         `json:"proposal_reasoning,omitempty"`
+	EvidenceRefs      []EvidenceRef  `json:"evidence_refs,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
+
+// EvidenceRef is one piece of evidence attached to a proposal. v0.53.
+// Mirrors applicationstore/types.RolloutEvidenceRef so the service
+// layer doesn't leak the storage type to handlers.
+type EvidenceRef struct {
+	Kind        string `json:"kind"`
+	ID          string `json:"id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// Rollout proposal origins. Use these constants when constructing
+// or comparing ProposedBy values. Mirrors the storage-layer
+// constants so callers in services/ don't need to import
+// applicationstore/types.
+const (
+	RolloutProposedByOperator = "operator"
+	RolloutProposedByAI       = "ai"
+	RolloutProposedBySystem   = "system"
+)
 
 // RolloutInput is the user-supplied shape Create accepts. The service
 // derives ID, timestamps, and PreviousConfigID (snapshotting the group's
@@ -206,6 +240,18 @@ type RolloutInput struct {
 	// time. Empty in dev / token-less mode (the two-person rule
 	// then matches on the audit actor placeholder).
 	RequestedBy string `json:"-"`
+
+	// v0.53 — proposal provenance. Most operator-originated rollouts
+	// leave these empty; the service layer defaults ProposedBy to
+	// "operator" at Create time. AI-originated proposals set
+	// ProposedBy to "ai" plus a natural-language ProposalReasoning
+	// and an EvidenceRefs slice pointing at the alerts / metrics /
+	// recommendations that informed the proposal. The values flow
+	// through the audit trail so the compliance evidence chain is
+	// consistent across origins.
+	ProposedBy        string        `json:"proposed_by,omitempty"`
+	ProposalReasoning string        `json:"proposal_reasoning,omitempty"`
+	EvidenceRefs      []EvidenceRef `json:"evidence_refs,omitempty"`
 }
 
 // RolloutFilter narrows List queries.

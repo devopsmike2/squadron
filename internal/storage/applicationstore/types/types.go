@@ -435,10 +435,53 @@ type Rollout struct {
 	LastBlackoutReason string     `json:"last_blackout_reason,omitempty"`
 	LastBlackoutAt     *time.Time `json:"last_blackout_at,omitempty"`
 
+	// v0.53 — proposal provenance. Every rollout is conceptually a
+	// proposal; ProposedBy records who or what originated it. The
+	// open core's existing path defaults to "operator" so behavior
+	// is unchanged from prior versions. The AI proposer pipeline
+	// (Squadron Move 1) sets "ai" and populates ProposalReasoning
+	// with the model's natural-language justification plus
+	// EvidenceRefs with the alerts and metrics that informed the
+	// proposal. The values flow through to the audit trail so the
+	// compliance evidence path is consistent across operator,
+	// AI, and system-originated changes.
+	//
+	// ProposedBy MUST be one of: "operator", "ai", "system".
+	// Service-layer validation enforces this; storage allows any
+	// string for forward compatibility with future origins.
+	ProposedBy         string                 `json:"proposed_by,omitempty"`
+	ProposalReasoning  string                 `json:"proposal_reasoning,omitempty"`
+	EvidenceRefs       []RolloutEvidenceRef   `json:"evidence_refs,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // set on terminal state
 }
+
+// RolloutEvidenceRef is a single piece of evidence attached to a
+// proposal. v0.53. Used by AI proposers to point at the alerts,
+// metrics, configlint findings, or recommendations that informed
+// the proposal. Stored as JSON on the rollouts row to avoid a
+// second table for a piece of data the operator and the audit
+// trail consume as one unit.
+//
+// Kind values: "alert", "metric", "configlint", "recommendation",
+// "audit_event", "url". Open-ended on purpose so future evidence
+// sources can plug in without a schema migration.
+type RolloutEvidenceRef struct {
+	Kind        string `json:"kind"`
+	ID          string `json:"id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// Rollout proposal origins. Use these constants when constructing
+// or comparing ProposedBy values so typos surface at compile time.
+const (
+	RolloutProposedByOperator = "operator"
+	RolloutProposedByAI       = "ai"
+	RolloutProposedBySystem   = "system"
+)
 
 // RolloutFilter narrows ListRollouts. Empty filter returns all.
 type RolloutFilter struct {
