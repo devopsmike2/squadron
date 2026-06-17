@@ -25,6 +25,7 @@ import (
 	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/extension/policy"
 	"github.com/devopsmike2/squadron/extension/siem"
+	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -80,5 +81,23 @@ func wireSiemDispatcher(auditService services.AuditService, siemSvc services.Sie
 	}
 	if impl, ok := auditService.(*services.AuditServiceImpl); ok {
 		impl.SetSiemDispatcher(siem.NoOpDispatcher{})
+	}
+}
+
+// wireAPIServerExtensions installs Compliance Pack extension points
+// on the API server. For OSS, this is a no-op: the per-request
+// access audit middleware (which records every authenticated
+// mutating call as an api.request audit_event) stays unmounted, so
+// the open core does not produce per-call evidence rows. Service-
+// layer events still record the substantive state changes.
+//
+// The Compliance Pack build replaces this with a version that
+// constructs middleware.APIAccessAudit and installs it via
+// server.SetAccessAuditMiddleware.
+func wireAPIServerExtensions(server *api.Server, auditService services.AuditService, logger *zap.Logger) {
+	_ = server
+	_ = auditService
+	if logger != nil {
+		logger.Info("API access audit: OSS build (per-call evidence unmounted)")
 	}
 }

@@ -34,6 +34,7 @@ package main
 import (
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -58,5 +59,12 @@ func wireEngineExtensions(_ *rollouts.Engine) {
 // webhook poster, and the Splunk HEC poster, then installs the
 // fan-out adapter on the audit service.
 func wireSiemDispatcher(_ services.AuditService, _ services.SiemService, _ *zap.Logger) {
+	panic("squadron: built with -tags compliance but the Compliance Pack wire file was not installed; see docs/build.md")
+}
+
+// wireAPIServerExtensions is the Compliance Pack version. Symbol
+// identical to the OSS file. The real implementation installs the
+// per-request access audit middleware via SetAccessAuditMiddleware.
+func wireAPIServerExtensions(_ *api.Server, _ services.AuditService, _ *zap.Logger) {
 	panic("squadron: built with -tags compliance but the Compliance Pack wire file was not installed; see docs/build.md")
 }
