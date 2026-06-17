@@ -154,7 +154,7 @@ func TestBridge_HappyPath(t *testing.T) {
 		results: []*ai.ProposalResult{goodProposal("prod-utility-fleet")},
 	}
 	rollouts := &fakeRollouts{}
-	b := New(prop, store, rollouts, Config{PollInterval: time.Hour}, zap.NewNop())
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
 	require.Len(t, rollouts.inputs, 1, "one rollout proposal should have been posted")
@@ -182,7 +182,7 @@ func TestBridge_DeclinePath(t *testing.T) {
 		results: []*ai.ProposalResult{{Declined: true, Reason: "Spike below threshold."}},
 	}
 	rollouts := &fakeRollouts{}
-	b := New(prop, store, rollouts, Config{PollInterval: time.Hour}, zap.NewNop())
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 	assert.Empty(t, rollouts.inputs, "declined proposals must not produce a rollout")
 }
@@ -199,7 +199,7 @@ func TestBridge_Dedup(t *testing.T) {
 		},
 	}
 	rollouts := &fakeRollouts{}
-	b := New(prop, store, rollouts, Config{PollInterval: time.Hour}, zap.NewNop())
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
 
 	b.tick(context.Background())
 	b.tick(context.Background())
@@ -218,7 +218,7 @@ func TestBridge_ProposerError(t *testing.T) {
 		errs:    []error{errors.New("rate limited")},
 	}
 	rollouts := &fakeRollouts{}
-	b := New(prop, store, rollouts, Config{PollInterval: time.Hour}, zap.NewNop())
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 	assert.Empty(t, rollouts.inputs, "proposer error must not produce a rollout")
 	// Second tick: the spike is in the seen set; we don't call
@@ -235,7 +235,7 @@ func TestBridge_NoAttribution(t *testing.T) {
 	spike.AttributionJSON = ""
 	prop := &fakeProposer{enabled: true}
 	rollouts := &fakeRollouts{}
-	b := New(prop, store, rollouts, Config{PollInterval: time.Hour}, zap.NewNop())
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 	assert.Equal(t, 0, prop.calls)
 	assert.Empty(t, rollouts.inputs)
@@ -248,7 +248,7 @@ func TestBridge_DisabledProposer(t *testing.T) {
 	store, _ := baselineFixture()
 	prop := &fakeProposer{enabled: false}
 	rollouts := &fakeRollouts{}
-	b := New(prop, store, rollouts, Config{PollInterval: time.Hour}, zap.NewNop())
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	b.Start(ctx)
@@ -256,6 +256,112 @@ func TestBridge_DisabledProposer(t *testing.T) {
 	// completes immediately.
 	require.NoError(t, b.Stop(time.Second))
 	assert.Equal(t, 0, prop.calls)
+}
+
+// fakeAudit captures every Record call so tests can assert.
+type fakeAudit struct {
+	entries []services.AuditEntry
+	err     error
+}
+
+func (f *fakeAudit) Record(_ context.Context, e services.AuditEntry) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.entries = append(f.entries, e)
+	return nil
+}
+
+// TestBridge_AuditOnHappyPath verifies proposal.created and
+// proposal.evidence_linked both fire on a successful proposal,
+// with the cost-spike ID as the target so the audit timeline
+// groups everything on the spike.
+func TestBridge_AuditOnHappyPath(t *testing.T) {
+	store, _ := baselineFixture()
+	prop := &fakeProposer{
+		enabled: true,
+		results: []*ai.ProposalResult{goodProposal("prod-utility-fleet")},
+	}
+	rollouts := &fakeRollouts{}
+	audit := &fakeAudit{}
+	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
+	b.tick(context.Background())
+
+	require.Len(t, audit.entries, 2, "successful proposal should emit two audit events")
+
+	created := audit.entries[0]
+	assert.Equal(t, "proposal.created", created.EventType)
+	assert.Equal(t, "cost_spike", created.TargetType)
+	assert.Equal(t, "spike-1", created.TargetID)
+	assert.Equal(t, "ai-proposer", created.Actor)
+	assert.Equal(t, "ai", created.Payload["origin"])
+	assert.Equal(t, "rollout-AI: drop container.id from metrics", created.Payload["rollout_id"])
+	assert.Equal(t, "prod-utility-fleet", created.Payload["group_id"])
+	assert.Equal(t, true, created.Payload["require_approval"])
+	assert.Equal(t, 1, created.Payload["evidence_count"])
+	assert.Equal(t, "claude-sonnet-4-6", created.Payload["model"])
+	assert.NotEmpty(t, created.Payload["reasoning_summary"])
+
+	evidence := audit.entries[1]
+	assert.Equal(t, "proposal.evidence_linked", evidence.EventType)
+	assert.Equal(t, "spike-1", evidence.TargetID)
+	refs, ok := evidence.Payload["evidence"].([]map[string]any)
+	require.True(t, ok, "evidence payload should be a list of refs")
+	require.Len(t, refs, 1)
+	assert.Equal(t, "alert", refs[0]["kind"])
+}
+
+// TestBridge_AuditOnDecline verifies proposal.declined fires with
+// the reason captured.
+func TestBridge_AuditOnDecline(t *testing.T) {
+	store, _ := baselineFixture()
+	prop := &fakeProposer{
+		enabled: true,
+		results: []*ai.ProposalResult{{Declined: true, Reason: "Spike below threshold.", Model: "claude-sonnet-4-6", TokensIn: 100, TokensOut: 20}},
+	}
+	rollouts := &fakeRollouts{}
+	audit := &fakeAudit{}
+	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
+	b.tick(context.Background())
+
+	require.Len(t, audit.entries, 1, "decline path should emit exactly one event")
+	e := audit.entries[0]
+	assert.Equal(t, "proposal.declined", e.EventType)
+	assert.Equal(t, "spike-1", e.TargetID)
+	assert.Equal(t, "Spike below threshold.", e.Payload["reason"])
+	assert.Equal(t, "claude-sonnet-4-6", e.Payload["model"])
+}
+
+// TestBridge_AuditNilSafeWhenAuditUnset verifies the bridge still
+// works when audit is nil — for tests, dev mode, and any future
+// caller that wires the daemon without the audit dependency.
+func TestBridge_AuditNilSafeWhenAuditUnset(t *testing.T) {
+	store, _ := baselineFixture()
+	prop := &fakeProposer{
+		enabled: true,
+		results: []*ai.ProposalResult{goodProposal("prod-utility-fleet")},
+	}
+	rollouts := &fakeRollouts{}
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
+	require.NotPanics(t, func() { b.tick(context.Background()) })
+	assert.Len(t, rollouts.inputs, 1, "rollout still posts even when audit is unset")
+}
+
+// TestBridge_AuditErrorLoggedButNotPropagated verifies a failing
+// audit emit does not block the rollout from being posted.
+// Compliance evidence is best-effort by design; a SIEM going down
+// must not stop operational state changes from flowing.
+func TestBridge_AuditErrorLoggedButNotPropagated(t *testing.T) {
+	store, _ := baselineFixture()
+	prop := &fakeProposer{
+		enabled: true,
+		results: []*ai.ProposalResult{goodProposal("prod-utility-fleet")},
+	}
+	rollouts := &fakeRollouts{}
+	audit := &fakeAudit{err: errors.New("siem down")}
+	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
+	b.tick(context.Background())
+	assert.Len(t, rollouts.inputs, 1, "audit failures must not block rollout posting")
 }
 
 // TestParseAttribution covers the tolerant parser.

@@ -64,6 +64,15 @@ type Rollouts interface {
 	Create(ctx context.Context, input services.RolloutInput) (*services.Rollout, error)
 }
 
+// Audit is the subset of services.AuditService the bridge uses to
+// emit proposal.* events. Stated as an interface so tests can
+// substitute a fake and assert on what was recorded. Nil is a
+// valid runtime state (the bridge treats audit as best-effort and
+// keeps running if it fails).
+type Audit interface {
+	Record(ctx context.Context, entry services.AuditEntry) error
+}
+
 // Config controls the bridge's cadence and behavior.
 type Config struct {
 	// PollInterval is how often the bridge sweeps open cost spikes.
@@ -82,6 +91,7 @@ type Bridge struct {
 	proposer Proposer
 	store    Store
 	rollouts Rollouts
+	audit    Audit // optional; nil is fine, events are best-effort
 	cfg      Config
 	logger   *zap.Logger
 
@@ -96,9 +106,10 @@ type Bridge struct {
 	wg       sync.WaitGroup
 }
 
-// New constructs a Bridge. All dependencies are required. Logger
-// nil is allowed (no-op logger is used).
-func New(proposer Proposer, store Store, rollouts Rollouts, cfg Config, logger *zap.Logger) *Bridge {
+// New constructs a Bridge. proposer, store, and rollouts are
+// required. audit may be nil (events are best-effort). logger nil
+// is allowed (no-op logger is used).
+func New(proposer Proposer, store Store, rollouts Rollouts, audit Audit, cfg Config, logger *zap.Logger) *Bridge {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -109,6 +120,7 @@ func New(proposer Proposer, store Store, rollouts Rollouts, cfg Config, logger *
 		proposer: proposer,
 		store:    store,
 		rollouts: rollouts,
+		audit:    audit,
 		cfg:      cfg,
 		logger:   logger,
 		seen:     map[string]struct{}{},
@@ -217,6 +229,7 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		b.logger.Info("AI proposer bridge: proposer declined",
 			zap.String("spike_id", spike.ID),
 			zap.String("reason", result.Reason))
+		b.emitDeclined(ctx, spike, result)
 		return
 	}
 
@@ -233,6 +246,112 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		zap.String("group_id", cs.GroupID),
 		zap.Int("tokens_in", result.TokensIn),
 		zap.Int("tokens_out", result.TokensOut))
+	b.emitCreated(ctx, spike, rollout, result, cs)
+	b.emitEvidenceLinked(ctx, spike, rollout, result)
+}
+
+// emitCreated records proposal.created at the cost-spike target.
+// The audit timeline groups proposal events on the spike so an
+// operator reviewing the spike sees the AI's reasoning, the model,
+// and the resulting rollout in one place. Compliance evidence
+// trail for NIST AI RMF MAP 4.1 and SOC 2 CC8.1.
+func (b *Bridge) emitCreated(ctx context.Context, spike *types.CostSpikeEvent, rollout *services.Rollout, result *ai.ProposalResult, cs ai.CostSpikeContext) {
+	if b.audit == nil {
+		return
+	}
+	if err := b.audit.Record(ctx, services.AuditEntry{
+		Actor:      "ai-proposer",
+		EventType:  "proposal.created",
+		TargetType: "cost_spike",
+		TargetID:   spike.ID,
+		Action:     "created",
+		Payload: map[string]any{
+			"origin":             "ai",
+			"rollout_id":         rollout.ID,
+			"group_id":           cs.GroupID,
+			"target_config_id":   rollout.TargetConfigID,
+			"reasoning_summary":  summarize(result.Reasoning, 240),
+			"evidence_count":     len(result.Evidence),
+			"model":              result.Model,
+			"tokens_in":          result.TokensIn,
+			"tokens_out":         result.TokensOut,
+			"require_approval":   true,
+		},
+	}); err != nil {
+		b.logger.Warn("AI proposer bridge: proposal.created audit emit failed",
+			zap.String("spike_id", spike.ID), zap.Error(err))
+	}
+}
+
+// emitEvidenceLinked records proposal.evidence_linked with the
+// full evidence list attached. One event per proposal carrying the
+// list, rather than one event per ref, so the audit log stays
+// readable. Compliance evidence trail for NIST AI RMF MEASURE 2.5
+// (evidence-based decision tracking).
+func (b *Bridge) emitEvidenceLinked(ctx context.Context, spike *types.CostSpikeEvent, rollout *services.Rollout, result *ai.ProposalResult) {
+	if b.audit == nil || len(result.Evidence) == 0 {
+		return
+	}
+	refs := make([]map[string]any, len(result.Evidence))
+	for i, e := range result.Evidence {
+		refs[i] = map[string]any{
+			"kind":        e.Kind,
+			"id":          e.ID,
+			"url":         e.URL,
+			"description": e.Description,
+		}
+	}
+	if err := b.audit.Record(ctx, services.AuditEntry{
+		Actor:      "ai-proposer",
+		EventType:  "proposal.evidence_linked",
+		TargetType: "cost_spike",
+		TargetID:   spike.ID,
+		Action:     "evidence_linked",
+		Payload: map[string]any{
+			"rollout_id": rollout.ID,
+			"evidence":   refs,
+		},
+	}); err != nil {
+		b.logger.Warn("AI proposer bridge: proposal.evidence_linked audit emit failed",
+			zap.String("spike_id", spike.ID), zap.Error(err))
+	}
+}
+
+// emitDeclined records the model's decision not to propose. Useful
+// evidence trail even on the negative path: an auditor can see
+// that the AI evaluated the spike and chose not to act, with the
+// reason captured.
+func (b *Bridge) emitDeclined(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult) {
+	if b.audit == nil {
+		return
+	}
+	if err := b.audit.Record(ctx, services.AuditEntry{
+		Actor:      "ai-proposer",
+		EventType:  "proposal.declined",
+		TargetType: "cost_spike",
+		TargetID:   spike.ID,
+		Action:     "declined",
+		Payload: map[string]any{
+			"origin":    "ai",
+			"reason":    result.Reason,
+			"model":     result.Model,
+			"tokens_in": result.TokensIn,
+			"tokens_out": result.TokensOut,
+		},
+	}); err != nil {
+		b.logger.Warn("AI proposer bridge: proposal.declined audit emit failed",
+			zap.String("spike_id", spike.ID), zap.Error(err))
+	}
+}
+
+// summarize truncates a long string to a maximum length and adds
+// an ellipsis. Used to keep audit payloads small while still
+// readable in the timeline. Empty input returns empty.
+func summarize(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
 }
 
 // buildContext assembles the CostSpikeContext the proposer needs.
