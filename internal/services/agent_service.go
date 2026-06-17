@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/devopsmike2/squadron/internal/changewindow"
+	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/google/uuid"
 )
 

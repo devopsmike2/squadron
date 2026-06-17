@@ -665,6 +665,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// (pause / resume / abort) land on the same parent span the
 	// engine opened.
 	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, rolloutTelemetry, configSender, eventBroker, rolloutTracer, configsTracer, logger)
+	// v0.52 — wire engine-level Compliance Pack extension points
+	// (currently the change-window provider). OSS installs NoOp;
+	// Compliance Pack installs a store-backed provider.
+	wireEngineExtensions(rolloutEngine)
 	rolloutEngine.Start()
 	defer func() {
 		if err := rolloutEngine.Stop(10 * time.Second); err != nil {

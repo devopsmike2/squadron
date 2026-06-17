@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/devopsmike2/squadron/internal/changewindow"
+	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 

@@ -32,16 +32,20 @@
 package main
 
 import (
+	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
-// wireExtensions is the Compliance Pack version. Symbol identical to
-// the OSS file so main.go has a single call site. The real
+// wireExtensions is the Compliance Pack version. Symbol identical
+// to the OSS file so main.go has a single call site. The real
 // implementation is in the private repo.
 func wireExtensions(_ services.RolloutService) string {
-	// This stub will be overwritten by the real implementation from
-	// the squadron-compliance repo at build time. If you see this
-	// string in a running binary, the Compliance Pack build did not
-	// complete properly — investigate the build pipeline.
+	panic("squadron: built with -tags compliance but the Compliance Pack wire file was not installed; see docs/build.md")
+}
+
+// wireEngineExtensions is the Compliance Pack version. Symbol
+// identical to the OSS file. The real implementation in the private
+// repo wires a store-backed change-window provider here.
+func wireEngineExtensions(_ *rollouts.Engine) {
 	panic("squadron: built with -tags compliance but the Compliance Pack wire file was not installed; see docs/build.md")
 }

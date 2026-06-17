@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/devopsmike2/squadron/internal/changewindow"
+	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -80,10 +80,42 @@ type Engine struct {
 	httpClient     *http.Client    // for webhook notifications
 	tracer         *Tracer         // optional; nil disables OTel rollout traces
 	configsTracer  *configs.Tracer // optional; nil disables OTel config-push spans
-	logger         *zap.Logger
+	// changeWindowProvider is the boundary between the open core
+	// (which stores change_windows as group metadata) and the
+	// Compliance Pack (which enforces them). nil is treated as
+	// NoOpProvider — no enforcement. Wired post-construction via
+	// SetChangeWindowProvider so the Compliance Pack build can plug
+	// in its own implementation without changing the OSS NewEngine
+	// signature. Added in v0.52 as part of the open-core split.
+	changeWindowProvider changewindow.Provider
+	logger               *zap.Logger
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
+}
+
+// SetChangeWindowProvider wires the Compliance Pack's blackout
+// enforcement. Called by the wire layer (wire_oss.go installs
+// NoOpProvider; wire_compliance.go installs the real one). nil is
+// a valid value and disables enforcement (the OSS default).
+func (e *Engine) SetChangeWindowProvider(p changewindow.Provider) {
+	e.changeWindowProvider = p
+}
+
+// RolloutService returns the underlying rollout service. Exposed
+// so engine-level extension wiring (Compliance Pack) can recover
+// the application store without needing it threaded through a
+// widened constructor signature. Read-only by convention.
+func (e *Engine) RolloutService() services.RolloutService {
+	return e.rolloutService
+}
+
+// AgentService returns the underlying agent service. Exposed so
+// engine-level extension wiring can read group records (with
+// parsed ChangeWindows) without depending on the lower-level
+// applicationstore. Read-only by convention.
+func (e *Engine) AgentService() services.AgentService {
+	return e.agentService
 }
 
 // NewEngine wires up the engine. auditService, telemetry, broker,
@@ -297,30 +329,31 @@ func (e *Engine) process(ctx context.Context, r *services.Rollout) {
 	}
 }
 
-// applyBlackoutCheck inspects the target group's change windows and,
-// if one is active, persists the blackout reason on the rollout and
-// returns true (= skip this tick's advancement). If no window is
-// active and the rollout was previously in a blackout, clears the
-// reason so the UI badge disappears.
+// applyBlackoutCheck consults the configured changewindow.Provider
+// (NoOp in the OSS build, real implementation in the Compliance
+// Pack) and, if a window is active, persists the blackout reason on
+// the rollout and returns true (= skip this tick's advancement).
+// If no window is active and the rollout was previously in a
+// blackout, clears the reason so the UI badge disappears.
 //
-// Debounced audit: only records "rollout.blackout_blocked" the first
-// time we hit a blackout for a given (rollout, window) pair. The
-// tracer span event fires every check so the trace shows the full
-// gap; the audit event is once-per-window to keep the audit log
-// readable.
+// Debounced audit: only records "rollout.blackout_blocked" the
+// first time we hit a blackout for a given (rollout, window) pair.
+// The tracer span event fires every check so the trace shows the
+// full gap; the audit event is once-per-window to keep the audit
+// log readable.
 //
-// Added in v0.49.
+// Added in v0.49. Moved behind the Provider interface in v0.52.
 func (e *Engine) applyBlackoutCheck(ctx context.Context, r *services.Rollout) bool {
-	group, err := e.agentService.GetGroup(ctx, r.GroupID)
-	if err != nil || group == nil {
-		// No group means no policy — fail open. A storage hiccup
-		// shouldn't strand a rollout indefinitely.
+	// v0.52 — enforcement moved behind the changewindow.Provider
+	// interface so the Compliance Pack (private repo) owns the
+	// blocking decision. With no provider wired (the OSS default,
+	// NoOpProvider), every check returns nil window and the engine
+	// proceeds. Groups can still carry change_windows as metadata
+	// in the OSS build; they just don't enforce.
+	if e.changeWindowProvider == nil {
 		return false
 	}
-	if len(group.ChangeWindows) == 0 {
-		return false
-	}
-	active := changewindow.FirstActive(group.ChangeWindows, time.Now())
+	active := e.changeWindowProvider.ActiveWindow(ctx, r.GroupID, time.Now())
 	if active == nil {
 		// No active window. If we were previously blocked, clear
 		// the reason so the badge disappears.
