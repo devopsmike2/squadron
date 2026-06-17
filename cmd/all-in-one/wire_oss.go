@@ -20,8 +20,10 @@
 package main
 
 import (
-	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/extension/policy"
+	"github.com/devopsmike2/squadron/internal/rollouts"
+	"github.com/devopsmike2/squadron/internal/services"
 )
 
 // wireExtensions installs Compliance Pack extension points on a
@@ -38,4 +40,18 @@ func wireExtensions(rolloutService services.RolloutService) string {
 		impl.SetGroupPolicyProvider(policy.NoOpProvider{})
 	}
 	return "squadron-oss"
+}
+
+// wireEngineExtensions installs engine-level Compliance Pack
+// extension points after the rollout engine is constructed. The
+// OSS build wires NoOpProvider for change-window enforcement so
+// groups can carry windows as metadata but the engine never
+// blocks. Compliance Pack build replaces this with a real
+// store-backed provider.
+//
+// Separated from wireExtensions because the rollout engine is
+// constructed late in main.go (after most other services), so the
+// two extension wiring points fire at different moments.
+func wireEngineExtensions(engine *rollouts.Engine) {
+	engine.SetChangeWindowProvider(changewindow.NoOpProvider{})
 }
