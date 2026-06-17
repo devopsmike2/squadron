@@ -41,7 +41,6 @@ import (
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
 	"github.com/devopsmike2/squadron/internal/selftel"
 	"github.com/devopsmike2/squadron/internal/siem"
-	"github.com/devopsmike2/squadron/internal/siemwire"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/telemetrystore"
@@ -545,20 +544,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// instead of a 500). When enabled, the dispatcher hot-reloads
 	// destinations from storage every 60s so operator edits in the
 	// UI apply without a process restart.
+	// v0.52 — SIEM destination storage stays in the open core
+	// (operators can configure destinations through the UI/API
+	// regardless of build edition). The actual fan-out of audit
+	// events to those destinations is the Compliance Pack feature.
+	// wireSiemDispatcher installs a NoOp in the OSS build (events
+	// stay local) and the real Splunk HEC + HMAC webhook
+	// dispatcher in the Enterprise build.
 	if siemCrypter, err := siem.NewCrypterFromEnv(); err != nil {
-		logger.Info("SIEM export disabled (SQUADRON_SIEM_KEY unset). Generate with: head -c 32 /dev/urandom | base64")
+		logger.Info("SIEM destinations storage disabled (SQUADRON_SIEM_KEY unset). Generate with: head -c 32 /dev/urandom | base64")
 	} else {
 		siemSvc := services.NewSiemService(appStore, siemCrypter, auditService, logger)
 		apiServer.SetSiemService(siemSvc)
-		siemDispatcher := siem.NewDispatcher(siemSvc, 60*time.Second, logger)
-		siemDispatcher.Start(context.Background())
-		// Connect the dispatcher into the audit service via the
-		// adapter in internal/siemwire (separate package to break
-		// the services↔siem cycle).
-		if impl, ok := auditService.(*services.AuditServiceImpl); ok {
-			impl.SetSiemDispatcher(&siemwire.DispatcherAdapter{Dispatcher: siemDispatcher})
-		}
-		logger.Info("SIEM export enabled (dispatcher reloading every 60s)")
+		wireSiemDispatcher(auditService, siemSvc, logger)
 	}
 
 	// v0.42 Billing connectors. Splunk is the v0.42 ship; Datadog,

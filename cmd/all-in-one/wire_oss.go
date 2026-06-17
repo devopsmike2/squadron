@@ -20,8 +20,11 @@
 package main
 
 import (
+	"go.uber.org/zap"
+
 	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/extension/policy"
+	"github.com/devopsmike2/squadron/extension/siem"
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -54,4 +57,28 @@ func wireExtensions(rolloutService services.RolloutService) string {
 // two extension wiring points fire at different moments.
 func wireEngineExtensions(engine *rollouts.Engine) {
 	engine.SetChangeWindowProvider(changewindow.NoOpProvider{})
+}
+
+// wireSiemDispatcher installs the SIEM fan-out dispatcher on the
+// audit service. The OSS build wires NoOpDispatcher; events still
+// persist locally in the audit_events table but never leave the
+// box. Configured SIEM destinations are stored and visible in the
+// UI for inventory purposes but are not actually delivered to.
+//
+// Operators who need centralized retention or signed external
+// export run the Compliance Pack build, which wires a real
+// dispatcher backed by Splunk HEC + HMAC-signed webhook posters.
+//
+// The siemSvc and logger arguments are accepted but unused by the
+// OSS wire; they exist to keep the signature stable across both
+// build editions so main.go has a single call site. The unused
+// variables are silenced explicitly.
+func wireSiemDispatcher(auditService services.AuditService, siemSvc services.SiemService, logger *zap.Logger) {
+	_ = siemSvc
+	if logger != nil {
+		logger.Info("SIEM dispatcher: OSS build (destinations stored only, no external fan-out)")
+	}
+	if impl, ok := auditService.(*services.AuditServiceImpl); ok {
+		impl.SetSiemDispatcher(siem.NoOpDispatcher{})
+	}
 }
