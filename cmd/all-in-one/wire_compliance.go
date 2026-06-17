@@ -32,6 +32,8 @@
 package main
 
 import (
+	"go.uber.org/zap"
+
 	"github.com/devopsmike2/squadron/internal/rollouts"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -47,5 +49,14 @@ func wireExtensions(_ services.RolloutService) string {
 // identical to the OSS file. The real implementation in the private
 // repo wires a store-backed change-window provider here.
 func wireEngineExtensions(_ *rollouts.Engine) {
+	panic("squadron: built with -tags compliance but the Compliance Pack wire file was not installed; see docs/build.md")
+}
+
+// wireSiemDispatcher is the Compliance Pack version. Symbol
+// identical to the OSS file. The real implementation in the private
+// repo constructs the bounded-queue dispatcher, the HMAC-signing
+// webhook poster, and the Splunk HEC poster, then installs the
+// fan-out adapter on the audit service.
+func wireSiemDispatcher(_ services.AuditService, _ services.SiemService, _ *zap.Logger) {
 	panic("squadron: built with -tags compliance but the Compliance Pack wire file was not installed; see docs/build.md")
 }
