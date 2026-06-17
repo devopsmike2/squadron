@@ -169,6 +169,27 @@ func (e *Engine) notifyWebhook(ctx context.Context, r *services.Rollout, transit
 		"abort_reason":     r.AbortReason,
 		"at":               time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	// v0.53 — proposal provenance. When the rollout came from the
+	// AI proposer, surface origin, the natural-language reasoning,
+	// the top three evidence references, and a slack_blocks render
+	// of the same. Receivers that just want JSON keep their old
+	// payload shape (the new fields are additive). Receivers that
+	// speak Slack Block Kit can render slack_blocks directly. The
+	// engine fires this on every transition so a Slack approver
+	// sees the AI's reasoning the moment the rollout enters
+	// pending_approval.
+	if r.ProposedBy != "" {
+		payload["proposed_by"] = r.ProposedBy
+	}
+	if r.ProposedBy == services.RolloutProposedByAI {
+		if r.ProposalReasoning != "" {
+			payload["proposal_reasoning"] = r.ProposalReasoning
+		}
+		if len(r.EvidenceRefs) > 0 {
+			payload["evidence_refs"] = topEvidence(r.EvidenceRefs, 3)
+		}
+		payload["slack_blocks"] = aiProposalSlackBlocks(r, transition)
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		e.logger.Warn("rollout engine: failed to marshal webhook payload",
