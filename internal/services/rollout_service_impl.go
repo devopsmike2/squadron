@@ -14,6 +14,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/configdiff"
 	"github.com/devopsmike2/squadron/internal/configlint"
+	"github.com/devopsmike2/squadron/extension/policy"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
@@ -27,9 +28,35 @@ import (
 type RolloutServiceImpl struct {
 	appStore     applicationstore.ApplicationStore
 	agentService AgentService
-	auditService AuditService // optional
+	auditService AuditService  // optional
 	tracer       RolloutTracer // optional
-	logger       *zap.Logger
+	// groupPolicy is the boundary between the open core (which
+	// surfaces require_approval as group metadata) and the
+	// Compliance Pack (which enforces it). nil is treated as
+	// NoOpProvider — no enforcement. Wired post-construction via
+	// SetGroupPolicyProvider so the Compliance Pack build can plug
+	// in its own implementation without changing the OSS constructor
+	// signature.
+	groupPolicy policy.GroupPolicyProvider
+	logger      *zap.Logger
+}
+
+// SetGroupPolicyProvider wires the Compliance Pack's group policy
+// enforcement. Called by main.go (or the Compliance Pack build's
+// wire file) after the service is constructed. nil is a valid value
+// and disables enforcement (the OSS default).
+func (s *RolloutServiceImpl) SetGroupPolicyProvider(p policy.GroupPolicyProvider) {
+	s.groupPolicy = p
+}
+
+// ApplicationStore returns the underlying application store. Exposed
+// so extension wiring (Compliance Pack, alternative builds) can
+// construct providers that need to read group / config / agent rows
+// without having to be passed the store through a separate channel.
+// Read-only by convention: extension code should not mutate state
+// through this handle.
+func (s *RolloutServiceImpl) ApplicationStore() applicationstore.ApplicationStore {
+	return s.appStore
 }
 
 // NewRolloutService creates a new rollout service. agentService is used at
@@ -97,18 +124,25 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		previousID = prev.ID
 	}
 
-	// v0.48 — per-group approval policy. If the target group has
-	// require_approval set, we force input.RequireApproval=true here
-	// so the requester cannot bypass policy by unchecking the form
-	// box. This is the actual compliance control: it turns v0.47's
-	// honor-system checkbox into per-group enforced policy. Failing
-	// open on a lookup error (storage hiccup) is safer than failing
-	// closed — operators can recover from "didn't enforce" with an
-	// audit, but a hard block on a transient DB blip prevents
-	// legitimate ops work during an incident. We log the override
-	// so the audit trail is explicit.
+	// v0.48 — per-group approval policy. If the target group's
+	// policy mandates approval, we force input.RequireApproval=true
+	// here so the requester cannot bypass policy by unchecking the
+	// form box. This is the actual compliance control: it turns
+	// v0.47's honor-system checkbox into per-group enforced policy.
+	//
+	// v0.52 — the enforcement check moved behind the
+	// policy.GroupPolicyProvider interface so the Compliance Pack
+	// (private squadron-compliance repo) can own enforcement and
+	// the open core stays honor-system. With no provider wired
+	// (the OSS default), the requester's value stands.
+	//
+	// Failing open is preserved at the provider boundary: a
+	// provider that can't determine policy returns false rather
+	// than blocking the rollout. Operators can recover from "didn't
+	// enforce" with an audit; a hard block on a transient lookup
+	// failure would prevent legitimate ops work during an incident.
 	enforcedByPolicy := false
-	if group, err := s.appStore.GetGroup(ctx, input.GroupID); err == nil && group != nil && group.RequireApproval && !input.RequireApproval {
+	if s.groupPolicy != nil && s.groupPolicy.RequiresApproval(ctx, input.GroupID) && !input.RequireApproval {
 		input.RequireApproval = true
 		enforcedByPolicy = true
 		s.logger.Info("forcing rollout into pending_approval per group policy",

@@ -249,6 +249,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// operators filter by what triggered each push.
 	configsTracer := configs.NewTracer(selftelPub.Tracer("squadron/configs"))
 	rolloutService := services.NewRolloutServiceWithTracer(appStore, agentService, auditService, rolloutTracer, logger)
+	// v0.52 — wire the build-specific extension points. The OSS
+	// build installs no-op providers; the Compliance Pack build
+	// installs real ones. main.go itself doesn't care which is
+	// active. See cmd/all-in-one/wire_oss.go (default) and
+	// wire_compliance.go (build tag: compliance) for the boundary.
+	buildEdition := wireExtensions(rolloutService)
+	logger.Info("squadron build edition", zap.String("edition", buildEdition))
 
 	// Bootstrap an initial token if auth is enabled and the store has
 	// none yet. Operators see this token in stderr on first start; they

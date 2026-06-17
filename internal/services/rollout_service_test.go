@@ -542,24 +542,43 @@ func TestRolloutService_AbortMissing(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+// stubGroupPolicy implements policy.GroupPolicyProvider for tests.
+// Returns true for every group ID in the enforced set. Stands in for
+// the Compliance Pack's real provider so the open core test can
+// exercise the enforcement code path without depending on the
+// private repo.
+type stubGroupPolicy struct{ enforced map[string]bool }
+
+func (s stubGroupPolicy) RequiresApproval(_ context.Context, groupID string) bool {
+	return s.enforced[groupID]
+}
+
 // TestRolloutService_GroupPolicyForcesApproval verifies the v0.48
-// compliance control: when the target group has require_approval=true,
-// the rollout must enter pending_approval even if the requester
-// explicitly sets RequireApproval=false on the input. This is the
-// difference between an honor-system checkbox and an enforced
-// policy — auditors require the latter.
+// compliance control: when the wired policy provider reports that
+// the group's policy is enforced, the rollout must enter
+// pending_approval even if the requester explicitly sets
+// RequireApproval=false on the input. This is the difference
+// between an honor-system checkbox and an enforced policy —
+// auditors require the latter.
+//
+// v0.52 — the enforcement implementation moved to the Compliance
+// Pack (private squadron-compliance repo). The open core only knows
+// the interface boundary. This test wires a stub provider that
+// behaves the way the Pack's real provider will, so the integration
+// is still covered in the open core CI.
 func TestRolloutService_GroupPolicyForcesApproval(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()
-	// Seed a group with policy enabled.
 	require.NoError(t, store.CreateGroup(ctx, &applicationstore.Group{
-		ID:              "group-a",
-		Name:            "prod-windows",
-		RequireApproval: true,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		ID:        "group-a",
+		Name:      "prod-windows",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}))
 	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	svc.(*RolloutServiceImpl).SetGroupPolicyProvider(stubGroupPolicy{
+		enforced: map[string]bool{"group-a": true},
+	})
 
 	in := validRolloutInput(t, store)
 	in.GroupID = "group-a"
@@ -571,6 +590,34 @@ func TestRolloutService_GroupPolicyForcesApproval(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, r.RequireApproval, "group policy should force RequireApproval=true")
 	assert.Equal(t, RolloutStatePendingApproval, r.State, "rollout should be pending_approval per group policy")
+}
+
+// TestRolloutService_NoPolicyProviderDoesNotEnforce documents the OSS
+// default: with no policy provider wired (the open-core build), the
+// require_approval flag on a Group row is metadata and the rollout
+// service does NOT force approval. Customers who need enforcement
+// run the Compliance Pack build, which wires its own provider.
+func TestRolloutService_NoPolicyProviderDoesNotEnforce(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	require.NoError(t, store.CreateGroup(ctx, &applicationstore.Group{
+		ID:              "group-oss",
+		Name:            "oss-fleet",
+		RequireApproval: true, // metadata only in the OSS build
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}))
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	// No SetGroupPolicyProvider call — this is the OSS default.
+
+	in := validRolloutInput(t, store)
+	in.GroupID = "group-oss"
+	in.RequireApproval = false
+
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	assert.False(t, r.RequireApproval, "OSS build must not enforce; require_approval flag is metadata")
+	assert.Equal(t, RolloutStatePending, r.State)
 }
 
 // TestRolloutService_GroupPolicyOffPreservesInput verifies the negative
