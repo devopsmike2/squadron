@@ -365,6 +365,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// worker, and API metrics in a single endpoint. The event broker is
 	// shared with publishers so /events/stream reflects what they emit.
 	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: config.Auth.Enabled}, configSender, eventBroker, configsTracer, registry, logger)
+	// v0.52 — wire API-server-level Compliance Pack extension points.
+	// OSS leaves the per-request access audit middleware unmounted;
+	// Compliance Pack installs it. Called here before any other
+	// SetX accessor so the middleware order in v1.Use() stays
+	// deterministic (auth → access audit → handler).
+	wireAPIServerExtensions(apiServer, auditService, logger)
 
 	// v0.27.1 Quickstart needs to know the OpAMP port so the
 	// generated agent configs dial back to the right place.

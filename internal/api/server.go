@@ -83,7 +83,15 @@ type Server struct {
 	deploy            *deploy.Service         // optional; v0.34 GitHub Actions deploy trigger — nil or Enabled()==false → /api/v1/deploy/* returns 503
 	billingProvider   billing.SnapshotProvider // optional; v0.42 — nil → /api/v1/billing/snapshot returns 204
 	siemService       services.SiemService    // optional; v0.50.2 — nil → /api/v1/siem/* returns 503
-	logger            *zap.Logger
+	// accessAuditMiddleware records an api.request audit event for
+	// every authenticated mutating request. Wired by the build-edition
+	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
+	// state-change events still recorded by the service layer);
+	// Compliance Pack wires middleware.APIAccessAudit which produces
+	// per-call evidence for NIST CSF PR.AA-04 and CIP-007-6 R4.1.2.
+	// Added in v0.52.
+	accessAuditMiddleware gin.HandlerFunc
+	logger                *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
 	registry          *prometheus.Registry
@@ -246,6 +254,18 @@ func (s *Server) SetSiemService(svc services.SiemService) {
 	s.siemService = svc
 }
 
+// SetAccessAuditMiddleware installs the per-request audit middleware
+// the v0.52 build edition split moves out of the open core's hard
+// wire. The wire layer in cmd/all-in-one calls this once after
+// NewServer; OSS passes nil (or skips the call) so the middleware
+// stays unmounted, Compliance Pack installs middleware.APIAccessAudit
+// so every authenticated mutating request lands in audit_events as
+// an api.request row. Safe to call with nil — the middleware is only
+// mounted when this is non-nil at Run time.
+func (s *Server) SetAccessAuditMiddleware(m gin.HandlerFunc) {
+	s.accessAuditMiddleware = m
+}
+
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
 // routes are read-only and gracefully degrade — when the pricer
 // is unwired we 503; when it's wired but disabled the handler
@@ -383,12 +403,18 @@ func (s *Server) registerRoutes() {
 		// When auth is enabled, every /api/v1/* request must carry a
 		// valid Bearer token. /metrics and /health above stay public.
 		v1.Use(middleware.RequireBearer(s.authService, s.logger))
-		// v0.51 — record an api.request audit event for every mutating
-		// request that an authenticated actor makes. Reads are skipped
-		// by default because they're high volume and rarely interesting
-		// for compliance evidence; the service-layer events still own
-		// the substantive state-change record.
-		v1.Use(middleware.APIAccessAudit(s.auditService, false))
+		// v0.52 — record an api.request audit event for every
+		// authenticated mutating request, but only if the
+		// build-edition wire layer installed the middleware.
+		// OSS leaves accessAuditMiddleware nil so the per-call
+		// evidence path is unmounted; service-layer events still
+		// own the substantive state-change record. The Compliance
+		// Pack build installs middleware.APIAccessAudit, which
+		// produces the per-call evidence trail compliance
+		// frameworks ask for.
+		if s.accessAuditMiddleware != nil {
+			v1.Use(s.accessAuditMiddleware)
+		}
 	}
 	{
 		// Auth token management lives under /api/v1/auth/tokens.
