@@ -231,6 +231,48 @@ curl -X POST http://localhost:8080/api/v1/rollouts/<id>/pause
 curl -X POST http://localhost:8080/api/v1/rollouts/<id>/resume
 ```
 
+## Rolling back a completed rollout (v0.60)
+
+A rollout that succeeded looked fine at the time. Thirty minutes
+later, metrics are degrading. The operator wants to undo it.
+
+Squadron's Roll back button (or `POST /rollouts/:id/rollback`)
+creates a new rollout that targets the source rollout's previous
+config, the one the group was on before the source ran. The new
+rollout is itself a normal rollout: it goes through approval if the
+source did, flows through the engine, and emits the standard audit
+events. The Roll back button is the convenient way to construct
+the right `RolloutInput`, not a special bypass path.
+
+```bash
+# One click rollback against a completed rollout.
+curl -X POST http://localhost:8080/api/v1/rollouts/<id>/rollback
+# Returns the new rollout. RolledBackFromID points back at <id>;
+# the UI uses that to render a "Rollback" badge on the card and
+# chain the two rollouts together on the audit timeline.
+```
+
+Constraints:
+
+- The source rollout must be in a terminal state (`succeeded`,
+  `aborted`, or `rolled_back`). Operators who want to stop an
+  in flight rollout reach for Abort instead.
+- The source must have a `previous_config_id`. Brand-new groups
+  whose first rollout succeeded have nowhere to roll back to.
+- The rollback inherits `require_approval` from the source. If the
+  source needed two person approval, so does the rollback — the
+  policy applies to the group, not the direction of the change.
+- The rollback fires as a single 100% stage with zero dwell because
+  the caller is asking for an emergency undo. Operators who want a
+  staged rollback can call `Create` directly with the previous
+  config as the target.
+
+Audit events: `rollout.rollback_requested` fires on the source
+rollout the moment the button is clicked, and the new rollout
+emits the normal `rollout.created` plus engine lifecycle events.
+Both rollouts carry the same `rolled_back_from_id` link so a query
+on either row can find the other.
+
 ## Webhook notifications
 
 Set `notification_url` on a rollout and Squadron POSTs a JSON payload on

@@ -246,6 +246,48 @@ func (h *RolloutHandlers) HandleAbortRollout(c *gin.Context) {
 	c.JSON(http.StatusOK, r)
 }
 
+// HandleRollBackRollout serves POST /api/v1/rollouts/:id/rollback.
+//
+// The source rollout (the one being rolled back from) must be in a
+// terminal state. The handler creates a new rollout that targets the
+// source's previous_config_id and returns it. The new rollout flows
+// through the normal Create pipeline, so it goes through approval if
+// the source did and emits the usual rollout.created plus a new
+// rollout.rollback_requested audit pair so the timeline shows the
+// chain.
+//
+// Added in v0.60.0.
+func (h *RolloutHandlers) HandleRollBackRollout(c *gin.Context) {
+	id := c.Param("id")
+	// The operator is read from the auth context the same way Approve
+	// and Reject read theirs. Falls back to "operator" so dev/no-auth
+	// mode still records something useful in the audit payload.
+	operator := "operator"
+	if actor, ok := c.Get("auth_actor"); ok {
+		if s, ok := actor.(string); ok && s != "" {
+			operator = s
+		}
+	}
+
+	r, err := h.rolloutService.RollBack(c.Request.Context(), id, operator)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": msg})
+			return
+		}
+		if strings.Contains(msg, "terminal state") ||
+			strings.Contains(msg, "no previous config") {
+			c.JSON(http.StatusConflict, gin.H{"error": msg})
+			return
+		}
+		h.logger.Error("failed to roll back rollout", zap.String("id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to roll back rollout"})
+		return
+	}
+	c.JSON(http.StatusOK, r)
+}
+
 // HandleApproveRollout serves POST /api/v1/rollouts/:id/approve.
 //
 // Body (optional): {notes: string}. The approver actor is taken from

@@ -481,6 +481,13 @@ type Rollout struct {
 	ProposalReasoning  string                 `json:"proposal_reasoning,omitempty"`
 	EvidenceRefs       []RolloutEvidenceRef   `json:"evidence_refs,omitempty"`
 
+	// v0.60 — operator initiated rollback. When this rollout was
+	// created by clicking "Roll back" on a previous rollout, this
+	// field carries the source rollout's ID. The UI uses it to render
+	// a "rollback of <X>" badge and the audit timeline chains the
+	// two rollouts together. Empty for normal rollouts.
+	RolledBackFromID string `json:"rolled_back_from_id,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // set on terminal state

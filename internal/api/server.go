@@ -604,6 +604,11 @@ func (s *Server) registerRoutes() {
 			rollouts.POST("/:id/abort", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleAbortRollout)
 			rollouts.POST("/:id/pause", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandlePauseRollout)
 			rollouts.POST("/:id/resume", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleResumeRollout)
+			// v0.60 — one click rollback. Creates a new rollout that
+			// targets the source's previous config. Routed under
+			// rollouts:write because the operator is creating a new
+			// rollout (just one with a predetermined target).
+			rollouts.POST("/:id/rollback", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleRollBackRollout)
 			// v0.47 — approval workflow.
 			// v0.48 — separated scope: approval requires the
 			// dedicated rollouts:approve grant, not rollouts:write.

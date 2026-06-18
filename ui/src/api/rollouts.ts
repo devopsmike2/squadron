@@ -94,6 +94,22 @@ export const resumeRollout = async (id: string): Promise<Rollout> => {
   return simpleRequest<Rollout>(`/rollouts/${id}/resume`, { method: "POST" });
 };
 
+// rollBackRollout — v0.60. Creates a new rollout that targets the
+// source rollout's previous_config_id and links back via
+// rolled_back_from_id. The source must be in a terminal state
+// (succeeded, aborted, or already rolled_back). The new rollout
+// flows through the normal Create path so it goes through approval
+// if the source did and emits the standard rollout.created plus a
+// rollout.rollback_requested audit pair. Operators reach for this
+// when a completed rollout looked fine at the time but is degrading
+// metrics now and they want one click to undo it.
+export const rollBackRollout = async (id: string): Promise<Rollout> => {
+  return simpleRequest<Rollout>(`/rollouts/${id}/rollback`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+};
+
 // approveRollout — v0.47. Transitions a rollout from pending_approval
 // to pending so the engine picks it up. The actor is the authenticated
 // caller (taken from the gin auth context server-side); the two-person
