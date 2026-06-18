@@ -114,6 +114,17 @@ func TestProposerStress_50Iterations(t *testing.T) {
 		buckets[r.outcome]++
 	}
 
+	// v0.59 added per-reason tallying of proposal.skipped audit
+	// events emitted from the bridge. The stress test verifies the
+	// counts line up with the seed corpus's correct refusals; if
+	// either side moves the other should too.
+	skipReasons := map[string]int{}
+	for _, r := range results {
+		for _, reason := range r.skipReasons {
+			skipReasons[reason]++
+		}
+	}
+
 	// Latency percentile calculation.
 	latencies := make([]time.Duration, len(results))
 	for i, r := range results {
@@ -139,6 +150,12 @@ func TestProposerStress_50Iterations(t *testing.T) {
 	rep.WriteString("\nOutcome distribution:\n")
 	for _, k := range allOutcomes() {
 		rep.WriteString(fmt.Sprintf("  %-30s %d\n", k, buckets[k]))
+	}
+	if len(skipReasons) > 0 {
+		rep.WriteString("\nproposal.skipped reasons (v0.59):\n")
+		for _, reason := range []string{"group_inference_failed", "missing_current_config"} {
+			rep.WriteString(fmt.Sprintf("  %-30s %d\n", reason, skipReasons[reason]))
+		}
 	}
 	rep.WriteString("\nPer iteration table:\n")
 	rep.WriteString("  idx  category                 name                                             outcome                       wall\n")
@@ -176,6 +193,27 @@ func TestProposerStress_50Iterations(t *testing.T) {
 	// systematically broken.
 	assert.GreaterOrEqual(t, buckets[outcomeSucceeded], 30,
 		"fewer than 30 of 50 iterations succeeded; the corpus assumes most should")
+
+	// v0.59 regression bar: every refused-correctly outcome from a
+	// pre-LLM refusal must have emitted a proposal.skipped audit
+	// event. The corpus has 6 correct refusals; the fake LLM
+	// declines for three of them (boundary_01, boundary_02,
+	// group_06_malformed_json — though the malformed one also flows
+	// through inferGroup and emits the bridge event), and the
+	// bridge refuses pre-LLM for the other three (missing_config,
+	// agent_with_nil_group, attribution_unknown_agent). We assert
+	// at minimum the three pre-LLM cases land in the bridge skip
+	// reason buckets.
+	totalSkipped := 0
+	for _, n := range skipReasons {
+		totalSkipped += n
+	}
+	assert.GreaterOrEqual(t, totalSkipped, 3,
+		"expected at least 3 proposal.skipped audit events; v0.59 made them visible")
+	assert.Greater(t, skipReasons["group_inference_failed"], 0,
+		"the corpus has seeds that drop the top agent; expected group_inference_failed events")
+	assert.Greater(t, skipReasons["missing_current_config"], 0,
+		"the corpus has a seed that drops the config; expected missing_current_config events")
 }
 
 // outcomeKind enumerates the classification buckets the user spec'd:
@@ -205,12 +243,13 @@ func allOutcomes() []outcomeKind {
 
 // iterResult is one row in the per iteration outcome table.
 type iterResult struct {
-	index    int
-	name     string
-	category string
-	outcome  outcomeKind
-	wallTime time.Duration
-	notes    string
+	index       int
+	name        string
+	category    string
+	outcome     outcomeKind
+	wallTime    time.Duration
+	notes       string
+	skipReasons []string // v0.59: reasons from proposal.skipped audit events
 }
 
 // classify inspects the seed's expected behavior and the post run
@@ -230,12 +269,21 @@ type iterResult struct {
 //   - LLM returned an error                                      → llm-error
 //   - context deadline exceeded                                  → timeout
 func classify(seed stressSeed, prop *stressFakeProposer, rollouts *fakeRollouts, audit *fakeAudit, elapsed time.Duration, idx int) iterResult {
-	_ = audit // available for future assertions on emitted events
 	r := iterResult{
 		index:    idx,
 		name:     seed.name,
 		category: seed.category,
 		wallTime: elapsed,
+	}
+	// v0.59 — collect any proposal.skipped reasons the bridge emitted
+	// so the stress test summary can count them per category.
+	for _, e := range audit.entries {
+		if e.EventType != "proposal.skipped" {
+			continue
+		}
+		if reason, ok := e.Payload["reason"].(string); ok {
+			r.skipReasons = append(r.skipReasons, reason)
+		}
 	}
 
 	// Timeout heuristic: anything over 4.5 seconds (the context

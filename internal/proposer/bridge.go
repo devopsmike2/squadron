@@ -344,6 +344,40 @@ func (b *Bridge) emitDeclined(ctx context.Context, spike *types.CostSpikeEvent, 
 	}
 }
 
+// emitSkipped records proposal.skipped when buildContext refuses to
+// call the LLM at all because the supporting context is incomplete.
+// The reason argument is a stable short code ("group_inference_failed"
+// or "missing_current_config") so the audit timeline can render a
+// consistent badge and the audit-explain endpoint has a known
+// vocabulary to narrate. Added in v0.59 after the v0.58 stress test
+// surfaced these pre-LLM refusals as a blind spot.
+//
+// Compliance evidence trail: NIST AI RMF MEASURE 2.3 (transparency
+// of model invocation decisions).
+func (b *Bridge) emitSkipped(ctx context.Context, spike *types.CostSpikeEvent, reason string, details map[string]any) {
+	if b.audit == nil {
+		return
+	}
+	payload := map[string]any{
+		"origin": "ai",
+		"reason": reason,
+	}
+	for k, v := range details {
+		payload[k] = v
+	}
+	if err := b.audit.Record(ctx, services.AuditEntry{
+		Actor:      "ai-proposer",
+		EventType:  services.AuditEventProposalSkipped,
+		TargetType: "cost_spike",
+		TargetID:   spike.ID,
+		Action:     "skipped",
+		Payload:    payload,
+	}); err != nil {
+		b.logger.Warn("AI proposer bridge: proposal.skipped audit emit failed",
+			zap.String("spike_id", spike.ID), zap.Error(err))
+	}
+}
+
 // summarize truncates a long string to a maximum length and adds
 // an ellipsis. Used to keep audit payloads small while still
 // readable in the timeline. Empty input returns empty.
@@ -364,6 +398,11 @@ func (b *Bridge) buildContext(ctx context.Context, spike *types.CostSpikeEvent) 
 	if groupID == "" {
 		b.logger.Info("AI proposer bridge: skipping spike; could not infer group",
 			zap.String("spike_id", spike.ID))
+		b.emitSkipped(ctx, spike, "group_inference_failed", map[string]any{
+			"top_agents_count":     len(topAgents),
+			"top_attributes_count": len(topAttributes),
+			"attribution_present":  spike.AttributionJSON != "",
+		})
 		return ai.CostSpikeContext{}, false
 	}
 	cfg, err := b.store.GetLatestConfigForGroup(ctx, groupID)
@@ -371,6 +410,10 @@ func (b *Bridge) buildContext(ctx context.Context, spike *types.CostSpikeEvent) 
 		b.logger.Info("AI proposer bridge: skipping spike; no current config for group",
 			zap.String("spike_id", spike.ID),
 			zap.String("group_id", groupID))
+		b.emitSkipped(ctx, spike, "missing_current_config", map[string]any{
+			"group_id":   groupID,
+			"group_name": groupName,
+		})
 		return ai.CostSpikeContext{}, false
 	}
 	return ai.CostSpikeContext{
