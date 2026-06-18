@@ -87,6 +87,15 @@ Scope required: `audit:read`. The cache mutation is treated as
 part of the read because the operator can only mutate rows they
 could already read.
 
+### Cost spike rows (v0.59)
+
+The audit explain handler resolves `target_type=cost_spike` rows to
+the spike's severity, signal, percent above baseline, and dollar
+numbers. Combined with the v0.59 `proposal.skipped` event type, an
+operator can click any pre-LLM refusal in the audit log and get a
+narrative that names the spike's specifics and the structured reason
+the bridge skipped it.
+
 ### Cost notes
 
 A typical audit row generates 200 to 400 input tokens and 50 to

@@ -155,9 +155,13 @@ proposer logs as expected.
 No iteration produced a bug worth filing as an issue. The run was
 clean. Tracked for future hardening:
 
-- The bridge could emit an audit event when it skips a spike due to
-  missing config or unknown agent so operators can see why the
-  proposer never ran. Today the only signal is a structured log.
+- ~~The bridge could emit an audit event when it skips a spike due
+  to missing config or unknown agent so operators can see why the
+  proposer never ran. Today the only signal is a structured log.~~
+  **Resolved in v0.59**: `proposal.skipped` audit events fire at
+  the two `buildContext` refusal points with a structured `reason`
+  field (`group_inference_failed` or `missing_current_config`).
+  The stress test counts them per category as a regression bar.
 - The 500 agent fixture's 153µs latency is dominated by JSON
   marshal of the attribution. Not a real concern at fleet sizes
   Squadron is built for, but worth re measuring if v0.6 scaling

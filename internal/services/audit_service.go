@@ -122,4 +122,16 @@ const (
 	// produced.
 	AuditEventIncidentDrafted        = "incident.drafted"
 	AuditEventIncidentDraftDeclined  = "incident.draft_declined"
+
+	// AI proposer lifecycle. proposal.created and proposal.declined
+	// fire from the bridge when the LLM actually produced a verdict.
+	// proposal.skipped fires when the bridge refused to call the LLM
+	// at all because context could not be assembled — the spike's
+	// attribution did not resolve to a group, or the group has no
+	// current config to propose against. v0.58's stress test surfaced
+	// these pre-LLM refusals as a blind spot in the audit timeline;
+	// v0.59 makes them visible.
+	AuditEventProposalCreated  = "proposal.created"
+	AuditEventProposalDeclined = "proposal.declined"
+	AuditEventProposalSkipped  = "proposal.skipped"
 )

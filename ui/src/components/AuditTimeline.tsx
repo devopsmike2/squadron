@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Rocket,
   Server,
+  SkipForward,
   Sparkles,
 } from "lucide-react";
 import { useState } from "react";
@@ -365,6 +366,15 @@ function iconFor(e: AuditEvent) {
     return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (e.event_type.startsWith("rollout."))
     return <Rocket className="h-4 w-4 text-blue-600" />;
+  // v0.59 — AI proposer lifecycle. created is a violet sparkle to
+  // match the AI explain panel; skipped is a quieter zinc icon so
+  // the timeline does not pretend a non-action is an action.
+  if (e.event_type === "proposal.created")
+    return <Sparkles className="h-4 w-4 text-violet-600" />;
+  if (e.event_type === "proposal.declined")
+    return <Sparkles className="h-4 w-4 text-amber-600" />;
+  if (e.event_type === "proposal.skipped")
+    return <SkipForward className="h-4 w-4 text-zinc-500" />;
   return <Activity className="h-4 w-4 text-muted-foreground" />;
 }
 
@@ -438,6 +448,24 @@ function describe(e: AuditEvent): string {
       return "Rollout succeeded";
     case "rollout.rolled_back":
       return "Rollback applied";
+    case "proposal.created":
+      return "AI proposed a rollout";
+    case "proposal.declined": {
+      const reason =
+        typeof e.payload?.reason === "string" ? `: ${e.payload.reason}` : "";
+      return `AI declined to propose${reason}`;
+    }
+    case "proposal.skipped": {
+      // v0.59 — pre-LLM refusal. Translate the structured reason
+      // code into a one-line human summary so the timeline reads
+      // naturally without an Explain click.
+      const reason = e.payload?.reason;
+      if (reason === "group_inference_failed")
+        return "AI skipped: could not infer target group";
+      if (reason === "missing_current_config")
+        return "AI skipped: no current config for group";
+      return "AI skipped this spike";
+    }
   }
   // Generic fallback: humanize the event type.
   return `${e.event_type} ${e.action}`;

@@ -284,6 +284,24 @@ func (h *AuditHandlers) buildExplainContext(c *gin.Context, event *services.Audi
 				ctxBag["incident.provider"] = d.Provider
 			}
 		}
+	case "cost_spike":
+		// v0.59 — proposal.created / proposal.declined / proposal.skipped
+		// all target the cost spike. Resolve the spike to give the
+		// model real numbers it can name in the narrative (severity,
+		// signal, percent above baseline) instead of just an ID. The
+		// attribution top_agents / top_attributes are interesting too
+		// when the bridge skipped — they explain why the proposer was
+		// never called.
+		s, err := h.appStore.GetCostSpikeEvent(ctx, event.TargetID)
+		if err == nil && s != nil {
+			ctxBag["cost_spike.severity"] = s.Severity
+			if s.Signal != "" {
+				ctxBag["cost_spike.signal"] = s.Signal
+			}
+			ctxBag["cost_spike.pct_above_baseline"] = fmt.Sprintf("%.0f%%", s.PeakPctAboveBaseline)
+			ctxBag["cost_spike.baseline_usd"] = fmt.Sprintf("$%.0f", s.BaselineMonthlyUSD)
+			ctxBag["cost_spike.peak_usd"] = fmt.Sprintf("$%.0f", s.PeakMonthlyUSD)
+		}
 	}
 	return ctxBag
 }
