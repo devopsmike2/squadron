@@ -32,6 +32,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
 	"github.com/devopsmike2/squadron/internal/pipelinehealth"
@@ -659,6 +660,33 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	} else {
 		logger.Info("AI assist not configured (set ANTHROPIC_API_KEY + ai.enabled=true to enable)")
 	}
+
+	// v0.54 Move 3 — incident drafter bridge. After an action runs
+	// on a node, the bridge asks the AI drafter for a postmortem
+	// style ticket draft. The operator reviews the draft through
+	// the /api/v1/incidents/drafts endpoints (and the UI inbox in a
+	// follow up chunk). Disabled when the AI service is disabled;
+	// the bridge's tick is a clean no op in that case so we always
+	// construct it.
+	incidentsBridge, err := incidents.New(
+		aiService,
+		appStore,
+		rolloutService,
+		auditService,
+		incidents.DefaultConfig(),
+		logger,
+	)
+	if err != nil {
+		logger.Fatal("failed to construct incidents bridge", zap.Error(err))
+	}
+	incidentsCtx, incidentsCancel := context.WithCancel(context.Background())
+	incidentsBridge.Start(incidentsCtx)
+	defer func() {
+		incidentsCancel()
+		incidentsBridge.Stop()
+	}()
+	logger.Info("incidents drafter bridge started",
+		zap.Bool("ai_enabled", aiService.Enabled()))
 
 	// Start API server in a goroutine
 	go func() {

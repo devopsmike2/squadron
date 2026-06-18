@@ -98,6 +98,15 @@ const (
 	// actions.
 	ScopeActionsRead  = "actions:read"
 	ScopeActionsWrite = "actions:write"
+
+	// v0.54 — incident drafts (Move 3). Read covers listing and
+	// viewing drafted tickets in the operator inbox. Write covers
+	// editing, dismissing, and publishing through a provider plug
+	// in. Kept separate from actions:write because the people who
+	// review and publish incident tickets are not always the same
+	// people who dispatch fleet actions.
+	ScopeIncidentsRead  = "incidents:read"
+	ScopeIncidentsWrite = "incidents:write"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -116,6 +125,7 @@ func AllScopes() []string {
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,
 		ScopeActionsRead, ScopeActionsWrite,
+		ScopeIncidentsRead, ScopeIncidentsWrite,
 	}
 }
 

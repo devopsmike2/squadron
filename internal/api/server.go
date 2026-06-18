@@ -1013,6 +1013,20 @@ func (s *Server) registerRoutes() {
 		v1.GET("/actions/:id", actionsRead, actionsHandler.HandleGetAction)
 		v1.POST("/actions/:id/result", actionsWrite, actionsHandler.HandlePostActionResult)
 
+		// v0.54 — incident drafter (Move 3). Read covers the
+		// operator inbox view; write covers edit, dismiss, and
+		// publish. Publish is a stamping operation in the MVP
+		// (clipboard provider); real provider plug ins land in a
+		// follow-up chunk.
+		incidentsHandler := handlers.NewIncidentsHandlers(s.appStore, s.auditService, s.logger)
+		incidentsRead := middleware.RequireScope(services.ScopeIncidentsRead)
+		incidentsWrite := middleware.RequireScope(services.ScopeIncidentsWrite)
+		v1.GET("/incidents/drafts", incidentsRead, incidentsHandler.HandleListDrafts)
+		v1.GET("/incidents/drafts/:id", incidentsRead, incidentsHandler.HandleGetDraft)
+		v1.PATCH("/incidents/drafts/:id", incidentsWrite, incidentsHandler.HandlePatchDraft)
+		v1.POST("/incidents/drafts/:id/dismiss", incidentsWrite, incidentsHandler.HandleDismissDraft)
+		v1.POST("/incidents/drafts/:id/publish", incidentsWrite, incidentsHandler.HandlePublishDraft)
+
 		// v0.27.1 Quickstart. Pure config-generation; no state.
 		// All read-only so ScopeAgentsRead is the natural gate.
 		// Handler is constructed inline since it's cheap and the
