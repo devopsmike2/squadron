@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Squadron · Roadmap Board</title>
+    <style>
+      :root {
+        --bg: #0b0f17;
+        --bg-elev: #121826;
+        --bg-card: #161e2e;
+        --bg-card-hover: #1c2538;
+        --border: #1f2937;
+        --border-strong: #2a3a52;
+        --fg: #e6ecf3;
+        --fg-muted: #8595aa;
+        --fg-quiet: #5b6982;
+        --accent: #8b5cf6;
+        --accent-soft: rgba(139, 92, 246, 0.15);
+        --good: #10b981;
+        --warn: #f59e0b;
+        --bad: #ef4444;
+        --info: #3b82f6;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      header.bar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: rgba(11, 15, 23, 0.92);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--border);
+        padding: 12px 24px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .logo-mark {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        background: linear-gradient(135deg, var(--accent), #6366f1);
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        color: #fff;
+      }
+      .brand h1 {
+        margin: 0;
+        font-size: 14px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--fg-muted);
+      }
+      .brand h1 strong {
+        color: var(--fg);
+        letter-spacing: 0.16em;
+      }
+      .filters {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+        flex-wrap: wrap;
+      }
+      .filter-btn {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        color: var(--fg-muted);
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          color 0.15s,
+          border-color 0.15s;
+      }
+      .filter-btn:hover {
+        background: var(--bg-card-hover);
+        color: var(--fg);
+      }
+      .filter-btn.active {
+        background: var(--accent-soft);
+        color: var(--fg);
+        border-color: var(--accent);
+      }
+      .updated {
+        font-size: 11px;
+        color: var(--fg-quiet);
+      }
+      main {
+        padding: 16px 24px 64px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+      .stat {
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 16px;
+      }
+      .stat .label {
+        font-size: 11px;
+        color: var(--fg-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+      .stat .value {
+        font-size: 22px;
+        font-weight: 600;
+        margin-top: 6px;
+      }
+      .stat .hint {
+        font-size: 11px;
+        color: var(--fg-quiet);
+        margin-top: 4px;
+      }
+      .board {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .column {
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        display: flex;
+        flex-direction: column;
+        min-height: 200px;
+      }
+      .col-head {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .col-head h2 {
+        margin: 0;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--fg-muted);
+      }
+      .col-count {
+        background: var(--bg-card);
+        color: var(--fg-quiet);
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+      }
+      .col-body {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        flex: 1;
+      }
+      .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          border-color 0.15s,
+          transform 0.05s;
+      }
+      .card:hover {
+        background: var(--bg-card-hover);
+        border-color: var(--border-strong);
+      }
+      .card:active {
+        transform: translateY(1px);
+      }
+      .card.hidden {
+        display: none;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .ticket {
+        font-family:
+          ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 11px;
+        color: var(--fg-muted);
+      }
+      .move-tag {
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-left: auto;
+      }
+      .move-tag.move1 { background: rgba(139, 92, 246, 0.18); color: #c4b5fd; }
+      .move-tag.move2 { background: rgba(59, 130, 246, 0.18); color: #93c5fd; }
+      .move-tag.move3 { background: rgba(16, 185, 129, 0.18); color: #6ee7b7; }
+      .move-tag.moveN { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+      .move-tag.moveB { background: rgba(91, 105, 130, 0.18); color: var(--fg-muted); }
+      .move-tag.moveCI { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
+      .move-tag.moveD { background: rgba(20, 184, 166, 0.18); color: #5eead4; }
+      .card-title {
+        font-size: 13px;
+        color: var(--fg);
+        font-weight: 500;
+        line-height: 1.35;
+      }
+      .card-meta {
+        margin-top: 8px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        font-size: 11px;
+        color: var(--fg-quiet);
+      }
+      .commit {
+        font-family:
+          ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        color: var(--good);
+      }
+      .commit a {
+        color: inherit;
+        text-decoration: none;
+      }
+      .commit a:hover {
+        text-decoration: underline;
+      }
+      .progress {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .progress-bar {
+        width: 60px;
+        height: 4px;
+        background: var(--border);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .progress-bar > span {
+        display: block;
+        height: 100%;
+        background: var(--good);
+      }
+      details.epic {
+        background: var(--bg-elev);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        margin-bottom: 12px;
+        padding: 0;
+      }
+      details.epic > summary {
+        padding: 12px 14px;
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      details.epic > summary::-webkit-details-marker {
+        display: none;
+      }
+      details.epic > summary::before {
+        content: "▸";
+        font-size: 12px;
+        color: var(--fg-quiet);
+        transition: transform 0.2s;
+      }
+      details.epic[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .epic-body {
+        padding: 0 14px 14px;
+        color: var(--fg-muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .epic-body p {
+        margin: 8px 0;
+      }
+      .epic-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .epic-status {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .status-done { background: rgba(16, 185, 129, 0.18); color: #6ee7b7; }
+      .status-progress { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+      .status-backlog { background: rgba(91, 105, 130, 0.18); color: var(--fg-muted); }
+      .legend {
+        margin-top: 32px;
+        font-size: 11px;
+        color: var(--fg-quiet);
+        display: flex;
+        gap: 18px;
+        flex-wrap: wrap;
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .legend i {
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+        display: inline-block;
+      }
+      section.epics {
+        margin-top: 32px;
+      }
+      section.epics h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--fg-muted);
+        margin: 0 0 12px;
+      }
+      .modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(11, 15, 23, 0.85);
+        backdrop-filter: blur(4px);
+        z-index: 100;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .modal.open {
+        display: flex;
+      }
+      .modal-panel {
+        background: var(--bg-elev);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        max-width: 560px;
+        width: 100%;
+        max-height: 80vh;
+        overflow: auto;
+        padding: 20px;
+      }
+      .modal-panel h3 {
+        margin: 0 0 4px;
+        font-size: 18px;
+      }
+      .modal-panel .ticket-large {
+        font-family:
+          ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+      .modal-panel .desc {
+        margin: 16px 0;
+        color: var(--fg);
+        line-height: 1.6;
+      }
+      .modal-panel .meta-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+      }
+      .modal-panel .meta-row .label {
+        color: var(--fg-quiet);
+      }
+      .modal-close {
+        background: transparent;
+        border: none;
+        color: var(--fg-muted);
+        cursor: pointer;
+        font-size: 18px;
+        float: right;
+        padding: 0;
+      }
+      @media (max-width: 1000px) {
+        .board {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="bar">
+      <div class="brand">
+        <div class="logo-mark">S</div>
+        <h1><strong>Squadron</strong> · Roadmap Board</h1>
+      </div>
+      <div class="filters" id="filters">
+        <button class="filter-btn active" data-move="all">All</button>
+        <button class="filter-btn" data-move="1">Move 1</button>
+        <button class="filter-btn" data-move="2">Move 2</button>
+        <button class="filter-btn" data-move="3">Move 3</button>
+        <button class="filter-btn" data-move="N">N picks</button>
+        <button class="filter-btn" data-move="CI">CI/Hygiene</button>
+        <button class="filter-btn" data-move="B">Backlog</button>
+      </div>
+      <div class="updated" id="updated"></div>
+    </header>
+
+    <main>
+      <div class="summary" id="summary"></div>
+      <div class="board">
+        <div class="column" id="col-backlog">
+          <div class="col-head">
+            <h2>Backlog</h2>
+            <span class="col-count" id="cnt-backlog">0</span>
+          </div>
+          <div class="col-body" data-col="backlog"></div>
+        </div>
+        <div class="column" id="col-progress">
+          <div class="col-head">
+            <h2>In progress</h2>
+            <span class="col-count" id="cnt-progress">0</span>
+          </div>
+          <div class="col-body" data-col="progress"></div>
+        </div>
+        <div class="column" id="col-review">
+          <div class="col-head">
+            <h2>Review · CI</h2>
+            <span class="col-count" id="cnt-review">0</span>
+          </div>
+          <div class="col-body" data-col="review"></div>
+        </div>
+        <div class="column" id="col-done">
+          <div class="col-head">
+            <h2>Done</h2>
+            <span class="col-count" id="cnt-done">0</span>
+          </div>
+          <div class="col-body" data-col="done"></div>
+        </div>
+      </div>
+
+      <section class="epics">
+        <h2>Epics · Moves</h2>
+        <div id="epics-list"></div>
+      </section>
+
+      <div class="legend">
+        <span><i style="background: rgba(139,92,246,.6)"></i>Move 1 — Demo loop</span>
+        <span><i style="background: rgba(59,130,246,.6)"></i>Move 2 — Action runner</span>
+        <span><i style="background: rgba(16,185,129,.6)"></i>Move 3 — Incident drafter</span>
+        <span><i style="background: rgba(245,158,11,.6)"></i>N — Best-judgment picks</span>
+        <span><i style="background: rgba(20,184,166,.6)"></i>D — Demo seed</span>
+        <span><i style="background: rgba(239,68,68,.6)"></i>CI · Hygiene</span>
+        <span><i style="background: rgba(91,105,130,.6)"></i>Backlog</span>
+      </div>
+    </main>
+
+    <div class="modal" id="modal">
+      <div class="modal-panel">
+        <button class="modal-close" id="modal-close">×</button>
+        <div id="modal-content"></div>
+      </div>
+    </div>
+
+    <script>
+      // ===========================================================
+      // Board data. Each card is a ticket. status: backlog | progress
+      // | review | done. move: 1 | 2 | 3 | N1 | N2 | N3 | CI | D | B
+      // commit: short SHA when shipped. desc: one-line description.
+      // ===========================================================
+      const repoBase = "https://github.com/devopsmike2/squadron/commit/";
+      const lastUpdated = "2026-06-18";
+
+      const epics = [
+        {
+          id: "move1",
+          title: "Move 1 — Cost-spike demo loop",
+          status: "done",
+          summary:
+            "Cost spike → AI proposer drafts staged rollout → require_approval gate → operator approves → engine stages the push. Plus visual surfaces on the rollouts page so an observer can see the AI provenance.",
+        },
+        {
+          id: "move2",
+          title: "Move 2 — Action runner",
+          status: "done",
+          summary:
+            "Ed25519-signed action requests, capability-constrained executor, restart-systemd-service as MVP type. SQ-2.7 adds the audit lifecycle (action.dispatched/executed/failed/denied).",
+        },
+        {
+          id: "move3",
+          title: "Move 3 — Auto-drafted incident ticket",
+          status: "done",
+          summary:
+            "After an action runs, the drafter writes a postmortem. Bridge ticks every 60s, persists drafts to inbox. UI inbox + clipboard + GitHub Issues publish + squadronctl incidents subcommand.",
+        },
+        {
+          id: "moveN",
+          title: "Move N (best-judgment picks)",
+          status: "done",
+          summary:
+            "Three picks made in lieu of literal Move 4/5/6: AI badge + reasoning panel (N1), action runner catalog expansion (N2), squadronctl incidents + dashboard widget (N3).",
+        },
+        {
+          id: "moveD",
+          title: "Move D — Demo seed",
+          status: "done",
+          summary:
+            "make demo-seed lands a realistic cost spike + group + agent + config in a fresh install so the engineer-copilot loop becomes visible in 90 seconds.",
+        },
+        {
+          id: "moveCI",
+          title: "CI · Hygiene",
+          status: "done",
+          summary:
+            "Go 1.25 bump, squadron-compliance require removal, opamp mock fix, deploy mock fix, gofmt drift, UI prettier pass, vitest polyfills. Six green checks expected on next CI run.",
+        },
+        {
+          id: "move4",
+          title: "Move 4 — Proposals refactor",
+          status: "backlog",
+          summary:
+            "Unify rollouts, recommendations, actions, alert actions into a single Proposal model. ~3–4 weeks. Currently deferred because the existing models work and the demo loop does not need it yet.",
+        },
+        {
+          id: "move5",
+          title: "Move 5 — Multi-cloud",
+          status: "backlog",
+          summary:
+            "Cloud provider + environment as first-class agent attributes. Per-environment policy. Action runners targeted by env slice. Depends on Move 4 in the roadmap doc.",
+        },
+        {
+          id: "move6",
+          title: "Move 6 — Agent SDK",
+          status: "backlog",
+          summary:
+            "Make Squadron trivially easy to integrate from any AI vendor or custom proposer. Pushed to Q4 after the engineer-copilot pivot since we are now selling the complete tool, not the gate.",
+        },
+        {
+          id: "move7",
+          title: "Move 7 — AI governance evidence",
+          status: "backlog",
+          summary:
+            "NIST AI RMF mapping + updates to NERC CIP, NIST CSF, HIPAA, SOC 2 mapping docs. Second-act story for when engineer-team customers grow into compliance buyers.",
+        },
+        {
+          id: "move8",
+          title: "Move 8 — Content cadence",
+          status: "progress",
+          summary:
+            "Buffer pipeline + LinkedIn cadence. Theme rotation through the launch window: collector pain → ticket fatigue → AI without keys → demo launch → action runner posts.",
+        },
+      ];
+
+      const cards = [
+        // ----- Move 1 (Cost-spike demo loop) -----
+        { ticket: "SQ-1.1", title: "Rollouts gain proposal provenance fields", move: "1", status: "done", commit: "bb53797", desc: "Add proposed_by, proposal_reasoning, evidence_refs to applicationstore Rollout + sqlite + memory + services + RolloutInput." },
+        { ticket: "SQ-1.3", title: "internal/ai.ProposeFromCostSpike", move: "1", status: "done", commit: "e45f939", desc: "AI service method that turns a CostSpikeContext into a structured RolloutInputCandidate with reasoning and evidence." },
+        { ticket: "SQ-1.4", title: "Proposer bridge daemon", move: "1", status: "done", commit: "e05803b", desc: "Polls open cost spikes, calls the proposer, posts rollouts with proposed_by=ai + require_approval=true. In-memory dedup." },
+        { ticket: "SQ-1.4g", title: "Wire proposer.Bridge in main.go", move: "1", status: "done", commit: "2853e5a", desc: "The cost-spike → AI proposal half of the loop was inert in production binaries until this commit." },
+        { ticket: "SQ-1.5", title: "Bridge audit events (proposal.created etc)", move: "1", status: "done", commit: "18f2213", desc: "proposal.created / proposal.declined / proposal.evidence_linked emitted from the bridge so the timeline tells the AI story." },
+        { ticket: "SQ-1.6", title: "Notification payload surfaces AI reasoning", move: "1", status: "done", commit: "3cea024", desc: "Slack/Teams/PagerDuty/Opsgenie cards include the AI reasoning + top evidence so approvers see why where they already live." },
+        { ticket: "SQ-1.7+1.8", title: "AI badge + reasoning panel on Rollouts UI", move: "N1", status: "done", commit: "e5a8566", desc: "Sparkles badge on rows where proposed_by=ai. Dedicated AI reasoning panel above History toggle with evidence list." },
+
+        // ----- Move 2 (Action runner) -----
+        { ticket: "SQ-2.1+2.2", title: "internal/actions + restart-systemd-service type", move: "2", status: "done", commit: "2030b17", desc: "Ed25519 signer, registry, type system, MVP action type." },
+        { ticket: "SQ-2.3", title: "Storage for action_requests + runner registrations", move: "2", status: "done", commit: "78162e7", desc: "SQLite + memory CRUD. Filter shapes for runner-side polling." },
+        { ticket: "SQ-2.5", title: "Action runner API + signer wiring", move: "2", status: "done", commit: "851135a", desc: "9 HTTP endpoints under /runners and /actions. 10 handler tests including signature round-trip." },
+        { ticket: "SQ-2.4", title: "cmd/squadron-action-runner binary", move: "2", status: "done", commit: "11d0231", desc: "Standalone Go binary. Polls Squadron, verifies signatures, executes via systemctl, posts results. 8 tests with fake systemctl." },
+        { ticket: "SQ-2.7", title: "Audit events for action lifecycle", move: "2", status: "done", commit: "80c83cb", desc: "action.dispatched / action.executed / action.failed / action.denied. Splits status across event_type so SIEM rules can match cleanly." },
+        { ticket: "N2", title: "Action catalog expansion (docker + shell allowlist)", move: "N2", status: "done", commit: "15e6970", desc: "restart-docker-container with container_glob constraints, run-shell-allowlist with verbatim allowlist match." },
+
+        // ----- Move 3 (Incident drafter) -----
+        { ticket: "SQ-3.1+3.2", title: "Drafter design doc + storage", move: "3", status: "done", commit: "d0551d7", desc: "Threat model, provider plug-in shape, IncidentDraft type + applicationstore methods." },
+        { ticket: "SQ-3.3+3.4", title: "internal/ai DraftIncidentFromAction", move: "3", status: "done", commit: "d0551d7", desc: "AI service method with strict-JSON system prompt. Six tests: clean draft, decline, malformed JSON, empty title, disabled service, markdown render shape." },
+        { ticket: "SQ-3.6", title: "Drafter bridge poll loop", move: "3", status: "done", commit: "3f9c6a9", desc: "Subscribes to completed action requests, dedups against existing drafts, calls drafter, persists. Emits incident.drafted / incident.draft_declined." },
+        { ticket: "SQ-3.7", title: "Drafter API + scopes + main.go wiring", move: "3", status: "done", commit: "24a54c0", desc: "5 endpoints + incidents:read/write scopes + bridge constructed in all-in-one." },
+        { ticket: "SQ-3.8", title: "UI inbox at /incidents", move: "3", status: "done", commit: "514f757", desc: "Two-pane layout, status tabs, edit/dismiss/publish, ReactMarkdown body, SWR poll every 30s." },
+        { ticket: "SQ-3.9", title: "GitHub Issues publisher", move: "3", status: "done", commit: "e7b7f4a", desc: "Publisher interface + ClipboardPublisher + GitHubIssuesPublisher. Env-var gated. Real issue gets filed + URL stamped." },
+        { ticket: "N3", title: "squadronctl incidents + Dashboard widget", move: "N3", status: "done", commit: "0d78c03", desc: "list/view/dismiss/publish from terminal. Incident drafts tile on home dashboard polling every 30s." },
+
+        // ----- Move D (demo seed) -----
+        { ticket: "SQ-D", title: "make demo-seed", move: "D", status: "done", commit: "c82467d", desc: "Standalone binary that drops demo group + baseline config + synthetic agent + +312% cost spike into a fresh install. Idempotent." },
+
+        // ----- CI / Hygiene -----
+        { ticket: "SQ-CI.1", title: "Go 1.25 + drop compliance require", move: "CI", status: "done", commit: "a9011fe", desc: "Workflow Go version + go.mod fix-up + deploy mock fix + azuredevops vet fix." },
+        { ticket: "SQ-CI.2", title: "UI prettier + lint hygiene", move: "CI", status: "done", commit: "1a51395", desc: "51 pre-existing files reformatted. eslint --fix + targeted disables. 0 errors / 23 warnings." },
+        { ticket: "SQ-CI.4", title: "gofmt drift + vitest polyfills", move: "CI", status: "done", commit: "90a7963", desc: "go fmt across 10+ files. EventSource + ResizeObserver stubs so jsdom-rendered App test passes." },
+
+        // ----- Backlog (Moves 4-8) -----
+        { ticket: "Move 4", title: "Proposals refactor (unified model)", move: "B", status: "backlog", commit: "", desc: "Unify rollouts, recommendations, actions, alert actions into a single Proposal type. Currently deferred — existing surfaces work and demo loop does not need it." },
+        { ticket: "Move 5", title: "Multi-cloud attributes + env policy", move: "B", status: "backlog", commit: "", desc: "Cloud provider and environment as first-class agent attributes. Per-environment policy. Fleet Map clusters by cloud." },
+        { ticket: "Move 6", title: "Agent SDK", move: "B", status: "backlog", commit: "", desc: "Trivially easy integration from any AI vendor or custom proposer. Deferred to Q4 per the engineer-copilot pivot." },
+        { ticket: "Move 7", title: "AI governance evidence", move: "B", status: "backlog", commit: "", desc: "NIST AI RMF mapping + updates to existing NIST CSF / NERC CIP / SOC 2 / HIPAA mapping docs." },
+        { ticket: "Move 8", title: "Content cadence (LinkedIn + Buffer)", move: "B", status: "progress", commit: "", desc: "Ongoing. Theme rotation: collector pain → ticket fatigue → AI without keys → demo launch → action runner posts." },
+      ];
+
+      // ===========================================================
+      // Render
+      // ===========================================================
+      function moveTag(move) {
+        if (move === "1") return { label: "Move 1", cls: "move1" };
+        if (move === "2") return { label: "Move 2", cls: "move2" };
+        if (move === "3") return { label: "Move 3", cls: "move3" };
+        if (move.startsWith("N")) return { label: move, cls: "moveN" };
+        if (move === "CI") return { label: "CI", cls: "moveCI" };
+        if (move === "D") return { label: "Demo", cls: "moveD" };
+        return { label: "Backlog", cls: "moveB" };
+      }
+
+      function epicGroupForMove(move) {
+        if (move === "1") return "1";
+        if (move === "2") return "2";
+        if (move === "3") return "3";
+        if (move.startsWith("N")) return "N";
+        if (move === "CI") return "CI";
+        return "B";
+      }
+
+      function renderCards() {
+        document.querySelectorAll(".col-body").forEach((b) => (b.innerHTML = ""));
+        const counts = { backlog: 0, progress: 0, review: 0, done: 0 };
+        cards.forEach((c, i) => {
+          const tag = moveTag(c.move);
+          const col = document.querySelector(`.col-body[data-col="${c.status}"]`);
+          if (!col) return;
+          const card = document.createElement("div");
+          card.className = "card";
+          card.dataset.move = epicGroupForMove(c.move);
+          card.dataset.idx = i;
+          card.innerHTML = `
+            <div class="card-head">
+              <span class="ticket">${c.ticket}</span>
+              <span class="move-tag ${tag.cls}">${tag.label}</span>
+            </div>
+            <div class="card-title">${c.title}</div>
+            <div class="card-meta">
+              ${c.commit ? `<span class="commit"><a href="${repoBase}${c.commit}" target="_blank">${c.commit}</a></span>` : ""}
+            </div>
+          `;
+          card.addEventListener("click", () => openModal(c));
+          col.appendChild(card);
+          counts[c.status]++;
+        });
+        Object.entries(counts).forEach(([k, v]) => {
+          const el = document.getElementById(`cnt-${k}`);
+          if (el) el.textContent = v;
+        });
+      }
+
+      function renderSummary() {
+        const totalCards = cards.length;
+        const done = cards.filter((c) => c.status === "done").length;
+        const inflight = cards.filter((c) => c.status === "progress" || c.status === "review").length;
+        const backlog = cards.filter((c) => c.status === "backlog").length;
+        const moves = new Set(cards.map((c) => c.move)).size;
+        const summary = [
+          { label: "Tickets", value: totalCards, hint: `${moves} moves` },
+          { label: "Done", value: done, hint: `${Math.round((done / totalCards) * 100)}%` },
+          { label: "In flight", value: inflight, hint: "active work" },
+          { label: "Backlog", value: backlog, hint: "later moves" },
+        ];
+        document.getElementById("summary").innerHTML = summary
+          .map(
+            (s) =>
+              `<div class="stat"><div class="label">${s.label}</div><div class="value">${s.value}</div><div class="hint">${s.hint}</div></div>`,
+          )
+          .join("");
+      }
+
+      function renderEpics() {
+        const wrap = document.getElementById("epics-list");
+        wrap.innerHTML = epics
+          .map((e) => {
+            const epicCards = cards.filter(
+              (c) => epicGroupForMove(c.move) === epicGroupForMoveFromId(e.id),
+            );
+            const epicDone = epicCards.filter((c) => c.status === "done").length;
+            const pct = epicCards.length > 0 ? Math.round((epicDone / epicCards.length) * 100) : 0;
+            return `<details class="epic">
+              <summary>
+                <span class="epic-title">${e.title}</span>
+                <span class="epic-status status-${e.status}">${e.status}</span>
+                <div class="progress" style="margin-left:auto;">
+                  <div class="progress-bar"><span style="width:${pct}%"></span></div>
+                  <span style="font-size:11px;color:var(--fg-quiet);">${epicDone}/${epicCards.length}</span>
+                </div>
+              </summary>
+              <div class="epic-body"><p>${e.summary}</p></div>
+            </details>`;
+          })
+          .join("");
+      }
+
+      function epicGroupForMoveFromId(id) {
+        if (id === "move1") return "1";
+        if (id === "move2") return "2";
+        if (id === "move3") return "3";
+        if (id === "moveN") return "N";
+        if (id === "moveD") return "D";
+        if (id === "moveCI") return "CI";
+        return "B";
+      }
+
+      function openModal(c) {
+        const tag = moveTag(c.move);
+        document.getElementById("modal-content").innerHTML = `
+          <div class="ticket-large">${c.ticket} · ${tag.label}</div>
+          <h3>${c.title}</h3>
+          <div class="desc">${c.desc}</div>
+          <div class="meta-row"><span class="label">Status</span><span>${c.status}</span></div>
+          ${c.commit ? `<div class="meta-row"><span class="label">Commit</span><span class="commit"><a href="${repoBase}${c.commit}" target="_blank">${c.commit}</a></span></div>` : ""}
+        `;
+        document.getElementById("modal").classList.add("open");
+      }
+
+      document.getElementById("modal-close").addEventListener("click", () => {
+        document.getElementById("modal").classList.remove("open");
+      });
+      document.getElementById("modal").addEventListener("click", (e) => {
+        if (e.target.id === "modal") {
+          document.getElementById("modal").classList.remove("open");
+        }
+      });
+
+      document.getElementById("filters").addEventListener("click", (e) => {
+        if (!e.target.classList.contains("filter-btn")) return;
+        document
+          .querySelectorAll(".filter-btn")
+          .forEach((b) => b.classList.remove("active"));
+        e.target.classList.add("active");
+        const want = e.target.dataset.move;
+        document.querySelectorAll(".card").forEach((c) => {
+          if (want === "all" || c.dataset.move === want) {
+            c.classList.remove("hidden");
+          } else {
+            c.classList.add("hidden");
+          }
+        });
+      });
+
+      document.getElementById("updated").textContent = `Last updated · ${lastUpdated}`;
+      renderSummary();
+      renderCards();
+      renderEpics();
+    </script>
+  </body>
+</html>
