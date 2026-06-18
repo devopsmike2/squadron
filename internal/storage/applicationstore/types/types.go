@@ -56,6 +56,23 @@ type ApplicationStore interface {
 	ListRollouts(ctx context.Context, filter RolloutFilter) ([]*Rollout, error)
 	UpdateRollout(ctx context.Context, rollout *Rollout) error
 
+	// Action runners + requests (v0.53 Move 2). An action runner is
+	// an installed squadron-action-runner daemon registered with
+	// this Squadron instance. An action request is one signed action
+	// dispatch plus its eventual result. List filtering supports
+	// the UI's "show all requests for proposal X" and "show in-
+	// flight requests assigned to runner Y" patterns.
+	CreateActionRunnerRegistration(ctx context.Context, r *ActionRunnerRegistration) error
+	UpdateActionRunnerRegistration(ctx context.Context, r *ActionRunnerRegistration) error
+	GetActionRunnerRegistration(ctx context.Context, runnerID string) (*ActionRunnerRegistration, error)
+	ListActionRunnerRegistrations(ctx context.Context) ([]*ActionRunnerRegistration, error)
+	RevokeActionRunnerRegistration(ctx context.Context, runnerID string, at time.Time) error
+
+	CreateActionRequest(ctx context.Context, r *ActionRequest) error
+	UpdateActionRequest(ctx context.Context, r *ActionRequest) error
+	GetActionRequest(ctx context.Context, id string) (*ActionRequest, error)
+	ListActionRequests(ctx context.Context, filter ActionRequestFilter) ([]*ActionRequest, error)
+
 	// API tokens (bearer auth)
 	CreateAPIToken(ctx context.Context, token *APIToken) error
 	GetAPITokenByHash(ctx context.Context, hash string) (*APIToken, error)
@@ -735,4 +752,73 @@ type SiemDestination struct {
 	LastErrorAt            *time.Time `json:"last_error_at,omitempty"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
+}
+
+// ActionRunnerRegistration is one installed squadron-action-runner
+// daemon. Squadron persists this on first enrollment so it knows
+// which runners exist, what they're allowed to do, and which
+// public key to use for return-channel authentication (future
+// work; the MVP uses HTTPS).
+//
+// CapabilitiesJSON stores the runner's declared capability list as
+// raw JSON. The string-typed field keeps storage out of the
+// internal/actions type dependency graph; services parse the JSON
+// at use time.
+//
+// RevokedAt is operator-controlled. A revoked runner stays in the
+// table for audit history but is excluded from action dispatch.
+// Squadron refuses to send signed requests to a revoked runner.
+//
+// Added in v0.53 as part of Move 2 (the action runner).
+type ActionRunnerRegistration struct {
+	RunnerID         string     `json:"runner_id"`
+	Hostname         string     `json:"hostname"`
+	PublicKeyPEM     string     `json:"public_key_pem"`
+	CapabilitiesJSON string     `json:"capabilities_json"`
+	RegisteredAt     time.Time  `json:"registered_at"`
+	LastSeenAt       time.Time  `json:"last_seen_at"`
+	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+}
+
+// ActionRequest is one signed request Squadron dispatched to a
+// runner, plus the runner's eventual result. Two rows exist per
+// approved action: one with Phase="dry_run" (preview shown in the
+// approval drawer) and one with Phase="execute" (the actual
+// execution). Linking by ProposalID + Phase gives the UI everything
+// it needs to render the full action lifecycle.
+//
+// Status values:
+//   - "pending"  request sent, runner has not yet responded
+//   - "success"  runner completed the phase successfully
+//   - "failure"  runner attempted but failed (non-zero exit)
+//   - "denied"   runner refused (signature, unknown type, out of policy)
+//
+// DeniedFor is populated only on Status="denied" and names the
+// rejection category for audit clarity.
+//
+// Added in v0.53 as part of Move 2.
+type ActionRequest struct {
+	ID                  string     `json:"id"`
+	ProposalID          string     `json:"proposal_id,omitempty"`
+	RunnerID            string     `json:"runner_id"`
+	ActionType          string     `json:"action_type"`
+	ParametersJSON      string     `json:"parameters_json"`
+	Signature           string     `json:"signature"`
+	Phase               string     `json:"phase"`
+	Status              string     `json:"status"`
+	DeniedFor           string     `json:"denied_for,omitempty"`
+	DryRunOutputJSON    string     `json:"dry_run_output_json,omitempty"`
+	ExecutionOutputJSON string     `json:"execution_output_json,omitempty"`
+	IssuedAt            time.Time  `json:"issued_at"`
+	ExpiresAt           time.Time  `json:"expires_at"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	CompletedAt         *time.Time `json:"completed_at,omitempty"`
+}
+
+// ActionRequestFilter narrows List queries.
+type ActionRequestFilter struct {
+	ProposalID string
+	RunnerID   string
+	Status     string // "", "pending", "success", "failure", "denied"
+	Limit      int
 }

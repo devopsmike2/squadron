@@ -42,6 +42,10 @@ type Store struct {
 	deployRuns    map[string]*types.DeployRun
 	// v0.50: SIEM destinations, keyed by ID.
 	siemDestinations map[string]*types.SiemDestination
+	// v0.53: action runner registrations, keyed by runner_id, and
+	// action requests keyed by id. Move 2 (action runner).
+	actionRunners  map[string]*types.ActionRunnerRegistration
+	actionRequests map[string]*types.ActionRequest
 }
 
 // NewStore creates a new in-memory store
@@ -62,6 +66,8 @@ func NewStore() *Store {
 		deployTargets:    make(map[string]*types.DeployTarget),
 		deployRuns:       make(map[string]*types.DeployRun),
 		siemDestinations: make(map[string]*types.SiemDestination),
+		actionRunners:    make(map[string]*types.ActionRunnerRegistration),
+		actionRequests:   make(map[string]*types.ActionRequest),
 	}
 }
 

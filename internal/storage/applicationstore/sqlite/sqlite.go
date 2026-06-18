@@ -426,6 +426,42 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE rollouts ADD COLUMN proposed_by TEXT NOT NULL DEFAULT 'operator'`,
 		`ALTER TABLE rollouts ADD COLUMN proposal_reasoning TEXT`,
 		`ALTER TABLE rollouts ADD COLUMN evidence_refs TEXT`,
+		// v0.53 Move 2: action runner tables. Two tables, both
+		// indexed for the access patterns the UI and dispatch loop
+		// actually use. Runners are addressed by runner_id (the
+		// fingerprint Squadron pins at enrollment). Action requests
+		// are listed by proposal_id (the UI shows every request for
+		// a given proposal) and by status (the dispatch loop sweeps
+		// pending requests).
+		`CREATE TABLE IF NOT EXISTS action_runner_registrations (
+			runner_id TEXT PRIMARY KEY,
+			hostname TEXT NOT NULL,
+			public_key_pem TEXT NOT NULL,
+			capabilities_json TEXT NOT NULL,
+			registered_at DATETIME NOT NULL,
+			last_seen_at DATETIME NOT NULL,
+			revoked_at DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS action_requests (
+			id TEXT PRIMARY KEY,
+			proposal_id TEXT,
+			runner_id TEXT NOT NULL,
+			action_type TEXT NOT NULL,
+			parameters_json TEXT NOT NULL,
+			signature TEXT NOT NULL,
+			phase TEXT NOT NULL,
+			status TEXT NOT NULL,
+			denied_for TEXT,
+			dry_run_output_json TEXT,
+			execution_output_json TEXT,
+			issued_at DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL,
+			started_at DATETIME,
+			completed_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_action_requests_proposal ON action_requests(proposal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_action_requests_runner ON action_requests(runner_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_action_requests_status ON action_requests(status)`,
 	}
 
 	for _, migration := range migrations {
