@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
@@ -29,6 +30,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
 // AgentCommander defines the interface for sending commands to agents.
@@ -91,7 +93,15 @@ type Server struct {
 	// per-call evidence for NIST CSF PR.AA-04 and CIP-007-6 R4.1.2.
 	// Added in v0.52.
 	accessAuditMiddleware gin.HandlerFunc
-	logger                *zap.Logger
+	// v0.53 Move 2 — action runner. The actions handler needs the
+	// raw applicationstore to read/write action_runner_registrations
+	// and action_requests; it also needs the Ed25519 signer to
+	// produce signed action requests. Both wired post-construction
+	// via SetActionStoreAndSigner so main.go can load the signing
+	// key from env after NewServer.
+	appStore     applicationstore.ApplicationStore
+	actionSigner *actions.Signer
+	logger       *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
 	registry          *prometheus.Registry
@@ -264,6 +274,17 @@ func (s *Server) SetSiemService(svc services.SiemService) {
 // mounted when this is non-nil at Run time.
 func (s *Server) SetAccessAuditMiddleware(m gin.HandlerFunc) {
 	s.accessAuditMiddleware = m
+}
+
+// SetActionStoreAndSigner wires the action runner dependencies
+// post-construction. Called from main.go after NewServer so the
+// signer can be loaded from the env without changing the server
+// constructor signature. Safe to call with a nil signer: dispatch
+// returns 503 in that case but read endpoints (list / get / poll)
+// keep working.
+func (s *Server) SetActionStoreAndSigner(store applicationstore.ApplicationStore, signer *actions.Signer) {
+	s.appStore = store
+	s.actionSigner = signer
 }
 
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
@@ -973,6 +994,24 @@ func (s *Server) registerRoutes() {
 		v1.PUT("/siem/destinations/:id", siemWrite, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleUpdateSiem(c) }))
 		v1.DELETE("/siem/destinations/:id", siemWrite, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleDeleteSiem(c) }))
 		v1.POST("/siem/destinations/:id/test", siemWrite, siemTrampoline(func(h *handlers.SiemHandlers, c *gin.Context) { h.HandleTestSiem(c) }))
+
+		// v0.53 — action runner endpoints (Move 2). Read scope
+		// covers list/get + the runner-side pending poll; write
+		// scope covers register, dispatch, revoke, and result
+		// reporting. The runner daemon authenticates with a token
+		// carrying actions:write issued at enrollment.
+		actionsHandler := handlers.NewActionsHandlers(s.appStore, s.actionSigner, nil, s.logger)
+		actionsRead := middleware.RequireScope(services.ScopeActionsRead)
+		actionsWrite := middleware.RequireScope(services.ScopeActionsWrite)
+		v1.POST("/runners/register", actionsWrite, actionsHandler.HandleRegisterRunner)
+		v1.GET("/runners", actionsRead, actionsHandler.HandleListRunners)
+		v1.GET("/runners/:id", actionsRead, actionsHandler.HandleGetRunner)
+		v1.POST("/runners/:id/revoke", actionsWrite, actionsHandler.HandleRevokeRunner)
+		v1.GET("/runners/:id/pending", actionsRead, actionsHandler.HandleRunnerPending)
+		v1.POST("/actions/dispatch", actionsWrite, actionsHandler.HandleDispatchAction)
+		v1.GET("/actions", actionsRead, actionsHandler.HandleListActions)
+		v1.GET("/actions/:id", actionsRead, actionsHandler.HandleGetAction)
+		v1.POST("/actions/:id/result", actionsWrite, actionsHandler.HandlePostActionResult)
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.
 		// All read-only so ScopeAgentsRead is the natural gate.
