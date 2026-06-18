@@ -342,8 +342,9 @@ func (s *AgentServiceImpl) CreateGroup(ctx context.Context, group *Group) error 
 		ID:                group.ID,
 		Name:              group.Name,
 		Labels:            group.Labels,
-		RequireApproval:   group.RequireApproval,
-		ChangeWindowsJSON: cwJSON,
+		RequireApproval:            group.RequireApproval,
+		RequireApprovalForRollback: group.RequireApprovalForRollback,
+		ChangeWindowsJSON:          cwJSON,
 		CreatedAt:         group.CreatedAt,
 		UpdatedAt:         group.UpdatedAt,
 	}
@@ -413,8 +414,9 @@ func (s *AgentServiceImpl) UpdateGroup(ctx context.Context, group *Group) error 
 		ID:                group.ID,
 		Name:              group.Name,
 		Labels:            group.Labels,
-		RequireApproval:   group.RequireApproval,
-		ChangeWindowsJSON: cwJSON,
+		RequireApproval:            group.RequireApproval,
+		RequireApprovalForRollback: group.RequireApprovalForRollback,
+		ChangeWindowsJSON:          cwJSON,
 		CreatedAt:         group.CreatedAt,
 		UpdatedAt:         group.UpdatedAt,
 	}
@@ -433,12 +435,13 @@ func (s *AgentServiceImpl) DeleteGroup(ctx context.Context, id string) error {
 // the storage blob.
 func groupToService(g *applicationstore.Group) *Group {
 	out := &Group{
-		ID:              g.ID,
-		Name:            g.Name,
-		Labels:          g.Labels,
-		RequireApproval: g.RequireApproval,
-		CreatedAt:       g.CreatedAt,
-		UpdatedAt:       g.UpdatedAt,
+		ID:                         g.ID,
+		Name:                       g.Name,
+		Labels:                     g.Labels,
+		RequireApproval:            g.RequireApproval,
+		RequireApprovalForRollback: g.RequireApprovalForRollback,
+		CreatedAt:                  g.CreatedAt,
+		UpdatedAt:                  g.UpdatedAt,
 	}
 	if g.ChangeWindowsJSON != "" && g.ChangeWindowsJSON != "[]" {
 		// Failing closed (empty slice) on malformed JSON is the safe

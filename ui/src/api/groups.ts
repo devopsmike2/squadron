@@ -27,6 +27,13 @@ export interface Group {
   // set on the rollout form. Surfaces as a "policy-protected" badge
   // and locks the create-form approval checkbox.
   require_approval?: boolean;
+  // v0.61 — separate policy for the rollback endpoint. When true,
+  // the new rollout created by /rollouts/:id/rollback is forced
+  // into pending_approval regardless of whether the source rollout
+  // required approval. Lets compliance flag rollback as the more
+  // dangerous operation without requiring approval on every fresh
+  // rollout.
+  require_approval_for_rollback?: boolean;
   // v0.49 — recurring blackout windows. Empty/missing means no
   // change-window restrictions. The engine refuses to advance
   // rollouts while any window is active.
@@ -39,6 +46,7 @@ export interface CreateGroupRequest {
   name: string;
   labels?: Record<string, string>;
   require_approval?: boolean;
+  require_approval_for_rollback?: boolean;
 }
 
 // UpdateGroupRequest — partial update. Send only the fields you want
@@ -49,6 +57,10 @@ export interface UpdateGroupRequest {
   name?: string;
   labels?: Record<string, string>;
   require_approval?: boolean;
+  // v0.61 — toggle the rollback-only approval policy. Same
+  // partial-update semantics as require_approval: send false to
+  // explicitly turn it off, omit to leave unchanged.
+  require_approval_for_rollback?: boolean;
   // v0.49 — pass the full list of windows (PUT semantics), not a
   // delta. Omit to leave existing windows untouched; pass [] to
   // clear all blackouts.

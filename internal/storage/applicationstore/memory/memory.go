@@ -299,6 +299,7 @@ func (s *Store) UpdateGroup(ctx context.Context, group *types.Group) error {
 	existing.Name = group.Name
 	existing.Labels = group.Labels
 	existing.RequireApproval = group.RequireApproval
+	existing.RequireApprovalForRollback = group.RequireApprovalForRollback
 	existing.ChangeWindowsJSON = group.ChangeWindowsJSON
 	existing.UpdatedAt = group.UpdatedAt
 	return nil

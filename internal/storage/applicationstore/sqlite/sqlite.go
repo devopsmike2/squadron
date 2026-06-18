@@ -501,6 +501,11 @@ func (s *Storage) migrate() error {
 		// existing row and every fresh rollout from operator / AI
 		// proposer flows; only the rollback handler sets it.
 		`ALTER TABLE rollouts ADD COLUMN rolled_back_from_id TEXT`,
+
+		// v0.61 — per group policy: force approval on rollback
+		// rollouts independently of require_approval. Default 0 so
+		// existing groups carry forward unchanged.
+		`ALTER TABLE groups ADD COLUMN require_approval_for_rollback INTEGER NOT NULL DEFAULT 0`,
 	}
 
 	for _, migration := range migrations {
@@ -773,8 +778,8 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 	}
 
 	query := `
-		INSERT INTO groups (id, name, labels, require_approval, change_windows, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO groups (id, name, labels, require_approval, require_approval_for_rollback, change_windows, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -782,6 +787,7 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 		group.Name,
 		string(labelsJSON),
 		boolToInt(group.RequireApproval),
+		boolToInt(group.RequireApprovalForRollback),
 		cw,
 		group.CreatedAt,
 		group.UpdatedAt,
@@ -796,17 +802,19 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 }
 
 func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error) {
-	query := `SELECT id, name, labels, require_approval, change_windows, created_at, updated_at FROM groups WHERE id = ?`
+	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, created_at, updated_at FROM groups WHERE id = ?`
 
 	var group types.Group
 	var labelsJSON string
 	var requireApproval int
+	var requireApprovalForRollback int
 
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&group.ID,
 		&group.Name,
 		&labelsJSON,
 		&requireApproval,
+		&requireApprovalForRollback,
 		&group.ChangeWindowsJSON,
 		&group.CreatedAt,
 		&group.UpdatedAt,
@@ -820,12 +828,13 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 	}
 
 	group.RequireApproval = requireApproval != 0
+	group.RequireApprovalForRollback = requireApprovalForRollback != 0
 	_ = json.Unmarshal([]byte(labelsJSON), &group.Labels)
 	return &group, nil
 }
 
 func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
-	query := `SELECT id, name, labels, require_approval, change_windows, created_at, updated_at FROM groups ORDER BY created_at DESC`
+	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, created_at, updated_at FROM groups ORDER BY created_at DESC`
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -838,12 +847,14 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 		var group types.Group
 		var labelsJSON string
 		var requireApproval int
+		var requireApprovalForRollback int
 
 		err := rows.Scan(
 			&group.ID,
 			&group.Name,
 			&labelsJSON,
 			&requireApproval,
+			&requireApprovalForRollback,
 			&group.ChangeWindowsJSON,
 			&group.CreatedAt,
 			&group.UpdatedAt,
@@ -853,6 +864,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 		}
 
 		group.RequireApproval = requireApproval != 0
+		group.RequireApprovalForRollback = requireApprovalForRollback != 0
 		_ = json.Unmarshal([]byte(labelsJSON), &group.Labels)
 		groups = append(groups, &group)
 	}
@@ -872,13 +884,14 @@ func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 	}
 	query := `
 		UPDATE groups
-		SET name = ?, labels = ?, require_approval = ?, change_windows = ?, updated_at = ?
+		SET name = ?, labels = ?, require_approval = ?, require_approval_for_rollback = ?, change_windows = ?, updated_at = ?
 		WHERE id = ?
 	`
 	result, err := s.db.ExecContext(ctx, query,
 		group.Name,
 		string(labelsJSON),
 		boolToInt(group.RequireApproval),
+		boolToInt(group.RequireApprovalForRollback),
 		cw,
 		group.UpdatedAt,
 		group.ID,

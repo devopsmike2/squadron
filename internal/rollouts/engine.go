@@ -524,6 +524,17 @@ func (e *Engine) finish(ctx context.Context, r *services.Rollout) {
 		return
 	}
 	e.recordAudit(ctx, r, "rollout.succeeded", "succeeded", nil)
+	// v0.61 — if this rollout was created via the rollback endpoint
+	// (RolledBackFromID set on create) and it has now reached
+	// succeeded, emit a separate completion event so the audit
+	// timeline shows the full arc: rollback_requested → succeeded →
+	// rollback_completed. SIEM consumers can alert on
+	// rollback_completed independently of generic succeeded events.
+	if r.RolledBackFromID != "" {
+		e.recordAudit(ctx, r, "rollout.rollback_completed", "rollback_completed", map[string]any{
+			"rolled_back_from_id": r.RolledBackFromID,
+		})
+	}
 	e.publishStateChange(r, "succeeded")
 	e.tracer.EndRollout(r.ID, services.RolloutStateSucceeded, "")
 	e.logger.Info("rollout succeeded", zap.String("rollout_id", r.ID))
