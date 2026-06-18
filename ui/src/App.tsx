@@ -8,12 +8,13 @@ import AuditPage from "./pages/Audit";
 import ConfigsPage from "./pages/Configs";
 import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
+import DeployPage from "./pages/Deploy";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
+import IncidentsPage from "./pages/Incidents";
 import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
 import QuickstartPage from "./pages/Quickstart";
-import DeployPage from "./pages/Deploy";
 import RolloutsPage from "./pages/Rollouts";
 import SavingsPage from "./pages/Savings";
 import SettingsSiemPage from "./pages/SettingsSiem";
@@ -145,6 +146,11 @@ function AuthBoundary() {
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/rollouts" element={<RolloutsPage />} />
           <Route path="/deploy" element={<DeployPage />} />
+          {/* v0.54 Move 3 — incident drafter inbox. Sits in the
+              Operations group next to Rollouts and Deploy because
+              that's where the operator already lives during an
+              incident response. */}
+          <Route path="/incidents" element={<IncidentsPage />} />
           <Route path="/audit" element={<AuditPage />} />
           {/* v0.41.1 — full Inventory drill-in page. The "See
               inventory for details" link on Fleet Status pointed

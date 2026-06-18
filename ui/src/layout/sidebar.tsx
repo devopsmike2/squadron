@@ -36,6 +36,7 @@ import {
   TrendingDownIcon,
   UploadCloudIcon,
   RocketIcon,
+  Inbox,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -154,6 +155,16 @@ export function AppSidebar() {
           title: "Deploy",
           url: "/deploy",
           icon: UploadCloudIcon,
+        },
+        {
+          // v0.54 Move 3 — incident drafter inbox. Sits in
+          // Operations next to Rollouts and Deploy: that's where
+          // the operator is already living during an incident
+          // response.
+          key: "incidents",
+          title: "Incidents",
+          url: "/incidents",
+          icon: Inbox,
         },
         {
           key: "alerts",
