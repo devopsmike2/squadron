@@ -18,20 +18,37 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/actions"
+	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
+
+// recordingAudit is a test-only AuditService that captures every
+// Record call. List is a stub — these handler tests never read back
+// audit history.
+type recordingAudit struct {
+	entries []services.AuditEntry
+}
+
+func (r *recordingAudit) Record(_ context.Context, e services.AuditEntry) error {
+	r.entries = append(r.entries, e)
+	return nil
+}
+func (r *recordingAudit) List(_ context.Context, _ services.AuditEventFilter) ([]*services.AuditEvent, error) {
+	return nil, nil
+}
 
 func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-func newActionsTestServer(t *testing.T) (*gin.Engine, *ActionsHandlers, *memory.Store, *actions.Signer) {
+func newActionsTestServer(t *testing.T) (*gin.Engine, *ActionsHandlers, *memory.Store, *actions.Signer, *recordingAudit) {
 	t.Helper()
 	store := memory.NewStore()
 	signer, err := actions.GenerateSigner()
 	require.NoError(t, err)
-	h := NewActionsHandlers(store, signer, actions.Default, zap.NewNop())
+	audit := &recordingAudit{}
+	h := NewActionsHandlers(store, signer, actions.Default, audit, zap.NewNop())
 	r := gin.New()
 	r.POST("/runners/register", h.HandleRegisterRunner)
 	r.GET("/runners", h.HandleListRunners)
@@ -42,7 +59,7 @@ func newActionsTestServer(t *testing.T) (*gin.Engine, *ActionsHandlers, *memory.
 	r.GET("/actions", h.HandleListActions)
 	r.GET("/actions/:id", h.HandleGetAction)
 	r.POST("/actions/:id/result", h.HandlePostActionResult)
-	return r, h, store, signer
+	return r, h, store, signer, audit
 }
 
 func postJSON(t *testing.T, r http.Handler, path string, body any) *httptest.ResponseRecorder {
@@ -67,7 +84,7 @@ func getJSON(t *testing.T, r http.Handler, path string) *httptest.ResponseRecord
 // TestRegisterRunner_Idempotent verifies re-registration updates
 // the existing record rather than erroring.
 func TestRegisterRunner_Idempotent(t *testing.T) {
-	r, _, store, _ := newActionsTestServer(t)
+	r, _, store, _, _ := newActionsTestServer(t)
 	body := RegisterRunnerRequest{
 		RunnerID:     "ed25519:abc",
 		Hostname:     "web-prod-1",
@@ -90,7 +107,7 @@ func TestRegisterRunner_Idempotent(t *testing.T) {
 
 // TestListAndGetRunners covers the basic browse paths.
 func TestListAndGetRunners(t *testing.T) {
-	r, _, _, _ := newActionsTestServer(t)
+	r, _, _, _, _ := newActionsTestServer(t)
 	postJSON(t, r, "/runners/register", RegisterRunnerRequest{
 		RunnerID: "rid-1", Hostname: "h1", PublicKeyPEM: "p1",
 	})
@@ -114,7 +131,7 @@ func TestListAndGetRunners(t *testing.T) {
 
 // TestRevokeRunner sets revoked_at and refuses subsequent dispatch.
 func TestRevokeRunner(t *testing.T) {
-	r, _, _, _ := newActionsTestServer(t)
+	r, _, _, _, _ := newActionsTestServer(t)
 	postJSON(t, r, "/runners/register", RegisterRunnerRequest{
 		RunnerID: "rid-rev", Hostname: "h", PublicKeyPEM: "p",
 		Capabilities: []actions.Capability{{Type: actions.RestartSystemdServiceType}},
@@ -136,7 +153,7 @@ func TestRevokeRunner(t *testing.T) {
 // TestDispatchAction_HappyPath signs + persists + returns the
 // signed request for runner consumption.
 func TestDispatchAction_HappyPath(t *testing.T) {
-	r, _, store, signer := newActionsTestServer(t)
+	r, _, store, signer, _ := newActionsTestServer(t)
 	postJSON(t, r, "/runners/register", RegisterRunnerRequest{
 		RunnerID: "rid-d", Hostname: "h", PublicKeyPEM: "p",
 		Capabilities: []actions.Capability{{
@@ -192,7 +209,7 @@ func TestDispatchAction_HappyPath(t *testing.T) {
 // TestDispatchAction_OutOfPolicy refuses when the parameters don't
 // satisfy the runner's capability constraints.
 func TestDispatchAction_OutOfPolicy(t *testing.T) {
-	r, _, _, _ := newActionsTestServer(t)
+	r, _, _, _, _ := newActionsTestServer(t)
 	postJSON(t, r, "/runners/register", RegisterRunnerRequest{
 		RunnerID: "rid-strict", Hostname: "h", PublicKeyPEM: "p",
 		Capabilities: []actions.Capability{{
@@ -212,7 +229,7 @@ func TestDispatchAction_OutOfPolicy(t *testing.T) {
 
 // TestDispatchAction_UnknownRunner returns 404.
 func TestDispatchAction_UnknownRunner(t *testing.T) {
-	r, _, _, _ := newActionsTestServer(t)
+	r, _, _, _, _ := newActionsTestServer(t)
 	params, _ := json.Marshal(actions.RestartSystemdServiceParameters{UnitName: "nginx"})
 	w := postJSON(t, r, "/actions/dispatch", DispatchActionRequest{
 		RunnerID:   "missing",
@@ -225,7 +242,7 @@ func TestDispatchAction_UnknownRunner(t *testing.T) {
 
 // TestDispatchAction_BadParameters returns 400.
 func TestDispatchAction_BadParameters(t *testing.T) {
-	r, _, _, _ := newActionsTestServer(t)
+	r, _, _, _, _ := newActionsTestServer(t)
 	postJSON(t, r, "/runners/register", RegisterRunnerRequest{
 		RunnerID: "rid-x", Hostname: "h", PublicKeyPEM: "p",
 		Capabilities: []actions.Capability{{Type: actions.RestartSystemdServiceType}},
@@ -242,7 +259,7 @@ func TestDispatchAction_BadParameters(t *testing.T) {
 
 // TestPostActionResult_HappyPath records a success result.
 func TestPostActionResult_HappyPath(t *testing.T) {
-	r, _, store, _ := newActionsTestServer(t)
+	r, _, store, _, _ := newActionsTestServer(t)
 	postJSON(t, r, "/runners/register", RegisterRunnerRequest{
 		RunnerID: "rid-r", Hostname: "h", PublicKeyPEM: "p",
 		Capabilities: []actions.Capability{{Type: actions.RestartSystemdServiceType}},
@@ -273,14 +290,135 @@ func TestPostActionResult_HappyPath(t *testing.T) {
 
 // TestPostActionResult_BadStatus rejects invalid status values.
 func TestPostActionResult_BadStatus(t *testing.T) {
-	r, _, _, _ := newActionsTestServer(t)
+	r, _, _, _, _ := newActionsTestServer(t)
 	w := postJSON(t, r, "/actions/anything/result", PostResultRequest{Status: "wonky"})
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // TestPostActionResult_UnknownAction returns 404.
 func TestPostActionResult_UnknownAction(t *testing.T) {
-	r, _, _, _ := newActionsTestServer(t)
+	r, _, _, _, _ := newActionsTestServer(t)
 	w := postJSON(t, r, "/actions/missing/result", PostResultRequest{Status: "success"})
 	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ---- SQ-2.7 audit emission tests --------------------------------------------
+//
+// The action runner timeline is the evidence trail Squadron offers
+// to anyone reviewing a "what did this fleet do" question after the
+// fact. These tests pin the three event types we emit so a refactor
+// can't quietly drop one and leave a gap in the timeline (or worse,
+// in the SIEM fan-out the Enterprise build wires on top of audit).
+
+// dispatchOne is a small helper: register a runner that allows
+// restart-systemd-service for nginx*, then dispatch one action so
+// we have a stored ActionRequest with a known ID. Returns the ID.
+func dispatchOne(t *testing.T, r *gin.Engine) string {
+	t.Helper()
+	postJSON(t, r, "/runners/register", RegisterRunnerRequest{
+		RunnerID: "rid-audit", Hostname: "h", PublicKeyPEM: "p",
+		Capabilities: []actions.Capability{{
+			Type: actions.RestartSystemdServiceType,
+			Constraints: map[string]any{
+				"unit_name_glob": []any{"nginx*"},
+			},
+		}},
+	})
+	params, _ := json.Marshal(actions.RestartSystemdServiceParameters{UnitName: "nginx.service"})
+	w := postJSON(t, r, "/actions/dispatch", DispatchActionRequest{
+		ProposalID: "prop-audit",
+		RunnerID:   "rid-audit",
+		ActionType: actions.RestartSystemdServiceType,
+		Parameters: params,
+		Phase:      "execute",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	var dispatchBody struct {
+		Request *types.ActionRequest `json:"request"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &dispatchBody))
+	require.NotNil(t, dispatchBody.Request)
+	return dispatchBody.Request.ID
+}
+
+// lastEntry returns the most recently recorded audit entry of the
+// given event type, or fails the test if none match.
+func lastEntry(t *testing.T, audit *recordingAudit, eventType string) services.AuditEntry {
+	t.Helper()
+	for i := len(audit.entries) - 1; i >= 0; i-- {
+		if audit.entries[i].EventType == eventType {
+			return audit.entries[i]
+		}
+	}
+	t.Fatalf("no audit entry of type %q (got: %+v)", eventType, audit.entries)
+	return services.AuditEntry{}
+}
+
+// TestAudit_DispatchEmitsAction verifies a successful dispatch
+// records action.dispatched carrying the request ID, runner, action
+// type, phase, and a parameters fingerprint.
+func TestAudit_DispatchEmitsAction(t *testing.T) {
+	r, _, _, _, audit := newActionsTestServer(t)
+	reqID := dispatchOne(t, r)
+
+	entry := lastEntry(t, audit, services.AuditEventActionDispatched)
+	assert.Equal(t, services.AuditTargetActionRequest, entry.TargetType)
+	assert.Equal(t, reqID, entry.TargetID)
+	assert.Equal(t, "dispatched", entry.Action)
+	assert.Equal(t, "rid-audit", entry.Payload["runner_id"])
+	assert.Equal(t, "prop-audit", entry.Payload["proposal_id"])
+	assert.Equal(t, actions.RestartSystemdServiceType, entry.Payload["action_type"])
+	assert.Equal(t, "execute", entry.Payload["phase"])
+	// fingerprint is sha256 hex of the parameters JSON, so it should
+	// be a 64-char string regardless of contents.
+	fp, ok := entry.Payload["parameters_sha256"].(string)
+	require.True(t, ok)
+	assert.Len(t, fp, 64)
+}
+
+// TestAudit_ResultSuccessEmitsActionExecuted verifies the
+// terminator event on the success branch.
+func TestAudit_ResultSuccessEmitsActionExecuted(t *testing.T) {
+	r, _, _, _, audit := newActionsTestServer(t)
+	reqID := dispatchOne(t, r)
+	w := postJSON(t, r, "/actions/"+reqID+"/result", PostResultRequest{
+		Status: "success",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	entry := lastEntry(t, audit, services.AuditEventActionExecuted)
+	assert.Equal(t, reqID, entry.TargetID)
+	assert.Equal(t, "executed", entry.Action)
+	assert.Equal(t, "rid-audit", entry.Payload["runner_id"])
+}
+
+// TestAudit_ResultFailureEmitsActionFailed verifies the terminator
+// event on the failure branch.
+func TestAudit_ResultFailureEmitsActionFailed(t *testing.T) {
+	r, _, _, _, audit := newActionsTestServer(t)
+	reqID := dispatchOne(t, r)
+	w := postJSON(t, r, "/actions/"+reqID+"/result", PostResultRequest{
+		Status: "failure",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	entry := lastEntry(t, audit, services.AuditEventActionFailed)
+	assert.Equal(t, "failed", entry.Action)
+}
+
+// TestAudit_ResultDeniedEmitsActionDenied verifies the terminator
+// event on the denial branch and that denied_for is carried through
+// to the audit payload.
+func TestAudit_ResultDeniedEmitsActionDenied(t *testing.T) {
+	r, _, _, _, audit := newActionsTestServer(t)
+	reqID := dispatchOne(t, r)
+	w := postJSON(t, r, "/actions/"+reqID+"/result", PostResultRequest{
+		Status:    "denied",
+		DeniedFor: "signature: expired",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	entry := lastEntry(t, audit, services.AuditEventActionDenied)
+	assert.Equal(t, "denied", entry.Action)
+	assert.Equal(t, "signature: expired", entry.Payload["denied_for"])
 }

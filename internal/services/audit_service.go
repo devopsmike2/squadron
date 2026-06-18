@@ -62,10 +62,12 @@ const (
 
 // Canonical target type values.
 const (
-	AuditTargetAgent  = "agent"
-	AuditTargetGroup  = "group"
-	AuditTargetConfig = "config"
-	AuditTargetRule   = "rule"
+	AuditTargetAgent         = "agent"
+	AuditTargetGroup         = "group"
+	AuditTargetConfig        = "config"
+	AuditTargetRule          = "rule"
+	AuditTargetActionRequest = "action_request"
+	AuditTargetActionRunner  = "action_runner"
 )
 
 // Canonical event types. Not exhaustive — callers can use any dotted name
@@ -82,4 +84,15 @@ const (
 	AuditEventAlertRuleDeleted   = "alert_rule.deleted"
 	AuditEventAlertFired         = "alert.fired"
 	AuditEventAlertResolved      = "alert.resolved"
+
+	// Action runner lifecycle. action.dispatched fires when Squadron
+	// signs a request and writes it as pending. action.executed and
+	// action.failed fire when the runner posts a result; action.denied
+	// fires when the runner (or Squadron at dispatch time) refuses to
+	// run the request — signature failure, expired request, out of
+	// declared capability, or dry-run-only mode.
+	AuditEventActionDispatched = "action.dispatched"
+	AuditEventActionExecuted   = "action.executed"
+	AuditEventActionFailed     = "action.failed"
+	AuditEventActionDenied     = "action.denied"
 )
