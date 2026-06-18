@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -34,19 +35,33 @@ import (
 
 // IncidentsHandlers owns the /api/v1/incidents/drafts routes. The
 // audit service is optional; when present, every dismiss and
-// publish lands in the audit timeline.
+// publish lands in the audit timeline. The publisher registry
+// drives the publish endpoint; providers with no implementation
+// (linear, jira, ...) still publish, but as a stamp only (no remote
+// API call).
 type IncidentsHandlers struct {
-	store  applicationstore.ApplicationStore
-	audit  services.AuditService
-	logger *zap.Logger
+	store      applicationstore.ApplicationStore
+	audit      services.AuditService
+	publishers incidents.PublisherRegistry
+	logger     *zap.Logger
 }
 
-// NewIncidentsHandlers constructs the handler. audit may be nil.
-func NewIncidentsHandlers(store applicationstore.ApplicationStore, audit services.AuditService, logger *zap.Logger) *IncidentsHandlers {
+// NewIncidentsHandlers constructs the handler. audit may be nil;
+// publishers may be nil (in which case only the clipboard provider
+// works through the stamp-only fallback).
+func NewIncidentsHandlers(store applicationstore.ApplicationStore, audit services.AuditService, publishers incidents.PublisherRegistry, logger *zap.Logger) *IncidentsHandlers {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &IncidentsHandlers{store: store, audit: audit, logger: logger}
+	if publishers == nil {
+		publishers = incidents.NewPublisherRegistry()
+	}
+	return &IncidentsHandlers{
+		store:      store,
+		audit:      audit,
+		publishers: publishers,
+		logger:     logger,
+	}
 }
 
 // HandleListDrafts returns recently-drafted tickets. Supports status
@@ -219,10 +234,40 @@ func (h *IncidentsHandlers) HandlePublishDraft(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "dismissed drafts cannot be published"})
 		return
 	}
+
+	// If we have a registered Publisher for this provider, call it.
+	// Otherwise fall back to stamping with the operator supplied
+	// external_id / external_url. The fallback preserves the audit
+	// trail when the operator manually filed the ticket in Linear
+	// (say) and is now telling Squadron where it landed.
+	externalID := body.ExternalID
+	externalURL := body.ExternalURL
+	if pub := h.publishers.Lookup(body.Provider); pub != nil {
+		if id, url, err := pub.Publish(c.Request.Context(), existing); err != nil {
+			h.logger.Warn("incidents: publisher failed",
+				zap.String("provider", body.Provider),
+				zap.String("draft_id", existing.ID),
+				zap.Error(err),
+			)
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error":  "publisher failed",
+				"detail": err.Error(),
+			})
+			return
+		} else {
+			if id != "" {
+				externalID = id
+			}
+			if url != "" {
+				externalURL = url
+			}
+		}
+	}
+
 	existing.Status = "published"
 	existing.Provider = body.Provider
-	existing.ExternalID = body.ExternalID
-	existing.ExternalURL = body.ExternalURL
+	existing.ExternalID = externalID
+	existing.ExternalURL = externalURL
 	if err := h.store.UpdateIncidentDraft(c.Request.Context(), existing); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed", "detail": err.Error()})
 		return
@@ -237,8 +282,8 @@ func (h *IncidentsHandlers) HandlePublishDraft(c *gin.Context) {
 				"action_request_id": existing.ActionRequestID,
 				"rollout_id":        existing.RolloutID,
 				"provider":          body.Provider,
-				"external_id":       body.ExternalID,
-				"external_url":      body.ExternalURL,
+				"external_id":       existing.ExternalID,
+				"external_url":      existing.ExternalURL,
 				"published_at":      time.Now().UTC(),
 			},
 		})

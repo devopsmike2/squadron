@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/actions"
+	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
@@ -101,7 +102,12 @@ type Server struct {
 	// key from env after NewServer.
 	appStore     applicationstore.ApplicationStore
 	actionSigner *actions.Signer
-	logger       *zap.Logger
+	// v0.54 Move 3 — incident drafter publishers. Map of provider
+	// name to Publisher. Always contains the clipboard publisher;
+	// main.go conditionally registers github when the matching env
+	// vars are set.
+	incidentsPublishers incidents.PublisherRegistry
+	logger              *zap.Logger
 	httpServer        *http.Server
 	metrics           *metrics.APIMetrics
 	registry          *prometheus.Registry
@@ -285,6 +291,15 @@ func (s *Server) SetAccessAuditMiddleware(m gin.HandlerFunc) {
 func (s *Server) SetActionStoreAndSigner(store applicationstore.ApplicationStore, signer *actions.Signer) {
 	s.appStore = store
 	s.actionSigner = signer
+}
+
+// SetIncidentsPublishers swaps in a populated publisher registry
+// after construction. main.go uses this to register the GitHub
+// Issues publisher when SQUADRON_GITHUB_ISSUES_* env vars are set.
+// Safe to call with nil — the publish endpoint falls back to the
+// stamp only behavior.
+func (s *Server) SetIncidentsPublishers(p incidents.PublisherRegistry) {
+	s.incidentsPublishers = p
 }
 
 // pricingTrampoline mirrors insightsTrampoline. The /pricing/*
@@ -1018,7 +1033,7 @@ func (s *Server) registerRoutes() {
 		// publish. Publish is a stamping operation in the MVP
 		// (clipboard provider); real provider plug ins land in a
 		// follow-up chunk.
-		incidentsHandler := handlers.NewIncidentsHandlers(s.appStore, s.auditService, s.logger)
+		incidentsHandler := handlers.NewIncidentsHandlers(s.appStore, s.auditService, s.incidentsPublishers, s.logger)
 		incidentsRead := middleware.RequireScope(services.ScopeIncidentsRead)
 		incidentsWrite := middleware.RequireScope(services.ScopeIncidentsWrite)
 		v1.GET("/incidents/drafts", incidentsRead, incidentsHandler.HandleListDrafts)

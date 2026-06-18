@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -26,7 +27,7 @@ func newIncidentsTestServer(t *testing.T) (*gin.Engine, *memory.Store, *recordin
 	t.Helper()
 	store := memory.NewStore()
 	audit := &recordingAudit{}
-	h := NewIncidentsHandlers(store, audit, zap.NewNop())
+	h := NewIncidentsHandlers(store, audit, nil, zap.NewNop())
 	r := gin.New()
 	r.GET("/incidents/drafts", h.HandleListDrafts)
 	r.GET("/incidents/drafts/:id", h.HandleGetDraft)
@@ -213,4 +214,87 @@ func TestPublishDraft_RejectsDismissedDraft(t *testing.T) {
 		Provider: "clipboard",
 	})
 	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+// TestPublishDraft_GitHubProviderStampsResponse verifies the
+// publisher integration path: the handler invokes the registered
+// GitHub Issues publisher, takes the returned external_id and url
+// from the publisher's response (overriding what the operator
+// supplied), and persists the published row.
+func TestPublishDraft_GitHubProviderStampsResponse(t *testing.T) {
+	store := memory.NewStore()
+	audit := &recordingAudit{}
+
+	// Fake GitHub API that returns issue 99 with a canned URL.
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"number":99,"html_url":"https://github.com/devopsmike2/squadron/issues/99"}`))
+	}))
+	defer ghSrv.Close()
+
+	publishers := incidents.NewPublisherRegistry()
+	gh, err := incidents.NewGitHubIssuesPublisher(incidents.GitHubIssuesConfig{
+		Owner:      "devopsmike2",
+		Repo:       "squadron",
+		Token:      "test-token",
+		APIBaseURL: ghSrv.URL,
+		HTTPClient: ghSrv.Client(),
+	})
+	require.NoError(t, err)
+	publishers.Register(gh)
+
+	h := NewIncidentsHandlers(store, audit, publishers, zap.NewNop())
+	r := gin.New()
+	r.POST("/incidents/drafts/:id/publish", h.HandlePublishDraft)
+
+	d := seedDraft(t, store, "a1", "draft")
+
+	// Operator supplies a placeholder external_id/url; the
+	// publisher response should override.
+	w := postJSON(t, r, "/incidents/drafts/"+d.ID+"/publish", PublishDraftRequest{
+		Provider:    "github",
+		ExternalID:  "placeholder",
+		ExternalURL: "https://example.com/placeholder",
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	stored, _ := store.GetIncidentDraft(context.Background(), d.ID)
+	assert.Equal(t, "published", stored.Status)
+	assert.Equal(t, "github", stored.Provider)
+	assert.Equal(t, "99", stored.ExternalID)
+	assert.Equal(t, "https://github.com/devopsmike2/squadron/issues/99", stored.ExternalURL)
+}
+
+// TestPublishDraft_GitHubFailureReturns502 verifies the handler
+// surfaces publisher errors cleanly without persisting a half
+// published draft.
+func TestPublishDraft_GitHubFailureReturns502(t *testing.T) {
+	store := memory.NewStore()
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+	}))
+	defer ghSrv.Close()
+
+	publishers := incidents.NewPublisherRegistry()
+	gh, err := incidents.NewGitHubIssuesPublisher(incidents.GitHubIssuesConfig{
+		Owner: "o", Repo: "r", Token: "bad",
+		APIBaseURL: ghSrv.URL,
+		HTTPClient: ghSrv.Client(),
+	})
+	require.NoError(t, err)
+	publishers.Register(gh)
+
+	h := NewIncidentsHandlers(store, nil, publishers, zap.NewNop())
+	r := gin.New()
+	r.POST("/incidents/drafts/:id/publish", h.HandlePublishDraft)
+
+	d := seedDraft(t, store, "a1", "draft")
+	w := postJSON(t, r, "/incidents/drafts/"+d.ID+"/publish", PublishDraftRequest{
+		Provider: "github",
+	})
+	assert.Equal(t, http.StatusBadGateway, w.Code)
+
+	stored, _ := store.GetIncidentDraft(context.Background(), d.ID)
+	assert.Equal(t, "draft", stored.Status, "draft must stay in status=draft when publisher fails")
 }
