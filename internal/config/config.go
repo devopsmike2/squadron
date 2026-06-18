@@ -72,11 +72,11 @@ type SilentAgentsConfig struct {
 	// v0.43 — vendor-aware webhook formatting. Empty / "generic"
 	// preserves the legacy plain-JSON shape so existing receivers
 	// don't break on upgrade. Supported: "slack", "teams",
-	// "pagerduty", "opsgenie", "generic".
+	// "pagerduty", "opsgenie", "discord" (v0.62), "generic".
 	DestinationType string `yaml:"destination_type,omitempty"`
 	// DestinationExtra is vendor-specific config. For pagerduty,
 	// set routing_key. For opsgenie, set api_key (and optionally
-	// region: "us" or "eu"). Slack/Teams need only WebhookURL.
+	// region: "us" or "eu"). Slack/Teams/Discord need only WebhookURL.
 	DestinationExtra map[string]string `yaml:"destination_extra,omitempty"`
 	// PublicBaseURL is the externally-reachable Squadron base URL.
 	// Used to build "Open in Squadron" deep links inside vendor-

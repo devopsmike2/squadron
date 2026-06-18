@@ -102,6 +102,44 @@ func TestDispatch_TeamsAdaptiveCard(t *testing.T) {
 	}
 }
 
+// v0.62 — Discord uses incoming webhooks that accept an "embeds"
+// array. The formatter emits one embed per event with severity
+// tinted color, fields rendered as inline name/value pairs, and the
+// Squadron link attached to the embed title.
+func TestDispatch_DiscordFormatsEmbed(t *testing.T) {
+	cs := newCaptureServer(t)
+	d := NewDispatcher()
+	dest := Destination{URL: cs.URL, Type: TypeDiscord}
+	if err := d.Dispatch(context.Background(), dest, sampleEvent()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(cs.body, &got); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, cs.body)
+	}
+	embeds, ok := got["embeds"].([]any)
+	if !ok || len(embeds) != 1 {
+		t.Fatalf("expected one embed, got: %v", got)
+	}
+	embed := embeds[0].(map[string]any)
+	if embed["title"] != "Silent agent: host-01" {
+		t.Errorf("title: got %v", embed["title"])
+	}
+	// Warning severity → amber decimal color.
+	if c, ok := embed["color"].(float64); !ok || c != 15375362 {
+		t.Errorf("color: got %v want 15375362", embed["color"])
+	}
+	// Fields are present and tagged inline.
+	fields, ok := embed["fields"].([]any)
+	if !ok || len(fields) == 0 {
+		t.Fatalf("expected fields on the embed, got: %v", embed)
+	}
+	first := fields[0].(map[string]any)
+	if first["inline"] != true {
+		t.Errorf("fields should be inline, got: %v", first)
+	}
+}
+
 func TestDispatch_PagerDutyRequiresRoutingKey(t *testing.T) {
 	d := NewDispatcher()
 	// No routing_key in Extra → should error out before any HTTP call.
