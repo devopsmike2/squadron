@@ -32,31 +32,38 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/actions"
+	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
 // ActionsHandlers owns the /api/v1/runners and /api/v1/actions
 // routes. The signer is required for dispatch; the registry knows
-// which action types exist and validates parameters.
+// which action types exist and validates parameters. The audit
+// service is optional — when present, every dispatch and every
+// result post lands in the audit timeline, and from there fans out
+// to any SIEM destination configured in the Enterprise build.
 type ActionsHandlers struct {
 	store    applicationstore.ApplicationStore
 	signer   *actions.Signer
 	registry *actions.Registry
+	audit    services.AuditService
 	logger   *zap.Logger
 }
 
 // NewActionsHandlers constructs the handler. Signer must be non-nil
 // for dispatch to work; registry defaults to actions.Default when
-// nil so tests can pass either.
-func NewActionsHandlers(store applicationstore.ApplicationStore, signer *actions.Signer, registry *actions.Registry, logger *zap.Logger) *ActionsHandlers {
+// nil so tests can pass either. Audit may be nil; when nil, audit
+// emission becomes a no-op so unit tests do not have to plumb an
+// audit service through every fixture.
+func NewActionsHandlers(store applicationstore.ApplicationStore, signer *actions.Signer, registry *actions.Registry, audit services.AuditService, logger *zap.Logger) *ActionsHandlers {
 	if registry == nil {
 		registry = actions.Default
 	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &ActionsHandlers{store: store, signer: signer, registry: registry, logger: logger}
+	return &ActionsHandlers{store: store, signer: signer, registry: registry, audit: audit, logger: logger}
 }
 
 // ---- runners ---------------------------------------------------------------
@@ -292,6 +299,35 @@ func (h *ActionsHandlers) HandleDispatchAction(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "persist failed", "detail": err.Error()})
 		return
 	}
+
+	// SQ-2.7 — drop an audit event the moment Squadron signs and
+	// persists a request. The actor is filled in by audit_service_impl
+	// from the AuthActor on the request context (bearer middleware
+	// puts it there), so we leave Actor empty here. The payload
+	// carries enough of the request shape that an auditor reviewing
+	// the timeline can answer: which proposal, which runner, what
+	// action, dry run or execute, when does the signature expire.
+	// We omit the raw signature and full parameters — the signature
+	// is in the persisted ActionRequest row, and parameters can be
+	// large; we summarize with type plus a short fingerprint.
+	if h.audit != nil {
+		_ = h.audit.Record(c.Request.Context(), services.AuditEntry{
+			EventType:  services.AuditEventActionDispatched,
+			TargetType: services.AuditTargetActionRequest,
+			TargetID:   reqID,
+			Action:     "dispatched",
+			Payload: map[string]any{
+				"runner_id":   req.RunnerID,
+				"proposal_id": req.ProposalID,
+				"action_type": req.ActionType,
+				"phase":       string(phase),
+				"issued_at":   signedReq.IssuedAt,
+				"expires_at":  signedReq.ExpiresAt,
+				"parameters_sha256": sha256Hex(string(req.Parameters)),
+			},
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{"request": stored, "signed": signedReq})
 }
 
@@ -383,5 +419,51 @@ func (h *ActionsHandlers) HandlePostActionResult(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed", "detail": err.Error()})
 		return
 	}
+
+	// SQ-2.7 — emit the lifecycle terminator event. We split on the
+	// result status so the audit timeline (and any SIEM destination
+	// fanning it out) gets three discrete event types: success path,
+	// failure path, denial path. Splitting beats one "completed"
+	// event with a buried status field, because alerting and search
+	// query patterns work cleanly on event_type alone.
+	if h.audit != nil {
+		eventType, action := actionResultEventType(body.Status)
+		payload := map[string]any{
+			"runner_id":   existing.RunnerID,
+			"proposal_id": existing.ProposalID,
+			"action_type": existing.ActionType,
+			"phase":       existing.Phase,
+		}
+		if body.DeniedFor != "" {
+			payload["denied_for"] = body.DeniedFor
+		}
+		if existing.StartedAt != nil && existing.CompletedAt != nil {
+			payload["duration_ms"] = existing.CompletedAt.Sub(*existing.StartedAt).Milliseconds()
+		}
+		_ = h.audit.Record(c.Request.Context(), services.AuditEntry{
+			EventType:  eventType,
+			TargetType: services.AuditTargetActionRequest,
+			TargetID:   existing.ID,
+			Action:     action,
+			Payload:    payload,
+		})
+	}
+
 	c.JSON(http.StatusOK, existing)
+}
+
+// actionResultEventType maps the runner-reported status onto the
+// canonical audit event type and verb. Kept as a small helper so
+// the dispatch handler and the tests reference the same mapping.
+func actionResultEventType(status string) (eventType, action string) {
+	switch status {
+	case "success":
+		return services.AuditEventActionExecuted, "executed"
+	case "denied":
+		return services.AuditEventActionDenied, "denied"
+	default:
+		// "failure" or anything unexpected — treat as failure so the
+		// event still gets written rather than silently dropped.
+		return services.AuditEventActionFailed, "failed"
+	}
 }

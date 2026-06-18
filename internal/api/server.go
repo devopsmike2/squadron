@@ -1000,7 +1000,7 @@ func (s *Server) registerRoutes() {
 		// scope covers register, dispatch, revoke, and result
 		// reporting. The runner daemon authenticates with a token
 		// carrying actions:write issued at enrollment.
-		actionsHandler := handlers.NewActionsHandlers(s.appStore, s.actionSigner, nil, s.logger)
+		actionsHandler := handlers.NewActionsHandlers(s.appStore, s.actionSigner, nil, s.auditService, s.logger)
 		actionsRead := middleware.RequireScope(services.ScopeActionsRead)
 		actionsWrite := middleware.RequireScope(services.ScopeActionsWrite)
 		v1.POST("/runners/register", actionsWrite, actionsHandler.HandleRegisterRunner)
