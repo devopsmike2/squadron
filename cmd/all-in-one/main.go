@@ -33,6 +33,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/incidents"
+	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
 	"github.com/devopsmike2/squadron/internal/pipelinehealth"
@@ -686,6 +687,30 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		incidentsBridge.Stop()
 	}()
 	logger.Info("incidents drafter bridge started",
+		zap.Bool("ai_enabled", aiService.Enabled()))
+
+	// SQ-1.4g — AI proposer bridge (Move 1). Polls open cost spike
+	// events, asks the AI proposer to draft a staged rollout for
+	// each, and posts the draft through services.RolloutService.
+	// The proposal lands in pending_approval with proposed_by=ai;
+	// a human approves; the existing rollout engine handles the
+	// staged push. Disabled when the AI service is disabled; the
+	// bridge's Start method is a clean no op in that case.
+	proposerBridge := proposer.New(
+		aiService,
+		appStore,
+		rolloutService,
+		auditService,
+		proposer.DefaultConfig(),
+		logger,
+	)
+	proposerCtx, proposerCancel := context.WithCancel(context.Background())
+	proposerBridge.Start(proposerCtx)
+	defer func() {
+		proposerCancel()
+		_ = proposerBridge.Stop(5 * time.Second)
+	}()
+	logger.Info("AI proposer bridge started",
 		zap.Bool("ai_enabled", aiService.Enabled()))
 
 	// Start API server in a goroutine
