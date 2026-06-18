@@ -88,6 +88,16 @@ const (
 	// touches write.
 	ScopeSiemRead  = "siem:read"
 	ScopeSiemWrite = "siem:write"
+	// v0.53 — action runner management (Move 2). actions:read
+	// covers the runner list, action request list, and runner
+	// long-poll for pending requests. actions:write covers
+	// runner registration, action dispatch (signing + persist),
+	// runner revocation, and result reporting. These are split
+	// because most operators only need to look; only the runner
+	// daemon and a small change-management group need to fire
+	// actions.
+	ScopeActionsRead  = "actions:read"
+	ScopeActionsWrite = "actions:write"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -105,6 +115,7 @@ func AllScopes() []string {
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,
+		ScopeActionsRead, ScopeActionsWrite,
 	}
 }
 

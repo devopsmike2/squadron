@@ -17,6 +17,9 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
+	"encoding/base64"
+
+	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/alerting"
 	"github.com/devopsmike2/squadron/internal/alerts"
@@ -371,6 +374,33 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// SetX accessor so the middleware order in v1.Use() stays
 	// deterministic (auth → access audit → handler).
 	wireAPIServerExtensions(apiServer, auditService, logger)
+	// v0.53 — wire action runner dependencies. The signer's key
+	// loads from SQUADRON_ACTION_SIGNING_KEY (base64 of 32 raw
+	// bytes); when unset we generate a fresh key at startup so dev
+	// instances work without ceremony. Production deployments must
+	// set this env var so runners pinned to a previous public key
+	// keep working across restarts.
+	var actionSigner *actions.Signer
+	if seedB64 := os.Getenv("SQUADRON_ACTION_SIGNING_KEY"); seedB64 != "" {
+		seed, err := base64.StdEncoding.DecodeString(seedB64)
+		if err != nil {
+			logger.Fatal("SQUADRON_ACTION_SIGNING_KEY is not valid base64", zap.Error(err))
+		}
+		actionSigner, err = actions.NewSigner(seed)
+		if err != nil {
+			logger.Fatal("SQUADRON_ACTION_SIGNING_KEY rejected", zap.Error(err))
+		}
+		logger.Info("action runner signer loaded from env", zap.String("fingerprint", actionSigner.Fingerprint()))
+	} else {
+		s, err := actions.GenerateSigner()
+		if err != nil {
+			logger.Fatal("failed to generate ephemeral action signing key", zap.Error(err))
+		}
+		actionSigner = s
+		logger.Warn("SQUADRON_ACTION_SIGNING_KEY unset; generated ephemeral key (runners must re-enroll on restart)",
+			zap.String("fingerprint", actionSigner.Fingerprint()))
+	}
+	apiServer.SetActionStoreAndSigner(appStore, actionSigner)
 
 	// v0.27.1 Quickstart needs to know the OpAMP port so the
 	// generated agent configs dial back to the right place.
