@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -688,6 +689,40 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}()
 	logger.Info("incidents drafter bridge started",
 		zap.Bool("ai_enabled", aiService.Enabled()))
+
+	// SQ-3.9 — incident drafter publishers. Clipboard is always
+	// registered. The GitHub Issues publisher is registered when
+	// all three SQUADRON_GITHUB_ISSUES_* env vars are set. Linear
+	// and Jira publishers are stamp only for now; their UI option
+	// stays available and the handler falls back to stamping the
+	// operator supplied external_id / external_url.
+	publishers := incidents.NewPublisherRegistry()
+	if owner, repo, token := os.Getenv("SQUADRON_GITHUB_ISSUES_OWNER"),
+		os.Getenv("SQUADRON_GITHUB_ISSUES_REPO"),
+		os.Getenv("SQUADRON_GITHUB_ISSUES_TOKEN"); owner != "" && repo != "" && token != "" {
+		var labels []string
+		if raw := os.Getenv("SQUADRON_GITHUB_ISSUES_LABELS"); raw != "" {
+			labels = strings.Split(raw, ",")
+			for i := range labels {
+				labels[i] = strings.TrimSpace(labels[i])
+			}
+		}
+		ghPub, err := incidents.NewGitHubIssuesPublisher(incidents.GitHubIssuesConfig{
+			Owner:  owner,
+			Repo:   repo,
+			Token:  token,
+			Labels: labels,
+		})
+		if err != nil {
+			logger.Warn("github issues publisher not enabled", zap.Error(err))
+		} else {
+			publishers.Register(ghPub)
+			logger.Info("github issues publisher registered",
+				zap.String("owner", owner),
+				zap.String("repo", repo))
+		}
+	}
+	apiServer.SetIncidentsPublishers(publishers)
 
 	// SQ-1.4g — AI proposer bridge (Move 1). Polls open cost spike
 	// events, asks the AI proposer to draft a staged rollout for
