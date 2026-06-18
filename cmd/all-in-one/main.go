@@ -750,6 +750,40 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 				zap.String("team_id", teamID))
 		}
 	}
+	// v0.56 — Jira Cloud publisher. Reads SQUADRON_JIRA_BASE_URL
+	// (tenant URL like https://acme.atlassian.net),
+	// SQUADRON_JIRA_EMAIL, SQUADRON_JIRA_API_TOKEN,
+	// SQUADRON_JIRA_PROJECT_KEY. Optional SQUADRON_JIRA_ISSUE_TYPE
+	// (default Task) and SQUADRON_JIRA_LABELS (comma separated
+	// names) refine routing.
+	if baseURL, email, token, projectKey := os.Getenv("SQUADRON_JIRA_BASE_URL"),
+		os.Getenv("SQUADRON_JIRA_EMAIL"),
+		os.Getenv("SQUADRON_JIRA_API_TOKEN"),
+		os.Getenv("SQUADRON_JIRA_PROJECT_KEY"); baseURL != "" && email != "" && token != "" && projectKey != "" {
+		var labels []string
+		if raw := os.Getenv("SQUADRON_JIRA_LABELS"); raw != "" {
+			labels = strings.Split(raw, ",")
+			for i := range labels {
+				labels[i] = strings.TrimSpace(labels[i])
+			}
+		}
+		jiraPub, err := incidents.NewJiraPublisher(incidents.JiraConfig{
+			BaseURL:    baseURL,
+			Email:      email,
+			APIToken:   token,
+			ProjectKey: projectKey,
+			IssueType:  os.Getenv("SQUADRON_JIRA_ISSUE_TYPE"),
+			Labels:     labels,
+		})
+		if err != nil {
+			logger.Warn("jira publisher not enabled", zap.Error(err))
+		} else {
+			publishers.Register(jiraPub)
+			logger.Info("jira publisher registered",
+				zap.String("base_url", baseURL),
+				zap.String("project_key", projectKey))
+		}
+	}
 	apiServer.SetIncidentsPublishers(publishers)
 
 	// SQ-1.4g — AI proposer bridge (Move 1). Polls open cost spike
