@@ -49,6 +49,8 @@ type ApplicationStore interface {
 	// Audit log
 	CreateAuditEvent(ctx context.Context, event *AuditEvent) error
 	ListAuditEvents(ctx context.Context, filter AuditEventFilter) ([]*AuditEvent, error)
+	GetAuditEvent(ctx context.Context, id string) (*AuditEvent, error)
+	UpdateAuditEventExplanation(ctx context.Context, id, explanation, model string, generatedAt time.Time) error
 
 	// Rollouts (safe staged config rollouts)
 	CreateRollout(ctx context.Context, rollout *Rollout) error
@@ -534,6 +536,15 @@ type AuditEvent struct {
 	Action     string         `json:"action"`               // "created" | "updated" | "deleted" | "applied" | "drift" | ...
 	Payload    map[string]any `json:"payload,omitempty"`    // freeform JSON metadata
 	CreatedAt  time.Time      `json:"created_at"`           // when the row was inserted
+
+	// v0.57 — cached AI explanation of this audit row. Populated lazily
+	// the first time an operator clicks "Explain" on the row in the UI.
+	// Audit rows are immutable so a cached explanation never goes stale
+	// in the data sense; operators can still force a refresh via the
+	// regenerate endpoint when they want a different angle.
+	AIExplanation             string     `json:"ai_explanation,omitempty"`
+	AIExplanationModel        string     `json:"ai_explanation_model,omitempty"`
+	AIExplanationGeneratedAt  *time.Time `json:"ai_explanation_generated_at,omitempty"`
 }
 
 // AuditEventFilter narrows a ListAuditEvents query.

@@ -2,7 +2,11 @@
 
 import { simpleRequest } from "./base";
 
-import type { AuditEvent, AuditEventFilter } from "@/types/audit";
+import type {
+  AuditEvent,
+  AuditEventFilter,
+  AuditExplainResponse,
+} from "@/types/audit";
 
 interface AuditListResponse {
   events: AuditEvent[];
@@ -22,4 +26,20 @@ export const listAuditEvents = async (
 
   const resp = await simpleRequest<AuditListResponse>(path);
   return resp.events ?? [];
+};
+
+// explainAuditEvent calls POST /audit/:id/explain. Pass regenerate=true
+// to bypass the cache and force a fresh LLM call (the response cached
+// on the row is replaced server side).
+export const explainAuditEvent = async (
+  id: string,
+  regenerate = false,
+): Promise<AuditExplainResponse> => {
+  const path = regenerate
+    ? `/audit/${encodeURIComponent(id)}/explain?regenerate=1`
+    : `/audit/${encodeURIComponent(id)}/explain`;
+  return simpleRequest<AuditExplainResponse>(path, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 };
