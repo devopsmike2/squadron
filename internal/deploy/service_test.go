@@ -80,6 +80,13 @@ func (f *fakeStore) UpsertExpectedAgent(_ context.Context, e *apptypes.ExpectedA
 	f.expected[e.Hostname] = e
 	return nil
 }
+func (f *fakeStore) ListExpectedAgents(_ context.Context, _ string) ([]*apptypes.ExpectedAgent, error) {
+	out := make([]*apptypes.ExpectedAgent, 0, len(f.expected))
+	for _, e := range f.expected {
+		out = append(out, e)
+	}
+	return out, nil
+}
 func (f *fakeStore) ListAgents(_ context.Context) ([]*apptypes.Agent, error) {
 	return f.agents, nil
 }
