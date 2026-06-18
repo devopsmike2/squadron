@@ -37,6 +37,12 @@ func (r *recordingAudit) Record(_ context.Context, e services.AuditEntry) error 
 func (r *recordingAudit) List(_ context.Context, _ services.AuditEventFilter) ([]*services.AuditEvent, error) {
 	return nil, nil
 }
+func (r *recordingAudit) Get(_ context.Context, _ string) (*services.AuditEvent, error) {
+	return nil, nil
+}
+func (r *recordingAudit) SetExplanation(_ context.Context, _, _, _ string, _ time.Time) error {
+	return nil
+}
 
 func init() {
 	gin.SetMode(gin.TestMode)

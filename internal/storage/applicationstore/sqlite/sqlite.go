@@ -485,6 +485,15 @@ func (s *Storage) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_incident_drafts_action ON incident_drafts(action_request_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_incident_drafts_rollout ON incident_drafts(rollout_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_incident_drafts_status ON incident_drafts(status)`,
+
+		// v0.57 — cached AI explanation surface on audit_events. Three
+		// nullable columns adjacent to the row so a List query gets the
+		// explanation in one read without a JOIN. We do not index any of
+		// these because the access pattern is always "explain by id"
+		// after the operator clicks a specific row.
+		`ALTER TABLE audit_events ADD COLUMN ai_explanation TEXT`,
+		`ALTER TABLE audit_events ADD COLUMN ai_explanation_model TEXT`,
+		`ALTER TABLE audit_events ADD COLUMN ai_explanation_generated_at DATETIME`,
 	}
 
 	for _, migration := range migrations {
@@ -1393,7 +1402,7 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 
 	// Build a parameterized query. We always add a LIMIT clause; the rest
 	// of the clauses are appended conditionally.
-	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at FROM audit_events WHERE 1=1"
+	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE 1=1"
 	var args []any
 	if filter.TargetType != "" {
 		q += " AND target_type = ?"
@@ -1421,9 +1430,12 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		e := &types.AuditEvent{}
 		var targetID sql.NullString
 		var payload sql.NullString
+		var aiExplanation, aiModel sql.NullString
+		var aiGeneratedAt sql.NullTime
 		if err := rows.Scan(
 			&e.ID, &e.Timestamp, &e.Actor, &e.EventType, &e.TargetType,
 			&targetID, &e.Action, &payload, &e.CreatedAt,
+			&aiExplanation, &aiModel, &aiGeneratedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan audit event: %w", err)
 		}
@@ -1433,9 +1445,79 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		if payload.Valid && payload.String != "" {
 			_ = json.Unmarshal([]byte(payload.String), &e.Payload)
 		}
+		if aiExplanation.Valid {
+			e.AIExplanation = aiExplanation.String
+		}
+		if aiModel.Valid {
+			e.AIExplanationModel = aiModel.String
+		}
+		if aiGeneratedAt.Valid {
+			t := aiGeneratedAt.Time
+			e.AIExplanationGeneratedAt = &t
+		}
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// GetAuditEvent fetches one audit row by ID. Returns (nil, nil) when no
+// row matches so the caller can render a 404 distinct from a 500.
+func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEvent, error) {
+	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE id = ?"
+	row := s.db.QueryRowContext(ctx, q, id)
+
+	e := &types.AuditEvent{}
+	var targetID sql.NullString
+	var payload sql.NullString
+	var aiExplanation, aiModel sql.NullString
+	var aiGeneratedAt sql.NullTime
+	err := row.Scan(
+		&e.ID, &e.Timestamp, &e.Actor, &e.EventType, &e.TargetType,
+		&targetID, &e.Action, &payload, &e.CreatedAt,
+		&aiExplanation, &aiModel, &aiGeneratedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get audit event: %w", err)
+	}
+	if targetID.Valid {
+		e.TargetID = targetID.String
+	}
+	if payload.Valid && payload.String != "" {
+		_ = json.Unmarshal([]byte(payload.String), &e.Payload)
+	}
+	if aiExplanation.Valid {
+		e.AIExplanation = aiExplanation.String
+	}
+	if aiModel.Valid {
+		e.AIExplanationModel = aiModel.String
+	}
+	if aiGeneratedAt.Valid {
+		t := aiGeneratedAt.Time
+		e.AIExplanationGeneratedAt = &t
+	}
+	return e, nil
+}
+
+// UpdateAuditEventExplanation writes a cached AI explanation onto the
+// row. The row stays otherwise immutable; this is the one mutation the
+// audit log allows. Returns an error if no row matches the supplied id.
+func (s *Storage) UpdateAuditEventExplanation(ctx context.Context, id, explanation, model string, generatedAt time.Time) error {
+	stmt := `UPDATE audit_events SET ai_explanation = ?, ai_explanation_model = ?, ai_explanation_generated_at = ? WHERE id = ?`
+	res, err := s.db.ExecContext(ctx, stmt, explanation, model, generatedAt, id)
+	if err != nil {
+		return fmt.Errorf("failed to update audit explanation: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("audit event %q not found", id)
+	}
+	return nil
 }
 
 // nullableString returns a sql.NullString that's invalid for the empty

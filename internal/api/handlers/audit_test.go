@@ -21,7 +21,7 @@ import (
 func setupAuditHandlers(t *testing.T) (*AuditHandlers, services.AuditService) {
 	t.Helper()
 	svc := services.NewAuditService(memory.NewStore(), nil, zap.NewNop())
-	return NewAuditHandlers(svc, zap.NewNop()), svc
+	return NewAuditHandlers(svc, nil, nil, zap.NewNop()), svc
 }
 
 func TestHandleListAuditEvents_ReturnsRecorded(t *testing.T) {

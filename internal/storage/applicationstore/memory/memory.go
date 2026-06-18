@@ -617,6 +617,47 @@ func (s *Store) ListAuditEvents(ctx context.Context, filter types.AuditEventFilt
 	return out, nil
 }
 
+// GetAuditEvent fetches a single audit row by ID. Returns (nil, nil) when
+// the row is absent so the caller can render a 404 distinct from a 500.
+func (s *Store) GetAuditEvent(ctx context.Context, id string) (*types.AuditEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.auditEvents {
+		if e.ID != id {
+			continue
+		}
+		eventCopy := *e
+		if e.Payload != nil {
+			eventCopy.Payload = make(map[string]any, len(e.Payload))
+			for k, v := range e.Payload {
+				eventCopy.Payload[k] = v
+			}
+		}
+		return &eventCopy, nil
+	}
+	return nil, nil
+}
+
+// UpdateAuditEventExplanation writes the cached AI explanation in place
+// on the stored row. Audit rows are otherwise immutable; this is the one
+// mutation the store allows, and it only touches the three explanation
+// fields.
+func (s *Store) UpdateAuditEventExplanation(ctx context.Context, id, explanation, model string, generatedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.auditEvents {
+		if e.ID != id {
+			continue
+		}
+		e.AIExplanation = explanation
+		e.AIExplanationModel = model
+		t := generatedAt
+		e.AIExplanationGeneratedAt = &t
+		return nil
+	}
+	return fmt.Errorf("audit event %q not found", id)
+}
+
 // Rollout management
 
 func (s *Store) CreateRollout(ctx context.Context, r *types.Rollout) error {

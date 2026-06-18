@@ -194,17 +194,45 @@ func (s *AuditServiceImpl) List(ctx context.Context, filter AuditEventFilter) ([
 	}
 	out := make([]*AuditEvent, len(stored))
 	for i, e := range stored {
-		out[i] = &AuditEvent{
-			ID:         e.ID,
-			Timestamp:  e.Timestamp,
-			Actor:      e.Actor,
-			EventType:  e.EventType,
-			TargetType: e.TargetType,
-			TargetID:   e.TargetID,
-			Action:     e.Action,
-			Payload:    e.Payload,
-			CreatedAt:  e.CreatedAt,
-		}
+		out[i] = toServiceAuditEvent(e)
 	}
 	return out, nil
+}
+
+// Get returns one audit row by ID, or nil if no row matches. Added in
+// v0.57 so the audit-explain endpoint can fetch a single row to build
+// its prompt context.
+func (s *AuditServiceImpl) Get(ctx context.Context, id string) (*AuditEvent, error) {
+	e, err := s.appStore.GetAuditEvent(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if e == nil {
+		return nil, nil
+	}
+	return toServiceAuditEvent(e), nil
+}
+
+// SetExplanation persists a cached AI explanation on the row. Audit
+// rows are otherwise immutable; this is the one mutation the service
+// allows, used by the explain handler to cache the generated narrative.
+func (s *AuditServiceImpl) SetExplanation(ctx context.Context, id, explanation, model string, generatedAt time.Time) error {
+	return s.appStore.UpdateAuditEventExplanation(ctx, id, explanation, model, generatedAt)
+}
+
+func toServiceAuditEvent(e *applicationstore.AuditEvent) *AuditEvent {
+	return &AuditEvent{
+		ID:                       e.ID,
+		Timestamp:                e.Timestamp,
+		Actor:                    e.Actor,
+		EventType:                e.EventType,
+		TargetType:               e.TargetType,
+		TargetID:                 e.TargetID,
+		Action:                   e.Action,
+		Payload:                  e.Payload,
+		CreatedAt:                e.CreatedAt,
+		AIExplanation:            e.AIExplanation,
+		AIExplanationModel:       e.AIExplanationModel,
+		AIExplanationGeneratedAt: e.AIExplanationGeneratedAt,
+	}
 }

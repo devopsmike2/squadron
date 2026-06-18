@@ -422,7 +422,7 @@ func (s *Server) registerRoutes() {
 	topologyHandlers := handlers.NewTopologyHandlers(s.agentService, s.telemetryService, s.logger)
 	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
-	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.logger)
+	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.aiService, s.appStore, s.logger)
 	rolloutHandlers := handlers.NewRolloutHandlers(s.rolloutService, s.logger)
 	eventsHandlers := handlers.NewEventsHandlers(s.broker, s.logger)
 	authHandlers := handlers.NewAuthHandlers(s.authService, s.logger)
@@ -567,11 +567,16 @@ func (s *Server) registerRoutes() {
 		// shapes the audit log records.
 		v1.GET("/events/stream", middleware.RequireScope(services.ScopeAuditRead), eventsHandlers.HandleStream)
 
-		// Audit log — read-only.
+		// Audit log — read-only, with the v0.57 explain side door.
+		// The explain endpoint mutates exactly one row (the requested
+		// one, to cache the AI explanation) but the operator is only
+		// allowed to do that for rows they can already read, so we
+		// keep both routes behind ScopeAuditRead.
 		audit := v1.Group("/audit")
 		audit.Use(middleware.RequireScope(services.ScopeAuditRead))
 		{
 			audit.GET("/events", auditHandlers.HandleListAuditEvents)
+			audit.POST("/:id/explain", auditHandlers.HandleExplainAuditEvent)
 		}
 
 		// v0.40.0 Timeline — postmortem view that merges audit,

@@ -14,15 +14,19 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  RefreshCw,
   Rocket,
   Server,
+  Sparkles,
 } from "lucide-react";
 import { useState } from "react";
-import useSWR from "swr";
+import ReactMarkdown from "react-markdown";
+import useSWR, { mutate as swrMutate } from "swr";
 
-import { listAuditEvents } from "@/api/audit";
+import { explainAuditEvent, listAuditEvents } from "@/api/audit";
 import { Badge } from "@/components/ui/badge";
-import type { AuditEvent } from "@/types/audit";
+import { Button } from "@/components/ui/button";
+import type { AuditEvent, AuditExplainResponse } from "@/types/audit";
 
 interface AuditTimelineProps {
   /** Filter to a specific entity, e.g. agent/group/config/rule. */
@@ -97,6 +101,11 @@ function AuditRow({ event }: { event: AuditEvent }) {
   const [expanded, setExpanded] = useState(false);
   const hasPayload =
     event.payload != null && Object.keys(event.payload).length > 0;
+  // v0.57 — the explain affordance is available on every row, not just
+  // rows with a payload, so we expand on click even when payload is
+  // empty. Operators get more value from being able to explain
+  // payloadless rows than from having a tighter list.
+  const expandable = true;
 
   const icon = iconFor(event);
   const ts = new Date(event.timestamp);
@@ -111,12 +120,12 @@ function AuditRow({ event }: { event: AuditEvent }) {
     <li>
       <button
         type="button"
-        onClick={() => hasPayload && setExpanded((v) => !v)}
-        disabled={!hasPayload}
+        onClick={() => expandable && setExpanded((v) => !v)}
+        disabled={!expandable}
         className="w-full text-left flex items-start gap-2 px-2 py-1.5 rounded hover:bg-muted/40 disabled:cursor-default"
       >
         <span className="shrink-0 mt-0.5">
-          {hasPayload ? (
+          {expandable ? (
             expanded ? (
               <ChevronDown className="h-3 w-3 text-muted-foreground" />
             ) : (
@@ -147,7 +156,7 @@ function AuditRow({ event }: { event: AuditEvent }) {
           {event.action}
         </Badge>
       </button>
-      {expanded && hasPayload && (
+      {expanded && (
         <div className="mx-6 mb-2 space-y-2">
           {agentIDs && agentIDs.length > 0 && (
             <div className="space-y-1">
@@ -167,12 +176,151 @@ function AuditRow({ event }: { event: AuditEvent }) {
               </div>
             </div>
           )}
-          <pre className="text-[11px] font-mono whitespace-pre-wrap break-all bg-muted/40 rounded p-2 overflow-auto max-h-48">
-            {JSON.stringify(event.payload, null, 2)}
-          </pre>
+          {hasPayload && (
+            <pre className="text-[11px] font-mono whitespace-pre-wrap break-all bg-muted/40 rounded p-2 overflow-auto max-h-48">
+              {JSON.stringify(event.payload, null, 2)}
+            </pre>
+          )}
+          <ExplainPanel event={event} />
         </div>
       )}
     </li>
+  );
+}
+
+// ExplainPanel renders the AI explanation surface on an expanded
+// audit row. Three states:
+// - The row already has a cached explanation: render it immediately
+//   with a model + relative-time caption and a Regenerate button.
+// - The operator has not asked yet: render a small "Explain" trigger.
+// - The operator just clicked: show a loading spinner; on success
+//   render the explanation; on failure render an inline retry.
+function ExplainPanel({ event }: { event: AuditEvent }) {
+  const [local, setLocal] = useState<AuditExplainResponse | null>(
+    event.ai_explanation
+      ? {
+          explanation: event.ai_explanation,
+          model: event.ai_explanation_model ?? "",
+          generated_at: event.ai_explanation_generated_at ?? "",
+          cached: true,
+        }
+      : null,
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (regenerate = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await explainAuditEvent(event.id, regenerate);
+      setLocal(resp);
+      // Invalidate any list caches that include this row so a fresh
+      // fetch picks up the newly persisted ai_explanation. We do not
+      // know which exact keys to bust, so we bust by prefix.
+      void swrMutate(
+        (key) => typeof key === "string" && key.startsWith("audit/"),
+        undefined,
+        { revalidate: true },
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!local && !loading && !error) {
+    return (
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs gap-1.5"
+          onClick={(e) => {
+            e.stopPropagation();
+            void run(false);
+          }}
+        >
+          <Sparkles className="h-3 w-3" />
+          Explain this
+        </Button>
+        <span className="text-[10px] text-muted-foreground">
+          AI summary of what happened. Cached on the row.
+        </span>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="text-xs text-muted-foreground italic pt-1 flex items-center gap-1.5">
+        <Sparkles className="h-3 w-3 animate-pulse" />
+        Generating explanation…
+      </div>
+    );
+  }
+
+  if (error && !local) {
+    return (
+      <div className="pt-1 space-y-1.5">
+        <div className="text-xs text-rose-600">
+          Could not generate an explanation. {error}
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          onClick={(e) => {
+            e.stopPropagation();
+            void run(false);
+          }}
+        >
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  if (!local) return null;
+
+  return (
+    <div className="border border-violet-500/20 rounded bg-violet-500/5 p-2 space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-700 dark:text-violet-300">
+          <Sparkles className="h-3 w-3" />
+          AI Explanation
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 text-[10px] gap-1"
+          onClick={(e) => {
+            e.stopPropagation();
+            void run(true);
+          }}
+          title="Regenerate, bypassing the cached explanation"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Regenerate
+        </Button>
+      </div>
+      <div className="text-xs prose prose-xs max-w-none dark:prose-invert">
+        <ReactMarkdown>{local.explanation}</ReactMarkdown>
+      </div>
+      <div className="text-[10px] text-muted-foreground">
+        {local.model && <span>Generated by {local.model}</span>}
+        {local.cached && <span> · served from cache</span>}
+        {local.redaction_summary && (
+          <span> · redacted: {local.redaction_summary}</span>
+        )}
+      </div>
+      {error && (
+        <div className="text-[11px] text-rose-600">
+          Regenerate failed: {error}
+        </div>
+      )}
+    </div>
   );
 }
 

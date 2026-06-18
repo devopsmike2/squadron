@@ -19,6 +19,16 @@ type AuditService interface {
 
 	// List returns audit events filtered and sorted newest-first.
 	List(ctx context.Context, filter AuditEventFilter) ([]*AuditEvent, error)
+
+	// Get returns a single audit event by ID, or nil if no row matches.
+	// Added in v0.57 for the audit-explain endpoint which needs to load
+	// one row by ID to build the prompt context.
+	Get(ctx context.Context, id string) (*AuditEvent, error)
+
+	// SetExplanation persists a cached AI explanation on the row. Audit
+	// rows are otherwise immutable; this is the one mutation the service
+	// allows, and it only touches the three explanation columns.
+	SetExplanation(ctx context.Context, id string, explanation, model string, generatedAt time.Time) error
 }
 
 // AuditEntry is the input shape callers fill in to Record. The service
@@ -43,6 +53,14 @@ type AuditEvent struct {
 	Action     string         `json:"action"`
 	Payload    map[string]any `json:"payload,omitempty"`
 	CreatedAt  time.Time      `json:"created_at"`
+
+	// v0.57 — cached AI explanation surface. Empty when the row has not
+	// been explained yet; non-empty after the first explain call. The
+	// UI shows the cached value directly without round-tripping the LLM
+	// again unless the operator clicks Regenerate.
+	AIExplanation            string     `json:"ai_explanation,omitempty"`
+	AIExplanationModel       string     `json:"ai_explanation_model,omitempty"`
+	AIExplanationGeneratedAt *time.Time `json:"ai_explanation_generated_at,omitempty"`
 }
 
 // AuditEventFilter narrows a List query. All fields are optional.
