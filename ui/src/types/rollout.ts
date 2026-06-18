@@ -58,9 +58,27 @@ export interface Rollout {
   // UI shows a 'In blackout' badge on the rollout card when set.
   last_blackout_reason?: string;
   last_blackout_at?: string;
+  // v0.53 SQ-1.1 — AI proposer provenance. Set when the proposer
+  // bridge drafted this rollout from a cost spike (or other signal).
+  // proposed_by is "ai" | "operator" | "system"; the UI surfaces a
+  // small AI badge on rows where proposed_by == "ai" and renders
+  // proposal_reasoning + evidence_refs in the approval drawer.
+  proposed_by?: string;
+  proposal_reasoning?: string;
+  evidence_refs?: RolloutEvidenceRef[];
   created_at: string;
   updated_at: string;
   completed_at?: string;
+}
+
+// RolloutEvidenceRef is one citation the AI proposer attached to a
+// drafted rollout. Kinds are open-ended; the UI renders id +
+// description with a clickable URL when present.
+export interface RolloutEvidenceRef {
+  kind: string;
+  id?: string;
+  url?: string;
+  description?: string;
 }
 
 export interface RolloutInput {

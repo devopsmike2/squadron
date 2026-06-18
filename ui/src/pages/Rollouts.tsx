@@ -19,6 +19,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -1175,6 +1176,21 @@ function RolloutCard({
               <Badge variant="outline" className={stateBadge[r.state]}>
                 {r.state.replace("_", " ")}
               </Badge>
+              {/* v0.53 SQ-1.7 — AI proposer badge. Set when the
+                  proposer bridge drafted this rollout from a cost
+                  spike or other signal. Helps operators distinguish
+                  AI proposals from operator-drafted rollouts at a
+                  glance. */}
+              {r.proposed_by === "ai" && (
+                <Badge
+                  variant="outline"
+                  className="bg-violet-500/10 text-violet-700 border-violet-500/30 gap-1"
+                  title={r.proposal_reasoning ?? "AI drafted from a cost spike"}
+                >
+                  <Sparkles className="h-3 w-3" />
+                  AI proposal
+                </Badge>
+              )}
               {/* v0.49 — blackout badge. Set by the engine when a
                   tick refuses to advance because the target group
                   has an active change window. Cleared on the next
@@ -1327,6 +1343,54 @@ function RolloutCard({
             )}
           </div>
         )}
+
+        {/* v0.53 SQ-1.8 — AI reasoning panel. Shows the proposer's
+            natural language explanation and any cited evidence so
+            the operator can read the why before deciding to approve.
+            Mirrors what the Slack/Teams notification already carries
+            so operators get the same context wherever they are. */}
+        {r.proposed_by === "ai" &&
+          (r.proposal_reasoning || (r.evidence_refs ?? []).length > 0) && (
+            <div className="border-t pt-2 space-y-2">
+              <div className="flex items-center gap-1 text-xs font-medium text-violet-700">
+                <Sparkles className="h-3 w-3" />
+                AI reasoning
+              </div>
+              {r.proposal_reasoning && (
+                <p className="text-sm text-foreground whitespace-pre-wrap">
+                  {r.proposal_reasoning}
+                </p>
+              )}
+              {(r.evidence_refs ?? []).length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">
+                    Evidence
+                  </div>
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {(r.evidence_refs ?? []).map((e, i) => (
+                      <li key={i} className="flex gap-2">
+                        <span className="font-mono shrink-0">{e.kind}</span>
+                        <span>
+                          {e.url ? (
+                            <a
+                              href={e.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-violet-600 hover:underline"
+                            >
+                              {e.id || e.description || e.url}
+                            </a>
+                          ) : (
+                            <>{e.id || e.description}</>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
         {/* History toggle — mounts an AuditTimeline filtered to this
             rollout. Includes the per-stage resolved agent IDs so a
