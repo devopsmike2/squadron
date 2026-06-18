@@ -275,6 +275,80 @@ func formatOpsgenie(ev Event) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
+// ----------------------------------------------------------------
+// Discord (Incoming Webhook + embeds)
+// ----------------------------------------------------------------
+//
+// Discord's incoming webhook accepts a JSON body with an "embeds"
+// array. Each embed is a small card with title, description, color
+// (decimal int), fields ({name, value, inline}), url, footer.text,
+// and timestamp (ISO 8601). The destination URL on the Squadron side
+// is the raw webhook URL the operator pastes from Discord's channel
+// settings — no auth header needed; the URL is the auth.
+//
+// Vendor caps to respect:
+//   title       256 chars
+//   description 4096 chars (we cap at 2000 to be polite)
+//   field name  256, field value 1024
+//   25 fields max per embed
+//   footer text 2048
+//
+// Added in v0.62.0.
+
+func formatDiscord(ev Event) ([]byte, error) {
+	// Discord embed colors are decimal ints. These match the
+	// severity colors used in Slack/Teams: blue / amber / red.
+	color := 3895026 // info — #3b6df2
+	switch ev.Severity {
+	case SeverityWarning:
+		color = 15375362 // warning — #eab502
+	case SeverityCritical:
+		color = 15679042 // critical — #ef2a42
+	}
+
+	embed := map[string]any{
+		"title": truncate(ev.Title, 256),
+		"color": color,
+	}
+	if ev.Summary != "" {
+		embed["description"] = truncate(ev.Summary, 2000)
+	}
+	if ev.Link != "" {
+		embed["url"] = ev.Link
+	}
+	if !ev.At.IsZero() {
+		// Discord renders timestamp at the bottom of the embed in the
+		// reader's local timezone. RFC3339 is required.
+		embed["timestamp"] = ev.At.UTC().Format("2006-01-02T15:04:05.000Z")
+	}
+	if ev.Kind != "" {
+		// Footer carries the kind — same role as Slack's context
+		// block at the bottom of the message.
+		embed["footer"] = map[string]any{
+			"text": truncate(ev.Kind, 2048),
+		}
+	}
+	if len(ev.Fields) > 0 {
+		fields := make([]map[string]any, 0, len(ev.Fields))
+		for i, f := range ev.Fields {
+			if i >= 25 { // Discord cap
+				break
+			}
+			fields = append(fields, map[string]any{
+				"name":   truncate(f.Key, 256),
+				"value":  truncate(f.Value, 1024),
+				"inline": true,
+			})
+		}
+		embed["fields"] = fields
+	}
+
+	payload := map[string]any{
+		"embeds": []map[string]any{embed},
+	}
+	return json.Marshal(payload)
+}
+
 // truncate caps a string to n runes. Used for vendor field-length
 // limits — Slack header 150, Opsgenie message 130, etc.
 func truncate(s string, n int) string {

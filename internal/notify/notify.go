@@ -52,6 +52,10 @@ const (
 	TypeTeams      DestinationType = "teams"
 	TypePagerDuty  DestinationType = "pagerduty"
 	TypeOpsgenie   DestinationType = "opsgenie"
+	// v0.62 — Discord incoming webhook. Same destination URL shape as
+	// Slack/Teams; the formatter emits a single embed per event with
+	// severity-tinted color, fields, and a deep link.
+	TypeDiscord DestinationType = "discord"
 )
 
 // Severity drives color/urgency in vendor formats. PagerDuty uses
@@ -184,6 +188,9 @@ func (d *Dispatcher) formatFor(dest Destination, ev Event) ([]byte, string, stri
 		return b, "application/json", dest.URL, err
 	case TypeTeams:
 		b, err := formatTeams(ev)
+		return b, "application/json", dest.URL, err
+	case TypeDiscord:
+		b, err := formatDiscord(ev)
 		return b, "application/json", dest.URL, err
 	case TypePagerDuty:
 		b, err := formatPagerDuty(dest, ev)
