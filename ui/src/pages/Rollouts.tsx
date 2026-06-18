@@ -30,6 +30,7 @@ import { getAgents } from "@/api/agents";
 import { getGroups, type Group } from "@/api/groups";
 import {
   abortRollout,
+  rollBackRollout,
   approveRollout,
   createRollout,
   listAbortCriteriaRecipes,
@@ -352,6 +353,27 @@ export default function RolloutsPage() {
       await mutate(ROLLOUTS_KEY);
     } catch (e) {
       alert(e instanceof Error ? e.message : "abort failed");
+    }
+  };
+
+  const handleRollBack = async (r: Rollout) => {
+    // v0.60 — one click rollback. Server creates a new rollout
+    // targeting the source's previous config and links back via
+    // rolled_back_from_id. The new rollout flows through approval
+    // if the source did, so we land the operator on the rollouts
+    // list and let the existing card surface drive the next step.
+    const confirmed = window.confirm(
+      `Roll back "${r.name || r.id.slice(0, 8)}"?\n\n` +
+        `Squadron will create a new rollout that pushes the previous config ` +
+        `at 100% to the group. If the original required approval, so does ` +
+        `the rollback.\n\nContinue?`,
+    );
+    if (!confirmed) return;
+    try {
+      await rollBackRollout(r.id);
+      await mutate(ROLLOUTS_KEY);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "rollback failed");
     }
   };
 
@@ -904,6 +926,7 @@ export default function RolloutsPage() {
             onPauseResume={handlePauseResume}
             onApprove={handleApprove}
             onReject={handleReject}
+            onRollBack={handleRollBack}
           />
         ))}
     </div>
@@ -1125,6 +1148,10 @@ interface RolloutCardProps {
   // "pending_approval"; the card hides them otherwise.
   onApprove: (r: Rollout) => void;
   onReject: (r: Rollout) => void;
+  // v0.60 — one-click rollback. Used when rollout.state is
+  // succeeded / aborted / rolled_back; the card hides the
+  // button otherwise.
+  onRollBack: (r: Rollout) => void;
 }
 
 function RolloutCard({
@@ -1134,6 +1161,7 @@ function RolloutCard({
   onPauseResume,
   onApprove,
   onReject,
+  onRollBack,
 }: RolloutCardProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const totalStages = r.stages.length;
@@ -1141,6 +1169,14 @@ function RolloutCard({
   const isActive =
     r.state === "in_progress" || r.state === "pending" || r.state === "paused";
   const isPaused = r.state === "paused";
+  // v0.60 — rollback is offered only on terminal states. previous_config_id
+  // must be present (brand-new groups whose first rollout succeeded have
+  // nothing to roll back to). The button hides on rollouts that are
+  // themselves a rollback, to keep the surface from suggesting a chain.
+  const canRollBack =
+    (r.state === "succeeded" || r.state === "aborted") &&
+    !!r.previous_config_id &&
+    !r.rolled_back_from_id;
 
   // Stage summary text varies by mode. We render this in both the header
   // and in the per-stage tooltips below.
@@ -1189,6 +1225,19 @@ function RolloutCard({
                 >
                   <Sparkles className="h-3 w-3" />
                   AI proposal
+                </Badge>
+              )}
+              {/* v0.60 — rollback chain badge. Set when this rollout
+                  was created by clicking Roll back on a previous one.
+                  The badge tells operators at a glance that this is
+                  an undo, not a fresh push. */}
+              {r.rolled_back_from_id && (
+                <Badge
+                  variant="outline"
+                  className="bg-amber-500/10 text-amber-700 border-amber-500/30"
+                  title={`Created from a rollback of ${r.rolled_back_from_id.slice(0, 8)}…`}
+                >
+                  Rollback
                 </Badge>
               )}
               {/* v0.49 — blackout badge. Set by the engine when a
@@ -1252,6 +1301,19 @@ function RolloutCard({
                 onClick={() => onAbort(r)}
               >
                 Abort
+              </Button>
+            </div>
+          )}
+          {canRollBack && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => onRollBack(r)}
+                title="Create a new rollout that targets the previous config"
+              >
+                Roll back
               </Button>
             </div>
           )}

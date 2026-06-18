@@ -340,6 +340,115 @@ func (s *RolloutServiceImpl) Abort(ctx context.Context, id, reason string) (*Rol
 	return toServiceRollout(stored), nil
 }
 
+// RollBack creates a new rollout that targets the source rollout's
+// PreviousConfigID (the config the group was on before the source
+// ran). The new rollout flows through Create normally, so the same
+// approval workflow, audit pipeline, and engine loop handle it —
+// it is not a special-case path, just a one-click way to construct
+// the right RolloutInput.
+//
+// The source rollout must be in a terminal state. Operators who
+// want to stop an in-progress rollout reach for Abort instead.
+// PreviousConfigID must be non-empty; brand-new groups whose first
+// rollout succeeded have nowhere to roll back to.
+//
+// The new rollout's RolledBackFromID points at the source so the UI
+// and the audit timeline can show the chain. Stages are a single
+// 100% push with zero dwell because the caller is asking to undo a
+// known-bad change as fast as possible; an operator who wants
+// staged rollback can use Create directly.
+//
+// Added in v0.60.
+func (s *RolloutServiceImpl) RollBack(ctx context.Context, id, operator string) (*Rollout, error) {
+	source, err := s.appStore.GetRollout(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if source == nil {
+		return nil, fmt.Errorf("rollout not found: %s", id)
+	}
+	switch source.State {
+	case applicationstore.RolloutStateSucceeded,
+		applicationstore.RolloutStateAborted,
+		applicationstore.RolloutStateRolledBack:
+		// Terminal states are the only ones rollback is allowed
+		// against. The succeeded case is the common one (rollout
+		// completed; metrics regressed; undo). The aborted case
+		// lets an operator unwind a partial canary. The
+		// rolled_back case is allowed because chained rollbacks
+		// can happen during a long incident.
+	default:
+		return nil, fmt.Errorf("rollout is not in a terminal state (state=%q)", source.State)
+	}
+	if source.PreviousConfigID == "" {
+		return nil, fmt.Errorf("rollout has no previous config to roll back to (likely the group's first rollout)")
+	}
+	// Build the input. Single 100% stage with zero dwell: this is
+	// an emergency undo, not a fresh push. Abort criteria stay
+	// permissive so an operator's rollback does not itself abort
+	// on the first hiccup.
+	name := "Rollback of: " + source.Name
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	input := RolloutInput{
+		Name:           name,
+		GroupID:        source.GroupID,
+		TargetConfigID: source.PreviousConfigID,
+		Stages: []RolloutStage{
+			{Mode: RolloutStageModePercent, Percentage: 100, DwellSeconds: 0},
+		},
+		AbortCriteria: RolloutAbortCriteria{
+			MaxDriftedAgents:           0,
+			MaxErrorLogsPerMinute:      0,
+			MinDwellSecondsBeforeAbort: 0,
+		},
+		// Carry the source's RequireApproval forward. If the
+		// original needed two-person approval, so does the
+		// rollback — the policy applies to the group, not the
+		// direction of the change.
+		RequireApproval: source.RequireApproval,
+		RequestedBy:     operator,
+		ProposedBy:      RolloutProposedByOperator,
+	}
+
+	newRollout, err := s.Create(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create rollback rollout: %w", err)
+	}
+
+	// Stamp the link field. Create() does not know about
+	// RolledBackFromID; we attach it here and persist via
+	// UpdateRollout so the field lands on the row.
+	newRollout.RolledBackFromID = source.ID
+	if err := s.appStore.UpdateRollout(ctx, toStorageRollout(newRollout)); err != nil {
+		return nil, fmt.Errorf("failed to persist rollback link: %w", err)
+	}
+
+	s.logger.Info("rollback created",
+		zap.String("rollback_rollout_id", newRollout.ID),
+		zap.String("source_rollout_id", source.ID),
+		zap.String("operator", operator),
+		zap.String("target_config_id", newRollout.TargetConfigID))
+
+	if s.auditService != nil {
+		_ = s.auditService.Record(ctx, AuditEntry{
+			Actor:      AuditActorSystem,
+			EventType:  "rollout.rollback_requested",
+			TargetType: "rollout",
+			TargetID:   source.ID,
+			Action:     "rollback_requested",
+			Payload: map[string]any{
+				"rollback_rollout_id": newRollout.ID,
+				"target_config_id":    newRollout.TargetConfigID,
+				"requested_by":        operator,
+				"source_state":        string(source.State),
+			},
+		})
+	}
+	return newRollout, nil
+}
+
 // Pause flips an in-progress rollout to paused. The engine will leave it
 // alone — no stage advance, no auto-abort — until Resume is called.
 // Pause is a no-op on already-paused rollouts and an error on terminal
@@ -747,9 +856,11 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		ProposedBy:        r.ProposedBy,
 		ProposalReasoning: r.ProposalReasoning,
 		EvidenceRefs:      toStorageEvidenceRefs(r.EvidenceRefs),
-		CreatedAt:         r.CreatedAt,
-		UpdatedAt:         r.UpdatedAt,
-		CompletedAt:       r.CompletedAt,
+		// v0.60 rollback chain.
+		RolledBackFromID: r.RolledBackFromID,
+		CreatedAt:        r.CreatedAt,
+		UpdatedAt:        r.UpdatedAt,
+		CompletedAt:      r.CompletedAt,
 	}
 }
 
@@ -832,8 +943,10 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		ProposedBy:        r.ProposedBy,
 		ProposalReasoning: r.ProposalReasoning,
 		EvidenceRefs:      toServiceEvidenceRefs(r.EvidenceRefs),
-		CreatedAt:         r.CreatedAt,
-		UpdatedAt:         r.UpdatedAt,
-		CompletedAt:       r.CompletedAt,
+		// v0.60 rollback chain.
+		RolledBackFromID: r.RolledBackFromID,
+		CreatedAt:        r.CreatedAt,
+		UpdatedAt:        r.UpdatedAt,
+		CompletedAt:      r.CompletedAt,
 	}
 }

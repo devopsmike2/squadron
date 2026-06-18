@@ -45,6 +45,17 @@ type RolloutService interface {
 	// the rollout to retry.
 	Reject(ctx context.Context, id, rejecter, notes string) (*Rollout, error)
 
+	// v0.60 — operator initiated rollback. RollBack creates a new
+	// rollout that targets the source rollout's PreviousConfigID
+	// (the config the group was on before the source ran) and
+	// links back via RolledBackFromID. The source must be in a
+	// terminal state (succeeded or aborted). Operators reach for
+	// this when a completed rollout looked fine at the time but is
+	// degrading metrics now; one click creates a clean new rollout
+	// to undo it that goes through the same approval and audit
+	// pipeline as any other rollout.
+	RollBack(ctx context.Context, id, operator string) (*Rollout, error)
+
 	// Persist is used by the engine to write back transitions discovered
 	// during evaluation. Service-layer guard so the engine doesn't reach
 	// into the application store directly.
@@ -193,6 +204,13 @@ type Rollout struct {
 	ProposedBy        string         `json:"proposed_by,omitempty"`
 	ProposalReasoning string         `json:"proposal_reasoning,omitempty"`
 	EvidenceRefs      []EvidenceRef  `json:"evidence_refs,omitempty"`
+
+	// v0.60 — operator initiated rollback. Set when this rollout was
+	// created by clicking "Roll back" on a previous rollout. The
+	// value is the source rollout's ID. UI uses it for the
+	// "rollback of <X>" badge and the audit timeline chains the
+	// two rollouts together.
+	RolledBackFromID string `json:"rolled_back_from_id,omitempty"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`

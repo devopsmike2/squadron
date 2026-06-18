@@ -494,6 +494,13 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE audit_events ADD COLUMN ai_explanation TEXT`,
 		`ALTER TABLE audit_events ADD COLUMN ai_explanation_model TEXT`,
 		`ALTER TABLE audit_events ADD COLUMN ai_explanation_generated_at DATETIME`,
+
+		// v0.60 — operator initiated rollback chain. When this rollout
+		// was created by clicking "Roll back" on a previous rollout,
+		// the column carries the source rollout's ID. NULL on every
+		// existing row and every fresh rollout from operator / AI
+		// proposer flows; only the rollback handler sets it.
+		`ALTER TABLE rollouts ADD COLUMN rolled_back_from_id TEXT`,
 	}
 
 	for _, migration := range migrations {
@@ -1564,8 +1571,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		evidenceJSON = string(buf)
 	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -1591,6 +1598,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		proposedBy,
 		nullableString(r.ProposalReasoning),
 		nullableString(evidenceJSON),
+		// v0.60 rollback chain.
+		nullableString(r.RolledBackFromID),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -1602,7 +1611,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1619,7 +1628,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1681,7 +1690,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    require_approval = ?, requested_by = ?, approved_by = ?, approved_at = ?,
 		    rejected_by = ?, rejected_at = ?, approval_notes = ?,
 		    last_blackout_reason = ?, last_blackout_at = ?,
-		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?
+		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?,
+		    rolled_back_from_id = ?
 		WHERE id = ?
 	`
 	res, err := s.db.ExecContext(ctx, stmt,
@@ -1706,6 +1716,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		proposedBy,
 		nullableString(r.ProposalReasoning),
 		nullableString(evidenceJSON),
+		// v0.60 rollback chain.
+		nullableString(r.RolledBackFromID),
 		r.ID,
 	)
 	if err != nil {
@@ -1750,6 +1762,8 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		proposedBy        sql.NullString
 		proposalReasoning sql.NullString
 		evidenceRefsJSON  sql.NullString
+		// v0.60 rollback chain.
+		rolledBackFromID sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -1761,8 +1775,12 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&rejectedBy, &rejectedAt, &approvalNotes,
 		&lastBlackoutReason, &lastBlackoutAt,
 		&proposedBy, &proposalReasoning, &evidenceRefsJSON,
+		&rolledBackFromID,
 	); err != nil {
 		return nil, err
+	}
+	if rolledBackFromID.Valid {
+		r.RolledBackFromID = rolledBackFromID.String
 	}
 	// v0.53 — proposal provenance decoding.
 	if proposedBy.Valid && proposedBy.String != "" {

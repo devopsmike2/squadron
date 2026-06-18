@@ -66,6 +66,11 @@ export interface Rollout {
   proposed_by?: string;
   proposal_reasoning?: string;
   evidence_refs?: RolloutEvidenceRef[];
+  // v0.60 — operator-initiated rollback. Set when this rollout was
+  // created by clicking "Roll back" on a previous rollout. The
+  // UI shows a "rollback of <X>" badge on the card and the audit
+  // timeline chains the two rollouts together.
+  rolled_back_from_id?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string;

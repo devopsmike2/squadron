@@ -466,6 +466,18 @@ function describe(e: AuditEvent): string {
         return "AI skipped: no current config for group";
       return "AI skipped this spike";
     }
+    case "rollout.rollback_requested": {
+      // v0.60 — operator clicked Roll back. The payload carries the
+      // new rollout's ID so the timeline can hint at the chain
+      // without a click.
+      const rbID =
+        typeof e.payload?.rollback_rollout_id === "string"
+          ? e.payload.rollback_rollout_id
+          : null;
+      return rbID
+        ? `Rollback requested · new rollout ${rbID.slice(0, 8)}…`
+        : "Rollback requested";
+    }
   }
   // Generic fallback: humanize the event type.
   return `${e.event_type} ${e.action}`;
