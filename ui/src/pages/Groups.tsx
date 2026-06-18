@@ -51,6 +51,7 @@ export default function GroupsPage() {
     name: "",
     labels: {},
     require_approval: false,
+    require_approval_for_rollback: false,
   });
 
   const {
@@ -69,7 +70,12 @@ export default function GroupsPage() {
     try {
       await createGroup(createForm);
       setCreateDrawerOpen(false);
-      setCreateForm({ name: "", labels: {}, require_approval: false });
+      setCreateForm({
+        name: "",
+        labels: {},
+        require_approval: false,
+        require_approval_for_rollback: false,
+      });
       await mutateGroups();
     } catch (error) {
       console.error("Failed to create group:", error);
@@ -339,6 +345,39 @@ export default function GroupsPage() {
                     pending_approval. A second operator (not the requester) must
                     approve before the engine advances. Use for production-tier
                     or NERC CIP-regulated groups.
+                  </p>
+                </div>
+              </label>
+            </div>
+            {/* v0.61 — rollback-only approval policy. Independent of
+                require_approval: a group can require approval on
+                every rollout, on rollbacks only, on neither, or on
+                everything but rollbacks. The rollback endpoint
+                consults this flag and forces pending_approval on
+                the new rollout regardless of how the source landed. */}
+            <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  checked={createForm.require_approval_for_rollback ?? false}
+                  onChange={(e) =>
+                    setCreateForm({
+                      ...createForm,
+                      require_approval_for_rollback: e.target.checked,
+                    })
+                  }
+                />
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium">
+                    Require approval for rollbacks to this group
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Forces every operator initiated rollback into
+                    pending_approval, even when the original rollout did not
+                    require approval. Treats undo as a more sensitive
+                    operation. Independent of the rollout-approval policy
+                    above.
                   </p>
                 </div>
               </label>

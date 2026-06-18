@@ -136,3 +136,46 @@ func TestRollBack_CarriesApprovalRequirementForward(t *testing.T) {
 		"if the source needed approval, so does the rollback")
 	assert.Equal(t, RolloutStatePendingApproval, rb.State)
 }
+
+// v0.61 — a group can require approval on rollbacks even when the
+// source rollout did not require approval. This is the policy the
+// compliance-strict operator wants: regular rollouts pass through but
+// undo is treated as more dangerous and gates on a second operator.
+func TestRollBack_GroupPolicyForcesApprovalOnRollback(t *testing.T) {
+	svc, source := rollbackSetup(t)
+	ctx := context.Background()
+
+	g, err := svc.appStore.GetGroup(ctx, source.GroupID)
+	require.NoError(t, err)
+	require.NotNil(t, g)
+	g.RequireApprovalForRollback = true
+	require.NoError(t, svc.appStore.UpdateGroup(ctx, g))
+
+	// Source had no approval requirement of its own.
+	require.False(t, source.RequireApproval)
+
+	rb, err := svc.RollBack(ctx, source.ID, "alice")
+	require.NoError(t, err)
+	assert.True(t, rb.RequireApproval,
+		"group's rollback policy forces approval on the new rollout")
+	assert.Equal(t, RolloutStatePendingApproval, rb.State)
+}
+
+// And when the policy is off the rollback should pass through as
+// before — the policy is opt-in, not the new default.
+func TestRollBack_GroupPolicyOffLeavesApprovalAlone(t *testing.T) {
+	svc, source := rollbackSetup(t)
+	ctx := context.Background()
+
+	g, err := svc.appStore.GetGroup(ctx, source.GroupID)
+	require.NoError(t, err)
+	require.False(t, g.RequireApprovalForRollback,
+		"setup leaves the policy off")
+	require.False(t, source.RequireApproval)
+
+	rb, err := svc.RollBack(ctx, source.ID, "alice")
+	require.NoError(t, err)
+	assert.False(t, rb.RequireApproval,
+		"no policy + no source approval = no approval gate on rollback")
+	assert.NotEqual(t, RolloutStatePendingApproval, rb.State)
+}

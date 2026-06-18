@@ -267,9 +267,35 @@ Constraints:
   staged rollback can call `Create` directly with the previous
   config as the target.
 
-Audit events: `rollout.rollback_requested` fires on the source
-rollout the moment the button is clicked, and the new rollout
-emits the normal `rollout.created` plus engine lifecycle events.
+### Per group rollback approval policy (v0.61)
+
+A group can require approval on rollbacks independently of regular
+rollouts. Set `require_approval_for_rollback` on the group (Groups
+page checkbox or `PUT /groups/:id`) and every rollback against that
+group is forced into `pending_approval`, even when the source
+rollout did not require approval. This lets a compliance strict
+operator treat undo as a more sensitive action than the original
+change. The two policies are independent: a group can require
+approval on every rollout, on rollbacks only, on neither, or on
+everything but rollbacks.
+
+### Audit events
+
+The rollback emits a richer event arc than the existing rollout
+lifecycle so SIEM rules can alert on the full undo cycle:
+
+- `rollout.rollback_requested` fires on the source rollout the
+  moment the button is clicked. Payload carries the new rollout's
+  ID, so a SIEM rule that watches for "operator clicked undo on a
+  prod rollout" hits here.
+- The new rollout emits the standard `rollout.created` plus engine
+  lifecycle events.
+- `rollout.rollback_completed` fires on the new rollout when it
+  reaches `succeeded`. Payload carries `rolled_back_from_id`. This
+  is the "undo actually landed" signal — distinct from a generic
+  `rollout.succeeded` so a SIEM rule can score rollback completions
+  separately. Added in v0.61.
+
 Both rollouts carry the same `rolled_back_from_id` link so a query
 on either row can find the other.
 

@@ -364,6 +364,11 @@ function iconFor(e: AuditEvent) {
     return <AlertCircle className="h-4 w-4 text-red-600" />;
   if (e.event_type === "rollout.succeeded")
     return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
+  // v0.61 — rollback_completed gets the same checkmark as succeeded
+  // but in amber so an operator scanning the timeline can spot the
+  // undo terminating cleanly without parsing the label.
+  if (e.event_type === "rollout.rollback_completed")
+    return <CheckCircle2 className="h-4 w-4 text-amber-600" />;
   if (e.event_type.startsWith("rollout."))
     return <Rocket className="h-4 w-4 text-blue-600" />;
   // v0.59 — AI proposer lifecycle. created is a violet sparkle to
@@ -477,6 +482,19 @@ function describe(e: AuditEvent): string {
       return rbID
         ? `Rollback requested · new rollout ${rbID.slice(0, 8)}…`
         : "Rollback requested";
+    }
+    case "rollout.rollback_completed": {
+      // v0.61 — engine emits this when a rollback rollout (the new
+      // rollout created by /rollouts/:id/rollback) reaches
+      // succeeded. The payload carries the source rollout id so
+      // the timeline can show the full arc without a click.
+      const srcID =
+        typeof e.payload?.rolled_back_from_id === "string"
+          ? e.payload.rolled_back_from_id
+          : null;
+      return srcID
+        ? `Rollback completed · undid ${srcID.slice(0, 8)}…`
+        : "Rollback completed";
     }
   }
   // Generic fallback: humanize the event type.

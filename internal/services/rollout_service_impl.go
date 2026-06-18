@@ -391,6 +391,17 @@ func (s *RolloutServiceImpl) RollBack(ctx context.Context, id, operator string) 
 	if len(name) > 200 {
 		name = name[:200]
 	}
+
+	// v0.61 — require approval on the rollback when either of:
+	//  - the source rollout required approval (carry forward), OR
+	//  - the group has require_approval_for_rollback set, which
+	//    treats rollback as a more dangerous operation regardless
+	//    of how the source landed.
+	requireApproval := source.RequireApproval
+	if g, err := s.appStore.GetGroup(ctx, source.GroupID); err == nil && g != nil && g.RequireApprovalForRollback {
+		requireApproval = true
+	}
+
 	input := RolloutInput{
 		Name:           name,
 		GroupID:        source.GroupID,
@@ -403,11 +414,7 @@ func (s *RolloutServiceImpl) RollBack(ctx context.Context, id, operator string) 
 			MaxErrorLogsPerMinute:      0,
 			MinDwellSecondsBeforeAbort: 0,
 		},
-		// Carry the source's RequireApproval forward. If the
-		// original needed two-person approval, so does the
-		// rollback — the policy applies to the group, not the
-		// direction of the change.
-		RequireApproval: source.RequireApproval,
+		RequireApproval: requireApproval,
 		RequestedBy:     operator,
 		ProposedBy:      RolloutProposedByOperator,
 	}

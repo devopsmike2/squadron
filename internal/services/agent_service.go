@@ -124,6 +124,14 @@ type Group struct {
 	// into per-group enforced policy. Set on production-tier
 	// groups for NERC CIP-style separation of duties.
 	RequireApproval bool `json:"require_approval"`
+	// v0.61 — separate policy for operator initiated rollbacks. When
+	// true, the /rollouts/:id/rollback endpoint forces the new rollout
+	// into pending_approval regardless of whether the source rollout
+	// required approval. Lets compliance flag rollback as the more
+	// dangerous operation (you are undoing a change that already
+	// shipped to prod) without forcing approval on every fresh
+	// rollout. Independent of RequireApproval.
+	RequireApprovalForRollback bool `json:"require_approval_for_rollback"`
 	// v0.49 — recurring blackout windows. The rollout engine
 	// refuses to advance rollouts to this group while any of
 	// these windows is active. See changewindow.Window for the

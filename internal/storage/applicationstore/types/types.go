@@ -663,6 +663,17 @@ type Group struct {
 	// can't accidentally (or intentionally) ship to prod without
 	// the two-person rule firing.
 	RequireApproval bool `json:"require_approval"`
+	// v0.61 — separate policy for operator initiated rollbacks. When
+	// true, every rollback rollout (i.e. one created via the
+	// /rollouts/:id/rollback endpoint) is forced into
+	// pending_approval regardless of whether the source rollout
+	// required approval. Lets compliance flag rollback as the more
+	// dangerous operation (you are undoing a change that already
+	// shipped to prod) without forcing approval on every fresh
+	// rollout. Independent of RequireApproval: a group can require
+	// approval on all rollouts and rollbacks, on rollbacks only, on
+	// neither, or on rollouts only.
+	RequireApprovalForRollback bool `json:"require_approval_for_rollback"`
 	// v0.49 — change windows. Recurring blackout periods that block
 	// rollout advancement during change-restricted times (utility
 	// peak demand hours, storm-response windows, quarterly freezes).
