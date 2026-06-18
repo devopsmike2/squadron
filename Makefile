@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo
+.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed
 
 # Variables
 BINARY_NAME=squadron
@@ -32,6 +32,17 @@ build-backend:
 	@echo "Building $(BINARY_NAME) (backend only)..."
 	@mkdir -p $(BUILD_DIR)
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/all-in-one
+
+# Demo seed. Drops a realistic engineer copilot scenario into the
+# application store: demo group, baseline config, synthetic agent,
+# and a +312% cost spike. Within 30 seconds the AI proposer drafts
+# a rollout that appears in /rollouts as pending_approval. See
+# docs/demo.md.
+demo-seed:
+	@echo "Seeding Squadron demo scenario..."
+	@mkdir -p $(BUILD_DIR)
+	go build -o $(BUILD_DIR)/squadron-demo-seed ./cmd/squadron-demo-seed
+	$(BUILD_DIR)/squadron-demo-seed --db ./$(DATA_DIR)/squadron.db
 
 # Build for Linux (for Docker)
 build-linux:
