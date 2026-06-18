@@ -37,6 +37,8 @@ import {
   UploadCloudIcon,
   RocketIcon,
   Inbox,
+  PlayCircle,
+  Cpu,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -167,6 +169,25 @@ export function AppSidebar() {
           title: "Incidents",
           url: "/incidents",
           icon: Inbox,
+        },
+        {
+          // v0.55 SQ-2.8 / N4 — every signed request Squadron
+          // dispatched to a runner. Operators land here when they
+          // need to confirm a restart actually ran or hunt down a
+          // failure.
+          key: "actions",
+          title: "Actions",
+          url: "/actions",
+          icon: PlayCircle,
+        },
+        {
+          // v0.55 N5 — registered action runner daemons. Companion
+          // to /actions; this is the "who is alive" view, /actions
+          // is the "what did they do" view.
+          key: "runners",
+          title: "Runners",
+          url: "/runners",
+          icon: Cpu,
         },
         {
           key: "alerts",
