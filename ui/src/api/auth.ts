@@ -17,9 +17,17 @@ export interface APIToken {
 // The canonical scope vocabulary mirrors services.AllScopes() on the
 // backend. Kept in sync by hand because the list is short and stable;
 // if it grows we'll consider exposing it from an endpoint.
-export const ALL_SCOPES: ReadonlyArray<{ id: string; label: string; group: string }> = [
+export const ALL_SCOPES: ReadonlyArray<{
+  id: string;
+  label: string;
+  group: string;
+}> = [
   { id: "agents:read", label: "View agents", group: "Agents" },
-  { id: "agents:write", label: "Modify agents (push config, restart)", group: "Agents" },
+  {
+    id: "agents:write",
+    label: "Modify agents (push config, restart)",
+    group: "Agents",
+  },
   { id: "groups:read", label: "View groups", group: "Groups" },
   { id: "groups:write", label: "Modify groups", group: "Groups" },
   { id: "configs:read", label: "View configs", group: "Configs" },
@@ -28,11 +36,19 @@ export const ALL_SCOPES: ReadonlyArray<{ id: string; label: string; group: strin
   { id: "alerts:read", label: "View alert rules", group: "Alerts" },
   { id: "alerts:write", label: "Manage alert rules", group: "Alerts" },
   { id: "rollouts:read", label: "View rollouts", group: "Rollouts" },
-  { id: "rollouts:write", label: "Create / abort / pause / resume rollouts", group: "Rollouts" },
+  {
+    id: "rollouts:write",
+    label: "Create / abort / pause / resume rollouts",
+    group: "Rollouts",
+  },
   // v0.48 — separation of duties. Distinct from rollouts:write so a
   // single operator with create authority can't also approve.
   // Grant to a change-management or reviewer group only.
-  { id: "rollouts:approve", label: "Approve / reject pending rollouts (two-person rule)", group: "Rollouts" },
+  {
+    id: "rollouts:approve",
+    label: "Approve / reject pending rollouts (two-person rule)",
+    group: "Rollouts",
+  },
   { id: "audit:read", label: "Read audit log + event stream", group: "Audit" },
   // v0.50 — SIEM destination management. Read = list / view (no
   // secrets ever); write = create / update / delete / test. Grant
@@ -40,7 +56,11 @@ export const ALL_SCOPES: ReadonlyArray<{ id: string; label: string; group: strin
   // audit destination is a sensitive operation that should be
   // explicitly authorized.
   { id: "siem:read", label: "View SIEM destinations", group: "Audit" },
-  { id: "siem:write", label: "Manage SIEM destinations (create / rotate / test)", group: "Audit" },
+  {
+    id: "siem:write",
+    label: "Manage SIEM destinations (create / rotate / test)",
+    group: "Audit",
+  },
   { id: "auth:read", label: "View API tokens", group: "Auth" },
   { id: "auth:write", label: "Create / revoke API tokens", group: "Auth" },
 ];

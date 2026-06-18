@@ -39,10 +39,7 @@ import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 
 import { getAgents } from "@/api/agents";
-import {
-  fetchBillingSnapshot,
-  formatBytes,
-} from "@/api/billing";
+import { fetchBillingSnapshot, formatBytes } from "@/api/billing";
 import {
   getFleetVolume,
   getTopAgents,
@@ -65,16 +62,19 @@ import {
   getRecommendations,
   type Recommendation,
 } from "@/api/recommendations";
-import { getRealizedSavings, type RealizedSavingsResponse } from "@/api/savings";
+import {
+  getRealizedSavings,
+  type RealizedSavingsResponse,
+} from "@/api/savings";
 import { CostSpikesPanel } from "@/components/cost-spikes/CostSpikesPanel";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   groupFlowsByDestination,
   parseAgentFlows,
 } from "@/components/fleet-map/exporter-parser";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const WINDOWS: { value: InsightsWindow; label: string }[] = [
   { value: "1h", label: "1 hour" },
@@ -85,31 +85,23 @@ export default function SavingsPage() {
   const [win, setWin] = useState<InsightsWindow>("24h");
   const [refreshing, setRefreshing] = useState(false);
 
-  const {
-    data: projection,
-    mutate: mutateProjection,
-  } = useSWR<PricingProjection>(
-    `pricing-projection-${win}`,
-    () => getPricingProjection(win),
-    { refreshInterval: 60_000 },
-  );
+  const { data: projection, mutate: mutateProjection } =
+    useSWR<PricingProjection>(
+      `pricing-projection-${win}`,
+      () => getPricingProjection(win),
+      { refreshInterval: 60_000 },
+    );
   const { data: pricingCfg } = useSWR<PricingConfig>(
     "pricing-config",
     getPricingConfig,
     { refreshInterval: 300_000 },
   );
-  const {
-    data: recs,
-    mutate: mutateRecs,
-  } = useSWR(
+  const { data: recs, mutate: mutateRecs } = useSWR(
     `savings-recs-${win}`,
     () => getRecommendations(win, 10),
     { refreshInterval: 60_000 },
   );
-  const {
-    data: topAgents,
-    mutate: mutateTopAgents,
-  } = useSWR(
+  const { data: topAgents, mutate: mutateTopAgents } = useSWR(
     `savings-top-agents-${win}`,
     () => getTopAgents({ window: win, limit: 500 }),
     { refreshInterval: 60_000 },
@@ -118,18 +110,16 @@ export default function SavingsPage() {
     "savings-agents",
     () => getAgents({ limit: 500 }),
   );
-  const { data: fleet } = useSWR<FleetSummary>(
-    `savings-fleet-${win}`,
-    () => getFleetVolume({ window: win }),
+  const { data: fleet } = useSWR<FleetSummary>(`savings-fleet-${win}`, () =>
+    getFleetVolume({ window: win }),
   );
   // v0.28 retrospective: refreshes on every page load, plus every
   // minute alongside the other panels. Re-observation happens lazily
   // on the GET, so a refresh here also recomputes realized savings.
-  const { data: realized, mutate: mutateRealized } = useSWR<RealizedSavingsResponse>(
-    "savings-realized",
-    getRealizedSavings,
-    { refreshInterval: 60_000 },
-  );
+  const { data: realized, mutate: mutateRealized } =
+    useSWR<RealizedSavingsResponse>("savings-realized", getRealizedSavings, {
+      refreshInterval: 60_000,
+    });
 
   // Per-destination $/month breakdown — computed client-side from
   // the v0.24 destination attribution + the pricing rules. Matches
@@ -357,10 +347,9 @@ function BillingStrip() {
           </div>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          Compares against the estimated ingest above. If the
-          destination number is materially lower, your dedup /
-          filtering rules are eating the difference — usually a
-          good thing.
+          Compares against the estimated ingest above. If the destination number
+          is materially lower, your dedup / filtering rules are eating the
+          difference — usually a good thing.
         </div>
       </CardContent>
     </Card>
@@ -382,11 +371,9 @@ function BillingStrip() {
 // destination breakdown.
 
 function ForecastStrip() {
-  const { data, isLoading } = useSWR(
-    "pricing-forecast",
-    getPricingForecast,
-    { refreshInterval: 60_000 },
-  );
+  const { data, isLoading } = useSWR("pricing-forecast", getPricingForecast, {
+    refreshInterval: 60_000,
+  });
 
   // Hide when pricing is off or first poll is in-flight. We don't
   // want a flickering "—" tile to confuse first-time visitors.
@@ -444,7 +431,8 @@ function ForecastStrip() {
           <div
             style={{
               width: `${100 - Math.round(fraction * 100)}%`,
-              background: "color-mix(in oklch, var(--muted-foreground) 30%, transparent)",
+              background:
+                "color-mix(in oklch, var(--muted-foreground) 30%, transparent)",
             }}
           />
         </div>
@@ -453,8 +441,8 @@ function ForecastStrip() {
             Day {Math.floor(data.days_elapsed ?? 0) + 1} of {data.days_in_month}
           </span>
           <span>
-            Linear extrapolation from the last 24h ingest rate. Real
-            invoices will vary.
+            Linear extrapolation from the last 24h ingest rate. Real invoices
+            will vary.
           </span>
         </div>
       </CardContent>
@@ -855,9 +843,7 @@ function StatusIcon({ status }: { status: string }) {
   }
   if (status === "pending") {
     return (
-      <CircleDashedIcon
-        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-      />
+      <CircleDashedIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
     );
   }
   return <HistoryIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
@@ -957,8 +943,9 @@ function AssumptionsFooter({
               Pricing assumptions
             </div>
             <div className="text-sm text-muted-foreground">
-              Tune these in <code className="font-mono text-xs">squadron.yaml</code>{" "}
-              under <code className="font-mono text-xs">pricing.rules</code>.
+              Tune these in{" "}
+              <code className="font-mono text-xs">squadron.yaml</code> under{" "}
+              <code className="font-mono text-xs">pricing.rules</code>.
             </div>
           </div>
         </div>
@@ -991,8 +978,8 @@ function DisabledNotice() {
         <div className="mt-2 text-sm">
           Set <code className="font-mono text-xs">pricing.enabled: true</code>{" "}
           in <code className="font-mono text-xs">squadron.yaml</code> to see
-          $/month estimates here. Once enabled, Squadron uses a starter rate
-          set covering the major destinations; tune the per-destination rates
+          $/month estimates here. Once enabled, Squadron uses a starter rate set
+          covering the major destinations; tune the per-destination rates
           against your actual invoice for accurate projections.
         </div>
       </CardContent>

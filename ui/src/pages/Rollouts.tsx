@@ -11,7 +11,17 @@
 // The form toggles between the two; live match-count against the target
 // group gives operators feedback before they click Start.
 
-import { Check, ChevronDown, ChevronRight, Pause, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Pause,
+  Play,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 
@@ -32,12 +42,7 @@ import { AuditTimeline } from "@/components/AuditTimeline";
 import { RolloutPreviewPane } from "@/components/rollouts/RolloutPreviewPane";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -181,7 +186,9 @@ function applyTemplate(prev: FormState, tpl: RolloutTemplate): FormState {
     stages,
     max_drifted_agents: String(crit.max_drifted_agents),
     max_error_logs_per_minute: String(crit.max_error_logs_per_minute ?? 0),
-    min_dwell_seconds_before_abort: String(crit.min_dwell_seconds_before_abort ?? 0),
+    min_dwell_seconds_before_abort: String(
+      crit.min_dwell_seconds_before_abort ?? 0,
+    ),
     template_id: tpl.id,
     // Picking a template fully owns the criteria, so the recipe
     // selection is no longer accurate — clear it.
@@ -192,7 +199,9 @@ function applyTemplate(prev: FormState, tpl: RolloutTemplate): FormState {
 // Build the wire-shape RolloutStage from form state. Discards the
 // inactive mode's fields so the API receives clean input.
 const toWireStage = (s: FormStage): RolloutStage => {
-  const base: RolloutStage = { dwell_seconds: parseInt(s.dwell_seconds, 10) || 0 };
+  const base: RolloutStage = {
+    dwell_seconds: parseInt(s.dwell_seconds, 10) || 0,
+  };
   if (s.mode === "label") {
     const selector: Record<string, string> = {};
     for (const row of s.selector_rows) {
@@ -202,12 +211,20 @@ const toWireStage = (s: FormStage): RolloutStage => {
     }
     return { ...base, mode: "label", label_selector: selector };
   }
-  return { ...base, mode: "percent", percentage: parseInt(s.percentage, 10) || 0 };
+  return {
+    ...base,
+    mode: "percent",
+    percentage: parseInt(s.percentage, 10) || 0,
+  };
 };
 
 // Materialize a stage's effective selector at the moment of typing so
 // the match-count widget can show a number. Mirrors backend AND-semantics.
-const matchAgents = (agents: Agent[], groupId: string, stage: FormStage): Agent[] => {
+const matchAgents = (
+  agents: Agent[],
+  groupId: string,
+  stage: FormStage,
+): Agent[] => {
   const inGroup = agents.filter((a) => a.group_id === groupId);
   if (stage.mode === "percent") {
     const pct = parseInt(stage.percentage, 10);
@@ -220,7 +237,9 @@ const matchAgents = (agents: Agent[], groupId: string, stage: FormStage): Agent[
   // Label mode: AND-match across all completed (non-empty key+value) rows.
   // Incomplete rows are ignored — operators in mid-typing shouldn't see
   // their match-count crash to zero between keystrokes.
-  const completed = stage.selector_rows.filter((r) => r.key.trim() && r.value.trim());
+  const completed = stage.selector_rows.filter(
+    (r) => r.key.trim() && r.value.trim(),
+  );
   if (completed.length === 0) return [];
   return inGroup.filter((a) =>
     completed.every((r) => a.labels?.[r.key.trim()] === r.value.trim()),
@@ -228,10 +247,11 @@ const matchAgents = (agents: Agent[], groupId: string, stage: FormStage): Agent[
 };
 
 export default function RolloutsPage() {
-  const { data: rollouts, error, isLoading } = useSWR<Rollout[]>(
-    ROLLOUTS_KEY,
-    listRollouts,
-  );
+  const {
+    data: rollouts,
+    error,
+    isLoading,
+  } = useSWR<Rollout[]>(ROLLOUTS_KEY, listRollouts);
   const { data: groupsResp } = useSWR<GroupsList>("groups-list", getGroups);
   const { data: agentsResp } = useSWR("agents-list", getAgents);
   // Cookbook is server-defined and only changes on upgrade; fine to
@@ -284,16 +304,14 @@ export default function RolloutsPage() {
 
     // The form holds both mode's fields side-by-side; toWireStage drops
     // whichever isn't active so the API sees a clean shape.
-    const stages: RolloutStage[] = form.stages
-      .map(toWireStage)
-      .filter((s) => {
-        // Drop blank rows the operator never filled in (defensive — the
-        // add/remove buttons should keep this from happening).
-        if (s.mode === "label") {
-          return s.label_selector && Object.keys(s.label_selector).length > 0;
-        }
-        return typeof s.percentage === "number" && s.percentage > 0;
-      });
+    const stages: RolloutStage[] = form.stages.map(toWireStage).filter((s) => {
+      // Drop blank rows the operator never filled in (defensive — the
+      // add/remove buttons should keep this from happening).
+      if (s.mode === "label") {
+        return s.label_selector && Object.keys(s.label_selector).length > 0;
+      }
+      return typeof s.percentage === "number" && s.percentage > 0;
+    });
 
     const input: RolloutInput = {
       name: form.name.trim(),
@@ -397,8 +415,7 @@ export default function RolloutsPage() {
 
   // Stages with all-same mode required by the API. We surface this in the
   // form too so operators don't get a 400 after Start.
-  const mixedModes =
-    new Set(form.stages.map((s) => s.mode)).size > 1;
+  const mixedModes = new Set(form.stages.map((s) => s.mode)).size > 1;
 
   // v0.48 — does the selected group have policy-enforced approval?
   // If so, lock the require_approval checkbox on. The backend
@@ -422,8 +439,8 @@ export default function RolloutsPage() {
           <h1 className="text-2xl font-semibold">Rollouts</h1>
           <p className="text-muted-foreground text-sm">
             Stage a new config to a percentage of a group at a time. Squadron
-            advances on dwell and rolls back automatically when a stage's
-            abort criteria fire.
+            advances on dwell and rolls back automatically when a stage's abort
+            criteria fire.
           </p>
         </div>
         {!showForm && (
@@ -480,8 +497,8 @@ export default function RolloutsPage() {
                   return (
                     <p className="text-xs text-muted-foreground">
                       Pick a template to prefill name, stages, and abort
-                      criteria — you'll still need to pick a group and
-                      target config below.
+                      criteria — you'll still need to pick a group and target
+                      config below.
                     </p>
                   );
                 }
@@ -559,7 +576,11 @@ export default function RolloutsPage() {
               <div className="space-y-3">
                 {form.stages.map((stage, i) => {
                   const matches = form.group_id
-                    ? matchAgents(allAgents, form.group_id, settledStages[i] ?? stage)
+                    ? matchAgents(
+                        allAgents,
+                        form.group_id,
+                        settledStages[i] ?? stage,
+                      )
                     : [];
                   return (
                     <StageEditor
@@ -590,7 +611,8 @@ export default function RolloutsPage() {
                   onClick={() => {
                     // New stages copy the previous stage's mode so the
                     // mixed-mode rejection rule doesn't surprise operators.
-                    const lastMode = form.stages[form.stages.length - 1]?.mode ?? "percent";
+                    const lastMode =
+                      form.stages[form.stages.length - 1]?.mode ?? "percent";
                     const next: FormStage =
                       lastMode === "label"
                         ? {
@@ -609,8 +631,8 @@ export default function RolloutsPage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Percent-mode stages are cumulative and must reach 100. Label
-                mode stages must all use the label selector — mixed modes
-                aren't supported.
+                mode stages must all use the label selector — mixed modes aren't
+                supported.
               </p>
               {mixedModes && (
                 <p className="text-xs text-amber-600">
@@ -643,7 +665,9 @@ export default function RolloutsPage() {
                     setForm({
                       ...form,
                       recipe_id: recipe.id,
-                      max_drifted_agents: String(recipe.criteria.max_drifted_agents),
+                      max_drifted_agents: String(
+                        recipe.criteria.max_drifted_agents,
+                      ),
                       max_error_logs_per_minute: String(
                         recipe.criteria.max_error_logs_per_minute ?? 0,
                       ),
@@ -677,8 +701,8 @@ export default function RolloutsPage() {
                   if (!active) {
                     return (
                       <p className="text-xs text-muted-foreground">
-                        Pick a recipe to prefill the criteria below, or
-                        leave on "Custom" and tune each field yourself.
+                        Pick a recipe to prefill the criteria below, or leave on
+                        "Custom" and tune each field yourself.
                       </p>
                     );
                   }
@@ -754,10 +778,10 @@ export default function RolloutsPage() {
                 </div>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Drift threshold is checked every tick. Error-rate threshold
-                only fires after the warmup elapses so newly-pushed agents
-                have time to flush startup noise. Set max errors/min to 0
-                to disable the error-rate check.
+                Drift threshold is checked every tick. Error-rate threshold only
+                fires after the warmup elapses so newly-pushed agents have time
+                to flush startup noise. Set max errors/min to 0 to disable the
+                error-rate check.
               </p>
             </div>
 
@@ -788,7 +812,9 @@ export default function RolloutsPage() {
             <div className="space-y-2 rounded-md border border-orange-500/20 bg-orange-500/5 p-3">
               <label
                 className={`flex items-start gap-2 ${
-                  policyEnforcedApproval ? "cursor-not-allowed" : "cursor-pointer"
+                  policyEnforcedApproval
+                    ? "cursor-not-allowed"
+                    : "cursor-pointer"
                 }`}
               >
                 <input
@@ -812,18 +838,19 @@ export default function RolloutsPage() {
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     {policyEnforcedApproval ? (
                       <>
-                        Group <code>{selectedGroup?.name ?? form.group_id}</code> has
+                        Group{" "}
+                        <code>{selectedGroup?.name ?? form.group_id}</code> has
                         approval policy enabled. Every rollout to this group
                         enters <code>pending_approval</code> regardless of this
                         setting. Change policy on the Groups page.
                       </>
                     ) : (
                       <>
-                        The rollout will enter <code>pending_approval</code>{" "}
-                        and won't advance until a different operator approves
-                        it (two-person rule). Use this for production-impacting
-                        or NERC CIP–regulated changes that require
-                        change-control sign-off.
+                        The rollout will enter <code>pending_approval</code> and
+                        won't advance until a different operator approves it
+                        (two-person rule). Use this for production-impacting or
+                        NERC CIP–regulated changes that require change-control
+                        sign-off.
                       </>
                     )}
                   </p>
@@ -976,7 +1003,9 @@ function StageEditor({
               min={1}
               max={100}
               value={stage.percentage}
-              onChange={(e) => onChange({ ...stage, percentage: e.target.value })}
+              onChange={(e) =>
+                onChange({ ...stage, percentage: e.target.value })
+              }
             />
           </div>
           <div className="space-y-1">
@@ -988,13 +1017,17 @@ function StageEditor({
               type="number"
               min={0}
               value={stage.dwell_seconds}
-              onChange={(e) => onChange({ ...stage, dwell_seconds: e.target.value })}
+              onChange={(e) =>
+                onChange({ ...stage, dwell_seconds: e.target.value })
+              }
             />
           </div>
         </div>
       ) : (
         <div className="space-y-2">
-          <Label className="text-xs">Label selector (all keys AND-matched)</Label>
+          <Label className="text-xs">
+            Label selector (all keys AND-matched)
+          </Label>
           <div className="space-y-1.5">
             {stage.selector_rows.map((row, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -1026,7 +1059,10 @@ function StageEditor({
                     if (stage.selector_rows.length <= 1) {
                       // Last row — clear it rather than removing so the
                       // editor always shows at least one input pair.
-                      onChange({ ...stage, selector_rows: [{ key: "", value: "" }] });
+                      onChange({
+                        ...stage,
+                        selector_rows: [{ key: "", value: "" }],
+                      });
                       return;
                     }
                     const rows = stage.selector_rows.filter((_, j) => j !== i);
@@ -1065,7 +1101,9 @@ function StageEditor({
               type="number"
               min={0}
               value={stage.dwell_seconds}
-              onChange={(e) => onChange({ ...stage, dwell_seconds: e.target.value })}
+              onChange={(e) =>
+                onChange({ ...stage, dwell_seconds: e.target.value })
+              }
               className="max-w-40"
             />
           </div>
@@ -1120,9 +1158,11 @@ function RolloutCard({
   const currentMode = currentStage?.mode ?? "percent";
   const currentSummary =
     currentMode === "label"
-      ? `label selector: ${Object.entries(currentStage?.label_selector ?? {})
-          .map(([k, v]) => `${k}=${v}`)
-          .join(", ") || "(empty)"}`
+      ? `label selector: ${
+          Object.entries(currentStage?.label_selector ?? {})
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ") || "(empty)"
+        }`
       : `${currentStage?.percentage ?? 0}% of group`;
 
   return (
@@ -1155,8 +1195,7 @@ function RolloutCard({
               )}
             </div>
             <div className="text-xs text-muted-foreground">
-              Group{" "}
-              <span className="font-mono">{groupName}</span>
+              Group <span className="font-mono">{groupName}</span>
               {" · "}target config{" "}
               <span className="font-mono">
                 {r.target_config_id.slice(0, 8)}…
@@ -1165,9 +1204,7 @@ function RolloutCard({
               {r.abort_reason && (
                 <>
                   {" · "}
-                  <span className="text-amber-600">
-                    {r.abort_reason}
-                  </span>
+                  <span className="text-amber-600">{r.abort_reason}</span>
                 </>
               )}
             </div>
@@ -1255,7 +1292,10 @@ function RolloutCard({
         {/* v0.47 — approval banner. Surfaces the requester (for the
             two-person comparison) and, once an approval/rejection has
             happened, who did it and when. */}
-        {(r.require_approval || r.state === "pending_approval" || r.approved_by || r.rejected_by) && (
+        {(r.require_approval ||
+          r.state === "pending_approval" ||
+          r.approved_by ||
+          r.rejected_by) && (
           <div className="rounded border border-orange-500/20 bg-orange-500/5 px-2.5 py-1.5 text-[11px] space-y-0.5">
             {r.requested_by && (
               <div>
@@ -1265,14 +1305,13 @@ function RolloutCard({
             )}
             {r.state === "pending_approval" && (
               <div className="text-orange-700">
-                Waiting on a second approver. The requester cannot approve
-                their own rollout.
+                Waiting on a second approver. The requester cannot approve their
+                own rollout.
               </div>
             )}
             {r.approved_by && (
               <div className="text-emerald-700">
-                Approved by{" "}
-                <span className="font-mono">{r.approved_by}</span>
+                Approved by <span className="font-mono">{r.approved_by}</span>
                 {r.approved_at &&
                   ` · ${new Date(r.approved_at).toLocaleString()}`}
                 {r.approval_notes && ` · "${r.approval_notes}"`}
@@ -1280,8 +1319,7 @@ function RolloutCard({
             )}
             {r.rejected_by && (
               <div className="text-red-700">
-                Rejected by{" "}
-                <span className="font-mono">{r.rejected_by}</span>
+                Rejected by <span className="font-mono">{r.rejected_by}</span>
                 {r.rejected_at &&
                   ` · ${new Date(r.rejected_at).toLocaleString()}`}
                 {r.approval_notes && ` · "${r.approval_notes}"`}
@@ -1307,11 +1345,7 @@ function RolloutCard({
         </button>
         {historyOpen && (
           <div className="border-t pt-2">
-            <AuditTimeline
-              targetType="rollout"
-              targetId={r.id}
-              limit={100}
-            />
+            <AuditTimeline targetType="rollout" targetId={r.id} limit={100} />
           </div>
         )}
       </CardContent>

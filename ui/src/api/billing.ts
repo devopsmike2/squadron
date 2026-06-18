@@ -4,11 +4,11 @@
 import { apiGet } from "./base";
 
 export interface BillingSnapshot {
-  provider: string;       // "splunk" (more later)
-  window: string;         // "30d" etc.
+  provider: string; // "splunk" (more later)
+  window: string; // "30d" etc.
   bytes: number;
   usd?: number;
-  at: string;             // ISO 8601
+  at: string; // ISO 8601
   source_url?: string;
 }
 

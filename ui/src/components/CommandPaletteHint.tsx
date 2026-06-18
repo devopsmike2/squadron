@@ -90,12 +90,14 @@ export function CommandPaletteHint() {
         </div>
         <div className="space-y-0.5">
           <p className="text-sm font-medium text-foreground">
-            Press <kbd className="rounded border border-border bg-card px-1.5 py-0.5 text-[10px] font-tabular">⌘K</kbd>
-            {" "}to jump anywhere
+            Press{" "}
+            <kbd className="rounded border border-border bg-card px-1.5 py-0.5 text-[10px] font-tabular">
+              ⌘K
+            </kbd>{" "}
+            to jump anywhere
           </p>
           <p className="text-[11px] text-muted-foreground">
-            Navigate, search agents, run common actions — all from the
-            keyboard.
+            Navigate, search agents, run common actions — all from the keyboard.
           </p>
         </div>
         <button

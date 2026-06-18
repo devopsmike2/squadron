@@ -26,10 +26,11 @@ import { Label } from "@/components/ui/label";
 const TOKENS_KEY = "api-tokens";
 
 export default function SettingsTokensPage() {
-  const { data: tokens, error, isLoading } = useSWR<APIToken[]>(
-    TOKENS_KEY,
-    listAPITokens,
-  );
+  const {
+    data: tokens,
+    error,
+    isLoading,
+  } = useSWR<APIToken[]>(TOKENS_KEY, listAPITokens);
   const [creating, setCreating] = useState(false);
   const [newLabel, setNewLabel] = useState("");
   // selectedScopes is the working set for the new-token form. Starts
@@ -41,7 +42,9 @@ export default function SettingsTokensPage() {
   // or "custom" — in which case the operator types an RFC3339 date in
   // expiryCustom. Defaulting to "never" keeps the form's behavior
   // identical to v0.10 for operators who don't care about expiry.
-  const [expiryChoice, setExpiryChoice] = useState<"never" | "7" | "30" | "90" | "custom">("never");
+  const [expiryChoice, setExpiryChoice] = useState<
+    "never" | "7" | "30" | "90" | "custom"
+  >("never");
   const [expiryCustom, setExpiryCustom] = useState("");
   // freshPlaintext holds the just-issued token plaintext for the
   // "copy this now" modal. Cleared when the operator dismisses the
@@ -90,7 +93,11 @@ export default function SettingsTokensPage() {
       return;
     }
     try {
-      const resp = await createAPIToken(newLabel.trim(), scopes, expiryForSubmit());
+      const resp = await createAPIToken(
+        newLabel.trim(),
+        scopes,
+        expiryForSubmit(),
+      );
       setFreshPlaintext(resp.plaintext);
       setNewLabel("");
       setSelectedScopes(new Set());
@@ -107,7 +114,8 @@ export default function SettingsTokensPage() {
   };
 
   const handleRevoke = async (t: APIToken) => {
-    if (!window.confirm(`Revoke token "${t.label}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Revoke token "${t.label}"? This cannot be undone.`))
+      return;
     try {
       await revokeAPIToken(t.id);
       await mutate(TOKENS_KEY);
@@ -117,11 +125,9 @@ export default function SettingsTokensPage() {
   };
 
   const copyToClipboard = (text: string) => {
-    navigator.clipboard
-      .writeText(text)
-      .catch(() => {
-        /* clipboard API blocked — operator can still select-and-copy */
-      });
+    navigator.clipboard.writeText(text).catch(() => {
+      /* clipboard API blocked — operator can still select-and-copy */
+    });
   };
 
   return (
@@ -210,13 +216,12 @@ export default function SettingsTokensPage() {
                   </div>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Token holders can only call endpoints in their granted
-                  scopes. Match the scope to the bearer's job: a CI
-                  pipeline that pushes configs and creates rollouts wants{" "}
+                  Token holders can only call endpoints in their granted scopes.
+                  Match the scope to the bearer's job: a CI pipeline that pushes
+                  configs and creates rollouts wants{" "}
                   <span className="font-mono">configs:write</span> +{" "}
-                  <span className="font-mono">rollouts:write</span>, not
-                  full access. For NERC CIP-style separation of duties,
-                  grant{" "}
+                  <span className="font-mono">rollouts:write</span>, not full
+                  access. For NERC CIP-style separation of duties, grant{" "}
                   <span className="font-mono">rollouts:approve</span> to a
                   distinct change-management group — operators with
                   rollouts:write can fire rollouts but can't approve them.
@@ -230,21 +235,23 @@ export default function SettingsTokensPage() {
               <div className="space-y-2">
                 <Label>Expires</Label>
                 <div className="flex flex-wrap gap-3 text-sm">
-                  {(["never", "7", "30", "90", "custom"] as const).map((choice) => (
-                    <label key={choice} className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        name="expiry"
-                        checked={expiryChoice === choice}
-                        onChange={() => setExpiryChoice(choice)}
-                      />
-                      {choice === "never"
-                        ? "Never"
-                        : choice === "custom"
-                          ? "Custom"
-                          : `${choice} days`}
-                    </label>
-                  ))}
+                  {(["never", "7", "30", "90", "custom"] as const).map(
+                    (choice) => (
+                      <label key={choice} className="flex items-center gap-1.5">
+                        <input
+                          type="radio"
+                          name="expiry"
+                          checked={expiryChoice === choice}
+                          onChange={() => setExpiryChoice(choice)}
+                        />
+                        {choice === "never"
+                          ? "Never"
+                          : choice === "custom"
+                            ? "Custom"
+                            : `${choice} days`}
+                      </label>
+                    ),
+                  )}
                 </div>
                 {expiryChoice === "custom" && (
                   <Input
@@ -255,10 +262,10 @@ export default function SettingsTokensPage() {
                   />
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Squadron rejects expired tokens at validate time (same
-                  401 response as a revoked one). Long-lived automation
-                  tokens are fine without an expiry, but rotating by
-                  hand is recommended every few months.
+                  Squadron rejects expired tokens at validate time (same 401
+                  response as a revoked one). Long-lived automation tokens are
+                  fine without an expiry, but rotating by hand is recommended
+                  every few months.
                 </p>
               </div>
 
@@ -313,8 +320,8 @@ export default function SettingsTokensPage() {
             </div>
             <p className="text-xs text-muted-foreground">
               Copy this now. Squadron stores only a hash — there's no way to
-              retrieve the plaintext later. If you lose it, revoke and issue
-              a new one.
+              retrieve the plaintext later. If you lose it, revoke and issue a
+              new one.
             </p>
             <div className="flex justify-end">
               <Button
@@ -379,9 +386,7 @@ export default function SettingsTokensPage() {
                     <td className="py-2 pr-3 text-xs">
                       {renderExpiry(t.expires_at)}
                     </td>
-                    <td className="py-2 pr-3">
-                      {renderStatus(t)}
-                    </td>
+                    <td className="py-2 pr-3">{renderStatus(t)}</td>
                     <td className="py-2">
                       {!t.revoked_at && (
                         <Button
@@ -433,7 +438,10 @@ function renderExpiry(iso?: string): React.ReactNode {
 function renderStatus(t: APIToken): React.ReactNode {
   if (t.revoked_at) {
     return (
-      <Badge variant="outline" className="text-[10px] uppercase bg-muted text-muted-foreground">
+      <Badge
+        variant="outline"
+        className="text-[10px] uppercase bg-muted text-muted-foreground"
+      >
         revoked
       </Badge>
     );

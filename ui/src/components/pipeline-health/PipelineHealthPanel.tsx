@@ -52,7 +52,9 @@ export function PipelineHealthBadge({ agentID }: { agentID: string }) {
       variant="outline"
       title={
         data && data.signals.length
-          ? data.signals.map((s) => `${s.severity.toUpperCase()}: ${s.message}`).join("\n")
+          ? data.signals
+              .map((s) => `${s.severity.toUpperCase()}: ${s.message}`)
+              .join("\n")
           : `Pipeline ${verdictLabel(verdict).toLowerCase()}`
       }
       style={{
@@ -99,9 +101,8 @@ export function PipelineHealthAgentPanel({ agentID }: { agentID: string }) {
     return (
       <Card>
         <CardContent className="p-4 text-sm text-muted-foreground">
-          Pipeline health unavailable. (The collector may not be
-          reporting its self-metrics yet — they take one scrape
-          interval to land.)
+          Pipeline health unavailable. (The collector may not be reporting its
+          self-metrics yet — they take one scrape interval to land.)
         </CardContent>
       </Card>
     );
@@ -152,8 +153,7 @@ export function PipelineHealthAgentPanel({ agentID }: { agentID: string }) {
                   aria-hidden
                 />
                 <span>
-                  <span className="font-medium">{s.severity}:</span>{" "}
-                  {s.message}
+                  <span className="font-medium">{s.severity}:</span> {s.message}
                 </span>
               </li>
             ))}
@@ -202,7 +202,9 @@ function MetricsTable({ data }: { data: PipelineHealthAgentSnapshot }) {
                 key={i}
                 className="flex items-center justify-between rounded border bg-background px-2 py-1 font-tabular"
               >
-                <span className="truncate text-muted-foreground">{r.label}</span>
+                <span className="truncate text-muted-foreground">
+                  {r.label}
+                </span>
                 <span>{r.formatted}</span>
               </div>
             ))}
@@ -287,13 +289,12 @@ export function FleetHealthSummary() {
           <div className="flex items-center gap-1.5">
             <h3 className="text-sm font-semibold">Pipeline health</h3>
             <InfoTooltip label="About pipeline health" maxWidth={320}>
-              Each agent's verdict comes from its OTel collector
-              self-metrics (queue depth, send failures, processor
-              drops). <b>Unknown</b> just means we haven't received
-              self-metrics from that agent yet — it's normal on fresh
-              installs and not an alarm. <b>Degraded</b> and{" "}
-              <b>Broken</b> mean we observed a real threshold breach
-              and the agent should be investigated.
+              Each agent's verdict comes from its OTel collector self-metrics
+              (queue depth, send failures, processor drops). <b>Unknown</b> just
+              means we haven't received self-metrics from that agent yet — it's
+              normal on fresh installs and not an alarm. <b>Degraded</b> and{" "}
+              <b>Broken</b> mean we observed a real threshold breach and the
+              agent should be investigated.
             </InfoTooltip>
           </div>
           <span className="text-xs text-muted-foreground">
@@ -322,7 +323,9 @@ export function FleetHealthSummary() {
                 style={{ background: verdictColor(s.verdict) }}
               />
               <span className="font-tabular">{s.count}</span>
-              <span className="text-muted-foreground">{verdictLabel(s.verdict)}</span>
+              <span className="text-muted-foreground">
+                {verdictLabel(s.verdict)}
+              </span>
             </div>
           ))}
         </div>

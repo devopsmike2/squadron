@@ -24,7 +24,6 @@ import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 
 import { listAlertRules } from "@/api/alerts";
-
 import type { Agent } from "@/types/agent";
 import type { AlertRule } from "@/types/alert";
 

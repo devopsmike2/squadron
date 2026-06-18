@@ -129,8 +129,8 @@ export function CostSpikesPanel() {
               Open cost spikes
             </div>
             <div className="text-sm text-muted-foreground">
-              The projection is meaningfully higher than the rolling
-              baseline. Auto-closes when it drops back.
+              The projection is meaningfully higher than the rolling baseline.
+              Auto-closes when it drops back.
             </div>
           </div>
           <Button
@@ -225,8 +225,8 @@ function SpikeRow({
                 color: isCritical ? "var(--destructive)" : "var(--chart-4)",
               }}
             >
-              <TrendingUpIcon className="h-3 w-3" />
-              +{(spike.peak_pct_above_baseline * 100).toFixed(0)}%
+              <TrendingUpIcon className="h-3 w-3" />+
+              {(spike.peak_pct_above_baseline * 100).toFixed(0)}%
             </span>
           </div>
         </div>

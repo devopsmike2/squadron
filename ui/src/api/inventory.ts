@@ -69,7 +69,11 @@ export function deleteExpectedAgent(
  * `source` with the new list. Idempotent. */
 export function replaceExpectedAgents(body: {
   source: string;
-  entries: { hostname: string; labels?: Record<string, string>; notes?: string }[];
+  entries: {
+    hostname: string;
+    labels?: Record<string, string>;
+    notes?: string;
+  }[];
 }): Promise<{ ok: boolean; source: string; count: number }> {
   return apiPut<{ ok: boolean; source: string; count: number }>(
     "/inventory/expected",

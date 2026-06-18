@@ -65,11 +65,13 @@ const emptyForm = (): SiemDestinationInput => ({
 });
 
 export default function SettingsSiemPage() {
-  const { data: destinations, error, isLoading } = useSWR<SiemDestination[]>(
-    DESTINATIONS_KEY,
-    listSiemDestinations,
-    { refreshInterval: 15000 },
-  );
+  const {
+    data: destinations,
+    error,
+    isLoading,
+  } = useSWR<SiemDestination[]>(DESTINATIONS_KEY, listSiemDestinations, {
+    refreshInterval: 15000,
+  });
 
   // Form state for create / edit. `editing` non-null switches the
   // drawer into edit mode; plaintext_secret stays empty in edit
@@ -83,7 +85,9 @@ export default function SettingsSiemPage() {
   const [confirmDelete, setConfirmDelete] = useState<SiemDestination | null>(
     null,
   );
-  const [testStatus, setTestStatus] = useState<Record<string, "ok" | "fail" | "pending">>({});
+  const [testStatus, setTestStatus] = useState<
+    Record<string, "ok" | "fail" | "pending">
+  >({});
   const [testError, setTestError] = useState<Record<string, string>>({});
 
   // Re-seed the form when the operator opens the drawer in a new mode.
@@ -177,10 +181,10 @@ export default function SettingsSiemPage() {
         <div>
           <h1 className="text-2xl font-semibold">SIEM destinations</h1>
           <p className="text-muted-foreground text-sm max-w-2xl">
-            Every audit event Squadron records is also forwarded to
-            every enabled destination below. Use this for centralized
-            retention (3–7 year SOX / NERC CIP windows) or to feed
-            compliance dashboards. The local audit log is unchanged.
+            Every audit event Squadron records is also forwarded to every
+            enabled destination below. Use this for centralized retention (3–7
+            year SOX / NERC CIP windows) or to feed compliance dashboards. The
+            local audit log is unchanged.
           </p>
         </div>
         <Button onClick={openCreate} className="gap-1">
@@ -196,9 +200,8 @@ export default function SettingsSiemPage() {
             {error instanceof Error ? error.message : String(error)}
             {String(error).includes("503") && (
               <div className="mt-2 text-muted-foreground">
-                SIEM export is disabled. Set{" "}
-                <code>SQUADRON_SIEM_KEY</code> (base64-encoded 32-byte
-                key) and restart Squadron.
+                SIEM export is disabled. Set <code>SQUADRON_SIEM_KEY</code>{" "}
+                (base64-encoded 32-byte key) and restart Squadron.
               </div>
             )}
           </CardContent>
@@ -310,12 +313,10 @@ export default function SettingsSiemPage() {
                 </div>
                 {d.last_error && (
                   <div className="text-red-700">
-                    Last error: <span className="font-mono">{d.last_error}</span>
+                    Last error:{" "}
+                    <span className="font-mono">{d.last_error}</span>
                     {d.last_error_at && (
-                      <>
-                        {" "}
-                        ({new Date(d.last_error_at).toLocaleString()})
-                      </>
+                      <> ({new Date(d.last_error_at).toLocaleString()})</>
                     )}
                   </div>
                 )}
@@ -338,8 +339,8 @@ export default function SettingsSiemPage() {
               {editing ? `Edit ${editing.name}` : "New SIEM destination"}
             </SheetTitle>
             <SheetDescription>
-              Squadron forwards every audit event to every enabled
-              destination matching the optional event-type filter.
+              Squadron forwards every audit event to every enabled destination
+              matching the optional event-type filter.
             </SheetDescription>
           </SheetHeader>
           <div className="space-y-4 mt-6">
@@ -415,9 +416,9 @@ export default function SettingsSiemPage() {
                 className="font-mono text-xs"
               />
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Encrypted at rest with the SQUADRON_SIEM_KEY master
-                key. Squadron never returns the plaintext after save —
-                to rotate, re-enter here.
+                Encrypted at rest with the SQUADRON_SIEM_KEY master key.
+                Squadron never returns the plaintext after save — to rotate,
+                re-enter here.
               </p>
             </div>
 
@@ -442,9 +443,9 @@ export default function SettingsSiemPage() {
                 className="font-mono text-xs"
               />
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Comma-separated prefixes. Only events whose type starts
-                with one of these is forwarded to this destination.
-                Empty = forward everything.
+                Comma-separated prefixes. Only events whose type starts with one
+                of these is forwarded to this destination. Empty = forward
+                everything.
               </p>
             </div>
 
@@ -452,7 +453,9 @@ export default function SettingsSiemPage() {
               <input
                 type="checkbox"
                 checked={form.enabled}
-                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+                onChange={(e) =>
+                  setForm({ ...form, enabled: e.target.checked })
+                }
                 className="h-4 w-4"
               />
               Enabled
@@ -487,8 +490,8 @@ export default function SettingsSiemPage() {
             <DialogTitle>Delete SIEM destination</DialogTitle>
             <DialogDescription>
               Stop forwarding audit events to "{confirmDelete?.name}"?
-              Squadron's local audit log is unaffected; only the
-              downstream pipe is removed.
+              Squadron's local audit log is unaffected; only the downstream pipe
+              is removed.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

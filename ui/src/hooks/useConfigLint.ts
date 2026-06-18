@@ -8,7 +8,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import { lintConfig } from "@/api/config-tools";
-
 import type { LintFinding } from "@/types/config-tools";
 
 export interface UseConfigLintResult {

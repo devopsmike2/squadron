@@ -76,7 +76,7 @@ export default function TimelinePage() {
       since: new Date(now - win.ms).toISOString(),
       until: new Date(now).toISOString(),
     };
-  }, [win, /* eslint-disable-next-line react-hooks/exhaustive-deps */ Math.floor(Date.now() / REFRESH_MS)]);
+  }, [win, Math.floor(Date.now() / REFRESH_MS)]);
 
   const { data, error, isLoading } = useSWR(
     ["timeline", since, until, activeSources.join(",")],
@@ -84,7 +84,10 @@ export default function TimelinePage() {
       fetchTimeline({
         since,
         until,
-        sources: activeSources.length === ALL_SOURCES.length ? undefined : activeSources,
+        sources:
+          activeSources.length === ALL_SOURCES.length
+            ? undefined
+            : activeSources,
       }),
     { refreshInterval: REFRESH_MS },
   );
@@ -136,11 +139,10 @@ export default function TimelinePage() {
             <span className="inline-flex items-center gap-1.5">
               Timeline
               <InfoTooltip label="About timeline" maxWidth={360}>
-                Postmortem view. Audit events, deploys, and cost
-                spikes are merged onto a single time axis so you
-                can answer "what happened?" without hopping between
-                pages. Click a marker to jump to its full record on
-                the source page.
+                Postmortem view. Audit events, deploys, and cost spikes are
+                merged onto a single time axis so you can answer "what
+                happened?" without hopping between pages. Click a marker to jump
+                to its full record on the source page.
               </InfoTooltip>
             </span>
           </h1>
@@ -289,8 +291,8 @@ export default function TimelinePage() {
 
             {data && data.count === 0 && !isLoading && (
               <div className="py-12 text-center text-sm text-muted-foreground">
-                No events in the selected window. Try widening the
-                range or enabling more sources.
+                No events in the selected window. Try widening the range or
+                enabling more sources.
               </div>
             )}
           </CardContent>

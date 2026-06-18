@@ -117,7 +117,9 @@ export function AppSidebar() {
             stats && stats.totalAgents > 0 ? (
               <NavCount
                 value={`${stats.onlineAgents}/${stats.totalAgents}`}
-                tone={stats.onlineAgents === stats.totalAgents ? "good" : "warn"}
+                tone={
+                  stats.onlineAgents === stats.totalAgents ? "good" : "warn"
+                }
               />
             ) : null,
         },
@@ -325,7 +327,9 @@ export function AppSidebar() {
               <button
                 type="button"
                 onClick={() => {
-                  const isMac = navigator.platform.toLowerCase().includes("mac");
+                  const isMac = navigator.platform
+                    .toLowerCase()
+                    .includes("mac");
                   document.dispatchEvent(
                     new KeyboardEvent("keydown", {
                       key: "k",

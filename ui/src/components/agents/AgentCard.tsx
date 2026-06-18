@@ -18,10 +18,7 @@
 import { Badge } from "@/components/ui/badge";
 import type { Agent, ConfigDriftStatus } from "@/types/agent";
 
-const STATUS_TONE: Record<
-  Agent["status"],
-  { dot: string; label: string }
-> = {
+const STATUS_TONE: Record<Agent["status"], { dot: string; label: string }> = {
   online: { dot: "var(--success)", label: "Online" },
   offline: { dot: "var(--muted-foreground)", label: "Offline" },
   error: { dot: "var(--destructive)", label: "Error" },

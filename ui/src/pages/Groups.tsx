@@ -1,4 +1,12 @@
-import { CalendarClock, Plus, RefreshCw, Server, ShieldCheck, Trash2, Users } from "lucide-react";
+import {
+  CalendarClock,
+  Plus,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { useState } from "react";
 import useSWR from "swr";
 
@@ -78,7 +86,9 @@ export default function GroupsPage() {
   ) => {
     e.stopPropagation();
     try {
-      await updateGroup(group.id, { require_approval: !group.require_approval });
+      await updateGroup(group.id, {
+        require_approval: !group.require_approval,
+      });
       await mutateGroups();
     } catch (error) {
       console.error("Failed to update group policy:", error);
@@ -326,10 +336,9 @@ export default function GroupsPage() {
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     Forces every rollout targeting this group into
-                    pending_approval. A second operator (not the
-                    requester) must approve before the engine
-                    advances. Use for production-tier or NERC
-                    CIP-regulated groups.
+                    pending_approval. A second operator (not the requester) must
+                    approve before the engine advances. Use for production-tier
+                    or NERC CIP-regulated groups.
                   </p>
                 </div>
               </label>

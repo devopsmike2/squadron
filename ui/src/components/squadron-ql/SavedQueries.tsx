@@ -31,7 +31,8 @@ export function SavedQueries({
   if (queries.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-6 text-center text-muted-foreground">
-        No saved queries yet. Save a Squadron QL query from the Query tab to build your library.
+        No saved queries yet. Save a Squadron QL query from the Query tab to
+        build your library.
       </div>
     );
   }

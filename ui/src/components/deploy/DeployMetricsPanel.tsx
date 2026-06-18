@@ -73,11 +73,11 @@ export function DeployMetricsPanel() {
               Deploy performance
             </h2>
             <InfoTooltip label="About DORA metrics" maxWidth={340}>
-              The four DORA metrics are the industry-standard yardstick
-              for software delivery performance. Computed from the
-              deploy_runs ledger over the selected window.{" "}
-              <b>Failed</b> counts failure, cancelled, and timed_out
-              terminal states; skipped is excluded as a no-op.
+              The four DORA metrics are the industry-standard yardstick for
+              software delivery performance. Computed from the deploy_runs
+              ledger over the selected window. <b>Failed</b> counts failure,
+              cancelled, and timed_out terminal states; skipped is excluded as a
+              no-op.
             </InfoTooltip>
           </div>
           <p className="text-xs text-muted-foreground">

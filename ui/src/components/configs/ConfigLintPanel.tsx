@@ -185,7 +185,9 @@ export function ConfigLintPanel({
               onClick={() => f.line && onJumpToLine?.(f.line)}
               className="w-full text-left px-4 py-2 hover:bg-muted/40 flex items-start gap-3"
             >
-              <span className="mt-0.5 shrink-0">{severityIcon(f.severity)}</span>
+              <span className="mt-0.5 shrink-0">
+                {severityIcon(f.severity)}
+              </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 mb-0.5">
                   {severityBadge(f.severity)}
@@ -212,9 +214,9 @@ export function ConfigLintPanel({
 
       {sorted.length === 0 && !isLinting && !error && (
         <div className="px-4 py-3 text-xs text-muted-foreground">
-          No issues found. The Squadron lint engine checks for undefined component
-          references, missing batch processors, memory_limiter ordering, and
-          localhost exporters in containerized deployments.
+          No issues found. The Squadron lint engine checks for undefined
+          component references, missing batch processors, memory_limiter
+          ordering, and localhost exporters in containerized deployments.
         </div>
       )}
     </div>

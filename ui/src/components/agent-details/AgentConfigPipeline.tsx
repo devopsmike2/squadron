@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import useSWR from "swr";
 
 import { sendConfigToAgent } from "@/api/agents";
-import { useTheme } from "@/components/ThemeProvider";
-import type { Agent } from "@/types/agent";
 import { fetchAgentComponentMetrics } from "@/api/collector-metrics";
 import { getConfigs } from "@/api/configs";
 import { CollectorPipelineView } from "@/components/collector-pipeline/CollectorPipelineView";
 import { ConfigYamlEditorWithMetrics } from "@/components/configs/ConfigYamlEditorWithMetrics";
+import { useTheme } from "@/components/ThemeProvider";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,9 +18,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { Agent } from "@/types/agent";
 import { type TimeRange, DEFAULT_TIME_RANGE } from "@/types/timeRange";
 
 interface AgentConfigPipelineProps {

@@ -182,7 +182,12 @@ export function AgentDetailsDrawer({
                   legacy AgentOverview keeps the inventory fields
                   below it. */}
               {agentId && (
-                <VolumePanel mode="agent" agentId={agentId} window="24h" compact />
+                <VolumePanel
+                  mode="agent"
+                  agentId={agentId}
+                  window="24h"
+                  compact
+                />
               )}
               {/* v0.31 pipeline health for this agent. Sits between the
                   volume panel and the recommendations so an operator
@@ -195,7 +200,12 @@ export function AgentDetailsDrawer({
                   about it" story follows directly from the "here's
                   what you're spending" one. */}
               {agentId && (
-                <RecommendationsPanel mode="agent" agentId={agentId} compact limit={4} />
+                <RecommendationsPanel
+                  mode="agent"
+                  agentId={agentId}
+                  compact
+                  limit={4}
+                />
               )}
               <AgentOverview agent={agent} metrics={metrics} />
             </TabsContent>
