@@ -73,6 +73,15 @@ type ApplicationStore interface {
 	GetActionRequest(ctx context.Context, id string) (*ActionRequest, error)
 	ListActionRequests(ctx context.Context, filter ActionRequestFilter) ([]*ActionRequest, error)
 
+	// SQ-3 incident drafts. One draft per action by default; the
+	// bridge dedups on action_request_id so flapping cannot flood
+	// the inbox. See docs/incident-drafter-design.md.
+	CreateIncidentDraft(ctx context.Context, d *IncidentDraft) error
+	UpdateIncidentDraft(ctx context.Context, d *IncidentDraft) error
+	GetIncidentDraft(ctx context.Context, id string) (*IncidentDraft, error)
+	GetIncidentDraftByActionRequestID(ctx context.Context, actionRequestID string) (*IncidentDraft, error)
+	ListIncidentDrafts(ctx context.Context, filter IncidentDraftFilter) ([]*IncidentDraft, error)
+
 	// API tokens (bearer auth)
 	CreateAPIToken(ctx context.Context, token *APIToken) error
 	GetAPITokenByHash(ctx context.Context, hash string) (*APIToken, error)
@@ -821,4 +830,36 @@ type ActionRequestFilter struct {
 	RunnerID   string
 	Status     string // "", "pending", "success", "failure", "denied"
 	Limit      int
+}
+
+// IncidentDraft is Move 3 of the engineer copilot roadmap: a draft
+// of an incident postmortem ticket that Squadron writes after an
+// action runs. The operator reviews, edits, and publishes through
+// whatever ticketing system their team uses (or copies to
+// clipboard). See docs/incident-drafter-design.md for the data flow
+// and threat model.
+//
+// One draft per action is the default; the bridge dedups on
+// ActionRequestID so flapping does not flood the inbox.
+type IncidentDraft struct {
+	ID                string `json:"id"`
+	ActionRequestID   string `json:"action_request_id,omitempty"`
+	RolloutID         string `json:"rollout_id,omitempty"`
+	Status            string `json:"status"` // draft | published | dismissed
+	Title             string `json:"title"`
+	BodyMarkdown      string `json:"body_markdown"`
+	DraftContentJSON  string `json:"draft_content_json,omitempty"`
+	Provider          string `json:"provider,omitempty"`     // clipboard | github | linear | jira | generic
+	ExternalID        string `json:"external_id,omitempty"`  // set on publish
+	ExternalURL       string `json:"external_url,omitempty"` // set on publish
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// IncidentDraftFilter narrows a List query.
+type IncidentDraftFilter struct {
+	ActionRequestID string
+	RolloutID       string
+	Status          string // "", "draft", "published", "dismissed"
+	Limit           int
 }

@@ -462,6 +462,29 @@ func (s *Storage) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_action_requests_proposal ON action_requests(proposal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_action_requests_runner ON action_requests(runner_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_action_requests_status ON action_requests(status)`,
+
+		// SQ-3 incident drafts. One draft per action by default;
+		// look-ups by action_request_id are the bridge dedup path,
+		// look-ups by status power the UI inbox view. The body and
+		// the structured draft JSON live in the same row so the
+		// edit-and-publish UI does not have to JOIN.
+		`CREATE TABLE IF NOT EXISTS incident_drafts (
+			id TEXT PRIMARY KEY,
+			action_request_id TEXT,
+			rollout_id TEXT,
+			status TEXT NOT NULL,
+			title TEXT NOT NULL,
+			body_markdown TEXT NOT NULL,
+			draft_content_json TEXT,
+			provider TEXT,
+			external_id TEXT,
+			external_url TEXT,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_incident_drafts_action ON incident_drafts(action_request_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_incident_drafts_rollout ON incident_drafts(rollout_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_incident_drafts_status ON incident_drafts(status)`,
 	}
 
 	for _, migration := range migrations {

@@ -46,6 +46,9 @@ type Store struct {
 	// action requests keyed by id. Move 2 (action runner).
 	actionRunners  map[string]*types.ActionRunnerRegistration
 	actionRequests map[string]*types.ActionRequest
+	// SQ-3 incident drafts, keyed by id. Move 3 (engineer copilot
+	// auto-drafted ticket).
+	incidentDrafts map[string]*types.IncidentDraft
 }
 
 // NewStore creates a new in-memory store
@@ -68,6 +71,7 @@ func NewStore() *Store {
 		siemDestinations: make(map[string]*types.SiemDestination),
 		actionRunners:    make(map[string]*types.ActionRunnerRegistration),
 		actionRequests:   make(map[string]*types.ActionRequest),
+		incidentDrafts:   make(map[string]*types.IncidentDraft),
 	}
 }
 
