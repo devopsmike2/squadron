@@ -53,14 +53,14 @@ const (
 // Parameters is action-type-specific JSON; the runner uses the
 // registered ActionType to validate it.
 type Request struct {
-	RequestID  string          `json:"request_id"`
-	ProposalID string          `json:"proposal_id"`
-	RunnerID   string          `json:"runner_id"`
-	Action     ActionPayload   `json:"action"`
-	IssuedAt   time.Time       `json:"issued_at"`
-	ExpiresAt  time.Time       `json:"expires_at"`
-	Phase      Phase           `json:"phase"`
-	Signature  string          `json:"signature"`
+	RequestID  string        `json:"request_id"`
+	ProposalID string        `json:"proposal_id"`
+	RunnerID   string        `json:"runner_id"`
+	Action     ActionPayload `json:"action"`
+	IssuedAt   time.Time     `json:"issued_at"`
+	ExpiresAt  time.Time     `json:"expires_at"`
+	Phase      Phase         `json:"phase"`
+	Signature  string        `json:"signature"`
 }
 
 // ActionPayload is the action-specific part of a request.
@@ -105,8 +105,8 @@ const (
 // the runner publishes at registration and Squadron checks before
 // issuing a request.
 type Capability struct {
-	Type        string            `json:"type"`
-	Constraints map[string]any    `json:"constraints,omitempty"`
+	Type        string         `json:"type"`
+	Constraints map[string]any `json:"constraints,omitempty"`
 }
 
 // RunnerRegistration is the payload a runner sends at first start.
@@ -126,14 +126,14 @@ type RunnerRegistration struct {
 // bytes without needing a JSON normalization library. Fields are
 // ordered for stability; new fields go at the end with a tag bump.
 type signingPayload struct {
-	RequestID  string        `json:"request_id"`
-	ProposalID string        `json:"proposal_id"`
-	RunnerID   string        `json:"runner_id"`
-	Type       string        `json:"type"`
+	RequestID  string          `json:"request_id"`
+	ProposalID string          `json:"proposal_id"`
+	RunnerID   string          `json:"runner_id"`
+	Type       string          `json:"type"`
 	Parameters json.RawMessage `json:"parameters"`
-	IssuedAt   time.Time     `json:"issued_at"`
-	ExpiresAt  time.Time     `json:"expires_at"`
-	Phase      Phase         `json:"phase"`
+	IssuedAt   time.Time       `json:"issued_at"`
+	ExpiresAt  time.Time       `json:"expires_at"`
+	Phase      Phase           `json:"phase"`
 }
 
 func (r *Request) signingBytes() ([]byte, error) {

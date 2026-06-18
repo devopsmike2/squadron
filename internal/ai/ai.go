@@ -325,11 +325,11 @@ type ExplainConfigRequest struct {
 // summary first and lets the operator expand for the per-pipeline
 // breakdown.
 type ExplainConfigResponse struct {
-	Summary   string             `json:"summary"`
-	Pipelines map[string]string  `json:"pipelines,omitempty"` // pipeline name → 1-line description
-	Model     string             `json:"model"`
-	TokensIn  int                `json:"tokens_in"`
-	TokensOut int                `json:"tokens_out"`
+	Summary   string            `json:"summary"`
+	Pipelines map[string]string `json:"pipelines,omitempty"` // pipeline name → 1-line description
+	Model     string            `json:"model"`
+	TokensIn  int               `json:"tokens_in"`
+	TokensOut int               `json:"tokens_out"`
 }
 
 // ExplainConfig produces a human-readable summary of an entire
@@ -400,8 +400,8 @@ func (s *Service) ExplainConfig(ctx context.Context, req ExplainConfigRequest) (
 // ground its answers (e.g. recognizing "Windows" maps to
 // host.os.type=windows for THIS fleet's actual label vocabulary).
 type FleetQueryRequest struct {
-	Query  string       `json:"query"`
-	Schema FleetSchema  `json:"schema,omitempty"`
+	Query  string      `json:"query"`
+	Schema FleetSchema `json:"schema,omitempty"`
 }
 
 // FleetSchema is the small grounding hint passed alongside the
@@ -508,16 +508,16 @@ Rules:
 // the operator reviews before saving.
 
 type RemediateLintRequest struct {
-	YAML     string         `json:"yaml"`
-	Findings []LintFinding  `json:"findings"`
+	YAML     string        `json:"yaml"`
+	Findings []LintFinding `json:"findings"`
 }
 
 // LintFinding mirrors internal/configlint.Finding's shape but lives
 // here so the AI package doesn't depend on configlint. The handler
 // layer adapts between the two.
 type LintFinding struct {
-	Severity string `json:"severity"`     // "warning" | "error"
-	Code     string `json:"code"`         // e.g. "localhost-exporter"
+	Severity string `json:"severity"` // "warning" | "error"
+	Code     string `json:"code"`     // e.g. "localhost-exporter"
 	Message  string `json:"message"`
 	Path     string `json:"path,omitempty"` // YAML path the lint flagged
 }

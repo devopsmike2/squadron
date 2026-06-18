@@ -90,11 +90,11 @@ func (f *fakeSquadron) handleActionSubpath(w http.ResponseWriter, r *http.Reques
 // returns canned output. Used by the runner round-trip test so we
 // never call real systemctl.
 type fakeCommandRunner struct {
-	calls   []fakeCall
-	stdout  string
-	stderr  string
-	code    int
-	err     error
+	calls  []fakeCall
+	stdout string
+	stderr string
+	code   int
+	err    error
 }
 
 type fakeCall struct {

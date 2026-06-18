@@ -62,16 +62,16 @@ func (quietLogger) Debugf(context.Context, string, ...interface{}) {}
 func (quietLogger) Errorf(context.Context, string, ...interface{}) {}
 
 type config struct {
-	target       string
-	count        int
-	ramp         time.Duration
-	driftPct     int
-	offlinePct   int
-	version      string
-	groupLabel   string
-	labelPrefix  string
-	healthEvery  time.Duration
-	verbose      bool
+	target      string
+	count       int
+	ramp        time.Duration
+	driftPct    int
+	offlinePct  int
+	version     string
+	groupLabel  string
+	labelPrefix string
+	healthEvery time.Duration
+	verbose     bool
 }
 
 // stats is the shared progress counter all agents update. Reads are
@@ -250,8 +250,8 @@ func runAgent(ctx context.Context, cfg config, st *stats, idx int) {
 			return
 		case <-ticker.C:
 			_ = c.SetHealth(&protobufs.ComponentHealth{
-				Healthy:           true,
-				StartTimeUnixNano: uint64(time.Now().UnixNano()),
+				Healthy:            true,
+				StartTimeUnixNano:  uint64(time.Now().UnixNano()),
 				StatusTimeUnixNano: uint64(time.Now().UnixNano()),
 			})
 		}

@@ -7,9 +7,9 @@
 //
 // Configuration sources, in order of precedence (highest wins):
 //
-//   1. Command-line flags: --server, --token
-//   2. Environment variables: SQUADRON_URL, SQUADRON_TOKEN
-//   3. ~/.squadronctl/config.yaml (optional)
+//  1. Command-line flags: --server, --token
+//  2. Environment variables: SQUADRON_URL, SQUADRON_TOKEN
+//  3. ~/.squadronctl/config.yaml (optional)
 //
 // All commands accept -o json for machine-readable output. Without it
 // they print human-friendly tables and prose. Non-zero exit codes
