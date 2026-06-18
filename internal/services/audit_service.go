@@ -68,6 +68,7 @@ const (
 	AuditTargetRule          = "rule"
 	AuditTargetActionRequest = "action_request"
 	AuditTargetActionRunner  = "action_runner"
+	AuditTargetIncidentDraft = "incident_draft"
 )
 
 // Canonical event types. Not exhaustive — callers can use any dotted name
@@ -95,4 +96,12 @@ const (
 	AuditEventActionExecuted   = "action.executed"
 	AuditEventActionFailed     = "action.failed"
 	AuditEventActionDenied     = "action.denied"
+
+	// Incident drafter lifecycle (Move 3). incident.drafted fires
+	// when the bridge persists a new draft; incident.draft_declined
+	// fires when the model returned declined=true so the timeline
+	// shows Squadron looked at the action even when no ticket was
+	// produced.
+	AuditEventIncidentDrafted        = "incident.drafted"
+	AuditEventIncidentDraftDeclined  = "incident.draft_declined"
 )
