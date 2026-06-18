@@ -50,3 +50,10 @@ ui/coverage/
 # Temporary files
 tmp/
 temp/
+
+# Built binaries (always live in bin/ or cmd/*/<name>; never the repo root)
+/all-in-one
+/squadronctl
+/fleetsim
+/webhook-echo
+/squadron-action-runner
