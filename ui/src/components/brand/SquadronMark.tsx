@@ -20,10 +20,7 @@ import * as React from "react";
 
 type SquadronMarkProps = React.SVGProps<SVGSVGElement>;
 
-export function SquadronMark({
-  className,
-  ...rest
-}: SquadronMarkProps) {
+export function SquadronMark({ className, ...rest }: SquadronMarkProps) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -63,19 +60,13 @@ export function SquadronMark({
  * uppercase styling. Used in the sidebar header, login hero, and
  * page <title>-style headers.
  */
-export function SquadronWordmark({
-  className = "",
-}: {
-  className?: string;
-}) {
+export function SquadronWordmark({ className = "" }: { className?: string }) {
   return (
     <span
       className={`inline-flex items-center gap-2 font-semibold text-foreground ${className}`}
     >
       <SquadronMark className="h-5 w-5" />
-      <span className="tracking-[0.18em] text-[0.9em] uppercase">
-        Squadron
-      </span>
+      <span className="tracking-[0.18em] text-[0.9em] uppercase">Squadron</span>
     </span>
   );
 }

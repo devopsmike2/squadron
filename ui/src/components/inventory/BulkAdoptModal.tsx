@@ -73,9 +73,7 @@ export function BulkAdoptModal({
   // the list loads.
   useMemo(() => {
     if (targetID) return;
-    const t = targetsQ.data?.items?.find(
-      (t: DeployTarget) => t.has_credential,
-    );
+    const t = targetsQ.data?.items?.find((t: DeployTarget) => t.has_credential);
     if (t) setTargetID(t.id);
   }, [targetsQ.data, targetID]);
 
@@ -113,13 +111,12 @@ export function BulkAdoptModal({
         <DialogHeader>
           <DialogTitle>Bulk adopt via deploy pipeline</DialogTitle>
           <DialogDescription>
-            Squadron generates one OpAMP-extension snippet per host
-            (each with that host's identity baked in) and fires the
-            adoption pipeline with the batch payload. The pipeline
-            applies each snippet to the matching host's{" "}
-            <span className="font-medium">existing</span> collector
-            config — receivers, processors, exporters, and pipelines
-            are preserved.
+            Squadron generates one OpAMP-extension snippet per host (each with
+            that host's identity baked in) and fires the adoption pipeline with
+            the batch payload. The pipeline applies each snippet to the matching
+            host's <span className="font-medium">existing</span> collector
+            config — receivers, processors, exporters, and pipelines are
+            preserved.
           </DialogDescription>
         </DialogHeader>
 
@@ -142,10 +139,9 @@ export function BulkAdoptModal({
               ))}
             </select>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              The pipeline must accept an{" "}
-              <code>adoption_payload</code> input and an{" "}
-              <code>adoption_mode</code> flag. See the reference
-              workflow in <code>deploy/test/adoption.yml</code>.
+              The pipeline must accept an <code>adoption_payload</code> input
+              and an <code>adoption_mode</code> flag. See the reference workflow
+              in <code>deploy/test/adoption.yml</code>.
             </p>
           </div>
 
@@ -162,9 +158,8 @@ export function BulkAdoptModal({
               className="mt-1 font-mono text-xs"
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              The URL baked into each snippet. Leave blank for the
-              auto-detected dev URL; set explicitly when the CI
-              runner can't reach localhost.
+              The URL baked into each snippet. Leave blank for the auto-detected
+              dev URL; set explicitly when the CI runner can't reach localhost.
             </p>
           </div>
 

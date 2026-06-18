@@ -67,7 +67,10 @@ const SIGNAL_LABEL: Record<Signal, string> = {
 
 // Destination icon — chosen so a glance at the right column tells
 // you what kind of sink each one is without reading the label.
-const DEST_ICON: Record<DestinationKind, React.ComponentType<{ className?: string }>> = {
+const DEST_ICON: Record<
+  DestinationKind,
+  React.ComponentType<{ className?: string }>
+> = {
   squadron: SquadronMark as React.ComponentType<{ className?: string }>,
   otlp: CloudIcon,
   honeycomb: DatabaseIcon,
@@ -394,7 +397,10 @@ function formatRps(rps: number): string {
 // Page-level component
 // ============================================================
 
-const nodeTypes = { agentSource: AgentSourceNode, destination: DestinationNode };
+const nodeTypes = {
+  agentSource: AgentSourceNode,
+  destination: DestinationNode,
+};
 const edgeTypes = { flow: FlowEdge };
 
 export interface DataFlowCanvasProps {
@@ -440,10 +446,9 @@ export function DataFlowCanvas({
             No exporters detected yet
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Agents need a collector config with at least one configured
-            exporter for the data-flow graph to populate. Push a config
-            to an agent from the Configs page and the flow will appear
-            here.
+            Agents need a collector config with at least one configured exporter
+            for the data-flow graph to populate. Push a config to an agent from
+            the Configs page and the flow will appear here.
           </p>
         </div>
       </div>

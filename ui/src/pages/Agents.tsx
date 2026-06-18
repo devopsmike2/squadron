@@ -33,13 +33,7 @@ import {
   ServerIcon,
   XIcon,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import useSWR from "swr";
 import useSWRInfinite from "swr/infinite";
@@ -200,7 +194,9 @@ export default function AgentsPage() {
   // deeplinks work and the back button is sensible.
   const urlDrift = searchParams.get("drift_status") as DriftFilter | null;
   const drift: DriftFilter =
-    urlDrift && DRIFT_OPTIONS.some((o) => o.value === urlDrift) ? urlDrift : "any";
+    urlDrift && DRIFT_OPTIONS.some((o) => o.value === urlDrift)
+      ? urlDrift
+      : "any";
   const setDrift = (next: DriftFilter) => {
     const sp = new URLSearchParams(searchParams);
     if (next === "any") sp.delete("drift_status");
@@ -221,9 +217,8 @@ export default function AgentsPage() {
   }, [searchInput]);
 
   const [layout, setLayout] = useState<LayoutMode>(() => {
-    const stored = typeof window !== "undefined"
-      ? localStorage.getItem(LAYOUT_KEY)
-      : null;
+    const stored =
+      typeof window !== "undefined" ? localStorage.getItem(LAYOUT_KEY) : null;
     return stored === "table" ? "table" : "cards";
   });
   useEffect(() => {
@@ -367,6 +362,7 @@ export default function AgentsPage() {
   // Infinite-scroll: when the bottom sentinel comes into view, ask
   // SWR for the next page. The handler is shared between the
   // virtualized + non-virtualized paths.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const onNeedMore = useCallback(() => {
     if (loadingMore || reachedEnd) return;
     setSize(size + 1);
@@ -444,9 +440,7 @@ export default function AgentsPage() {
           saved chip. Hidden entirely when AI is disabled. */}
       <AskAIStrip
         labelKeys={Array.from(
-          new Set(
-            agents.flatMap((a) => Object.keys(a.labels ?? {})),
-          ),
+          new Set(agents.flatMap((a) => Object.keys(a.labels ?? {}))),
         ).slice(0, 30)}
         groupNames={(groupsData?.groups ?? []).map((g) => g.name)}
         onApply={(resp) => {
@@ -561,9 +555,7 @@ export default function AgentsPage() {
         <span>
           Showing{" "}
           <span className="font-tabular text-foreground">{agents.length}</span>
-          {agents.length < total ? (
-            <> of {total}</>
-          ) : null}
+          {agents.length < total ? <> of {total}</> : null}
           {fleetTotal !== undefined && total < fleetTotal ? (
             <> · {fleetTotal} in fleet</>
           ) : null}
@@ -628,10 +620,7 @@ export default function AgentsPage() {
           when this comes into view. Virtualized paths handle their
           own onNeedMore via the scroll listener. */}
       {agents.length < VIRT_THRESHOLD && !reachedEnd && (
-        <NonVirtualSentinel
-          onVisible={onNeedMore}
-          loading={loadingMore}
-        />
+        <NonVirtualSentinel onVisible={onNeedMore} loading={loadingMore} />
       )}
 
       <AgentDetailsDrawer
@@ -902,7 +891,14 @@ function VirtualizedAgentTable({
 }
 
 const TABLE_COLS = "112px 128px 1fr 96px 192px 192px";
-const TABLE_HEADS = ["Status", "Drift", "Name", "Version", "Group", "Last Seen"];
+const TABLE_HEADS = [
+  "Status",
+  "Drift",
+  "Name",
+  "Version",
+  "Group",
+  "Last Seen",
+];
 
 function AgentTable({
   agents,
@@ -1009,10 +1005,7 @@ function StatusBadge({ status }: { status: Agent["status"] }) {
         : "var(--muted-foreground)";
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span
-        className="status-dot"
-        style={{ ["--dot" as string]: color }}
-      />
+      <span className="status-dot" style={{ ["--dot" as string]: color }} />
       <span className="text-xs capitalize text-foreground">{status}</span>
     </span>
   );
@@ -1164,9 +1157,7 @@ function EmptyState({
         <>
           <ServerIcon className="mx-auto h-10 w-10 text-muted-foreground/40" />
           <p className="mt-3 text-sm font-medium text-foreground">
-            {totalAgents === 0
-              ? "No agents reporting yet"
-              : "No agents found"}
+            {totalAgents === 0 ? "No agents reporting yet" : "No agents found"}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Agents appear here automatically when they connect to Squadron's

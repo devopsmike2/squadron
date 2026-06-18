@@ -26,13 +26,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { Link } from "react-router-dom";
-import {
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-} from "recharts";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import useSWR from "swr";
 
 import { getAgents, getAgentStats } from "@/api/agents";
@@ -80,9 +74,7 @@ function HeroMetric({ stat }: { stat: HeroStat }) {
           <Icon className="h-4 w-4 text-muted-foreground" />
         </div>
         <div className="mt-3 flex items-end gap-3">
-          <span
-            className="font-tabular text-4xl font-semibold leading-none tracking-tight text-foreground"
-          >
+          <span className="font-tabular text-4xl font-semibold leading-none tracking-tight text-foreground">
             {stat.value}
           </span>
           {stat.trend && (
@@ -142,7 +134,9 @@ const DRIFT_META: Record<
   },
 };
 
-function tallyDrift(agents: Agent[] | undefined): Record<ConfigDriftStatus, number> {
+function tallyDrift(
+  agents: Agent[] | undefined,
+): Record<ConfigDriftStatus, number> {
   const out: Record<ConfigDriftStatus, number> = {
     synced: 0,
     drifted: 0,
@@ -202,7 +196,11 @@ function DriftDonut({ agents }: { agents: Agent[] | undefined }) {
             <ResponsiveContainer>
               <PieChart>
                 <Pie
-                  data={data.length > 0 ? data : [{ name: "Empty", value: 1, key: "unknown" }]}
+                  data={
+                    data.length > 0
+                      ? data
+                      : [{ name: "Empty", value: 1, key: "unknown" }]
+                  }
                   innerRadius={56}
                   outerRadius={78}
                   paddingAngle={data.length > 1 ? 2 : 0}
@@ -211,7 +209,10 @@ function DriftDonut({ agents }: { agents: Agent[] | undefined }) {
                   strokeWidth={2}
                   isAnimationActive={false}
                 >
-                  {(data.length > 0 ? data : [{ key: "unknown" as ConfigDriftStatus }]).map((d, i) => (
+                  {(data.length > 0
+                    ? data
+                    : [{ key: "unknown" as ConfigDriftStatus }]
+                  ).map((d, i) => (
                     <Cell key={i} fill={DRIFT_META[d.key].color} />
                   ))}
                 </Pie>
@@ -297,7 +298,10 @@ function ROLLOUT_STATE_COLOR(state: Rollout["state"]) {
 
 function ActiveRollouts({ rollouts }: { rollouts: Rollout[] | undefined }) {
   const active = (rollouts ?? []).filter(
-    (r) => r.state === "in_progress" || r.state === "pending" || r.state === "paused",
+    (r) =>
+      r.state === "in_progress" ||
+      r.state === "pending" ||
+      r.state === "paused",
   );
   return (
     <Card className="bg-card/80 border-border/70 backdrop-blur">
@@ -386,7 +390,9 @@ function ActiveRollouts({ rollouts }: { rollouts: Rollout[] | undefined }) {
 function RecentAlerts({
   alerts,
 }: {
-  alerts: { id: string; name: string; severity: string; enabled: boolean }[] | undefined;
+  alerts:
+    | { id: string; name: string; severity: string; enabled: boolean }[]
+    | undefined;
 }) {
   const list = (alerts ?? []).filter((a) => a.enabled).slice(0, 5);
   return (
@@ -470,7 +476,13 @@ function relTime(iso: string): string {
   return `${d}d ago`;
 }
 
-function RecentActivity({ events }: { events: { id: string; timestamp: string; actor: string; event_type: string }[] | undefined }) {
+function RecentActivity({
+  events,
+}: {
+  events:
+    | { id: string; timestamp: string; actor: string; event_type: string }[]
+    | undefined;
+}) {
   const list = (events ?? []).slice(0, 8);
   return (
     <Card className="bg-card/80 border-border/70 backdrop-blur">
@@ -541,7 +553,9 @@ export default function DashboardPage() {
     getAgents({ limit: 500 }),
   );
   const { data: stats } = useSWR("/agents/stats", () => getAgentStats());
-  const { data: rollouts } = useSWR<Rollout[]>("/rollouts", () => listRollouts());
+  const { data: rollouts } = useSWR<Rollout[]>("/rollouts", () =>
+    listRollouts(),
+  );
   const { data: alerts } = useSWR("/alerts/rules", () => listAlertRules());
   const { data: auditEvents } = useSWR("/audit/events?limit=20", () =>
     listAuditEvents({ limit: 20 }),
@@ -553,7 +567,10 @@ export default function DashboardPage() {
   );
   const tally = tallyDrift(agents);
   const activeRollouts = (rollouts ?? []).filter(
-    (r) => r.state === "in_progress" || r.state === "paused" || r.state === "pending",
+    (r) =>
+      r.state === "in_progress" ||
+      r.state === "paused" ||
+      r.state === "pending",
   ).length;
   const firingRules = (alerts ?? []).filter((a) => a.enabled).length;
 
@@ -578,7 +595,9 @@ export default function DashboardPage() {
       label: "Drifted",
       value: tally.drifted,
       hint:
-        tally.drifted > 0 ? "Out of sync with intended config" : "Everything in sync",
+        tally.drifted > 0
+          ? "Out of sync with intended config"
+          : "Everything in sync",
       trend: tally.drifted > 0 ? "bad" : "good",
       icon: CircleSlashIcon,
       href: "/agents?drift_status=drifted",
@@ -663,8 +682,8 @@ export default function DashboardPage() {
                     No agents yet — let's get your first one connected
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    The Quickstart wizard takes a few minutes whether
-                    you're starting fresh or already have collectors running.
+                    The Quickstart wizard takes a few minutes whether you're
+                    starting fresh or already have collectors running.
                   </div>
                 </div>
               </div>

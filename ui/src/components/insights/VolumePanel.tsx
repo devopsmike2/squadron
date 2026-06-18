@@ -205,11 +205,12 @@ export function VolumePanel({
           })}
         </ul>
 
-        {mode === "fleet" && (data as FleetSummary | undefined)?.agent_count !== undefined && (
-          <div className="mt-3 border-t border-border/40 pt-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-            {(data as FleetSummary).agent_count} agents contributed
-          </div>
-        )}
+        {mode === "fleet" &&
+          (data as FleetSummary | undefined)?.agent_count !== undefined && (
+            <div className="mt-3 border-t border-border/40 pt-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+              {(data as FleetSummary).agent_count} agents contributed
+            </div>
+          )}
       </CardContent>
     </Card>
   );

@@ -74,7 +74,9 @@ function SignalChip({
           : "border-border bg-transparent text-muted-foreground hover:bg-accent/40"
       }`}
       style={
-        active ? ({ ["color" as string]: meta.color } as React.CSSProperties) : undefined
+        active
+          ? ({ ["color" as string]: meta.color } as React.CSSProperties)
+          : undefined
       }
     >
       <span
@@ -524,7 +526,9 @@ function summarizePipelineConfig(effectiveConfig?: string): {
   if (!effectiveConfig) return { receiverTypes: [], signals: [] };
   try {
     const cfg = parseYAMLLite(effectiveConfig);
-    const receivers = Object.keys((cfg.receivers ?? {}) as Record<string, unknown>);
+    const receivers = Object.keys(
+      (cfg.receivers ?? {}) as Record<string, unknown>,
+    );
     const receiverTypes = Array.from(
       new Set(receivers.map((r) => r.split("/")[0])),
     );

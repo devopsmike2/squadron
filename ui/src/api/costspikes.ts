@@ -64,9 +64,7 @@ export function tickCostSpikes(): Promise<{ ok: boolean; reason?: string }> {
   );
 }
 
-export function parseAttribution(
-  raw?: string,
-): CostSpikeAttribution | null {
+export function parseAttribution(raw?: string): CostSpikeAttribution | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as CostSpikeAttribution;

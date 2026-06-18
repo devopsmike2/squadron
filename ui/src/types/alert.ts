@@ -1,12 +1,6 @@
 export type AlertSeverity = "info" | "warning" | "critical";
 
-export type ThresholdOperator =
-  | ">"
-  | ">="
-  | "<"
-  | "<="
-  | "=="
-  | "!=";
+export type ThresholdOperator = ">" | ">=" | "<" | "<=" | "==" | "!=";
 
 export interface AlertRule {
   id: string;

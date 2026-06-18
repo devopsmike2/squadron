@@ -22,13 +22,9 @@
 import { InfoIcon } from "lucide-react";
 import * as React from "react";
 
-import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "./tooltip";
+import { cn } from "@/lib/utils";
 
 interface InfoTooltipProps {
   /** Text or rich content shown when the icon is hovered/focused. */

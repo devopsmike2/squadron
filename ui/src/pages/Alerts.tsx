@@ -57,7 +57,11 @@ const severityClass: Record<AlertSeverity, string> = {
 };
 
 export default function AlertsPage() {
-  const { data: rules, isLoading, error } = useSWR<AlertRule[]>(ALERTS_KEY, listAlertRules);
+  const {
+    data: rules,
+    isLoading,
+    error,
+  } = useSWR<AlertRule[]>(ALERTS_KEY, listAlertRules);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<AlertRuleInput>(emptyInput());
@@ -133,9 +137,7 @@ export default function AlertsPage() {
             Squadron QL rules that fire when their threshold is satisfied.
           </p>
         </div>
-        {!showForm && (
-          <Button onClick={startCreate}>New rule</Button>
-        )}
+        {!showForm && <Button onClick={startCreate}>New rule</Button>}
       </div>
 
       {showForm && (
@@ -197,9 +199,8 @@ export default function AlertsPage() {
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                The rule fires when the result row count satisfies the
-                threshold below. Query runs against the last 5 minutes by
-                default.
+                The rule fires when the result row count satisfies the threshold
+                below. Query runs against the last 5 minutes by default.
               </p>
             </div>
 
@@ -290,21 +291,32 @@ export default function AlertsPage() {
             )}
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={cancelForm} disabled={submitting}>
+              <Button
+                variant="outline"
+                onClick={cancelForm}
+                disabled={submitting}
+              >
                 Cancel
               </Button>
               <Button onClick={submit} disabled={submitting}>
-                {submitting ? "Saving…" : editingId ? "Save changes" : "Create rule"}
+                {submitting
+                  ? "Saving…"
+                  : editingId
+                    ? "Save changes"
+                    : "Create rule"}
               </Button>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {isLoading && <p className="text-sm text-muted-foreground">Loading rules…</p>}
+      {isLoading && (
+        <p className="text-sm text-muted-foreground">Loading rules…</p>
+      )}
       {error && (
         <p className="text-sm text-red-600">
-          Failed to load rules: {error instanceof Error ? error.message : String(error)}
+          Failed to load rules:{" "}
+          {error instanceof Error ? error.message : String(error)}
         </p>
       )}
 

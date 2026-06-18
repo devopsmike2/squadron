@@ -77,9 +77,7 @@ export function hostStatusColor(s: HostLiveStatus["status"]): string {
   }
 }
 
-export function fetchDeployInventory(
-  id: string,
-): Promise<InventoryPreview> {
+export function fetchDeployInventory(id: string): Promise<InventoryPreview> {
   return apiGet<InventoryPreview>(
     `/deploy/targets/${encodeURIComponent(id)}/inventory`,
   );
@@ -95,7 +93,13 @@ export interface DeployRun {
   github_run_id?: number;
   github_run_url?: string;
   status: "queued" | "in_progress" | "completed";
-  conclusion?: "success" | "failure" | "cancelled" | "timed_out" | "skipped" | "";
+  conclusion?:
+    | "success"
+    | "failure"
+    | "cancelled"
+    | "timed_out"
+    | "skipped"
+    | "";
   completed_at?: string;
   expected_hosts?: string[];
   verification_state?: "" | "pending" | "verified" | "missing_agents";
@@ -145,7 +149,10 @@ export function updateDeployTarget(
   id: string,
   body: Partial<DeployTarget> & { pat?: string },
 ): Promise<DeployTarget> {
-  return apiPut<DeployTarget>(`/deploy/targets/${encodeURIComponent(id)}`, body);
+  return apiPut<DeployTarget>(
+    `/deploy/targets/${encodeURIComponent(id)}`,
+    body,
+  );
 }
 
 export function deleteDeployTarget(id: string): Promise<{ ok: boolean }> {

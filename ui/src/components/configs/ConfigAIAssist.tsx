@@ -172,7 +172,10 @@ function ExplainConfigDialog({
                 </div>
                 <div className="space-y-1.5">
                   {Object.entries(result.pipelines).map(([name, desc]) => (
-                    <div key={name} className="rounded-md border border-border p-2">
+                    <div
+                      key={name}
+                      className="rounded-md border border-border p-2"
+                    >
                       <div className="font-mono text-[11px] text-muted-foreground">
                         {name}
                       </div>
@@ -243,9 +246,9 @@ function MergeSnippetDialog({
           <DialogTitle>Merge a snippet into this config</DialogTitle>
           <DialogDescription>
             {model ? `${model}` : "Claude"} will merge your snippet into the
-            current YAML and replace the editor contents. Review the result,
-            run lint, and roll out as usual — nothing changes server-side
-            until you save.
+            current YAML and replace the editor contents. Review the result, run
+            lint, and roll out as usual — nothing changes server-side until you
+            save.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -275,7 +278,9 @@ function MergeSnippetDialog({
               disabled={loading}
             />
           </label>
-          {error && <div className="text-sm text-[var(--destructive)]">{error}</div>}
+          {error && (
+            <div className="text-sm text-[var(--destructive)]">{error}</div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>

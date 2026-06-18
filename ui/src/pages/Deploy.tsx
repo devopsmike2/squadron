@@ -83,20 +83,24 @@ export default function DeployPage() {
             <p className="font-medium">Deploy integration not configured.</p>
             <p className="text-muted-foreground">
               The deploy feature requires a 32-byte secretbox key in the{" "}
-              <code className="font-mono">SQUADRON_DEPLOY_KEY</code>{" "}
-              environment variable. Generate one with:
+              <code className="font-mono">SQUADRON_DEPLOY_KEY</code> environment
+              variable. Generate one with:
             </p>
             <pre className="rounded bg-muted p-2 text-xs">
               head -c 32 /dev/urandom | base64
             </pre>
             <p className="text-muted-foreground">
-              Set the variable in your environment (or
-              {" "}
-              <code className="font-mono">.env</code> /
-              {" "}
+              Set the variable in your environment (or{" "}
+              <code className="font-mono">.env</code> /{" "}
               <code className="font-mono">squadron.yaml</code>'s process env)
               and restart Squadron. See{" "}
-              <a className="underline" href="https://github.com/devopsmike2/squadron/blob/main/docs/deploy.md">docs/deploy.md</a>.
+              <a
+                className="underline"
+                href="https://github.com/devopsmike2/squadron/blob/main/docs/deploy.md"
+              >
+                docs/deploy.md
+              </a>
+              .
             </p>
           </CardContent>
         </Card>
@@ -110,8 +114,10 @@ export default function DeployPage() {
   // v0.35: highlight any deploy currently moving through the
   // pipeline so the operator doesn't fire a second one
   // accidentally.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const inFlight = useMemo(
-    () => runs.filter((r) => r.status === "queued" || r.status === "in_progress"),
+    () =>
+      runs.filter((r) => r.status === "queued" || r.status === "in_progress"),
     [runs],
   );
 
@@ -121,8 +127,8 @@ export default function DeployPage() {
         <div>
           <h1 className="text-2xl font-semibold">Deploy</h1>
           <p className="text-sm text-muted-foreground">
-            Fire GitHub Actions workflows that deploy OTel collectors; pre-flight
-            config lint + post-deploy verification close the loop.
+            Fire GitHub Actions workflows that deploy OTel collectors;
+            pre-flight config lint + post-deploy verification close the loop.
           </p>
         </div>
         <Button onClick={() => setShowNew(true)}>
@@ -179,16 +185,20 @@ export default function DeployPage() {
                   <code className="font-mono">contents:read</code>.
                 </li>
                 <li>
-                  Click <span className="font-medium text-foreground">New target</span> and fill in
-                  owner / repo / workflow file / branch + paste the PAT. If your
-                  workflow uses an Ansible-style{" "}
+                  Click{" "}
+                  <span className="font-medium text-foreground">
+                    New target
+                  </span>{" "}
+                  and fill in owner / repo / workflow file / branch + paste the
+                  PAT. If your workflow uses an Ansible-style{" "}
                   <code className="font-mono">inventory.ini</code>, set its path
                   too — Squadron reads it at trigger time.
                 </li>
                 <li>
-                  Click <span className="font-medium text-foreground">Validate</span> on the
-                  resulting card to confirm Squadron can reach the workflow and
-                  read the inventory before your first real deploy.
+                  Click{" "}
+                  <span className="font-medium text-foreground">Validate</span>{" "}
+                  on the resulting card to confirm Squadron can reach the
+                  workflow and read the inventory before your first real deploy.
                 </li>
               </ol>
               <Button className="mt-2" onClick={() => setShowNew(true)}>
@@ -260,7 +270,12 @@ export default function DeployPage() {
                               className="ml-2 h-6 px-2 text-[11px]"
                               title="Re-fire this exact deploy with the same inputs"
                               onClick={async () => {
-                                if (!confirm("Redeploy with the same inputs as this run?")) return;
+                                if (
+                                  !confirm(
+                                    "Redeploy with the same inputs as this run?",
+                                  )
+                                )
+                                  return;
                                 try {
                                   await redeployRun(r.id);
                                   runsQ.mutate();
@@ -269,7 +284,8 @@ export default function DeployPage() {
                                 }
                               }}
                             >
-                              <RotateCcwIcon className="mr-1 h-3 w-3" /> Redeploy
+                              <RotateCcwIcon className="mr-1 h-3 w-3" />{" "}
+                              Redeploy
                             </Button>
                           )}
                         </td>
@@ -392,11 +408,17 @@ function TargetCard({
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {target.has_credential ? (
-            <Badge variant="outline" style={{ color: "var(--status-healthy, #22c55e)" }}>
+            <Badge
+              variant="outline"
+              style={{ color: "var(--status-healthy, #22c55e)" }}
+            >
               PAT set
             </Badge>
           ) : (
-            <Badge variant="outline" style={{ color: "var(--status-critical, #ef4444)" }}>
+            <Badge
+              variant="outline"
+              style={{ color: "var(--status-critical, #ef4444)" }}
+            >
               PAT missing
             </Badge>
           )}
@@ -410,13 +432,19 @@ function TargetCard({
               config pinned
             </Badge>
           )}
-          <Badge variant="outline" style={{ color: lastTone, borderColor: lastTone }}>
+          <Badge
+            variant="outline"
+            style={{ color: lastTone, borderColor: lastTone }}
+          >
             Last: {lastVerb}
             {lastWhen ? ` · ${lastWhen}` : ""}
           </Badge>
         </div>
         {validation && (
-          <ValidationChecklist result={validation} onDismiss={() => setValidation(null)} />
+          <ValidationChecklist
+            result={validation}
+            onDismiss={() => setValidation(null)}
+          />
         )}
         <div className="flex gap-2">
           <Button
@@ -452,7 +480,11 @@ function ValidationChecklist({
   result: ValidationResult;
   onDismiss: () => void;
 }) {
-  const rows: { key: string; label: string; check: ValidationResult["github_auth"] }[] = [
+  const rows: {
+    key: string;
+    label: string;
+    check: ValidationResult["github_auth"];
+  }[] = [
     { key: "auth", label: "GitHub auth", check: result.github_auth },
     { key: "wf", label: "Workflow exists", check: result.workflow_exists },
     { key: "inv", label: "Inventory readable", check: result.inventory },
@@ -490,9 +522,14 @@ function ValidationChecklist({
                   : "var(--status-warn, #eab308)";
           return (
             <li key={r.key} className="flex items-start gap-2">
-              <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color }} aria-hidden />
+              <Icon
+                className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                style={{ color }}
+                aria-hidden
+              />
               <span>
-                <span className="font-medium">{r.label}:</span> {r.check.message}
+                <span className="font-medium">{r.label}:</span>{" "}
+                {r.check.message}
               </span>
             </li>
           );
@@ -585,7 +622,9 @@ function NewTargetSheet({
       try {
         parsed = JSON.parse(defaultInputsJSON || "{}");
       } catch {
-        setError("Default inputs must be valid JSON (object of string→string).");
+        setError(
+          "Default inputs must be valid JSON (object of string→string).",
+        );
         setBusy(false);
         return;
       }
@@ -622,7 +661,11 @@ function NewTargetSheet({
             on small windows. */}
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
           <Field label="Name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Prod OTel deploy" />
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Prod OTel deploy"
+            />
           </Field>
           {/* v0.41 — provider picker. Two cards side-by-side so the
               choice is visible up-front and operators don't get
@@ -632,9 +675,21 @@ function NewTargetSheet({
             <div className="grid grid-cols-3 gap-2">
               {(
                 [
-                  { id: "github", title: "GitHub Actions", sub: "workflow_dispatch + Contents API" },
-                  { id: "azure_devops", title: "Azure DevOps", sub: "Pipelines + Git Items API" },
-                  { id: "ansible_tower", title: "Ansible Tower", sub: "Job templates + Bearer auth" },
+                  {
+                    id: "github",
+                    title: "GitHub Actions",
+                    sub: "workflow_dispatch + Contents API",
+                  },
+                  {
+                    id: "azure_devops",
+                    title: "Azure DevOps",
+                    sub: "Pipelines + Git Items API",
+                  },
+                  {
+                    id: "ansible_tower",
+                    title: "Ansible Tower",
+                    sub: "Job templates + Bearer auth",
+                  },
                 ] as const
               ).map((opt) => (
                 <button
@@ -679,7 +734,11 @@ function NewTargetSheet({
             />
           </Field>
           <Field label="Branch">
-            <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+            <Input
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              placeholder="main"
+            />
           </Field>
           <Field label={labels.patHint}>
             <Input
@@ -703,7 +762,11 @@ function NewTargetSheet({
             </div>
           </Field>
           <Field label="Pinned config ID (optional — lint-checks before deploy)">
-            <Input value={configID} onChange={(e) => setConfigID(e.target.value)} placeholder="" />
+            <Input
+              value={configID}
+              onChange={(e) => setConfigID(e.target.value)}
+              placeholder=""
+            />
           </Field>
           <Field label="Default inputs (JSON object of string→string)">
             <Textarea
@@ -716,8 +779,13 @@ function NewTargetSheet({
           </Field>
           {error && <div className="text-xs text-destructive">{error}</div>}
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button disabled={busy || !name || !owner || !repo || !workflow || !pat} onClick={submit}>
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              disabled={busy || !name || !owner || !repo || !workflow || !pat}
+              onClick={submit}
+            >
               {busy ? "Saving…" : "Save target"}
             </Button>
           </div>
@@ -750,9 +818,7 @@ function TriggerSheet({
   // what's about to be deployed to. SWR refreshes on the modal
   // re-open, which is exactly when the file may have changed.
   const inventoryQ = useSWR(
-    target.inventory_path
-      ? ["deploy-inventory", target.id]
-      : null,
+    target.inventory_path ? ["deploy-inventory", target.id] : null,
     () => fetchDeployInventory(target.id),
     { revalidateOnFocus: false },
   );
@@ -811,8 +877,8 @@ function TriggerSheet({
             <code className="font-mono">
               {target.github_owner}/{target.github_repo}@{target.github_branch}
             </code>{" "}
-            workflow{" "}
-            <code className="font-mono">{target.github_workflow}</code>.
+            workflow <code className="font-mono">{target.github_workflow}</code>
+            .
           </SheetDescription>
         </SheetHeader>
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -825,15 +891,20 @@ function TriggerSheet({
             />
           </Field>
           {usingInventoryFile ? (
-            <Field label={`Hosts from inventory file (${target.inventory_path})`}>
+            <Field
+              label={`Hosts from inventory file (${target.inventory_path})`}
+            >
               <div className="rounded border bg-muted/40 p-2 text-xs max-h-48 overflow-auto">
                 {inventoryQ.isLoading ? (
-                  <span className="text-muted-foreground">Loading inventory…</span>
+                  <span className="text-muted-foreground">
+                    Loading inventory…
+                  </span>
                 ) : inventoryQ.data?.fetch_error ? (
                   <span className="text-destructive">
                     Couldn't read inventory.ini: {inventoryQ.data.fetch_error}
                   </span>
-                ) : inventoryQ.data?.hosts && inventoryQ.data.hosts.length > 0 ? (
+                ) : inventoryQ.data?.hosts &&
+                  inventoryQ.data.hosts.length > 0 ? (
                   <ul className="space-y-1 font-mono">
                     {inventoryQ.data.hosts.map((h) => (
                       <li key={h.hostname} className="flex items-center gap-2">
@@ -873,10 +944,10 @@ function TriggerSheet({
                 )}
               </div>
               <div className="mt-1 text-[11px] text-muted-foreground">
-                Green = healthy / yellow = silent / red = never seen by Squadron.
-                Re-fetched from GitHub at trigger time and registered into
-                expected_agents so v0.32 reconciliation can flag any that don't
-                check in.{" "}
+                Green = healthy / yellow = silent / red = never seen by
+                Squadron. Re-fetched from GitHub at trigger time and registered
+                into expected_agents so v0.32 reconciliation can flag any that
+                don't check in.{" "}
                 <button
                   type="button"
                   className="underline"
@@ -902,7 +973,11 @@ function TriggerSheet({
             </Field>
           )}
           <Field label="Notes (optional)">
-            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="canary batch 3" />
+            <Input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="canary batch 3"
+            />
           </Field>
           {lintFindings && (
             <div className="space-y-1 rounded border border-destructive/40 bg-destructive/10 p-3 text-xs">
@@ -920,7 +995,9 @@ function TriggerSheet({
           )}
           {error && <div className="text-xs text-destructive">{error}</div>}
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
             <Button disabled={busy} onClick={fire}>
               {busy ? "Firing…" : "Run deployment"}
             </Button>
@@ -931,7 +1008,13 @@ function TriggerSheet({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="space-y-1.5">
       <Label className="text-xs font-medium">{label}</Label>

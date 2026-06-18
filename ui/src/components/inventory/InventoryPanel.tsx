@@ -55,13 +55,12 @@ export function InventorySummary() {
           <div className="flex items-center gap-1.5">
             <h3 className="text-sm font-semibold">Fleet inventory</h3>
             <InfoTooltip label="About fleet inventory" maxWidth={320}>
-              Reconciliation between your declared inventory (e.g.
-              an Ansible <code>inventory.ini</code> file) and the
-              agents that actually checked in. <b>Missing</b> means a
-              host was declared but hasn't checked in for ~10 minutes
-              — often expected during a deploy, but worth checking
-              afterward. <b>Unexpected</b> means an agent showed up
-              that isn't in your declared inventory.
+              Reconciliation between your declared inventory (e.g. an Ansible{" "}
+              <code>inventory.ini</code> file) and the agents that actually
+              checked in. <b>Missing</b> means a host was declared but hasn't
+              checked in for ~10 minutes — often expected during a deploy, but
+              worth checking afterward. <b>Unexpected</b> means an agent showed
+              up that isn't in your declared inventory.
             </InfoTooltip>
           </div>
           <span className="text-xs text-muted-foreground">
@@ -90,7 +89,9 @@ export function InventorySummary() {
                 style={{ background: statusColor(s.status) }}
               />
               <span className="font-tabular">{s.count}</span>
-              <span className="text-muted-foreground">{statusLabel(s.status)}</span>
+              <span className="text-muted-foreground">
+                {statusLabel(s.status)}
+              </span>
             </div>
           ))}
         </div>
@@ -99,10 +100,7 @@ export function InventorySummary() {
             {data.missing} expected{" "}
             {data.missing === 1 ? "host hasn't" : "hosts haven't"} checked in
             recently. See{" "}
-            <Link
-              to="/inventory"
-              className="underline hover:text-foreground"
-            >
+            <Link to="/inventory" className="underline hover:text-foreground">
               Inventory
             </Link>{" "}
             for details.
@@ -114,9 +112,13 @@ export function InventorySummary() {
 }
 
 export function InventoryDetails() {
-  const { data } = useSWR("inventory-report-detail", () => fetchInventoryReport(""), {
-    refreshInterval: REFRESH_MS,
-  });
+  const { data } = useSWR(
+    "inventory-report-detail",
+    () => fetchInventoryReport(""),
+    {
+      refreshInterval: REFRESH_MS,
+    },
+  );
   const rows = useMemo(() => data?.rows ?? [], [data]);
   // v0.45 — adoption drawer state. Opens when the operator clicks
   // "Adopt" on a missing row and shows the per-host snippet.
@@ -145,10 +147,10 @@ export function InventoryDetails() {
         <CardContent className="p-4 text-sm text-muted-foreground">
           <p className="font-medium">No inventory yet.</p>
           <p className="mt-1">
-            Your CI/CD pipeline can register the hosts it deployed by
-            POSTing to <code>/api/v1/inventory/expected</code>.
-            Squadron will then diff that list against connected agents
-            and flag missing or unexpected hosts.
+            Your CI/CD pipeline can register the hosts it deployed by POSTing to{" "}
+            <code>/api/v1/inventory/expected</code>. Squadron will then diff
+            that list against connected agents and flag missing or unexpected
+            hosts.
           </p>
         </CardContent>
       </Card>
@@ -163,8 +165,7 @@ export function InventoryDetails() {
         <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
           <span className="text-xs text-muted-foreground">
             {missingHosts.length} missing host
-            {missingHosts.length === 1 ? "" : "s"} eligible for
-            bulk adoption
+            {missingHosts.length === 1 ? "" : "s"} eligible for bulk adoption
           </span>
           <Button
             size="sm"
@@ -260,9 +261,10 @@ export function InventoryDetails() {
 // CI/CD pipeline registered the host) and any labels the pipeline
 // attached. We forward both so Squadron's agent card shows the same
 // labels you set at deploy time.
-function extractAdoptionLabels(
-  r: { source?: string; labels?: Record<string, string> },
-): Record<string, string> {
+function extractAdoptionLabels(r: {
+  source?: string;
+  labels?: Record<string, string>;
+}): Record<string, string> {
   const out: Record<string, string> = {};
   if (r.source) out["squadron.source"] = r.source;
   for (const [k, v] of Object.entries(r.labels ?? {})) {

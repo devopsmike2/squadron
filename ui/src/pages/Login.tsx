@@ -51,7 +51,8 @@ export default function LoginPage() {
       // doesn't sit in localStorage.
       setAuthToken("");
       setError(
-        msg.toLowerCase().includes("unauthorized") || msg.toLowerCase().includes("invalid")
+        msg.toLowerCase().includes("unauthorized") ||
+          msg.toLowerCase().includes("invalid")
           ? "That token wasn't accepted. Check for typos or paste a fresh one."
           : `Couldn't reach Squadron: ${msg}`,
       );
@@ -70,8 +71,8 @@ export default function LoginPage() {
           </div>
           <p className="text-sm text-muted-foreground pt-1">
             Squadron uses API tokens for authentication. Paste an existing
-            token, or look in your server's logs for the bootstrap token
-            issued on first start.
+            token, or look in your server's logs for the bootstrap token issued
+            on first start.
           </p>
         </CardHeader>
         <CardContent>
@@ -89,12 +90,16 @@ export default function LoginPage() {
                 required
               />
               <p className="text-xs text-muted-foreground">
-                Tokens are stored in this browser's localStorage. Clear it
-                via your browser's developer tools to sign out.
+                Tokens are stored in this browser's localStorage. Clear it via
+                your browser's developer tools to sign out.
               </p>
             </div>
             {error && <div className="text-sm text-red-600">{error}</div>}
-            <Button type="submit" disabled={submitting || !token.trim()} className="w-full">
+            <Button
+              type="submit"
+              disabled={submitting || !token.trim()}
+              className="w-full"
+            >
               {submitting ? "Verifying..." : "Sign in"}
             </Button>
           </form>

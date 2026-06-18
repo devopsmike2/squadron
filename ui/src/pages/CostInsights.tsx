@@ -13,11 +13,7 @@
  * of these same endpoints. The response shapes are stable.
  */
 
-import {
-  AlertCircleIcon,
-  RefreshCwIcon,
-  ServerIcon,
-} from "lucide-react";
+import { AlertCircleIcon, RefreshCwIcon, ServerIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import useSWR from "swr";
@@ -47,7 +43,11 @@ const WINDOW_OPTIONS: { value: InsightsWindow; label: string }[] = [
   { value: "24h", label: "24 hours" },
 ];
 
-const SIGNAL_OPTIONS: { value: InsightsSignal; label: string; color: string }[] = [
+const SIGNAL_OPTIONS: {
+  value: InsightsSignal;
+  label: string;
+  color: string;
+}[] = [
   { value: "traces", label: "Traces", color: "var(--chart-1)" },
   { value: "metrics", label: "Metrics", color: "var(--chart-2)" },
   { value: "logs", label: "Logs", color: "var(--chart-3)" },
@@ -180,13 +180,15 @@ export default function CostInsightsPage() {
             Cost Insights
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Where your telemetry bytes are going. Use this to find
-            outliers and noisy attributes before they show up on the
-            invoice.
+            Where your telemetry bytes are going. Use this to find outliers and
+            noisy attributes before they show up on the invoice.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Tabs value={window} onValueChange={(v) => setWindow(v as InsightsWindow)}>
+          <Tabs
+            value={window}
+            onValueChange={(v) => setWindow(v as InsightsWindow)}
+          >
             <TabsList>
               {WINDOW_OPTIONS.map((o) => (
                 <TabsTrigger key={o.value} value={o.value}>
@@ -279,7 +281,8 @@ function OutliersPanel({
           )}
           {outliers.map((a) => {
             const name = agentNameByID[a.agent_id] || a.agent_id.slice(0, 8);
-            const pctOfShown = totalShown > 0 ? (a.total_bytes / totalShown) * 100 : 0;
+            const pctOfShown =
+              totalShown > 0 ? (a.total_bytes / totalShown) * 100 : 0;
             return (
               <li
                 key={a.agent_id}
@@ -343,7 +346,12 @@ function AttributesPanel({
   signal,
   onSignalChange,
 }: {
-  attributes: { key: string; bytes: number; pct_of_signal: number; estimated: boolean }[];
+  attributes: {
+    key: string;
+    bytes: number;
+    pct_of_signal: number;
+    estimated: boolean;
+  }[];
   isLoading: boolean;
   signal: InsightsSignal;
   onSignalChange: (s: InsightsSignal) => void;
@@ -413,8 +421,10 @@ function AttributesPanel({
         <div className="mt-3 flex items-center gap-1.5 text-[10px] text-muted-foreground">
           <AlertCircleIcon className="h-3 w-3" />
           <span>
-            Estimated via sampled aggregation (~2,000 rows per query).
-            Use the value to find candidates for a <code className="font-mono text-[10px]">delete</code> processor; treat exact numbers as approximate.
+            Estimated via sampled aggregation (~2,000 rows per query). Use the
+            value to find candidates for a{" "}
+            <code className="font-mono text-[10px]">delete</code> processor;
+            treat exact numbers as approximate.
           </span>
         </div>
       </CardContent>
@@ -492,9 +502,9 @@ function DestinationBreakdown({
         <div className="mt-3 flex items-center gap-1.5 text-[10px] text-muted-foreground">
           <AlertCircleIcon className="h-3 w-3" />
           <span>
-            Bytes attributed by pro-rating each agent's volume across
-            its configured exporters. True per-destination egress
-            measurement is on the v0.26+ roadmap.
+            Bytes attributed by pro-rating each agent's volume across its
+            configured exporters. True per-destination egress measurement is on
+            the v0.26+ roadmap.
           </span>
         </div>
       </CardContent>

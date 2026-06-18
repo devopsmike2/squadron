@@ -58,12 +58,14 @@ export const getSiemDestination = (id: string): Promise<SiemDestination> =>
 
 export const createSiemDestination = (
   input: SiemDestinationInput,
-): Promise<SiemDestination> => apiPost<SiemDestination>("/siem/destinations", input);
+): Promise<SiemDestination> =>
+  apiPost<SiemDestination>("/siem/destinations", input);
 
 export const updateSiemDestination = (
   id: string,
   input: SiemDestinationUpdate,
-): Promise<SiemDestination> => apiPut<SiemDestination>(`/siem/destinations/${id}`, input);
+): Promise<SiemDestination> =>
+  apiPut<SiemDestination>(`/siem/destinations/${id}`, input);
 
 export const deleteSiemDestination = (id: string): Promise<void> =>
   apiDelete<void>(`/siem/destinations/${id}`);

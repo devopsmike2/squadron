@@ -2,11 +2,10 @@
 // Mirrors the Go shapes in internal/pricing/pricing.go. Keep in sync.
 
 import { apiGet } from "./base";
-
 import type { InsightsSignal, InsightsWindow } from "./insights";
 
 export interface PricingRule {
-  match: string;        // empty = catch-all
+  match: string; // empty = catch-all
   label?: string;
   price_per_gb: number;
   traces?: number;

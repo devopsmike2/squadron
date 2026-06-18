@@ -50,7 +50,9 @@ function buildAgentsQuery(params?: GetAgentsParams): string {
 
 // Get a (paginated, filtered) page of agents. Default page size
 // matches the server's defaultAgentsLimit.
-export const getAgents = (params?: GetAgentsParams): Promise<GetAgentsResponse> => {
+export const getAgents = (
+  params?: GetAgentsParams,
+): Promise<GetAgentsResponse> => {
   return apiGet<GetAgentsResponse>(`/agents${buildAgentsQuery(params)}`);
 };
 

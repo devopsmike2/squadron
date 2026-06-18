@@ -30,20 +30,18 @@ export default function InventoryPage() {
           <span className="inline-flex items-center gap-1.5">
             Inventory
             <InfoTooltip label="About inventory" maxWidth={360}>
-              Squadron compares the hosts that were{" "}
-              <i>declared</i> (e.g. by your Ansible inventory.ini or
-              a CI pipeline that POSTed to{" "}
-              <code>/api/v1/inventory/expected</code>) against the
-              agents that have actually checked in. Missing hosts
-              are declared but absent; unexpected hosts are present
-              but undeclared.
+              Squadron compares the hosts that were <i>declared</i> (e.g. by
+              your Ansible inventory.ini or a CI pipeline that POSTed to{" "}
+              <code>/api/v1/inventory/expected</code>) against the agents that
+              have actually checked in. Missing hosts are declared but absent;
+              unexpected hosts are present but undeclared.
             </InfoTooltip>
           </span>
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Expected-vs-actual reconciliation. Click "Deploy" on a
-          target with an inventory_path set, and Squadron will
-          auto-register every host the workflow promised to touch.
+          Expected-vs-actual reconciliation. Click "Deploy" on a target with an
+          inventory_path set, and Squadron will auto-register every host the
+          workflow promised to touch.
         </p>
       </header>
 

@@ -106,7 +106,6 @@ export async function getQueryFunctions(): Promise<FunctionsResponse> {
   return apiGet<FunctionsResponse>("/telemetry/query/functions");
 }
 
-
 export interface SavedQuery {
   id: string;
   name: string;
@@ -128,12 +127,13 @@ export interface SavedQueryInput {
   tags?: string[];
 }
 
-
 export async function getSavedQueries(): Promise<SavedQueriesResponse> {
   return apiGet<SavedQueriesResponse>("/telemetry/saved-queries");
 }
 
-export async function createSavedQueryApi(input: SavedQueryInput): Promise<SavedQuery> {
+export async function createSavedQueryApi(
+  input: SavedQueryInput,
+): Promise<SavedQuery> {
   return apiPost<SavedQuery>("/telemetry/saved-queries", input);
 }
 

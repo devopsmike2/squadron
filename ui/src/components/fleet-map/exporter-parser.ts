@@ -101,7 +101,8 @@ function classifyExporter(
     )
       return { kind: "honeycomb", endpoint };
     if (lowerEndpoint.includes("tempo")) return { kind: "tempo", endpoint };
-    if (lowerEndpoint.includes("squadron")) return { kind: "squadron", endpoint };
+    if (lowerEndpoint.includes("squadron"))
+      return { kind: "squadron", endpoint };
     // Heuristic for "back to Squadron" via the local OTLP receiver: a
     // localhost or :4317/:4318 endpoint on a non-loopback hostname
     // generally still means the demo-collector pattern.
@@ -125,7 +126,9 @@ function classifyExporter(
  *  most vendor exporters put the destination at `.endpoint`; a few
  *  (kafka, file) use other shapes. Returns undefined when no obvious
  *  candidate exists rather than fabricating one. */
-function pickEndpoint(spec: Record<string, unknown> | undefined): string | undefined {
+function pickEndpoint(
+  spec: Record<string, unknown> | undefined,
+): string | undefined {
   if (!spec || typeof spec !== "object") return undefined;
   const candidates = ["endpoint", "url", "api_url", "broker_address"];
   for (const k of candidates) {

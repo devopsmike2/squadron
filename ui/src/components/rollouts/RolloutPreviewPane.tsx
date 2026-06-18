@@ -10,7 +10,13 @@
 // the whole point is "look at the diff before you ship".
 
 import { DiffEditor } from "@monaco-editor/react";
-import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, Info } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Info,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 
@@ -57,8 +63,7 @@ export function RolloutPreviewPane({
   if (!ready) {
     return (
       <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-        Preview will appear here once both a group and target config id are
-        set.
+        Preview will appear here once both a group and target config id are set.
       </div>
     );
   }
@@ -138,9 +143,9 @@ export function RolloutPreviewPane({
           {diff.identical ? (
             <div className="px-3 py-3 text-xs text-amber-700">
               Target config is identical to the group's current effective
-              config. A rollout would not change anything. (You can still
-              start it — for example, to re-push after manual edits — but
-              double-check this is what you meant.)
+              config. A rollout would not change anything. (You can still start
+              it — for example, to re-push after manual edits — but double-check
+              this is what you meant.)
             </div>
           ) : (
             <div className="h-64">
@@ -178,9 +183,9 @@ export function RolloutPreviewPane({
           )}
           {!current && (
             <div className="border-t px-3 py-2 text-[11px] text-muted-foreground">
-              This group has no current effective config — Squadron will
-              treat the rollout as the first push and the rollback target
-              will be empty.
+              This group has no current effective config — Squadron will treat
+              the rollout as the first push and the rollback target will be
+              empty.
             </div>
           )}
         </div>

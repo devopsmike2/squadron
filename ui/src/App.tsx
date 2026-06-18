@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter as Router, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import {
+  BrowserRouter as Router,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 
 import Layout from "./layout";
 import AgentsPage from "./pages/Agents";
@@ -128,10 +135,7 @@ function AuthBoundary() {
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/groups" element={<GroupsPage />} />
           <Route path="/configs" element={<ConfigsPage />} />
-          <Route
-            path="/configs/new"
-            element={<ConfigsPage mode="create" />}
-          />
+          <Route path="/configs/new" element={<ConfigsPage mode="create" />} />
           <Route
             path="/configs/:configId/edit"
             element={<ConfigsPage mode="edit" />}

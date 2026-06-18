@@ -47,7 +47,8 @@ const TABS: { value: IncidentDraftStatus; label: string }[] = [
   { value: "dismissed", label: "Dismissed" },
 ];
 
-const swrKey = (status: IncidentDraftStatus) => `/incidents/drafts?status=${status}`;
+const swrKey = (status: IncidentDraftStatus) =>
+  `/incidents/drafts?status=${status}`;
 
 const statusToneClass: Record<IncidentDraftStatus, string> = {
   draft: "bg-amber-500/10 text-amber-700 border-amber-500/20",
@@ -91,7 +92,11 @@ export default function IncidentsPage() {
   const [publishExternalID, setPublishExternalID] = useState("");
   const [publishExternalURL, setPublishExternalURL] = useState("");
 
-  const { data: drafts, isLoading, error } = useSWR<IncidentDraft[]>(
+  const {
+    data: drafts,
+    isLoading,
+    error,
+  } = useSWR<IncidentDraft[]>(
     swrKey(activeTab),
     () => listIncidentDrafts({ status: activeTab }),
     {
@@ -210,10 +215,9 @@ export default function IncidentsPage() {
       <div>
         <h1 className="text-2xl font-semibold">Incidents</h1>
         <p className="text-muted-foreground text-sm">
-          When Squadron's action runner restarts a service or applies a
-          fix, the AI drafter writes a postmortem ticket here for
-          review. Edit, dismiss, or publish to your team's ticketing
-          system.
+          When Squadron's action runner restarts a service or applies a fix, the
+          AI drafter writes a postmortem ticket here for review. Edit, dismiss,
+          or publish to your team's ticketing system.
         </p>
       </div>
 
@@ -432,9 +436,7 @@ function EmptyState({ status }: { status: IncidentDraftStatus }) {
       : status === "published"
         ? "No published drafts yet."
         : "No dismissed drafts.";
-  return (
-    <div className="text-muted-foreground px-4 py-6 text-sm">{text}</div>
-  );
+  return <div className="text-muted-foreground px-4 py-6 text-sm">{text}</div>;
 }
 
 interface PublishFormProps {
@@ -462,10 +464,9 @@ function PublishForm({
     <div className="border-border space-y-3 rounded-md border p-4">
       <div className="text-sm font-medium">Publish</div>
       <p className="text-muted-foreground text-xs">
-        Publishing stamps the draft so the audit timeline records what
-        you did with it. The clipboard provider also copies the body
-        to your clipboard so you can paste it into Linear, Jira, or
-        wherever you track work.
+        Publishing stamps the draft so the audit timeline records what you did
+        with it. The clipboard provider also copies the body to your clipboard
+        so you can paste it into Linear, Jira, or wherever you track work.
       </p>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <div className="space-y-1">

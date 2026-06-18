@@ -240,7 +240,8 @@ function RecommendationRow({
             <SeverityPill severity={rec.severity} />
             {rec.est_savings_bytes > 0 && (
               <span className="font-tabular inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                <CoinsIcon className="h-3 w-3" />~{formatBytes(rec.est_savings_bytes)} / window
+                <CoinsIcon className="h-3 w-3" />~
+                {formatBytes(rec.est_savings_bytes)} / window
               </span>
             )}
             {rec.agent_id && rec.agent_name && (
@@ -276,7 +277,9 @@ function RecommendationRow({
                       Thinking…
                     </div>
                   ) : explainError ? (
-                    <div className="text-[var(--destructive)]">{explainError}</div>
+                    <div className="text-[var(--destructive)]">
+                      {explainError}
+                    </div>
                   ) : (
                     <div>{explanation}</div>
                   )}
@@ -382,11 +385,23 @@ function severityColor(s: RecommendationSeverity): string {
 function severityIcon(s: RecommendationSeverity) {
   switch (s) {
     case "critical":
-      return <AlertTriangleIcon className="h-4 w-4" style={{ color: severityColor(s) }} />;
+      return (
+        <AlertTriangleIcon
+          className="h-4 w-4"
+          style={{ color: severityColor(s) }}
+        />
+      );
     case "warn":
-      return <AlertTriangleIcon className="h-4 w-4" style={{ color: severityColor(s) }} />;
+      return (
+        <AlertTriangleIcon
+          className="h-4 w-4"
+          style={{ color: severityColor(s) }}
+        />
+      );
     case "info":
-      return <InfoIcon className="h-4 w-4" style={{ color: severityColor(s) }} />;
+      return (
+        <InfoIcon className="h-4 w-4" style={{ color: severityColor(s) }} />
+      );
   }
 }
 

@@ -109,10 +109,9 @@ function Landing({ onPick }: { onPick: (m: Mode) => void }) {
                 </div>
               </div>
               <p className="mt-3 text-sm text-muted-foreground">
-                You don't have an OpenTelemetry Collector running yet. Pick
-                your backend (Datadog, Honeycomb, etc.) and Squadron generates
-                a starter config + a one-line install command. Live in
-                minutes.
+                You don't have an OpenTelemetry Collector running yet. Pick your
+                backend (Datadog, Honeycomb, etc.) and Squadron generates a
+                starter config + a one-line install command. Live in minutes.
               </p>
               <div className="mt-4 inline-flex items-center gap-1 text-xs font-medium">
                 Get started <ArrowLeftIcon className="h-3 w-3 rotate-180" />
@@ -145,10 +144,9 @@ function Landing({ onPick }: { onPick: (m: Mode) => void }) {
                 </div>
               </div>
               <p className="mt-3 text-sm text-muted-foreground">
-                You already have OTel Collectors deployed (bare binary,
-                Docker, Helm, systemd). Squadron generates the OpAMP extension
-                snippet to paste into your existing configs. No re-deploy
-                needed.
+                You already have OTel Collectors deployed (bare binary, Docker,
+                Helm, systemd). Squadron generates the OpAMP extension snippet
+                to paste into your existing configs. No re-deploy needed.
               </p>
               <div className="mt-4 inline-flex items-center gap-1 text-xs font-medium">
                 Adopt my fleet <ArrowLeftIcon className="h-3 w-3 rotate-180" />
@@ -161,8 +159,8 @@ function Landing({ onPick }: { onPick: (m: Mode) => void }) {
       <Card>
         <CardContent className="p-4 text-sm text-muted-foreground">
           <strong className="text-foreground">Not sure?</strong> Path A is
-          quicker if you have a backend account but no collector setup yet.
-          Path B preserves your existing pipelines and just adds Squadron's
+          quicker if you have a backend account but no collector setup yet. Path
+          B preserves your existing pipelines and just adds Squadron's
           management — pick this if your collectors are already shipping
           telemetry you care about.
         </CardContent>
@@ -285,9 +283,8 @@ function InstallStep({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const { data: starter } = useSWR(
-    `quickstart-starter-${backend}`,
-    () => getStarterConfig(backend),
+  const { data: starter } = useSWR(`quickstart-starter-${backend}`, () =>
+    getStarterConfig(backend),
   );
 
   if (!starter) {
@@ -345,9 +342,10 @@ function InstallStep({
             Run the agent
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Save the config above to <code className="font-mono text-xs">otelcol-config.yaml</code>{" "}
-            on the host you want to run the agent on, then run one of the
-            commands below.
+            Save the config above to{" "}
+            <code className="font-mono text-xs">otelcol-config.yaml</code> on
+            the host you want to run the agent on, then run one of the commands
+            below.
           </p>
           <InstallCommandTabs starterURL={starter.opamp_server_url} />
         </CardContent>
@@ -358,14 +356,19 @@ function InstallStep({
           <ArrowLeftIcon className="mr-1 h-3 w-3" /> Different backend
         </Button>
         <Button size="sm" onClick={onNext}>
-          I've started the agent <ArrowLeftIcon className="ml-1 h-3 w-3 rotate-180" />
+          I've started the agent{" "}
+          <ArrowLeftIcon className="ml-1 h-3 w-3 rotate-180" />
         </Button>
       </div>
     </div>
   );
 }
 
-function InstallCommandTabs({ starterURL: _starterURL }: { starterURL: string }) {
+function InstallCommandTabs({
+  starterURL: _starterURL,
+}: {
+  starterURL: string;
+}) {
   // Generic install commands. The starter URL is informational —
   // it's already inside the YAML the operator just saved.
   const dockerCmd = `docker run -d --name otelcol \\
@@ -424,10 +427,7 @@ function AdoptExistingFlow({ onBack }: { onBack: () => void }) {
   if (!snippet) {
     return (
       <div className="p-6">
-        <WizardHeader
-          title="Adopt your existing collectors"
-          onBack={onBack}
-        />
+        <WizardHeader title="Adopt your existing collectors" onBack={onBack} />
         <Card className="mt-6">
           <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
             <Loader2Icon className="h-4 w-4 animate-spin" />
@@ -452,9 +452,12 @@ function AdoptExistingFlow({ onBack }: { onBack: () => void }) {
           <p>
             Squadron talks to collectors via the OpenTelemetry{" "}
             <strong>OpAMP</strong> extension. Adopting existing collectors is
-            two steps: <strong>merge the snippet below into each collector's
-            config</strong>, then <strong>restart the collector</strong>. Once
-            restarted, it shows up here within a few seconds.
+            two steps:{" "}
+            <strong>
+              merge the snippet below into each collector's config
+            </strong>
+            , then <strong>restart the collector</strong>. Once restarted, it
+            shows up here within a few seconds.
           </p>
         </CardContent>
       </Card>
@@ -489,7 +492,9 @@ function AdoptExistingFlow({ onBack }: { onBack: () => void }) {
               <CommandBlock cmd="helm upgrade otelcol open-telemetry/opentelemetry-collector --reuse-values" />
             </TabsContent>
             <TabsContent value="bare" className="mt-3">
-              <CommandBlock cmd="# Stop the running collector process (Ctrl-C or kill PID),&#10;# then re-run with the updated config file:&#10;./otelcol-contrib --config /etc/otelcol/config.yaml" />
+              <CommandBlock
+                cmd="# Stop the running collector process (Ctrl-C or kill PID),&#10;# then re-run with the updated config file:&#10;./otelcol-contrib --config /etc/otelcol/config.yaml"
+              />
             </TabsContent>
           </Tabs>
         </CardContent>
@@ -508,7 +513,9 @@ function AdoptExistingFlow({ onBack }: { onBack: () => void }) {
           <Textarea
             value={hostList}
             onChange={(e) => setHostList(e.target.value)}
-            placeholder={"web-01.prod.example.com\nweb-02.prod.example.com\napi-01.prod.example.com"}
+            placeholder={
+              "web-01.prod.example.com\nweb-02.prod.example.com\napi-01.prod.example.com"
+            }
             rows={4}
             className="mt-2 font-mono text-xs"
           />
@@ -556,9 +563,7 @@ function WatchForAgentsStep() {
         <CardContent className="p-6">
           <div className="flex items-center gap-2">
             <Loader2Icon className="h-4 w-4 animate-spin text-muted-foreground" />
-            <div className="text-sm font-medium">
-              Watching for new agents…
-            </div>
+            <div className="text-sm font-medium">Watching for new agents…</div>
           </div>
           <p className="mt-2 text-sm text-muted-foreground">
             Squadron polls every 3 seconds. Currently{" "}
@@ -699,8 +704,8 @@ function CommandBlock({
   );
 }
 
-// Avoid an unused-import warning for PlusCircleIcon in case the
-// flow grows. Cheap; keeps the imports list stable when the page
-// expands in v0.27.x.
-const _keepIconImported = PlusCircleIcon;
-useEffect; useMemo; _keepIconImported;
+// Avoid an unused-import warning for PlusCircleIcon, useEffect,
+// and useMemo in case the flow grows. Cheap; keeps the imports list
+// stable when the page expands in v0.27.x.
+const _quickstartKeepImports = [PlusCircleIcon, useEffect, useMemo];
+void _quickstartKeepImports;

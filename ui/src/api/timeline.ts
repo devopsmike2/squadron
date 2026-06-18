@@ -37,7 +37,9 @@ export interface TimelineQuery {
   limit?: number;
 }
 
-export function fetchTimeline(q: TimelineQuery = {}): Promise<TimelineResponse> {
+export function fetchTimeline(
+  q: TimelineQuery = {},
+): Promise<TimelineResponse> {
   const params = new URLSearchParams();
   if (q.since) params.set("since", q.since);
   if (q.until) params.set("until", q.until);

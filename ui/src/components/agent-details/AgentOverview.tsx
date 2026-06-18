@@ -1,9 +1,8 @@
-import type { Agent } from "@/types/agent";
-
 import { AuditTimeline } from "@/components/AuditTimeline";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InfoCard } from "@/components/ui/info-card";
+import type { Agent } from "@/types/agent";
 
 interface Metrics {
   metric_count: number;
@@ -27,7 +26,8 @@ export function AgentOverview({ agent, metrics }: AgentOverviewProps) {
 
     switch (status) {
       case "synced":
-        badgeClasses = "bg-emerald-500/10 text-emerald-700 border-emerald-500/20";
+        badgeClasses =
+          "bg-emerald-500/10 text-emerald-700 border-emerald-500/20";
         badgeLabel = "Synced";
         break;
       case "drifted":
@@ -68,7 +68,9 @@ export function AgentOverview({ agent, metrics }: AgentOverviewProps) {
         <Badge variant="outline" className={badgeClasses}>
           {badgeLabel}
         </Badge>
-        <span className="text-xs text-muted-foreground">{meta.join(" • ")}</span>
+        <span className="text-xs text-muted-foreground">
+          {meta.join(" • ")}
+        </span>
       </div>
     );
   };

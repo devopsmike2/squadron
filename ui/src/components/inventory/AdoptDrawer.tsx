@@ -90,11 +90,11 @@ export function AdoptDrawer({
         <SheetHeader className="flex-shrink-0">
           <SheetTitle>Adopt {hostname}</SheetTitle>
           <SheetDescription>
-            Paste this snippet into the agent's existing collector
-            config to bring it under Squadron management. Your
-            receivers, processors, exporters, and pipelines are{" "}
-            <span className="font-medium text-foreground">not touched</span>{" "}
-            — only the OpAMP extension is added.
+            Paste this snippet into the agent's existing collector config to
+            bring it under Squadron management. Your receivers, processors,
+            exporters, and pipelines are{" "}
+            <span className="font-medium text-foreground">not touched</span> —
+            only the OpAMP extension is added.
           </SheetDescription>
         </SheetHeader>
         <div className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -115,12 +115,14 @@ export function AdoptDrawer({
             <li>
               Merge in. If your config already has{" "}
               <code className="rounded bg-muted/40 px-1">extensions:</code> or{" "}
-              <code className="rounded bg-muted/40 px-1">service.extensions:</code>,
-              append rather than replace.
+              <code className="rounded bg-muted/40 px-1">
+                service.extensions:
+              </code>
+              , append rather than replace.
             </li>
             <li>
-              Restart the collector. Squadron picks up the connection
-              within seconds.
+              Restart the collector. Squadron picks up the connection within
+              seconds.
             </li>
           </ol>
 

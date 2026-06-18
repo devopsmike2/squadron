@@ -74,7 +74,8 @@ function qs(params: Record<string, unknown>): string {
 export const getFleetVolume = (params: {
   window: InsightsWindow;
   signal?: InsightsSignal | InsightsSignal[];
-}): Promise<FleetSummary> => apiGet<FleetSummary>(`/insights/volume${qs(params)}`);
+}): Promise<FleetSummary> =>
+  apiGet<FleetSummary>(`/insights/volume${qs(params)}`);
 
 export const getTopAgents = (params: {
   window: InsightsWindow;
@@ -97,4 +98,5 @@ export const getTopAttributes = (params: {
 
 export const getDrops = (params: {
   window: InsightsWindow;
-}): Promise<DropsResponse> => apiGet<DropsResponse>(`/insights/volume/drops${qs(params)}`);
+}): Promise<DropsResponse> =>
+  apiGet<DropsResponse>(`/insights/volume/drops${qs(params)}`);

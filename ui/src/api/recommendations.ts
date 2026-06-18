@@ -3,7 +3,6 @@
 // Keep these in sync — the engine's JSON shape is wire-stable.
 
 import { apiGet, apiPost } from "./base";
-
 import type { InsightsWindow, InsightsSignal } from "./insights";
 
 /**

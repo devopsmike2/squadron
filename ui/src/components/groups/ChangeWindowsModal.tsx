@@ -131,10 +131,10 @@ export function ChangeWindowsModal({
             Change windows — {group?.name ?? "(loading…)"}
           </DialogTitle>
           <DialogDescription>
-            Rollouts to this group won't advance while a window is
-            active. Use these for peak-demand hours, storm-response
-            windows, or quarterly freezes. Add an effective date range
-            to restrict a window to a one-off period.
+            Rollouts to this group won't advance while a window is active. Use
+            these for peak-demand hours, storm-response windows, or quarterly
+            freezes. Add an effective date range to restrict a window to a
+            one-off period.
           </DialogDescription>
         </DialogHeader>
 
@@ -214,7 +214,9 @@ export function ChangeWindowsModal({
                   <Input
                     type="time"
                     value={w.end_local}
-                    onChange={(e) => updateField(i, "end_local", e.target.value)}
+                    onChange={(e) =>
+                      updateField(i, "end_local", e.target.value)
+                    }
                     className="mt-0.5"
                   />
                 </div>
@@ -229,8 +231,8 @@ export function ChangeWindowsModal({
                 </div>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                If end ≤ start, the window wraps past midnight (e.g.
-                22:00 to 06:00).
+                If end ≤ start, the window wraps past midnight (e.g. 22:00 to
+                06:00).
               </p>
 
               <div className="grid grid-cols-2 gap-2">
@@ -242,7 +244,11 @@ export function ChangeWindowsModal({
                   <Input
                     value={w.effective_from ?? ""}
                     onChange={(e) =>
-                      updateField(i, "effective_from", e.target.value || undefined)
+                      updateField(
+                        i,
+                        "effective_from",
+                        e.target.value || undefined,
+                      )
                     }
                     placeholder="2026-11-15T00:00:00Z"
                     className="mt-0.5 font-mono text-[11px]"
@@ -256,7 +262,11 @@ export function ChangeWindowsModal({
                   <Input
                     value={w.effective_to ?? ""}
                     onChange={(e) =>
-                      updateField(i, "effective_to", e.target.value || undefined)
+                      updateField(
+                        i,
+                        "effective_to",
+                        e.target.value || undefined,
+                      )
                     }
                     placeholder="2027-01-05T23:59:59Z"
                     className="mt-0.5 font-mono text-[11px]"
