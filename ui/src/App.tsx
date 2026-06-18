@@ -9,6 +9,7 @@ import {
 } from "react-router-dom";
 
 import Layout from "./layout";
+import ActionsPage from "./pages/Actions";
 import AgentsPage from "./pages/Agents";
 import AlertsPage from "./pages/Alerts";
 import AuditPage from "./pages/Audit";
@@ -23,6 +24,7 @@ import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
 import QuickstartPage from "./pages/Quickstart";
 import RolloutsPage from "./pages/Rollouts";
+import RunnersPage from "./pages/Runners";
 import SavingsPage from "./pages/Savings";
 import SettingsSiemPage from "./pages/SettingsSiem";
 import SettingsTokensPage from "./pages/SettingsTokens";
@@ -150,6 +152,14 @@ function AuthBoundary() {
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/rollouts" element={<RolloutsPage />} />
           <Route path="/deploy" element={<DeployPage />} />
+          {/* v0.55 SQ-2.8 / N4 — operational visibility into the action
+              runner system. /actions lists every signed request
+              Squadron dispatched; /runners lists the daemons that
+              accepted them. Sit next to Rollouts in Operations since
+              they answer the same operator question: what changed and
+              who applied it. */}
+          <Route path="/actions" element={<ActionsPage />} />
+          <Route path="/runners" element={<RunnersPage />} />
           {/* v0.54 Move 3 — incident drafter inbox. Sits in the
               Operations group next to Rollouts and Deploy because
               that's where the operator already lives during an

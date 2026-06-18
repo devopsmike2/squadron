@@ -692,10 +692,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 
 	// SQ-3.9 — incident drafter publishers. Clipboard is always
 	// registered. The GitHub Issues publisher is registered when
-	// all three SQUADRON_GITHUB_ISSUES_* env vars are set. Linear
-	// and Jira publishers are stamp only for now; their UI option
-	// stays available and the handler falls back to stamping the
-	// operator supplied external_id / external_url.
+	// all three SQUADRON_GITHUB_ISSUES_* env vars are set. The
+	// Linear publisher is registered when SQUADRON_LINEAR_API_KEY
+	// and SQUADRON_LINEAR_TEAM_ID are set. Jira stays stamp only
+	// for now; its UI option remains available and the handler
+	// falls back to stamping the operator supplied external_id /
+	// external_url.
 	publishers := incidents.NewPublisherRegistry()
 	if owner, repo, token := os.Getenv("SQUADRON_GITHUB_ISSUES_OWNER"),
 		os.Getenv("SQUADRON_GITHUB_ISSUES_REPO"),
@@ -720,6 +722,32 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			logger.Info("github issues publisher registered",
 				zap.String("owner", owner),
 				zap.String("repo", repo))
+		}
+	}
+	// v0.55 N6 — Linear publisher. Reads SQUADRON_LINEAR_API_KEY
+	// (personal API key, lin_api_xxxx) and SQUADRON_LINEAR_TEAM_ID.
+	// Optional SQUADRON_LINEAR_LABEL_IDS is a comma separated list
+	// of label IDs (not names; Linear references labels by ID).
+	if apiKey, teamID := os.Getenv("SQUADRON_LINEAR_API_KEY"),
+		os.Getenv("SQUADRON_LINEAR_TEAM_ID"); apiKey != "" && teamID != "" {
+		var labelIDs []string
+		if raw := os.Getenv("SQUADRON_LINEAR_LABEL_IDS"); raw != "" {
+			labelIDs = strings.Split(raw, ",")
+			for i := range labelIDs {
+				labelIDs[i] = strings.TrimSpace(labelIDs[i])
+			}
+		}
+		linPub, err := incidents.NewLinearPublisher(incidents.LinearConfig{
+			APIKey:   apiKey,
+			TeamID:   teamID,
+			LabelIDs: labelIDs,
+		})
+		if err != nil {
+			logger.Warn("linear publisher not enabled", zap.Error(err))
+		} else {
+			publishers.Register(linPub)
+			logger.Info("linear publisher registered",
+				zap.String("team_id", teamID))
 		}
 	}
 	apiServer.SetIncidentsPublishers(publishers)
