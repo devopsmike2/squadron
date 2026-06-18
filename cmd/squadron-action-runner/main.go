@@ -112,4 +112,3 @@ func buildLogger(level string) (*zap.Logger, error) {
 	zapCfg.DisableStacktrace = true
 	return zapCfg.Build()
 }
-

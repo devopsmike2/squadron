@@ -26,10 +26,10 @@ type RestartSystemdServiceParameters struct {
 }
 
 var allowedRestartStrategies = map[string]struct{}{
-	"":             {}, // default = restart
-	"restart":      {},
-	"try-restart":  {},
-	"reload":       {},
+	"":            {}, // default = restart
+	"restart":     {},
+	"try-restart": {},
+	"reload":      {},
 }
 
 // init registers the action type on Default at process load. Tests

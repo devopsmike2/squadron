@@ -138,25 +138,25 @@ func newRolloutsGetCommand() *cobra.Command {
 // newRolloutsCreateCommand is the most important command in the CLI
 // for CI use. The two ways to call it:
 //
-//   --template=standard-percent-ramp --group=... --target-config=...
-//   --stages=10:120,50:180,100:120 --group=... --target-config=...
+//	--template=standard-percent-ramp --group=... --target-config=...
+//	--stages=10:120,50:180,100:120 --group=... --target-config=...
 //
 // `--wait` blocks until the rollout reaches a terminal state and exits
 // non-zero on rolled_back / aborted-without-rollback so the pipeline
 // fails properly.
 func newRolloutsCreateCommand() *cobra.Command {
 	var (
-		name         string
-		groupID      string
-		targetCfgID  string
-		templateID   string
-		stagesSpec   string
-		maxDrift     int
-		maxErr       int
-		warmup       int
-		notify       string
-		wait         bool
-		waitTimeout  time.Duration
+		name        string
+		groupID     string
+		targetCfgID string
+		templateID  string
+		stagesSpec  string
+		maxDrift    int
+		maxErr      int
+		warmup      int
+		notify      string
+		wait        bool
+		waitTimeout time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -366,8 +366,8 @@ func newRolloutsWaitCommand() *cobra.Command {
 
 func newRolloutsPreviewCommand() *cobra.Command {
 	var (
-		groupID    string
-		targetCfg  string
+		groupID   string
+		targetCfg string
 	)
 	cmd := &cobra.Command{
 		Use:   "preview",
