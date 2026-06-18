@@ -72,6 +72,10 @@ func (e *SystemdExecutor) ExecuteRequest(ctx context.Context, req *actions.Reque
 	switch req.Action.Type {
 	case actions.RestartSystemdServiceType:
 		return e.executeRestartSystemd(ctx, req, started)
+	case actions.RestartDockerContainerType:
+		return e.executeRestartDocker(ctx, req, started)
+	case actions.RunShellAllowlistType:
+		return e.executeRunShellAllowlist(ctx, req, started)
 	default:
 		return &actions.Result{
 			Status:      actions.StatusFailure,
@@ -80,6 +84,138 @@ func (e *SystemdExecutor) ExecuteRequest(ctx context.Context, req *actions.Reque
 			CompletedAt: time.Now().UTC(),
 		}
 	}
+}
+
+func (e *SystemdExecutor) executeRestartDocker(ctx context.Context, req *actions.Request, started time.Time) *actions.Result {
+	var params actions.RestartDockerContainerParameters
+	if err := json.Unmarshal(req.Action.Parameters, &params); err != nil {
+		return &actions.Result{
+			Status:      actions.StatusFailure,
+			Stderr:      "decode parameters: " + err.Error(),
+			StartedAt:   started,
+			CompletedAt: time.Now().UTC(),
+		}
+	}
+	timeoutArg := []string{"--time", "10"}
+	if params.TimeoutSeconds > 0 {
+		timeoutArg = []string{"--time", fmt.Sprintf("%d", params.TimeoutSeconds)}
+	}
+
+	if req.Phase == actions.PhaseDryRun {
+		// Dry run = inspect the container. Reports whether it
+		// exists and what we would run on execute.
+		stdout, stderr, code, err := e.commandRunner.Run(ctx, "docker", "inspect", "--format", "{{.State.Status}}", params.Container)
+		out := map[string]any{
+			"planned_command": fmt.Sprintf("docker restart %s %s", strings.Join(timeoutArg, " "), params.Container),
+			"container":       params.Container,
+			"current_state":   strings.TrimSpace(stdout),
+		}
+		if err != nil {
+			out["inspect_error"] = err.Error()
+		}
+		return &actions.Result{
+			Status:      actions.StatusSuccess,
+			Stdout:      truncate(stdout, 4000),
+			Stderr:      truncate(stderr, 2000),
+			ExitCode:    code,
+			ResultData:  out,
+			StartedAt:   started,
+			CompletedAt: time.Now().UTC(),
+		}
+	}
+
+	args := append([]string{"restart"}, timeoutArg...)
+	args = append(args, params.Container)
+	stdout, stderr, code, err := e.commandRunner.Run(ctx, "docker", args...)
+	out := map[string]any{
+		"ran_command": fmt.Sprintf("docker %s", strings.Join(args, " ")),
+		"container":   params.Container,
+		"exit_code":   code,
+	}
+	status := actions.StatusSuccess
+	if err != nil || code != 0 {
+		status = actions.StatusFailure
+	}
+	res := &actions.Result{
+		Status:      status,
+		Stdout:      truncate(stdout, 4000),
+		Stderr:      truncate(stderr, 2000),
+		ExitCode:    code,
+		ResultData:  out,
+		StartedAt:   started,
+		CompletedAt: time.Now().UTC(),
+	}
+	if err != nil && status == actions.StatusFailure {
+		res.Stderr = strings.TrimSpace(res.Stderr + "\n" + err.Error())
+	}
+	return res
+}
+
+// executeRunShellAllowlist runs an exact allowlisted shell command.
+// Note: the capability matcher in actions/register_run_shell_allowlist.go
+// already enforces the allowlist; the runner re-checks defensively
+// would require knowing the runner's own capabilities here, which
+// it does via the Runner's actionAllowed gate. By the time the
+// executor sees the request the allowlist match has succeeded
+// twice (Squadron + runner).
+func (e *SystemdExecutor) executeRunShellAllowlist(ctx context.Context, req *actions.Request, started time.Time) *actions.Result {
+	var params actions.RunShellAllowlistParameters
+	if err := json.Unmarshal(req.Action.Parameters, &params); err != nil {
+		return &actions.Result{
+			Status:      actions.StatusFailure,
+			Stderr:      "decode parameters: " + err.Error(),
+			StartedAt:   started,
+			CompletedAt: time.Now().UTC(),
+		}
+	}
+	// Split the verbatim command. We do not invoke a shell; we
+	// argv-split the allowlisted string and exec directly so shell
+	// metacharacters (already blocked at validate time) cannot
+	// expand even if they slipped through.
+	fields := strings.Fields(params.Command)
+	if len(fields) == 0 {
+		return &actions.Result{
+			Status:      actions.StatusFailure,
+			Stderr:      "empty command after split",
+			StartedAt:   started,
+			CompletedAt: time.Now().UTC(),
+		}
+	}
+
+	if req.Phase == actions.PhaseDryRun {
+		return &actions.Result{
+			Status: actions.StatusSuccess,
+			ResultData: map[string]any{
+				"planned_command": params.Command,
+				"argv":            fields,
+			},
+			StartedAt:   started,
+			CompletedAt: time.Now().UTC(),
+		}
+	}
+
+	stdout, stderr, code, err := e.commandRunner.Run(ctx, fields[0], fields[1:]...)
+	out := map[string]any{
+		"ran_command": params.Command,
+		"exit_code":   code,
+	}
+	status := actions.StatusSuccess
+	if err != nil || code != 0 {
+		status = actions.StatusFailure
+	}
+	res := &actions.Result{
+		Status:      status,
+		Stdout:      truncate(stdout, 4000),
+		Stderr:      truncate(stderr, 2000),
+		ExitCode:    code,
+		ResultData:  out,
+		StartedAt:   started,
+		CompletedAt: time.Now().UTC(),
+	}
+	if err != nil && status == actions.StatusFailure {
+		res.Stderr = strings.TrimSpace(res.Stderr + "\n" + err.Error())
+	}
+	return res
 }
 
 func (e *SystemdExecutor) executeRestartSystemd(ctx context.Context, req *actions.Request, started time.Time) *actions.Result {
