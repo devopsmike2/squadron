@@ -1,271 +1,285 @@
-# Squadron Roadmap: The Policy Gate for AI Proposed Infrastructure Changes
+# Squadron Roadmap: The AI Ops Copilot for Engineering Teams
 
-This roadmap turns the strategic reframe from late v0.52 into trackable
-work. Squadron remains an OpAMP based OTel collector control plane, but
-its larger value, and the larger market, is as the deterministic
-policy gate between AI agents and production infrastructure. The six
-moves below get us from "tool that manages collectors" to "tool every
-AI vendor's output flows through in regulated environments."
+This roadmap reflects the post-v0.52 strategic pivot. Squadron is
+no longer marketed as "compliance gate for AI-proposed OTel changes
+in regulated industries." It is now marketed as "the AI ops copilot
+that catches the problem, drafts the fix, runs it with your
+approval, and writes the post-mortem ticket before you finish your
+coffee." The compliance pack stays in the product as a feature
+pillar; regulated buyers are the second act, not the first.
+
+The buyer is the engineering manager or platform team lead who is
+exhausted from their team writing incident tickets at 2 AM. The
+distribution channels are engineer-to-engineer: Hacker News, Reddit
+r/devops, dev.to, the OpenTelemetry community Slack, engineering
+podcasts, and LinkedIn posts framed as "I built this because the
+problem broke my team."
 
 Each move below is a ticket. Sub tasks are checkboxes. Effort
 estimates are focused engineering days; double them for contractor
-after hours calendar time. Dependencies are stated explicitly so the
-sequencing is unambiguous.
+after hours calendar time. Dependencies are stated explicitly.
 
 ---
 
 ## Dependency Graph
 
 ```
-Move 6 (Marketing)  ───────────────────────────► always parallel
-Move 1 (Demo)  ─────┬─► Move 2 (Proposals) ─┬─► Move 3 (Agent SDK)
-                    │                        └─► Move 4 (Multi cloud)
-                    └─► Move 5 (AI governance evidence)
+Move 8 (Content)  ──────────────────────────────────► always parallel
+Move 1 (Demo loop, config-change) ──┬─► Move 2 (Action runner)
+                                     ├─► Move 3 (Ticket auto-draft)
+                                     └─► Move 4 (Proposals refactor)
+                                              └─► Move 5 (Multi-cloud)
+                                              └─► Move 6 (Agent SDK)
+                                              └─► Move 7 (AI governance evidence)
 ```
 
 ## Quarter Plan
 
-| Quarter           | Work                                             |
-| ----------------- | ------------------------------------------------ |
-| Q1 (4-6 weeks)    | Move 1 demo loop, Move 5 evidence writing, Move 6 content |
-| Q2 (6-12 weeks)   | Move 2 proposals refactor, Move 4 multi cloud polish, Move 6 demo launch post |
-| Q3                | Move 3 agent SDK, conference talks if accepted, first paid pilot conversations |
+| Quarter           | Work                                                              |
+| ----------------- | ----------------------------------------------------------------- |
+| Q1 (4-6 weeks)    | Finish Move 1 demo loop, draft Move 2 action runner design        |
+| Q2 (6-12 weeks)   | Ship Move 2 (action runner MVP) plus Move 3 (auto-drafted ticket) |
+| Q3                | Move 4 proposals refactor, Move 8 content compounds, first paid pilots |
+| Q4                | Move 5 multi-cloud, Move 6 agent SDK, Move 7 evidence updates     |
 
 ---
 
-## Move 1: Build the Demo Loop (AI proposes, Squadron gates)
+## Move 1: Build the Demo Loop (telemetry config-change flow)
 
-**Status:** Next, start immediately
-**Effort:** ~7 focused days, 2-3 calendar weeks
+**Status:** In progress, SQ-1.1 through SQ-1.6 shipped; SQ-1.7 next
+**Effort:** ~7 focused days remaining, ~3 calendar weeks
 **Dependencies:** None, foundational
 
-**Goal.** Produce a working two minute video that shows the end to end
-loop: cost spike fires, Claude consumes the alert plus context, AI
-emits a structured rollout proposal back to Squadron's API,
-require_approval forces the rollout into pending_approval, human gets
-a Slack notification with Claude's reasoning attached, human approves,
-rollout stages, cost recovers in the next pipeline health window. This
-video becomes the centerpiece of every Squadron conversation for the
-next year.
+**Goal.** Produce a working two-minute video showing the end-to-end
+loop for the telemetry config-change case: cost spike fires, Claude
+consumes the alert plus context, AI emits a structured rollout
+proposal back to Squadron's API, require_approval forces the
+rollout into pending_approval, human gets a Slack notification with
+Claude's reasoning attached, human approves, rollout stages, cost
+recovers. This becomes the first half of the engineer-facing demo.
 
-**Sub tasks**
+The action runner version of the loop (Move 2) extends this with
+node actions; the two demos together tell the full story.
 
-- [ ] Schema migration: `proposed_by` (enum: operator, ai, system),
-  `proposal_reasoning` (text), `evidence_refs` (JSON array) on
-  rollouts. ALTER TABLE on sqlite, parallel update in memory store.
-  (0.5d)
-- [ ] Update Go types and API JSON contracts for the three new
-  fields. (bundled with schema)
-- [ ] Implement `ProposeFromCostSpike(ctx, spike)` in `internal/ai`.
-  Pull spike context plus recent pipeline health, configlint findings,
-  and recommendations. Call Anthropic Messages API with tool use
-  feature to constrain output to a valid rollout payload. Return
-  payload plus reasoning text. (1.5d, most of which is prompt
-  iteration)
-- [ ] Background goroutine that polls cost_spike rows where
-  `proposal_id IS NULL`, calls ProposeFromCostSpike, posts the result
-  back through the existing rollout service. (0.5d)
-- [ ] Audit event types `proposal.created` and `proposal.evidence_linked`
-  with origin and reasoning fields. (0.5d)
-- [ ] Slack notification template includes AI reasoning section plus
-  the top three evidence links. Existing webhook notifier fires it.
-  (0.5d)
-- [ ] UI: "AI Proposed" badge on rollouts page rows. (0.5d)
-- [ ] UI: AI reasoning panel plus evidence section in the approval
-  drawer. Format reasoning to look like an engineer's note, not a
-  chatbot transcript. (1.5d)
-- [ ] Seed demo scenario in the fleetsim environment: one collector
-  ships high cardinality metric, billing tile spikes, AI proposes
-  dropping the offending metric. Wrap as a make target so any
-  operator can reproduce. (0.5d)
-- [ ] Stress test the proposer: 50 runs against the seeded scenario,
-  verify proposal quality and structural consistency. Tune the prompt
-  if needed. (0.5d)
-- [ ] Record the screen capture via Chrome MCP. (0.5d)
-- [ ] Generate the voice over with ElevenLabs voice clone. (0.25d)
-- [ ] Composite and edit final MP4 with ffmpeg. (0.5d)
+**Sub tasks** (status as of pivot)
 
-**Acceptance criteria.** A two minute MP4 with audio narration shows
-the full loop. The seeded scenario reproduces reliably from a single
-make target. The audit timeline contains every step of the chain.
-Demo is shippable to LinkedIn and customer conversations.
+- [x] SQ-1.1: schema migration (proposed_by, proposal_reasoning, evidence_refs)
+- [x] SQ-1.3: ProposeFromCostSpike service method in internal/ai
+- [x] SQ-1.4: bridge daemon wires cost spikes to AI proposer
+- [x] SQ-1.5: proposal.created / evidence_linked / declined audit events
+- [x] SQ-1.6: webhook payload surfaces AI reasoning + evidence
+- [ ] SQ-1.7: UI badge on rollouts page rows when proposed_by=ai
+- [ ] SQ-1.8: UI reasoning panel + evidence section in approval drawer
+- [ ] SQ-1.9: seed demo scenario in fleetsim (make target)
+- [ ] SQ-1.10: stress test proposer (50 runs against seeded scenario)
+- [ ] SQ-1.11: record screen capture via Chrome MCP
+- [ ] SQ-1.12: generate voiceover via ElevenLabs clone
+- [ ] SQ-1.13: composite final MP4 with ffmpeg
+
+**Acceptance criteria.** A two-minute MP4 with audio narration shows
+the full config-change loop. Reproducible from a single make
+target. Audit timeline contains every step of the chain.
 
 ---
 
-## Move 2: Formalize "Proposal" as the Unifying Concept
+## Move 2: Action Runner (NEW centerpiece)
 
-**Status:** Backlog, start after Move 1 demo lands
+**Status:** Next after Move 1 demo lands
+**Effort:** ~6-8 weeks for MVP
+**Dependencies:** Move 1 (proves the propose-approve-execute loop
+shape works for config changes; the action runner extends the
+same loop to node actions)
+
+**Goal.** Build the opt-in daemon that lets Squadron execute scoped
+node actions after approval. This is what turns Squadron from a
+config-push tool into an AI ops copilot that can actually fix
+problems. Design doc lives at `docs/action-runner-design.md`; this
+roadmap entry tracks delivery.
+
+**Sub tasks** (sketch, expanded in the design doc)
+
+- [ ] SQ-2.1: action protocol spec (request/response, signing,
+  capability declaration) finalized in design doc
+- [ ] SQ-2.2: storage schema for actions (action_definitions table,
+  action_runs table, capabilities per runner)
+- [ ] SQ-2.3: extend Proposal model so a proposal can carry either
+  a rollout spec or an action spec or both
+- [ ] SQ-2.4: cmd/squadron-action-runner Go binary
+- [ ] SQ-2.5: first action type, restart-systemd-service
+- [ ] SQ-2.6: signed action dispatch (Squadron signs, runner verifies)
+- [ ] SQ-2.7: action audit events (action.proposed, action.approved,
+  action.executed, action.failed)
+- [ ] SQ-2.8: UI surfaces action proposals in approval drawer with
+  dry-run output preview
+- [ ] SQ-2.9: end-to-end demo (cost spike → AI proposes action →
+  human approves → runner executes restart → metrics confirm)
+- [ ] SQ-2.10: paid external security review of the signing scheme
+
+**Acceptance criteria.** A signed action request flows from
+Squadron to an installed runner, executes the restart-systemd-service
+action against a specified unit name, returns the result, and
+records the full chain in audit. Runner refuses any action not in
+its declared capability set.
+
+---
+
+## Move 3: Auto-Drafted Incident Ticket
+
+**Status:** After Move 2 ships the action runner
+**Effort:** ~2-3 weeks
+**Dependencies:** Move 2 (need a completed action execution to draft
+the ticket; can ship a partial version against config-change-only
+loops earlier if needed)
+
+**Goal.** Close the engineer's loop. After a proposal executes
+(either a config change or an action), Squadron uses the assembled
+context plus the AI to draft a complete incident ticket in the
+engineer's issue tracker, with title, description, investigation
+trail, resolution, verification metrics, and a placeholder for
+lessons learned. The engineer reviews, edits, and posts. This is
+the moment that turns "I saved 30 seconds clicking through Squadron"
+into "I saved 30 minutes writing this up."
+
+**Sub tasks**
+
+- [ ] SQ-3.1: ticket draft service in internal/ai that consumes the
+  full audit chain for a spike+proposal+execution and emits a draft
+- [ ] SQ-3.2: integration with Jira, Linear, and GitHub Issues
+- [ ] SQ-3.3: UI "draft ticket" button on completed proposals
+- [ ] SQ-3.4: configurable templates per organization (matches their
+  incident format)
+- [ ] SQ-3.5: audit event ticket.drafted with the issue-tracker URL
+
+**Acceptance criteria.** From a completed proposal, one click
+produces a draft ticket in the configured tracker with the full
+incident narrative pre-populated.
+
+---
+
+## Move 4: Formalize the "Proposal" Concept
+
+**Status:** Backlog, after Move 3
 **Effort:** ~3-4 weeks
-**Dependencies:** Move 1 (need to see what real AI proposals look
-like in production before fixing the model)
+**Dependencies:** Move 2 and Move 3 (so the unified Proposal type
+covers config-change, action, and ticket-draft origins from the
+start)
 
-**Goal.** Refactor rollouts, recommendations, and alert backed actions
-into a unified proposals model. Origin (operator, ai, system), intent
-(what to do), evidence (why), policy evaluation (gates run), outcome
-(applied, rolled back, rejected) become the same shape for every
-change in the system. This is the durable API surface AI agents,
-operator clicks, and automated triggers all target.
+**Goal.** Refactor rollouts, recommendations, actions, and alert
+actions into a unified `proposals` model. Single API surface for
+every change. Compliance evidence trail consistent across change
+types.
 
-**Sub tasks**
-
-- [ ] Design doc: unified Proposal type, fields, lifecycle, and
-  back compat strategy for existing /api/v1/rollouts callers
-- [ ] Storage migration: `proposals` table; existing rollouts table
-  becomes a specialized projection or join target
-- [ ] New API surface: /api/v1/proposals plus
-  /api/v1/proposals/:id/approve and /reject
-- [ ] Back compat: /api/v1/rollouts continues to work, internally
-  delegates to proposals
-- [ ] Migrate recommendations engine to emit proposals instead of a
-  separate recommendation type
-- [ ] Update audit events to a unified `proposal.*` shape; map old
-  `rollout.*` events into the new namespace with aliases for
-  compatibility
-- [ ] UI: unified Proposals page replaces the standalone rollouts
-  list; filters distinguish proposal origin
-- [ ] Update docs and four mapping docs to reference proposals as the
-  change unit
-
-**Acceptance criteria.** Single API surface for every change. Both AI
-and operator flows produce a proposal record with the same shape. The
-compliance evidence trail is consistent across change types.
+(Sub tasks unchanged from prior roadmap; preserved here for
+continuity. See git history of this file for the full list.)
 
 ---
 
-## Move 3: Agent SDK and Integration Surface
+## Move 5: Multi-Cloud and Cross-Environment Polish
+
+**Status:** Backlog
+**Effort:** ~1-2 weeks
+**Dependencies:** Move 4
+
+**Goal.** First-class cloud provider and environment attributes.
+Per-environment policy. Action runners can target a specific
+environment slice. Fleet Map clusters by cloud provider.
+
+(Sub tasks unchanged.)
+
+---
+
+## Move 6: Agent SDK and Integration Surface
 
 **Status:** Backlog
 **Effort:** ~2-3 weeks
-**Dependencies:** Move 2 (SDK targets the unified Proposals API)
+**Dependencies:** Move 4
 
 **Goal.** Make Squadron trivially easy to integrate from any AI
 vendor or custom proposer. Squadron becomes the gate every AI
 vendor's output flows through in regulated environments.
 
-**Sub tasks**
-
-- [ ] Go SDK: github.com/devopsmike2/squadron-agent-sdk-go. Wraps the
-  Proposals API, handles auth, retries, and the approval callback
-  webhook
-- [ ] Python SDK: pypi.org/project/squadron-agent. Same surface as
-  Go SDK
-- [ ] Public reference implementation: Claude backed cost optimizer
-  agent in a new squadron-agents/ repo. This is the Move 1 demo
-  repackaged as a standalone open source agent
-- [ ] Integration docs: "Build an Agent for Squadron" with examples
-- [ ] Webhook callback design and example: agents listen for approval
-  outcomes (approved, rejected, applied, rolled back)
-- [ ] Second example agent: PagerDuty fed proposer. Uses PagerDuty
-  incident webhook as trigger, emits a Squadron proposal in response.
-  Demonstrates that the agent contract is vendor neutral
-
-**Acceptance criteria.** A third party engineer can build a working
-Squadron agent in under an hour using the SDK and the integration
-docs. Two reference implementations exist in public repos.
+(Sub tasks unchanged. With the engineer-copilot pivot the SDK is
+less time-critical because we are now selling the complete tool to
+engineers, not selling the gate to AI vendors. SDK work pushes to
+Q4 unless a partnership opportunity makes it earlier.)
 
 ---
 
-## Move 4: Multi Cloud and Cross Environment Polish
+## Move 7: AI Governance Compliance Evidence (was Move 5)
 
 **Status:** Backlog
-**Effort:** ~1-2 weeks
-**Dependencies:** Move 2 (cleanest if proposals already model the
-target as a structured field)
+**Effort:** ~2-3 weeks, writing-heavy
+**Dependencies:** Moves 1 through 4
 
-**Goal.** Make cloud provider and environment first class attributes.
-Enable per environment proposal scoping. A proposal can target
-"prod fleets across AWS and Azure" but not staging in GCP.
+**Goal.** Capture the evidence regulated buyers will eventually ask
+for around AI in operations. NIST AI RMF mapping plus updates to
+the existing NIST CSF, NERC CIP, SOC 2, and HIPAA mapping docs.
+This is the second-act story for when engineering-team customers
+grow into compliance-grade buyers, or when a regulated buyer
+finds Squadron through engineering-team word of mouth.
 
-**Sub tasks**
-
-- [ ] Add `cloud_provider`, `region`, `environment` to the Agent
-  struct
-- [ ] Auto detect from OpAMP attributes where available
-  (`cloud.provider`, `cloud.region`, `deployment.environment`)
-- [ ] Surface in Fleet Map: cluster nodes by cloud provider, show
-  region badges
-- [ ] Group attributes: per environment `require_approval` and
-  `change_windows` (Compliance Pack extension)
-- [ ] Proposal targeting: scope to environment slice of a group
-- [ ] Filter chips on Agents, Rollouts, and Proposals pages
-
-**Acceptance criteria.** A proposal targeting "all prod fleets across
-AWS and Azure" applies to exactly those agents. Fleet Map renders the
-multi cloud picture cleanly.
+(Sub tasks unchanged.)
 
 ---
 
-## Move 5: AI Governance Compliance Evidence
-
-**Status:** Next, run in parallel with Move 1
-**Effort:** ~2-3 weeks, writing heavy
-**Dependencies:** Move 1 (need the AI proposed audit events to map
-against)
-
-**Goal.** Capture the evidence regulators are starting to ask for
-around AI in production operations. Position Squadron as the first
-compliance grade tool for AI in regulated environments. NIST released
-the AI Risk Management Framework in 2024; no OTel control plane has
-mapped to it yet. We can stake the claim early.
-
-**Sub tasks**
-
-- [ ] Add `proposal_origin` and `proposal_reasoning` to every audit
-  event type that can be linked to a proposal
-- [ ] Add `proposal_id` back reference on existing event types where
-  applicable
-- [ ] Write the fifth compliance mapping doc: NIST AI RMF v1.0
-  mapping. Cover the GOVERN, MAP, MEASURE, and MANAGE functions
-- [ ] Update existing NIST CSF doc with an AI governance subsection
-  pointing at the new mapping
-- [ ] Update NERC CIP doc: CIP-013 supply chain mapping extends to AI
-  components in the operations toolchain
-- [ ] Update SOC 2 doc: CC8.1 change management coverage explicitly
-  includes AI originated changes
-- [ ] Update HIPAA doc: §164.308 administrative safeguards include
-  AI decision logging
-- [ ] Update the one pager to surface AI governance as a positioning
-  pillar alongside collector management
-
-**Acceptance criteria.** Squadron is the first published OTel control
-plane with a NIST AI RMF mapping. The compliance evidence package
-includes AI specific event fields that auditors can filter on.
-
----
-
-## Move 6: Content and Marketing Cadence
+## Move 8: Content and Marketing Cadence (reframed)
 
 **Status:** In progress, Buffer pipeline being set up
 **Effort:** Ongoing, 2-3 posts per week sustained
-**Dependencies:** None, runs in parallel with everything
+**Dependencies:** None, parallel with everything
 
-**Goal.** Build the LinkedIn audience for the new positioning before
-the Move 1 demo lands. By the time the demo ships, the audience is
-primed to understand what they are seeing.
+**Goal.** Build the LinkedIn and engineer-community audience for
+the new positioning. The audience is engineering managers and
+platform team leads, not compliance officers. The content threads
+through the engineer's lived experience.
 
-**Sub tasks**
+**Theme rotation through the launch window**
 
-- [ ] Buffer Creator tier signed up, API key delivered
-- [ ] ElevenLabs voice clone trained, voice ID delivered
-- [ ] First batch of 6 posts written (3 educational, 3 personal)
-- [ ] Posting cadence locked: Tuesday and Thursday mornings, US
-  Eastern
-- [ ] Theme rotation through the launch window:
-  - Weeks 1-3: "Why OTel collector management is harder than vendors
-    will tell you"
-  - Weeks 4-6: "How regulated industries actually adopt AI"
-  - Weeks 7-9: "Deterministic gates: why AI in ops needs them"
-  - Week 10: Demo video launch with companion post
-- [ ] Lead magnet: NIST AI RMF mapping PDF (output of Move 5)
-  available for download
-- [ ] Conference talk submissions: S4 ICS, GridSecCon, HIPAA Summit,
-  AICPA SOC
+- Weeks 1-3: "OTel collector management at scale is harder than
+  any vendor tells you" (lived-experience posts about the specific
+  pains)
+- Weeks 4-6: "Incident tickets are the second job nobody asked for"
+  (the problem auto-drafted tickets solve)
+- Weeks 7-9: "How we let AI run ops without giving it the keys"
+  (the propose-approve-execute pattern and the action runner story)
+- Week 10: Demo video launch (config-change loop first, action
+  runner teased)
+- Weeks 11+: Action runner posts as that feature ships
 
-**Acceptance criteria.** 30 or more posts published in the first
-quarter. Around 500 followers gained. At least three inbound DMs from
-qualified prospects. At least one conference talk accepted.
+**Channels beyond LinkedIn**
+
+- Hacker News launch when v1.0 (config + action + ticket) ships
+- Reddit r/devops, r/sre, r/kubernetes for the action-runner story
+- OpenTelemetry community Slack for the OTel-management story
+- One engineering podcast appearance per quarter (Software Engineering
+  Daily, The InfoQ Podcast, Changelog)
+- Conference submissions: KubeCon, SREcon, Monitorama
+  (engineer-focused, not compliance-focused)
+
+(Sub tasks updated to match new audience.)
 
 ---
+
+## What the Pivot Costs Us, Honestly
+
+The NERC CIP / SOC 2 / HIPAA mapping work we did over the past two
+weeks is not wasted; it stays in the product as a feature pillar
+and gets reused when engineering-team customers grow into compliance
+buyers. The compliance pack code we split out in v0.52 still ships;
+operators who run the Enterprise binary still get policy
+enforcement, change windows, signed SIEM export, and the per-call
+audit trail. The story we tell about that work changes from "this
+is why you should buy Squadron" to "this is what makes Squadron
+defensible when your customers grow up."
+
+The pivot gains: a buyer who is reachable through channels the
+founder actually uses, a sales cycle measured in weeks rather than
+quarters, a deal size that compounds rather than waits, and a
+product story that maps cleanly onto the founder's own lived
+experience as an engineer. The founder narrative ("I was an
+engineer at a big company, managing OTel collectors was painful,
+I built the tool I wished I had") is the strongest version of this
+story and it is true.
 
 ## Status Conventions
 
@@ -276,10 +290,6 @@ qualified prospects. At least one conference talk accepted.
 
 ## Update Cadence
 
-Review this roadmap weekly. Move items between status columns as work
-progresses. The dependency graph is the contract: do not start a
-downstream move until its upstream has hit acceptance.
-
-Squadron stays the policy gate. Everything else, including the AI
-proposers, the dashboards, the integrations, plugs into that gate
-through the Proposals API.
+Review this roadmap weekly. Move items between status columns as
+work progresses. The dependency graph is the contract: do not start
+a downstream move until its upstream has hit acceptance.
