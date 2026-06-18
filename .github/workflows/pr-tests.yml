@@ -18,7 +18,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25'
         cache: true
         
     - name: Cache Go modules
@@ -108,7 +108,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25'
         cache: true
         
     - name: Cache Go modules
@@ -149,7 +149,7 @@ jobs:
         docker run --rm -d --name squadron-test -p 8080:8080 -p 4317:4317 -p 4318:4318 squadron:latest
         sleep 10
         # Test if the service is responding
-        curl -f http://localhost:8080/api/v1/health || exit 1
+        curl -f http://localhost:8080/health || exit 1
         docker stop squadron-test
 
   security-scan:
@@ -194,7 +194,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25'
         cache: true
         
     - name: Set up Node.js

@@ -133,7 +133,6 @@ func (p *AzureDevOpsProvider) do(ctx context.Context, method, urlStr, pat string
 type adoRunResponse struct {
 	ID           int64      `json:"id"`
 	URL          string     `json:"url"`
-	WebURL       string     `json:"_links,omitempty"`
 	Links        adoLinks   `json:"_links"`
 	State        string     `json:"state"`  // "inProgress" | "completed" | "canceling"
 	Result       string     `json:"result"` // "succeeded" | "failed" | "canceled" | "skipped"
