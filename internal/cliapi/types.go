@@ -177,6 +177,27 @@ type AuditResponse struct {
 	Events []AuditEvent `json:"events"`
 }
 
+// IncidentDraft mirrors types.IncidentDraft. The CLI surfaces this
+// for `squadronctl incidents list/view/dismiss/publish`.
+type IncidentDraft struct {
+	ID              string    `json:"id"`
+	ActionRequestID string    `json:"action_request_id,omitempty"`
+	RolloutID       string    `json:"rollout_id,omitempty"`
+	Status          string    `json:"status"`
+	Title           string    `json:"title"`
+	BodyMarkdown    string    `json:"body_markdown"`
+	Provider        string    `json:"provider,omitempty"`
+	ExternalID      string    `json:"external_id,omitempty"`
+	ExternalURL     string    `json:"external_url,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// IncidentsResponse is the wire shape for /api/v1/incidents/drafts.
+type IncidentsResponse struct {
+	Drafts []IncidentDraft `json:"drafts"`
+}
+
 // APIToken mirrors services.APIToken. Plaintext is NEVER on this type.
 // Scopes is empty for legacy pre-v0.10 tokens (treated as full-access
 // by the middleware); explicit scopes for v0.10+ tokens.

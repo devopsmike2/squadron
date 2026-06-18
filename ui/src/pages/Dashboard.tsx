@@ -21,6 +21,7 @@ import {
   CircleDotIcon,
   CircleHelpIcon,
   CircleSlashIcon,
+  Inbox,
   RocketIcon,
   ServerIcon,
 } from "lucide-react";
@@ -32,6 +33,7 @@ import useSWR from "swr";
 import { getAgents, getAgentStats } from "@/api/agents";
 import { listAlertRules } from "@/api/alerts";
 import { listAuditEvents } from "@/api/audit";
+import { listIncidentDrafts } from "@/api/incidents";
 import { listRollouts } from "@/api/rollouts";
 import { SquadronMark } from "@/components/brand/SquadronMark";
 import { CostSpikesBanner } from "@/components/cost-spikes/CostSpikesPanel";
@@ -560,6 +562,15 @@ export default function DashboardPage() {
   const { data: auditEvents } = useSWR("/audit/events?limit=20", () =>
     listAuditEvents({ limit: 20 }),
   );
+  // v0.54 Move 3 — open incident draft count for the inbox tile.
+  // Polls a bit faster than the page-level Incidents view since the
+  // dashboard is where operators most often check "is there anything
+  // waiting for me?".
+  const { data: openDrafts } = useSWR(
+    "/incidents/drafts?status=draft",
+    () => listIncidentDrafts({ status: "draft" }),
+    { refreshInterval: 30_000 },
+  );
 
   const agents: Agent[] = React.useMemo(
     () => agentsResp?.items ?? [],
@@ -617,6 +628,17 @@ export default function DashboardPage() {
       trend: "neutral",
       icon: AlertTriangleIcon,
       href: "/alerts",
+    },
+    // v0.54 Move 3 — incident drafts inbox. Surfaces the count of
+    // AI drafted postmortem tickets waiting for review so the
+    // operator catches them without having to open /incidents.
+    {
+      label: "Incident drafts",
+      value: (openDrafts ?? []).length,
+      hint: (openDrafts ?? []).length > 0 ? "Awaiting review" : "Inbox empty",
+      trend: (openDrafts ?? []).length > 0 ? "warn" : "good",
+      icon: Inbox,
+      href: "/incidents",
     },
   ];
 
