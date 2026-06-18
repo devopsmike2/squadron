@@ -91,6 +91,15 @@ func (m *MockAgentService) DeleteGroup(ctx context.Context, id string) error {
 	return args.Error(0)
 }
 
+// UpdateGroup was added to the services.AgentService interface in
+// v0.48 for the approval-policy toggle on Groups settings. This
+// mock stub keeps the opamp tests compiling; none of them exercise
+// UpdateGroup directly, so the testify Called pattern is enough.
+func (m *MockAgentService) UpdateGroup(ctx context.Context, group *services.Group) error {
+	args := m.Called(ctx, group)
+	return args.Error(0)
+}
+
 func (m *MockAgentService) CreateConfig(ctx context.Context, config *services.Config) error {
 	args := m.Called(ctx, config)
 	return args.Error(0)
