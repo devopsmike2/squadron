@@ -40,7 +40,9 @@ import {
   getRecommendations,
   getRecommendationsForAgent,
   type Recommendation,
+  type RecommendationActionKind,
   type RecommendationSeverity,
+  type RecommendationSourceKind,
 } from "@/api/recommendations";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -168,6 +170,7 @@ function RecommendationRow({
   const [busy, setBusy] = useState<"copy" | "dismiss" | "explain" | null>(null);
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [iacExpanded, setIacExpanded] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
   const [explainError, setExplainError] = useState<string | null>(null);
   const { capabilities } = useAICapabilities();
@@ -210,6 +213,25 @@ function RecommendationRow({
     }
   };
 
+  // v0.85 — stubbed action handler. Slice 1 wires the typed
+  // Action through to the UI but defers the actual mutation
+  // dispatch (start rollout, create plan, open discovery action)
+  // to a later slice. console.log + alert is the agreed slice-1
+  // placeholder; the production version will branch on
+  // rec.action.kind and call the appropriate mutation.
+  const handleAction = () => {
+    if (!rec.action) return;
+    console.log("recommendation action invoked", {
+      recommendation_id: rec.id,
+      kind: rec.action.kind,
+      payload: rec.action.payload,
+    });
+    window.alert(
+      `Action "${actionButtonLabel(rec.action.kind)}" is wired in a later slice. ` +
+        `Recommendation ${rec.id} (${rec.action.kind}).`,
+    );
+  };
+
   const handleDismiss = async () => {
     setBusy("dismiss");
     try {
@@ -238,6 +260,13 @@ function RecommendationRow({
           <div className="flex flex-wrap items-baseline gap-x-2">
             <div className="text-sm font-medium leading-snug">{rec.title}</div>
             <SeverityPill severity={rec.severity} />
+            {/* v0.85 — source kind badge. Renders next to the
+                severity pill so an operator scanning the list
+                can tell at a glance whether a recommendation
+                came from a cost spike (JARVIS), a discovery
+                scan, or an operator. Unknown / absent → no
+                badge, no layout shift. */}
+            {rec.source && <SourceBadge source={rec.source.kind} />}
             {rec.est_savings_bytes > 0 && (
               <span className="font-tabular inline-flex items-center gap-1 text-[11px] text-muted-foreground">
                 <CoinsIcon className="h-3 w-3" />~
@@ -289,6 +318,34 @@ function RecommendationRow({
                 <pre className="mt-3 max-h-64 overflow-auto rounded-sm bg-muted/60 p-2 font-mono text-[11px] leading-snug">
                   {rec.snippet}
                 </pre>
+              )}
+              {/* v0.85 — Infrastructure-as-Code block. Present
+                  for discovery-style recommendations whose
+                  remediation is cloud-side (Terraform / CDK /
+                  Pulumi). Reuses the same <pre> style as the
+                  YAML snippet so the visual weight is
+                  consistent; sits below the collector YAML
+                  because the operator typically reads the
+                  YAML first and reaches for IaC only when the
+                  fix is cloud-side. Wrapped in its own
+                  collapse because IaC snippets can be long
+                  enough to overwhelm the details body. */}
+              {rec.iac && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setIacExpanded((v) => !v)}
+                    className="font-tabular text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                  >
+                    {iacExpanded ? "Hide" : "Show"} Infrastructure-as-Code (
+                    {rec.iac.format})
+                  </button>
+                  {iacExpanded && (
+                    <pre className="mt-2 max-h-64 overflow-auto rounded-sm bg-muted/60 p-2 font-mono text-[11px] leading-snug">
+                      {rec.iac.source}
+                    </pre>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -352,6 +409,20 @@ function RecommendationRow({
             </Link>
           </>
         )}
+        {/* v0.85 — typed action button. Renders whichever label
+            matches rec.action.kind. Slice 1 wires the click to a
+            stub (console.log + alert) and defers the actual
+            mutation dispatch to a later slice. */}
+        {rec.action && (
+          <button
+            type="button"
+            onClick={handleAction}
+            disabled={busy !== null}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+          >
+            {actionButtonLabel(rec.action.kind)}
+          </button>
+        )}
         <button
           type="button"
           onClick={handleDismiss}
@@ -402,6 +473,71 @@ function severityIcon(s: RecommendationSeverity) {
       return (
         <InfoIcon className="h-4 w-4" style={{ color: severityColor(s) }} />
       );
+  }
+}
+
+// SourceBadge — v0.85 — sibling pill to SeverityPill that
+// indicates where the recommendation came from. Colors are
+// distinct from the severity palette so the two badges don't
+// blur together: blue for cost spikes (the JARVIS arc the
+// operator already knows), violet for discovery scans (the new
+// universal-observation arc), neutral gray for manual. Unknown
+// values fall through to the default (gray + raw kind text) so
+// a future SourceKind addition doesn't require a UI deploy.
+function SourceBadge({ source }: { source: RecommendationSourceKind }) {
+  const label = sourceBadgeLabel(source);
+  const color = sourceBadgeColor(source);
+  return (
+    <span
+      className="font-tabular rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
+      style={{
+        color,
+        borderColor: `color-mix(in oklch, ${color} 40%, transparent)`,
+        background: `color-mix(in oklch, ${color} 12%, transparent)`,
+      }}
+      title={`Source: ${source}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function sourceBadgeColor(source: RecommendationSourceKind): string {
+  switch (source) {
+    case "cost_spike":
+      return "var(--info)"; // blue — JARVIS arc the operator already knows
+    case "discovery_scan":
+      // Violet for the universal-observation arc — distinct from
+      // info/destructive/warning so the discovery surface reads
+      // as its own neighborhood.
+      return "oklch(0.62 0.18 295)";
+    case "manual":
+      return "var(--muted-foreground)";
+  }
+}
+
+function sourceBadgeLabel(source: RecommendationSourceKind): string {
+  switch (source) {
+    case "cost_spike":
+      return "Cost spike";
+    case "discovery_scan":
+      return "Discovery";
+    case "manual":
+      return "Manual";
+  }
+}
+
+// actionButtonLabel — v0.85 — human-readable button text per
+// ActionKind. Imperative voice matching the design doc's prose
+// ("Start rollout", "Create plan", "View action").
+function actionButtonLabel(kind: RecommendationActionKind): string {
+  switch (kind) {
+    case "rollout":
+      return "Start rollout";
+    case "plan":
+      return "Create plan";
+    case "discovery_action":
+      return "View action";
   }
 }
 

@@ -5,9 +5,11 @@ package recommendations
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -523,4 +525,294 @@ func extractAttributeKey(title string) string {
 		return ""
 	}
 	return title[start+1 : start+1+end]
+}
+
+// ----------------------------------------------------------------
+// v0.85 — Source / Action / IaC field tests. Validates the
+// recommendation-surface generalization decision (universal
+// discovery design doc, decision 7). Wire-stability for the
+// existing fields is the load-bearing property here; the new
+// fields are additive + omitempty.
+// ----------------------------------------------------------------
+
+// TestRecommendationMarshalsNewFields exercises the v0.85 typed
+// metadata roundtrip. Construct with Source + Action + IaC
+// populated, marshal, unmarshal, verify each subfield survives.
+func TestRecommendationMarshalsNewFields(t *testing.T) {
+	rolloutPayload := json.RawMessage(`{"group_id":"prod-edge","config_version":"v42","canary_pct":10}`)
+	original := Recommendation{
+		ID:              "rec-source-test",
+		Category:        CategoryNoisyAttribute,
+		Severity:        SeverityWarn,
+		Title:           "Drop attribute http.url from metrics",
+		Detail:          "Saves ~40% of metrics bytes.",
+		Signal:          insights.SignalMetrics,
+		EstSavingsBytes: 420_000,
+		GeneratedAt:     time.Unix(1_700_000_000, 0).UTC(),
+		Source: &RecommendationSource{
+			Kind:  SourceCostSpike,
+			RefID: "cost-spike-42",
+		},
+		Action: &RecommendationAction{
+			Kind:    ActionRollout,
+			Payload: rolloutPayload,
+		},
+		IaC: &IaCSnippet{
+			Format: IaCTerraform,
+			Source: `resource "aws_sns_topic" "alerts" { name = "alerts" }`,
+		},
+	}
+
+	blob, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Sanity check: the keys appear in the JSON.
+	for _, key := range []string{`"source"`, `"action"`, `"iac"`, `"kind"`, `"payload"`, `"format"`} {
+		if !strings.Contains(string(blob), key) {
+			t.Errorf("marshalled JSON missing %s: %s", key, blob)
+		}
+	}
+
+	var got Recommendation
+	if err := json.Unmarshal(blob, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Existing fields unchanged.
+	if got.ID != original.ID || got.Title != original.Title {
+		t.Errorf("existing fields not preserved: %+v", got)
+	}
+
+	// Source roundtrip.
+	if got.Source == nil {
+		t.Fatal("Source dropped on roundtrip")
+	}
+	if got.Source.Kind != SourceCostSpike || got.Source.RefID != "cost-spike-42" {
+		t.Errorf("Source mismatch: %+v", got.Source)
+	}
+
+	// Action roundtrip — including payload survival as raw JSON.
+	if got.Action == nil {
+		t.Fatal("Action dropped on roundtrip")
+	}
+	if got.Action.Kind != ActionRollout {
+		t.Errorf("Action.Kind mismatch: %s", got.Action.Kind)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Action.Payload, &payload); err != nil {
+		t.Fatalf("Action.Payload not valid JSON: %v (%s)", err, got.Action.Payload)
+	}
+	if payload["group_id"] != "prod-edge" || payload["config_version"] != "v42" {
+		t.Errorf("Action.Payload contents lost: %v", payload)
+	}
+
+	// IaC roundtrip.
+	if got.IaC == nil {
+		t.Fatal("IaC dropped on roundtrip")
+	}
+	if got.IaC.Format != IaCTerraform {
+		t.Errorf("IaC.Format mismatch: %s", got.IaC.Format)
+	}
+	if !strings.Contains(got.IaC.Source, "aws_sns_topic") {
+		t.Errorf("IaC.Source content lost: %s", got.IaC.Source)
+	}
+}
+
+// TestRecommendationOldShapeStillDecodes feeds a JSON blob in the
+// pre-v0.85 wire shape (no source/action/iac keys) and verifies
+// the unmarshal succeeds with the new fields decoding as nil.
+// Guards backward compatibility for stored audit records and
+// older clients.
+func TestRecommendationOldShapeStillDecodes(t *testing.T) {
+	// Hand-built JSON in the v0.84-era shape. Notably missing:
+	// source, action, iac.
+	oldBlob := []byte(`{
+		"id": "rec-old-1",
+		"category": "noisy_attribute",
+		"severity": "warn",
+		"title": "Drop attribute http.url from metrics",
+		"detail": "old client, no new fields",
+		"signal": "metrics",
+		"est_savings_bytes": 100,
+		"generated_at": "2024-11-12T08:30:00Z"
+	}`)
+
+	var got Recommendation
+	if err := json.Unmarshal(oldBlob, &got); err != nil {
+		t.Fatalf("unmarshal old-shape blob: %v", err)
+	}
+
+	// Existing fields populated correctly.
+	if got.ID != "rec-old-1" {
+		t.Errorf("ID lost: %q", got.ID)
+	}
+	if got.Category != CategoryNoisyAttribute {
+		t.Errorf("Category lost: %q", got.Category)
+	}
+	if got.Severity != SeverityWarn {
+		t.Errorf("Severity lost: %q", got.Severity)
+	}
+	if got.EstSavingsBytes != 100 {
+		t.Errorf("EstSavingsBytes lost: %d", got.EstSavingsBytes)
+	}
+
+	// New fields nil — the load-bearing assertion for backward
+	// compatibility.
+	if got.Source != nil {
+		t.Errorf("Source should be nil for old-shape JSON; got %+v", got.Source)
+	}
+	if got.Action != nil {
+		t.Errorf("Action should be nil for old-shape JSON; got %+v", got.Action)
+	}
+	if got.IaC != nil {
+		t.Errorf("IaC should be nil for old-shape JSON; got %+v", got.IaC)
+	}
+}
+
+// TestRecommendationOmitemptyDropsNilFields constructs a
+// Recommendation without the new fields, marshals, and verifies
+// the JSON output does NOT contain the new keys. Confirms the
+// omitempty tags work — important because existing UI clients
+// + squadronctl key off "this key is absent" rather than "this
+// key is null".
+func TestRecommendationOmitemptyDropsNilFields(t *testing.T) {
+	rec := Recommendation{
+		ID:              "rec-omitempty",
+		Category:        CategoryDropHotspot,
+		Severity:        SeverityInfo,
+		Title:           "test",
+		Detail:          "test",
+		EstSavingsBytes: -1,
+		GeneratedAt:     time.Unix(0, 0).UTC(),
+		// Source, Action, IaC intentionally not set.
+	}
+
+	blob, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	out := string(blob)
+	for _, key := range []string{`"source"`, `"action"`, `"iac"`} {
+		if strings.Contains(out, key) {
+			t.Errorf("omitempty broken: JSON contains %s: %s", key, out)
+		}
+	}
+}
+
+// TestSourceKindEnumRoundtrip stores + retrieves every SourceKind
+// constant. Catches future PR's that add a constant but forget
+// the JSON tag, or change a value and break a stored audit log.
+func TestSourceKindEnumRoundtrip(t *testing.T) {
+	for _, kind := range []SourceKind{
+		SourceCostSpike,
+		SourceDiscoveryScan,
+		SourceManual,
+	} {
+		src := RecommendationSource{Kind: kind, RefID: "ref-" + string(kind)}
+		blob, err := json.Marshal(src)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", kind, err)
+		}
+		var got RecommendationSource
+		if err := json.Unmarshal(blob, &got); err != nil {
+			t.Fatalf("unmarshal %s: %v", kind, err)
+		}
+		if got.Kind != kind {
+			t.Errorf("SourceKind roundtrip: want %q, got %q", kind, got.Kind)
+		}
+		// Spot-check that the wire string matches the constant.
+		if !strings.Contains(string(blob), `"`+string(kind)+`"`) {
+			t.Errorf("SourceKind %q missing from JSON: %s", kind, blob)
+		}
+	}
+}
+
+// TestActionKindEnumRoundtrip mirrors the SourceKind test for
+// ActionKind. Includes a non-trivial payload so a Payload-handling
+// regression surfaces here too.
+func TestActionKindEnumRoundtrip(t *testing.T) {
+	for _, kind := range []ActionKind{
+		ActionRollout,
+		ActionPlan,
+		ActionDiscoveryAction,
+	} {
+		act := RecommendationAction{
+			Kind:    kind,
+			Payload: json.RawMessage(`{"kind":"` + string(kind) + `"}`),
+		}
+		blob, err := json.Marshal(act)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", kind, err)
+		}
+		var got RecommendationAction
+		if err := json.Unmarshal(blob, &got); err != nil {
+			t.Fatalf("unmarshal %s: %v", kind, err)
+		}
+		if got.Kind != kind {
+			t.Errorf("ActionKind roundtrip: want %q, got %q", kind, got.Kind)
+		}
+		if !strings.Contains(string(blob), `"`+string(kind)+`"`) {
+			t.Errorf("ActionKind %q missing from JSON: %s", kind, blob)
+		}
+	}
+}
+
+// TestIaCFormatEnumRoundtrip mirrors the SourceKind/ActionKind
+// tests for IaCFormat. Slice 1 only emits Terraform, but the
+// enum is wire-stable from day one per decision 6.
+func TestIaCFormatEnumRoundtrip(t *testing.T) {
+	for _, format := range []IaCFormat{
+		IaCTerraform,
+		IaCCDK,
+		IaCPulumi,
+	} {
+		snippet := IaCSnippet{
+			Format: format,
+			Source: "/* placeholder for " + string(format) + " */",
+		}
+		blob, err := json.Marshal(snippet)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", format, err)
+		}
+		var got IaCSnippet
+		if err := json.Unmarshal(blob, &got); err != nil {
+			t.Fatalf("unmarshal %s: %v", format, err)
+		}
+		if got.Format != format {
+			t.Errorf("IaCFormat roundtrip: want %q, got %q", format, got.Format)
+		}
+		if !strings.Contains(string(blob), `"`+string(format)+`"`) {
+			t.Errorf("IaCFormat %q missing from JSON: %s", format, blob)
+		}
+	}
+}
+
+// TestApplyOptionsAttachesMetadata verifies the
+// RecommendationOptions hook the discovery / manual producers
+// will use. Existing recipes pass nil; this test covers the
+// non-nil path.
+func TestApplyOptionsAttachesMetadata(t *testing.T) {
+	base := Recommendation{ID: "rec-options", Category: CategoryNoisyAttribute}
+	opts := &RecommendationOptions{
+		Source: &RecommendationSource{Kind: SourceDiscoveryScan, RefID: "scan-1"},
+		Action: &RecommendationAction{Kind: ActionDiscoveryAction, Payload: json.RawMessage(`{}`)},
+		IaC:    &IaCSnippet{Format: IaCTerraform, Source: "resource \"aws_s3_bucket\" \"x\" {}"},
+	}
+	got := applyOptions(base, opts)
+	if got.Source == nil || got.Source.Kind != SourceDiscoveryScan {
+		t.Errorf("Source not attached: %+v", got.Source)
+	}
+	if got.Action == nil || got.Action.Kind != ActionDiscoveryAction {
+		t.Errorf("Action not attached: %+v", got.Action)
+	}
+	if got.IaC == nil || got.IaC.Format != IaCTerraform {
+		t.Errorf("IaC not attached: %+v", got.IaC)
+	}
+	// And nil-options is a clean no-op (existing recipes' code
+	// path).
+	if got := applyOptions(base, nil); got.Source != nil || got.Action != nil || got.IaC != nil {
+		t.Errorf("nil opts should not attach anything: %+v", got)
+	}
 }
