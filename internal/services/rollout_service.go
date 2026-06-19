@@ -107,6 +107,65 @@ type RolloutService interface {
 	// are returned in step-index order so callers can render the
 	// plan immediately.
 	CreatePlan(ctx context.Context, steps []RolloutInput) ([]*Rollout, string, error)
+
+	// v0.74 — plan read entry point. Returns the plan envelope: the
+	// shared metadata plus the rollouts that make it up, separated
+	// into forward steps (sorted by PlanStepIndex ascending) and
+	// rollback steps (negative PlanStepIndex from v0.72, sorted
+	// ascending so -1 comes first). Returns (nil, nil) when no
+	// rollouts exist with this PlanID, so the handler can map to a
+	// 404 without ambiguity. See docs/multi-step-plans-design.md.
+	GetPlan(ctx context.Context, planID string) (*Plan, error)
+}
+
+// Plan is the envelope shape returned by GetPlan. v0.74.
+// Plans are not a first-class storage entity (per the design doc),
+// so this struct is computed from the underlying rollouts at read
+// time; mutations happen on the rollouts directly via the existing
+// rollout endpoints.
+type Plan struct {
+	// PlanID is the shared id every step in the plan carries.
+	PlanID string `json:"plan_id"`
+
+	// GroupID is taken from step 0 — every step in a plan shares
+	// the same group, enforced at CreatePlan time.
+	GroupID string `json:"group_id"`
+
+	// StepCount is the number of forward steps in the plan
+	// (ignoring rollback steps that have negative PlanStepIndex).
+	StepCount int `json:"step_count"`
+
+	// State summarizes the plan's lifecycle in one word. Derived
+	// from the underlying rollouts:
+	//   - pending_approval: step 0 is in PendingApproval
+	//   - in_progress:      any step is InProgress, or step 0 is
+	//                       Pending (engine hasn't picked it up yet)
+	//   - succeeded:        every forward step is Succeeded
+	//   - rejected:         step 0 is Rejected
+	//   - cancelled:        any forward step is Cancelled
+	//   - aborted:          any forward step is Aborted
+	//   - rolled_back:      any rollback step exists
+	//
+	// The string is a derived view, not a stored value. Don't rely
+	// on it as the canonical status for SIEM — use the per step
+	// rollout.* and plan.* audit events for that.
+	State string `json:"state"`
+
+	// Steps is the forward steps in PlanStepIndex order. Step 0
+	// is index 0 in the slice, step 1 is index 1, etc.
+	Steps []*Rollout `json:"steps"`
+
+	// RollbackSteps is the rollback steps in PlanStepIndex
+	// ascending order (-1, -2, …). Empty when the plan hasn't
+	// triggered backwards rollback. v0.72 created these.
+	RollbackSteps []*Rollout `json:"rollback_steps,omitempty"`
+
+	// CreatedAt is step 0's CreatedAt — the moment CreatePlan
+	// committed the plan to storage. UpdatedAt is the most recent
+	// timestamp across all steps so a UI showing "last activity"
+	// gets the right value without having to walk the list.
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // RolloutPreview is the response shape of a Preview call.
@@ -356,6 +415,11 @@ type RolloutFilter struct {
 	GroupID string
 	State   RolloutState
 	Limit   int
+	// v0.74 — narrow to a single plan. Empty matches everything.
+	// Both forward steps and rollback steps (negative
+	// PlanStepIndex) share the same PlanID, so a filtered query
+	// returns the full forward + backward arc.
+	PlanID string
 }
 
 // IsTerminal reports whether a rollout has reached an end state and the

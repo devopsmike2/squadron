@@ -412,6 +412,9 @@ func (askRolloutListOnly) RollBackPlanPredecessors(context.Context, string, int,
 func (askRolloutListOnly) CreatePlan(context.Context, []services.RolloutInput) ([]*services.Rollout, string, error) {
 	panic("not used")
 }
+func (askRolloutListOnly) GetPlan(context.Context, string) (*services.Plan, error) {
+	panic("not used")
+}
 
 // askAuditListOnly is the audit counterpart.
 type askAuditListOnly struct {

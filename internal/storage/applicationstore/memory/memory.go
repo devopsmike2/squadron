@@ -728,6 +728,10 @@ func (s *Store) ListRollouts(ctx context.Context, filter types.RolloutFilter) ([
 		if filter.State != "" && r.State != filter.State {
 			continue
 		}
+		// v0.74 — narrow to one plan id.
+		if filter.PlanID != "" && r.PlanID != filter.PlanID {
+			continue
+		}
 		out := copyRollout(r)
 		matches = append(matches, &out)
 	}

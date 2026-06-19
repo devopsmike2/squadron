@@ -32,6 +32,9 @@ func (h *RolloutHandlers) HandleListRollouts(c *gin.Context) {
 	filter := services.RolloutFilter{
 		GroupID: c.Query("group_id"),
 		State:   services.RolloutState(c.Query("state")),
+		// v0.74 — narrow to one plan id when given. Returns both
+		// forward and rollback steps of that plan.
+		PlanID: c.Query("plan_id"),
 	}
 	if raw := c.Query("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -398,6 +401,37 @@ type CreatePlanResponse struct {
 	PlanID string                `json:"plan_id"`
 	Steps  []*services.Rollout   `json:"steps"`
 	Count  int                   `json:"count"`
+}
+
+// HandleGetPlan serves GET /api/v1/rollouts/plans/:id.
+//
+// Returns the plan envelope: shared metadata (PlanID, GroupID,
+// StepCount, derived State, CreatedAt, UpdatedAt) plus the forward
+// steps in PlanStepIndex order and any rollback steps. Returns 404
+// when no rollouts carry the given plan id.
+//
+// Auth: rollouts:read scope. Same as GET /api/v1/rollouts since
+// the envelope is a view over rollouts the same token could read
+// directly.
+//
+// Added in v0.74.0.
+func (h *RolloutHandlers) HandleGetPlan(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "plan id is required"})
+		return
+	}
+	envelope, err := h.rolloutService.GetPlan(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to get plan", zap.String("plan_id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get plan"})
+		return
+	}
+	if envelope == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "plan not found"})
+		return
+	}
+	c.JSON(http.StatusOK, envelope)
 }
 
 // HandleCreatePlan serves POST /api/v1/rollouts/plans.

@@ -494,6 +494,105 @@ func TestRollout_CreatePlanRejectsEmptySteps(t *testing.T) {
 	assert.Contains(t, err.Error(), "at least one step")
 }
 
+// v0.74 — GetPlan returns the envelope: forward steps in
+// ascending PlanStepIndex order, rollback steps in descending
+// order (-1 first), derived state.
+func TestRollout_GetPlanReturnsEnvelope(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	steps := []RolloutInput{
+		{Name: "S0", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}}},
+		{Name: "S1", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}}},
+		{Name: "S2", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}}},
+	}
+	_, planID, err := svc.CreatePlan(ctx, steps)
+	require.NoError(t, err)
+
+	env, err := svc.GetPlan(ctx, planID)
+	require.NoError(t, err)
+	require.NotNil(t, env)
+	assert.Equal(t, planID, env.PlanID)
+	assert.Equal(t, gid, env.GroupID)
+	assert.Equal(t, 3, env.StepCount)
+	require.Len(t, env.Steps, 3)
+	assert.Equal(t, 0, env.Steps[0].PlanStepIndex)
+	assert.Equal(t, 1, env.Steps[1].PlanStepIndex)
+	assert.Equal(t, 2, env.Steps[2].PlanStepIndex)
+	assert.Empty(t, env.RollbackSteps,
+		"no rollback steps until a failure triggers the backwards walk")
+	// All three steps are in Pending or Queued — plan state is in_progress.
+	assert.Equal(t, "in_progress", env.State)
+}
+
+// GetPlan against an unknown plan id returns (nil, nil) so the
+// handler can map to a clean 404.
+func TestRollout_GetPlanUnknownReturnsNil(t *testing.T) {
+	svc := &RolloutServiceImpl{appStore: memory.NewStore(), logger: zap.NewNop()}
+	env, err := svc.GetPlan(context.Background(), "plan-does-not-exist")
+	require.NoError(t, err)
+	assert.Nil(t, env)
+}
+
+// GetPlan rejects an empty plan id.
+func TestRollout_GetPlanRejectsEmptyID(t *testing.T) {
+	svc := &RolloutServiceImpl{appStore: memory.NewStore(), logger: zap.NewNop()}
+	_, err := svc.GetPlan(context.Background(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plan id is required")
+}
+
+// A plan with a rollback step from the v0.72 backwards walk shows
+// up in the envelope's RollbackSteps slice with negative
+// PlanStepIndex. State derives to "rolled_back" when any rollback
+// step exists.
+func TestRollout_GetPlanIncludesRollbackSteps(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	cfg1 := &types.Config{ID: "c1", Name: "v1", Content: "x", GroupID: &gid, CreatedAt: time.Now().Add(-2 * time.Hour)}
+	cfg2 := &types.Config{ID: "c2", Name: "v2", Content: "y", GroupID: &gid, CreatedAt: time.Now().Add(-1 * time.Hour)}
+	require.NoError(t, store.CreateConfig(ctx, cfg1))
+	require.NoError(t, store.CreateConfig(ctx, cfg2))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	_, planID, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "S0", GroupID: gid, TargetConfigID: cfg1.ID, Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}}},
+		{Name: "S1", GroupID: gid, TargetConfigID: cfg2.ID, Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+
+	// Mark step 0 as succeeded so the rollback walk has something
+	// to roll back; step 1 plays the role of the failed step.
+	step0ID := findStepID(t, store, planID, 0)
+	stored, err := store.GetRollout(ctx, step0ID)
+	require.NoError(t, err)
+	stored.State = types.RolloutState(RolloutStateSucceeded)
+	now := time.Now()
+	stored.CompletedAt = &now
+	require.NoError(t, store.UpdateRollout(ctx, stored))
+
+	rollbacks, err := svc.RollBackPlanPredecessors(ctx, planID, 1, "system:test")
+	require.NoError(t, err)
+	require.Len(t, rollbacks, 1)
+
+	env, err := svc.GetPlan(ctx, planID)
+	require.NoError(t, err)
+	require.NotNil(t, env)
+	assert.Len(t, env.Steps, 2, "forward steps unchanged")
+	require.Len(t, env.RollbackSteps, 1)
+	assert.Equal(t, -1, env.RollbackSteps[0].PlanStepIndex)
+	assert.Equal(t, "rolled_back", env.State)
+}
+
 // A standalone rollout has empty PlanID and step 0 — the v0.4 through
 // v0.68 default. The new fields must not change that behavior.
 func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {

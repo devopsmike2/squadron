@@ -755,6 +755,10 @@ func (s *Server) registerRoutes() {
 			// creating a plan is conceptually N rollout creates.
 			// Read/list endpoint for plans lands in v0.74.
 			rollouts.POST("/plans", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleCreatePlan)
+			// v0.74 — plan read. Returns the envelope (forward steps
+			// + rollback steps + derived state). Same scope as
+			// /rollouts/:id since the data is a view over rollouts.
+			rollouts.GET("/plans/:id", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleGetPlan)
 			rollouts.GET("/:id", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleGetRollout)
 			rollouts.POST("/:id/abort", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleAbortRollout)
 			rollouts.POST("/:id/pause", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandlePauseRollout)

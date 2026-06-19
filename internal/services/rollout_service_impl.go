@@ -296,6 +296,7 @@ func (s *RolloutServiceImpl) List(ctx context.Context, filter RolloutFilter) ([]
 		GroupID: filter.GroupID,
 		State:   applicationstore.RolloutState(filter.State),
 		Limit:   filter.Limit,
+		PlanID:  filter.PlanID,
 	})
 	if err != nil {
 		return nil, err
@@ -453,6 +454,124 @@ func (s *RolloutServiceImpl) CreatePlan(ctx context.Context, steps []RolloutInpu
 	}
 
 	return created, planID, nil
+}
+
+// GetPlan returns the plan envelope for planID. v0.74.
+// Returns (nil, nil) when no rollouts carry that planID, so the
+// handler can map to a clean 404. Otherwise builds the envelope
+// from the matching rollouts: forward steps in ascending step
+// index, rollback steps in ascending negative step index (-1
+// first), state derived from the forward steps' lifecycle.
+func (s *RolloutServiceImpl) GetPlan(ctx context.Context, planID string) (*Plan, error) {
+	if planID == "" {
+		return nil, fmt.Errorf("plan id is required")
+	}
+	stored, err := s.appStore.ListRollouts(ctx, applicationstore.RolloutFilter{
+		PlanID: planID,
+		Limit:  1000,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(stored) == 0 {
+		return nil, nil
+	}
+
+	// Separate forward + rollback steps. The negative range was
+	// introduced in v0.72 for the backwards rollback walk.
+	var forward, rollbacks []*Rollout
+	for _, r := range stored {
+		if r == nil {
+			continue
+		}
+		svc := toServiceRollout(r)
+		if r.PlanStepIndex < 0 {
+			rollbacks = append(rollbacks, svc)
+		} else {
+			forward = append(forward, svc)
+		}
+	}
+	// Forward ascending (0, 1, 2 …). Rollbacks ascending (-1
+	// numerically lowest absolute value first, then -2, etc. — i.e.
+	// the rollback of the highest forward step comes first because
+	// that's the order they fire in the engine's backwards walk).
+	sort.Slice(forward, func(i, j int) bool {
+		return forward[i].PlanStepIndex < forward[j].PlanStepIndex
+	})
+	sort.Slice(rollbacks, func(i, j int) bool {
+		// -1 should come before -2 (i.e. -1 > -2 numerically).
+		// Ascending sort on the index puts -3 first, which is the
+		// wrong order. Flip via Greater so -1 comes first.
+		return rollbacks[i].PlanStepIndex > rollbacks[j].PlanStepIndex
+	})
+
+	envelope := &Plan{
+		PlanID:        planID,
+		StepCount:     len(forward),
+		Steps:         forward,
+		RollbackSteps: rollbacks,
+	}
+	if len(forward) > 0 {
+		envelope.GroupID = forward[0].GroupID
+		envelope.CreatedAt = forward[0].CreatedAt
+	}
+	// UpdatedAt is the most recent across all steps so a UI
+	// showing "last activity" gets the right value without walking.
+	envelope.UpdatedAt = envelope.CreatedAt
+	for _, r := range forward {
+		if r.UpdatedAt.After(envelope.UpdatedAt) {
+			envelope.UpdatedAt = r.UpdatedAt
+		}
+	}
+	for _, r := range rollbacks {
+		if r.UpdatedAt.After(envelope.UpdatedAt) {
+			envelope.UpdatedAt = r.UpdatedAt
+		}
+	}
+	envelope.State = derivePlanState(forward, rollbacks)
+	return envelope, nil
+}
+
+// derivePlanState collapses the forward + rollback steps into a
+// single status word for the envelope. v0.74. The mapping is
+// best effort — the per step rollout.* + plan.* audit events are
+// the canonical sources for SIEM. UI uses this for the headline
+// badge on the plan card.
+func derivePlanState(forward, rollbacks []*Rollout) string {
+	if len(rollbacks) > 0 {
+		return "rolled_back"
+	}
+	// Step 0 carries the approval gate, so its state shapes the
+	// plan's headline before any forward progress.
+	if len(forward) > 0 {
+		switch forward[0].State {
+		case RolloutStateRejected:
+			return "rejected"
+		case RolloutStatePendingApproval:
+			return "pending_approval"
+		}
+	}
+	// Walk forward steps in order. Any cancelled / aborted /
+	// in_progress wins precedence over the all-succeeded path.
+	allSucceeded := true
+	for _, r := range forward {
+		switch r.State {
+		case RolloutStateAborted:
+			return "aborted"
+		case RolloutStateCancelled:
+			return "cancelled"
+		case RolloutStateInProgress, RolloutStatePending, RolloutStatePaused, RolloutStateQueued:
+			allSucceeded = false
+		case RolloutStateSucceeded:
+			// keep walking
+		default:
+			allSucceeded = false
+		}
+	}
+	if allSucceeded && len(forward) > 0 {
+		return "succeeded"
+	}
+	return "in_progress"
 }
 
 // RollBackPlanPredecessors walks steps 0..failedIndex-1 in planID,
