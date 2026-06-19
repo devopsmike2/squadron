@@ -506,6 +506,14 @@ func (s *Storage) migrate() error {
 		// rollouts independently of require_approval. Default 0 so
 		// existing groups carry forward unchanged.
 		`ALTER TABLE groups ADD COLUMN require_approval_for_rollback INTEGER NOT NULL DEFAULT 0`,
+
+		// v0.69 — multi step plans. PlanID groups rollouts that
+		// belong to one approved plan; PlanStepIndex orders them.
+		// Both NULL/0 on every existing row preserves backwards
+		// compatibility — a standalone rollout has empty PlanID
+		// and the engine treats it exactly as before.
+		`ALTER TABLE rollouts ADD COLUMN plan_id TEXT`,
+		`ALTER TABLE rollouts ADD COLUMN plan_step_index INTEGER NOT NULL DEFAULT 0`,
 	}
 
 	for _, migration := range migrations {
@@ -1584,8 +1592,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		evidenceJSON = string(buf)
 	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -1613,6 +1621,9 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(evidenceJSON),
 		// v0.60 rollback chain.
 		nullableString(r.RolledBackFromID),
+		// v0.69 plan grouping.
+		nullableString(r.PlanID),
+		r.PlanStepIndex,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -1624,7 +1635,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1641,7 +1652,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1704,7 +1715,7 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    rejected_by = ?, rejected_at = ?, approval_notes = ?,
 		    last_blackout_reason = ?, last_blackout_at = ?,
 		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?,
-		    rolled_back_from_id = ?
+		    rolled_back_from_id = ?, plan_id = ?, plan_step_index = ?
 		WHERE id = ?
 	`
 	res, err := s.db.ExecContext(ctx, stmt,
@@ -1731,6 +1742,9 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(evidenceJSON),
 		// v0.60 rollback chain.
 		nullableString(r.RolledBackFromID),
+		// v0.69 plan grouping.
+		nullableString(r.PlanID),
+		r.PlanStepIndex,
 		r.ID,
 	)
 	if err != nil {
@@ -1777,6 +1791,9 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		evidenceRefsJSON  sql.NullString
 		// v0.60 rollback chain.
 		rolledBackFromID sql.NullString
+		// v0.69 plan grouping.
+		planID        sql.NullString
+		planStepIndex int
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -1789,12 +1806,17 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&lastBlackoutReason, &lastBlackoutAt,
 		&proposedBy, &proposalReasoning, &evidenceRefsJSON,
 		&rolledBackFromID,
+		&planID, &planStepIndex,
 	); err != nil {
 		return nil, err
 	}
 	if rolledBackFromID.Valid {
 		r.RolledBackFromID = rolledBackFromID.String
 	}
+	if planID.Valid {
+		r.PlanID = planID.String
+	}
+	r.PlanStepIndex = planStepIndex
 	// v0.53 — proposal provenance decoding.
 	if proposedBy.Valid && proposedBy.String != "" {
 		r.ProposedBy = proposedBy.String

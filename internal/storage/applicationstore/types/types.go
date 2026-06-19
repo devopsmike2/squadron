@@ -488,6 +488,19 @@ type Rollout struct {
 	// two rollouts together. Empty for normal rollouts.
 	RolledBackFromID string `json:"rolled_back_from_id,omitempty"`
 
+	// v0.69 — multi step plans. Groups rollouts that belong to one
+	// approved plan. When the AI proposer recommends a fix that
+	// requires multiple sequenced rollouts (e.g. "drop the noisy
+	// attribute, then rotate the Splunk index, then update the
+	// alert rule"), each rollout carries the same PlanID and a
+	// PlanStepIndex (0, 1, 2…) that orders them. A single approval
+	// on PlanStepIndex=0 gates the whole chain; the engine advances
+	// step N+1 only after step N reaches succeeded. Empty PlanID
+	// means a standalone rollout (the v0.4–v0.68 default), preserving
+	// full backwards compatibility. See docs/multi-step-plans-design.md.
+	PlanID        string `json:"plan_id,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // set on terminal state
