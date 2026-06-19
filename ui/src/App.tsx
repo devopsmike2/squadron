@@ -22,6 +22,7 @@ import GroupsPage from "./pages/Groups";
 import IncidentsPage from "./pages/Incidents";
 import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
+import PlanPage from "./pages/Plan";
 import QuickstartPage from "./pages/Quickstart";
 import RolloutsPage from "./pages/Rollouts";
 import RunnersPage from "./pages/Runners";
@@ -157,6 +158,9 @@ function AuthBoundary() {
           <Route path="/topology" element={<FleetMapPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/rollouts" element={<RolloutsPage />} />
+          {/* v0.75 — multi step plan detail. Reached via the Plan
+              badge on any rollout card whose plan_id is set. */}
+          <Route path="/plans/:id" element={<PlanPage />} />
           <Route path="/deploy" element={<DeployPage />} />
           {/* v0.55 SQ-2.8 / N4 — operational visibility into the action
               runner system. /actions lists every signed request

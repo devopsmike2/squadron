@@ -71,9 +71,32 @@ export interface Rollout {
   // UI shows a "rollback of <X>" badge on the card and the audit
   // timeline chains the two rollouts together.
   rolled_back_from_id?: string;
+  // v0.69 — multi step plan grouping. Empty plan_id means
+  // standalone. When present, plan_step_index orders the steps
+  // within the plan (0..N-1 forward; -1, -2, … reserved for
+  // backward rollback steps from v0.72). See
+  // docs/multi-step-plans-design.md.
+  plan_id?: string;
+  plan_step_index?: number;
   created_at: string;
   updated_at: string;
   completed_at?: string;
+}
+
+// Plan is the v0.74 envelope returned by GET /api/v1/rollouts/plans/:id.
+// Mirrors the services.Plan Go struct — keep in sync.
+export interface Plan {
+  plan_id: string;
+  group_id: string;
+  step_count: number;
+  // Derived state for the UI badge. Values:
+  // pending_approval | in_progress | succeeded | rejected
+  // | cancelled | aborted | rolled_back
+  state: string;
+  steps: Rollout[];
+  rollback_steps?: Rollout[];
+  created_at: string;
+  updated_at: string;
 }
 
 // RolloutEvidenceRef is one citation the AI proposer attached to a

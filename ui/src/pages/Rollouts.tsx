@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import useSWR, { mutate } from "swr";
 
 import { getAgents } from "@/api/agents";
@@ -1239,6 +1240,31 @@ function RolloutCard({
                 >
                   Rollback
                 </Badge>
+              )}
+              {/* v0.75 — plan grouping badge. Clicking navigates to
+                  the plan detail page so operators can see the full
+                  forward + backward arc as one view. The step index
+                  is rendered inline so a quick scan of the rollouts
+                  list shows the operator where each row sits in the
+                  plan without a click. */}
+              {r.plan_id && (
+                <Link
+                  to={`/plans/${encodeURIComponent(r.plan_id)}`}
+                  onClick={(e) => e.stopPropagation()}
+                  title={`Part of plan ${r.plan_id.slice(0, 8)}…`}
+                >
+                  <Badge
+                    variant="outline"
+                    className="bg-violet-500/10 text-violet-700 border-violet-500/30 hover:bg-violet-500/20"
+                  >
+                    Plan · step{" "}
+                    {r.plan_step_index !== undefined
+                      ? r.plan_step_index >= 0
+                        ? r.plan_step_index
+                        : `rb${Math.abs(r.plan_step_index)}`
+                      : "?"}
+                  </Badge>
+                </Link>
               )}
               {/* v0.49 — blackout badge. Set by the engine when a
                   tick refuses to advance because the target group
