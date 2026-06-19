@@ -69,6 +69,15 @@ type RolloutService interface {
 	// the next step out of Queued; see docs/multi-step-plans-design.md
 	// for the protocol.
 	NextPlanStep(ctx context.Context, planID string, currentIndex int) (*Rollout, error)
+
+	// v0.71 — cancellation walk. Find every queued step in planID
+	// with index strictly greater than afterIndex and transition
+	// each to Cancelled. Returns the list of cancelled rollouts so
+	// the caller can emit per step audit events. The engine calls
+	// this from triggerAbort and Reject's plan branch; the
+	// transition is a no op for plans with no queued followers
+	// (the failed step was the last in the plan).
+	CancelPlanFollowers(ctx context.Context, planID string, afterIndex int) ([]*Rollout, error)
 }
 
 // RolloutPreview is the response shape of a Preview call.
@@ -144,6 +153,14 @@ const (
 	// plan approval gate sits there. See
 	// docs/multi-step-plans-design.md.
 	RolloutStateQueued RolloutState = "queued"
+
+	// v0.71 — terminal state for queued plan steps that never get
+	// to run because an earlier step in the plan failed or was
+	// rejected. The cancellation walk visits every queued step
+	// with index > the failed step's and flips them to cancelled
+	// in one pass. SIEM consumers see plan.step_cancelled per step
+	// plus a plan level plan.rejected or plan.cancelled summary.
+	RolloutStateCancelled RolloutState = "cancelled"
 )
 
 // RolloutStageMode mirrors applicationstore.RolloutStageMode.
@@ -313,7 +330,11 @@ type RolloutFilter struct {
 }
 
 // IsTerminal reports whether a rollout has reached an end state and the
-// engine should ignore it.
+// engine should ignore it. v0.71 — Cancelled joins the list because a
+// cancelled plan step never ran, so there's no rollback work to do.
+// Aborted and Rejected are NOT terminal by this definition because the
+// engine still has rollback work to perform on aborted rollouts and the
+// rejected state may still need cleanup.
 func (s RolloutState) IsTerminal() bool {
-	return s == RolloutStateSucceeded || s == RolloutStateRolledBack
+	return s == RolloutStateSucceeded || s == RolloutStateRolledBack || s == RolloutStateCancelled
 }

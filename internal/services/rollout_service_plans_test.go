@@ -171,6 +171,118 @@ func TestRollout_NextPlanStepReturnsCorrectStep(t *testing.T) {
 	assert.Nil(t, next)
 }
 
+// v0.71 — cancellation walk. When a mid plan step fails or is
+// rejected, every queued step that would have followed gets
+// transitioned to Cancelled so the engine never picks them up.
+func TestRollout_CancelPlanFollowersFlipsQueuedSteps(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	cfg := &types.Config{ID: "c-1", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	// Seed a 4 step plan. Steps 0..3 — step 0 in Pending, steps 1..3
+	// in Queued by virtue of the v0.70 Create logic.
+	for i := 0; i < 4; i++ {
+		_, err := svc.Create(ctx, RolloutInput{
+			Name:           "Plan w step",
+			GroupID:        gid,
+			TargetConfigID: cfg.ID,
+			Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+			PlanID:         "plan-w",
+			PlanStepIndex:  i,
+		})
+		require.NoError(t, err)
+	}
+
+	// Simulate step 1 failing — cancel followers means steps 2+3.
+	cancelled, err := svc.CancelPlanFollowers(ctx, "plan-w", 1)
+	require.NoError(t, err)
+	require.Len(t, cancelled, 2, "steps 2 and 3 should be cancelled")
+
+	// Step indices are 2 and 3 in storage order. Don't assume strict
+	// ordering — the storage layer may shuffle — just check the set.
+	gotIndices := map[int]bool{}
+	for _, c := range cancelled {
+		gotIndices[c.PlanStepIndex] = true
+		assert.Equal(t, RolloutStateCancelled, c.State,
+			"cancelled rollouts must be in Cancelled state")
+	}
+	assert.True(t, gotIndices[2] && gotIndices[3],
+		"expected steps 2 and 3 to be in the cancelled set; got %v", gotIndices)
+
+	// Re reading the store confirms the persistence.
+	for i := 2; i <= 3; i++ {
+		stepID := findStepID(t, store, "plan-w", i)
+		got, err := store.GetRollout(ctx, stepID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, types.RolloutState(RolloutStateCancelled), got.State)
+	}
+
+	// Step 0 and step 1 are NOT touched — they were not queued at
+	// the time of the cancel call. The failed step (step 1) keeps
+	// its own state set by triggerAbort, not by us.
+	for i := 0; i <= 1; i++ {
+		stepID := findStepID(t, store, "plan-w", i)
+		got, err := store.GetRollout(ctx, stepID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.NotEqual(t, types.RolloutState(RolloutStateCancelled), got.State,
+			"step %d should not have been cancelled", i)
+	}
+}
+
+// Cancelling on a plan whose failed step is the last is a no op
+// rather than an error. The plan terminates naturally without a
+// summary event.
+func TestRollout_CancelPlanFollowersHandlesLastStep(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	// Single step plan — calling cancel after the only step should
+	// return an empty list without error.
+	_, err := svc.Create(ctx, RolloutInput{
+		Name:           "Single",
+		GroupID:        gid,
+		TargetConfigID: cfg.ID,
+		Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		PlanID:         "plan-single",
+		PlanStepIndex:  0,
+	})
+	require.NoError(t, err)
+
+	cancelled, err := svc.CancelPlanFollowers(ctx, "plan-single", 0)
+	require.NoError(t, err)
+	assert.Len(t, cancelled, 0,
+		"single step plan has no followers to cancel")
+}
+
+// findStepID looks up the rollout id for a given plan step index.
+// Helper for the cancellation test, which seeds rollouts in a loop
+// and doesn't capture the ids individually.
+func findStepID(t *testing.T, store *memory.Store, planID string, idx int) string {
+	t.Helper()
+	all, err := store.ListRollouts(context.Background(), types.RolloutFilter{Limit: 100})
+	require.NoError(t, err)
+	for _, r := range all {
+		if r.PlanID == planID && r.PlanStepIndex == idx {
+			return r.ID
+		}
+	}
+	t.Fatalf("step %d not found in plan %s", idx, planID)
+	return ""
+}
+
 // A standalone rollout has empty PlanID and step 0 — the v0.4 through
 // v0.68 default. The new fields must not change that behavior.
 func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {
