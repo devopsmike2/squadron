@@ -383,3 +383,80 @@ func isRolloutValidationError(err error) bool {
 		strings.Contains(msg, "not found") ||
 		strings.Contains(msg, "stage")
 }
+
+// CreatePlanRequest is the wire shape for POST /api/v1/rollouts/plans.
+// Steps is an ordered list of N rollout intents that get grouped under
+// a single plan id assigned server side. v0.73.
+type CreatePlanRequest struct {
+	Steps []services.RolloutInput `json:"steps"`
+}
+
+// CreatePlanResponse mirrors the service return: the assigned plan id
+// plus the steps in step-index order so clients can render the plan
+// immediately without a follow up GET.
+type CreatePlanResponse struct {
+	PlanID string                `json:"plan_id"`
+	Steps  []*services.Rollout   `json:"steps"`
+	Count  int                   `json:"count"`
+}
+
+// HandleCreatePlan serves POST /api/v1/rollouts/plans.
+//
+// Body: {steps: [<RolloutInput>, ...]}. The caller supplies N step
+// inputs; the service assigns a shared plan id, sets PlanStepIndex
+// 0..N-1 in step order, forces RequireApproval=false on steps 1..N
+// (the plan approves as a unit at step 0), and creates the steps in
+// order. On partial failure the service cleans up already-created
+// steps where it can; the response is an error and the operator
+// should check the audit timeline for any orphan rows.
+//
+// Returns 201 with {plan_id, steps, count} on success. 400 on bad
+// input (empty steps, mismatched group_id across steps, validation
+// errors on any step). 500 on internal failures.
+//
+// Auth: rollouts:write scope. Same as POST /api/v1/rollouts since
+// creating a plan is conceptually N rollout creates rolled up.
+//
+// Added in v0.73.0.
+func (h *RolloutHandlers) HandleCreatePlan(c *gin.Context) {
+	var req CreatePlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body", "detail": err.Error()})
+		return
+	}
+	if len(req.Steps) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "plan requires at least one step"})
+		return
+	}
+	// Stamp RequestedBy on every step. Steps 1..N have it set the
+	// same as step 0 so a SIEM consumer querying audit events by
+	// requester sees consistent attribution across the plan. The
+	// service layer's two person rule still binds at step 0 only.
+	requester := actorFromContext(c)
+	for i := range req.Steps {
+		req.Steps[i].RequestedBy = requester
+	}
+
+	steps, planID, err := h.rolloutService.CreatePlan(c.Request.Context(), req.Steps)
+	if err != nil {
+		msg := err.Error()
+		// Validation errors map to 400. Anything matching the
+		// existing rollout validation patterns plus the plan-level
+		// guards (group_id mismatch, empty plan, missing step group).
+		if isRolloutValidationError(err) ||
+			strings.Contains(msg, "group_id") ||
+			strings.Contains(msg, "at least one step") ||
+			strings.Contains(msg, "missing group_id") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			return
+		}
+		h.logger.Error("failed to create plan", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create plan"})
+		return
+	}
+	c.JSON(http.StatusCreated, CreatePlanResponse{
+		PlanID: planID,
+		Steps:  steps,
+		Count:  len(steps),
+	})
+}

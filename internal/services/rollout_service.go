@@ -92,6 +92,21 @@ type RolloutService interface {
 	// means there were no succeeded forward steps to roll back —
 	// e.g. step 0 itself aborted, no work to do.
 	RollBackPlanPredecessors(ctx context.Context, planID string, failedIndex int, operator string) ([]*Rollout, error)
+
+	// v0.73 — plan create entry point. Wraps N Create calls under a
+	// shared PlanID with PlanStepIndex assigned 0..N-1 in step
+	// order. The first step's RequireApproval flag is honored (it's
+	// the plan's approval gate); steps 1..N are forced to
+	// RequireApproval=false because per the design doc the plan
+	// approves as a unit at step 0.
+	//
+	// Partial failure: if step K's Create fails after K-1 already
+	// succeeded, the implementation cancels the K-1 already-created
+	// steps so the storage doesn't hold an orphan partial plan.
+	// Returns the created steps and the assigned PlanID; the steps
+	// are returned in step-index order so callers can render the
+	// plan immediately.
+	CreatePlan(ctx context.Context, steps []RolloutInput) ([]*Rollout, string, error)
 }
 
 // RolloutPreview is the response shape of a Preview call.
