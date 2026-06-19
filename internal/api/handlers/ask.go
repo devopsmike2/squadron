@@ -52,6 +52,30 @@ type AskRecLister interface {
 	ListForAsk(ctx context.Context, limit int) ([]AskRec, error)
 }
 
+// v0.68 — agents. The fourth and final bag source. Agents
+// surfacing here is different in shape from rollouts/spikes/recs:
+// a large fleet has hundreds of agents, but operators only ask
+// about the interesting ones (offline or drifted). The wiring
+// layer prioritizes those and trims to askRecentAgents before
+// handing the slim shape to the bag walker.
+
+// AskAgent is the slim shape the prompt sees for one agent.
+type AskAgent struct {
+	ID          string
+	Name        string
+	Status      string
+	DriftStatus string
+	GroupName   string
+	LastSeen    time.Time
+}
+
+// AskAgentLister returns the operator interesting agents. The
+// limit parameter caps how many enter the bag; the listener is
+// responsible for ordering by interestingness before truncating.
+type AskAgentLister interface {
+	ListForAsk(ctx context.Context, limit int) ([]AskAgent, error)
+}
+
 // v0.63 — conversational Ask Squadron surface. The handler walks
 // a few read services to build a small context bag, hands it to
 // ai.Service.Ask, and returns the answer + citations to the UI.
@@ -77,6 +101,7 @@ type AskHandler struct {
 	auditService   services.AuditService
 	costSpikes     AskCostSpikeLister
 	recs           AskRecLister
+	agents         AskAgentLister
 	logger         *zap.Logger
 }
 
@@ -86,6 +111,7 @@ func NewAskHandler(
 	auditSvc services.AuditService,
 	costSpikes AskCostSpikeLister,
 	recs AskRecLister,
+	agents AskAgentLister,
 	logger *zap.Logger,
 ) *AskHandler {
 	return &AskHandler{
@@ -94,6 +120,7 @@ func NewAskHandler(
 		auditService:   auditSvc,
 		costSpikes:     costSpikes,
 		recs:           recs,
+		agents:         agents,
 		logger:         logger,
 	}
 }
@@ -126,6 +153,11 @@ const askRecentSpikes = 6
 // dozens; the bag wants only the top few so the prompt stays
 // readable.
 const askRecentRecs = 8
+
+// askRecentAgents caps the agent entries. A large fleet has
+// hundreds; we want only the interesting ones (offline + drifted
+// first). The wiring layer prioritizes before truncating.
+const askRecentAgents = 8
 
 // HandleAsk — POST /api/v1/ai/ask
 //
@@ -259,6 +291,26 @@ func (h *AskHandler) buildBag(ctx context.Context) (map[string]string, map[strin
 		}
 	}
 
+	// v0.68 — agents. Only the operator interesting ones (offline
+	// or drifted, ordered by the wiring layer). A healthy 500
+	// agent fleet should yield zero entries here; that's correct,
+	// the operator who asks "anything wrong?" wants Squadron to
+	// say no when nothing is wrong.
+	if h.agents != nil {
+		ags, err := h.agents.ListForAsk(ctx, askRecentAgents)
+		if err != nil {
+			h.logger.Debug("ask: agents.ListForAsk failed", zap.Error(err))
+		} else {
+			hints["agents_interesting_count"] = fmt.Sprintf("%d", len(ags))
+			for _, a := range ags {
+				if a.ID == "" {
+					continue
+				}
+				bag["agent:"+a.ID] = summarizeAgent(a)
+			}
+		}
+	}
+
 	return bag, hints
 }
 
@@ -335,6 +387,27 @@ func summarizeRec(r AskRec) string {
 		// entry contract. Flatten.
 		d = strings.ReplaceAll(d, "\n", " ")
 		parts = append(parts, "detail="+d)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// summarizeAgent one liners an agent. Status + drift + group +
+// last seen — the four things operators ask about. Labels and
+// effective config are intentionally omitted; if the operator
+// asks about config details they should click through.
+func summarizeAgent(a AskAgent) string {
+	parts := []string{
+		"name=" + a.Name,
+		"status=" + a.Status,
+	}
+	if a.DriftStatus != "" {
+		parts = append(parts, "drift="+a.DriftStatus)
+	}
+	if a.GroupName != "" {
+		parts = append(parts, "group="+a.GroupName)
+	}
+	if !a.LastSeen.IsZero() {
+		parts = append(parts, "last_seen="+a.LastSeen.UTC().Format(time.RFC3339))
 	}
 	return strings.Join(parts, ", ")
 }

@@ -37,6 +37,13 @@ func (s *stubRecs) ListForAsk(_ context.Context, _ int) ([]AskRec, error) {
 	return s.recs, nil
 }
 
+// v0.68 stub for the agents lister.
+type stubAgents struct{ agents []AskAgent }
+
+func (s *stubAgents) ListForAsk(_ context.Context, _ int) ([]AskAgent, error) {
+	return s.agents, nil
+}
+
 // v0.63 — the handler's job is to walk the read services, build a
 // small context bag, and pass to ai.Service.Ask. The test verifies
 // the bag contents land in the outbound Anthropic call so a
@@ -132,7 +139,7 @@ func TestAskHandler_BuildsContextBagAndForwardsToAI(t *testing.T) {
 		},
 	}}
 
-	h := NewAskHandler(aiSvc, rollouts, audit, nil, nil, zap.NewNop())
+	h := NewAskHandler(aiSvc, rollouts, audit, nil, nil, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -205,7 +212,7 @@ func TestAskHandler_IncludesSpikesAndRecsInBag(t *testing.T) {
 		},
 	}}
 
-	h := NewAskHandler(aiSvc, nil, nil, spikes, recs, zap.NewNop())
+	h := NewAskHandler(aiSvc, nil, nil, spikes, recs, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -233,6 +240,68 @@ func TestAskHandler_IncludesSpikesAndRecsInBag(t *testing.T) {
 	assert.Contains(t, outbound, "Drop attribute http.url")
 }
 
+// v0.68 — agents enter the bag as the fourth source. The wiring
+// adapter only forwards offline + drifted agents (healthy ones do
+// not belong in a JARVIS bag), and the handler quotes the slim
+// summary verbatim. Verifies the summarize path emits the four
+// fields the prompt prioritizes: name, status, drift, group.
+func TestAskHandler_IncludesAgentsInBag(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fake := &fakeAskAI{
+		respText: "Two agents need attention. **host-09** is offline [cite:agent:a-9] and **host-12** is drifted [cite:agent:a-12].",
+	}
+	srv := fake.start(t)
+	defer srv.Close()
+
+	aiSvc := ai.NewService(ai.Config{
+		Enabled: true, APIKey: "k", BaseURL: srv.URL,
+		ExplainModel: "claude-haiku-4-5-20251001",
+	}, zap.NewNop())
+
+	now := time.Now()
+	agents := &stubAgents{agents: []AskAgent{
+		{
+			ID: "a-9", Name: "host-09", Status: "offline",
+			DriftStatus: "synced", GroupName: "web-prod",
+			LastSeen: now.Add(-15 * time.Minute),
+		},
+		{
+			ID: "a-12", Name: "host-12", Status: "online",
+			DriftStatus: "drifted", GroupName: "web-prod",
+			LastSeen: now,
+		},
+	}}
+
+	h := NewAskHandler(aiSvc, nil, nil, nil, nil, agents, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodPost, "/",
+		bytes.NewBufferString(`{"question":"anything wrong in the fleet?"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.HandleAsk(c)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp ai.AskResult
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Citations, 2)
+	assert.Equal(t, "agent", resp.Citations[0].Kind)
+	assert.Equal(t, "a-9", resp.Citations[0].ID)
+	assert.Equal(t, "agent", resp.Citations[1].Kind)
+	assert.Equal(t, "a-12", resp.Citations[1].ID)
+
+	// Outbound bag must carry the prioritized fields per agent.
+	outbound := string(fake.lastBody)
+	assert.Contains(t, outbound, "agent:a-9")
+	assert.Contains(t, outbound, "name=host-09")
+	assert.Contains(t, outbound, "status=offline")
+	assert.Contains(t, outbound, "agent:a-12")
+	assert.Contains(t, outbound, "drift=drifted")
+	assert.Contains(t, outbound, "group=web-prod")
+}
+
 // And when neither lister is wired, the handler still answers
 // against the rollout + audit sources. Verifies the nil guards in
 // buildBag.
@@ -248,7 +317,7 @@ func TestAskHandler_HandlesMissingSpikesAndRecs(t *testing.T) {
 		ExplainModel: "claude-haiku-4-5-20251001",
 	}, zap.NewNop())
 
-	h := NewAskHandler(aiSvc, nil, nil, nil, nil, zap.NewNop())
+	h := NewAskHandler(aiSvc, nil, nil, nil, nil, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -262,7 +331,7 @@ func TestAskHandler_HandlesMissingSpikesAndRecs(t *testing.T) {
 
 func TestAskHandler_RejectsEmptyQuestion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewAskHandler(nil, nil, nil, nil, nil, zap.NewNop())
+	h := NewAskHandler(nil, nil, nil, nil, nil, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -277,7 +346,7 @@ func TestAskHandler_RejectsEmptyQuestion(t *testing.T) {
 
 func TestAskHandler_RejectsLongQuestion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewAskHandler(nil, nil, nil, nil, nil, zap.NewNop())
+	h := NewAskHandler(nil, nil, nil, nil, nil, nil, zap.NewNop())
 
 	long := strings.Repeat("a", 600)
 	w := httptest.NewRecorder()

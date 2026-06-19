@@ -384,9 +384,84 @@ func (s *Server) askTrampoline() gin.HandlerFunc {
 		if s.recsEngine != nil {
 			recs = newAskRecsAdapter(s.recsEngine)
 		}
-		h := handlers.NewAskHandler(s.aiService, s.rolloutService, s.auditService, costSpikes, recs, s.logger)
+		// v0.68 — agents adapter. agentService is required at
+		// Server construction so it's never nil here, but guard
+		// anyway in case a future code path makes it optional.
+		var agents handlers.AskAgentLister
+		if s.agentService != nil {
+			agents = newAskAgentsAdapter(s.agentService)
+		}
+		h := handlers.NewAskHandler(s.aiService, s.rolloutService, s.auditService, costSpikes, recs, agents, s.logger)
 		h.HandleAsk(c)
 	}
+}
+
+// askAgentsAdapter wraps services.AgentService so it satisfies
+// handlers.AskAgentLister. Walks ListAgents, prioritizes the
+// operator interesting subset (offline first, then drifted, then
+// whatever fills the remaining slots), trims to limit. A 500
+// agent healthy fleet returns zero entries, which is correct — the
+// operator asking "anything wrong?" gets a JARVIS "no" rather than
+// a wall of agent rows that say "online, synced."
+type askAgentsAdapter struct {
+	svc services.AgentService
+}
+
+func newAskAgentsAdapter(svc services.AgentService) *askAgentsAdapter {
+	return &askAgentsAdapter{svc: svc}
+}
+
+func (a *askAgentsAdapter) ListForAsk(ctx context.Context, limit int) ([]handlers.AskAgent, error) {
+	if a == nil || a.svc == nil {
+		return nil, nil
+	}
+	all, err := a.svc.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Walk twice — first pass collects interesting agents, second
+	// pass fills with whatever's left up to limit. Cheap on a
+	// 500-agent fleet; large fleets would benefit from a service
+	// layer query if this ever becomes a hot path.
+	var offline, drifted, rest []handlers.AskAgent
+	for _, ag := range all {
+		if ag == nil {
+			continue
+		}
+		slim := handlers.AskAgent{
+			ID:          ag.ID.String(),
+			Name:        ag.Name,
+			Status:      string(ag.Status),
+			DriftStatus: string(ag.DriftStatus),
+			LastSeen:    ag.LastSeen,
+		}
+		if ag.GroupName != nil {
+			slim.GroupName = *ag.GroupName
+		}
+		switch {
+		case ag.Status == services.AgentStatusOffline:
+			offline = append(offline, slim)
+		case ag.DriftStatus == services.ConfigDriftStatusDrifted:
+			drifted = append(drifted, slim)
+		default:
+			rest = append(rest, slim)
+		}
+	}
+	// Concatenate in priority order, then trim. The "interesting
+	// first" ordering means that on a small bag, the first slot
+	// is the most likely answer to the operator's question.
+	out := append([]handlers.AskAgent{}, offline...)
+	out = append(out, drifted...)
+	// Skip the rest bucket entirely: healthy synced agents do not
+	// belong in the bag. An operator asking about the fleet by
+	// name will hit the next bag widening (agent name search) in
+	// a follow on release; for v0.68 we keep the bag focused on
+	// what's actually wrong.
+	_ = rest
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // askRecsAdapter wraps a recommendations.Engine so it satisfies the
