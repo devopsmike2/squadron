@@ -46,6 +46,14 @@ import { RolloutPreviewPane } from "@/components/rollouts/RolloutPreviewPane";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -395,30 +403,56 @@ export default function RolloutsPage() {
   // land in the audit log payload. The two-person rule is enforced
   // server-side; here we just surface the 409 if the approver is
   // also the requester.
-  const handleApprove = async (r: Rollout) => {
-    const notes = window.prompt(
-      `Approve rollout "${r.name || r.id.slice(0, 8)}"?\n\nOptional approval notes (recorded in the audit log):`,
-      "",
-    );
-    if (notes === null) return;
-    try {
-      await approveRollout(r.id, notes);
-      await mutate(ROLLOUTS_KEY);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "approve failed");
-    }
+  // v0.81.3 — approve / reject confirmation dialog state. Replaces
+  // the old window.prompt() calls. The native prompt was an ugly UX
+  // by 2026 standards and, more importantly, it blocked the JS event
+  // loop in a way headless / Chrome-MCP automation could not drive —
+  // the E2E sweep that surfaced #544 caught it because the renderer
+  // wedged on the prompt the test harness couldn't see or dismiss.
+  // Same pattern is fine to extend to Abort + Rollback later (those
+  // still use window.prompt / window.confirm at lines below — out of
+  // scope for v0.81.3 to keep the hotfix tight).
+  const [pendingDecision, setPendingDecision] = useState<{
+    kind: "approve" | "reject";
+    rollout: Rollout;
+    notes: string;
+    submitting: boolean;
+    error: string | null;
+  } | null>(null);
+
+  const handleApprove = (r: Rollout) => {
+    setPendingDecision({
+      kind: "approve",
+      rollout: r,
+      notes: "",
+      submitting: false,
+      error: null,
+    });
   };
-  const handleReject = async (r: Rollout) => {
-    const notes = window.prompt(
-      `Reject rollout "${r.name || r.id.slice(0, 8)}"?\n\nThis is terminal — the requester will have to clone the rollout to retry.\n\nOptional rejection notes:`,
-      "",
-    );
-    if (notes === null) return;
+  const handleReject = (r: Rollout) => {
+    setPendingDecision({
+      kind: "reject",
+      rollout: r,
+      notes: "",
+      submitting: false,
+      error: null,
+    });
+  };
+
+  const submitPendingDecision = async () => {
+    if (!pendingDecision) return;
+    setPendingDecision({ ...pendingDecision, submitting: true, error: null });
     try {
-      await rejectRollout(r.id, notes);
+      if (pendingDecision.kind === "approve") {
+        await approveRollout(pendingDecision.rollout.id, pendingDecision.notes);
+      } else {
+        await rejectRollout(pendingDecision.rollout.id, pendingDecision.notes);
+      }
       await mutate(ROLLOUTS_KEY);
+      setPendingDecision(null);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "reject failed");
+      const msg = e instanceof Error ? e.message : "request failed";
+      setPendingDecision((s) => (s ? { ...s, submitting: false, error: msg } : s));
     }
   };
 
@@ -930,6 +964,101 @@ export default function RolloutsPage() {
             onRollBack={handleRollBack}
           />
         ))}
+
+      {/* v0.81.3 — approve / reject confirmation dialog. In-app Radix
+          dialog replacing window.prompt so the UX is consistent with
+          the rest of the app and the flow is drivable by Chrome MCP /
+          Playwright. Notes textarea is optional; the API accepts an
+          empty string. */}
+      <Dialog
+        open={pendingDecision !== null}
+        onOpenChange={(open) => {
+          if (!open && !pendingDecision?.submitting) setPendingDecision(null);
+        }}
+      >
+        <DialogContent>
+          {pendingDecision && (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {pendingDecision.kind === "approve"
+                    ? "Approve rollout"
+                    : "Reject rollout"}
+                </DialogTitle>
+                <DialogDescription>
+                  {pendingDecision.kind === "approve" ? (
+                    <>
+                      Approving{" "}
+                      <span className="font-mono">
+                        {pendingDecision.rollout.name ||
+                          pendingDecision.rollout.id.slice(0, 8)}
+                      </span>
+                      . The engine will start the first stage immediately.
+                    </>
+                  ) : (
+                    <>
+                      Rejecting{" "}
+                      <span className="font-mono">
+                        {pendingDecision.rollout.name ||
+                          pendingDecision.rollout.id.slice(0, 8)}
+                      </span>
+                      . This is terminal — the requester will have to clone the
+                      rollout to retry.
+                    </>
+                  )}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2">
+                <Label htmlFor="decision-notes" className="text-xs">
+                  Notes (optional, recorded in the audit log)
+                </Label>
+                <textarea
+                  id="decision-notes"
+                  className="w-full min-h-[80px] rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={pendingDecision.notes}
+                  disabled={pendingDecision.submitting}
+                  onChange={(e) =>
+                    setPendingDecision((s) =>
+                      s ? { ...s, notes: e.target.value } : s,
+                    )
+                  }
+                  placeholder="What did you see that informed this decision?"
+                  maxLength={500}
+                />
+              </div>
+              {pendingDecision.error && (
+                <div className="rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-700 dark:text-red-300">
+                  {pendingDecision.error}
+                </div>
+              )}
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setPendingDecision(null)}
+                  disabled={pendingDecision.submitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => void submitPendingDecision()}
+                  disabled={pendingDecision.submitting}
+                  className={
+                    pendingDecision.kind === "reject"
+                      ? "bg-red-600 hover:bg-red-700"
+                      : ""
+                  }
+                >
+                  {pendingDecision.submitting
+                    ? "Submitting…"
+                    : pendingDecision.kind === "approve"
+                      ? "Approve"
+                      : "Reject"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
