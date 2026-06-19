@@ -263,6 +263,48 @@ the workflow. "These three rollouts are the cost spike fix"
 naturally maps to "these three rollouts share a plan id." No
 mental model upgrade required.
 
+## Action runner steps in plans — v0.80+ candidate arc
+
+As of v0.79 every plan step is a rollout — a config push. Plans
+cannot include action-runner calls (verify, notify, page on-call,
+integrity check). The dropped seeds from v0.79's stress corpus
+reframe are the natural seed corpus for this arc when it ships:
+
+- **drop_attribute_then_verify** — drop the attribute + action
+  runner verifies cost dropped >50% within 5 minutes
+- **rotate_exporter_then_observe** — switch destination + action
+  runner verifies error rate stays below threshold
+- **enable_tail_sampling_with_fallback** — enable tail sampling +
+  action runner pages on-call if metrics-for-tail-sampled-count
+  doesn't appear within 5 minutes
+- **multi_attribute_drop_with_integrity_check** — drop attributes +
+  action runner verifies metric integrity stays above threshold;
+  failure triggers automatic Abort + backwards rollback
+- **cleanup_with_downstream_notification** — drop redundant log
+  lines + action runner notifies dependent team Slack channel
+
+Rough scope notes for the engine work:
+
+- A new step kind discriminator on the plan steps table:
+  `step_kind: "rollout" | "action"`. Action steps carry an
+  action request id (v0.54 actions table) instead of a
+  target config id.
+- Engine logic to dispatch the action via the action runner when
+  the step's predecessor reaches succeeded.
+- Engine wait state for action completion. Action timeout caps
+  per the action runner's existing semantics; a timed-out action
+  step counts as failure and triggers the v0.72 backwards walk.
+- Audit events: `plan.step_action_dispatched`,
+  `plan.step_action_completed`, `plan.step_action_failed`.
+- Bridge dispatch: the proposer's `kind: "plan"` schema gains a
+  step type discriminator so action steps can be requested at
+  proposal time.
+
+Best estimate: 4-6 release arc (engine + storage + audit + UI +
+proposer schema + bridge). The v0.79 design philosophy carries
+forward — sequence small slices, fail honestly when something
+doesn't fit.
+
 ## See also
 
 - [Rollouts](./rollouts.md) — the single rollout protocol plans build

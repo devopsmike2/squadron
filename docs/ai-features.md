@@ -135,6 +135,51 @@ proposal. The proposal lands in the rollouts table with
 `proposed_by=ai` and `require_approval=true`. A human approves
 before the rollout engine touches a single agent.
 
+### Cost spike proposer — plan output mode (v0.79)
+
+The v0.58–v0.78 proposer emitted exactly one rollout per spike. v0.79
+extends the structured output schema with a discriminated union:
+
+```
+{ "kind": "rollout" | "plan", ... }
+```
+
+The model picks one of two shapes per spike. The prompt provides a
+decision framework:
+
+- **`kind: "rollout"`** when a single config change is sufficient
+  and a target config already exists in storage to reference by id.
+- **`kind: "plan"`** when a single config change might not be
+  sufficient and progressive changes with observation windows reduce
+  regression risk (multi-attribute drops, sample rate ratchets,
+  staged pipeline splits).
+
+The plan branch produces N steps (2–4 in practice), each carrying an
+`inline_config_snippet` instead of `target_config_id`. The v0.78
+plan create path materializes each snippet as a new `Config` row in
+storage before persisting the rollout. The proposer never has to
+invent config IDs that don't exist yet.
+
+Bridge dispatch happens at decode time in `internal/proposer/bridge.go`:
+the bridge inspects `result.Kind` and routes through either
+`services.RolloutService.Create` (rollout branch) or
+`services.RolloutService.CreatePlan` (plan branch). Empty `Kind`
+defaults to rollout for backwards compatibility with pre-v0.79 model
+outputs.
+
+The JARVIS payoff: when a plan lands, the operator approves once at
+step 0, the engine sequences the cascade through step N, and if any
+step fails the v0.72 backwards rollback walk undoes every succeeded
+predecessor. One approval, full sequenced fix, automatic rollback.
+
+What plans **don't** do (yet): every plan step is a rollout — a
+config push. Plans cannot include action-runner calls (verify,
+notify, page on-call). That's queued as a separate arc — adding
+action-runner-as-plan-step requires engine logic to dispatch actions,
+wait for completion before advancing, and handle action failures.
+See [docs/multi-step-plans-design.md](./multi-step-plans-design.md)
+for the v0.80+ roadmap.
+
 ### Incident drafter (v0.54 Move 3)
 
 `DraftIncidentFromAction` reads a completed action request plus the

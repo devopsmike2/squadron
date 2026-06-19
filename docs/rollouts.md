@@ -355,3 +355,45 @@ operators get the full transcript in one view.
 | GET    | `/api/v1/rollout-preview?group_id=&target_config_id=` | Diff + lint preview          |
 | GET    | `/api/v1/rollout-recipes/abort-criteria`        | List recipe cookbook                 |
 | GET    | `/api/v1/rollout-recipes/templates`             | List template gallery                |
+| POST   | `/api/v1/rollouts/plans`                        | Create plan (v0.73). Body = `{steps: [RolloutInput, ...]}` |
+| GET    | `/api/v1/rollouts/plans/:id`                    | Get plan envelope (v0.74)            |
+| GET    | `/api/v1/rollouts?plan_id=`                     | Filter rollouts by plan id (v0.74)   |
+
+## Multi step plans
+
+Plans are sequences of rollouts that group N changes under one
+approval and one audit arc. The engine cascades the steps in order
+on success; on failure, every succeeded forward step gets
+automatically rolled back via the v0.72 backwards walk.
+
+See [multi step plans design](./multi-step-plans-design.md) for the
+full protocol — engine semantics, approval rules, audit events,
+inline config snippet shape (v0.78).
+
+### AI emitted plans (v0.79)
+
+The cost spike proposer can now emit plans alongside single
+rollouts via the v0.79 discriminated union schema. When the model
+decides a single config change won't fix the spike (or progressive
+staged changes reduce regression risk), it emits `kind: "plan"`
+with N steps, each carrying an inline config snippet. The bridge
+materializes the snippets into Config rows and creates the plan
+server side.
+
+Common plan shapes the proposer emits today:
+
+- **Progressive attribute drop** — staged drops with observation
+  windows between steps. If step 1 regresses cost or signal
+  integrity, Abort rolls back step 0 too.
+- **Sample rate ratchet** — staged sampling rate reduction
+  (100% → 50% → 25% → 10%) so operators observe between levels.
+- **Pipeline split for high-volume signal** — add a secondary
+  pipeline, route a hot signal to a cheaper destination, remove
+  the filter from the main path.
+- **Dual write then cut destination** — add a backup exporter,
+  validate, then cut the failing primary.
+
+What plans don't include yet: action-runner calls. Verification,
+notification, paging, integrity checks — all require an action
+runner integration that's queued as a separate v0.80+ arc. See the
+design doc for the roadmap.

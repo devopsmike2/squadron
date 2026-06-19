@@ -44,8 +44,8 @@ import (
 // build tag.
 func TestProposerStress_50Iterations(t *testing.T) {
 	seeds := stressSeeds()
-	if len(seeds) != 50 {
-		t.Fatalf("expected 50 seeds, got %d", len(seeds))
+	if len(seeds) != 54 {
+		t.Fatalf("expected 54 seeds, got %d", len(seeds))
 	}
 
 	// Bucket the LLM error kinds and pull them into the order the
@@ -81,7 +81,10 @@ func TestProposerStress_50Iterations(t *testing.T) {
 		if seed.expectError {
 			propErr = "simulated_" + seed.name
 		}
-		prop := &stressFakeProposer{errKinds: []string{propErr}}
+		prop := &stressFakeProposer{
+			errKinds:   []string{propErr},
+			expectPlan: seed.expectPlan,
+		}
 
 		store, _ := seed.makeStore()
 		rollouts := &fakeRollouts{}
@@ -312,8 +315,11 @@ func classify(seed stressSeed, prop *stressFakeProposer, rollouts *fakeRollouts,
 	}
 
 	// Proposer outcome: walk the legitimacy verdict against
-	// whether the bridge actually posted a rollout.
-	posted := len(rollouts.inputs) > 0
+	// whether the bridge actually posted a rollout or a plan.
+	// v0.79 — plan-shape seeds dispatch through CreatePlan which
+	// records planSteps, not inputs; either path counts as
+	// "posted" from the bridge's perspective.
+	posted := len(rollouts.inputs) > 0 || len(rollouts.planSteps) > 0
 	switch {
 	case seed.legitimate && posted:
 		r.outcome = outcomeSucceeded

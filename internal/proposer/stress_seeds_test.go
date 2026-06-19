@@ -32,6 +32,11 @@ type stressSeed struct {
 	legitimate  bool          // true means the proposer should produce a proposal
 	expectError bool          // true means the fake LLM intentionally errors
 	expectDispatchFail bool   // true means we wire fakeRollouts to fail
+	// v0.79 — when true the fake LLM returns a plan-kind result for
+	// this seed instead of a rollout-kind result. Bridge should
+	// dispatch through CreatePlan and the seed should classify as
+	// outcomeSucceeded.
+	expectPlan  bool
 	makeStore   func() (*fakeStore, *types.CostSpikeEvent)
 }
 
@@ -402,8 +407,42 @@ func stressSeeds() []stressSeed {
 		})
 	}
 
-	if len(out) != 50 {
-		panic(fmt.Sprintf("stressSeeds: expected 50 seeds, built %d", len(out)))
+	// Category 7 (v0.79): plan shaped seeds (4).
+	// These exercise the discriminated union path. Each seed makes
+	// a spike whose attribution suggests progressive multi step
+	// changes; the fake LLM returns a plan kind ProposalResult and
+	// the bridge dispatches via CreatePlan. Outcome should be
+	// outcomeSucceeded just like a rollout dispatch.
+	//
+	// Seed catalog mirrors the v0.79 push back analysis — only
+	// patterns the proposer can construct from current context
+	// using v0.78 inline snippets, no action runner steps.
+	for _, planSeed := range []struct {
+		name string
+		// pattern is just naming for human readability — the fake
+		// LLM ignores it and emits a generic 2 step plan. Real
+		// plan logic ships when we have a live proposer.
+		pattern string
+	}{
+		{name: "plan_progressive_attribute_drop", pattern: "drop http.url then http.flavor staged"},
+		{name: "plan_sample_rate_ratchet", pattern: "drop sampling 100→50→25"},
+		{name: "plan_pipeline_split_for_high_volume", pattern: "split high volume signal to cheap exporter"},
+		{name: "plan_dual_write_then_cut_destination", pattern: "add backup exporter then cut failing primary"},
+	} {
+		planSeed := planSeed
+		out = append(out, stressSeed{
+			name:       planSeed.name,
+			category:   "plan_kind",
+			legitimate: true,
+			expectPlan: true,
+			makeStore: func() (*fakeStore, *types.CostSpikeEvent) {
+				return spikeWithAttributes([]string{"http.url"}, 300)
+			},
+		})
+	}
+
+	if len(out) != 54 {
+		panic(fmt.Sprintf("stressSeeds: expected 54 seeds, built %d", len(out)))
 	}
 	return out
 }
@@ -488,6 +527,10 @@ type stressFakeProposer struct {
 	lastCtx  ai.CostSpikeContext
 	errKinds []string // one per seed; "" means succeed
 	lastErr  error
+	// v0.79 — when set the fake returns a plan kind ProposalResult
+	// instead of the standard rollout kind. Wired per iteration in
+	// the stress driver from the seed's expectPlan flag.
+	expectPlan bool
 }
 
 func (f *stressFakeProposer) Enabled() bool { return true }
@@ -538,8 +581,56 @@ func (f *stressFakeProposer) ProposeFromCostSpike(_ context.Context, in ai.CostS
 	if len(lead) > 60 {
 		lead = lead[:60] + "..."
 	}
+
+	// v0.79 — plan kind branch. Emits a 2 step plan with inline
+	// config snippets so the bridge exercises the CreatePlan path.
+	// Snippet bodies are intentionally minimal but valid YAML that
+	// passes configlint.Lint with no error-severity findings.
+	if f.expectPlan {
+		snippet1 := "receivers:\n  otlp:\n    protocols:\n      grpc: {}\nprocessors:\n  batch: {}\nexporters:\n  debug: {}\nservice:\n  pipelines:\n    metrics:\n      receivers: [otlp]\n      processors: [batch]\n      exporters: [debug]\n"
+		snippet2 := "receivers:\n  otlp:\n    protocols:\n      grpc: {}\nprocessors:\n  batch: {}\n  filter: {}\nexporters:\n  debug: {}\nservice:\n  pipelines:\n    metrics:\n      receivers: [otlp]\n      processors: [batch, filter]\n      exporters: [debug]\n"
+		stage := []ai.RolloutStageCandidate{
+			{Mode: "percentage", Percentage: 10, DwellSeconds: 600},
+			{Mode: "percentage", Percentage: 100, DwellSeconds: 0},
+		}
+		abort := ai.AbortCriteriaCandidate{
+			MaxDriftedAgents: 5, MaxErrorLogsPerMinute: 50, MinDwellSecondsBeforeAbort: 120,
+		}
+		return &ai.ProposalResult{
+			Declined: false,
+			Kind:     ai.ProposalKindPlan,
+			Plan: ai.PlanCandidate{
+				Steps: []ai.PlanStepCandidate{
+					{
+						Name:                fmt.Sprintf("AI plan step 0: drop %s", lead),
+						GroupID:             in.GroupID,
+						InlineConfigSnippet: snippet1,
+						RequireApproval:     true,
+						Stages:              stage,
+						AbortCriteria:       abort,
+					},
+					{
+						Name:                fmt.Sprintf("AI plan step 1: follow up on %s", lead),
+						GroupID:             in.GroupID,
+						InlineConfigSnippet: snippet2,
+						Stages:              stage,
+						AbortCriteria:       abort,
+					},
+				},
+			},
+			Reasoning: fmt.Sprintf("Progressive change on %s: drop it in step 0, observe, then layer filter in step 1.", lead),
+			Evidence: []ai.EvidenceRefCandidate{
+				{Kind: "alert", ID: in.SpikeID, Description: "Cost spike attribution"},
+			},
+			Model:     "fake-sonnet",
+			TokensIn:  200 + len(in.TopAttributes)*30,
+			TokensOut: 600,
+		}, nil
+	}
+
 	return &ai.ProposalResult{
 		Declined: false,
+		Kind:     ai.ProposalKindRollout,
 		Proposal: ai.RolloutInputCandidate{
 			Name:            fmt.Sprintf("AI: tame %s on %s", lead, in.GroupName),
 			GroupID:         in.GroupID,

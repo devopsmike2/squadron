@@ -6,6 +6,7 @@ package proposer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -71,6 +72,13 @@ func (f *fakeStore) GetGroup(_ context.Context, id string) (*types.Group, error)
 type fakeRollouts struct {
 	inputs []services.RolloutInput
 	err    error
+	// v0.79 — plan create dispatch path. planSteps records the N
+	// steps the bridge handed to CreatePlan; planErr lets tests
+	// force a plan create failure independently from the rollout
+	// Create path.
+	planSteps []services.RolloutInput
+	planErr   error
+	planID    string
 }
 
 func (f *fakeRollouts) Create(_ context.Context, in services.RolloutInput) (*services.Rollout, error) {
@@ -79,6 +87,28 @@ func (f *fakeRollouts) Create(_ context.Context, in services.RolloutInput) (*ser
 	}
 	f.inputs = append(f.inputs, in)
 	return &services.Rollout{ID: "rollout-" + in.Name}, nil
+}
+
+func (f *fakeRollouts) CreatePlan(_ context.Context, steps []services.RolloutInput) ([]*services.Rollout, string, error) {
+	if f.planErr != nil {
+		return nil, "", f.planErr
+	}
+	f.planSteps = append(f.planSteps, steps...)
+	planID := f.planID
+	if planID == "" {
+		planID = "plan-fake"
+	}
+	out := make([]*services.Rollout, 0, len(steps))
+	for i, s := range steps {
+		out = append(out, &services.Rollout{
+			ID:            fmt.Sprintf("rollout-%s-step-%d", planID, i),
+			Name:          s.Name,
+			GroupID:       s.GroupID,
+			PlanID:        planID,
+			PlanStepIndex: i,
+		})
+	}
+	return out, planID, nil
 }
 
 // helper to build a baseline spike with two agents both in the
@@ -377,4 +407,106 @@ func TestParseAttribution(t *testing.T) {
 	agents, attrs = parseAttribution("not json")
 	assert.Empty(t, agents)
 	assert.Empty(t, attrs)
+}
+
+// v0.79 — goodPlan returns a valid plan-kind ProposalResult that
+// the bridge should dispatch via CreatePlan. Two steps, each with
+// an inline_config_snippet; abort criteria honored on each step.
+func goodPlan(gid string) *ai.ProposalResult {
+	stages := []ai.RolloutStageCandidate{
+		{Mode: "percentage", Percentage: 10, DwellSeconds: 600},
+		{Mode: "percentage", Percentage: 100, DwellSeconds: 0},
+	}
+	abort := ai.AbortCriteriaCandidate{
+		MaxDriftedAgents: 5, MaxErrorLogsPerMinute: 50, MinDwellSecondsBeforeAbort: 120,
+	}
+	snippetA := "receivers:\n  otlp: {}\nexporters:\n  debug: {}\nservice:\n  pipelines:\n    metrics: { receivers: [otlp], exporters: [debug] }\n"
+	snippetB := "receivers:\n  otlp: {}\nprocessors:\n  batch: {}\nexporters:\n  debug: {}\nservice:\n  pipelines:\n    metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }\n"
+	return &ai.ProposalResult{
+		Declined: false,
+		Kind:     ai.ProposalKindPlan,
+		Plan: ai.PlanCandidate{
+			Steps: []ai.PlanStepCandidate{
+				{
+					Name:                "AI plan step 0: drop http.url",
+					GroupID:             gid,
+					InlineConfigSnippet: snippetA,
+					RequireApproval:     true,
+					Stages:              stages,
+					AbortCriteria:       abort,
+				},
+				{
+					Name:                "AI plan step 1: layer filter for http.flavor",
+					GroupID:             gid,
+					InlineConfigSnippet: snippetB,
+					Stages:              stages,
+					AbortCriteria:       abort,
+				},
+			},
+		},
+		Reasoning: "Two related cardinality attributes drive the spike; stage drops so operators observe between steps.",
+		Evidence: []ai.EvidenceRefCandidate{
+			{Kind: "alert", ID: "spike-1", Description: "Cost spike"},
+		},
+		Model:     "claude-sonnet-4-6",
+		TokensIn:  240,
+		TokensOut: 600,
+	}
+}
+
+// TestBridge_PlanKindDispatchesToCreatePlan verifies the v0.79
+// discriminated union path: a Kind=plan ProposalResult flows into
+// services.RolloutService.CreatePlan, not Create. The bridge
+// stamps ProposedBy=ai on each step and surfaces reasoning +
+// evidence on step 0 only.
+func TestBridge_PlanKindDispatchesToCreatePlan(t *testing.T) {
+	store, _ := baselineFixture()
+	prop := &fakeProposer{
+		enabled: true,
+		results: []*ai.ProposalResult{goodPlan("prod-utility-fleet")},
+	}
+	rollouts := &fakeRollouts{planID: "plan-abc"}
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
+	b.tick(context.Background())
+
+	// No single rollout Create call.
+	assert.Empty(t, rollouts.inputs, "plan kind must NOT dispatch through Create")
+	// Two plan steps recorded by CreatePlan.
+	require.Len(t, rollouts.planSteps, 2)
+	assert.Equal(t, services.RolloutProposedByAI, rollouts.planSteps[0].ProposedBy)
+	assert.Equal(t, services.RolloutProposedByAI, rollouts.planSteps[1].ProposedBy)
+	// Step 0 carries the plan's approval gate and the AI reasoning.
+	assert.True(t, rollouts.planSteps[0].RequireApproval, "step 0 must carry the plan approval gate")
+	assert.Contains(t, rollouts.planSteps[0].ProposalReasoning, "stage drops")
+	require.Len(t, rollouts.planSteps[0].EvidenceRefs, 1)
+	assert.Equal(t, "alert", rollouts.planSteps[0].EvidenceRefs[0].Kind)
+	// Step 1 does NOT carry approval gate or duplicated provenance.
+	assert.False(t, rollouts.planSteps[1].RequireApproval, "step 1+ must not carry the approval gate")
+	assert.Empty(t, rollouts.planSteps[1].ProposalReasoning)
+	assert.Empty(t, rollouts.planSteps[1].EvidenceRefs)
+	// Inline snippets flow through to the materializer.
+	assert.Contains(t, rollouts.planSteps[0].InlineConfigSnippet, "exporters")
+	assert.Contains(t, rollouts.planSteps[1].InlineConfigSnippet, "batch")
+	// GroupID is the bridge's inferred group, not whatever the model emitted.
+	assert.Equal(t, "prod-utility-fleet", rollouts.planSteps[0].GroupID)
+	assert.Equal(t, "prod-utility-fleet", rollouts.planSteps[1].GroupID)
+}
+
+// Backwards compat: a ProposalResult with empty Kind (no
+// discriminator) defaults to rollout dispatch. v0.79 mustn't
+// break pre v0.79 model outputs.
+func TestBridge_EmptyKindDefaultsToRollout(t *testing.T) {
+	store, _ := baselineFixture()
+	// goodProposal does not set Kind — exactly what a pre v0.79
+	// fake or live response looks like.
+	prop := &fakeProposer{
+		enabled: true,
+		results: []*ai.ProposalResult{goodProposal("prod-utility-fleet")},
+	}
+	rollouts := &fakeRollouts{}
+	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
+	b.tick(context.Background())
+
+	assert.Len(t, rollouts.inputs, 1, "empty kind must dispatch through Create")
+	assert.Empty(t, rollouts.planSteps, "empty kind must NOT dispatch through CreatePlan")
 }
