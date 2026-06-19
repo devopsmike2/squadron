@@ -95,9 +95,14 @@ type Rollout struct {
 	AbortReason      string         `json:"abort_reason,omitempty"`
 	// v0.69 — multi step plan grouping. Empty PlanID means
 	// standalone. Negative PlanStepIndex is reserved for v0.72
-	// rollback steps within the same plan.
+	// rollback steps within the same plan. v0.82 dropped omitempty
+	// on PlanStepIndex because 0 is a meaningful value (the first
+	// forward step) and omitempty was silently stripping it, which
+	// surfaced as "Plan · step ?" in the UI for the head of every
+	// plan (#543). PlanID keeps omitempty because empty there really
+	// is the absence signal.
 	PlanID        string `json:"plan_id,omitempty"`
-	PlanStepIndex int    `json:"plan_step_index,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 	CompletedAt      *time.Time     `json:"completed_at,omitempty"`

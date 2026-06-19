@@ -23,6 +23,24 @@ Both model strings are overridable in `squadron.yaml`. Token usage
 is metered on every response so an operator can see what was spent
 on what.
 
+### Token budget per call
+
+The service-wide `max_tokens` cap in `squadron.yaml` (default
+`1024`) governs the upper bound on response length for the short
+surfaces — explain, ask, merge — where the model is expected to
+emit a couple of paragraphs and stop. The proposer is the
+exception: as of v0.82 it carries a per-call override of 4096
+tokens (`ai.ProposerMaxTokens`) because plan-kind responses can
+include a complete inline OpenTelemetry Collector YAML per step
+(the v0.78 inline\_config\_snippet contract). At the 1024 default
+those responses would truncate mid-config and the bridge would
+silently drop the spike (this is what `#550` was). The trade-off:
+the cap is a ceiling, not a per-call bill — the model only uses
+what it needs, so raising the ceiling adds no cost on short
+responses. A future release that wants to drop the cap should
+convert `inline_config_snippet` from a complete YAML to a diff
+encoding, which is a v0.78 contract pivot rather than a hotfix.
+
 ## Audit log explain (v0.57)
 
 The audit log is the surface every Squadron operator stares at

@@ -49,6 +49,24 @@ const (
 	DefaultBaseURL      = "https://api.anthropic.com"
 	DefaultExplainModel = "claude-haiku-4-5-20251001"
 	DefaultMergeModel   = "claude-sonnet-4-6"
+
+	// ProposerMaxTokens overrides s.cfg.MaxTokens for the proposer
+	// call only. v0.79's plan-kind responses can include 2+ steps
+	// where each step carries a full inline collector YAML in
+	// inline_config_snippet (the v0.78 contract). The global default
+	// of 1024 tokens proved too tight in v0.82 testing: the second
+	// seeded spike returned a JSON truncated mid-config and the
+	// bridge silently dropped it (#550). 4096 covers 2-step plans
+	// with generous headroom and leaves room for the 3-4 step plans
+	// the v0.79 prompt examples suggest. Cost is the model's actual
+	// output, not the cap — raising the ceiling adds no per-call
+	// charge for short responses. Per-call override keeps explain /
+	// ask / merge on the small 1024 cap appropriate for their
+	// short-answer use cases. A future release that wants to drop
+	// the cap can compress inline_config_snippet to a diff format
+	// instead of a full YAML — that's a v0.78 contract pivot, not a
+	// hotfix.
+	ProposerMaxTokens = 4096
 	DefaultMaxTokens    = 1024
 
 	apiVersion       = "2023-06-01"
@@ -618,6 +636,12 @@ type callOpts struct {
 	Model    string
 	System   string
 	UserText string
+	// MaxTokens optionally overrides the service-wide cap from
+	// s.cfg.MaxTokens. Zero leaves the default in place. v0.82 added
+	// this so the proposer can request more tokens than the global
+	// default — see ProposerMaxTokens. Other callers (explain, ask,
+	// merge) leave it zero and inherit the smaller default.
+	MaxTokens int
 }
 
 type callResp struct {
@@ -662,9 +686,16 @@ type anthropicResponse struct {
 }
 
 func (s *Service) callMessages(ctx context.Context, opts callOpts) (*callResp, error) {
+	// v0.82 — opts.MaxTokens overrides the service-wide cap when set.
+	// Falls back to s.cfg.MaxTokens (DefaultMaxTokens at 1024 unless
+	// configured) for callers that don't need the headroom.
+	maxTokens := s.cfg.MaxTokens
+	if opts.MaxTokens > 0 {
+		maxTokens = opts.MaxTokens
+	}
 	body := anthropicRequest{
 		Model:     opts.Model,
-		MaxTokens: s.cfg.MaxTokens,
+		MaxTokens: maxTokens,
 		System:    opts.System,
 		Messages: []anthropicMessage{
 			{Role: "user", Content: opts.UserText},
