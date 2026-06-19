@@ -21,6 +21,7 @@
 
 import {
   Server,
+  Sparkles,
   Users,
   FileText,
   BarChart3,
@@ -47,7 +48,9 @@ import useSWR from "swr";
 import { ModeToggle } from "./mode-toggle";
 
 import { getAgentStats } from "@/api/agents";
+import { useAICapabilities } from "@/api/ai";
 import { listAlertRules } from "@/api/alerts";
+import { ASK_OPEN_EVENT } from "@/components/AskSquadronDialog";
 import { SquadronMark } from "@/components/brand/SquadronMark";
 import {
   Sidebar,
@@ -66,7 +69,14 @@ import {
 interface MenuItem {
   key: string;
   title: string;
-  url: string;
+  /**
+   * Route to navigate to. Mutually exclusive with onClick — actions
+   * that don't open a page (Ask Squadron is the v0.81 example) set
+   * onClick and leave url empty.
+   */
+  url?: string;
+  /** Action invoked when the item is clicked. */
+  onClick?: () => void;
   icon: React.ComponentType<{ className?: string }>;
   /** Optional status decoration shown next to the label. */
   status?: React.ReactNode;
@@ -94,10 +104,31 @@ export function AppSidebar() {
 
   const activeAlerts = (alerts ?? []).filter((a) => a.enabled).length;
 
+  // v0.81 — Ask Squadron sidebar entry. Same posture as the v0.64
+  // command palette entry: only render when AI is configured server
+  // side. useAICapabilities caches the probe at session granularity
+  // so the gate is cheap.
+  const { capabilities } = useAICapabilities();
+  const askEnabled = !!capabilities?.enabled;
+
+  // Anchor the Ask entry at the very top of the Fleet group when
+  // enabled. The dispatch hook is the same v0.64 ASK_OPEN_EVENT the
+  // command palette uses; the AskSquadronDialog handles open/close
+  // state.
+  const askItem: MenuItem = {
+    key: "ask",
+    title: "Ask Squadron",
+    onClick: () => {
+      document.dispatchEvent(new CustomEvent(ASK_OPEN_EVENT));
+    },
+    icon: Sparkles,
+  };
+
   const groups: MenuGroup[] = [
     {
       label: "Fleet",
       items: [
+        ...(askEnabled ? [askItem] : []),
         {
           key: "quickstart",
           title: "Quickstart",
@@ -297,10 +328,36 @@ export function AppSidebar() {
             )}
             <SidebarMenu>
               {group.items.map((item) => {
-                const isActive =
-                  item.url === "/"
+                // v0.81 — items with onClick render as buttons that
+                // dispatch the action; items with url render as
+                // Links that navigate. Ask Squadron uses the action
+                // shape because the dialog opens via event, not
+                // route navigation.
+                const isAction = !!item.onClick;
+                const isActive = isAction
+                  ? false
+                  : item.url === "/"
                     ? location.pathname === "/"
-                    : location.pathname.startsWith(item.url);
+                    : location.pathname.startsWith(item.url ?? "");
+                const inner = (
+                  <>
+                    {isActive && (
+                      <span
+                        aria-hidden
+                        className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-sm bg-primary"
+                      />
+                    )}
+                    <item.icon className="h-4 w-4" />
+                    {!collapsed && (
+                      <>
+                        <span>{item.title}</span>
+                        {item.status && (
+                          <span className="ml-auto">{item.status}</span>
+                        )}
+                      </>
+                    )}
+                  </>
+                );
                 return (
                   <SidebarMenuItem key={item.key}>
                     <SidebarMenuButton
@@ -309,27 +366,17 @@ export function AppSidebar() {
                       tooltip={item.title}
                       className="relative h-8"
                     >
-                      <Link to={item.url}>
-                        {/* Left accent bar — only renders for the
-                            active route. Subtle but unmistakable, and
-                            independent of the cell background so it
-                            survives hover. */}
-                        {isActive && (
-                          <span
-                            aria-hidden
-                            className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r-sm bg-primary"
-                          />
-                        )}
-                        <item.icon className="h-4 w-4" />
-                        {!collapsed && (
-                          <>
-                            <span>{item.title}</span>
-                            {item.status && (
-                              <span className="ml-auto">{item.status}</span>
-                            )}
-                          </>
-                        )}
-                      </Link>
+                      {isAction ? (
+                        <button
+                          type="button"
+                          onClick={item.onClick}
+                          className="w-full text-left"
+                        >
+                          {inner}
+                        </button>
+                      ) : (
+                        <Link to={item.url ?? "/"}>{inner}</Link>
+                      )}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );

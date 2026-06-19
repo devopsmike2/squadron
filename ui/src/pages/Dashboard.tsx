@@ -35,6 +35,7 @@ import { listAlertRules } from "@/api/alerts";
 import { listAuditEvents } from "@/api/audit";
 import { listIncidentDrafts } from "@/api/incidents";
 import { listRollouts } from "@/api/rollouts";
+import { AskSquadronHero } from "@/components/AskSquadronHero";
 import { SquadronMark } from "@/components/brand/SquadronMark";
 import { CostSpikesBanner } from "@/components/cost-spikes/CostSpikesPanel";
 import { InventorySummary } from "@/components/inventory/InventoryPanel";
@@ -664,6 +665,17 @@ export default function DashboardPage() {
           </div>
         </div>
       </header>
+
+      {/* v0.81 — Ask Squadron hero. Most prominent placement so a
+          new operator landing on the Dashboard sees the deputy
+          first. Renders null when AI is off so a misconfigured
+          deployment doesn't see a teaser for a feature that's not
+          wired. Sits above the cost-spike banner because the
+          deputy can ANSWER questions about the spike — and a new
+          operator's first reaction to an alert is more useful if
+          they know there's a conversational surface to query
+          against. */}
+      <AskSquadronHero />
 
       {/* v0.29 cost-spike heads-up. Renders only when there are
           open, unacknowledged spikes — otherwise null. Lives above
