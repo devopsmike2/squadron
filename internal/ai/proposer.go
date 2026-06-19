@@ -115,10 +115,61 @@ type AbortCriteriaCandidate struct {
 	MinDwellSecondsBeforeAbort int `json:"min_dwell_seconds_before_abort,omitempty"`
 }
 
+// ProposalKind is the discriminator for the v0.79 structured output
+// union. Old responses without a kind field decode as
+// ProposalKindRollout for backwards compatibility — the field is
+// optional and defaults to rollout.
+type ProposalKind string
+
+const (
+	ProposalKindRollout ProposalKind = "rollout"
+	ProposalKindPlan    ProposalKind = "plan"
+)
+
+// PlanCandidate is the proposer's draft multi step plan. Shape
+// mirrors handlers.CreatePlanRequest — Steps is the ordered list
+// the bridge daemon hands to services.RolloutService.CreatePlan.
+// Each step is a PlanStepCandidate carrying an inline YAML config
+// snippet that the v0.78 plan create path materializes server side.
+//
+// Plans are emitted for cost spikes where a single config change
+// won't fix the spike, OR where staged progressive changes with
+// observation between steps reduce regression risk. See
+// proposer_prompt.go for the decision framework the model sees.
+type PlanCandidate struct {
+	Steps []PlanStepCandidate `json:"steps"`
+}
+
+// PlanStepCandidate is one rollout intent inside a plan. Each step
+// supplies an InlineConfigSnippet (YAML the v0.78 server materializes
+// into a Config row) and the same stages/abort_criteria shape as a
+// standalone rollout. PlanID + PlanStepIndex are assigned by the
+// server at CreatePlan time — the model doesn't set them.
+type PlanStepCandidate struct {
+	Name                string                  `json:"name"`
+	GroupID             string                  `json:"group_id"`
+	InlineConfigSnippet string                  `json:"inline_config_snippet"`
+	Stages              []RolloutStageCandidate `json:"stages"`
+	AbortCriteria       AbortCriteriaCandidate  `json:"abort_criteria"`
+	// RequireApproval is honored on step 0 only — steps 1..N are
+	// forced to false server side per the v0.69 design (plans
+	// approve as a unit at step 0). The model may set it on step 0
+	// when the change is risky enough to gate behind operator
+	// approval.
+	RequireApproval bool `json:"require_approval,omitempty"`
+}
+
 // ProposalResult is what ProposeFromCostSpike returns. The proposer
 // either returns a Proposal (which the bridge daemon converts +
 // posts) or Declined=true with a Reason (no good action to propose;
 // the bridge daemon logs and moves on).
+//
+// v0.79 — Kind discriminates between rollout and plan responses.
+// Empty / missing Kind decodes as ProposalKindRollout for backwards
+// compatibility with v0.58-78 prompt outputs. When Kind is plan, the
+// Plan field carries the candidate; when rollout (or empty), the
+// Proposal field carries the candidate. The bridge dispatches on
+// Kind at decode time.
 type ProposalResult struct {
 	// Declined is set when the model decided no productive
 	// proposal exists for the given spike. Common reasons: the
@@ -130,10 +181,20 @@ type ProposalResult struct {
 	Declined bool   `json:"declined"`
 	Reason   string `json:"reason,omitempty"`
 
+	// v0.79 — discriminator. Set to one of ProposalKindRollout or
+	// ProposalKindPlan. Empty defaults to rollout for backwards
+	// compatibility with model outputs that don't emit the field.
+	Kind ProposalKind `json:"kind,omitempty"`
+
 	// Proposal is the staged rollout draft the bridge daemon
-	// converts into a services.RolloutInput. Only valid when
-	// Declined is false.
+	// converts into a services.RolloutInput. Set when Kind is
+	// rollout (or empty for back-compat).
 	Proposal RolloutInputCandidate `json:"proposal,omitempty"`
+
+	// Plan is the multi step plan the bridge daemon converts into
+	// services.RolloutService.CreatePlan. Set when Kind is plan.
+	// v0.79.
+	Plan PlanCandidate `json:"plan,omitempty"`
 
 	// Reasoning is the natural-language explanation that flows
 	// onto the rollout record as proposal_reasoning. The UI
@@ -184,10 +245,17 @@ func (s *Service) ProposeFromCostSpike(ctx context.Context, in CostSpikeContext)
 	// Parse the JSON block out of the response. The system prompt
 	// asks for a strict JSON object; the helper extracts it even
 	// when the model preambles with a sentence.
+	//
+	// v0.79 — the parsed shape carries both Proposal (rollout
+	// candidate) and Plan (plan candidate). Kind discriminates;
+	// empty Kind defaults to rollout for backwards compatibility
+	// with v0.58-78 model outputs.
 	type parsed struct {
 		Declined  bool                   `json:"declined"`
 		Reason    string                 `json:"reason"`
+		Kind      ProposalKind           `json:"kind"`
 		Proposal  RolloutInputCandidate  `json:"proposal"`
+		Plan      PlanCandidate          `json:"plan"`
 		Reasoning string                 `json:"reasoning"`
 		Evidence  []EvidenceRefCandidate `json:"evidence"`
 	}
@@ -197,9 +265,18 @@ func (s *Service) ProposeFromCostSpike(ctx context.Context, in CostSpikeContext)
 		return nil, fmt.Errorf("propose from cost spike: model response was not valid JSON: %w (raw=%s)", err, truncateString(resp.Text, 400))
 	}
 
+	// Default Kind to rollout when the model didn't emit the field.
+	// Old (pre v0.79) prompt outputs that only set Proposal land
+	// here cleanly.
+	kind := p.Kind
+	if kind == "" {
+		kind = ProposalKindRollout
+	}
+
 	result := &ProposalResult{
 		Declined:  p.Declined,
 		Reason:    strings.TrimSpace(p.Reason),
+		Kind:      kind,
 		Reasoning: strings.TrimSpace(p.Reasoning),
 		Evidence:  p.Evidence,
 		Model:     resp.Model,
@@ -207,15 +284,56 @@ func (s *Service) ProposeFromCostSpike(ctx context.Context, in CostSpikeContext)
 		TokensOut: resp.TokensOut,
 	}
 	if !p.Declined {
-		result.Proposal = p.Proposal
-		// Light validation: the rollout service will validate
-		// thoroughly at Create, but catch obvious garbage here so
-		// we don't waste a round trip.
-		if err := validateProposal(p.Proposal, in.GroupID); err != nil {
-			return nil, fmt.Errorf("propose from cost spike: model returned an invalid proposal: %w", err)
+		switch kind {
+		case ProposalKindRollout:
+			result.Proposal = p.Proposal
+			if err := validateProposal(p.Proposal, in.GroupID); err != nil {
+				return nil, fmt.Errorf("propose from cost spike: model returned an invalid proposal: %w", err)
+			}
+		case ProposalKindPlan:
+			result.Plan = p.Plan
+			if err := validatePlan(p.Plan, in.GroupID); err != nil {
+				return nil, fmt.Errorf("propose from cost spike: model returned an invalid plan: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("propose from cost spike: unknown kind %q (expected rollout or plan)", kind)
 		}
 	}
 	return result, nil
+}
+
+// validatePlan catches obvious problems on a plan candidate before
+// the bridge daemon hands it to services.RolloutService.CreatePlan.
+// v0.79. Mirrors validateProposal's "smoke test" posture — the
+// full validation happens at CreatePlan time.
+func validatePlan(p PlanCandidate, expectedGroupID string) error {
+	if len(p.Steps) == 0 {
+		return errors.New("plan has no steps")
+	}
+	if len(p.Steps) > 10 {
+		// 10 step ceiling. A plan with more than this many steps
+		// is almost certainly a model that's lost the plot —
+		// CreatePlan accepts up to 1000 but a sane proposer
+		// should rarely emit more than 3-4. Cap loudly here so
+		// pathological outputs don't sneak through.
+		return fmt.Errorf("plan has %d steps (max 10)", len(p.Steps))
+	}
+	for i, step := range p.Steps {
+		if step.GroupID == "" {
+			return fmt.Errorf("plan step %d missing group_id", i)
+		}
+		if step.GroupID != expectedGroupID {
+			return fmt.Errorf("plan step %d group_id %q does not match context group_id %q",
+				i, step.GroupID, expectedGroupID)
+		}
+		if strings.TrimSpace(step.InlineConfigSnippet) == "" {
+			return fmt.Errorf("plan step %d missing inline_config_snippet", i)
+		}
+		if len(step.Stages) == 0 {
+			return fmt.Errorf("plan step %d has no stages", i)
+		}
+	}
+	return nil
 }
 
 // truncateString is a small helper that complements truncate

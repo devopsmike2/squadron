@@ -62,6 +62,10 @@ type Store interface {
 // posts to. Stated as an interface for testability.
 type Rollouts interface {
 	Create(ctx context.Context, input services.RolloutInput) (*services.Rollout, error)
+	// v0.79 — plan create. Bridge dispatches to this when the
+	// proposer emits ProposalKindPlan. Returns the assigned plan
+	// id + the created step rollouts in step order.
+	CreatePlan(ctx context.Context, steps []services.RolloutInput) ([]*services.Rollout, string, error)
 }
 
 // Audit is the subset of services.AuditService the bridge uses to
@@ -233,6 +237,27 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		return
 	}
 
+	// v0.79 — dispatch on result.Kind. Empty Kind decodes as
+	// rollout (backwards compat with pre-v0.79 model outputs);
+	// plan kind invokes the v0.78 plan create path with inline
+	// snippets per step.
+	switch result.Kind {
+	case ai.ProposalKindPlan:
+		b.handlePlanSpike(ctx, spike, result, cs)
+	case ai.ProposalKindRollout, "":
+		b.handleRolloutSpike(ctx, spike, result, cs)
+	default:
+		b.logger.Warn("AI proposer bridge: unknown proposal kind; skipping spike",
+			zap.String("spike_id", spike.ID),
+			zap.String("kind", string(result.Kind)))
+		return
+	}
+}
+
+// handleRolloutSpike is the v0.58 path — single rollout create.
+// Extracted from handleSpike during the v0.79 refactor so the
+// dispatch branch reads cleanly.
+func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext) {
 	input := candidateToInput(result, cs.GroupID)
 	rollout, err := b.rollouts.Create(ctx, input)
 	if err != nil {
@@ -248,6 +273,45 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		zap.Int("tokens_out", result.TokensOut))
 	b.emitCreated(ctx, spike, rollout, result, cs)
 	b.emitEvidenceLinked(ctx, spike, rollout, result)
+}
+
+// handlePlanSpike is the v0.79 path — multi step plan create. Wraps
+// each PlanStepCandidate into a services.RolloutInput with the
+// step's inline snippet, then calls CreatePlan which materializes
+// configs + creates rollouts in one server-side transaction.
+//
+// Failure modes:
+//   - CreatePlan returns an error if any step's snippet fails lint
+//     or any storage write fails. We log + skip the spike; the
+//     audit event records the decline reason via emitDeclined.
+//   - On success, audit events fire against the first step's
+//     rollout id so the timeline anchors the plan to a concrete row.
+func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext) {
+	steps := candidateToPlanInputs(result, cs.GroupID)
+	createdSteps, planID, err := b.rollouts.CreatePlan(ctx, steps)
+	if err != nil {
+		b.logger.Warn("AI proposer bridge: plan create failed; skipping spike",
+			zap.String("spike_id", spike.ID), zap.Error(err))
+		return
+	}
+	if len(createdSteps) == 0 {
+		b.logger.Warn("AI proposer bridge: plan create returned no steps; skipping spike",
+			zap.String("spike_id", spike.ID))
+		return
+	}
+	b.logger.Info("AI proposer bridge: posted plan proposal",
+		zap.String("spike_id", spike.ID),
+		zap.String("plan_id", planID),
+		zap.Int("step_count", len(createdSteps)),
+		zap.String("group_id", cs.GroupID),
+		zap.Int("tokens_in", result.TokensIn),
+		zap.Int("tokens_out", result.TokensOut))
+	// Reuse the per-rollout audit emission against the first
+	// step's rollout. proposal.created + evidence.linked events
+	// anchor on step 0; the plan.created event already fires from
+	// services.CreatePlan itself with the plan_id payload.
+	b.emitCreated(ctx, spike, createdSteps[0], result, cs)
+	b.emitEvidenceLinked(ctx, spike, createdSteps[0], result)
 }
 
 // emitCreated records proposal.created at the cost-spike target.
@@ -542,6 +606,63 @@ func candidateToInput(result *ai.ProposalResult, expectedGroupID string) service
 		// SDK clients can supply a "requested_by_agent_id" if they
 		// want that breadcrumb too.
 	}
+}
+
+// candidateToPlanInputs maps the proposer's plan candidate (N
+// PlanStepCandidates) into the []services.RolloutInput slice that
+// services.RolloutService.CreatePlan accepts. v0.79.
+//
+// Each step's InlineConfigSnippet flows through to the materialized
+// config. ProposedBy=ai, ProposalReasoning, and EvidenceRefs are
+// stamped on step 0 only — the per-step provenance lives on the
+// rollout records the engine creates from CreatePlan.
+func candidateToPlanInputs(result *ai.ProposalResult, expectedGroupID string) []services.RolloutInput {
+	steps := result.Plan.Steps
+	out := make([]services.RolloutInput, 0, len(steps))
+	evidence := make([]services.EvidenceRef, len(result.Evidence))
+	for i, e := range result.Evidence {
+		evidence[i] = services.EvidenceRef{
+			Kind:        e.Kind,
+			ID:          e.ID,
+			URL:         e.URL,
+			Description: e.Description,
+		}
+	}
+	for i, st := range steps {
+		stages := make([]services.RolloutStage, len(st.Stages))
+		for j, s := range st.Stages {
+			stages[j] = services.RolloutStage{
+				Mode:          services.RolloutStageMode(s.Mode),
+				Percentage:    s.Percentage,
+				LabelSelector: copyMap(s.LabelSelector),
+				DwellSeconds:  s.DwellSeconds,
+			}
+		}
+		input := services.RolloutInput{
+			Name:                st.Name,
+			GroupID:             expectedGroupID, // ignore model's value; trust the bridge's inference
+			InlineConfigSnippet: st.InlineConfigSnippet,
+			Stages:              stages,
+			AbortCriteria:       servicesAbortCriteria(st.AbortCriteria),
+			// v0.79 — step 0 keeps the model's RequireApproval (the
+			// plan's gate). Steps 1..N have it forced to false by
+			// services.CreatePlan itself; setting it here would be
+			// redundant but harmless. Mirroring the model's
+			// intent for step 0 only keeps the code path tight.
+			RequireApproval: i == 0 && st.RequireApproval,
+			ProposedBy:      services.RolloutProposedByAI,
+		}
+		// Provenance fields fire on step 0 so the plan's approval
+		// drawer surfaces the reasoning + evidence in one place.
+		// Steps 1..N inherit the plan grouping; SIEM consumers can
+		// fan out via the plan_id.
+		if i == 0 {
+			input.ProposalReasoning = result.Reasoning
+			input.EvidenceRefs = evidence
+		}
+		out = append(out, input)
+	}
+	return out
 }
 
 func servicesAbortCriteria(c ai.AbortCriteriaCandidate) services.RolloutAbortCriteria {
