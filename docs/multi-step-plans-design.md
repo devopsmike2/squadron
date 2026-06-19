@@ -169,6 +169,56 @@ contract stable first, and shipping the storage as its own release
 gives the design doc time to bake before the engine commits to a
 behavior that's hard to change later.
 
+## Inline config snippets (v0.78)
+
+The proposer that's coming in v0.79 needs to emit N step plans, but
+it doesn't know in advance which `target_config_id` values exist in
+storage. v0.78 closes that gap by letting plan steps supply an
+inline YAML snippet instead of a `target_config_id`.
+
+The wire shape on `RolloutInput` gains one optional field:
+
+```json
+{
+  "name": "Step 1 — drop noisy attribute",
+  "group_id": "web-prod",
+  "inline_config_snippet": "receivers: ...\nprocessors: ...\n",
+  "stages": [{"mode": "percent", "percentage": 100}]
+}
+```
+
+Rules:
+
+- Exactly one of `target_config_id` or `inline_config_snippet`
+  must be set per step. Both → ambiguous, rejected. Neither →
+  no target, rejected.
+- The server lints the snippet first. Error severity findings
+  reject the plan create; warnings + infos pass through (same
+  posture the existing `HandleCreateRollout` takes).
+- After lint passes, the server creates a new `Config` row in
+  the step's group with the snippet as content. The config name
+  encodes the plan id + step index (`ai-plan-<8-char>-step-<n>`)
+  so an operator scanning the Configs page can trace it back.
+- The step's `target_config_id` is rewritten to the new config's
+  id before the rollout is persisted. From the engine's
+  perspective the step is indistinguishable from one created
+  against a pre-existing config.
+- An audit event `config.created` fires per materialized config
+  with the plan id, step index, and `source: "plan_inline_snippet"`
+  in the payload so SIEM consumers can correlate config creates
+  to plan creates.
+
+Standalone rollout `Create` ignores the field — only `CreatePlan`
+interprets it. This keeps the v0.4–v0.77 single-rollout contract
+byte-identical.
+
+Failure mode: if a snippet's materialization fails mid-plan
+(after K-1 steps were already created), the existing
+`CancelPlanFollowers` cleanup runs the same way as the v0.73
+partial-failure path. Orphan configs from earlier successful
+materializations stay in storage — they're cheap and a future GC
+pass can clean them up. The audit trail tells the story.
+
 ## Out of scope for v0.69
 
 - Engine sequencing (step N+1 starts after step N reaches succeeded).

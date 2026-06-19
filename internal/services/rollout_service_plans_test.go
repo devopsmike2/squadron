@@ -593,6 +593,151 @@ func TestRollout_GetPlanIncludesRollbackSteps(t *testing.T) {
 	assert.Equal(t, "rolled_back", env.State)
 }
 
+// v0.78 — CreatePlan materializes inline config snippets into
+// real Config rows. The proposer in v0.79 will use this to emit
+// multi step plans without inventing config IDs from thin air.
+func TestRollout_CreatePlanMaterializesInlineSnippet(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	// One pre existing config for step 0; step 1 will use an inline
+	// snippet that the service materializes.
+	existing := &types.Config{ID: "cfg-existing", Name: "Existing", Content: "receivers:\n  otlp: {}\n", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, existing))
+
+	agentSvc := NewAgentService(store, nil, nil, nil, zap.NewNop())
+	svc := &RolloutServiceImpl{
+		appStore:     store,
+		agentService: agentSvc,
+		logger:       zap.NewNop(),
+	}
+
+	inlineYAML := "receivers:\n  otlp:\n    protocols:\n      grpc: {}\nprocessors:\n  batch: {}\nexporters:\n  debug: {}\nservice:\n  pipelines:\n    metrics:\n      receivers: [otlp]\n      processors: [batch]\n      exporters: [debug]\n"
+
+	created, planID, err := svc.CreatePlan(ctx, []RolloutInput{
+		{
+			Name:           "Step 0 — existing config",
+			GroupID:        gid,
+			TargetConfigID: existing.ID,
+			Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		},
+		{
+			Name:                "Step 1 — inline snippet",
+			GroupID:             gid,
+			InlineConfigSnippet: inlineYAML,
+			Stages:              []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, created, 2)
+	assert.NotEmpty(t, planID)
+
+	// Step 0 unchanged — uses the pre existing config.
+	assert.Equal(t, existing.ID, created[0].TargetConfigID)
+
+	// Step 1's TargetConfigID is the materialized config id, not
+	// empty and not the same as step 0's.
+	assert.NotEmpty(t, created[1].TargetConfigID)
+	assert.NotEqual(t, existing.ID, created[1].TargetConfigID)
+
+	// The materialized config exists in storage with the inline
+	// snippet as its content and the expected naming convention.
+	matched, err := store.GetConfig(ctx, created[1].TargetConfigID)
+	require.NoError(t, err)
+	require.NotNil(t, matched)
+	assert.Equal(t, inlineYAML, matched.Content)
+	require.NotNil(t, matched.GroupID)
+	assert.Equal(t, gid, *matched.GroupID)
+	assert.Contains(t, matched.Name, "ai-plan-")
+	assert.Contains(t, matched.Name, "step-1")
+}
+
+// Step that sets BOTH inline snippet AND target_config_id is
+// ambiguous and gets rejected at the validation pass before any
+// storage write fires.
+func TestRollout_CreatePlanRejectsBothSnippetAndTarget(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	existing := &types.Config{ID: "cfg", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, existing))
+
+	svc := &RolloutServiceImpl{
+		appStore:     store,
+		agentService: NewAgentService(store, nil, nil, nil, zap.NewNop()),
+		logger:       zap.NewNop(),
+	}
+
+	_, _, err := svc.CreatePlan(ctx, []RolloutInput{
+		{
+			Name:                "Step 0 — ambiguous",
+			GroupID:             gid,
+			TargetConfigID:      existing.ID,
+			InlineConfigSnippet: "receivers: { otlp: {} }",
+			Stages:              []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous")
+	// No rollouts created.
+	list, err := svc.List(ctx, RolloutFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
+// Step that sets NEITHER inline snippet NOR target_config_id is
+// invalid and gets rejected at validation.
+func TestRollout_CreatePlanRejectsEmptyTarget(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+
+	svc := &RolloutServiceImpl{
+		appStore:     store,
+		agentService: NewAgentService(store, nil, nil, nil, zap.NewNop()),
+		logger:       zap.NewNop(),
+	}
+
+	_, _, err := svc.CreatePlan(ctx, []RolloutInput{
+		{
+			Name:    "Step 0 — empty",
+			GroupID: gid,
+			Stages:  []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "neither")
+}
+
+// Bad YAML (lint error severity) on the inline snippet rejects
+// before any config or rollout is created.
+func TestRollout_CreatePlanRejectsBadSnippetYAML(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+
+	svc := &RolloutServiceImpl{
+		appStore:     store,
+		agentService: NewAgentService(store, nil, nil, nil, zap.NewNop()),
+		logger:       zap.NewNop(),
+	}
+
+	_, _, err := svc.CreatePlan(ctx, []RolloutInput{
+		{
+			Name:                "Step 0 — bad YAML",
+			GroupID:             gid,
+			InlineConfigSnippet: "receivers: {{not valid yaml",
+			Stages:              []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed lint")
+}
+
 // A standalone rollout has empty PlanID and step 0 — the v0.4 through
 // v0.68 default. The new fields must not change that behavior.
 func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {
