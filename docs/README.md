@@ -13,6 +13,9 @@ jump straight to that page.
 
 - [Getting started](./getting-started.md) — install Squadron, connect your
   first collector, push your first config.
+- [Deployment guide](./deployment.md) — the four supported deployment
+  shapes (single VM, Docker Compose, Kubernetes, OpenShift), the
+  required and optional components, and the production checklist.
 - [Concepts](./concepts.md) — agents, groups, configs, and the drift model.
 - [Rollouts](./rollouts.md) — safe staged deploys with canary selection,
   auto-abort criteria, preview/diff, and the recipe + template cookbook.

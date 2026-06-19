@@ -149,6 +149,9 @@ Full docs under [`/docs`](./docs/README.md):
   through in detail
 - [Getting started](./docs/getting-started.md) — installing,
   connecting your first collector
+- [Deployment guide](./docs/deployment.md) — the 4 deployment
+  shapes (single VM, Compose, Kubernetes, OpenShift), required
+  vs optional components, production checklist
 - [Concepts](./docs/concepts.md) — agents, groups, configs, drift
 
 **Save money**
