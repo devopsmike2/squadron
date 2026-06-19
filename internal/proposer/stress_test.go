@@ -44,8 +44,8 @@ import (
 // build tag.
 func TestProposerStress_50Iterations(t *testing.T) {
 	seeds := stressSeeds()
-	if len(seeds) != 54 {
-		t.Fatalf("expected 54 seeds, got %d", len(seeds))
+	if len(seeds) != 64 {
+		t.Fatalf("expected 64 seeds, got %d", len(seeds))
 	}
 
 	// Bucket the LLM error kinds and pull them into the order the
