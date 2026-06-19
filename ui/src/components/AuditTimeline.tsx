@@ -14,11 +14,14 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  Layers,
   RefreshCw,
   Rocket,
+  RotateCcw,
   Server,
   SkipForward,
   Sparkles,
+  XCircle,
 } from "lucide-react";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -371,6 +374,27 @@ function iconFor(e: AuditEvent) {
     return <CheckCircle2 className="h-4 w-4 text-amber-600" />;
   if (e.event_type.startsWith("rollout."))
     return <Rocket className="h-4 w-4 text-blue-600" />;
+  // v0.76 — multi step plan lifecycle. plan.created lands violet
+  // to match the Plan badge color on rollout cards. Terminal
+  // outcomes inherit per type colors so an operator scanning
+  // the timeline can tell at a glance whether a plan succeeded,
+  // cancelled, or rolled back.
+  if (e.event_type === "plan.created")
+    return <Layers className="h-4 w-4 text-violet-600" />;
+  if (e.event_type === "plan.completed")
+    return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
+  if (e.event_type === "plan.step_started")
+    return <Rocket className="h-4 w-4 text-violet-600" />;
+  if (e.event_type === "plan.step_cancelled")
+    return <XCircle className="h-4 w-4 text-zinc-500" />;
+  if (e.event_type === "plan.cancelled")
+    return <XCircle className="h-4 w-4 text-zinc-600" />;
+  if (e.event_type === "plan.rejected")
+    return <XCircle className="h-4 w-4 text-zinc-700" />;
+  if (e.event_type === "plan.rolled_back")
+    return <RotateCcw className="h-4 w-4 text-amber-600" />;
+  if (e.event_type.startsWith("plan."))
+    return <Layers className="h-4 w-4 text-violet-600" />;
   // v0.59 — AI proposer lifecycle. created is a violet sparkle to
   // match the AI explain panel; skipped is a quieter zinc icon so
   // the timeline does not pretend a non-action is an action.
@@ -496,9 +520,87 @@ function describe(e: AuditEvent): string {
         ? `Rollback completed · undid ${srcID.slice(0, 8)}…`
         : "Rollback completed";
     }
+    // v0.76 — multi step plan lifecycle. The payloads carry the
+    // plan id so operators can correlate events across the full
+    // forward + backward arc without opening each rollout.
+    case "plan.created": {
+      const count =
+        typeof e.payload?.step_count === "number"
+          ? e.payload.step_count
+          : null;
+      const planID = planIDOf(e);
+      return planID
+        ? `Plan created · ${count ?? "?"} steps · ${planID.slice(0, 8)}…`
+        : `Plan created · ${count ?? "?"} steps`;
+    }
+    case "plan.step_started": {
+      const idx = e.payload?.plan_step_index;
+      const prev = e.payload?.previous_step;
+      return typeof idx === "number"
+        ? `Plan step ${idx} started${typeof prev === "number" ? ` (after step ${prev})` : ""}`
+        : "Plan step started";
+    }
+    case "plan.completed": {
+      const final = e.payload?.final_step;
+      const total = e.payload?.total_steps;
+      return typeof total === "number"
+        ? `Plan completed · ${total} steps shipped`
+        : typeof final === "number"
+          ? `Plan completed · final step ${final}`
+          : "Plan completed";
+    }
+    case "plan.step_cancelled": {
+      const idx = e.payload?.plan_step_index;
+      const reason =
+        typeof e.payload?.reason === "string" ? e.payload.reason : null;
+      return typeof idx === "number"
+        ? `Plan step ${idx} cancelled${reason ? ` · ${reason}` : ""}`
+        : "Plan step cancelled";
+    }
+    case "plan.cancelled": {
+      const count =
+        typeof e.payload?.cancelled_count === "number"
+          ? e.payload.cancelled_count
+          : null;
+      const failed = e.payload?.failed_step_index;
+      return typeof count === "number"
+        ? `Plan cancelled · step ${typeof failed === "number" ? failed : "?"} failed, ${count} steps skipped`
+        : "Plan cancelled";
+    }
+    case "plan.rejected": {
+      const count =
+        typeof e.payload?.cancelled_count === "number"
+          ? e.payload.cancelled_count
+          : null;
+      return typeof count === "number"
+        ? `Plan rejected at approval · ${count} steps cancelled`
+        : "Plan rejected at approval";
+    }
+    case "plan.rolled_back": {
+      const count =
+        typeof e.payload?.rollback_count === "number"
+          ? e.payload.rollback_count
+          : null;
+      const failed = e.payload?.failed_step_index;
+      return typeof count === "number"
+        ? `Plan rolling back · step ${typeof failed === "number" ? failed : "?"} failed, ${count} predecessors being undone`
+        : "Plan rolling back";
+    }
   }
   // Generic fallback: humanize the event type.
   return `${e.event_type} ${e.action}`;
+}
+
+// planIDOf reaches into the v0.76 plan.* event payload to pull
+// out the plan id. Returns null when the payload doesn't carry
+// one — defensive because audit payloads are freeform JSON and
+// we'd rather render "Plan created" than crash if a future event
+// shape changes.
+function planIDOf(e: AuditEvent): string | null {
+  if (typeof e.payload?.plan_id === "string") {
+    return e.payload.plan_id;
+  }
+  return null;
 }
 
 // labelSelectorSummary turns a {k:v} map from an audit payload into a
