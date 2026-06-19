@@ -408,6 +408,21 @@ type RolloutInput struct {
 	// docs/multi-step-plans-design.md.
 	PlanID        string `json:"plan_id,omitempty"`
 	PlanStepIndex int    `json:"plan_step_index,omitempty"`
+
+	// v0.78 — inline config snippet. Used only by CreatePlan today:
+	// when a plan step supplies this instead of TargetConfigID, the
+	// server lints the YAML, materializes a new Config row in the
+	// step's GroupID, and sets the step's TargetConfigID to the
+	// new config's id before the rollout is persisted. Empty
+	// snippet + non-empty TargetConfigID preserves the v0.4–v0.77
+	// behavior of pointing at a pre-existing config.
+	//
+	// CreatePlan rejects steps where both are set (ambiguous) or
+	// both are empty (no target). Regular Create (single rollout)
+	// ignores this field; only the plan path interprets it. This
+	// unblocks v0.79 proposer plan output — the model emits YAML
+	// and the server materializes.
+	InlineConfigSnippet string `json:"inline_config_snippet,omitempty"`
 }
 
 // RolloutFilter narrows List queries.

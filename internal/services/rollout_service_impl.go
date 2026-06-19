@@ -5,6 +5,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -385,6 +387,22 @@ func (s *RolloutServiceImpl) CreatePlan(ctx context.Context, steps []RolloutInpu
 		}
 	}
 
+	// v0.78 — pre-flight: walk every step and validate the
+	// target_config_id vs inline_config_snippet shape before any
+	// storage write fires. Failing fast here is better than
+	// materializing step 0's config, then discovering step 1 is
+	// ambiguous and having to roll back.
+	for i, step := range steps {
+		snippet := strings.TrimSpace(step.InlineConfigSnippet)
+		target := strings.TrimSpace(step.TargetConfigID)
+		switch {
+		case snippet != "" && target != "":
+			return nil, "", fmt.Errorf("plan step %d sets both inline_config_snippet and target_config_id (ambiguous)", i)
+		case snippet == "" && target == "":
+			return nil, "", fmt.Errorf("plan step %d sets neither inline_config_snippet nor target_config_id", i)
+		}
+	}
+
 	planID := uuid.NewString()
 	created := make([]*Rollout, 0, len(steps))
 
@@ -399,6 +417,30 @@ func (s *RolloutServiceImpl) CreatePlan(ctx context.Context, steps []RolloutInpu
 		if i > 0 {
 			step.RequireApproval = false
 		}
+
+		// v0.78 — materialize inline config snippet into a real
+		// Config row before the rollout is created. Lint check
+		// runs first so a malformed snippet never lands a Config.
+		// The materialized config carries a name that ties it to
+		// the plan + step for forensic clarity.
+		if strings.TrimSpace(step.InlineConfigSnippet) != "" {
+			if err := s.materializePlanStepConfig(ctx, &step, planID, i, groupID); err != nil {
+				// Roll back already-created steps using the v0.71
+				// cancellation walk. Same cleanup path as the
+				// non-snippet partial-failure case below.
+				if len(created) > 0 {
+					_, cancelErr := s.CancelPlanFollowers(ctx, planID, -1)
+					if cancelErr != nil {
+						s.logger.Warn("create plan: cleanup after snippet materialize failure also failed",
+							zap.String("plan_id", planID),
+							zap.Int("created_so_far", len(created)),
+							zap.Error(cancelErr))
+					}
+				}
+				return nil, "", err
+			}
+		}
+
 		r, err := s.Create(ctx, step)
 		if err != nil {
 			// Partial failure cleanup. Cancel everything we already
@@ -572,6 +614,89 @@ func derivePlanState(forward, rollbacks []*Rollout) string {
 		return "succeeded"
 	}
 	return "in_progress"
+}
+
+// materializePlanStepConfig lints the step's inline snippet, then
+// creates a Config row in the step's group and updates the step's
+// TargetConfigID to point at it. v0.78.
+//
+// Lint policy: error-severity findings reject the snippet. Warnings
+// and infos pass through — they're surfaced via the rollout's
+// own pre-flight lint at apply time. This is the same posture
+// HandleCreateRollout takes today for snippets pasted by operators.
+//
+// After this function returns nil, step.TargetConfigID is the new
+// config's id and step.InlineConfigSnippet is cleared so the
+// subsequent Create call doesn't loop or re-materialize.
+func (s *RolloutServiceImpl) materializePlanStepConfig(ctx context.Context, step *RolloutInput, planID string, stepIndex int, groupID string) error {
+	// Preserve the operator's exact bytes — they may have
+	// intentionally formatted the snippet with leading/trailing
+	// whitespace. Only the empty check trims.
+	if strings.TrimSpace(step.InlineConfigSnippet) == "" {
+		return nil
+	}
+	snippet := step.InlineConfigSnippet
+
+	findings := configlint.Lint(snippet)
+	for _, f := range findings {
+		if f.Severity == configlint.SeverityError {
+			return fmt.Errorf("plan step %d snippet failed lint (%s): %s", stepIndex, f.Rule, f.Message)
+		}
+	}
+
+	if s.agentService == nil {
+		// Belt and suspenders: in tests where the agent service is
+		// nil but the caller wired CreatePlan with snippet steps,
+		// surface a clean error instead of panicking inside the
+		// service.
+		return fmt.Errorf("plan step %d: agent service not wired; cannot materialize inline config", stepIndex)
+	}
+
+	hash := sha256.Sum256([]byte(snippet))
+	configID := uuid.NewString()
+	gid := groupID
+	// Config name encodes the plan and step for forensic clarity.
+	// When operators see this name on the Configs page or in an
+	// audit row, they can trace it back to the originating plan
+	// without spelunking through audit events.
+	name := fmt.Sprintf("ai-plan-%s-step-%d", planID[:8], stepIndex)
+
+	cfg := &Config{
+		ID:         configID,
+		Name:       name,
+		GroupID:    &gid,
+		ConfigHash: hex.EncodeToString(hash[:]),
+		Content:    snippet,
+		Version:    1,
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := s.agentService.CreateConfig(ctx, cfg); err != nil {
+		return fmt.Errorf("plan step %d: materialize config: %w", stepIndex, err)
+	}
+
+	// Audit the materialization so SIEM consumers see config.created
+	// events linked to the plan id. This is in addition to the
+	// per step rollout.created and plan.created events that fire
+	// downstream from Create + CreatePlan respectively.
+	if s.auditService != nil {
+		_ = s.auditService.Record(ctx, AuditEntry{
+			Actor:      AuditActorSystem,
+			EventType:  "config.created",
+			TargetType: "config",
+			TargetID:   configID,
+			Action:     "created",
+			Payload: map[string]any{
+				"plan_id":         planID,
+				"plan_step_index": stepIndex,
+				"group_id":        groupID,
+				"source":          "plan_inline_snippet",
+			},
+		})
+	}
+
+	step.TargetConfigID = configID
+	step.InlineConfigSnippet = "" // clear so Create doesn't re-process
+	return nil
 }
 
 // RollBackPlanPredecessors walks steps 0..failedIndex-1 in planID,
