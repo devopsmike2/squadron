@@ -47,44 +47,55 @@ var ErrSecretsKeyMalformed = errors.New(
 	"credstore: " + EnvVarSecretsKey + " must be base64-encoded 32 bytes (AES-256)",
 )
 
-// loadKeyFromEnv reads SQUADRON_SECRETS_KEY, base64-decodes it, and
-// returns the raw 32-byte key. Any deviation from the contract — env
-// missing, not base64, wrong length — is a hard error.
-func loadKeyFromEnv() ([]byte, error) {
+// Key wraps the AES-256-GCM AEAD configured for the substrate. It is
+// the encryption primitive shared between the SQLiteSecretsBackend
+// (Store-side) and the per-provider Marshal/Unmarshal helpers
+// (caller-side). The same Key instance can be used from multiple
+// goroutines — crypto/cipher.AEAD operations don't share mutable state.
+//
+// Construct via LoadKeyFromEnv (production path) or NewKey (tests /
+// callers that have already obtained the raw bytes). The substrate
+// refuses to construct without a Key; there is no fallback to a default
+// key, a zero key, or plaintext.
+type Key struct {
+	aead cipher.AEAD
+}
+
+// LoadKeyFromEnv reads SQUADRON_SECRETS_KEY, base64-decodes it, and
+// returns a Key wrapping a fresh AES-256-GCM AEAD. Any deviation from
+// the contract — env missing, not base64, wrong length — is a hard
+// error.
+//
+// This is the production path the SQLiteSecretsBackend constructor
+// uses. Tests construct via NewKey to skip env coupling.
+func LoadKeyFromEnv() (*Key, error) {
 	raw := os.Getenv(EnvVarSecretsKey)
 	if raw == "" {
 		return nil, ErrSecretsKeyMissing
 	}
-	key, err := base64.StdEncoding.DecodeString(raw)
+	decoded, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
 		// Wrap with the sentinel so callers can errors.Is against it
 		// without leaking the raw env-var contents into the error.
 		return nil, fmt.Errorf("%w: %v", ErrSecretsKeyMalformed, err)
 	}
-	if len(key) != keyByteLen {
+	if len(decoded) != keyByteLen {
 		return nil, fmt.Errorf("%w: got %d bytes, need %d",
-			ErrSecretsKeyMalformed, len(key), keyByteLen)
+			ErrSecretsKeyMalformed, len(decoded), keyByteLen)
 	}
-	return key, nil
+	return NewKey(decoded)
 }
 
-// cryptor wraps a configured cipher.AEAD and exposes seal/open against
-// freshly-generated nonces. One per Store; safe for concurrent use
-// because AEAD operations don't share mutable state.
-type cryptor struct {
-	aead cipher.AEAD
-}
-
-// newCryptor builds a cryptor from a 32-byte raw key. Returns an error
-// only if the key length is wrong (the only other failure modes from
-// aes.NewCipher and cipher.NewGCM are length-related and crypto/cipher
-// internal invariants).
-func newCryptor(key []byte) (*cryptor, error) {
-	if len(key) != keyByteLen {
-		return nil, fmt.Errorf("%w: cryptor needs %d bytes, got %d",
-			ErrSecretsKeyMalformed, keyByteLen, len(key))
+// NewKey builds a Key from a 32-byte raw key. Returns an error only if
+// the key length is wrong or the cipher package reports an internal
+// invariant violation. The other failure modes from aes.NewCipher and
+// cipher.NewGCM are length-related.
+func NewKey(raw []byte) (*Key, error) {
+	if len(raw) != keyByteLen {
+		return nil, fmt.Errorf("%w: Key needs %d bytes, got %d",
+			ErrSecretsKeyMalformed, keyByteLen, len(raw))
 	}
-	block, err := aes.NewCipher(key)
+	block, err := aes.NewCipher(raw)
 	if err != nil {
 		return nil, fmt.Errorf("credstore: aes.NewCipher: %w", err)
 	}
@@ -99,33 +110,33 @@ func newCryptor(key []byte) (*cryptor, error) {
 		return nil, fmt.Errorf("credstore: unexpected AES-GCM nonce size %d, want %d",
 			aead.NonceSize(), nonceByteLen)
 	}
-	return &cryptor{aead: aead}, nil
+	return &Key{aead: aead}, nil
 }
 
-// seal encrypts plaintext under a fresh random nonce and returns
+// Seal encrypts plaintext under a fresh random nonce and returns
 // (ciphertext, nonce). Each call uses a new nonce so reusing the same
 // plaintext (e.g., a re-stored row) yields different on-disk bytes.
 // The ciphertext includes the GCM authentication tag; tampering with
-// either field will make open fail.
-func (c *cryptor) seal(plaintext []byte) (ciphertext, nonce []byte, err error) {
+// either field will make Open fail.
+func (k *Key) Seal(plaintext []byte) (ciphertext, nonce []byte, err error) {
 	nonce = make([]byte, nonceByteLen)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, fmt.Errorf("credstore: nonce generation failed: %w", err)
 	}
-	ciphertext = c.aead.Seal(nil, nonce, plaintext, nil)
+	ciphertext = k.aead.Seal(nil, nonce, plaintext, nil)
 	return ciphertext, nonce, nil
 }
 
-// open decrypts ciphertext under the stored nonce. Returns an error
+// Open decrypts ciphertext under the stored nonce. Returns an error
 // containing "decrypt" if the GCM authentication tag fails — tampering
 // with the ciphertext, the nonce, or the key all produce this path.
 // The substrate's tamper-detection test verifies this contract.
-func (c *cryptor) open(ciphertext, nonce []byte) ([]byte, error) {
+func (k *Key) Open(ciphertext, nonce []byte) ([]byte, error) {
 	if len(nonce) != nonceByteLen {
 		return nil, fmt.Errorf("credstore: decrypt failed: nonce length %d, want %d",
 			len(nonce), nonceByteLen)
 	}
-	plaintext, err := c.aead.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := k.aead.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		// Wrap with the literal "decrypt" so tests and operators see a
 		// consistent signal regardless of the underlying cipher's
@@ -133,4 +144,54 @@ func (c *cryptor) open(ciphertext, nonce []byte) ([]byte, error) {
 		return nil, fmt.Errorf("credstore: decrypt failed (auth tag mismatch): %w", err)
 	}
 	return plaintext, nil
+}
+
+// SecretsBackend is the substrate's pluggable encryption interface.
+// The OSS edition ships with SQLiteSecretsBackend (AES-256-GCM keyed
+// by SQUADRON_SECRETS_KEY). The Compliance Pack will land
+// implementations backed by Vault, AWS Secrets Manager, and GCP Secret
+// Manager — same interface, no schema changes needed.
+//
+// Implementations must be safe for concurrent use. The Store calls
+// Encrypt on every write and Decrypt on every read; no internal
+// caching of plaintext occurs above this layer.
+type SecretsBackend interface {
+	// Encrypt seals plaintext and returns (ciphertext, nonce). Both
+	// outputs are stored verbatim on the substrate row. A fresh
+	// nonce must be generated per call so repeated identical
+	// plaintexts produce different ciphertexts.
+	Encrypt(plaintext []byte) (ciphertext []byte, nonce []byte, err error)
+
+	// Decrypt opens ciphertext using the stored nonce. Implementations
+	// must surface a clear error (containing "decrypt" or "auth")
+	// when the authentication tag fails so operators can distinguish
+	// tamper events from other failures.
+	Decrypt(ciphertext, nonce []byte) (plaintext []byte, err error)
+}
+
+// SQLiteSecretsBackend is the OSS-default SecretsBackend. It wraps a
+// Key loaded from SQUADRON_SECRETS_KEY and delegates Seal / Open
+// without any additional state. The Compliance Pack's Vault-backed
+// equivalent will look identical from the substrate's perspective —
+// only the Encrypt/Decrypt implementation differs.
+type SQLiteSecretsBackend struct {
+	key *Key
+}
+
+// NewSQLiteSecretsBackend constructs a SQLiteSecretsBackend with the
+// supplied Key. The constructor is intentionally separate from key
+// loading so tests can construct backends with deterministic keys
+// without round-tripping through the env var.
+func NewSQLiteSecretsBackend(key *Key) *SQLiteSecretsBackend {
+	return &SQLiteSecretsBackend{key: key}
+}
+
+// Encrypt delegates to the wrapped Key. See Key.Seal.
+func (s *SQLiteSecretsBackend) Encrypt(plaintext []byte) ([]byte, []byte, error) {
+	return s.key.Seal(plaintext)
+}
+
+// Decrypt delegates to the wrapped Key. See Key.Open.
+func (s *SQLiteSecretsBackend) Decrypt(ciphertext, nonce []byte) ([]byte, error) {
+	return s.key.Open(ciphertext, nonce)
 }
