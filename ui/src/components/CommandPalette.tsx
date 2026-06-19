@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   Server,
+  Sparkles,
   Users,
   BarChart3,
   Sparkle,
@@ -23,7 +24,9 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 
+import { useAICapabilities } from "@/api/ai";
 import { listAlertRules } from "@/api/alerts";
+import { ASK_OPEN_EVENT } from "@/components/AskSquadronDialog";
 import type { Agent } from "@/types/agent";
 import type { AlertRule } from "@/types/alert";
 
@@ -43,6 +46,12 @@ const fetchAgentsRaw = async (): Promise<Agent[]> => {
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  // v0.64 — probe AI status so we can show/hide the Ask Squadron
+  // entry honestly. useAICapabilities already caches the probe at
+  // session granularity so this doesn't add a round trip per
+  // palette open.
+  const { capabilities } = useAICapabilities();
+  const askEnabled = !!capabilities?.enabled;
 
   // Wire the global keyboard shortcut. Match the most common conventions
   // (cmd+k on mac, ctrl+k everywhere else). Toggling means a second press
@@ -150,6 +159,33 @@ export function CommandPalette() {
                 heading="Actions"
                 className="text-xs text-muted-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider"
               >
+                {/* v0.64 — Ask Squadron, the JARVIS shaped entry.
+                    Only rendered when AI is configured server side
+                    so an operator who hasn't wired ANTHROPIC_API_KEY
+                    doesn't see a button that 503s on click. */}
+                {askEnabled && (
+                  <PaletteItem
+                    icon={
+                      <Sparkles className="h-4 w-4 text-violet-500" />
+                    }
+                    onSelect={() => {
+                      setOpen(false);
+                      document.dispatchEvent(
+                        new CustomEvent(ASK_OPEN_EVENT),
+                      );
+                    }}
+                    keywords={[
+                      "ask",
+                      "squadron",
+                      "jarvis",
+                      "chat",
+                      "question",
+                      "ai",
+                    ]}
+                  >
+                    Ask Squadron…
+                  </PaletteItem>
+                )}
                 <PaletteItem
                   icon={<Plus className="h-4 w-4" />}
                   onSelect={() => go("/configs/new")}

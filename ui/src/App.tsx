@@ -37,6 +37,7 @@ import {
   subscribeAuthChallenge,
   subscribeAuthChange,
 } from "@/api/auth-store";
+import { AskSquadronDialog } from "@/components/AskSquadronDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CommandPaletteHint } from "@/components/CommandPaletteHint";
 import { EventSubscriber } from "@/components/EventSubscriber";
@@ -118,6 +119,11 @@ function AuthBoundary() {
       {/* Global ⌘K command palette. Mounted inside the Router so its
           items can use useNavigate. */}
       <CommandPalette />
+      {/* v0.64 — Ask Squadron conversational dialog. Mounted at
+          App root so any caller can open it by dispatching the
+          ASK_OPEN_EVENT; ⌘K's Ask Squadron entry is the first
+          dispatch site. */}
+      <AskSquadronDialog />
       {/* First-session hint pointing at ⌘K. localStorage-flagged so
           it fires exactly once per browser. v0.38 — discoverability
           pass after the command palette went underutilized in

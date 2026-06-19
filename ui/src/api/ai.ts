@@ -135,6 +135,40 @@ export function remediateLint(
   return apiPost<RemediateLintResponse>("/ai/remediate-lint", req);
 }
 
+// v0.63 — Ask Squadron: conversational read surface. The backend
+// walks recent rollouts + audit events to build a context bag,
+// hands the question to the AI service, and returns a paragraph
+// answer plus the rows it cited inline. The UI strips the
+// [cite:kind:id] tags from the answer and renders citation chips
+// in their first appearance order.
+
+export interface AskRequest {
+  question: string;
+}
+
+// AskCitation mirrors the Go struct. Kind is one of:
+// rollout | agent | audit | spike | rec. v0.63 only ships rollout
+// and audit as citation kinds (the bag covers those two surfaces);
+// the others reserve their kind values for follow on releases so
+// the UI can keep chip rendering stable.
+export interface AskCitation {
+  kind: "rollout" | "agent" | "audit" | "spike" | "rec";
+  id: string;
+  label?: string;
+}
+
+export interface AskResponse {
+  answer: string;
+  citations: AskCitation[];
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+export function askSquadron(req: AskRequest): Promise<AskResponse> {
+  return apiPost<AskResponse>("/ai/ask", req);
+}
+
 /**
  * useAICapabilities — single shared probe of /api/v1/ai/status.
  * Cached for the whole session (5min revalidation); operators
