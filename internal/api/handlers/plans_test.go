@@ -99,6 +99,92 @@ func TestHandleCreatePlan_RejectsEmptySteps(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "at least one step")
 }
 
+// v0.74 — GET /api/v1/rollouts/plans/:id returns the envelope.
+// 404 when the plan id doesn't exist.
+func TestHandleGetPlan_HappyPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, gid, cfgID := setupPlanHandler(t)
+
+	// Seed via the service to get a real PlanID.
+	svc, ok := h.rolloutService.(services.RolloutService)
+	require.True(t, ok)
+	_, planID, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
+		{Name: "S0", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+		{Name: "S1", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = []gin.Param{{Key: "id", Value: planID}}
+	c.Request, _ = http.NewRequest(http.MethodGet, "/", nil)
+
+	h.HandleGetPlan(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var env services.Plan
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &env))
+	assert.Equal(t, planID, env.PlanID)
+	assert.Equal(t, gid, env.GroupID)
+	assert.Equal(t, 2, env.StepCount)
+	require.Len(t, env.Steps, 2)
+	assert.Empty(t, env.RollbackSteps)
+}
+
+func TestHandleGetPlan_Unknown404(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, _, _ := setupPlanHandler(t)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = []gin.Param{{Key: "id", Value: "plan-does-not-exist"}}
+	c.Request, _ = http.NewRequest(http.MethodGet, "/", nil)
+
+	h.HandleGetPlan(c)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// HandleListRollouts now accepts plan_id query param.
+func TestHandleListRollouts_FiltersByPlanID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, gid, cfgID := setupPlanHandler(t)
+
+	svc, ok := h.rolloutService.(services.RolloutService)
+	require.True(t, ok)
+	// Two plans, two steps each.
+	_, plan1, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
+		{Name: "P1S0", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+		{Name: "P1S1", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+	_, _, err = svc.CreatePlan(t.Context(), []services.RolloutInput{
+		{Name: "P2S0", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/?plan_id="+plan1, nil)
+
+	h.HandleListRollouts(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Rollouts []*services.Rollout `json:"rollouts"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Rollouts, 2,
+		"plan_id filter should only return rollouts in plan1")
+	for _, r := range resp.Rollouts {
+		assert.Equal(t, plan1, r.PlanID)
+	}
+}
+
 func TestHandleCreatePlan_RejectsMismatchedGroups(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, store, gid, cfgID := setupPlanHandler(t)

@@ -536,6 +536,11 @@ type RolloutFilter struct {
 	GroupID string
 	State   RolloutState
 	Limit   int
+	// v0.74 — narrow to a single plan. Empty matches everything
+	// (preserving v0.4–v0.73 behavior). Negative PlanStepIndex
+	// rollback rollouts share the same PlanID, so a filtered query
+	// returns the full forward + backward arc.
+	PlanID string
 }
 
 // AuditEvent is one entry in the audit log. Every state change in Squadron

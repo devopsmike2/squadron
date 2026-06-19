@@ -1662,6 +1662,11 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		q += " AND state = ?"
 		args = append(args, string(filter.State))
 	}
+	// v0.74 — narrow to one plan id.
+	if filter.PlanID != "" {
+		q += " AND plan_id = ?"
+		args = append(args, filter.PlanID)
+	}
 	q += " ORDER BY created_at DESC LIMIT ?"
 	args = append(args, limit)
 
