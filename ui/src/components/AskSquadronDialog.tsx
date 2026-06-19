@@ -28,8 +28,24 @@ import {
 // askOpenEvent is the custom event the command palette dispatches
 // to open this dialog without prop drilling. Exported so other
 // callers (a Dashboard button, a sidebar item) can use the same
-// hook in the future.
+// hook.
+//
+// v0.81 — the event accepts an optional `prefill` detail payload
+// carrying a question string. When set, the dialog opens with the
+// input pre populated, letting Dashboard hero cards seed example
+// questions. Empty detail (or no detail) opens the dialog with a
+// fresh empty input, preserving the v0.64 behavior.
 export const ASK_OPEN_EVENT = "squadron:ask-open";
+
+// Helper for callers that want to pre-fill the input. Wraps the
+// CustomEvent construction so dispatch sites read cleanly.
+export function dispatchAskOpen(prefill?: string) {
+  document.dispatchEvent(
+    new CustomEvent(ASK_OPEN_EVENT, {
+      detail: prefill ? { prefill } : undefined,
+    }),
+  );
+}
 
 interface InternalState {
   question: string;
@@ -58,8 +74,15 @@ export function AskSquadronDialog() {
   // question, closed it, and reopened expects a fresh slate
   // rather than a stale previous answer.
   useEffect(() => {
-    const handler = () => {
-      setState(EMPTY);
+    const handler = (e: Event) => {
+      // v0.81 — honor the optional prefill payload from
+      // dispatchAskOpen so Dashboard hero cards can seed example
+      // questions. Auto-submitting would be more aggressive than
+      // operators want; pre-filling lets them read the question
+      // first, then click Ask (or edit before sending).
+      const detail = (e as CustomEvent<{ prefill?: string }>).detail;
+      const prefill = detail?.prefill ?? "";
+      setState({ ...EMPTY, question: prefill });
       setOpen(true);
     };
     document.addEventListener(ASK_OPEN_EVENT, handler);
