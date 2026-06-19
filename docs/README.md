@@ -51,10 +51,12 @@ jump straight to that page.
 
 - **Multi-tenant.** Everything is global to a Squadron instance. Run one
   per team or per environment for now.
-- **SSO/RBAC.** Squadron ships Bearer-token auth (see [Authentication](./auth.md))
-  but every token has full API access — there's no concept of
-  "read-only" or scoped roles yet. SSO/OIDC is best handled by a
-  reverse proxy in front of Squadron today.
+- **SSO.** Squadron ships Bearer-token auth with a scope
+  vocabulary so tokens can be narrowed to read only or to a
+  specific surface (see [Authentication](./auth.md) for the full
+  scope list — agents:read, rollouts:write, rollouts:approve,
+  incidents:write, etc.). What's not built in is SSO/OIDC; that's
+  best handled by a reverse proxy in front of Squadron today.
 - **A Kubernetes operator.** OpAMP works fine with collectors deployed
   via Helm/manifest; a CRD-based operator that pushes configs into the
   cluster is on the roadmap.
