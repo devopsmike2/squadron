@@ -108,7 +108,11 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`  - Cite any lint findings or recommendations from the context ` +
 	`that informed the proposal.` + "\n\n" +
 
-	`Output ONLY a JSON object, no preface, no code fences. ` +
+	`Your response MUST begin with the opening '{' of a JSON object. ` +
+	`Do not narrate your thinking aloud. Do not write a preamble like ` +
+	`"Looking at the context:" or "Based on the spike:". Put your ` +
+	`reasoning INSIDE the JSON object's "reasoning" field, not before ` +
+	`the object. No code fences either. ` +
 	`Two schemas — rollout kind:` + "\n" +
 	`{` + "\n" +
 	`  "kind": "rollout",` + "\n" +

@@ -802,10 +802,17 @@ func buildMergeUserMessage(req MergeIntoConfigRequest) string {
 }
 
 // extractJSONBlock pulls a JSON object out of a response that may
-// be wrapped in markdown code fences. Models are usually obedient
-// when told to skip fences, but defensive parsing here saves the
-// operator from a hard failure when the model occasionally adds
-// ```json ... ``` despite the system prompt.
+// be wrapped in markdown code fences or preceded by prose. Models
+// are usually obedient when told to skip fences and preamble, but
+// defensive parsing here saves the operator from a hard failure
+// when they don't.
+//
+// v0.83 (#552): added the prose-preamble case. The pre-v0.83 helper
+// only stripped fences; when the model preambled with "Looking at
+// the context: ..." the parser saw a 'L' instead of a '{' and the
+// bridge silently dropped the spike. Now we strip fences, then scan
+// for the first '{' and the matching '}' (with proper brace
+// counting that ignores braces inside string literals).
 func extractJSONBlock(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
@@ -817,7 +824,48 @@ func extractJSONBlock(s string) string {
 		s = strings.TrimSuffix(s, "```")
 		s = strings.TrimSpace(s)
 	}
-	return s
+	// Find the first '{' — anything before it is preamble we drop.
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		// No JSON object at all. Return the original so the caller
+		// gets the most informative parse error possible.
+		return s
+	}
+	// Scan from start matching braces, respecting string literals
+	// (so a '{' inside a JSON string doesn't increment depth).
+	depth := 0
+	inString := false
+	escape := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if escape {
+			escape = false
+			continue
+		}
+		if c == '\\' && inString {
+			escape = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch c {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	// Unterminated object — return from start to give the parser
+	// something to chew on; it will surface the truncation cleanly.
+	return s[start:]
 }
 
 // truncate returns at most n bytes of b, suitable for embedding in
