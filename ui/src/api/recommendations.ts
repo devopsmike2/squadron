@@ -19,6 +19,58 @@ export type RecommendationCategory =
 
 export type RecommendationSeverity = "critical" | "warn" | "info";
 
+/**
+ * v0.85 — typed source for the recommendation. Maps 1:1 with the
+ * Go SourceKind constants. Distinguishes recommendations
+ * produced by the cost-spike pipeline (JARVIS arc) from
+ * discovery scans (universal observation arc) and from manual
+ * operator creation. Unknown values fall through to gray styling
+ * so future producers don't require a UI deploy.
+ */
+export type RecommendationSourceKind =
+  | "cost_spike"
+  | "discovery_scan"
+  | "manual";
+
+/**
+ * v0.85 — typed action kind. Maps 1:1 with the Go ActionKind
+ * constants. The UI matches on this to render the right button
+ * label + confirmation flow.
+ */
+export type RecommendationActionKind =
+  | "rollout"
+  | "plan"
+  | "discovery_action";
+
+/**
+ * v0.85 — Infrastructure-as-Code format. Slice 1 emits Terraform
+ * only; CDK and Pulumi land via later slices with the same wire
+ * shape.
+ */
+export type IaCFormat = "terraform" | "cdk" | "pulumi";
+
+export interface RecommendationSource {
+  kind: RecommendationSourceKind;
+  /** Backing reference id (cost_spike_id / discovery_scan_id /
+   * actor user id). Descriptive only — the UI may deeplink on it. */
+  ref_id?: string;
+}
+
+export interface RecommendationAction {
+  kind: RecommendationActionKind;
+  /** Action-specific JSON. The shape is determined by kind; the
+   * UI's panel renders a kind-aware button and defers the
+   * unmarshal to whichever flow handles the action. */
+  payload: unknown;
+}
+
+export interface IaCSnippet {
+  format: IaCFormat;
+  /** Actual Terraform/CDK/Pulumi code. Squadron does NOT execute
+   * this — the operator runs it through their IaC pipeline. */
+  source: string;
+}
+
 export interface Recommendation {
   id: string;
   category: RecommendationCategory;
@@ -44,6 +96,15 @@ export interface Recommendation {
    * example, needs a human to investigate). */
   snippet?: string;
   generated_at: string;
+  /** v0.85 — typed source. Absent on pre-v0.85 wire shapes. */
+  source?: RecommendationSource;
+  /** v0.85 — typed action payload. Absent for advisory-only
+   * recommendations. */
+  action?: RecommendationAction;
+  /** v0.85 — Infrastructure-as-Code snippet. Present for
+   * cloud-side discovery recommendations; absent for
+   * collector-side advice. */
+  iac?: IaCSnippet;
 }
 
 export interface RecommendationsResponse {
