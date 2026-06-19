@@ -13,18 +13,20 @@ package credstore
 // The numbering convention mirrors the application store: integer
 // version, one migration per bump, applied in order, idempotent SQL
 // inside each step.
-const SchemaVersion = 1
-
-// migration0001AWSConnections is the initial schema for the credential
-// substrate. It contains a single table — aws_connections — keyed by
-// AccountID, with the ExternalID stored as ciphertext + nonce. There
-// is no plaintext column for the ExternalID; the application has no
-// path that writes one even by accident.
 //
-// The schema matches the design doc's "Credential substrate" section
-// exactly. All timestamp columns use ISO-8601 strings (TEXT) so the
-// row contents are human-inspectable during incident response without
-// pulling the SQLite driver into the read path.
+// v2: AWS-specific aws_connections table replaced with the multi-cloud
+//
+//	cloud_connections table per docs/universal-discovery-design.md
+//	decisions 2-4. Migration is destructive (DROP TABLE then CREATE
+//	TABLE) because no deployment has real rows in v1 — the
+//	credential substrate was shipped in Stream 2A but not wired into
+//	any user-facing connector flow.
+const SchemaVersion = 2
+
+// migration0001AWSConnections is the initial (v1) schema. Retained in
+// the migration chain so a hypothetical v1 database upgrades correctly,
+// but the v2 migration immediately drops the table — see the comment
+// on migration0002CloudConnections for the rationale.
 const migration0001AWSConnections = `
 -- Schema version tracker, mirrors the convention used by the
 -- application store. Single row carrying the highest applied version.
@@ -50,6 +52,57 @@ CREATE TABLE IF NOT EXISTS aws_connections (
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 `
 
+// migration0002CloudConnections replaces the AWS-specific
+// aws_connections table with the multi-cloud cloud_connections table.
+// This is the schema implementation of decisions 2-4 in
+// docs/universal-discovery-design.md "Decisions locked in this
+// revision":
+//
+//   - Provider column lets the same row hold AWS / GCP / Azure /
+//     on-prem connections.
+//   - ConnectionType column lets the same row hold API-discovered
+//     cloud accounts and agent-polled on-prem sites.
+//   - Regions stored as a JSON-encoded TEXT column so the schema does
+//     not change when slice 3 extends single-region scans to
+//     multi-region.
+//   - credentials_ciphertext + credentials_nonce hold the provider-
+//     specific authentication material; the substrate stores opaque
+//     bytes and lets each provider's scanner unmarshal its own shape.
+//
+// The migration is destructive: aws_connections is dropped before
+// cloud_connections is created. This is safe because the credential
+// substrate was shipped in Stream 2A as architecture-only — no
+// deployment has real rows in any aws_connections table. If a future
+// migration needs to preserve data, it gets its own non-destructive
+// pattern.
+const migration0002CloudConnections = `
+-- v1's aws_connections table is replaced wholesale. No real data
+-- exists in any deployment so dropping is safe; this is the cleanest
+-- way to land the multi-cloud schema without dragging a column-rename
+-- migration through the chain.
+DROP TABLE IF EXISTS aws_connections;
+
+CREATE TABLE IF NOT EXISTS cloud_connections (
+	account_id             TEXT PRIMARY KEY,
+	provider               TEXT NOT NULL,
+	connection_type        TEXT NOT NULL,
+	display_name           TEXT NOT NULL,
+	regions                TEXT NOT NULL, -- JSON array
+	credentials_ciphertext BLOB NOT NULL,
+	credentials_nonce      BLOB NOT NULL,
+	created_at             TEXT NOT NULL,
+	updated_at             TEXT NOT NULL
+);
+
+-- Provider is the most common filter — the audit timeline and the
+-- per-provider scan dispatch both narrow by provider before doing
+-- anything else. Indexed so List(filter.Provider) doesn't table-scan.
+CREATE INDEX IF NOT EXISTS idx_cloud_connections_provider
+	ON cloud_connections(provider);
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (2);
+`
+
 // migrations is the ordered list of schema migrations. Index N is the
 // SQL applied at version N+1. New entries are appended; existing
 // entries are never edited (they ran against historical databases and
@@ -57,4 +110,5 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 // deployments).
 var migrations = []string{
 	migration0001AWSConnections,
+	migration0002CloudConnections,
 }

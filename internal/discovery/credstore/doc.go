@@ -2,22 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package credstore is the encrypted-at-rest credential substrate for
-// Squadron's universal cloud discovery. It is the only place trust-policy
-// metadata for connected AWS accounts (role ARN, ExternalId, display
-// name, region) is persisted.
+// Squadron's universal cloud discovery. It is the only place
+// provider-typed connection metadata (account/project/subscription/
+// site id, display name, regions, credentials) is persisted.
 //
-// What this package stores
+// The substrate is multi-cloud from day one per
+// docs/universal-discovery-design.md "Decisions locked in this
+// revision". Slice 1 ships the AWS scanner implementation; the
+// substrate stores any provider's connection without schema changes.
 //
-//   - The customer's AWS role ARN (not a secret per se, but identifies
-//     the target account).
-//   - The deployment's per-account ExternalId (effectively a secret —
-//     must not leak; encrypted at rest, never logged).
-//   - Per-account metadata: display name, primary region, timestamps.
+// # What this package stores
 //
-// What this package does NOT store
+//   - CloudConnection rows keyed by AccountID, with Provider /
+//     ConnectionType discriminators.
+//   - Per-provider authentication material as an opaque encrypted
+//     blob plus its AEAD nonce. AWS uses RoleARN + ExternalID (see
+//     aws.go); future providers store whatever their auth mechanism
+//     requires.
+//   - Operator-set metadata: display name, regions, timestamps.
 //
-//   - AWS access keys / secret keys (Squadron never receives them).
-//   - STS tokens (those live in memory only, dropped after each scan).
+// # What this package does NOT store
+//
+//   - Long-lived cloud access keys / secret keys. The substrate is
+//     for trust-policy / federation material only — short-lived STS /
+//     OAuth tokens live in memory and are dropped after each scan.
 //   - Customer telemetry or business data.
 //
 // # Encryption
@@ -29,12 +37,19 @@
 // zero key, or plaintext — failing loud is the entire point of the
 // substrate.
 //
+// The encryption primitive is exposed via the SecretsBackend interface
+// so the Compliance Pack can plug in Vault / AWS Secrets Manager /
+// GCP Secret Manager implementations without schema changes. The OSS
+// edition's SQLiteSecretsBackend wraps SQUADRON_SECRETS_KEY.
+//
 // # Audit
 //
-// Every read (Get and List) emits a `discovery.role_assumed` audit
-// event through the provided AuditRecorder. The payload carries
-// account_id and role_arn; the ExternalId is never included in the
-// payload and is never logged anywhere in this package.
+// Every read (Get and List) emits a
+// discovery.<provider>.connection_read event through the provided
+// AuditRecorder. The payload carries account_id, provider,
+// connection_type, display_name, and regions; the credentials bytes
+// are never included in the payload and are never logged anywhere in
+// this package.
 //
 // See docs/universal-discovery-design.md "Security architecture >
 // Credential substrate" for the full design and threat model.
