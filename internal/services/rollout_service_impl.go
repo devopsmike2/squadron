@@ -339,6 +339,51 @@ func (s *RolloutServiceImpl) NextPlanStep(ctx context.Context, planID string, cu
 	return nil, nil
 }
 
+// CancelPlanFollowers transitions every queued step in planID with
+// index > afterIndex to Cancelled. v0.71. The cancellation walk
+// runs synchronously because the engine's recovery work shouldn't
+// race against a tick that picks up an "unfinished" queued step
+// while the walk is in flight.
+//
+// Returns the list of cancelled rollouts (in storage order) so
+// the caller can fan out per step audit events. Empty list means
+// the failed step had no queued followers (it was the last in the
+// plan), which is a valid case and not an error.
+func (s *RolloutServiceImpl) CancelPlanFollowers(ctx context.Context, planID string, afterIndex int) ([]*Rollout, error) {
+	if planID == "" {
+		return nil, nil
+	}
+	stored, err := s.appStore.ListRollouts(ctx, applicationstore.RolloutFilter{Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	cancelled := []*Rollout{}
+	now := time.Now().UTC()
+	for _, r := range stored {
+		if r == nil {
+			continue
+		}
+		if r.PlanID != planID || r.PlanStepIndex <= afterIndex {
+			continue
+		}
+		// Only queued steps get cancelled. A step that already ran
+		// (succeeded, failed, etc.) stays in its current state —
+		// the cancellation walk is about preventing future work,
+		// not rewriting history.
+		if r.State != applicationstore.RolloutState(RolloutStateQueued) {
+			continue
+		}
+		r.State = applicationstore.RolloutState(RolloutStateCancelled)
+		r.UpdatedAt = now
+		r.CompletedAt = &now
+		if err := s.appStore.UpdateRollout(ctx, r); err != nil {
+			return nil, fmt.Errorf("cancel plan follower %s: %w", r.ID, err)
+		}
+		cancelled = append(cancelled, toServiceRollout(r))
+	}
+	return cancelled, nil
+}
+
 // Abort flips the rollout to the aborted state. The engine performs the
 // actual rollback work on its next tick. Operator-supplied reason lands
 // in AbortReason for the audit trail.
@@ -672,6 +717,58 @@ func (s *RolloutServiceImpl) Reject(ctx context.Context, id, rejecter, notes str
 	if s.tracer != nil {
 		s.tracer.RecordEvent(id, "rejected", rejecter)
 	}
+
+	// v0.71 — if this rejected rollout is a plan step, cancel
+	// every queued follower. By design only step 0 carries the
+	// approval gate, so this branch fires precisely when an
+	// operator rejects a multi step plan at the approval stage.
+	// Standalone rollouts (empty PlanID) and steps 1..N (never
+	// carry RequireApproval per the design doc) skip this branch.
+	if stored.PlanID != "" {
+		cancelled, cancelErr := s.CancelPlanFollowers(ctx, stored.PlanID, stored.PlanStepIndex)
+		if cancelErr != nil {
+			// Don't fail the rejection — the rollout itself was
+			// already rejected and persisted. Log + audit the
+			// degraded state and move on. The orphan queued steps
+			// will eventually be visible in the UI and a follow on
+			// release can add a manual cleanup path.
+			s.logger.Warn("plan reject: failed to cancel followers",
+				zap.String("plan_id", stored.PlanID),
+				zap.Error(cancelErr))
+		} else if s.auditService != nil {
+			cancelledIDs := make([]string, 0, len(cancelled))
+			for _, c := range cancelled {
+				cancelledIDs = append(cancelledIDs, c.ID)
+				_ = s.auditService.Record(ctx, AuditEntry{
+					Actor:      rejecter,
+					EventType:  "plan.step_cancelled",
+					TargetType: "rollout",
+					TargetID:   c.ID,
+					Action:     "plan_step_cancelled",
+					Payload: map[string]any{
+						"plan_id":         c.PlanID,
+						"plan_step_index": c.PlanStepIndex,
+						"reason":          "plan_rejected_at_approval",
+					},
+				})
+			}
+			_ = s.auditService.Record(ctx, AuditEntry{
+				Actor:      rejecter,
+				EventType:  "plan.rejected",
+				TargetType: "rollout",
+				TargetID:   id,
+				Action:     "plan_rejected",
+				Payload: map[string]any{
+					"plan_id":         stored.PlanID,
+					"rejected_step":   stored.PlanStepIndex,
+					"notes":           notes,
+					"cancelled_count": len(cancelled),
+					"cancelled_ids":   cancelledIDs,
+				},
+			})
+		}
+	}
+
 	return toServiceRollout(stored), nil
 }
 

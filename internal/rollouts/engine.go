@@ -628,6 +628,67 @@ func (e *Engine) triggerAbort(ctx context.Context, r *services.Rollout, reason s
 	e.logger.Warn("rollout auto-aborted",
 		zap.String("rollout_id", r.ID),
 		zap.String("reason", reason))
+
+	// v0.71 — if this aborted rollout belongs to a plan, cancel
+	// every queued step that follows. The plan can't recover
+	// forward from a mid sequence abort; the design says the
+	// remaining steps are not run and (in v0.72) the succeeded
+	// predecessors get rolled back. v0.71 ships the cancellation
+	// half; the backwards rollback walk lands in v0.72.
+	if r.PlanID != "" {
+		e.cancelPlanFollowers(ctx, r, "predecessor_aborted")
+	}
+}
+
+// cancelPlanFollowers transitions every queued step in r's plan
+// with index > r.PlanStepIndex to Cancelled and emits one
+// plan.step_cancelled per step plus a plan.cancelled summary. The
+// failure reason is passed through to the audit payload so SIEM
+// consumers can route on (planID, reason) pairs.
+//
+// Called from triggerAbort and Reject. Safe to call on plans
+// whose final step is the one that failed — the walk returns an
+// empty list, no events fire, and the plan terminates naturally
+// without summary noise.
+func (e *Engine) cancelPlanFollowers(ctx context.Context, r *services.Rollout, reason string) {
+	cancelled, err := e.rolloutService.CancelPlanFollowers(ctx, r.PlanID, r.PlanStepIndex)
+	if err != nil {
+		e.logger.Warn("plan engine: cancel followers failed",
+			zap.String("plan_id", r.PlanID),
+			zap.Int("after_step", r.PlanStepIndex),
+			zap.Error(err))
+		return
+	}
+	if len(cancelled) == 0 {
+		// The failed step was the last in the plan, no followers to
+		// cancel. No plan.cancelled event either — there's nothing
+		// for SIEM to act on that the per step rollout.aborted didn't
+		// already say.
+		return
+	}
+	cancelledIDs := make([]string, 0, len(cancelled))
+	for _, c := range cancelled {
+		cancelledIDs = append(cancelledIDs, c.ID)
+		e.recordAudit(ctx, c, "plan.step_cancelled", "plan_step_cancelled", map[string]any{
+			"plan_id":           c.PlanID,
+			"plan_step_index":   c.PlanStepIndex,
+			"reason":            reason,
+			"failed_step_id":    r.ID,
+			"failed_step_index": r.PlanStepIndex,
+		})
+	}
+	e.recordAudit(ctx, r, "plan.cancelled", "plan_cancelled", map[string]any{
+		"plan_id":           r.PlanID,
+		"failed_step_index": r.PlanStepIndex,
+		"reason":            reason,
+		"cancelled_count":   len(cancelled),
+		"cancelled_ids":     cancelledIDs,
+	})
+	e.logger.Warn("plan cancelled",
+		zap.String("plan_id", r.PlanID),
+		zap.Int("failed_step", r.PlanStepIndex),
+		zap.Int("cancelled_count", len(cancelled)),
+		zap.String("reason", reason))
 }
 
 // rollback pushes the previous config back to every canary agent and
