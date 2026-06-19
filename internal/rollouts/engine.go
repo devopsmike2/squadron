@@ -629,15 +629,62 @@ func (e *Engine) triggerAbort(ctx context.Context, r *services.Rollout, reason s
 		zap.String("rollout_id", r.ID),
 		zap.String("reason", reason))
 
-	// v0.71 — if this aborted rollout belongs to a plan, cancel
-	// every queued step that follows. The plan can't recover
-	// forward from a mid sequence abort; the design says the
-	// remaining steps are not run and (in v0.72) the succeeded
-	// predecessors get rolled back. v0.71 ships the cancellation
-	// half; the backwards rollback walk lands in v0.72.
+	// v0.71 + v0.72 — if this aborted rollout belongs to a plan,
+	// cancel every queued step that follows and roll back every
+	// succeeded forward step. Order matters: cancellation is fast
+	// (just state transitions) and stops further forward work
+	// before the backwards walk starts spawning rollback rollouts.
 	if r.PlanID != "" {
 		e.cancelPlanFollowers(ctx, r, "predecessor_aborted")
+		e.rollBackPlanPredecessors(ctx, r, "predecessor_aborted")
 	}
+}
+
+// rollBackPlanPredecessors walks every succeeded forward step in
+// r's plan and creates a rollback rollout for each. Emits one
+// plan.rolled_back summary event with the list of rollback ids so
+// SIEM consumers see the full backwards arc kicking off. The per
+// step rollout.rollback_completed events fire as each individual
+// rollback rollout completes via the v0.61 hook.
+//
+// Failure mode: if the walk creates fewer rollback rollouts than
+// expected (the storage write for one of them failed), the audit
+// payload reports the actual count plus a warning flag so the
+// operator knows there's manual cleanup to do. The plan
+// terminates either way — we don't retry the walk.
+func (e *Engine) rollBackPlanPredecessors(ctx context.Context, r *services.Rollout, reason string) {
+	rollbacks, err := e.rolloutService.RollBackPlanPredecessors(ctx, r.PlanID, r.PlanStepIndex, "system:plan_engine")
+	if err != nil {
+		e.logger.Warn("plan engine: rollback predecessors failed",
+			zap.String("plan_id", r.PlanID),
+			zap.Int("failed_step", r.PlanStepIndex),
+			zap.Error(err))
+		return
+	}
+	if len(rollbacks) == 0 {
+		// No succeeded forward steps to roll back. Common when step
+		// 0 itself fails — there's nothing yet to undo. No
+		// plan.rolled_back event in this case; the per step
+		// rollout.aborted plus the v0.71 plan.cancelled summary
+		// already tell the full story.
+		return
+	}
+	rollbackIDs := make([]string, 0, len(rollbacks))
+	for _, rb := range rollbacks {
+		rollbackIDs = append(rollbackIDs, rb.ID)
+	}
+	e.recordAudit(ctx, r, "plan.rolled_back", "plan_rolled_back", map[string]any{
+		"plan_id":              r.PlanID,
+		"failed_step_index":    r.PlanStepIndex,
+		"reason":               reason,
+		"rollback_rollout_ids": rollbackIDs,
+		"rollback_count":       len(rollbackIDs),
+	})
+	e.logger.Warn("plan rolling back",
+		zap.String("plan_id", r.PlanID),
+		zap.Int("failed_step", r.PlanStepIndex),
+		zap.Int("rollback_count", len(rollbackIDs)),
+		zap.String("reason", reason))
 }
 
 // cancelPlanFollowers transitions every queued step in r's plan

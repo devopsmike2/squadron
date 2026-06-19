@@ -6,6 +6,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -337,6 +338,105 @@ func (s *RolloutServiceImpl) NextPlanStep(ctx context.Context, planID string, cu
 		}
 	}
 	return nil, nil
+}
+
+// RollBackPlanPredecessors walks steps 0..failedIndex-1 in planID,
+// finds every step in succeeded state, and creates a rollback
+// rollout for each using the reserved negative PlanStepIndex range
+// (-1 for the rollback of the highest succeeded forward step, -2
+// for the next, etc.). v0.72.
+//
+// The new rollback rollouts:
+//   - share the failed plan's PlanID so the audit timeline groups
+//     the full forward + backward arc under one query
+//   - each carry RolledBackFromID pointing at the forward step
+//     they undo (the v0.60 link field)
+//   - run in parallel by design — each is independent of the
+//     others, just an emergency undo of one step's config push
+//   - inherit the v0.61 group-level RequireApprovalForRollback
+//     policy via the existing RollBack code path; an
+//     approval-strict group still gates plan rollbacks
+//
+// Returns the rollback rollouts in creation order (highest forward
+// step's rollback first, step 0's last). Empty slice means there
+// were no succeeded forward steps to roll back — e.g. step 0 itself
+// aborted, no work to do.
+func (s *RolloutServiceImpl) RollBackPlanPredecessors(ctx context.Context, planID string, failedIndex int, operator string) ([]*Rollout, error) {
+	if planID == "" {
+		return nil, nil
+	}
+	stored, err := s.appStore.ListRollouts(ctx, applicationstore.RolloutFilter{Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	// Collect succeeded forward steps in descending index order so
+	// the highest-index rollback fires first. This is the order an
+	// operator would naturally walk if undoing manually.
+	type stepRef struct {
+		id    string
+		index int
+	}
+	var succeeded []stepRef
+	for _, r := range stored {
+		if r == nil {
+			continue
+		}
+		if r.PlanID != planID {
+			continue
+		}
+		if r.PlanStepIndex < 0 || r.PlanStepIndex >= failedIndex {
+			// Skip rollback steps (negative index), the failed
+			// step itself, and any forward step at or after the
+			// failed index (those got cancelled in v0.71's walk).
+			continue
+		}
+		if r.State != applicationstore.RolloutStateSucceeded {
+			// Only succeeded steps need rolling back. Anything
+			// else (failed/cancelled/queued/paused) either has no
+			// effect to undo or is already terminal in a non
+			// succeeded way.
+			continue
+		}
+		succeeded = append(succeeded, stepRef{id: r.ID, index: r.PlanStepIndex})
+	}
+	// Descending by forward index — so the highest succeeded step's
+	// rollback gets PlanStepIndex -1, the next -2, etc.
+	sort.Slice(succeeded, func(i, j int) bool {
+		return succeeded[i].index > succeeded[j].index
+	})
+
+	out := []*Rollout{}
+	for i, step := range succeeded {
+		rollback, err := s.RollBack(ctx, step.id, operator)
+		if err != nil {
+			// Partial failure mode: log + carry on so the rest of
+			// the chain at least gets attempted. The caller (engine
+			// triggerAbort) will see which steps got rollback
+			// rollouts and which didn't via the returned slice.
+			s.logger.Warn("plan rollback: failed to create rollback for step",
+				zap.String("plan_id", planID),
+				zap.Int("forward_step", step.index),
+				zap.String("forward_step_id", step.id),
+				zap.Error(err))
+			continue
+		}
+		// Stamp the reserved negative PlanStepIndex. RollBack used
+		// the standard Create path which left PlanID empty (since
+		// the RolloutInput it constructed didn't pass PlanID). We
+		// attach both fields here and persist via UpdateRollout so
+		// the rollback rollout joins the plan in storage.
+		rollback.PlanID = planID
+		rollback.PlanStepIndex = -(i + 1)
+		if err := s.appStore.UpdateRollout(ctx, toStorageRollout(rollback)); err != nil {
+			s.logger.Warn("plan rollback: failed to attach plan grouping to rollback rollout",
+				zap.String("plan_id", planID),
+				zap.String("rollback_id", rollback.ID),
+				zap.Error(err))
+			continue
+		}
+		out = append(out, rollback)
+	}
+	return out, nil
 }
 
 // CancelPlanFollowers transitions every queued step in planID with
