@@ -283,6 +283,118 @@ func findStepID(t *testing.T, store *memory.Store, planID string, idx int) strin
 	return ""
 }
 
+// v0.72 — backwards rollback walk. When step N fails, every
+// succeeded forward step (index 0..N-1) gets a rollback rollout
+// created in the reserved negative PlanStepIndex range.
+func TestRollout_RollBackPlanPredecessorsWalksSucceededSteps(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	// Two configs so PreviousConfigID can be non empty for the forward steps.
+	// Step 0 ships cfg1; step 1 ships cfg2 (cfg1 is previous); step 2 ships
+	// cfg3 (cfg2 is previous). The rollback walk needs each forward step to
+	// have a valid PreviousConfigID to roll back to.
+	cfg1 := &types.Config{ID: "cfg1", Name: "v1", Content: "x", GroupID: &gid, CreatedAt: time.Now().Add(-3 * time.Hour)}
+	cfg2 := &types.Config{ID: "cfg2", Name: "v2", Content: "y", GroupID: &gid, CreatedAt: time.Now().Add(-2 * time.Hour)}
+	cfg3 := &types.Config{ID: "cfg3", Name: "v3", Content: "z", GroupID: &gid, CreatedAt: time.Now().Add(-1 * time.Hour)}
+	cfg4 := &types.Config{ID: "cfg4", Name: "v4", Content: "w", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg1))
+	require.NoError(t, store.CreateConfig(ctx, cfg2))
+	require.NoError(t, store.CreateConfig(ctx, cfg3))
+	require.NoError(t, store.CreateConfig(ctx, cfg4))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	// Seed a 4 step plan, each step pointing at a different config so
+	// PreviousConfigID gets set by Create's snapshot logic.
+	targets := []string{cfg1.ID, cfg2.ID, cfg3.ID, cfg4.ID}
+	stepIDs := make([]string, 4)
+	for i := 0; i < 4; i++ {
+		r, err := svc.Create(ctx, RolloutInput{
+			Name:           "Plan rb step",
+			GroupID:        gid,
+			TargetConfigID: targets[i],
+			Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+			PlanID:         "plan-rb",
+			PlanStepIndex:  i,
+		})
+		require.NoError(t, err)
+		stepIDs[i] = r.ID
+	}
+
+	// Simulate steps 0 + 1 having succeeded (the engine's normal
+	// terminal transition would have done this through finish()).
+	for i := 0; i < 2; i++ {
+		stored, err := store.GetRollout(ctx, stepIDs[i])
+		require.NoError(t, err)
+		stored.State = types.RolloutState(RolloutStateSucceeded)
+		now := time.Now()
+		stored.CompletedAt = &now
+		require.NoError(t, store.UpdateRollout(ctx, stored))
+	}
+
+	// Now step 2 fails. The engine would call
+	// RollBackPlanPredecessors(plan-rb, 2, ...) — exercise it directly.
+	rollbacks, err := svc.RollBackPlanPredecessors(ctx, "plan-rb", 2, "system:test")
+	require.NoError(t, err)
+	require.Len(t, rollbacks, 2, "steps 0 and 1 each get a rollback rollout")
+
+	// Rollback order is descending by forward index: step 1's
+	// rollback first (PlanStepIndex -1), step 0's second (-2).
+	assert.Equal(t, -1, rollbacks[0].PlanStepIndex)
+	assert.Equal(t, "plan-rb", rollbacks[0].PlanID)
+	assert.Equal(t, stepIDs[1], rollbacks[0].RolledBackFromID,
+		"first rollback should undo the highest succeeded forward step")
+	assert.Equal(t, -2, rollbacks[1].PlanStepIndex)
+	assert.Equal(t, "plan-rb", rollbacks[1].PlanID)
+	assert.Equal(t, stepIDs[0], rollbacks[1].RolledBackFromID)
+
+	// The rollback rollouts are new pending rollouts ready for the
+	// engine's tick loop. They are not standalone — the PlanID +
+	// negative PlanStepIndex pair groups them with the failed plan
+	// so SIEM queries on plan_id see the full forward + backward
+	// arc as one chain.
+	for _, rb := range rollbacks {
+		assert.NotEqual(t, "", rb.ID)
+		assert.NotEqual(t, stepIDs[0], rb.ID)
+		assert.NotEqual(t, stepIDs[1], rb.ID)
+		assert.NotEqual(t, stepIDs[2], rb.ID)
+		assert.NotEqual(t, stepIDs[3], rb.ID)
+	}
+}
+
+// When step 0 itself fails (nothing has succeeded yet), the
+// backwards walk is a no op — there's nothing to undo. The plan
+// terminates via v0.71's cancellation walk instead.
+func TestRollout_RollBackPlanPredecessorsNoSucceededYet(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	for i := 0; i < 3; i++ {
+		_, err := svc.Create(ctx, RolloutInput{
+			Name:           "Plan early step",
+			GroupID:        gid,
+			TargetConfigID: cfg.ID,
+			Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+			PlanID:         "plan-early",
+			PlanStepIndex:  i,
+		})
+		require.NoError(t, err)
+	}
+
+	// Step 0 fails before any forward progress — nothing to roll back.
+	rollbacks, err := svc.RollBackPlanPredecessors(ctx, "plan-early", 0, "system:test")
+	require.NoError(t, err)
+	assert.Empty(t, rollbacks, "no succeeded forward steps means no rollbacks")
+}
+
 // A standalone rollout has empty PlanID and step 0 — the v0.4 through
 // v0.68 default. The new fields must not change that behavior.
 func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {

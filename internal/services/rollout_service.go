@@ -78,6 +78,20 @@ type RolloutService interface {
 	// transition is a no op for plans with no queued followers
 	// (the failed step was the last in the plan).
 	CancelPlanFollowers(ctx context.Context, planID string, afterIndex int) ([]*Rollout, error)
+
+	// v0.72 — backwards rollback walk. When a plan step fails,
+	// every succeeded forward step (index 0..failedIndex-1) needs
+	// its config undone or the collectors are left running the
+	// partial change. RollBackPlanPredecessors finds the succeeded
+	// forward steps and creates a rollback rollout for each, using
+	// the reserved negative PlanStepIndex range so the timeline
+	// can distinguish rollback steps from forward steps.
+	//
+	// Returns the rollback rollouts in creation order (highest
+	// forward step's rollback first, step 0's last). Empty slice
+	// means there were no succeeded forward steps to roll back —
+	// e.g. step 0 itself aborted, no work to do.
+	RollBackPlanPredecessors(ctx context.Context, planID string, failedIndex int, operator string) ([]*Rollout, error)
 }
 
 // RolloutPreview is the response shape of a Preview call.
