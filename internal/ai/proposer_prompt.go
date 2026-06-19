@@ -120,8 +120,8 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`    "target_config_id": "<from context>",` + "\n" +
 	`    "require_approval": true,` + "\n" +
 	`    "stages": [` + "\n" +
-	`      {"mode":"percentage","percentage":10,"dwell_seconds":600},` + "\n" +
-	`      {"mode":"percentage","percentage":100,"dwell_seconds":0}` + "\n" +
+	`      {"mode":"percent","percentage":10,"dwell_seconds":600},` + "\n" +
+	`      {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +
 	`    ],` + "\n" +
 	`    "abort_criteria": {` + "\n" +
 	`      "max_drifted_agents": 5,` + "\n" +
@@ -148,8 +148,8 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`        "inline_config_snippet": "<complete YAML for step 0>",` + "\n" +
 	`        "require_approval": true,` + "\n" +
 	`        "stages": [` + "\n" +
-	`          {"mode":"percentage","percentage":10,"dwell_seconds":600},` + "\n" +
-	`          {"mode":"percentage","percentage":100,"dwell_seconds":0}` + "\n" +
+	`          {"mode":"percent","percentage":10,"dwell_seconds":600},` + "\n" +
+	`          {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +
 	`        ],` + "\n" +
 	`        "abort_criteria": {"max_drifted_agents":5,"max_error_logs_per_minute":50,"min_dwell_seconds_before_abort":120}` + "\n" +
 	`      },` + "\n" +
@@ -158,8 +158,8 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`        "group_id": "<from user message>",` + "\n" +
 	`        "inline_config_snippet": "<complete YAML for step 1>",` + "\n" +
 	`        "stages": [` + "\n" +
-	`          {"mode":"percentage","percentage":10,"dwell_seconds":600},` + "\n" +
-	`          {"mode":"percentage","percentage":100,"dwell_seconds":0}` + "\n" +
+	`          {"mode":"percent","percentage":10,"dwell_seconds":600},` + "\n" +
+	`          {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +
 	`        ],` + "\n" +
 	`        "abort_criteria": {"max_drifted_agents":5,"max_error_logs_per_minute":50,"min_dwell_seconds_before_abort":120}` + "\n" +
 	`      }` + "\n" +

@@ -99,8 +99,11 @@ type RolloutInputCandidate struct {
 }
 
 // RolloutStageCandidate is the per-stage shape the model fills in.
-// Mode is "percentage" (canary by % of fleet) or "label" (target a
-// labeled subset). Mirrors services.RolloutStage.
+// Mode is "percent" (canary by % of fleet) or "label" (target a
+// labeled subset). Mirrors services.RolloutStage — keep these two
+// in lock-step with services.RolloutStageMode* constants, otherwise
+// the bridge's create call gets rejected with "invalid mode" and
+// the spike is silently dropped (regression v0.81.2 fixed).
 type RolloutStageCandidate struct {
 	Mode          string            `json:"mode"`
 	Percentage    int               `json:"percentage,omitempty"`
