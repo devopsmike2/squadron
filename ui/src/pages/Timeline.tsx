@@ -210,17 +210,33 @@ export default function TimelinePage() {
       ) : (
         <Card>
           <CardContent className="p-4">
-            {/* Tick row at top of the axis */}
+            {/* Tick row at top of the axis. v0.81.3 — the leftmost
+                tick anchors its left edge at 0% (was -translate-x-1/2
+                which clipped the "Ju" of "Jun 18"), and the rightmost
+                anchors its right edge at 100% (was overflowing and
+                wrapping onto the row below where it collided with the
+                swimlane's "N events" count). Middle ticks stay
+                centered. whitespace-nowrap also prevents the label
+                from breaking apart on narrow viewports. */}
             <div className="relative mb-2 h-5">
-              {ticks.map((t, i) => (
-                <span
-                  key={i}
-                  className="absolute -translate-x-1/2 font-tabular text-[10px] text-muted-foreground"
-                  style={{ left: `${t.pct}%` }}
-                >
-                  {t.label}
-                </span>
-              ))}
+              {ticks.map((t, i) => {
+                const isFirst = i === 0;
+                const isLast = i === ticks.length - 1;
+                const translate = isFirst
+                  ? ""
+                  : isLast
+                    ? "-translate-x-full"
+                    : "-translate-x-1/2";
+                return (
+                  <span
+                    key={i}
+                    className={`absolute whitespace-nowrap font-tabular text-[10px] text-muted-foreground ${translate}`}
+                    style={{ left: `${t.pct}%` }}
+                  >
+                    {t.label}
+                  </span>
+                );
+              })}
             </div>
 
             {/* One swimlane per source */}
