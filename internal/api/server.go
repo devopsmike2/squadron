@@ -354,6 +354,29 @@ func (s *Server) aiTrampoline(fn func(*handlers.AIHandlers, *gin.Context)) gin.H
 	}
 }
 
+// askTrampoline late binds the Ask handler so the route table can
+// be wired before the AI service is set. The handler needs the
+// rollout + audit services to build its context bag; both are
+// already on the Server and required at construction, so no nil
+// guards beyond the AI check are needed.
+//
+// Same 503 semantics as the rest of the AI surface: if AI isn't
+// configured the route returns a clear opt in message rather than
+// 500ing or pretending the surface exists.
+func (s *Server) askTrampoline() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.aiService == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "AI assist is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewAskHandler(s.aiService, s.rolloutService, s.auditService, s.logger)
+		h.HandleAsk(c)
+	}
+}
+
 // aiStatusTrampoline is the special case for /api/v1/ai/status —
 // when the service is nil, return enabled=false rather than 503
 // so the UI's capability probe stays simple.
@@ -726,6 +749,15 @@ func (s *Server) registerRoutes() {
 		v1.POST("/ai/remediate-lint",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleRemediateLint(c) }))
+		// v0.63 — conversational Ask Squadron. The handler walks a
+		// small read context (recent rollouts + audit events) and
+		// hands the question to the AI service. Same agents-read
+		// scope: the answer's content is bounded by what the same
+		// token could read by hitting /rollouts and /audit/events
+		// directly. Coining a new scope would be vocabulary noise.
+		v1.POST("/ai/ask",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.askTrampoline())
 
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
