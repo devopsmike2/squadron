@@ -1,5 +1,13 @@
 # Squadron thesis
 
+> **Squadron — universal insight, dynamic discovery, intuitive
+> remediation, user friendly.**
+>
+> The OSS observability control plane that connects every
+> environment, recommends what to observe, orchestrates the
+> change through your existing IaC, and never holds your
+> production keys.
+
 Last revised: v0.84.0.
 
 This document exists so anyone reading the codebase — contributor,

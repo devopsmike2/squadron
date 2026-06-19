@@ -7,6 +7,46 @@ land over months — not weeks. The goal is to surface Squadron to
 SREs and platform engineers in a way that earns trust through
 evidence, not hype.
 
+## Brand line
+
+Every post lands under one consistent positioning statement.
+
+> **Squadron — universal insight, dynamic discovery, intuitive
+> remediation, user friendly.**
+
+The five-word pillars are the post-title vocabulary. A post about
+the proposer playground is about *intuitive remediation*. A post
+about discovery is about *dynamic discovery*. A post about the
+audit timeline is about *universal insight*. A post about the
+v0.81.3 in-app approve dialog is about *user friendly*. The
+language is consistent because the product is consistent.
+
+## The visual-evidence rule
+
+**Every post must include at least one of:**
+
+- (a) A screenshot from a real run against the live deployment
+- (b) A short GIF or screen recording of an actual interaction
+- (c) An embedded interactive widget hosted somewhere the
+  audience can reach
+- (d) A static SVG diagram exported from the design docs
+
+**Posts that do not meet one of those four criteria do not
+publish.** Wall-of-text posts in this audience get scanned,
+discounted, and forgotten. The visual artifact is what makes a
+post earn the click and the reshare.
+
+Production guidance:
+- Screenshots come from the actual running deployment, not
+  mockups. A real proposer reasoning panel beats any hand-drawn
+  approximation.
+- GIFs are short — 6 to 12 seconds. Loop cleanly.
+- Widgets are saved as standalone HTML files in
+  `docs/widgets/` so they can be embedded in future docs or
+  blog posts without rebuilding.
+- SVGs are committed to `docs/diagrams/` and referenced from
+  multiple posts when relevant.
+
 ## The principle
 
 Every post is dogfooded before it's published. If the post claims
