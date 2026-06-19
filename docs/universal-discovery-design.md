@@ -51,6 +51,22 @@ slice 1," the answer is "no, that's slice 2." When someone asks "can
 the recommendation auto-apply if the operator clicks Approve," the
 answer is "no, that's a thesis violation."
 
+## Architecture at a glance
+
+Where the discovery tier slots into Squadron's existing control
+plane. The Surface, Decision, and Substrate tiers are real today
+at v0.84.0. The Future tier is what slice 1 ships into.
+
+<p align="center">
+<img src="diagrams/architecture-current-and-future.svg" alt="Squadron architecture: three-tier control plane with future discovery tier slotting in below the substrate." width="100%">
+</p>
+
+The IaC orchestrator is the load-bearing component. Recommendations
+emit Terraform snippets that the operator's existing pipeline
+runs. Squadron never executes cloud mutations directly. The action
+runner stays on its v0.55 VM-daemon model; cloud changes route
+through customer IaC. The two paths never merge.
+
 ## Security architecture
 
 The security posture is the single most important part of this

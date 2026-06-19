@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 470" role="img" aria-labelledby="title desc">
+  <title id="title">Squadron architecture: current and future</title>
+  <desc id="desc">Three-tier control plane diagram. Top tier (Surface) shows operator-facing components: Operator UI, squadronctl, Ask Squadron, Playground. Middle tier (Decision) shows AI Proposer, Plan engine, Rollout engine, Audit timeline. Substrate tier shows App store (SQLite), Telemetry store (DuckDB), and OpAMP fleet. A dashed Future tier below shows Cloud connectors, Discovery engine, and IaC orchestrator. A footer notes the customer backend (Datadog, Honeycomb, Grafana, etc.) is interchangeable; Squadron is vendor-neutral.</desc>
+  <defs>
+    <style>
+      .t { font: 500 14px sans-serif; fill: #1a1a1a; }
+      .ts { font: 400 12px sans-serif; fill: #5a5a5a; }
+      .surface-fill { fill: #EEEDFE; stroke: #534AB7; stroke-width: 0.8; }
+      .surface-title { font: 500 14px sans-serif; fill: #26215C; }
+      .surface-sub { font: 400 12px sans-serif; fill: #3C3489; }
+      .decision-fill { fill: #E1F5EE; stroke: #0F6E56; stroke-width: 0.8; }
+      .decision-title { font: 500 14px sans-serif; fill: #04342C; }
+      .decision-sub { font: 400 12px sans-serif; fill: #085041; }
+      .substrate-fill { fill: #F1EFE8; stroke: #5F5E5A; stroke-width: 0.8; }
+      .substrate-title { font: 500 14px sans-serif; fill: #2C2C2A; }
+      .substrate-sub { font: 400 12px sans-serif; fill: #444441; }
+      .future-fill { fill: #FBEAF0; stroke: #993556; stroke-width: 0.8; stroke-dasharray: 4 3; }
+      .future-title { font: 500 14px sans-serif; fill: #4B1528; }
+      .future-sub { font: 400 12px sans-serif; fill: #72243E; }
+      .connector { stroke: #888780; stroke-width: 0.5; fill: none; }
+      .connector-dashed { stroke: #888780; stroke-width: 0.5; fill: none; stroke-dasharray: 3 3; }
+      .tier-label { font: 400 12px sans-serif; fill: #5F5E5A; }
+      .footer { font: 400 12px sans-serif; fill: #888780; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <text class="tier-label" x="40" y="60">Surface</text>
+  <text class="tier-label" x="40" y="170">Decision</text>
+  <text class="tier-label" x="40" y="265">Substrate</text>
+  <text class="tier-label" x="40" y="355">Future</text>
+
+  <g>
+    <rect class="surface-fill" x="100" y="40" width="130" height="50" rx="4"/>
+    <text class="surface-title" x="165" y="62" text-anchor="middle">Operator UI</text>
+    <text class="surface-sub" x="165" y="78" text-anchor="middle">React + SWR</text>
+  </g>
+  <g>
+    <rect class="surface-fill" x="242" y="40" width="130" height="50" rx="4"/>
+    <text class="surface-title" x="307" y="62" text-anchor="middle">squadronctl</text>
+    <text class="surface-sub" x="307" y="78" text-anchor="middle">CLI for ops</text>
+  </g>
+  <g>
+    <rect class="surface-fill" x="384" y="40" width="130" height="50" rx="4"/>
+    <text class="surface-title" x="449" y="62" text-anchor="middle">Ask Squadron</text>
+    <text class="surface-sub" x="449" y="78" text-anchor="middle">Conversational deputy</text>
+  </g>
+  <g>
+    <rect class="surface-fill" x="526" y="40" width="130" height="50" rx="4"/>
+    <text class="surface-title" x="591" y="62" text-anchor="middle">Playground</text>
+    <text class="surface-sub" x="591" y="78" text-anchor="middle">Proposer dogfood</text>
+  </g>
+
+  <line class="connector" x1="340" y1="92" x2="340" y2="138" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect class="decision-fill" x="100" y="140" width="130" height="65" rx="4"/>
+    <text class="decision-title" x="165" y="166" text-anchor="middle">AI Proposer</text>
+    <text class="decision-sub" x="165" y="184" text-anchor="middle">Cost spike to plan</text>
+  </g>
+  <g>
+    <rect class="decision-fill" x="242" y="140" width="130" height="65" rx="4"/>
+    <text class="decision-title" x="307" y="166" text-anchor="middle">Plan engine</text>
+    <text class="decision-sub" x="307" y="184" text-anchor="middle">Sequences steps</text>
+  </g>
+  <g>
+    <rect class="decision-fill" x="384" y="140" width="130" height="65" rx="4"/>
+    <text class="decision-title" x="449" y="166" text-anchor="middle">Rollout engine</text>
+    <text class="decision-sub" x="449" y="184" text-anchor="middle">Stages and aborts</text>
+  </g>
+  <g>
+    <rect class="decision-fill" x="526" y="140" width="130" height="65" rx="4"/>
+    <text class="decision-title" x="591" y="166" text-anchor="middle">Audit timeline</text>
+    <text class="decision-sub" x="591" y="184" text-anchor="middle">Compliance trail</text>
+  </g>
+
+  <line class="connector" x1="340" y1="207" x2="340" y2="233" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect class="substrate-fill" x="100" y="235" width="190" height="50" rx="4"/>
+    <text class="substrate-title" x="195" y="257" text-anchor="middle">App store</text>
+    <text class="substrate-sub" x="195" y="273" text-anchor="middle">SQLite, configs and audit</text>
+  </g>
+  <g>
+    <rect class="substrate-fill" x="302" y="235" width="190" height="50" rx="4"/>
+    <text class="substrate-title" x="397" y="257" text-anchor="middle">Telemetry store</text>
+    <text class="substrate-sub" x="397" y="273" text-anchor="middle">DuckDB, fleet samples</text>
+  </g>
+  <g>
+    <rect class="substrate-fill" x="504" y="235" width="152" height="50" rx="4"/>
+    <text class="substrate-title" x="580" y="257" text-anchor="middle">OpAMP fleet</text>
+    <text class="substrate-sub" x="580" y="273" text-anchor="middle">Managed agents</text>
+  </g>
+
+  <line class="connector-dashed" x1="340" y1="287" x2="340" y2="318" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect class="future-fill" x="100" y="320" width="190" height="50" rx="4"/>
+    <text class="future-title" x="195" y="342" text-anchor="middle">Cloud connectors</text>
+    <text class="future-sub" x="195" y="358" text-anchor="middle">AWS, GCP, Azure, on-prem</text>
+  </g>
+  <g>
+    <rect class="future-fill" x="302" y="320" width="190" height="50" rx="4"/>
+    <text class="future-title" x="397" y="342" text-anchor="middle">Discovery engine</text>
+    <text class="future-sub" x="397" y="358" text-anchor="middle">Inventory and coverage</text>
+  </g>
+  <g>
+    <rect class="future-fill" x="504" y="320" width="152" height="50" rx="4"/>
+    <text class="future-title" x="580" y="342" text-anchor="middle">IaC orchestrator</text>
+    <text class="future-sub" x="580" y="358" text-anchor="middle">Terraform output</text>
+  </g>
+
+  <text class="ts" x="340" y="400" text-anchor="middle">Operator pipeline executes the change. Squadron orchestrates; never mutates.</text>
+  <text class="footer" x="340" y="445" text-anchor="middle">Customer backend (Datadog, Honeycomb, Grafana, etc.) — interchangeable. Squadron is vendor-neutral.</text>
+</svg>
