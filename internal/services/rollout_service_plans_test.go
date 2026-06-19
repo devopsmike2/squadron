@@ -395,6 +395,105 @@ func TestRollout_RollBackPlanPredecessorsNoSucceededYet(t *testing.T) {
 	assert.Empty(t, rollbacks, "no succeeded forward steps means no rollbacks")
 }
 
+// v0.73 — CreatePlan wraps N Create calls under a shared PlanID.
+// Steps 1..N get RequireApproval forced to false; step 0's flag
+// is honored as the plan's approval gate. PlanStepIndex is
+// assigned in step order regardless of what the caller put on
+// the inputs.
+func TestRollout_CreatePlanHappyPath(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	steps := []RolloutInput{
+		{
+			Name:            "Step 0 — drop noisy attr",
+			GroupID:         gid,
+			TargetConfigID:  cfg.ID,
+			Stages:          []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+			RequireApproval: true, // plan's approval gate
+			RequestedBy:     "alice@example.com",
+		},
+		{
+			Name:           "Step 1 — rotate Splunk index",
+			GroupID:        gid,
+			TargetConfigID: cfg.ID,
+			Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+			// Caller sets this to true but service should force false;
+			// the design says plans approve as a unit at step 0 only.
+			RequireApproval: true,
+			RequestedBy:     "alice@example.com",
+		},
+		{
+			Name:           "Step 2 — update alert rule",
+			GroupID:        gid,
+			TargetConfigID: cfg.ID,
+			Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+			RequestedBy:    "alice@example.com",
+		},
+	}
+
+	created, planID, err := svc.CreatePlan(ctx, steps)
+	require.NoError(t, err)
+	require.Len(t, created, 3)
+	assert.NotEmpty(t, planID)
+
+	// PlanStepIndex is assigned in order regardless of what was on input.
+	for i, r := range created {
+		assert.Equal(t, planID, r.PlanID, "step %d should share plan id", i)
+		assert.Equal(t, i, r.PlanStepIndex, "step %d should have index %d", i, i)
+	}
+
+	// Step 0 carries the approval gate (RequireApproval true → state
+	// is PendingApproval). Step 1+2 had RequireApproval=true on input
+	// but the service should have forced it to false; their initial
+	// state should be Queued because they're plan steps 1+.
+	assert.Equal(t, RolloutStatePendingApproval, created[0].State,
+		"step 0 with RequireApproval=true should land in pending_approval")
+	assert.False(t, created[1].RequireApproval,
+		"step 1 RequireApproval must be forced to false by the service")
+	assert.False(t, created[2].RequireApproval,
+		"step 2 RequireApproval must be forced to false by the service")
+	assert.Equal(t, RolloutStateQueued, created[1].State,
+		"step 1 should wait in queued")
+	assert.Equal(t, RolloutStateQueued, created[2].State,
+		"step 2 should wait in queued")
+}
+
+// CreatePlan rejects mismatched group_ids — a plan across two groups
+// would have ambiguous approval semantics.
+func TestRollout_CreatePlanRejectsMismatchedGroups(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid1, gid2 := "g1", "g2"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid1, Name: "G1"}))
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid2, Name: "G2"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid1, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	_, _, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "0", GroupID: gid1, TargetConfigID: cfg.ID, Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}}},
+		{Name: "1", GroupID: gid2, TargetConfigID: cfg.ID, Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "group_id")
+}
+
+// CreatePlan rejects an empty steps slice.
+func TestRollout_CreatePlanRejectsEmptySteps(t *testing.T) {
+	svc := &RolloutServiceImpl{appStore: memory.NewStore(), logger: zap.NewNop()}
+	_, _, err := svc.CreatePlan(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one step")
+}
+
 // A standalone rollout has empty PlanID and step 0 — the v0.4 through
 // v0.68 default. The new fields must not change that behavior.
 func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {

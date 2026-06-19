@@ -747,6 +747,14 @@ func (s *Server) registerRoutes() {
 		{
 			rollouts.GET("", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleListRollouts)
 			rollouts.POST("", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleCreateRollout)
+			// v0.73 — plan create. N rollout inputs become a single
+			// plan with shared PlanID assigned server side. The
+			// engine support for plans landed in v0.70-72; this
+			// endpoint is the surface clients use to actually
+			// produce one. Same scope as regular Create because
+			// creating a plan is conceptually N rollout creates.
+			// Read/list endpoint for plans lands in v0.74.
+			rollouts.POST("/plans", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleCreatePlan)
 			rollouts.GET("/:id", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleGetRollout)
 			rollouts.POST("/:id/abort", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleAbortRollout)
 			rollouts.POST("/:id/pause", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandlePauseRollout)

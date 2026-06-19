@@ -340,6 +340,121 @@ func (s *RolloutServiceImpl) NextPlanStep(ctx context.Context, planID string, cu
 	return nil, nil
 }
 
+// CreatePlan wraps N Create calls under a shared PlanID. v0.73.
+// The plan id is generated server side; callers shouldn't pre
+// assign one because uniqueness has to be guaranteed.
+//
+// Validation rules:
+//   - At least one step. An empty plan is a misuse of the API.
+//   - All steps must share the same GroupID. A plan that crosses
+//     groups would have ambiguous approval semantics (which group's
+//     RequireApproval policy applies?) and no operator workflow
+//     actually wants this today. Service rejects it cleanly so the
+//     proposer can't construct one by accident.
+//   - The PlanID and PlanStepIndex on the input are ignored. The
+//     caller's job is to supply N rollout intents; the service
+//     handles the grouping.
+//   - RequireApproval is honored on step 0 (the plan's gate) and
+//     forced to false on steps 1..N (per design — plan approves as
+//     a unit).
+//
+// Partial failure: if step K's Create fails after K-1 already
+// succeeded, the implementation immediately calls
+// CancelPlanFollowers with afterIndex=-1 to flip every step in the
+// plan to Cancelled. This is a defensive cleanup, not a guaranteed
+// rollback — if any of the K-1 already-created steps have already
+// started running (the engine ticks between Create calls), the
+// cancel only catches Queued ones. The forward step that's in
+// Pending or InProgress remains; the operator will see the
+// partial plan in the UI and can Abort manually. This is
+// documented as a known limitation; v0.74 may tighten this when
+// the API surface settles.
+func (s *RolloutServiceImpl) CreatePlan(ctx context.Context, steps []RolloutInput) ([]*Rollout, string, error) {
+	if len(steps) == 0 {
+		return nil, "", fmt.Errorf("plan requires at least one step")
+	}
+	groupID := strings.TrimSpace(steps[0].GroupID)
+	if groupID == "" {
+		return nil, "", fmt.Errorf("plan step 0 missing group_id")
+	}
+	for i, st := range steps[1:] {
+		if strings.TrimSpace(st.GroupID) != groupID {
+			return nil, "", fmt.Errorf("plan step %d group_id %q does not match step 0 group_id %q",
+				i+1, st.GroupID, groupID)
+		}
+	}
+
+	planID := uuid.NewString()
+	created := make([]*Rollout, 0, len(steps))
+
+	for i, step := range steps {
+		// The caller's PlanID + PlanStepIndex are ignored. We assign
+		// authoritative values so a misuse of the input shape can't
+		// produce inconsistent plans in storage.
+		step.PlanID = planID
+		step.PlanStepIndex = i
+		// Force require_approval=false on steps 1..N. Step 0 keeps
+		// whatever the caller set, which is the plan's approval gate.
+		if i > 0 {
+			step.RequireApproval = false
+		}
+		r, err := s.Create(ctx, step)
+		if err != nil {
+			// Partial failure cleanup. Cancel everything we already
+			// created so the storage doesn't keep orphan plan rows.
+			// The cancellation walk is best effort — Pending/InProgress
+			// rows are out of reach and the operator will need to
+			// abort those manually. The audit trail tells the story.
+			if len(created) > 0 {
+				_, cancelErr := s.CancelPlanFollowers(ctx, planID, -1)
+				if cancelErr != nil {
+					s.logger.Warn("create plan: cleanup after partial failure also failed",
+						zap.String("plan_id", planID),
+						zap.Int("created_so_far", len(created)),
+						zap.Error(cancelErr))
+				}
+			}
+			return nil, "", fmt.Errorf("plan step %d create failed: %w", i, err)
+		}
+		created = append(created, r)
+	}
+
+	s.logger.Info("plan created",
+		zap.String("plan_id", planID),
+		zap.String("group_id", groupID),
+		zap.Int("step_count", len(created)))
+
+	if s.auditService != nil {
+		stepIDs := make([]string, 0, len(created))
+		for _, r := range created {
+			stepIDs = append(stepIDs, r.ID)
+		}
+		_ = s.auditService.Record(ctx, AuditEntry{
+			// The actor of plan.created is the proposer/requester of
+			// step 0 — the same hand that approves the plan when it
+			// eventually does. Empty when the caller didn't pass
+			// RequestedBy (token less mode).
+			Actor:      steps[0].RequestedBy,
+			EventType:  "plan.created",
+			TargetType: "rollout",
+			TargetID:   created[0].ID,
+			Action:     "plan_created",
+			Payload: map[string]any{
+				"plan_id":    planID,
+				"group_id":   groupID,
+				"step_count": len(created),
+				"step_ids":   stepIDs,
+				// Proposer attribution from step 0 — when a future AI
+				// proposer creates plans, ProposedBy=ai flows through
+				// for SIEM and the audit timeline UI explain panel.
+				"proposed_by": created[0].ProposedBy,
+			},
+		})
+	}
+
+	return created, planID, nil
+}
+
 // RollBackPlanPredecessors walks steps 0..failedIndex-1 in planID,
 // finds every step in succeeded state, and creates a rollback
 // rollout for each using the reserved negative PlanStepIndex range
