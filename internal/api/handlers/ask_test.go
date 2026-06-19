@@ -21,7 +21,21 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/services"
+	storetypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
+
+// v0.66 stubs for the two new bag sources.
+type stubCostSpikes struct{ events []*storetypes.CostSpikeEvent }
+
+func (s *stubCostSpikes) ListCostSpikeEvents(_ context.Context, _ storetypes.CostSpikeFilter) ([]*storetypes.CostSpikeEvent, error) {
+	return s.events, nil
+}
+
+type stubRecs struct{ recs []AskRec }
+
+func (s *stubRecs) ListForAsk(_ context.Context, _ int) ([]AskRec, error) {
+	return s.recs, nil
+}
 
 // v0.63 — the handler's job is to walk the read services, build a
 // small context bag, and pass to ai.Service.Ask. The test verifies
@@ -118,7 +132,7 @@ func TestAskHandler_BuildsContextBagAndForwardsToAI(t *testing.T) {
 		},
 	}}
 
-	h := NewAskHandler(aiSvc, rollouts, audit, zap.NewNop())
+	h := NewAskHandler(aiSvc, rollouts, audit, nil, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -151,9 +165,104 @@ func TestAskHandler_BuildsContextBagAndForwardsToAI(t *testing.T) {
 	assert.Contains(t, outbound, "operator deputy")
 }
 
+// v0.66 — extending the bag to cost spikes + recommendations. The
+// handler must walk both sources when wired, summarize each row in
+// the bag, and the outbound prompt must contain enough of each
+// summary that a regression on the walks is loud.
+func TestAskHandler_IncludesSpikesAndRecsInBag(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fake := &fakeAskAI{
+		respText: "Costs spiked on the otlp_logs signal [cite:spike:sp-1]. " +
+			"Consider dropping the http.url attribute [cite:rec:rec-1].",
+	}
+	srv := fake.start(t)
+	defer srv.Close()
+
+	aiSvc := ai.NewService(ai.Config{
+		Enabled:      true,
+		APIKey:       "test-key",
+		BaseURL:      srv.URL,
+		ExplainModel: "claude-haiku-4-5-20251001",
+	}, zap.NewNop())
+
+	spikes := &stubCostSpikes{events: []*storetypes.CostSpikeEvent{
+		{
+			ID:                   "sp-1",
+			Severity:             "critical",
+			Signal:               "otlp_logs",
+			BaselineMonthlyUSD:   400,
+			PeakMonthlyUSD:       1600,
+			PeakPctAboveBaseline: 300,
+			StartedAt:            time.Now().Add(-30 * time.Minute),
+		},
+	}}
+	recs := &stubRecs{recs: []AskRec{
+		{
+			ID:     "rec-1",
+			Title:  "Drop attribute http.url from metrics",
+			Detail: "Cardinality from this attribute is 3x the median; dropping cuts ~$400/mo.",
+		},
+	}}
+
+	h := NewAskHandler(aiSvc, nil, nil, spikes, recs, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodPost, "/",
+		bytes.NewBufferString(`{"question":"Why are costs up?"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.HandleAsk(c)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp ai.AskResult
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Citations, 2)
+	assert.Equal(t, "spike", resp.Citations[0].Kind)
+	assert.Equal(t, "sp-1", resp.Citations[0].ID)
+	assert.Equal(t, "rec", resp.Citations[1].Kind)
+	assert.Equal(t, "rec-1", resp.Citations[1].ID)
+
+	// Outbound Anthropic body must include the spike + rec summaries.
+	outbound := string(fake.lastBody)
+	assert.Contains(t, outbound, "spike:sp-1")
+	assert.Contains(t, outbound, "severity=critical")
+	assert.Contains(t, outbound, "peak=$1600/mo")
+	assert.Contains(t, outbound, "rec:rec-1")
+	assert.Contains(t, outbound, "Drop attribute http.url")
+}
+
+// And when neither lister is wired, the handler still answers
+// against the rollout + audit sources. Verifies the nil guards in
+// buildBag.
+func TestAskHandler_HandlesMissingSpikesAndRecs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	fake := &fakeAskAI{respText: "I don't have cost data loaded."}
+	srv := fake.start(t)
+	defer srv.Close()
+
+	aiSvc := ai.NewService(ai.Config{
+		Enabled: true, APIKey: "k", BaseURL: srv.URL,
+		ExplainModel: "claude-haiku-4-5-20251001",
+	}, zap.NewNop())
+
+	h := NewAskHandler(aiSvc, nil, nil, nil, nil, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodPost, "/",
+		bytes.NewBufferString(`{"question":"anything?"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.HandleAsk(c)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestAskHandler_RejectsEmptyQuestion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewAskHandler(nil, nil, nil, zap.NewNop())
+	h := NewAskHandler(nil, nil, nil, nil, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -168,7 +277,7 @@ func TestAskHandler_RejectsEmptyQuestion(t *testing.T) {
 
 func TestAskHandler_RejectsLongQuestion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewAskHandler(nil, nil, nil, zap.NewNop())
+	h := NewAskHandler(nil, nil, nil, nil, nil, zap.NewNop())
 
 	long := strings.Repeat("a", 600)
 	w := httptest.NewRecorder()

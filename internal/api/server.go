@@ -372,9 +372,58 @@ func (s *Server) askTrampoline() gin.HandlerFunc {
 			})
 			return
 		}
-		h := handlers.NewAskHandler(s.aiService, s.rolloutService, s.auditService, s.logger)
+		// v0.66 — costSpikes + recs lazily adapted into the Ask
+		// listers. Either may be nil (cost insights or recs engine
+		// not wired); the handler skips a source when its lister is
+		// nil, so the resulting bag just narrows accordingly.
+		var costSpikes handlers.AskCostSpikeLister
+		if s.costSpikes != nil {
+			costSpikes = s.costSpikes
+		}
+		var recs handlers.AskRecLister
+		if s.recsEngine != nil {
+			recs = newAskRecsAdapter(s.recsEngine)
+		}
+		h := handlers.NewAskHandler(s.aiService, s.rolloutService, s.auditService, costSpikes, recs, s.logger)
 		h.HandleAsk(c)
 	}
+}
+
+// askRecsAdapter wraps a recommendations.Engine so it satisfies the
+// handlers.AskRecLister interface. The Ask handler calls
+// ListForAsk(ctx, limit); we map that to Engine.Evaluate with a
+// fixed 1h window (the same default the /recommendations endpoint
+// uses) and trim to the requested limit. Severity ordering and
+// dismissal filtering are already handled by the engine.
+type askRecsAdapter struct {
+	engine *recommendations.Engine
+}
+
+func newAskRecsAdapter(engine *recommendations.Engine) *askRecsAdapter {
+	return &askRecsAdapter{engine: engine}
+}
+
+func (a *askRecsAdapter) ListForAsk(ctx context.Context, limit int) ([]handlers.AskRec, error) {
+	if a == nil || a.engine == nil {
+		return nil, nil
+	}
+	recs, err := a.engine.Evaluate(ctx, insights.Window1h)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 && len(recs) > limit {
+		recs = recs[:limit]
+	}
+	out := make([]handlers.AskRec, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, handlers.AskRec{
+			ID:      r.ID,
+			Title:   r.Title,
+			Detail:  r.Detail,
+			AgentID: r.AgentID,
+		})
+	}
+	return out, nil
 }
 
 // aiStatusTrampoline is the special case for /api/v1/ai/status —
