@@ -237,9 +237,17 @@ func (s *Service) ProposeFromCostSpike(ctx context.Context, in CostSpikeContext)
 	}
 
 	resp, err := s.callMessages(ctx, callOpts{
-		Model:    s.cfg.MergeModel,
-		System:   proposeFromCostSpikeSystem,
-		UserText: buildProposeUserMessage(in),
+		Model:  s.cfg.MergeModel,
+		System: proposeFromCostSpikeSystem,
+		// v0.82 — raise the per-call cap for plan-kind responses.
+		// The v0.79 prompt asks the model to emit a complete inline
+		// collector YAML per step (v0.78 contract). With 2+ steps
+		// the JSON regularly exceeds the global 1024 default; #550
+		// caught it truncating mid-config on the second seeded
+		// spike. ProposerMaxTokens is sized for 2-step plans plus
+		// reasoning + evidence with headroom.
+		MaxTokens: ProposerMaxTokens,
+		UserText:  buildProposeUserMessage(in),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("propose from cost spike: %w", err)

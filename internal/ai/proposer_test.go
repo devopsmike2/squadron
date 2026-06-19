@@ -245,3 +245,57 @@ func TestBuildProposeUserMessage_IncludesContext(t *testing.T) {
 	}
 	assert.True(t, strings.Contains(msg, "MUST equal"), "prompt should remind the model group_id must equal context")
 }
+
+// TestProposeFromCostSpike_RequestsProposerMaxTokens pins #550. The
+// v0.79 prompt asks the model to emit a complete inline collector
+// YAML per plan step. With the global s.cfg.MaxTokens at 1024 the
+// second seeded spike in v0.82 testing truncated mid-config and the
+// bridge silently dropped the spike.
+//
+// v0.82 fixed this by adding a per-call MaxTokens override in
+// callOpts and wiring the proposer to use ProposerMaxTokens (4096).
+// This test asserts the wire request actually carries that value —
+// catches accidental regressions where someone removes the override
+// thinking it's redundant. It does NOT reproduce the truncation
+// symptom (the fake server doesn't simulate token limits); the real
+// safety net for that is stress_live_test.go behind the live build
+// tag.
+func TestProposeFromCostSpike_RequestsProposerMaxTokens(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/messages", r.URL.Path)
+		body, _ := io.ReadAll(r.Body)
+		require.NoError(t, json.Unmarshal(body, &captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, anthropicReply(`{"declined":true,"reason":"test"}`))
+	}))
+	defer srv.Close()
+
+	// Configure the service with the SMALL global default
+	// (1024) so we can tell the per-call override is what's
+	// landing on the wire and not the global setting bleeding in.
+	svc := NewService(Config{
+		Enabled:    true,
+		APIKey:     "test-key",
+		BaseURL:    srv.URL,
+		MergeModel: "claude-sonnet-4-6",
+		MaxTokens:  1024,
+	}, zap.NewNop())
+
+	_, err := svc.ProposeFromCostSpike(context.Background(), CostSpikeContext{
+		SpikeID:       "spike-mt",
+		Signal:        "metrics",
+		GroupID:       "g-1",
+		GroupName:     "Prod",
+		TopAttributes: []string{"container.id"},
+	})
+	require.NoError(t, err)
+
+	gotMaxTokens, ok := captured["max_tokens"].(float64)
+	require.True(t, ok, "request should carry max_tokens; got %v", captured)
+	assert.Equal(t, float64(ProposerMaxTokens), gotMaxTokens,
+		"proposer call must use ProposerMaxTokens (%d) not the global s.cfg.MaxTokens (1024); raising the cap is what fixes #550",
+		ProposerMaxTokens)
+	assert.Equal(t, float64(4096), gotMaxTokens,
+		"ProposerMaxTokens itself should stay at 4096 unless we also extend docs/ai-features.md")
+}

@@ -498,8 +498,10 @@ type Rollout struct {
 	// step N+1 only after step N reaches succeeded. Empty PlanID
 	// means a standalone rollout (the v0.4–v0.68 default), preserving
 	// full backwards compatibility. See docs/multi-step-plans-design.md.
+	// v0.82 — dropped omitempty on PlanStepIndex; 0 is the first
+	// forward step and omitempty was hiding it on the wire (#543).
 	PlanID        string `json:"plan_id,omitempty"`
-	PlanStepIndex int    `json:"plan_step_index,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`

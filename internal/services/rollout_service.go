@@ -337,9 +337,10 @@ type Rollout struct {
 
 	// v0.69 — multi step plan grouping. Mirrors types.Rollout's
 	// PlanID + PlanStepIndex. See docs/multi-step-plans-design.md
-	// for the protocol. Empty PlanID is a standalone rollout.
+	// for the protocol. Empty PlanID is a standalone rollout. v0.82
+	// — dropped omitempty on PlanStepIndex; 0 is meaningful (#543).
 	PlanID        string `json:"plan_id,omitempty"`
-	PlanStepIndex int    `json:"plan_step_index,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
@@ -405,9 +406,11 @@ type RolloutInput struct {
 	// distinct PlanStepIndex. The engine sequencing that uses these
 	// fields lands in v0.70+; for now Create just round trips them
 	// to storage so the contract is stable. See
-	// docs/multi-step-plans-design.md.
+	// docs/multi-step-plans-design.md. v0.82 — dropped omitempty on
+	// PlanStepIndex (consistency with the storage + response shapes
+	// fixed in #543; omitempty doesn't affect decode anyway).
 	PlanID        string `json:"plan_id,omitempty"`
-	PlanStepIndex int    `json:"plan_step_index,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index"`
 
 	// v0.78 — inline config snippet. Used only by CreatePlan today:
 	// when a plan step supplies this instead of TargetConfigID, the
