@@ -298,6 +298,12 @@ non-negotiable:
   hardens; it does not gate.
 - No coupling to a single backend vendor's API or data model.
   Backend integrations are pluggable.
+- **Connector workflows are foolproof or release-blocked.** Every
+  connector ships with a guided wizard a new operator can complete
+  in under 5 minutes without external docs. If they can
+  misconfigure it by following the wizard, the slice does not
+  ship. See `docs/universal-discovery-design.md` "Connector
+  workflow design" for the eleven principles.
 
 When a feature proposal violates any of these, the proposal
 either gets restructured to fit or gets explicitly rejected with
