@@ -242,10 +242,7 @@ func (h *TimelineHandlers) merge(c *gin.Context, q TimelineQuery) []TimelineEven
 // ----------------------------------------------------------------
 
 func auditToEvent(e *services.AuditEvent) TimelineEvent {
-	title := strings.TrimSpace(e.EventType)
-	if title == "" {
-		title = e.Action
-	}
+	title := humanizeEventType(e.EventType, e.Action)
 	sub := strings.TrimSpace(e.Actor)
 	if e.TargetType != "" {
 		if sub != "" {
@@ -400,4 +397,74 @@ func parseTimelineQuery(c *gin.Context) TimelineQuery {
 		}
 	}
 	return q
+}
+
+// humanizeEventType turns a machine event type ("plan.created",
+// "rollout.stage_applied") into a short readable title for the
+// timeline's Recent Events list. v0.81.4 (#545) — the pre-v0.81.4
+// timeline emitted raw event_type strings, which read like log
+// lines rather than postmortem prose. The v0.76 humanizer lives in
+// the UI's AuditTimeline.tsx but Timeline.tsx renders backend-
+// supplied titles directly, so humanizing has to happen server-
+// side. This is intentionally a small subset of the v0.76 JS
+// humanizer — the cleanup-grade scope is "the prominent plan.* and
+// rollout.* family the operator stares at during an incident",
+// not "every event type in the system". Unknown types fall back to
+// a TitleCased version of the underscore-separated suffix so we
+// never regress on what the operator saw before.
+func humanizeEventType(eventType, action string) string {
+	switch eventType {
+	case "plan.created":
+		return "Plan created"
+	case "plan.approved":
+		return "Plan approved"
+	case "plan.rejected":
+		return "Plan rejected"
+	case "plan.cancelled":
+		return "Plan cancelled"
+	case "plan.completed":
+		return "Plan completed"
+	case "plan.step_started":
+		return "Plan step started"
+	case "plan.step_completed":
+		return "Plan step completed"
+	case "plan.rolled_back":
+		return "Plan rolled back"
+	case "rollout.created":
+		return "Rollout created"
+	case "rollout.approved":
+		return "Rollout approved"
+	case "rollout.rejected":
+		return "Rollout rejected"
+	case "rollout.stage_applied":
+		return "Rollout stage applied"
+	case "rollout.stage_advanced":
+		return "Rollout stage advanced"
+	case "rollout.succeeded":
+		return "Rollout succeeded"
+	case "rollout.aborted":
+		return "Rollout aborted"
+	case "rollout.paused":
+		return "Rollout paused"
+	case "rollout.resumed":
+		return "Rollout resumed"
+	case "rollout.rolled_back":
+		return "Rollout rolled back"
+	case "proposal.created":
+		return "AI proposal created"
+	case "proposal.declined":
+		return "AI proposal declined"
+	case "proposal.skipped":
+		return "AI proposal skipped"
+	case "proposal.evidence_linked":
+		return "AI evidence linked"
+	}
+	// Fallback for event types not in the cleanup-grade table.
+	// Preserves backwards compatibility with whatever the operator
+	// saw before — we never want to lose information by humanizing.
+	title := strings.TrimSpace(eventType)
+	if title == "" {
+		title = strings.TrimSpace(action)
+	}
+	return title
 }

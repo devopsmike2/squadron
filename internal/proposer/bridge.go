@@ -659,6 +659,18 @@ func candidateToPlanInputs(result *ai.ProposalResult, expectedGroupID string) []
 		if i == 0 {
 			input.ProposalReasoning = result.Reasoning
 			input.EvidenceRefs = evidence
+			// v0.81.4 — set RequestedBy on step 0 so the
+			// plan.created audit event lands with a meaningful
+			// actor. services.CreatePlan emits plan.created with
+			// Actor: steps[0].RequestedBy; without this the audit
+			// row had actor="" while the same-instant
+			// proposal.created event used "ai-proposer" (#546).
+			// "ai-proposer" matches the actor string the bridge
+			// uses for its own audit emissions (proposal.created,
+			// proposal.evidence_linked, proposal.declined,
+			// proposal.skipped) so SIEM consumers see a single
+			// consistent actor for every AI-originated event.
+			input.RequestedBy = "ai-proposer"
 		}
 		out = append(out, input)
 	}

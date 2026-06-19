@@ -475,6 +475,18 @@ func TestBridge_PlanKindDispatchesToCreatePlan(t *testing.T) {
 	require.Len(t, rollouts.planSteps, 2)
 	assert.Equal(t, services.RolloutProposedByAI, rollouts.planSteps[0].ProposedBy)
 	assert.Equal(t, services.RolloutProposedByAI, rollouts.planSteps[1].ProposedBy)
+	// v0.81.4 (#546) — step 0's RequestedBy must be "ai-proposer" so
+	// services.CreatePlan's plan.created audit emission lands a
+	// meaningful actor. Without this the audit row had Actor=""
+	// while the same-instant proposal.created event used
+	// "ai-proposer", confusing SIEM consumers who key on actor.
+	assert.Equal(t, "ai-proposer", rollouts.planSteps[0].RequestedBy,
+		"step 0 RequestedBy drives plan.created Actor; must match the bridge's other AI audit emissions")
+	// Step 1+ have no need for RequestedBy — services.CreatePlan
+	// doesn't read it for non-head steps and the audit trail
+	// derives the actor from step 0.
+	assert.Empty(t, rollouts.planSteps[1].RequestedBy,
+		"step 1+ RequestedBy is unused; keeping it empty avoids a misleading per-step actor in storage")
 	// Step 0 carries the plan's approval gate and the AI reasoning.
 	assert.True(t, rollouts.planSteps[0].RequireApproval, "step 0 must carry the plan approval gate")
 	assert.Contains(t, rollouts.planSteps[0].ProposalReasoning, "stage drops")
