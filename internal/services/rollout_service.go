@@ -60,6 +60,15 @@ type RolloutService interface {
 	// during evaluation. Service-layer guard so the engine doesn't reach
 	// into the application store directly.
 	Persist(ctx context.Context, rollout *Rollout) error
+
+	// v0.70 — multi step plan support. NextPlanStep looks up the
+	// rollout with (PlanID = planID, PlanStepIndex = currentIndex+1).
+	// Returns (nil, nil) when there is no next step (currentIndex was
+	// the final step in the plan), letting the caller emit
+	// plan.completed. The engine calls this from finish() to promote
+	// the next step out of Queued; see docs/multi-step-plans-design.md
+	// for the protocol.
+	NextPlanStep(ctx context.Context, planID string, currentIndex int) (*Rollout, error)
 }
 
 // RolloutPreview is the response shape of a Preview call.
@@ -126,6 +135,15 @@ const (
 	// the rollout. Engine ignores it; the requester can clone the
 	// rollout with adjustments and re-submit.
 	RolloutStateRejected RolloutState = "rejected"
+
+	// v0.70 — multi step plan steps after the first sit in this
+	// state until the previous step reaches succeeded. The engine
+	// then promotes step N+1 from queued to pending, which the
+	// normal tick loop picks up. Step 0 is created in pending (or
+	// pending_approval) the same way a standalone rollout is — the
+	// plan approval gate sits there. See
+	// docs/multi-step-plans-design.md.
+	RolloutStateQueued RolloutState = "queued"
 )
 
 // RolloutStageMode mirrors applicationstore.RolloutStageMode.

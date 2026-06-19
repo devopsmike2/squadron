@@ -538,6 +538,74 @@ func (e *Engine) finish(ctx context.Context, r *services.Rollout) {
 	e.publishStateChange(r, "succeeded")
 	e.tracer.EndRollout(r.ID, services.RolloutStateSucceeded, "")
 	e.logger.Info("rollout succeeded", zap.String("rollout_id", r.ID))
+
+	// v0.70 — multi step plan advancement. When the succeeded
+	// rollout belongs to a plan, promote the next step out of
+	// Queued so the next tick picks it up. When there is no next
+	// step, emit plan.completed so the audit timeline closes the
+	// arc and SIEM consumers see one terminal event per plan.
+	// Standalone rollouts (empty PlanID) skip this branch.
+	if r.PlanID != "" {
+		e.advancePlan(ctx, r)
+	}
+}
+
+// advancePlan promotes the next step in r's plan from Queued to
+// Pending, or emits plan.completed if r was the final step. Called
+// from finish() only — the failure path (cancellation + backwards
+// rollback) lands in v0.71.
+func (e *Engine) advancePlan(ctx context.Context, r *services.Rollout) {
+	next, err := e.rolloutService.NextPlanStep(ctx, r.PlanID, r.PlanStepIndex)
+	if err != nil {
+		e.logger.Warn("rollout engine: failed to look up next plan step",
+			zap.String("rollout_id", r.ID),
+			zap.String("plan_id", r.PlanID),
+			zap.Int("current_step", r.PlanStepIndex),
+			zap.Error(err))
+		return
+	}
+	if next == nil {
+		// r was the final step. Emit plan.completed against r so the
+		// audit row links to the last forward rollout in the plan.
+		e.recordAudit(ctx, r, "plan.completed", "plan_completed", map[string]any{
+			"plan_id":     r.PlanID,
+			"final_step":  r.PlanStepIndex,
+			"total_steps": r.PlanStepIndex + 1,
+		})
+		e.logger.Info("plan completed",
+			zap.String("plan_id", r.PlanID),
+			zap.Int("final_step", r.PlanStepIndex))
+		return
+	}
+	// Promote the next step. The expected state is Queued (the
+	// service Create logic puts plan steps after step 0 in Queued).
+	// If the next step is already in some other state (operator
+	// manually intervened, the failure path got there first), leave
+	// it alone — better to no op than to clobber an operator action.
+	if next.State != services.RolloutStateQueued {
+		e.logger.Info("plan engine: next step not in queued state, leaving alone",
+			zap.String("plan_id", r.PlanID),
+			zap.Int("next_step", next.PlanStepIndex),
+			zap.String("next_state", string(next.State)))
+		return
+	}
+	next.State = services.RolloutStatePending
+	if err := e.rolloutService.Persist(ctx, next); err != nil {
+		e.logger.Warn("rollout engine: failed to promote next plan step",
+			zap.String("plan_id", r.PlanID),
+			zap.Int("next_step", next.PlanStepIndex),
+			zap.Error(err))
+		return
+	}
+	e.recordAudit(ctx, next, "plan.step_started", "plan_step_started", map[string]any{
+		"plan_id":         next.PlanID,
+		"plan_step_index": next.PlanStepIndex,
+		"previous_step":   r.PlanStepIndex,
+	})
+	e.logger.Info("plan advanced",
+		zap.String("plan_id", r.PlanID),
+		zap.Int("from_step", r.PlanStepIndex),
+		zap.Int("to_step", next.PlanStepIndex))
 }
 
 // triggerAbort flips state to aborted with a reason. The next tick will

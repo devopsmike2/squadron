@@ -79,6 +79,98 @@ func TestRollout_PlanFieldsRoundTrip(t *testing.T) {
 	assert.Equal(t, 0, got.PlanStepIndex)
 }
 
+// v0.70 — plan steps after the first land in Queued state so the
+// engine doesn't pick them up on its next tick. The engine's
+// advancePlan hook promotes them to Pending when the previous step
+// reaches succeeded.
+func TestRollout_PlanStepsLandInQueued(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	cfg := &types.Config{ID: "c-1", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	// Step 0 — lands in Pending as before.
+	step0, err := svc.Create(ctx, RolloutInput{
+		Name:           "Plan abc step 0",
+		GroupID:        gid,
+		TargetConfigID: cfg.ID,
+		Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		PlanID:         "plan-abc",
+		PlanStepIndex:  0,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePending, step0.State,
+		"step 0 should behave like a standalone rollout — Pending unless RequireApproval is set")
+
+	// Step 1 — lands in Queued. This is the v0.70 change.
+	step1, err := svc.Create(ctx, RolloutInput{
+		Name:           "Plan abc step 1",
+		GroupID:        gid,
+		TargetConfigID: cfg.ID,
+		Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		PlanID:         "plan-abc",
+		PlanStepIndex:  1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStateQueued, step1.State,
+		"step 1+ should wait in Queued until the engine promotes them")
+}
+
+// NextPlanStep returns the step at currentIndex+1 within the same
+// plan. The engine calls this from finish() to advance plans on
+// succeeded transitions.
+func TestRollout_NextPlanStepReturnsCorrectStep(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	cfg := &types.Config{ID: "c-1", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	// Seed a 3 step plan.
+	for i := 0; i < 3; i++ {
+		_, err := svc.Create(ctx, RolloutInput{
+			Name:           "Plan xyz step",
+			GroupID:        gid,
+			TargetConfigID: cfg.ID,
+			Stages:         []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+			PlanID:         "plan-xyz",
+			PlanStepIndex:  i,
+		})
+		require.NoError(t, err)
+	}
+
+	// Looking up step after 0 returns step 1.
+	next, err := svc.NextPlanStep(ctx, "plan-xyz", 0)
+	require.NoError(t, err)
+	require.NotNil(t, next)
+	assert.Equal(t, 1, next.PlanStepIndex)
+
+	// Looking up step after 1 returns step 2.
+	next, err = svc.NextPlanStep(ctx, "plan-xyz", 1)
+	require.NoError(t, err)
+	require.NotNil(t, next)
+	assert.Equal(t, 2, next.PlanStepIndex)
+
+	// Looking up step after 2 (the final step) returns nil.
+	// finish() emits plan.completed in this case.
+	next, err = svc.NextPlanStep(ctx, "plan-xyz", 2)
+	require.NoError(t, err)
+	assert.Nil(t, next, "last step has no successor")
+
+	// Empty plan id is a no op — standalone rollouts never call
+	// this in practice, but defensive guard matters.
+	next, err = svc.NextPlanStep(ctx, "", 0)
+	require.NoError(t, err)
+	assert.Nil(t, next)
+}
+
 // A standalone rollout has empty PlanID and step 0 — the v0.4 through
 // v0.68 default. The new fields must not change that behavior.
 func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {
