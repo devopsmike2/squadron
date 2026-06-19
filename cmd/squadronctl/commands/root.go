@@ -84,6 +84,7 @@ squadronctl's span nests under that. See docs/squadronctl.md
 		newGroupsCommand(),
 		newConfigsCommand(),
 		newRolloutsCommand(),
+		newPlansCommand(),
 		newAuditCommand(),
 		newIncidentsCommand(),
 	)

@@ -93,6 +93,11 @@ type Rollout struct {
 	CurrentStage     int            `json:"current_stage"`
 	StageStartedAt   *time.Time     `json:"stage_started_at,omitempty"`
 	AbortReason      string         `json:"abort_reason,omitempty"`
+	// v0.69 — multi step plan grouping. Empty PlanID means
+	// standalone. Negative PlanStepIndex is reserved for v0.72
+	// rollback steps within the same plan.
+	PlanID        string `json:"plan_id,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index,omitempty"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 	CompletedAt      *time.Time     `json:"completed_at,omitempty"`
@@ -123,6 +128,38 @@ type RolloutInput struct {
 	Stages          []RolloutStage       `json:"stages"`
 	AbortCriteria   RolloutAbortCriteria `json:"abort_criteria"`
 	NotificationURL string               `json:"notification_url,omitempty"`
+	// v0.47 — when true the rollout requires two person approval.
+	// On plan creation only step 0's flag is honored; the server
+	// forces steps 1..N to false (plans approve as a unit).
+	RequireApproval bool `json:"require_approval,omitempty"`
+}
+
+// Plan mirrors the v0.74 services.Plan envelope returned by
+// GET /api/v1/rollouts/plans/:id.
+type Plan struct {
+	PlanID        string    `json:"plan_id"`
+	GroupID       string    `json:"group_id"`
+	StepCount     int       `json:"step_count"`
+	State         string    `json:"state"`
+	Steps         []Rollout `json:"steps"`
+	RollbackSteps []Rollout `json:"rollback_steps,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// CreatePlanRequest is the body POST /api/v1/rollouts/plans accepts.
+// Steps is an ordered list of N rollout intents that the server
+// groups under a single plan id with PlanStepIndex assigned 0..N-1.
+type CreatePlanRequest struct {
+	Steps []RolloutInput `json:"steps"`
+}
+
+// CreatePlanResponse is what POST /plans returns: the assigned
+// plan id plus the created steps in step-index order.
+type CreatePlanResponse struct {
+	PlanID string    `json:"plan_id"`
+	Steps  []Rollout `json:"steps"`
+	Count  int       `json:"count"`
 }
 
 // RolloutTemplate mirrors the /rollout-recipes/templates response.

@@ -67,6 +67,72 @@ func TestClient_401ProducesIs401True(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing token")
 }
 
+// v0.77 — plans get + create round trip through the cliapi client.
+// Mirrors the cliapi types against the v0.74 envelope shape and
+// the v0.73 create response shape so a server side schema change
+// breaks the test loud rather than silently degrading the CLI.
+func TestClient_PlansGetEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/rollouts/plans/plan-abc", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"plan_id": "plan-abc",
+			"group_id": "web-prod",
+			"step_count": 2,
+			"state": "in_progress",
+			"created_at": "2026-06-18T14:00:00Z",
+			"updated_at": "2026-06-18T14:05:00Z",
+			"steps": [
+				{"id":"s-0","name":"Step 0","group_id":"web-prod","target_config_id":"c1","state":"succeeded","current_stage":0,"plan_id":"plan-abc","plan_step_index":0,"stages":[],"abort_criteria":{"max_drifted_agents":0},"created_at":"2026-06-18T14:00:00Z","updated_at":"2026-06-18T14:02:00Z"},
+				{"id":"s-1","name":"Step 1","group_id":"web-prod","target_config_id":"c2","state":"in_progress","current_stage":0,"plan_id":"plan-abc","plan_step_index":1,"stages":[],"abort_criteria":{"max_drifted_agents":0},"created_at":"2026-06-18T14:00:00Z","updated_at":"2026-06-18T14:05:00Z"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	var got Plan
+	require.NoError(t, c.Do(context.Background(), http.MethodGet,
+		"/api/v1/rollouts/plans/plan-abc", nil, nil, &got))
+	assert.Equal(t, "plan-abc", got.PlanID)
+	assert.Equal(t, "web-prod", got.GroupID)
+	assert.Equal(t, 2, got.StepCount)
+	assert.Equal(t, "in_progress", got.State)
+	require.Len(t, got.Steps, 2)
+	assert.Equal(t, 0, got.Steps[0].PlanStepIndex)
+	assert.Equal(t, "plan-abc", got.Steps[0].PlanID)
+	assert.Equal(t, "succeeded", got.Steps[0].State)
+}
+
+func TestClient_PlansCreateRoundTrip(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/v1/rollouts/plans", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{
+			"plan_id": "plan-xyz",
+			"count": 2,
+			"steps": [
+				{"id":"s-0","name":"Step 0","group_id":"g","target_config_id":"c","state":"pending","current_stage":0,"plan_id":"plan-xyz","plan_step_index":0,"stages":[],"abort_criteria":{"max_drifted_agents":0},"created_at":"2026-06-18T14:00:00Z","updated_at":"2026-06-18T14:00:00Z"},
+				{"id":"s-1","name":"Step 1","group_id":"g","target_config_id":"c","state":"queued","current_stage":0,"plan_id":"plan-xyz","plan_step_index":1,"stages":[],"abort_criteria":{"max_drifted_agents":0},"created_at":"2026-06-18T14:00:00Z","updated_at":"2026-06-18T14:00:00Z"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	body := []byte(`{"steps":[{"name":"Step 0","group_id":"g","target_config_id":"c","stages":[]},{"name":"Step 1","group_id":"g","target_config_id":"c","stages":[]}]}`)
+	var resp CreatePlanResponse
+	require.NoError(t, c.Do(context.Background(), http.MethodPost,
+		"/api/v1/rollouts/plans", nil, body, &resp))
+	assert.Equal(t, "plan-xyz", resp.PlanID)
+	assert.Equal(t, 2, resp.Count)
+	require.Len(t, resp.Steps, 2)
+	assert.Equal(t, 1, resp.Steps[1].PlanStepIndex)
+	assert.Equal(t, "queued", resp.Steps[1].State)
+}
+
 func TestClient_4xxNonJSONStillDecodesAsError(t *testing.T) {
 	// Servers can return non-JSON bodies (proxy errors, panic
 	// recovery). The client must still return *APIError so the CLI

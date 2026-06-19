@@ -322,3 +322,82 @@ never blocks user feedback on telemetry.
 See [self-monitoring.md](./self-monitoring.md) for the server-side
 of the picture (the Squadron API's gin middleware extracts the
 traceparent and roots its internal spans there).
+
+## Plans (v0.77)
+
+Multi step plans group N rollouts under one approval and one
+audit arc. The AI proposer creates them for cost spikes that
+need more than one fix; CI scripts and operators can create them
+directly via the plans subcommand.
+
+See [multi step plans design](./multi-step-plans-design.md) for
+the protocol.
+
+### `squadronctl plans get <plan-id>`
+
+Print the envelope: shared metadata + ordered steps + rollback
+steps (when v0.72's backwards walk fired).
+
+```bash
+squadronctl plans get plan-abc123
+# plan_id:     plan-abc123
+# group_id:    web-prod
+# state:       in_progress
+# step_count:  3
+# created:     2026-06-18 14:23:00 UTC
+# updated:     2026-06-18 14:28:00 UTC
+# ------------------------------------------------------------
+# Steps:
+# # | ID       | STATE       | NAME
+# 0 | 4f2a8b1c | succeeded   | drop noisy attr
+# 1 | 7c91e2a3 | in_progress | rotate splunk index
+# 2 | 9b4d5e6f | queued      | update alert rule
+```
+
+JSON output for piping through `jq`:
+
+```bash
+squadronctl plans get plan-abc123 -o json | jq '.state'
+```
+
+### `squadronctl plans create --steps <file>`
+
+POST a new plan from a JSON file. The body is
+`{"steps":[<RolloutInput>, ...]}` — each step has the same shape
+`POST /api/v1/rollouts` accepts. The server assigns a shared
+`plan_id` and `plan_step_index` 0..N-1 in step order; the request's
+own values are ignored. Only step 0's `require_approval` flag is
+honored — the plan approves as a unit at step 0.
+
+```bash
+cat > plan.json <<EOF
+{
+  "steps": [
+    {
+      "name": "Step 0 — drop noisy attribute",
+      "group_id": "web-prod",
+      "target_config_id": "cfg-abc",
+      "stages": [{"mode": "percent", "percentage": 100}],
+      "require_approval": true
+    },
+    {
+      "name": "Step 1 — rotate Splunk index",
+      "group_id": "web-prod",
+      "target_config_id": "cfg-def",
+      "stages": [{"mode": "percent", "percentage": 100}]
+    }
+  ]
+}
+EOF
+
+squadronctl plans create --steps plan.json
+```
+
+Read from stdin with `--steps -`:
+
+```bash
+my-plan-generator | squadronctl plans create --steps -
+```
+
+Validation runs client side before the request fires, so a
+malformed body produces a tight error rather than a server 400.
