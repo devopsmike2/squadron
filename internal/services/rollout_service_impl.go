@@ -158,6 +158,14 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 	if input.RequireApproval {
 		initialState = RolloutStatePendingApproval
 	}
+	// v0.70 — plan steps after the first wait in Queued until the
+	// engine promotes them on the predecessor's succeeded transition.
+	// Step 0 still respects RequireApproval (the plan approval gate
+	// sits there); steps 1..N never carry RequireApproval themselves
+	// because the v0.69 design says the plan is approved as a unit.
+	if input.PlanID != "" && input.PlanStepIndex > 0 {
+		initialState = RolloutStateQueued
+	}
 	// v0.53 — proposal provenance. Default to operator so existing
 	// callers behave unchanged. AI proposers set ProposedBy="ai"
 	// plus reasoning + evidence; validation prevents unknown values.
@@ -296,6 +304,39 @@ func (s *RolloutServiceImpl) List(ctx context.Context, filter RolloutFilter) ([]
 		out[i] = toServiceRollout(r)
 	}
 	return out, nil
+}
+
+// NextPlanStep looks up the rollout that follows the one at
+// currentIndex within the same plan. v0.70. Implemented as a List
+// + linear scan because the storage layer doesn't yet have a
+// (plan_id, plan_step_index) index — fine for plans of single
+// digit step counts (the common case for cost spike fixes) and
+// only called once per succeeded transition. If plans ever grow
+// long enough to make the scan hot, this method gets a dedicated
+// storage query without disturbing the engine's contract.
+func (s *RolloutServiceImpl) NextPlanStep(ctx context.Context, planID string, currentIndex int) (*Rollout, error) {
+	if planID == "" {
+		return nil, nil
+	}
+	stored, err := s.appStore.ListRollouts(ctx, applicationstore.RolloutFilter{
+		// No upper bound on Limit here — a plan with hundreds of
+		// steps is pathological, and List caps internally at 1000
+		// which is two orders of magnitude beyond reasonable.
+		Limit: 1000,
+	})
+	if err != nil {
+		return nil, err
+	}
+	target := currentIndex + 1
+	for _, r := range stored {
+		if r == nil {
+			continue
+		}
+		if r.PlanID == planID && r.PlanStepIndex == target {
+			return toServiceRollout(r), nil
+		}
+	}
+	return nil, nil
 }
 
 // Abort flips the rollout to the aborted state. The engine performs the

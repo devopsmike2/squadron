@@ -400,6 +400,9 @@ func (askRolloutListOnly) RollBack(context.Context, string, string) (*services.R
 func (askRolloutListOnly) Preview(context.Context, string, string) (*services.RolloutPreview, error) {
 	panic("not used")
 }
+func (askRolloutListOnly) NextPlanStep(context.Context, string, int) (*services.Rollout, error) {
+	panic("not used")
+}
 
 // askAuditListOnly is the audit counterpart.
 type askAuditListOnly struct {
