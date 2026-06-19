@@ -190,3 +190,48 @@ export function useAICapabilities(): {
   });
   return { capabilities: data, loading: isLoading };
 }
+
+// v0.84 — proposer playground.
+//
+// ProposerPreviewRequest mirrors the server-side wire shape. JSON
+// tags on the server are snake_case; TS keys here match so the
+// network request body is the literal object.
+export interface ProposerPreviewRequest {
+  spike_id: string;
+  signal: string;
+  severity: string;
+  baseline_monthly_usd: number;
+  peak_monthly_usd: number;
+  peak_pct_above_baseline: number;
+  top_agents: string[];
+  top_attributes: string[];
+  group_id: string;
+  group_name: string;
+  recent_lint_findings: string[];
+  recent_recommendations: string[];
+}
+
+// ProposerPreviewResponse wraps the proposer's ProposalResult plus
+// the derived cost estimate the server computes. Fields are loose
+// (`unknown` for the plan / proposal payloads) on purpose — the
+// playground just renders them. A future strongly-typed surface
+// can refine these as the schema settles.
+export interface ProposerPreviewResponse {
+  declined: boolean;
+  reason?: string;
+  kind?: "rollout" | "plan" | "";
+  proposal?: unknown;
+  plan?: { steps?: unknown[] };
+  reasoning?: string;
+  evidence?: Array<{ kind: string; id?: string; description?: string }>;
+  model?: string;
+  tokens_in?: number;
+  tokens_out?: number;
+  estimated_usd: number;
+}
+
+export function proposerPreview(
+  req: ProposerPreviewRequest,
+): Promise<ProposerPreviewResponse> {
+  return apiPost<ProposerPreviewResponse>("/ai/proposer/preview", req);
+}
