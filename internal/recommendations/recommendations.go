@@ -26,6 +26,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -132,6 +133,154 @@ type Recommendation struct {
 	// GeneratedAt is the snapshot time the recommendation reflects.
 	// Clients can show "as of 2 min ago" if they care.
 	GeneratedAt time.Time `json:"generated_at"`
+
+	// Source — v0.85 — typed source for the recommendation.
+	// Distinguishes recommendations produced by the cost-spike
+	// pipeline (existing JARVIS arc) from discovery scans
+	// (universal observation arc) and from operator manual
+	// creation. The Source field is purely descriptive — it
+	// doesn't change how the engine ranks, dismisses, or displays
+	// the recommendation. Existing producers leave this nil; the
+	// JSON tag uses omitempty so v0.84-era wire shapes are
+	// unchanged on the wire.
+	Source *RecommendationSource `json:"source,omitempty"`
+
+	// Action — v0.85 — typed action payload. When the
+	// recommendation has a concrete action the operator can take
+	// (start a rollout, create a plan, apply a discovery-action),
+	// the typed payload carries the information the UI needs to
+	// render the correct button + confirmation flow. When Action
+	// is nil, the recommendation is advisory only — operator
+	// copies the Snippet and applies it out-of-band.
+	Action *RecommendationAction `json:"action,omitempty"`
+
+	// IaC — v0.85 — Infrastructure-as-Code snippet for cloud-side
+	// changes. When present, the operator runs this through their
+	// existing IaC pipeline (Terraform, CDK, Pulumi). Squadron
+	// does NOT execute it. Empty for collector-side
+	// recommendations whose remediation is captured by the
+	// existing Snippet field (collector YAML).
+	IaC *IaCSnippet `json:"iac,omitempty"`
+}
+
+// SourceKind is the typed enum carried on RecommendationSource.
+// Stable string values so the UI can route on them without a
+// switch on every render.
+type SourceKind string
+
+const (
+	// SourceCostSpike — produced by the JARVIS cost-spike
+	// pipeline. The RefID typically points at the cost-spike
+	// detection record.
+	SourceCostSpike SourceKind = "cost_spike"
+
+	// SourceDiscoveryScan — produced by a discovery scan (AWS /
+	// GCP / on-prem). The RefID typically points at the
+	// discovery_scan record.
+	SourceDiscoveryScan SourceKind = "discovery_scan"
+
+	// SourceManual — created by an operator via the manual
+	// creation flow. The RefID typically points at the actor user
+	// id.
+	SourceManual SourceKind = "manual"
+)
+
+// RecommendationSource is the typed "where did this come from"
+// pointer. RefID is descriptive only — the engine does not
+// dereference it.
+type RecommendationSource struct {
+	Kind  SourceKind `json:"kind"`
+	RefID string     `json:"ref_id,omitempty"` // cost_spike_id / discovery_scan_id / actor id
+}
+
+// ActionKind is the typed enum carried on RecommendationAction.
+// The UI matches Kind to unmarshal Payload into the right shape.
+type ActionKind string
+
+const (
+	// ActionRollout — Squadron should kick off a rollout. The
+	// payload carries the rollout request (target group, config
+	// version, canary policy, etc.).
+	ActionRollout ActionKind = "rollout"
+
+	// ActionPlan — Squadron should create a (multi-step) plan.
+	// The payload carries the proposed plan shape.
+	ActionPlan ActionKind = "plan"
+
+	// ActionDiscoveryAction — operator should review a
+	// discovery-action (cloud-side IaC change). The payload
+	// carries the discovery-action handle the UI uses to deeplink.
+	ActionDiscoveryAction ActionKind = "discovery_action"
+)
+
+// RecommendationAction is a typed action payload. Payload is
+// action-specific JSON that the UI unmarshals based on Kind.
+// Marshalling the Recommendation re-emits Payload as inline JSON
+// rather than re-encoded escaped text.
+type RecommendationAction struct {
+	Kind ActionKind `json:"kind"`
+	// Payload is action-specific JSON. The UI matches Kind to
+	// unmarshal Payload into the right shape.
+	Payload json.RawMessage `json:"payload"`
+}
+
+// IaCFormat is the typed enum carried on IaCSnippet. Slice 1
+// ships Terraform; CDK and Pulumi land as later slices without a
+// shape change.
+type IaCFormat string
+
+const (
+	IaCTerraform IaCFormat = "terraform"
+	IaCCDK       IaCFormat = "cdk"
+	IaCPulumi    IaCFormat = "pulumi"
+)
+
+// IaCSnippet is the Infrastructure-as-Code snippet attached to a
+// recommendation. Source is the actual Terraform/CDK/Pulumi code
+// the operator pastes into their IaC pipeline. Squadron does NOT
+// execute this — the thesis decision is explicit.
+type IaCSnippet struct {
+	Format IaCFormat `json:"format"`
+	Source string    `json:"source"` // the actual Terraform/CDK/Pulumi code
+}
+
+// RecommendationOptions carries the v0.85 typed metadata
+// producers attach when constructing a recommendation. Existing
+// recipe code paths pass nil/zero; future producers (discovery
+// scanner, manual creation flow) populate the relevant fields.
+//
+// Kept as a separate struct rather than threading three new
+// arguments into every recipe so growth is additive: new
+// metadata categories add a field to RecommendationOptions, not
+// a parameter to every constructor.
+type RecommendationOptions struct {
+	Source *RecommendationSource
+	Action *RecommendationAction
+	IaC    *IaCSnippet
+}
+
+// applyOptions attaches the typed metadata (if any) to a
+// recommendation. Returns the recommendation by value so call
+// sites can keep their existing append-by-value pattern.
+//
+// Callers pass nil when they have nothing to attach; this is the
+// hook existing recipe code uses (recipes pass nil). Future
+// discovery / manual producers construct the options struct and
+// pass it in.
+func applyOptions(rec Recommendation, opts *RecommendationOptions) Recommendation {
+	if opts == nil {
+		return rec
+	}
+	if opts.Source != nil {
+		rec.Source = opts.Source
+	}
+	if opts.Action != nil {
+		rec.Action = opts.Action
+	}
+	if opts.IaC != nil {
+		rec.IaC = opts.IaC
+	}
+	return rec
 }
 
 // Dismissals is the interface the engine uses to filter out
