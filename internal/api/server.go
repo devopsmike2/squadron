@@ -879,6 +879,15 @@ func (s *Server) registerRoutes() {
 		v1.POST("/ai/fleet-query",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleFleetQuery(c) }))
+		// v0.84 — proposer playground preview. Non-persisting preview
+		// of the proposer's response for the operator-facing playground
+		// UI. Same agents-read scope: no rollouts / plans / audit
+		// events are created; the operator is just dogfooding the
+		// proposer's reasoning. Anyone who can read the fleet can
+		// preview a proposal against it.
+		v1.POST("/ai/proposer/preview",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleProposerPreview(c) }))
 		// v0.44 — auto-remediate lint warnings. The remediated YAML
 		// flows through the normal save / rollout path, so no new
 		// scope is needed — config-write happens at save time.

@@ -185,6 +185,20 @@ export function AppSidebar() {
           url: "/rollouts",
           icon: Rocket,
         },
+        // v0.84 — proposer playground. Sits next to Rollouts because
+        // it lets the operator dogfood what the proposer would
+        // create as a rollout / plan without actually creating one.
+        // Gated by AI capabilities like Ask Squadron.
+        ...(askEnabled
+          ? [
+              {
+                key: "proposer-playground",
+                title: "Proposer Playground",
+                url: "/playground/proposer",
+                icon: Sparkles,
+              } as MenuItem,
+            ]
+          : []),
         {
           key: "deploy",
           title: "Deploy",
