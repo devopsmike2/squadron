@@ -325,6 +325,24 @@ func TestExtractJSONBlock(t *testing.T) {
 		{"trimmed whitespace", `   {"a":1}   `, `{"a":1}`},
 		{"with fence", "```json\n{\"a\":1}\n```", `{"a":1}`},
 		{"bare fence", "```\n{\"a\":1}\n```", `{"a":1}`},
+		// v0.83 (#552) — model preambled with prose before emitting
+		// JSON. Extractor must skip the preamble and return only the
+		// object. Without this fix the parser sees 'L' (from "Looking
+		// at...") and fails with `invalid character 'L'`.
+		{"preamble before json", `Looking at the context: foo bar.
+
+{"kind":"plan"}`, `{"kind":"plan"}`},
+		{"preamble + fence", "Here is the response:\n```json\n{\"kind\":\"rollout\"}\n```", `{"kind":"rollout"}`},
+		{"nested objects", `{"a":{"b":1},"c":2}`, `{"a":{"b":1},"c":2}`},
+		// Brace-counter respects strings — a '{' inside a string
+		// literal must not advance depth. Without this the matcher
+		// would close too early on the next '}'.
+		{"brace in string", `{"text":"has } brace","ok":true}`, `{"text":"has } brace","ok":true}`},
+		{"escaped quote in string", `{"text":"has \"escaped\" quotes","ok":true}`, `{"text":"has \"escaped\" quotes","ok":true}`},
+		// Trailing prose after the object — should be dropped.
+		{"trailing prose", `{"a":1}
+
+That's my response.`, `{"a":1}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
