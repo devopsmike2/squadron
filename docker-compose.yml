@@ -15,6 +15,13 @@ services:
       # Mount source code for hot reloading
       - ./cmd:/app/cmd
       - ./internal:/app/internal
+      # The extension/ tree holds the Compliance Pack stubs
+      # (changewindow, policy, siem) that cmd/all-in-one/wire_oss.go
+      # imports. Without this mount, air's hot-reload build fails
+      # with "no required module provides package
+      # github.com/devopsmike2/squadron/extension/..." and the
+      # container loops on rebuild forever.
+      - ./extension:/app/extension
       - ./go.mod:/app/go.mod
       - ./go.sum:/app/go.sum
       - ./squadron.yaml:/app/squadron.yaml
