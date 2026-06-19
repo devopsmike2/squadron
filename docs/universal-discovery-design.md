@@ -1,6 +1,54 @@
 # Universal discovery — design
 
-Last revised: drafting against v0.84.0.
+Last revised: drafting against v0.84.0 + post-thesis decisions.
+
+## Decisions locked in this revision
+
+Read these before any other section. The build-for-end-state
+philosophy applies: architecture is generalized from day one;
+implementation is sliced incrementally on top.
+
+1. **Multi-account from day one.** The credential substrate
+   schema uses `account_id` as primary key. The connect-account
+   UI ships with multi-account support in slice 1.
+2. **Multi-cloud connectors from day one (architecture).**
+   `CloudConnection` type with `Provider` enum (`aws`, `gcp`,
+   `azure`, `onprem`). `Scanner` interface with per-provider
+   implementations. Slice 1 implements AWS only; slice 2 adds
+   GCP by implementing the interface, not by reworking schema.
+3. **On-prem posture from day one (architecture).**
+   `CloudConnection.ConnectionType` enum (`api_discovered`,
+   `agent_polled`, `manual_import`). Slice 6 implements
+   `agent_polled`; the type lives in the schema from slice 1.
+4. **Secrets backend pluggable from day one.** Credential
+   substrate exposes a `SecretsBackend` interface. SQLite is the
+   OSS default. Vault / AWS Secrets Manager / GCP Secret Manager
+   land as Compliance Pack implementations.
+5. **Multi-region scans from day one (architecture).** The
+   `Scanner` interface takes a list of regions. Slice 1 ships
+   with operator-selected single region per scan; slice 3
+   extends to scheduled multi-region. The interface doesn't
+   change between slices.
+6. **IaC format: Terraform-first implementation, multi-format
+   architecture.** Recommendation payload carries an
+   `iac_format` field from day one. Proposer prompt accepts
+   `iac_format` as a parameter. Slice 1 fills Terraform only;
+   slice 7 adds CDK and Pulumi by template, not by rework.
+7. **Recommendation surface: shared between JARVIS and
+   discovery.** The v0.66 recommendations engine carries a
+   typed `Source` (`cost_spike` / `discovery_scan` / `manual`)
+   and a typed `Action` payload (`rollout` / `plan` /
+   `discovery_action`). Same UI, same audit, same Ask Squadron
+   citation.
+8. **Canonical demo scenario: `container.id` + `k8s.pod.uid`.**
+   The v0.79 prompt example, LinkedIn rollout doc table, bench
+   corpus, and playground starter all reference the same
+   scenario. No drift.
+9. **Multi-tenancy: held.** Single-tenant in OSS. Tenant
+   isolation arrives when the managed offering is real.
+10. **Connector workflows are foolproof or release-blocked.**
+    See the "Connector workflow design" section below — the
+    eleven principles are non-negotiable.
 
 This is the architecture document for Squadron's universal discovery
 arc. It exists so anyone reading the codebase, reviewing the security
@@ -348,47 +396,60 @@ AI tool with prod cloud keys" and gets blocked. With it, Squadron
 is "the recommendation engine that orchestrates with our existing
 infrastructure-as-code workflow" and gets approved.
 
-## The AWSDiscoveryContext shape
+## The CloudDiscoveryContext shape
 
 Mirrors `ai.CostSpikeContext`. The proposer pattern carries with
-minimal new code — same shape, new entry point.
+minimal new code — same shape, new entry point. Provider-typed
+at the top level; resources are category-typed underneath so the
+same prompt reasons about compute / function / database
+regardless of which cloud emitted them.
 
 ```go
-type AWSDiscoveryContext struct {
+type CloudDiscoveryContext struct {
     // Identification
     ScanID        string
     ScanStartedAt time.Time
-    AccountID     string  // AWS account being scanned
-    Region        string  // single region per scan in slice 1
+    Provider      Provider  // aws, gcp, azure, onprem
+    AccountID     string    // account (aws), project (gcp), subscription (azure), site (onprem)
+    Regions       []string  // multi-region native; slice 1 emits one entry
 
-    // Inventory snapshot
-    EC2Instances    []EC2InstanceSnapshot
-    LambdaFunctions []LambdaFunctionSnapshot
+    // Inventory snapshot — category-typed, not provider-typed
+    ComputeInstances []ComputeInstanceSnapshot   // ec2 / gce / azure vm / vmware vm
+    FunctionRuntimes []FunctionRuntimeSnapshot   // lambda / cloud functions / azure functions
+    Databases        []DatabaseSnapshot          // rds / cloud sql / azure sql  (slice 2+)
+    LoadBalancers    []LoadBalancerSnapshot      // alb / gclb / azure lb       (slice 2+)
+    ObjectStores     []ObjectStoreSnapshot       // s3 / gcs / blob             (slice 2+)
 
     // Coverage assessment
-    InstrumentedCount   int  // resources with OTel already
+    InstrumentedCount   int  // resources with OTel detected
     UninstrumentedCount int  // resources without
 
     // Customer context (helps the proposer reason)
-    PreferredBackend string  // "datadog" / "honeycomb" / "grafana" / "selfhosted"
-    PreferredRegion  string  // for collector colocation
+    PreferredBackend  string   // "datadog" / "honeycomb" / "grafana" / "selfhosted"
+    PreferredIaCFormat string  // "terraform" / "cdk" / "pulumi"  -- slice 1: terraform only
+    PreferredRegions  []string // for collector colocation
 }
 
-type EC2InstanceSnapshot struct {
-    InstanceID   string
-    InstanceType string
-    Tags         map[string]string
-    HasOTel      bool   // detected via tag heuristic
-    OSFamily     string // "linux" / "windows" / "unknown"
+type ComputeInstanceSnapshot struct {
+    ResourceID   string             // ec2 instance id / gce instance name / azure vm id
+    InstanceType string             // provider-specific shape, e.g. m5.large or n2-standard-4
+    Tags         map[string]string  // provider tags, normalized
+    HasOTel      bool               // detected via tag or process heuristic
+    OSFamily     string             // "linux" / "windows" / "unknown"
 }
 
-type LambdaFunctionSnapshot struct {
-    Arn          string
+type FunctionRuntimeSnapshot struct {
+    ResourceID   string  // arn (aws) / function id (gcp) / function name (azure)
     Name         string
-    Runtime      string
-    HasOTelLayer bool   // detected via layer ARN heuristic
+    Runtime      string  // "nodejs20" / "python3.11" / "go1.21" / etc.
+    HasOTelLayer bool    // provider-specific detection (aws layer, gcp lib, azure extension)
 }
 ```
+
+Provider-specific scanners populate the snapshot structs from their
+native APIs. The proposer prompt reasons about categories, not
+provider-specific resource types — same plan-kind output, IaC
+snippets targeted to the source provider.
 
 The proposer takes this and emits a `ProposalResult` with `Kind:
 "plan"` where each plan step is "instrument these N resources via
@@ -430,6 +491,146 @@ IaC snippet panels. Each recommendation step has:
 The recommendations tab reuses every UX pattern v0.84 proved out
 in the proposer playground. The operator's mental model is
 "this is the proposer, applied to my cloud account."
+
+## Connector workflow design
+
+The connector setup experience is the first ten minutes an SRE
+spends with Squadron. Get it wrong and the universal-observation
+thesis stalls at the front door — no amount of downstream feature
+quality recovers a bad first impression. Get it right and the
+LinkedIn drumbeat writes itself.
+
+**Load-bearing constraint:** every connector workflow is guided
+step-by-step with one action per step, copy-to-clipboard for every
+Squadron-generated value, real-time validation, a test-before-commit
+step, and humanized error messages naming recovery actions. If a
+user can misconfigure a connector by following the wizard, the
+wizard is broken — treat it as a release-blocking bug, not a polish
+issue.
+
+### The eleven principles
+
+1. **Guided multi-step wizard with explicit progress.** One action
+   per step. Visual progress bar. User always knows where they are.
+2. **Copy-to-clipboard for every Squadron-generated value.** Trust
+   policy JSON, ExternalId, role ARN format — all one-click.
+3. **Pre-filled values wherever possible.** The trust policy JSON
+   ships with the customer's AWS account ID and the deployment's
+   ExternalId already inserted. User pastes verbatim.
+4. **Inline deep-links to the exact provider console page.** Not
+   the IAM home — the role creation flow itself.
+5. **Real-time client-side validation.** Role ARN format, region
+   list, ExternalId length. Errors appear inline, not after submit.
+6. **Test-before-commit step.** A "Validate connection" button runs
+   `sts:AssumeRole` (or provider equivalent), returns the result,
+   creates no records. Save lands only after validation passes.
+7. **Decoded error messages with recovery guidance.** Parse every
+   provider error code. `AccessDenied` becomes "the role exists but
+   doesn't trust Squadron's principal; did you paste the trust
+   policy from Step 2?" Each error names the recoverable step.
+8. **Idempotent retry at any step.** Fix one field and retry — no
+   duplicate records, no orphaned half-configured connections.
+9. **"What just happened" confirmation panel.** Concrete evidence
+   on success: "Trust policy validated. EC2 test scan succeeded —
+   47 instances visible in us-east-1. Lambda test scan succeeded —
+   12 functions visible." Shareable with the security reviewer.
+10. **Inline "why this step?" docs panel.** Every step has a
+    collapsible explainer answering the question the SRE's security
+    reviewer will ask. The ExternalId step explains confused deputy
+    in three sentences.
+11. **Provider-specific wizard, shared component framework.** AWS,
+    GCP, Azure, on-prem each have their own step content; they all
+    use the same multi-step shell + copy helpers + deep-link helpers
+    + validation helpers + error-humanization layer.
+
+### Architecture
+
+Wizard definitions are declarative. Each provider exports a
+`ConnectorWizard` value:
+
+```go
+type ConnectorWizard struct {
+    Provider       Provider
+    Title          string
+    Steps          []WizardStep
+    ValidateFn     func(ctx context.Context, draft Draft) (*ValidationResult, error)
+    PersistFn      func(ctx context.Context, draft Draft) (*CloudConnection, error)
+}
+
+type WizardStep struct {
+    ID             string
+    Title          string
+    Description    string
+    Action         WizardAction // CopyValue / FillField / DeepLink / TestConnection
+    ActionPayload  any
+    Validation     ValidationRule
+    DocLink        string  // "why this step?"
+    RecoveryHint   string  // shown when a later step fails citing this one
+}
+```
+
+The UI consumes the declarative wizard via a single React component
+that handles steppers, copy buttons, deep-links, inline validation,
+the test-before-commit flow, and the "what just happened" panel.
+Adding a new provider is shipping a new `ConnectorWizard` value plus
+provider-specific code for `ValidateFn` and `PersistFn`. No new
+React components.
+
+### Validation endpoint
+
+The test-before-commit step calls a first-class API:
+
+```
+POST /api/v1/discovery/{provider}/validate
+{
+  "draft": { ...provider-specific fields... }
+}
+=>
+{
+  "assume_role_ok": true,
+  "scan_preflight": [
+    {"service": "ec2", "ok": true, "sample_count": 3},
+    {"service": "lambda", "ok": true, "sample_count": 1}
+  ],
+  "errors": []
+}
+```
+
+Zero records are created. The UI renders this response as the
+"what just happened" panel pre-commit, then prompts Save.
+
+### Error humanization layer
+
+Each provider implements `HumanizeError(error) HumanizedError`:
+
+```go
+type HumanizedError struct {
+    Code           string  // provider's raw code
+    Message        string  // human prose
+    SuggestedStep  string  // ID of the wizard step to return to
+    DocLink        string  // optional deeper context
+}
+```
+
+AWS errors live in `internal/discovery/aws/errors.go`. GCP in
+`internal/discovery/gcp/errors.go`. The UI renders the humanized
+error verbatim — no client-side error parsing.
+
+### Release-blocking criteria
+
+A connector ships only when:
+
+- A new operator who has never used Squadron can complete the
+  connect-account flow in under 5 minutes following the wizard
+  alone (no external docs needed).
+- Every distinct provider error code observed during testing has
+  a humanized message naming the recoverable step.
+- The "what just happened" panel renders concrete inventory
+  evidence the operator can show to their security reviewer.
+
+If any of these fails, the slice does not ship. Polish later is
+not an option — connector setup is the first impression, and first
+impressions don't get a v0.X.1 hotfix to fix them.
 
 ## Audit trail invariants
 
@@ -576,37 +777,66 @@ substrate, sub-agent).**
 - Spec: this design section "STS token lifecycle" +
   "Permissions policy (slice 1)"
 
+**Stream 2D — Connector wizard framework (post-2C validation
+endpoint, sub-agent).**
+- New package `internal/discovery/wizard` with the declarative
+  `ConnectorWizard` + `WizardStep` types
+- AWS `ConnectorWizard` value populated with the 5-step AWS flow
+  (Account ID → Trust policy → Role ARN → Validate → Save)
+- React component `<ConnectorWizard />` consuming any wizard
+- AWS `errors.go` with humanization for common assume-role errors
+- Tests: every wizard step has a unit test for its validation rule;
+  the React component has a Vitest test for the happy path and one
+  error-path scenario
+- Spec: this design section "Connector workflow design"
+
 **Stream 3 — Independent track (any time, sub-agents).**
 - LinkedIn Phase 1 drafting (docs only, no code)
+- LinkedIn Phase 1 posts 4-8 (Bench, Playground, Audit timeline,
+  Two-person rule, E2E sweep recap — agent surfaced these candidates)
 - #547 agent citations investigation
 - #554 server-side plans-list endpoint
+- Canonical demo scenario sync (update v0.79 prompt example,
+  rollout doc table, posts to use `container.id` / `k8s.pod.uid`)
 
 Stream 1 in the main session handles the work that stitches these
 together: the proposer prompt for discovery, the
-`AWSDiscoveryContext` definition, the `/discovery/aws` UI page, the
-audit-event wiring. These are decisions, not implementations, so
-they stay with the orchestrating session.
+`CloudDiscoveryContext` definition, the `/discovery/{provider}` UI
+page that hosts the wizard, the audit-event wiring. These are
+decisions, not implementations, so they stay with the orchestrating
+session.
 
 ## Constraints this design imposes
 
 Until this document is rewritten, the following are non-negotiable:
 
-- Squadron does not call cloud-mutating AWS APIs from any code
-  path. Cloud mutations route through customer IaC. Always.
+- Squadron does not call cloud-mutating APIs from any code path,
+  for any provider. Cloud mutations route through customer IaC.
+  Always.
 - The action runner system does not receive cloud credentials.
-  Ever.
+  Ever, for any provider.
 - The discovery role's permissions policy contains no
   `*:Update*`, `*:Modify*`, `*:Create*`, `*:Delete*`, `*:Put*`,
-  or `iam:*` actions.
-- The ExternalId condition on the trust policy is required.
-  Connections without ExternalId are rejected at connect time.
-- The credential substrate never stores AWS access keys or STS
-  tokens at rest. STS tokens are in-memory-only and dropped
-  after each scan.
+  or `iam:*` actions. Equivalent restrictions apply to GCP
+  (no `*.update`, `*.delete`, `*.create`) and Azure (no
+  write actions).
+- The ExternalId condition (or provider equivalent — GCP
+  workload identity audience, Azure principal scope) on the
+  trust relationship is required. Connections without it are
+  rejected at connect time.
+- The credential substrate never stores cloud access keys or
+  short-lived session tokens at rest. Sessions are in-memory-only
+  and dropped after each scan.
 - Discovery and (future) remediation code paths live in separate
-  packages with no shared imports.
+  packages with no shared imports, across every provider.
 - Every recommendation requires explicit operator approval before
-  being recorded as applied. No auto-apply path exists.
+  being recorded as applied. No auto-apply path exists, for any
+  provider.
+- **Connector workflows are foolproof or release-blocked.** A
+  slice does not ship if a new operator cannot complete the
+  connect-account flow in under 5 minutes following the wizard
+  alone. Connector setup is the first impression; first
+  impressions don't get hotfixes.
 
 When a feature proposal violates any of these, the proposal is
 either restructured to fit or explicitly rejected with a written
