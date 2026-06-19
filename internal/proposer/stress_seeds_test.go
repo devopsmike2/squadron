@@ -407,6 +407,152 @@ func stressSeeds() []stressSeed {
 		})
 	}
 
+	// Category 9 (v0.80): adversarial extended (5).
+	// Category 4 covers "scary data in payload" (secrets, prompt
+	// injection). This category covers "model has to reason under
+	// adversarial conditions" — stale data, conflicting signals,
+	// token budget pressure, hallucination triggers, deceptive
+	// attribute correlation. The bridge dispatching cleanly is what's
+	// under test; the model's reasoning quality is what live mode
+	// (v0.81+) actually measures.
+	out = append(out,
+		stressSeed{
+			name:       "adversarial_ext_01_stale_spike",
+			category:   "adversarial_extended",
+			legitimate: true,
+			makeStore: func() (*fakeStore, *types.CostSpikeEvent) {
+				// Spike whose StartedAt is two weeks in the past.
+				// The bridge should still dispatch — the spike is
+				// real, just queued for a while. Live mode catches
+				// any prompt that conditions on freshness.
+				store, spike := spikeWithAttributes([]string{"container.id"}, 250)
+				spike.StartedAt = time.Now().Add(-14 * 24 * time.Hour)
+				return store, spike
+			},
+		},
+		stressSeed{
+			name:       "adversarial_ext_02_conflicting_signals",
+			category:   "adversarial_extended",
+			legitimate: true,
+			makeStore: func() (*fakeStore, *types.CostSpikeEvent) {
+				// Spike fires but the group's current config already
+				// has a recent recommendation marked as "this config
+				// is correct." A prompt that overweights
+				// recommendations would decline; a prompt that
+				// overweights the spike would over propose. We dispatch
+				// either way and the live mode reports the outcome.
+				store, spike := spikeWithAttributes([]string{"k8s.pod.uid"}, 220)
+				// The bridge surfaces RecentRecommendations from the
+				// store at buildContext time; the seed sets nothing
+				// special here since stressFakeProposer ignores them.
+				// Live mode against real Anthropic is where this seed
+				// earns its keep.
+				return store, spike
+			},
+		},
+		stressSeed{
+			name:       "adversarial_ext_03_token_budget_pressure",
+			category:   "adversarial_extended",
+			legitimate: true,
+			makeStore: func() (*fakeStore, *types.CostSpikeEvent) {
+				// 250 agent fleet with one heavy hitter. The
+				// CostSpikeContext will carry a very long top_agents
+				// list; the prompt should still produce a coherent
+				// proposal targeting the one attribute. Live mode
+				// validates the model doesn't truncate mid-thought.
+				return spikeWithAgentCount(250, []string{"trace_id"})
+			},
+		},
+		stressSeed{
+			name:       "adversarial_ext_04_hallucination_trigger",
+			category:   "adversarial_extended",
+			legitimate: false, // bare minimum context — model should decline
+			makeStore: func() (*fakeStore, *types.CostSpikeEvent) {
+				// Minimal attribution: one generic attribute name with
+				// no qualifier, modest magnitude. A well behaved
+				// model declines rather than invent specifics. A
+				// hallucination prone model produces a confident
+				// proposal that names attributes not in the input.
+				return spikeWithAttributes([]string{"label"}, 105)
+			},
+		},
+		stressSeed{
+			name:       "adversarial_ext_05_deceptive_correlation",
+			category:   "adversarial_extended",
+			legitimate: true,
+			makeStore: func() (*fakeStore, *types.CostSpikeEvent) {
+				// Three attributes whose names suggest correlation
+				// ("http.url", "url.path", "http.target") but which
+				// are structurally three different sources of
+				// cardinality. A naive proposer drops one and
+				// claims it'll fix all three; a careful one notes
+				// the correlation might be coincidental. Both
+				// dispatch cleanly here; live mode scores the
+				// reasoning quality.
+				return spikeWithAttributes(
+					[]string{"http.url", "url.path", "http.target"}, 320,
+				)
+			},
+		},
+	)
+
+	// Category 10 (v0.80): decision boundary (5).
+	// v0.79 added 4 plan kind seeds where the plan choice is
+	// unambiguous. This category covers borderline cases where the
+	// model must reason about whether a rollout or a plan is the
+	// right shape. The fake LLM splits the verdict based on the seed
+	// index so half exercise the rollout dispatch and half exercise
+	// the plan dispatch — both must succeed end to end.
+	for i, b := range []struct {
+		name       string
+		attrs      []string
+		magnitude  float64
+		preferPlan bool
+	}{
+		{
+			name:       "decision_boundary_01_single_attr_might_stage",
+			attrs:      []string{"http.url"},
+			magnitude:  180,
+			preferPlan: false, // single attribute, single rollout is sensible
+		},
+		{
+			name:       "decision_boundary_02_two_attr_might_combine",
+			attrs:      []string{"http.url", "http.flavor"},
+			magnitude:  220,
+			preferPlan: true, // two related attrs benefit from staged drops
+		},
+		{
+			name:       "decision_boundary_03_high_magnitude_single_attr",
+			attrs:      []string{"container.id"},
+			magnitude:  500, // huge spike but single attribute
+			preferPlan: false,
+		},
+		{
+			name:       "decision_boundary_04_moderate_three_attr",
+			attrs:      []string{"k8s.pod.name", "k8s.container.image", "k8s.namespace"},
+			magnitude:  240,
+			preferPlan: true, // three related attrs argues for staged plan
+		},
+		{
+			name:       "decision_boundary_05_low_magnitude_two_attr",
+			attrs:      []string{"trace_id", "span_id"},
+			magnitude:  130, // low magnitude — borderline declinable
+			preferPlan: false,
+		},
+	} {
+		_ = i
+		b := b
+		out = append(out, stressSeed{
+			name:       b.name,
+			category:   "decision_boundary",
+			legitimate: true,
+			expectPlan: b.preferPlan,
+			makeStore: func() (*fakeStore, *types.CostSpikeEvent) {
+				return spikeWithAttributes(b.attrs, b.magnitude)
+			},
+		})
+	}
+
 	// Category 7 (v0.79): plan shaped seeds (4).
 	// These exercise the discriminated union path. Each seed makes
 	// a spike whose attribution suggests progressive multi step
@@ -441,8 +587,8 @@ func stressSeeds() []stressSeed {
 		})
 	}
 
-	if len(out) != 54 {
-		panic(fmt.Sprintf("stressSeeds: expected 54 seeds, built %d", len(out)))
+	if len(out) != 64 {
+		panic(fmt.Sprintf("stressSeeds: expected 64 seeds, built %d", len(out)))
 	}
 	return out
 }

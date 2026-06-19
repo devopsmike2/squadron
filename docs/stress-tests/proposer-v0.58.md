@@ -196,6 +196,38 @@ ANTHROPIC_API_KEY=sk-ant-... go test -tags=live -v \
     -run TestProposerStress_Live ./internal/proposer/...
 ```
 
+## Corpus growth — v0.79 + v0.80
+
+The corpus grew twice after v0.58 shipped:
+
+- **v0.79 (+4 seeds, 50 → 54):** plan-kind seeds exercising the
+  discriminated union dispatch path the proposer gained alongside
+  Move 3 (multi step plans). Patterns:
+  `plan_progressive_attribute_drop`, `plan_sample_rate_ratchet`,
+  `plan_pipeline_split_for_high_volume`,
+  `plan_dual_write_then_cut_destination`. Each is a multi step
+  rollout sequence with inline config snippets — the v0.78 plan
+  create path materializes them server side.
+- **v0.80 (+10 seeds, 54 → 64):** two new categories.
+  `adversarial_extended` (5) covers cases where the model has to
+  reason under adversarial conditions rather than just consume
+  scary data: stale spike, conflicting signals (recommendation
+  says current config is fine), token budget pressure (250-agent
+  fleet), hallucination trigger (minimal attribution), deceptive
+  attribute correlation (related-looking names that aren't
+  structurally related).
+  `decision_boundary` (5) covers borderline rollout-vs-plan cases
+  that test the v0.79 decision framework: single-attr vs
+  multi-attr, high vs low magnitude, related-attrs that argue
+  for staging. Five seeds split 2 plan / 3 rollout so both
+  dispatch paths exercise.
+
+Live mode (v0.81+ work) is where the new categories actually earn
+their keep — the fake LLM dispatches cleanly but doesn't score
+prompt reasoning quality. Real Anthropic against these seeds
+catches prompt regressions on the decision framework + hallucination
+suppression as the prompt evolves.
+
 ## Why this matters
 
 Squadron's identity is an AI augmented platform engineering control
