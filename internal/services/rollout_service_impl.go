@@ -187,8 +187,13 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		ProposedBy:        proposedBy,
 		ProposalReasoning: input.ProposalReasoning,
 		EvidenceRefs:      input.EvidenceRefs,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		// v0.69 multi step plan grouping. Round trips to storage; the
+		// engine does not yet sequence on these — see
+		// docs/multi-step-plans-design.md for the v0.70+ roadmap.
+		PlanID:        input.PlanID,
+		PlanStepIndex: input.PlanStepIndex,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if err := s.appStore.CreateRollout(ctx, toStorageRollout(rollout)); err != nil {
@@ -865,9 +870,12 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		EvidenceRefs:      toStorageEvidenceRefs(r.EvidenceRefs),
 		// v0.60 rollback chain.
 		RolledBackFromID: r.RolledBackFromID,
-		CreatedAt:        r.CreatedAt,
-		UpdatedAt:        r.UpdatedAt,
-		CompletedAt:      r.CompletedAt,
+		// v0.69 plan grouping.
+		PlanID:        r.PlanID,
+		PlanStepIndex: r.PlanStepIndex,
+		CreatedAt:     r.CreatedAt,
+		UpdatedAt:     r.UpdatedAt,
+		CompletedAt:   r.CompletedAt,
 	}
 }
 
@@ -952,8 +960,11 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		EvidenceRefs:      toServiceEvidenceRefs(r.EvidenceRefs),
 		// v0.60 rollback chain.
 		RolledBackFromID: r.RolledBackFromID,
-		CreatedAt:        r.CreatedAt,
-		UpdatedAt:        r.UpdatedAt,
-		CompletedAt:      r.CompletedAt,
+		// v0.69 plan grouping.
+		PlanID:        r.PlanID,
+		PlanStepIndex: r.PlanStepIndex,
+		CreatedAt:     r.CreatedAt,
+		UpdatedAt:     r.UpdatedAt,
+		CompletedAt:   r.CompletedAt,
 	}
 }

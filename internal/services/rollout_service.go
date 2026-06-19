@@ -212,6 +212,12 @@ type Rollout struct {
 	// two rollouts together.
 	RolledBackFromID string `json:"rolled_back_from_id,omitempty"`
 
+	// v0.69 — multi step plan grouping. Mirrors types.Rollout's
+	// PlanID + PlanStepIndex. See docs/multi-step-plans-design.md
+	// for the protocol. Empty PlanID is a standalone rollout.
+	PlanID        string `json:"plan_id,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -270,6 +276,15 @@ type RolloutInput struct {
 	ProposedBy        string        `json:"proposed_by,omitempty"`
 	ProposalReasoning string        `json:"proposal_reasoning,omitempty"`
 	EvidenceRefs      []EvidenceRef `json:"evidence_refs,omitempty"`
+
+	// v0.69 — multi step plan grouping. When the proposer creates a
+	// plan, every step shares the same PlanID and each step gets a
+	// distinct PlanStepIndex. The engine sequencing that uses these
+	// fields lands in v0.70+; for now Create just round trips them
+	// to storage so the contract is stable. See
+	// docs/multi-step-plans-design.md.
+	PlanID        string `json:"plan_id,omitempty"`
+	PlanStepIndex int    `json:"plan_step_index,omitempty"`
 }
 
 // RolloutFilter narrows List queries.
