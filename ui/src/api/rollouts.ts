@@ -4,6 +4,7 @@ import { simpleRequest } from "./base";
 
 import type {
   AbortCriteriaRecipe,
+  Plan,
   Rollout,
   RolloutInput,
   RolloutPreview,
@@ -63,6 +64,59 @@ export const getRolloutPreview = async (
 export const listRollouts = async (): Promise<Rollout[]> => {
   const resp = await simpleRequest<ListResponse>("/rollouts");
   return resp.rollouts ?? [];
+};
+
+// v0.74 — narrow the rollouts list to one plan. Returns both
+// forward and rollback steps that share the plan id.
+export const listRolloutsByPlan = async (
+  planID: string,
+): Promise<Rollout[]> => {
+  const resp = await simpleRequest<ListResponse>(
+    `/rollouts?plan_id=${encodeURIComponent(planID)}`,
+  );
+  return resp.rollouts ?? [];
+};
+
+// v0.74 — fetch the plan envelope: shared metadata + ordered
+// forward steps + rollback steps + derived state. Returns null
+// on 404 so callers can render a not-found message cleanly
+// instead of throwing.
+export const getPlan = async (planID: string): Promise<Plan | null> => {
+  try {
+    return await simpleRequest<Plan>(
+      `/rollouts/plans/${encodeURIComponent(planID)}`,
+    );
+  } catch (err) {
+    // simpleRequest throws Error with a message containing the
+    // status code. 404 maps to null so the caller can render a
+    // dedicated empty state.
+    if (err instanceof Error && err.message.includes("404")) {
+      return null;
+    }
+    throw err;
+  }
+};
+
+// v0.73 — create a plan from N rollout inputs. The first step's
+// require_approval flag is honored as the plan's approval gate;
+// steps 1..N are forced to false server side.
+export interface CreatePlanRequest {
+  steps: RolloutInput[];
+}
+
+export interface CreatePlanResponse {
+  plan_id: string;
+  steps: Rollout[];
+  count: number;
+}
+
+export const createPlan = async (
+  req: CreatePlanRequest,
+): Promise<CreatePlanResponse> => {
+  return simpleRequest<CreatePlanResponse>("/rollouts/plans", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 };
 
 export const getRollout = async (id: string): Promise<Rollout> => {
