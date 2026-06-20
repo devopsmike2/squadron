@@ -15,8 +15,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -64,6 +66,49 @@ type RDSClient interface {
 	DescribeDBInstances(ctx context.Context, params *rds.DescribeDBInstancesInput, optFns ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error)
 }
 
+// S3Client is the narrow S3 surface the scanner depends on. Slice 3a
+// (v0.88.0) of the universal-observation arc walks the per-bucket
+// observability state with five low-cost reads:
+//   - ListBuckets returns the account's buckets (single call, no
+//     pagination — S3 is global, region per bucket is resolved via
+//     GetBucketLocation)
+//   - GetBucketLocation returns the bucket's home region so the
+//     scanner can filter to the connection's region list
+//   - GetBucketLogging returns the server access logging
+//     configuration — the slice 3a single-axis instrumented rule
+//   - GetBucketTagging returns per-bucket tags (handles NoSuchTagSet
+//     in the scanner mapper)
+//   - GetBucketRequestPayment returns the request-payer
+//     configuration; combined with the logging config it's the
+//     informational signal RequestMetricsEnabled keys off
+//
+// Same narrow-interface rationale as EC2Client: each method is what
+// the scanner actually calls, nothing else.
+type S3Client interface {
+	ListBuckets(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
+	GetBucketLocation(ctx context.Context, params *s3.GetBucketLocationInput, optFns ...func(*s3.Options)) (*s3.GetBucketLocationOutput, error)
+	GetBucketLogging(ctx context.Context, params *s3.GetBucketLoggingInput, optFns ...func(*s3.Options)) (*s3.GetBucketLoggingOutput, error)
+	GetBucketTagging(ctx context.Context, params *s3.GetBucketTaggingInput, optFns ...func(*s3.Options)) (*s3.GetBucketTaggingOutput, error)
+}
+
+// ELBv2Client is the narrow Elastic Load Balancing v2 surface the
+// scanner depends on. Slice 3a (v0.88.0) walks per-region ALBs /
+// NLBs with three reads:
+//   - DescribeLoadBalancers returns the inventory (paginated via
+//     Marker / NextMarker, mirroring RDS)
+//   - DescribeLoadBalancerAttributes returns the access-logs
+//     configuration (access_logs.s3.enabled + access_logs.s3.bucket)
+//   - DescribeTags returns per-load-balancer tags in a single
+//     batch call (up to 20 ARNs per call; the scanner batches
+//     accordingly)
+//
+// Same narrow-interface rationale as the other service clients.
+type ELBv2Client interface {
+	DescribeLoadBalancers(ctx context.Context, params *elasticloadbalancingv2.DescribeLoadBalancersInput, optFns ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error)
+	DescribeLoadBalancerAttributes(ctx context.Context, params *elasticloadbalancingv2.DescribeLoadBalancerAttributesInput, optFns ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancerAttributesOutput, error)
+	DescribeTags(ctx context.Context, params *elasticloadbalancingv2.DescribeTagsInput, optFns ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeTagsOutput, error)
+}
+
 // STSClient is the narrow STS surface used by Validate to confirm the
 // AssumeRole chain is functional. The real *sts.Client satisfies it.
 type STSClient interface {
@@ -96,6 +141,23 @@ type ClientFactory interface {
 	// RDS returns an RDS client for the supplied region. Added in
 	// slice 2 of the universal-observation arc.
 	RDS(ctx context.Context, region string) (RDSClient, error)
+
+	// S3 returns an S3 client for the supplied region. Added in
+	// slice 3a of the universal-observation arc (v0.88.0).
+	//
+	// S3 is technically a global service for ListBuckets — the
+	// region argument here pins the SDK client's signing region,
+	// not the buckets it can see. The scanner resolves each
+	// bucket's actual home region via GetBucketLocation and filters
+	// to the connection's region list at the mapper layer.
+	S3(ctx context.Context, region string) (S3Client, error)
+
+	// ELBv2 returns an Elastic Load Balancing v2 (ALB/NLB/GWLB)
+	// client for the supplied region. Added in slice 3a of the
+	// universal-observation arc (v0.88.0). Unlike S3, ELBv2 is a
+	// per-region API — the supplied region is where
+	// DescribeLoadBalancers walks.
+	ELBv2(ctx context.Context, region string) (ELBv2Client, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -217,6 +279,20 @@ func (f *sdkClientFactory) Lambda(_ context.Context, region string) (LambdaClien
 
 func (f *sdkClientFactory) RDS(_ context.Context, region string) (RDSClient, error) {
 	return rds.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) S3(_ context.Context, region string) (S3Client, error) {
+	return s3.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) ELBv2(_ context.Context, region string) (ELBv2Client, error) {
+	return elasticloadbalancingv2.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil

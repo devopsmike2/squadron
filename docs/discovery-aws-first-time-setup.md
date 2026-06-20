@@ -26,10 +26,10 @@ Three IAM objects in your AWS account:
    has one permission and one only: call `sts:AssumeRole` against the
    discovery role below.
 2. **A discovery IAM role (`SquadronDiscovery`)** that holds the
-   read-only EC2 + Lambda + RDS describe permissions Squadron's
-   scanner actually exercises. The trust policy on this role allows
-   `squadron-bot` to assume it (gated by an `sts:ExternalId`
-   condition).
+   read-only EC2 + Lambda + RDS + S3 + ELBv2 (ALB / NLB) describe
+   permissions Squadron's scanner actually exercises. The trust
+   policy on this role allows `squadron-bot` to assume it (gated by
+   an `sts:ExternalId` condition).
 3. **An inline `AssumeSquadronDiscovery` policy** on the
    `squadron-bot` user that authorizes the assume-role call. Scoped
    to the discovery role's ARN — not a wildcard.
@@ -150,7 +150,8 @@ Click **Next**.
 - Role name: `SquadronDiscovery` (exact case — Squadron's audit
   events expect this string)
 - Description: anything memorable, e.g. "Read-only discovery role
-  for Squadron. Assumed by squadron-bot. Slice 1+2 EC2/Lambda/RDS."
+  for Squadron. Assumed by squadron-bot. Slice 1+2+3a
+  EC2/Lambda/RDS/S3/ALB."
 
 Click **Create role**.
 
@@ -164,7 +165,7 @@ permissions** → **Create inline policy**. Switch to the JSON editor
 and paste the policy from the Squadron wizard's step 3 (the new
 permissions-policy step added in v0.87.1).
 
-For reference, the v0.87.1 wizard's permissions policy is:
+For reference, the v0.88.0 wizard's permissions policy is:
 
 ```json
 {
@@ -181,7 +182,15 @@ For reference, the v0.87.1 wizard's permissions policy is:
         "lambda:GetFunction",
         "lambda:GetFunctionConfiguration",
         "lambda:ListTags",
-        "rds:DescribeDBInstances"
+        "rds:DescribeDBInstances",
+        "s3:ListAllMyBuckets",
+        "s3:GetBucketLocation",
+        "s3:GetBucketLogging",
+        "s3:GetBucketTagging",
+        "s3:GetBucketRequestPayment",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeTags"
       ],
       "Resource": "*"
     }
@@ -189,8 +198,9 @@ For reference, the v0.87.1 wizard's permissions policy is:
 }
 ```
 
-Click **Next**. Policy name: `SquadronDiscoveryReadOnly`. Click
-**Create policy**.
+17 actions total: 4 EC2 + 4 Lambda + 1 RDS + 5 S3 + 3 ELBv2. All
+Describe/List/Get; no write actions. Click **Next**. Policy name:
+`SquadronDiscoveryReadOnly`. Click **Create policy**.
 
 The role is now ready.
 
@@ -297,13 +307,18 @@ Return to the Squadron wizard tab. Click through:
   `arn:aws:iam::<ACCOUNT_ID>:role/SquadronDiscovery`. Next.
 - Step 5 (validate) — click **Validate connection**.
 
-The "What just happened" panel should show four green checks:
+The "What just happened" panel should show six green checks:
 
 - ✓ `sts:AssumeRole`
 - ✓ `ec2 probe` (with a sample count — 0 if you have no EC2
   instances yet)
 - ✓ `lambda probe`
 - ✓ `rds probe`
+- ✓ `s3 probe` (slice 3a, v0.88.0 — single `s3:ListAllMyBuckets`
+  call)
+- ✓ `alb probe` (slice 3a, v0.88.0 — single
+  `elasticloadbalancing:DescribeLoadBalancers` call with
+  PageSize=1)
 
 If any check fails, the panel renders a humanized error with a
 `SuggestedStep` jump-back button — click it, fix the IAM
@@ -317,9 +332,10 @@ Common failure modes:
 - **`sts:AssumeRole` fails with "Invalid ExternalId"** — the trust
   policy on `SquadronDiscovery` references a different ExternalId
   than the wizard's current state. Update one to match the other.
-- **`ec2 probe` / `lambda probe` / `rds probe` fails with
-  AccessDenied** — the `SquadronDiscoveryReadOnly` inline policy on
-  the role is missing or scoped wrong. Re-check step 3d above.
+- **`ec2 probe` / `lambda probe` / `rds probe` / `s3 probe` /
+  `alb probe` fails with AccessDenied** — the
+  `SquadronDiscoveryReadOnly` inline policy on the role is missing
+  or scoped wrong. Re-check step 3d above.
 - **`sts:AssumeRole` hangs for 30+ seconds then fails with "no
   credentials"** — Squadron didn't see `~/.aws/credentials`. Check
   that `AWS_PROFILE=squadron-bot` is in the process environment
@@ -344,15 +360,16 @@ accounts" list on `/discovery/aws`.
 ## Step 10 — Trigger your first scan
 
 The Inventory tab on `/discovery/aws` triggers a scan against the
-connection. If your account has EC2 / Lambda / RDS resources, they
-populate the Compute / Functions / Databases sections. The
-Recommendations tab populates from the proposer's analysis of the
-inventory.
+connection. If your account has EC2 / Lambda / RDS / S3 / ALB
+resources, they populate the Compute / Functions / Databases /
+Object stores / Load balancers sections. The Recommendations tab
+populates from the proposer's analysis of the inventory.
 
-If your account is empty (fresh test account), all three sections
+If your account is empty (fresh test account), all five sections
 will show "no resources found" — that's expected and confirms the
 scanner walked the API successfully with no items to return. Spin
-up a free-tier t2.micro EC2 instance to see the inventory populate.
+up a free-tier t2.micro EC2 instance — or an empty S3 bucket — to
+see the inventory populate.
 
 ## Rotation and cleanup
 
@@ -378,10 +395,11 @@ If you want to rotate the key without re-walking the whole flow:
 ## What this does NOT cover
 
 The IAM permissions Squadron asks for cover slice 1 (EC2 + Lambda,
-v0.85.0) and slice 2 (+ RDS, v0.87.0). Future slices will request
-additional read-only permissions for S3, ALB, EKS, ECS, and so on
-— each will add a copy_value step to the wizard mirroring the
-permissions-policy step covered above.
+v0.85.0), slice 2 (+ RDS, v0.87.0), and slice 3a (+ S3 + ALB,
+v0.88.0). Slice 3b (+ EKS, v0.89.0) is the next planned addition;
+ECS / Fargate is parked for a later slice. Each future slice
+expands the permissions-policy template in the same place — the
+policy you copied in step 3d.
 
 The role does **not** include any write or modify permission. The
 proposer surfaces recommendations as Terraform snippets or plan

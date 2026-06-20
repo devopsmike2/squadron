@@ -85,8 +85,14 @@ so scope creep is visible and refusable.
 **Explicitly out of scope for slice 1:**
 - Multi-account connections (single account at MVP; slice 3)
 - Multi-region per scan (single region at MVP; slice 3)
-- Other AWS service types — RDS (slice 2, shipped v0.87), S3 / ALB
-  (slice 3, planned v0.88), ECS (later slice)
+- Other AWS service types — RDS (slice 2, shipped v0.87), S3 + ALB
+  (slice 3a, shipped v0.88.0 — paired because ALB access logs target
+  S3 buckets, so the proposer's cross-reference value of recommending
+  an ALB enable logs to a bucket Squadron already sees in the
+  inventory justified the paired ship), EKS (slice 3b, planned
+  v0.89.0 — ships standalone because of the cluster-shape snapshot,
+  the composite instrumented rule, and the dedicated LinkedIn
+  narrative beat), ECS / Fargate (later slice, parked)
 - GCP, Azure, on-prem (slice 4, 5, 6)
 - Multi-format IaC — CDK, Pulumi, CloudFormation (slice 7)
 - Remediation posture — anything where Squadron has write permissions
@@ -164,11 +170,13 @@ role if they discovered the role ARN. The `ExternalId` is the
 shared secret that proves the assume-role request originated from
 the specific Squadron deployment the customer authorized.
 
-### Permissions policy (slice 1 + slice 2)
+### Permissions policy (slice 1 + slice 2 + slice 3a)
 
 The role's permissions policy is strictly read-only. Slice 1 covered
-EC2 + Lambda; slice 2 (v0.87) adds RDS as the third service Squadron
-walks. The slice 2 policy:
+EC2 + Lambda (9 actions); slice 2 (v0.87) added RDS as the third
+service Squadron walks (1 action); slice 3a (v0.88.0) adds S3 (5
+actions) and ELBv2 / ALB / NLB (3 actions), bringing the total to
+17 read-only actions. The slice 3a policy:
 
 ```json
 {
@@ -185,7 +193,15 @@ walks. The slice 2 policy:
         "lambda:GetFunction",
         "lambda:GetFunctionConfiguration",
         "lambda:ListTags",
-        "rds:DescribeDBInstances"
+        "rds:DescribeDBInstances",
+        "s3:ListAllMyBuckets",
+        "s3:GetBucketLocation",
+        "s3:GetBucketLogging",
+        "s3:GetBucketTagging",
+        "s3:GetBucketRequestPayment",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeTags"
       ],
       "Resource": "*"
     }
@@ -209,7 +225,43 @@ Terraform through their own IaC pipeline. The discovery role's
 permissions policy never grants `rds:ModifyDBInstance` — the
 read-only invariant holds.
 
-When slice 3 adds S3 / ALB, this policy expands by additional
+Slice 3a's S3 actions return per-bucket Server Access Logging state
+(`s3:GetBucketLogging`), per-bucket tags (`s3:GetBucketTagging`),
+per-bucket region (`s3:GetBucketLocation`), and request-payer
+configuration (`s3:GetBucketRequestPayment`). `s3:ListAllMyBuckets`
+returns BUCKET NAMES (metadata, not contents). No action in the
+slice 3a policy returns object data, object metadata, ACL entries,
+or any data inside a bucket. The proposer surfaces enablement
+recommendations as plan steps — Terraform that calls
+`aws_s3_bucket_logging.target_bucket` / `target_prefix` with an
+operator-chosen bucket. **Squadron does NOT execute
+`s3:PutBucketLogging`**.
+
+Slice 3a's ELBv2 actions return per-LB type / scheme
+(`elasticloadbalancing:DescribeLoadBalancers`), per-LB access-logs
+attribute (`elasticloadbalancing:DescribeLoadBalancerAttributes`),
+and per-LB tags (`elasticloadbalancing:DescribeTags`). The
+`access_logs.s3.bucket` attribute is operator-chosen CONFIG, not
+the log contents — Squadron never reads the actual access-log
+files. The proposer surfaces enablement recommendations as plan
+steps — Terraform that calls `aws_lb.access_logs.bucket` /
+`enabled = true` with an operator-chosen target bucket (preferring
+an existing instrumented bucket from the same scan when possible,
+per the ALB→S3 cross-reference rule documented in the proposer
+prompt). **Squadron does NOT execute
+`elasticloadbalancing:ModifyLoadBalancerAttributes`**.
+
+Squadron's discovery code path explicitly never calls any of
+the following AWS write APIs:
+
+- `rds:ModifyDBInstance`
+- `s3:PutBucketLogging`
+- `elasticloadbalancing:ModifyLoadBalancerAttributes`
+- `ec2:RunInstances` / `ec2:Terminate*` / `ec2:Modify*`
+- `lambda:UpdateFunctionConfiguration` / `lambda:Update*`
+- any `iam:*` action
+
+When slice 3b adds EKS, this policy expands by additional
 Describe/List/Get actions only. The "no write actions" invariant
 holds across every slice. If a future slice ever needs write
 actions, that's a fundamentally different posture (the remediation
@@ -287,14 +339,15 @@ What's the blast radius at each posture? This section is the
 honest answer to the security review question "what happens if
 Squadron is compromised."
 
-### Posture: Discovery role only (slice 1 + slice 2)
+### Posture: Discovery role only (slice 1 + slice 2 + slice 3a)
 
 If an attacker compromises a Squadron deployment and the only IAM
 role connected is the discovery role:
 
 **The attacker can:**
-- Enumerate EC2 instances, Lambda functions, and RDS DB instances
-  in the connected region of the connected account
+- Enumerate EC2 instances, Lambda functions, RDS DB instances, S3
+  buckets, and ALB / NLB / GWLB load balancers in the connected
+  region(s) of the connected account
 - Read instance metadata, security group references, tags
 - Read Lambda function configuration including environment variable
   KEYS (not values — `lambda:GetFunctionConfiguration` returns
@@ -303,12 +356,28 @@ role connected is the discovery role:
   Performance Insights / Enhanced Monitoring enablement flags, tags.
   `rds:DescribeDBInstances` does NOT return endpoint credentials,
   master passwords, or any data inside the database.
+- Read S3 bucket NAMES (`s3:ListAllMyBuckets`), per-bucket region
+  (`s3:GetBucketLocation`), per-bucket Server Access Logging
+  CONFIGURATION (`s3:GetBucketLogging` returns the logging target
+  bucket and prefix, NOT the log contents), per-bucket tags
+  (`s3:GetBucketTagging`), and per-bucket request-payer
+  configuration (`s3:GetBucketRequestPayment`). The slice 3a S3
+  permissions never return object data, object metadata, ACL
+  entries, or any data inside a bucket.
+- Read load balancer metadata (name, ARN, type, scheme, region —
+  `elasticloadbalancing:DescribeLoadBalancers`), per-LB attributes
+  including the access-logs configuration
+  (`elasticloadbalancing:DescribeLoadBalancerAttributes` returns
+  the operator-chosen target S3 bucket for the access logs — this
+  is CONFIG, not the log contents themselves), and per-LB tags
+  (`elasticloadbalancing:DescribeTags`).
 
 **The attacker cannot:**
 - Modify anything in the customer's AWS account (no
-  `rds:ModifyDBInstance`, no `ec2:RunInstances`, no
-  `lambda:UpdateFunctionConfiguration` — the policy is strictly
-  Describe/List/Get)
+  `rds:ModifyDBInstance`, no `s3:PutBucketLogging`, no
+  `elasticloadbalancing:ModifyLoadBalancerAttributes`, no
+  `ec2:RunInstances`, no `lambda:UpdateFunctionConfiguration` —
+  the policy is strictly Describe/List/Get)
 - Read EC2 instance memory, disk, or network traffic
 - Read Lambda function code (would require `lambda:GetFunction` to
   fetch the deployment package — included in slice 1 because the

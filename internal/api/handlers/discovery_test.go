@@ -989,13 +989,20 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 		t.Errorf("entry[1].target_id = %q", completed.TargetID)
 	}
 	// scan_completed payload carries the slice-1 counts the design
-	// doc's audit-invariants section names.
+	// doc's audit-invariants section names. Slice 2 added
+	// database_count; slice 3a (v0.88.0) added object_store_count +
+	// load_balancer_count. All count fields are mandatory and
+	// always present on the wire — they do NOT drop out via
+	// omitempty even when the inventory is empty.
 	payloadJSON, _ := json.Marshal(completed.Payload)
 	for _, want := range []string{
 		"account_id",
 		"scan_id",
 		"compute_count",
 		"function_count",
+		"database_count",
+		"object_store_count",
+		"load_balancer_count",
 		"instrumented_count",
 		"uninstrumented_count",
 		"partial",
@@ -1003,6 +1010,218 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 		if !strings.Contains(string(payloadJSON), want) {
 			t.Errorf("scan_completed payload missing %q: %s", want, payloadJSON)
 		}
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsObjectStoreAndLoadBalancerCounts
+// pins the slice 3a (v0.88.0) audit-shape extension — the
+// scan_completed event payload now carries object_store_count and
+// load_balancer_count as MANDATORY fields. They always emit (even
+// when the corresponding inventory is empty) so an operator
+// skimming the audit log sees the slice 3a categories' coverage in
+// the same place as compute/function/database counts.
+//
+// Regression discipline: if a future refactor moves these into the
+// conditional-insert path (partial_reason / failed_services
+// style), the audit log loses operator-visible counts for empty
+// inventories.
+func TestHandleAWSRunScan_AuditEmitsObjectStoreAndLoadBalancerCounts(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	// One S3 bucket + two ALBs in the inventory so the counts are
+	// distinguishable from zero. The instrumentation flags don't
+	// matter for this test — the assertion is on the count keys,
+	// not on coverage tallies.
+	scanResult := &scanner.Result{
+		ScanID:          "test-scan-s3-alb-counts",
+		ScanStartedAt:   now,
+		ScanCompletedAt: now.Add(2 * time.Second),
+		Provider:        credstore.ProviderAWS,
+		AccountID:       "123456789012",
+		Regions:         []string{"us-east-1"},
+		ObjectStores: []scanner.ObjectStoreSnapshot{
+			{ResourceID: "prod-logs", Region: "us-east-1", ServerAccessLoggingEnabled: true},
+		},
+		LoadBalancers: []scanner.LoadBalancerSnapshot{
+			{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/a/x", Name: "a", Type: "application", Scheme: "internet-facing", AccessLogsEnabled: true, AccessLogsS3Bucket: "prod-logs", Region: "us-east-1"},
+			{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/b/y", Name: "b", Type: "application", Scheme: "internal", AccessLogsEnabled: false, Region: "us-east-1"},
+		},
+		InstrumentedCount:   2,
+		UninstrumentedCount: 1,
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	if got := len(audit.entries); got != 2 {
+		t.Fatalf("audit entries = %d, want 2", got)
+	}
+	completed := audit.entries[1]
+	if completed.EventType != "discovery.aws.scan_completed" {
+		t.Fatalf("entry[1].event_type = %q", completed.EventType)
+	}
+
+	// Both new count keys are present and carry the expected
+	// values. payload is map[string]any; the values are typed int.
+	gotObj, ok := completed.Payload["object_store_count"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing object_store_count key: %+v", completed.Payload)
+	}
+	if got, _ := gotObj.(int); got != 1 {
+		t.Errorf("object_store_count = %v, want 1", gotObj)
+	}
+	gotLB, ok := completed.Payload["load_balancer_count"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing load_balancer_count key: %+v", completed.Payload)
+	}
+	if got, _ := gotLB.(int); got != 2 {
+		t.Errorf("load_balancer_count = %v, want 2", gotLB)
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_S3
+// is the slice 3a (v0.88.0) S3 failure parallel to the v0.87.3 RDS
+// audit emission test. When the s3 walk fails, FailedServices
+// carries ["s3"] and PartialReason carries the formatted
+// explanation — same shape audit consumers pattern-match against.
+func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_S3(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	scanResult := &scanner.Result{
+		ScanID:              "test-scan-partial-s3",
+		ScanStartedAt:       now,
+		ScanCompletedAt:     now.Add(2 * time.Second),
+		Provider:            credstore.ProviderAWS,
+		AccountID:           "123456789012",
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   0,
+		UninstrumentedCount: 0,
+		Partial:             true,
+		PartialReason:       "s3 scan failed in us-east-1: AccessDenied",
+		FailedServices:      []string{"s3"},
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	completed := audit.entries[1]
+	gotReason, ok := completed.Payload["partial_reason"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing partial_reason key: %+v", completed.Payload)
+	}
+	if got, want := gotReason, "s3 scan failed in us-east-1: AccessDenied"; got != want {
+		t.Errorf("partial_reason = %v, want %q", got, want)
+	}
+	gotServices, ok := completed.Payload["failed_services"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing failed_services key: %+v", completed.Payload)
+	}
+	gotSlice, ok := gotServices.([]string)
+	if !ok {
+		t.Fatalf("failed_services = %T (%v), want []string", gotServices, gotServices)
+	}
+	if len(gotSlice) != 1 || gotSlice[0] != "s3" {
+		t.Errorf("failed_services = %v, want [\"s3\"]", gotSlice)
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_ALB
+// is the slice 3a (v0.88.0) ALB failure parallel. Same shape as
+// the s3 + rds parallels above.
+func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_ALB(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	scanResult := &scanner.Result{
+		ScanID:              "test-scan-partial-alb",
+		ScanStartedAt:       now,
+		ScanCompletedAt:     now.Add(2 * time.Second),
+		Provider:            credstore.ProviderAWS,
+		AccountID:           "123456789012",
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   0,
+		UninstrumentedCount: 0,
+		Partial:             true,
+		PartialReason:       "alb scan failed in us-east-1: AccessDenied",
+		FailedServices:      []string{"alb"},
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	completed := audit.entries[1]
+	gotServices, ok := completed.Payload["failed_services"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing failed_services key: %+v", completed.Payload)
+	}
+	gotSlice, ok := gotServices.([]string)
+	if !ok {
+		t.Fatalf("failed_services = %T (%v), want []string", gotServices, gotServices)
+	}
+	if len(gotSlice) != 1 || gotSlice[0] != "alb" {
+		t.Errorf("failed_services = %v, want [\"alb\"]", gotSlice)
 	}
 }
 

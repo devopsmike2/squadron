@@ -165,6 +165,43 @@ export interface DatabaseInstanceSnapshot {
   tags: Record<string, string>;
 }
 
+// ObjectStoreSnapshot mirrors scanner.ObjectStoreSnapshot. Slice 3a
+// (v0.88.0) — S3 observability is a single-axis rule:
+// `server_access_logging_enabled` is the only field that gates the
+// instrumented-count tally. `request_metrics_enabled` is
+// informational only — surfaced as an additional badge column so the
+// operator sees per-bucket request-rate observability state, but it
+// does NOT participate in the rule. The proposer prompt only emits
+// enablement recommendations for the logging lever.
+export interface ObjectStoreSnapshot {
+  resource_id: string;
+  region: string;
+  server_access_logging_enabled: boolean;
+  request_metrics_enabled: boolean;
+  tags: Record<string, string>;
+}
+
+// LoadBalancerSnapshot mirrors scanner.LoadBalancerSnapshot. Slice 3a
+// (v0.88.0) — ALB / NLB / GWLB observability is a single-axis rule
+// on `access_logs_enabled`. `access_logs_s3_bucket` is the
+// operator-chosen target the proposer cross-references against the
+// scan's `object_stores` list — recommendations prefer naming an
+// existing bucket Squadron already sees. The Inventory tab renders
+// the target bucket inline with the badge so the relationship is
+// visible at a glance.
+export interface LoadBalancerSnapshot {
+  resource_id: string;
+  name: string;
+  // type: one of "application" | "network" | "gateway" on AWS.
+  type: string;
+  // scheme: one of "internet-facing" | "internal" on AWS.
+  scheme: string;
+  access_logs_enabled: boolean;
+  access_logs_s3_bucket?: string;
+  region: string;
+  tags: Record<string, string>;
+}
+
 // ScanResult is the typed payload the scan endpoint returns. Mirrors
 // scanner.Result via the marshalScanResult wire shape on the Go side.
 // scan_started_at / scan_completed_at are ISO-8601 strings; partial
@@ -183,6 +220,12 @@ export interface ScanResult {
   // on the wire (the Go handler always emits an array, never null) so
   // the UI's empty-state branch is a single `.length === 0` check.
   databases: DatabaseInstanceSnapshot[];
+  // object_stores and load_balancers join the wire shape in slice 3a
+  // (v0.88.0). Same non-optional posture — Go handler always emits
+  // arrays, the UI's empty-state branch is a single `.length === 0`
+  // check.
+  object_stores: ObjectStoreSnapshot[];
+  load_balancers: LoadBalancerSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

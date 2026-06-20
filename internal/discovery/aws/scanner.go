@@ -12,8 +12,12 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithy "github.com/aws/smithy-go"
 	"github.com/google/uuid"
@@ -28,6 +32,13 @@ import (
 // strictly read-only (rds:DescribeDBInstances). RDS recommendations
 // are emitted as plan steps the operator runs via their own
 // ModifyDBInstance tooling; Squadron does NOT issue the modify call.
+//
+// Slice 3a (v0.88.0) adds S3 (Server Access Logging detection,
+// single-axis instrumented rule) and ALB / NLB / Gateway LB (Access
+// Logs detection, single-axis rule with an operator-visible
+// cross-reference to the scan's S3 inventory). Same strictly-read-only
+// posture: Squadron NEVER executes s3:PutBucketLogging or
+// elasticloadbalancing:ModifyLoadBalancerAttributes.
 //
 // Construct via NewScannerForValidation when serving the connector
 // wizard's validate endpoint (the connection has not yet been
@@ -173,6 +184,17 @@ func (s *Scanner) Validate(ctx context.Context, conn *credstore.CloudConnection)
 	if check := s.preflightRDS(ctx, factory, primaryRegion); check != nil {
 		result.Preflight = append(result.Preflight, *check)
 	}
+	// Slice 3a (v0.88.0) — S3 and ALB join the preflight battery.
+	// Each runs a single low-cost API call (ListBuckets is a single
+	// call for the whole account; DescribeLoadBalancers with
+	// PageSize=1 keeps the probe within the design doc's
+	// "permissions probe, not inventory walk" contract).
+	if check := s.preflightS3(ctx, factory, primaryRegion); check != nil {
+		result.Preflight = append(result.Preflight, *check)
+	}
+	if check := s.preflightALB(ctx, factory, primaryRegion); check != nil {
+		result.Preflight = append(result.Preflight, *check)
+	}
 
 	return result, nil
 }
@@ -255,6 +277,63 @@ func (s *Scanner) preflightRDS(ctx context.Context, factory ClientFactory, regio
 	return &scanner.PreflightCheck{Service: "rds", OK: true, SampleCount: sample}
 }
 
+// preflightS3 runs a single ListBuckets call against the supplied
+// region. S3's ListBuckets is global — the region argument only
+// pins the SDK client's signing region — but the preflight semantics
+// are the same as the per-region probes: a single API round-trip
+// that proves the trust policy granted s3:ListAllMyBuckets.
+//
+// Slice 3a (v0.88.0) — the rest of the S3 instrumentation read path
+// (GetBucketLocation + GetBucketLogging + GetBucketTagging) only
+// fires per-bucket at scan time, so the preflight intentionally
+// stops at ListBuckets: the cheap signal is enough to deep-link the
+// operator back to the trust-policy step on AccessDenied.
+func (s *Scanner) preflightS3(ctx context.Context, factory ClientFactory, region string) *scanner.PreflightCheck {
+	client, err := factory.S3(ctx, region)
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "s3", OK: false, Err: HumanizeError(err)}
+	}
+	out, err := client.ListBuckets(ctx, &s3.ListBucketsInput{})
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "s3", OK: false, Err: HumanizeError(err)}
+	}
+	sample := len(out.Buckets)
+	if sample > 5 {
+		sample = 5
+	}
+	return &scanner.PreflightCheck{Service: "s3", OK: true, SampleCount: sample}
+}
+
+// preflightALB runs a single DescribeLoadBalancers call with
+// PageSize=1 against the supplied region. PageSize keeps the probe
+// within the design doc's "permissions probe, not inventory walk"
+// contract — a misconfigured role fails fast, and a properly
+// configured one returns at most one row.
+//
+// Slice 3a (v0.88.0) — the per-LB attribute reads
+// (DescribeLoadBalancerAttributes + DescribeTags) only fire at scan
+// time. The preflight only proves
+// elasticloadbalancing:DescribeLoadBalancers is granted; the other
+// two permissions surface at scan time and emit "alb" to
+// Result.FailedServices on the failure path.
+func (s *Scanner) preflightALB(ctx context.Context, factory ClientFactory, region string) *scanner.PreflightCheck {
+	client, err := factory.ELBv2(ctx, region)
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "alb", OK: false, Err: HumanizeError(err)}
+	}
+	out, err := client.DescribeLoadBalancers(ctx, &elasticloadbalancingv2.DescribeLoadBalancersInput{
+		PageSize: awssdk.Int32(1),
+	})
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "alb", OK: false, Err: HumanizeError(err)}
+	}
+	sample := len(out.LoadBalancers)
+	if sample > 5 {
+		sample = 5
+	}
+	return &scanner.PreflightCheck{Service: "alb", OK: true, SampleCount: sample}
+}
+
 // Scan satisfies scanner.Scanner. Walks each region in turn,
 // paginating DescribeInstances, ListFunctions, and DescribeDBInstances
 // with exponential backoff on throttling. On unrecoverable errors
@@ -313,6 +392,24 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 			result.PartialReason = fmt.Sprintf("rds scan failed in %s: %s", region, err.Error())
 			result.FailedServices = append(result.FailedServices, "rds")
 		}
+		// Slice 3a (v0.88.0) — S3 + ALB join the per-region walk.
+		// Each emission site mirrors the v0.87.3 rds branch exactly:
+		// FailedServices gets the service identifier appended,
+		// PartialReason carries the formatted explanation, and
+		// Partial flips to true. The TODO(v0.87.4+) accumulator
+		// comment above applies the same way — the last failed
+		// service wins on PartialReason; FailedServices accumulates
+		// across services.
+		if err := s.scanRegionS3(ctx, factory, region, result); err != nil {
+			result.Partial = true
+			result.PartialReason = fmt.Sprintf("s3 scan failed in %s: %s", region, err.Error())
+			result.FailedServices = append(result.FailedServices, "s3")
+		}
+		if err := s.scanRegionALB(ctx, factory, region, result); err != nil {
+			result.Partial = true
+			result.PartialReason = fmt.Sprintf("alb scan failed in %s: %s", region, err.Error())
+			result.FailedServices = append(result.FailedServices, "alb")
+		}
 	}
 
 	for _, c := range result.Compute {
@@ -336,6 +433,25 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 	// AI's reasoning use the same denominator.
 	for _, d := range result.Databases {
 		if d.PerformanceInsightsEnabled && d.EnhancedMonitoringEnabled {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Slice 3a (v0.88.0) — single-axis instrumented rules.
+	//   - ObjectStores: ServerAccessLoggingEnabled (RequestMetrics
+	//     is informational only — see scanner.ObjectStoreSnapshot).
+	//   - LoadBalancers: AccessLogsEnabled (AccessLogsS3Bucket is
+	//     the operator-chosen target, informational on the row).
+	for _, o := range result.ObjectStores {
+		if o.ServerAccessLoggingEnabled {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	for _, l := range result.LoadBalancers {
+		if l.AccessLogsEnabled {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++
@@ -471,6 +587,347 @@ func (s *Scanner) scanRegionRDS(ctx context.Context, factory ClientFactory, regi
 	}
 	return nil
 }
+
+// scanRegionS3 walks the account's S3 buckets and appends mapped
+// snapshots to result.ObjectStores. The walk has three phases:
+//
+//  1. ListBuckets returns every bucket in the account. S3 is global
+//     for listing, so the call happens once per scan rather than
+//     per region — but the scanner still invokes scanRegionS3 once
+//     per region in the connection's region list. The first region
+//     does the real work; subsequent regions short-circuit (the
+//     scanner tracks which buckets it has already mapped).
+//
+//  2. For each bucket, GetBucketLocation returns the bucket's home
+//     region. The scanner filters to the connection's region list
+//     before doing the more expensive per-bucket reads.
+//
+//  3. GetBucketLogging + GetBucketTagging produce the per-bucket
+//     observability state + tags that fill the
+//     ObjectStoreSnapshot.
+//
+// IAM permissions required: s3:ListAllMyBuckets +
+// s3:GetBucketLocation + s3:GetBucketLogging + s3:GetBucketTagging.
+// The trust policy snippet in docs/universal-discovery-design.md's
+// "Permissions policy" section adds all four when slice 3a ships.
+// Squadron does NOT execute s3:PutBucketLogging — discovery is
+// strictly read-only.
+//
+// On the first invocation of this function within a Scan call,
+// scanRegionS3 lists every bucket. On subsequent invocations
+// (multi-region connections), it returns nil immediately because
+// the buckets have already been collected. The
+// alreadyWalkedObjectStores flag on the result struct's region
+// list (encoded via len(result.ObjectStores) > 0 — buckets are
+// only added on first walk) keeps the wire shape consistent with
+// the EC2 / Lambda / RDS per-region pattern.
+func (s *Scanner) scanRegionS3(ctx context.Context, factory ClientFactory, region string, result *scanner.Result) error {
+	// Multi-region short-circuit: S3 ListBuckets is global, so only
+	// the first region's invocation does the work. We use the
+	// region-list head as the "first invocation" sentinel — the
+	// scan's region loop calls scanRegionS3 in iteration order
+	// matching result.Regions, so the head is the first to fire.
+	if len(result.Regions) > 1 && region != result.Regions[0] {
+		return nil
+	}
+	client, err := factory.S3(ctx, region)
+	if err != nil {
+		return err
+	}
+	var out *s3.ListBucketsOutput
+	err = retryWithBackoff(ctx, func() error {
+		var callErr error
+		out, callErr = client.ListBuckets(ctx, &s3.ListBucketsInput{})
+		return callErr
+	})
+	if err != nil {
+		return err
+	}
+	// Build a quick membership set for the connection's region
+	// filter. An empty filter (no regions configured) lets every
+	// bucket through — defense in depth; the connection layer
+	// already guarantees a non-empty slice.
+	allowed := map[string]bool{}
+	for _, r := range result.Regions {
+		allowed[r] = true
+	}
+	for _, b := range out.Buckets {
+		if b.Name == nil {
+			continue
+		}
+		bucketName := *b.Name
+		// Resolve the bucket's home region. GetBucketLocation
+		// returns an empty LocationConstraint for us-east-1
+		// (legacy AWS quirk); the mapper normalizes.
+		loc, locErr := client.GetBucketLocation(ctx, &s3.GetBucketLocationInput{
+			Bucket: awssdk.String(bucketName),
+		})
+		bucketRegion := "us-east-1"
+		if locErr == nil && loc != nil && loc.LocationConstraint != "" {
+			bucketRegion = string(loc.LocationConstraint)
+		}
+		// Filter to the connection's region list. A bucket
+		// outside the configured regions stays out of the scan
+		// result entirely — operators who want broader visibility
+		// add more regions to the connection.
+		if len(allowed) > 0 && !allowed[bucketRegion] {
+			continue
+		}
+		snap, err := s.collectBucketDetails(ctx, client, bucketName, bucketRegion)
+		if err != nil {
+			// Per-bucket GetBucketLogging / GetBucketTagging
+			// failures inside the walk fail the whole S3 scan —
+			// the proposer needs a complete view of bucket
+			// instrumentation state to reason correctly. Return
+			// the error so the caller emits the s3 FailedServices
+			// entry.
+			return err
+		}
+		result.ObjectStores = append(result.ObjectStores, snap)
+	}
+	return nil
+}
+
+// collectBucketDetails runs GetBucketLogging + GetBucketTagging
+// against a single bucket and returns the mapped snapshot. Extracted
+// for readability; the per-bucket fan-out is the most complex part
+// of the S3 walk.
+//
+// GetBucketTagging returns NoSuchTagSet on untagged buckets; that's
+// a successful read with no tags, not an error. The mapper handles
+// it by leaving snap.Tags nil.
+func (s *Scanner) collectBucketDetails(ctx context.Context, client S3Client, bucketName, bucketRegion string) (scanner.ObjectStoreSnapshot, error) {
+	snap := scanner.ObjectStoreSnapshot{
+		ResourceID: bucketName,
+		Region:     bucketRegion,
+	}
+	logging, err := client.GetBucketLogging(ctx, &s3.GetBucketLoggingInput{
+		Bucket: awssdk.String(bucketName),
+	})
+	if err != nil {
+		return snap, err
+	}
+	if logging != nil && logging.LoggingEnabled != nil &&
+		logging.LoggingEnabled.TargetBucket != nil &&
+		*logging.LoggingEnabled.TargetBucket != "" {
+		snap.ServerAccessLoggingEnabled = true
+	}
+	tagging, err := client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{
+		Bucket: awssdk.String(bucketName),
+	})
+	if err != nil {
+		// NoSuchTagSet is the documented "bucket has no tags"
+		// signal; treat it as a successful read with empty tags.
+		// Any other error fails the walk.
+		if !isNoSuchTagSet(err) {
+			return snap, err
+		}
+	}
+	if tagging != nil && len(tagging.TagSet) > 0 {
+		snap.Tags = make(map[string]string, len(tagging.TagSet))
+		for _, t := range tagging.TagSet {
+			if t.Key == nil {
+				continue
+			}
+			key := *t.Key
+			val := ""
+			if t.Value != nil {
+				val = *t.Value
+			}
+			snap.Tags[key] = val
+		}
+	}
+	return snap, nil
+}
+
+// isNoSuchTagSet pattern-matches the smithy.APIError shape against
+// the S3 NoSuchTagSet code. Used by collectBucketDetails to
+// distinguish "bucket has no tags" (successful read, empty result)
+// from a genuine permissions or transport failure.
+func isNoSuchTagSet(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.ErrorCode() == "NoSuchTagSet"
+}
+
+// scanRegionALB paginates DescribeLoadBalancers, then for each load
+// balancer fans out to DescribeLoadBalancerAttributes +
+// DescribeTags. Mapped snapshots land in result.LoadBalancers.
+//
+// IAM permissions required: elasticloadbalancing:DescribeLoadBalancers
+// + elasticloadbalancing:DescribeLoadBalancerAttributes +
+// elasticloadbalancing:DescribeTags. The permissions policy snippet
+// in docs/universal-discovery-design.md adds all three when slice 3a
+// ships. Squadron does NOT execute
+// elasticloadbalancing:ModifyLoadBalancerAttributes — discovery is
+// strictly read-only.
+//
+// DescribeTags accepts up to 20 ARNs per call; the scanner batches
+// the per-LB tag reads accordingly so a 50-ALB account spends 3
+// DescribeTags calls instead of 50.
+func (s *Scanner) scanRegionALB(ctx context.Context, factory ClientFactory, region string, result *scanner.Result) error {
+	client, err := factory.ELBv2(ctx, region)
+	if err != nil {
+		return err
+	}
+	var marker *string
+	for {
+		input := &elasticloadbalancingv2.DescribeLoadBalancersInput{}
+		if marker != nil {
+			input.Marker = marker
+		}
+		var out *elasticloadbalancingv2.DescribeLoadBalancersOutput
+		err := retryWithBackoff(ctx, func() error {
+			var callErr error
+			out, callErr = client.DescribeLoadBalancers(ctx, input)
+			return callErr
+		})
+		if err != nil {
+			return err
+		}
+		// Per-LB attribute reads. DescribeLoadBalancerAttributes
+		// is per-LB; DescribeTags is batched (up to 20 ARNs).
+		arns := make([]string, 0, len(out.LoadBalancers))
+		snapsByARN := make(map[string]*scanner.LoadBalancerSnapshot, len(out.LoadBalancers))
+		for i := range out.LoadBalancers {
+			lb := out.LoadBalancers[i]
+			snap := mapALBBase(lb, region)
+			// Fetch access-logs attribute per-LB. A failure here
+			// (e.g. AccessDenied on DescribeLoadBalancerAttributes
+			// when the policy granted only DescribeLoadBalancers)
+			// fails the whole ALB walk so the FailedServices
+			// emission is consistent.
+			if lb.LoadBalancerArn != nil {
+				attrs, attrErr := client.DescribeLoadBalancerAttributes(ctx,
+					&elasticloadbalancingv2.DescribeLoadBalancerAttributesInput{
+						LoadBalancerArn: lb.LoadBalancerArn,
+					})
+				if attrErr != nil {
+					return attrErr
+				}
+				applyALBAttributes(&snap, attrs)
+				arns = append(arns, *lb.LoadBalancerArn)
+				snapsByARN[*lb.LoadBalancerArn] = &snap
+			}
+			result.LoadBalancers = append(result.LoadBalancers, snap)
+		}
+		// Batch tag fetch — up to 20 ARNs per DescribeTags call.
+		// The ELB v2 API returns one TagDescription per ARN.
+		for i := 0; i < len(arns); i += 20 {
+			end := i + 20
+			if end > len(arns) {
+				end = len(arns)
+			}
+			tagsOut, tagsErr := client.DescribeTags(ctx,
+				&elasticloadbalancingv2.DescribeTagsInput{
+					ResourceArns: arns[i:end],
+				})
+			if tagsErr != nil {
+				return tagsErr
+			}
+			for _, desc := range tagsOut.TagDescriptions {
+				if desc.ResourceArn == nil {
+					continue
+				}
+				snap := snapsByARN[*desc.ResourceArn]
+				if snap == nil {
+					continue
+				}
+				if len(desc.Tags) > 0 {
+					snap.Tags = make(map[string]string, len(desc.Tags))
+					for _, t := range desc.Tags {
+						if t.Key == nil {
+							continue
+						}
+						key := *t.Key
+						val := ""
+						if t.Value != nil {
+							val = *t.Value
+						}
+						snap.Tags[key] = val
+					}
+				}
+			}
+		}
+		// Tag-fetch updated the snaps stored via pointer in
+		// snapsByARN. The slice entries we appended above are
+		// value copies — push the tags back so the final
+		// result.LoadBalancers slice carries them.
+		for i := range result.LoadBalancers {
+			if result.LoadBalancers[i].ResourceID == "" {
+				continue
+			}
+			updated := snapsByARN[result.LoadBalancers[i].ResourceID]
+			if updated != nil && updated.Tags != nil {
+				result.LoadBalancers[i].Tags = updated.Tags
+			}
+		}
+		if out.NextMarker == nil || *out.NextMarker == "" {
+			break
+		}
+		marker = out.NextMarker
+	}
+	return nil
+}
+
+// mapALBBase turns an SDK LoadBalancer into the base snapshot — name,
+// type, scheme, region, ARN — without the per-LB attributes that
+// require a follow-up call. applyALBAttributes fills in the
+// AccessLogs* fields once DescribeLoadBalancerAttributes returns.
+func mapALBBase(lb elbv2LoadBalancer, region string) scanner.LoadBalancerSnapshot {
+	snap := scanner.LoadBalancerSnapshot{
+		Region: region,
+	}
+	if lb.LoadBalancerArn != nil {
+		snap.ResourceID = *lb.LoadBalancerArn
+	}
+	if lb.LoadBalancerName != nil {
+		snap.Name = *lb.LoadBalancerName
+	}
+	// Type and Scheme are enum-typed in the SDK but render as
+	// plain strings on the snapshot — the proposer reasons about
+	// the lowercase string (application / network / gateway,
+	// internet-facing / internal).
+	snap.Type = string(lb.Type)
+	snap.Scheme = string(lb.Scheme)
+	return snap
+}
+
+// applyALBAttributes maps the access_logs.s3.enabled +
+// access_logs.s3.bucket attributes from
+// DescribeLoadBalancerAttributes onto the snapshot. The attributes
+// arrive as a flat key/value list with stringly-typed values; the
+// "true" / "false" string is the boolean encoding the API uses.
+func applyALBAttributes(snap *scanner.LoadBalancerSnapshot, out *elasticloadbalancingv2.DescribeLoadBalancerAttributesOutput) {
+	if out == nil {
+		return
+	}
+	for _, attr := range out.Attributes {
+		if attr.Key == nil || attr.Value == nil {
+			continue
+		}
+		switch *attr.Key {
+		case "access_logs.s3.enabled":
+			if *attr.Value == "true" {
+				snap.AccessLogsEnabled = true
+			}
+		case "access_logs.s3.bucket":
+			snap.AccessLogsS3Bucket = *attr.Value
+		}
+	}
+}
+
+// Compile-time references to keep the s3types + elbv2types imports
+// live even if a future refactor inlines the mappers. The mappers
+// use the SDK types directly (s3types.Bucket / elbv2types.LoadBalancer
+// flow through the type aliases in types.go); the references below
+// are belt-and-braces.
+var (
+	_ = s3types.Bucket{}
+	_ = elbv2types.LoadBalancer{}
+)
 
 // mapRDSInstance turns an SDK DBInstance into the category-typed
 // snapshot. The two observability lever flags come straight off the
