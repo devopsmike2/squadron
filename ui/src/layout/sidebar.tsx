@@ -40,6 +40,7 @@ import {
   Inbox,
   PlayCircle,
   Cpu,
+  Cloud,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -261,6 +262,21 @@ export function AppSidebar() {
           title: "Cost Insights",
           url: "/cost-insights",
           icon: CoinsIcon,
+        },
+      ],
+    },
+    {
+      // v0.85 Stream 2E — Discovery group lands between Operations
+      // and Admin. Slice 1 ships one entry (AWS); slice 4-6 add GCP,
+      // Azure, on-prem under the same group label so the operator's
+      // muscle memory carries across providers.
+      label: "Discovery",
+      items: [
+        {
+          key: "discovery-aws",
+          title: "AWS",
+          url: "/discovery/aws",
+          icon: Cloud,
         },
       ],
     },
