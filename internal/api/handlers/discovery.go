@@ -913,25 +913,42 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 	}
 
 	if h.auditService != nil {
+		// v0.87.4: scan_completed payload uses conditional inserts for
+		// partial_reason and failed_services so the audit shape mirrors
+		// the HTTP response's omitempty semantics. map[string]any does
+		// NOT honor JSON-tag omitempty (only struct fields do), so an
+		// unconditional insert of an empty string or nil slice would
+		// emit "partial_reason": "" and "failed_services": null on
+		// every successful scan — line noise that audit consumers
+		// (SIEM forwarders, Timeline UI, squadronctl, proposer's
+		// future learning loop) would have to filter out per event.
+		// The happy path now emits ONLY the mandatory fields; the
+		// failure path emits the same plus partial_reason +
+		// failed_services. Symmetric with the typed HTTP response.
+		payload := map[string]any{
+			"account_id":           accountID,
+			"scan_id":              result.ScanID,
+			"compute_count":        len(result.Compute),
+			"function_count":       len(result.Functions),
+			"database_count":       len(result.Databases),
+			"instrumented_count":   result.InstrumentedCount,
+			"uninstrumented_count": result.UninstrumentedCount,
+			"partial":              result.Partial,
+			"recorded_at":          time.Now().UTC(),
+		}
+		if result.PartialReason != "" {
+			payload["partial_reason"] = result.PartialReason
+		}
+		if len(result.FailedServices) > 0 {
+			payload["failed_services"] = result.FailedServices
+		}
 		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
 			Actor:      "system",
 			EventType:  "discovery.aws.scan_completed",
 			TargetType: credstore.TargetTypeCloudConnection,
 			TargetID:   accountID,
 			Action:     "scan_completed",
-			Payload: map[string]any{
-				"account_id":           accountID,
-				"scan_id":              result.ScanID,
-				"compute_count":        len(result.Compute),
-				"function_count":       len(result.Functions),
-				"database_count":       len(result.Databases),
-				"instrumented_count":   result.InstrumentedCount,
-				"uninstrumented_count": result.UninstrumentedCount,
-				"partial":              result.Partial,
-				"partial_reason":       result.PartialReason,
-				"failed_services":      result.FailedServices,
-				"recorded_at":          time.Now().UTC(),
-			},
+			Payload:    payload,
 		})
 	}
 

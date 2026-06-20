@@ -1102,6 +1102,83 @@ func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices(t *testing.T)
 	}
 }
 
+// TestHandleAWSRunScan_AuditOmitsPartialFieldsOnHappyPath pins the
+// v0.87.4 omitempty parity — the scan_completed payload is a
+// map[string]any which does NOT honor JSON-tag omitempty (only struct
+// fields do). The handler conditionally inserts partial_reason and
+// failed_services so happy-path events emit only the mandatory fields
+// and don't ship `partial_reason: ""` + `failed_services: null` line
+// noise on every successful scan. Mirrors the HTTP response's
+// omitempty behavior. Regression guard: if a future refactor goes
+// back to an unconditional map literal, audit consumers regain the
+// asymmetric shape between happy + failure scans.
+func TestHandleAWSRunScan_AuditOmitsPartialFieldsOnHappyPath(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	// Happy-path scan: empty inventory, no partial flag, empty
+	// PartialReason, nil FailedServices. The handler must NOT insert
+	// the empty/nil values into the audit payload — they should be
+	// absent entirely.
+	scanResult := &scanner.Result{
+		ScanID:              "test-scan-happy",
+		ScanStartedAt:       now,
+		ScanCompletedAt:     now.Add(1 * time.Second),
+		Provider:            credstore.ProviderAWS,
+		AccountID:           "123456789012",
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   0,
+		UninstrumentedCount: 0,
+		Partial:             false,
+		// PartialReason and FailedServices left as zero values
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	if got := len(audit.entries); got != 2 {
+		t.Fatalf("audit entries = %d, want 2", got)
+	}
+	completed := audit.entries[1]
+	if completed.EventType != "discovery.aws.scan_completed" {
+		t.Fatalf("entry[1].event_type = %q", completed.EventType)
+	}
+
+	// Both optional fields MUST be absent from the payload — not
+	// present-with-empty-value.
+	if _, ok := completed.Payload["partial_reason"]; ok {
+		t.Errorf("partial_reason key present on happy path (value=%v); should be absent", completed.Payload["partial_reason"])
+	}
+	if _, ok := completed.Payload["failed_services"]; ok {
+		t.Errorf("failed_services key present on happy path (value=%v); should be absent", completed.Payload["failed_services"])
+	}
+
+	// partial itself stays false, mirroring the existing invariant.
+	if got, _ := completed.Payload["partial"].(bool); got {
+		t.Errorf("partial = %v, want false", completed.Payload["partial"])
+	}
+}
+
 // --- HandleAWSGenerateRecommendations tests (Stream 2F) --------------
 
 // mockAIProposer records the context it was handed and returns a
