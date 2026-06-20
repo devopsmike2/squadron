@@ -47,13 +47,16 @@ Aggregated:
 
 ## Cost ceiling
 
-At the v0.86 corpus size (14 seeds: 8 cost-spike + 6 discovery) and
+At the v0.87 corpus size (15 seeds: 8 cost-spike + 7 discovery) and
 typical token sizes, expect roughly **\$0.15–\$0.25 per run**. The
 bench prints `total cost` on every run so the operator sees the
 number after each invocation. Discovery seeds run at a similar token
 profile to cost-spike seeds — the per-seed cost is comparable, so
-adding 6 discovery seeds on top of 8 cost-spike seeds keeps the
-total inside the same envelope.
+adding 7 discovery seeds on top of 8 cost-spike seeds keeps the
+total inside the same envelope. The v0.87 RDS seed
+(`discovery_rds_mixed_coverage`) carries a slightly larger inventory
+list than the other discovery seeds (5 RDS + 3 EC2 + 2 Lambda); the
+per-seed cost stays inside the discovery-arc range.
 
 For scheduled CI: a daily run for thirty days is ~\$5-7. Costs scale
 linearly with corpus size; v0.84+ expansions to the corpus should
@@ -89,7 +92,7 @@ shows up as a bucket count moving in the wrong direction —
 
 ## Corpus
 
-Fourteen hand-curated scenarios at v0.86 — split across the two
+Fifteen hand-curated scenarios at v0.87 — split across the two
 proposer arcs.
 
 ### Cost-spike arc (8 seeds, drives `ProposeFromCostSpike`)
@@ -105,16 +108,17 @@ proposer arcs.
 | `boundary_tiny_fleet`         | Single-agent fleet                                            |
 | `sparse_context_low_signal`   | Low-confidence spike (25% over baseline)                      |
 
-### Discovery arc (6 seeds, drives `ProposeFromDiscoveryScan`)
+### Discovery arc (7 seeds, drives `ProposeFromDiscoveryScan`)
 
-| Seed                                   | What it tests                                                          |
-| -------------------------------------- | ---------------------------------------------------------------------- |
-| `discovery_small_fleet_uninstrumented` | 3 EC2 + 2 Lambda, all uncovered — minimal plan happy path              |
-| `discovery_mixed_coverage`             | 10 EC2 (4 covered) + 8 Lambda (3 covered); plan must skip the covered  |
-| `discovery_zero_resources`             | Empty inventory; should decline (`declined` bucket through discovery)  |
-| `discovery_fully_instrumented`         | 8 EC2 + 5 Lambda, all covered; should decline                          |
-| `discovery_windows_heavy`              | 6 Windows EC2, 0 Lambda — exercises OS-family reasoning                |
-| `discovery_lambda_runtime_variety`     | 12 Lambda across 5 runtimes; exercises per-runtime OTel layer batching |
+| Seed                                   | What it tests                                                                                       |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `discovery_small_fleet_uninstrumented` | 3 EC2 + 2 Lambda, all uncovered — minimal plan happy path                                           |
+| `discovery_mixed_coverage`             | 10 EC2 (4 covered) + 8 Lambda (3 covered); plan must skip the covered                               |
+| `discovery_zero_resources`             | Empty inventory; should decline (`declined` bucket through discovery)                               |
+| `discovery_fully_instrumented`         | 8 EC2 + 5 Lambda, all covered; should decline                                                       |
+| `discovery_windows_heavy`              | 6 Windows EC2, 0 Lambda — exercises OS-family reasoning                                             |
+| `discovery_lambda_runtime_variety`     | 12 Lambda across 5 runtimes; exercises per-runtime OTel layer batching                              |
+| `discovery_rds_mixed_coverage`         | 5 RDS across 4 engines (PI/EM mixed) + 3 EC2 + 2 Lambda; exercises slice 2 RDS PI/EM independent-levers reasoning |
 
 The list is intentionally small. v0.84 will refactor the
 `internal/proposer` stress corpus into a shared module so the bench

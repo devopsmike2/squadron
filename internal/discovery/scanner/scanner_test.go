@@ -44,7 +44,17 @@ func TestScannerInterfaceCompiles(t *testing.T) {
 			HasOTelLayer: true,
 			Region:       "us-east-1",
 		}},
-		InstrumentedCount:   2,
+		Databases: []DatabaseInstanceSnapshot{{
+			ResourceID:                 "arn:aws:rds:us-east-1:123456789012:db:db-prod-1",
+			Engine:                     "postgres",
+			EngineVersion:              "15.4",
+			InstanceClass:              "db.r6g.large",
+			PerformanceInsightsEnabled: true,
+			EnhancedMonitoringEnabled:  true,
+			Region:                     "us-east-1",
+			Tags:                       map[string]string{"Env": "prod"},
+		}},
+		InstrumentedCount:   3,
 		UninstrumentedCount: 0,
 		Partial:             false,
 		PartialReason:       "",
@@ -57,6 +67,16 @@ func TestScannerInterfaceCompiles(t *testing.T) {
 	}
 	if len(r.Functions) != 1 || !r.Functions[0].HasOTelLayer {
 		t.Fatalf("Function snapshot did not preserve HasOTelLayer")
+	}
+	if len(r.Databases) != 1 {
+		t.Fatalf("Database snapshot did not round-trip: %+v", r.Databases)
+	}
+	db := r.Databases[0]
+	if db.Engine != "postgres" || db.EngineVersion != "15.4" {
+		t.Fatalf("Database engine/version round-trip lost: %+v", db)
+	}
+	if !db.PerformanceInsightsEnabled || !db.EnhancedMonitoringEnabled {
+		t.Fatalf("Database PI/EM flags lost: %+v", db)
 	}
 
 	// ValidationResult composes the humanized error + per-service

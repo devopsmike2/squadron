@@ -147,6 +147,24 @@ export interface FunctionRuntimeSnapshot {
   region: string;
 }
 
+// DatabaseInstanceSnapshot mirrors scanner.DatabaseInstanceSnapshot.
+// Slice 2 (v0.87) — RDS observability is a two-part rule:
+// `performance_insights_enabled` AND `enhanced_monitoring_enabled`
+// must both be true for the instance to count as covered. The
+// Inventory tab surfaces them as independent badge columns so the
+// operator can see at a glance which lever is missing, matching the
+// proposer prompt's "PI and EM are independent levers" framing.
+export interface DatabaseInstanceSnapshot {
+  resource_id: string;
+  engine: string;
+  engine_version: string;
+  instance_class: string;
+  performance_insights_enabled: boolean;
+  enhanced_monitoring_enabled: boolean;
+  region: string;
+  tags: Record<string, string>;
+}
+
 // ScanResult is the typed payload the scan endpoint returns. Mirrors
 // scanner.Result via the marshalScanResult wire shape on the Go side.
 // scan_started_at / scan_completed_at are ISO-8601 strings; partial
@@ -161,6 +179,10 @@ export interface ScanResult {
   regions: string[];
   compute: ComputeInstanceSnapshot[];
   functions: FunctionRuntimeSnapshot[];
+  // databases is the v0.87 slice 2 addition. The field is non-optional
+  // on the wire (the Go handler always emits an array, never null) so
+  // the UI's empty-state branch is a single `.length === 0` check.
+  databases: DatabaseInstanceSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

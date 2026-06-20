@@ -13,6 +13,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithy "github.com/aws/smithy-go"
 	"github.com/google/uuid"
@@ -23,6 +24,10 @@ import (
 
 // Scanner implements scanner.Scanner for the AWS provider. Slice-1
 // scope: EC2 + Lambda inventory, single-region per call, read-only.
+// Slice 2 (v0.87) adds RDS as the third service walked — same posture,
+// strictly read-only (rds:DescribeDBInstances). RDS recommendations
+// are emitted as plan steps the operator runs via their own
+// ModifyDBInstance tooling; Squadron does NOT issue the modify call.
 //
 // Construct via NewScannerForValidation when serving the connector
 // wizard's validate endpoint (the connection has not yet been
@@ -119,8 +124,8 @@ func (s *Scanner) ensureFactory(ctx context.Context, region string) (ClientFacto
 
 // Validate satisfies scanner.Scanner. Runs sts:GetCallerIdentity to
 // confirm the role chain works, then runs a single small
-// DescribeInstances + ListFunctions per region to confirm read
-// permissions. Creates zero persistent records.
+// DescribeInstances + ListFunctions + DescribeDBInstances per region
+// to confirm read permissions. Creates zero persistent records.
 //
 // The "single small call" rationale comes from the design doc's
 // "Connector workflow design > Validation endpoint" section: this is
@@ -163,6 +168,9 @@ func (s *Scanner) Validate(ctx context.Context, conn *credstore.CloudConnection)
 		result.Preflight = append(result.Preflight, *check)
 	}
 	if check := s.preflightLambda(ctx, factory, primaryRegion); check != nil {
+		result.Preflight = append(result.Preflight, *check)
+	}
+	if check := s.preflightRDS(ctx, factory, primaryRegion); check != nil {
 		result.Preflight = append(result.Preflight, *check)
 	}
 
@@ -217,11 +225,41 @@ func (s *Scanner) preflightLambda(ctx context.Context, factory ClientFactory, re
 	return &scanner.PreflightCheck{Service: "lambda", OK: true, SampleCount: sample}
 }
 
+// preflightRDS runs a single DescribeDBInstances with MaxRecords=20
+// (RDS's minimum allowed value — the API rejects anything below 20)
+// against the supplied region. Mirrors preflightEC2. SampleCount is
+// still capped at 5 in the returned PreflightCheck so the wire shape
+// stays consistent with the EC2 + Lambda probes.
+//
+// Slice 2's only required RDS permission is rds:DescribeDBInstances.
+// The proposer surfaces enablement recommendations as plan steps; the
+// modify call is executed by the operator's own IaC tooling.
+func (s *Scanner) preflightRDS(ctx context.Context, factory ClientFactory, region string) *scanner.PreflightCheck {
+	client, err := factory.RDS(ctx, region)
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "rds", OK: false, Err: HumanizeError(err)}
+	}
+	out, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
+		// 20 is the RDS API's minimum MaxRecords value. SDK validation
+		// rejects MaxRecords < 20; the SampleCount cap below keeps the
+		// wire response consistent with the EC2/Lambda probes regardless.
+		MaxRecords: awssdk.Int32(20),
+	})
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "rds", OK: false, Err: HumanizeError(err)}
+	}
+	sample := len(out.DBInstances)
+	if sample > 5 {
+		sample = 5
+	}
+	return &scanner.PreflightCheck{Service: "rds", OK: true, SampleCount: sample}
+}
+
 // Scan satisfies scanner.Scanner. Walks each region in turn,
-// paginating DescribeInstances and ListFunctions with exponential
-// backoff on throttling. On unrecoverable errors (anything not
-// throttling), the scan returns Partial=true with the failing
-// region's error humanized into PartialReason.
+// paginating DescribeInstances, ListFunctions, and DescribeDBInstances
+// with exponential backoff on throttling. On unrecoverable errors
+// (anything not throttling), the scan returns Partial=true with the
+// failing region's error humanized into PartialReason.
 //
 // regions argument overrides the connection's Regions list — slice 1
 // passes a single-entry slice; slice 3 will iterate. Empty slice
@@ -258,6 +296,10 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 			result.Partial = true
 			result.PartialReason = fmt.Sprintf("lambda scan failed in %s: %s", region, err.Error())
 		}
+		if err := s.scanRegionRDS(ctx, factory, region, result); err != nil {
+			result.Partial = true
+			result.PartialReason = fmt.Sprintf("rds scan failed in %s: %s", region, err.Error())
+		}
 	}
 
 	for _, c := range result.Compute {
@@ -269,6 +311,18 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 	}
 	for _, f := range result.Functions {
 		if f.HasOTelLayer {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// RDS counts as instrumented when BOTH Performance Insights AND
+	// Enhanced Monitoring are enabled — the two-part rule documented
+	// on scanner.DatabaseInstanceSnapshot. The proposer prompt teaches
+	// the same rule, so the operator-visible Inventory tab and the
+	// AI's reasoning use the same denominator.
+	for _, d := range result.Databases {
+		if d.PerformanceInsightsEnabled && d.EnhancedMonitoringEnabled {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++
@@ -360,6 +414,104 @@ func (s *Scanner) scanRegionLambda(ctx context.Context, factory ClientFactory, r
 		marker = out.NextMarker
 	}
 	return nil
+}
+
+// scanRegionRDS paginates DescribeDBInstances and appends mapped
+// snapshots to result.Databases. Each DBInstance arrives with its
+// PerformanceInsightsEnabled flag and Enhanced Monitoring interval
+// already populated — the proposer's two RDS levers — so no
+// per-instance follow-up call is needed at this scope.
+//
+// IAM permission required: rds:DescribeDBInstances. The trust policy
+// snippet in docs/universal-discovery-design.md's "Permissions policy"
+// section is updated to add this one action when slice 2 ships.
+// Squadron does NOT execute rds:ModifyDBInstance — discovery is
+// strictly read-only; the operator runs the modify call through their
+// own IaC tooling.
+func (s *Scanner) scanRegionRDS(ctx context.Context, factory ClientFactory, region string, result *scanner.Result) error {
+	client, err := factory.RDS(ctx, region)
+	if err != nil {
+		return err
+	}
+	var marker *string
+	for {
+		input := &rds.DescribeDBInstancesInput{}
+		if marker != nil {
+			input.Marker = marker
+		}
+		var out *rds.DescribeDBInstancesOutput
+		err := retryWithBackoff(ctx, func() error {
+			var callErr error
+			out, callErr = client.DescribeDBInstances(ctx, input)
+			return callErr
+		})
+		if err != nil {
+			return err
+		}
+		for _, db := range out.DBInstances {
+			result.Databases = append(result.Databases, mapRDSInstance(db, region))
+		}
+		if out.Marker == nil || *out.Marker == "" {
+			break
+		}
+		marker = out.Marker
+	}
+	return nil
+}
+
+// mapRDSInstance turns an SDK DBInstance into the category-typed
+// snapshot. The two observability lever flags come straight off the
+// DescribeDBInstances response:
+//   - PerformanceInsightsEnabled is the boolean the SDK exposes
+//     verbatim (PI is a per-instance toggle).
+//   - Enhanced Monitoring is signaled by a non-zero MonitoringInterval
+//     (the SDK reports the interval in seconds; 0 means disabled, any
+//     positive value — typically 1, 5, 10, 15, 30, or 60 — means
+//     enabled).
+//
+// Tags come from the TagList field RDS returns alongside the instance
+// description; the flatten mirrors the EC2 tag normalization.
+func mapRDSInstance(db rdsDBInstance, region string) scanner.DatabaseInstanceSnapshot {
+	snap := scanner.DatabaseInstanceSnapshot{
+		Region: region,
+	}
+	if db.DBInstanceArn != nil {
+		snap.ResourceID = *db.DBInstanceArn
+	}
+	if db.Engine != nil {
+		snap.Engine = *db.Engine
+	}
+	if db.EngineVersion != nil {
+		snap.EngineVersion = *db.EngineVersion
+	}
+	if db.DBInstanceClass != nil {
+		snap.InstanceClass = *db.DBInstanceClass
+	}
+	if db.PerformanceInsightsEnabled != nil {
+		snap.PerformanceInsightsEnabled = *db.PerformanceInsightsEnabled
+	}
+	// Enhanced Monitoring: any non-zero MonitoringInterval means the
+	// per-second OS-metrics stream is being delivered to CloudWatch.
+	// The SDK uses *int32; nil is the "field absent" shape RDS uses
+	// for instances created before EM existed.
+	if db.MonitoringInterval != nil && *db.MonitoringInterval > 0 {
+		snap.EnhancedMonitoringEnabled = true
+	}
+	if len(db.TagList) > 0 {
+		snap.Tags = make(map[string]string, len(db.TagList))
+		for _, t := range db.TagList {
+			if t.Key == nil {
+				continue
+			}
+			key := *t.Key
+			val := ""
+			if t.Value != nil {
+				val = *t.Value
+			}
+			snap.Tags[key] = val
+		}
+	}
+	return snap
 }
 
 // mapEC2Instance turns an SDK Instance into the category-typed
