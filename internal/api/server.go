@@ -102,6 +102,13 @@ type Server struct {
 	// "key not wired" humanized error; the validate endpoint stays
 	// unaffected because it never touches the store.
 	discoveryCredKey *credstore.Key
+	// v0.85 Stream 2F — discovery-side AI proposer. Optional: only
+	// the recommendations route consumes it; the list / scan /
+	// validate / save routes never call it. A nil service makes the
+	// recommendations route 503 with a clear "AI assist not
+	// configured" message; the rest of the discovery surface stays
+	// reachable. Wired by main.go right beside the credstore block.
+	discoveryAIService *ai.Service
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -380,6 +387,22 @@ func (s *Server) SetDiscoveryCredKey(key *credstore.Key) {
 	s.discoveryCredKey = key
 }
 
+// SetDiscoveryAIService wires the v0.85 Stream 2F discovery-side AI
+// proposer. The recommendations route — POST
+// /api/v1/discovery/aws/connections/:id/recommendations — depends on
+// it; the list / scan / validate / save routes do not. A nil service
+// (the test_server.go and AI-disabled deployments path) leaves only the
+// recommendations route 503ing; the rest of the discovery surface
+// stays reachable.
+//
+// Mirrors the SetDiscoveryCredStore + SetDiscoveryCredKey setter
+// pattern: NewServer's signature doesn't grow, and the wiring lives at
+// main.go right beside the credstore block so the gap that prompted
+// the credstore follow-up commit doesn't recur for AI.
+func (s *Server) SetDiscoveryAIService(svc *ai.Service) {
+	s.discoveryAIService = svc
+}
+
 // discoveryTrampoline late-binds a discovery handler call so the
 // route table can be registered before SetDiscoveryCredStore runs.
 // Mirrors the insights / recommendations / AI trampolines. 503s with
@@ -391,6 +414,12 @@ func (s *Server) SetDiscoveryCredKey(key *credstore.Key) {
 // supplied via WithAuditService and the credstore Key via
 // WithCredstoreKey — both are set on Server post-construction and the
 // trampoline picks up whatever's there at request time.
+//
+// v0.85 Stream 2F: the AI proposer is wired in too when the operator
+// has configured one. The recommendations route additionally requires
+// it (see discoveryAITrampoline); routes registered through the plain
+// discoveryTrampoline tolerate a nil aiProposer because they never
+// call it.
 func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.Context)) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.discoveryCredStore == nil {
@@ -407,6 +436,48 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		if s.discoveryCredKey != nil {
 			h.WithCredstoreKey(s.discoveryCredKey)
 		}
+		if s.discoveryAIService != nil {
+			h.WithAIProposer(s.discoveryAIService)
+		}
+		fn(h, c)
+	}
+}
+
+// discoveryAITrampoline is the v0.85 Stream 2F variant of
+// discoveryTrampoline that additionally requires the AI proposer to be
+// wired. Routes that ask the proposer to think (today: only the
+// recommendations route) register through this trampoline so an
+// AI-disabled deployment 503s with a clear opt-in message rather than
+// running the handler and getting a generic "AI assist not configured"
+// payload back from the proposer call itself.
+//
+// Same shape as discoveryTrampoline so the route registration above
+// stays one-liner. The two trampolines share the credstore check; the
+// AI check sits on top.
+func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.discoveryCredStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "Discovery is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		if s.discoveryAIService == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "AI assist is not configured; discovery recommendations require it",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewDiscoveryHandlers(s.discoveryCredStore, s.logger)
+		if s.auditService != nil {
+			h.WithAuditService(s.auditService)
+		}
+		if s.discoveryCredKey != nil {
+			h.WithCredstoreKey(s.discoveryCredKey)
+		}
+		h.WithAIProposer(s.discoveryAIService)
 		fn(h, c)
 	}
 }
@@ -1043,6 +1114,28 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/aws/connections/:id/scan",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRunScan(c) }))
+
+		// v0.85 Stream 2F — discovery-side AI recommendations route.
+		// The Inventory tab POSTs the scan result it just rendered; the
+		// handler converts it into an ai.DiscoveryScanContext, asks the
+		// proposer for an instrumentation plan, and walks the plan-kind
+		// result into a slice of typed Recommendations (one per plan
+		// step) whose IaC field carries the Terraform the operator
+		// runs through their existing IaC pipeline. Squadron never
+		// executes the Terraform — the design doc's thesis line stands.
+		//
+		// Registered through discoveryAITrampoline so AI-disabled
+		// deployments 503 here without breaking the list/scan/validate
+		// routes (which stay reachable via discoveryTrampoline).
+		//
+		// agents:read is the right scope: the recommendation generation
+		// emits an audit event but creates no persisted Squadron state
+		// in slice 1 (recommendations themselves are not persisted in
+		// the OSS surface — they're returned per request and rendered
+		// in the UI; persistence lands as part of the dismissals path).
+		v1.POST("/discovery/aws/connections/:id/recommendations",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAITrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGenerateRecommendations(c) }))
 
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest

@@ -5,17 +5,31 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
+
+// DiscoveryAIProposer is the slim contract HandleAWSGenerateRecommendations
+// calls against the AI proposer. Mirrors the per-handler interface
+// pattern the rest of this file uses: the production wire passes
+// *ai.Service directly (it satisfies the interface); tests substitute a
+// stub that returns a pre-canned ProposalResult without touching the
+// Anthropic SDK.
+type DiscoveryAIProposer interface {
+	ProposeFromDiscoveryScan(ctx context.Context, in *ai.DiscoveryScanContext) (*ai.ProposalResult, error)
+}
 
 // DiscoveryValidator is the slim contract HandleAWSValidate calls
 // against. The production wire builds an *aws.Scanner per request and
@@ -83,7 +97,14 @@ type DiscoveryHandlers struct {
 	awsCredMarshaller AWSCredMarshaller
 	awsScannerFor     AWSScannerFactory
 	auditService      services.AuditService
-	logger            *zap.Logger
+	// aiProposer is the v0.85 Stream 2F discovery-side AI proposer.
+	// Optional at construction: only HandleAWSGenerateRecommendations
+	// consumes it; the wizard / list / scan endpoints don't. The
+	// recommendations route returns 503 when this is nil so the rest
+	// of the discovery surface stays reachable on AI-disabled
+	// deployments.
+	aiProposer DiscoveryAIProposer
+	logger     *zap.Logger
 }
 
 // AWSCredMarshaller turns the wizard-supplied AWSCredentials into the
@@ -161,6 +182,17 @@ func (h *DiscoveryHandlers) WithCredMarshaller(m AWSCredMarshaller) *DiscoveryHa
 // clear "scanner not wired" humanized error.
 func (h *DiscoveryHandlers) WithAWSScannerFactory(f AWSScannerFactory) *DiscoveryHandlers {
 	h.awsScannerFor = f
+	return h
+}
+
+// WithAIProposer wires the v0.85 Stream 2F discovery-side AI proposer.
+// Production wires *ai.Service (which satisfies the interface); tests
+// substitute a mock that returns a pre-canned ProposalResult. A nil
+// proposer leaves HandleAWSGenerateRecommendations returning 503 with
+// a clear "AI assist not configured" message; the rest of the
+// discovery surface stays unaffected.
+func (h *DiscoveryHandlers) WithAIProposer(p DiscoveryAIProposer) *DiscoveryHandlers {
+	h.aiProposer = p
 	return h
 }
 
@@ -846,4 +878,276 @@ func marshalValidationResult(vr *scanner.ValidationResult) awsValidateResponse {
 		}
 	}
 	return out
+}
+
+// --- HandleAWSGenerateRecommendations (Stream 2F) -------------------
+
+// awsGenerateRecommendationsRequest is the JSON wire shape the
+// Inventory tab POSTs after a scan completes and the operator clicks
+// "Generate recommendations". The scan_result is the typed
+// scanner-result body the same operator just rendered; the handler
+// converts it into an ai.DiscoveryScanContext, calls the proposer,
+// and walks the plan-kind response into discovery-source
+// Recommendations.
+type awsGenerateRecommendationsRequest struct {
+	ScanResult awsScanResponse `json:"scan_result"`
+}
+
+// awsGenerateRecommendationsResponse is the wire shape the
+// Recommendations tab consumes. When the proposer declines (no
+// productive plan), Declined is true and Reason carries the model's
+// explanation; the Recommendations array is empty. Otherwise
+// Recommendations is one entry per plan step the model emitted.
+type awsGenerateRecommendationsResponse struct {
+	Declined        bool                             `json:"declined"`
+	Reason          string                           `json:"reason,omitempty"`
+	Reasoning       string                           `json:"reasoning,omitempty"`
+	Recommendations []recommendations.Recommendation `json:"recommendations"`
+}
+
+// HandleAWSGenerateRecommendations — POST
+// /api/v1/discovery/aws/connections/:id/recommendations.
+//
+// Flow:
+//  1. Validate request body shape. 400 on malformed JSON.
+//  2. Verify the account_id in the URL matches scan_result.account_id —
+//     a mismatch is operator error (e.g. accidentally scrolled to the
+//     wrong account's inventory) and should fail loudly before the
+//     proposer runs.
+//  3. Look up the connection via credstore.GetConnection. 404 on
+//     "no row matches"; the recommendations route exists only for
+//     accounts Squadron is configured to scan.
+//  4. Convert scanner.Result → ai.DiscoveryScanContext, then call
+//     aiProposer.ProposeFromDiscoveryScan.
+//  5. If declined: 200 with declined=true + the reason. No
+//     recommendations_generated audit event (nothing was generated).
+//  6. Otherwise: walk the plan-kind result into recommendation rows —
+//     one per plan step — and emit the
+//     discovery.aws.recommendations_generated audit event with
+//     {scan_id, account_id, step_count, tokens_in, tokens_out}. The
+//     audit payload does NOT include the Terraform content; audit logs
+//     shouldn't grow with snippet size.
+//
+// Returns 200 with the typed response on success. 400/404/500 per the
+// flow above.
+func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
+	accountID := strings.TrimSpace(c.Param("id"))
+	if accountID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingAccountID",
+			Message: "Account ID path parameter is required.",
+		}})
+		return
+	}
+
+	if h.credStore == nil {
+		// Belt-and-braces — the trampoline already 503s when credStore
+		// is nil. Surfaced as 500 here for the struct-literal path.
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "CredStoreNotWired",
+			Message:       "Squadron's credential substrate isn't configured.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+	if h.aiProposer == nil {
+		// The trampoline 503s when aiProposer is nil on this route;
+		// the direct-struct path lands here.
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "AIProposerNotWired",
+			Message: "Squadron's AI assist is not configured. Set ANTHROPIC_API_KEY and ai.enabled=true to enable discovery recommendations.",
+		}})
+		return
+	}
+
+	var req awsGenerateRecommendationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message: "Request body could not be parsed as JSON. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.ScanResult.ScanID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingScanID",
+			Message: "scan_result.scan_id is required. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.ScanResult.AccountID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingScanAccountID",
+			Message: "scan_result.account_id is required.",
+		}})
+		return
+	}
+	// The URL :id and the scan_result.account_id must match. A mismatch
+	// is almost always operator error (clicked the wrong tab); fail
+	// loudly before the proposer runs.
+	if req.ScanResult.AccountID != accountID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "AccountIDMismatch",
+			Message: "scan_result.account_id does not match the URL path account_id. Re-run the scan against the right connection and retry.",
+		}})
+		return
+	}
+
+	conn, err := h.credStore.GetConnection(c.Request.Context(), accountID)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws generate recommendations: credstore read failed",
+				zap.Error(err), zap.String("account_id", accountID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "CredStoreReadFailed",
+			Message:       "Squadron could not read the connection. The error has been logged; retry in a moment.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+	if conn == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ConnectionNotFound",
+			Message: "No AWS connection exists with that account ID. Connect the account from the wizard first.",
+		}})
+		return
+	}
+
+	// Convert the scan-result wire shape into the AI context. The
+	// proposer prompt reasons about categories; both lists carry the
+	// same per-row fields the scanner produces.
+	aiCtx := &ai.DiscoveryScanContext{
+		ScanID:              req.ScanResult.ScanID,
+		AccountID:           req.ScanResult.AccountID,
+		Regions:             append([]string{}, req.ScanResult.Regions...),
+		InstrumentedCount:   req.ScanResult.InstrumentedCount,
+		UninstrumentedCount: req.ScanResult.UninstrumentedCount,
+	}
+	for _, ci := range req.ScanResult.Compute {
+		aiCtx.ComputeInstances = append(aiCtx.ComputeInstances, ai.ComputeResourceCandidate{
+			ResourceID:   ci.ResourceID,
+			InstanceType: ci.InstanceType,
+			Region:       ci.Region,
+			OSFamily:     ci.OSFamily,
+			HasOTel:      ci.HasOTel,
+		})
+	}
+	for _, fn := range req.ScanResult.Functions {
+		aiCtx.Functions = append(aiCtx.Functions, ai.FunctionResourceCandidate{
+			ResourceID:   fn.ResourceID,
+			Name:         fn.Name,
+			Runtime:      fn.Runtime,
+			Region:       fn.Region,
+			HasOTelLayer: fn.HasOTelLayer,
+		})
+	}
+
+	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("aws generate recommendations: proposer call failed",
+				zap.Error(err), zap.String("account_id", accountID), zap.String("scan_id", aiCtx.ScanID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ProposerCallFailed",
+			Message: "Squadron's AI proposer failed: " + err.Error(),
+		}})
+		return
+	}
+
+	if result.Declined {
+		// Surface the model's reason; no audit event for
+		// recommendations_generated (nothing was generated). An empty
+		// Recommendations array — never null — so the UI's branch on
+		// .length stays simple.
+		c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+			Declined:        true,
+			Reason:          result.Reason,
+			Recommendations: []recommendations.Recommendation{},
+		})
+		return
+	}
+
+	// Walk the plan-kind result into one Recommendation per step. Each
+	// step's Terraform lands in the typed IaC field (the v0.85 Stream
+	// 2B addition); the Action payload carries the step JSON for the
+	// UI's preview flow.
+	now := time.Now().UTC()
+	recs := make([]recommendations.Recommendation, 0, len(result.Plan.Steps))
+	for i, step := range result.Plan.Steps {
+		stepJSON, err := json.Marshal(step)
+		if err != nil {
+			// Marshal of a Go struct we just produced should never
+			// fail. Surface as 500 so the operator sees a clean
+			// error rather than a half-filled recommendations list.
+			if h.logger != nil {
+				h.logger.Error("aws generate recommendations: plan step marshal failed",
+					zap.Error(err), zap.Int("step_index", i))
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+				Code:    "PlanStepMarshalFailed",
+				Message: "Squadron could not encode the plan step. The error has been logged.",
+			}})
+			return
+		}
+		title := step.Name
+		if title == "" {
+			title = "Discovery recommendation"
+		}
+		detail := result.Reasoning
+		if detail == "" {
+			detail = "AI-emitted instrumentation plan step. Run the Terraform through your IaC pipeline."
+		}
+		rec := recommendations.Recommendation{
+			ID:              "discovery-" + req.ScanResult.ScanID + "-" + strconv.Itoa(i),
+			Category:        recommendations.CategoryEmptySignal, // closest existing semantic match: "resource emits no telemetry"
+			Severity:        recommendations.SeverityWarn,
+			Title:           title,
+			Detail:          detail,
+			EstSavingsBytes: 0,
+			GeneratedAt:     now,
+			Source: &recommendations.RecommendationSource{
+				Kind:  recommendations.SourceDiscoveryScan,
+				RefID: req.ScanResult.ScanID,
+			},
+			Action: &recommendations.RecommendationAction{
+				Kind:    recommendations.ActionPlan,
+				Payload: stepJSON,
+			},
+			IaC: &recommendations.IaCSnippet{
+				Format: recommendations.IaCTerraform,
+				Source: step.InlineConfigSnippet,
+			},
+		}
+		recs = append(recs, rec)
+	}
+
+	// Audit event. Payload deliberately omits the Terraform content —
+	// audit rows shouldn't grow with snippet size. step_count +
+	// scan_id + token metering are what an auditor needs to
+	// reconstruct "what was generated and how much did it cost".
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      "system",
+			EventType:  "discovery.aws.recommendations_generated",
+			TargetType: credstore.TargetTypeCloudConnection,
+			TargetID:   accountID,
+			Action:     "recommendations_generated",
+			Payload: map[string]any{
+				"account_id":  accountID,
+				"scan_id":     req.ScanResult.ScanID,
+				"step_count":  len(recs),
+				"tokens_in":   result.TokensIn,
+				"tokens_out":  result.TokensOut,
+				"model":       result.Model,
+				"recorded_at": now,
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+		Declined:        false,
+		Reasoning:       result.Reasoning,
+		Recommendations: recs,
+	})
 }
