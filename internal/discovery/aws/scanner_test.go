@@ -5,6 +5,7 @@ package aws
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -812,6 +813,58 @@ func TestScanner_ScanRDSFailureSetsPartialAndFailedServices(t *testing.T) {
 	// string. Single-service-failure case: exactly one entry.
 	if len(result.FailedServices) != 1 || result.FailedServices[0] != "rds" {
 		t.Errorf("Result.FailedServices = %v, want [\"rds\"]", result.FailedServices)
+	}
+}
+
+// TestScanner_MultiServiceFailureAccumulatesPartialReason pins the
+// v0.88.3 fix for #586: when multiple services fail in the same scan,
+// PartialReason accumulates joined by "; " instead of overwriting
+// (only the last failure surviving). FailedServices was always
+// accumulating correctly — that part of the contract pre-dates v0.88.3.
+// This test seeds two simultaneous failures (rds + s3) and asserts:
+//
+//  1. Result.Partial = true (same as single-failure case)
+//  2. Result.PartialReason contains BOTH service names (not just the
+//     last-failed one — that was #586's symptom)
+//  3. Result.FailedServices contains BOTH entries in their walk order
+//
+// Multi-region scans are out of scope here; that path can compound
+// failures further but the accumulator logic is the same per region.
+func TestScanner_MultiServiceFailureAccumulatesPartialReason(t *testing.T) {
+	s := newTestScanner(t, &fakeFactory{
+		ec2:    &fakeEC2{},
+		lambda: &fakeLambda{},
+		rds:    &fakeRDS{callErr: &apiErr{code: "AccessDenied", msg: "rds:DescribeDBInstances denied"}},
+		s3:     &fakeS3{listBucketsErr: &apiErr{code: "AccessDenied", msg: "s3:ListAllMyBuckets denied"}},
+		elbv2:  &fakeELBv2{},
+		sts:    &fakeSTS{},
+	})
+	result, err := s.Scan(context.Background(), &credstore.CloudConnection{Regions: []string{"us-east-1"}}, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v (Scanner contract says Partial=true, not a Go error)", err)
+	}
+	if !result.Partial {
+		t.Fatalf("Result.Partial = false, want true when multiple services fail")
+	}
+	// PartialReason must contain BOTH service identifiers. Pre-v0.88.3
+	// the rds message would be CLOBBERED by the s3 message (s3 walks
+	// after rds in the per-region loop). The accumulator joins them
+	// with "; " so audit consumers and operators see every failure.
+	if !strings.Contains(result.PartialReason, "rds scan failed") {
+		t.Errorf("PartialReason missing rds message — got %q; #586 regression", result.PartialReason)
+	}
+	if !strings.Contains(result.PartialReason, "s3 scan failed") {
+		t.Errorf("PartialReason missing s3 message — got %q", result.PartialReason)
+	}
+	if !strings.Contains(result.PartialReason, "; ") {
+		t.Errorf("PartialReason missing ';' separator — got %q; accumulator format broken", result.PartialReason)
+	}
+	// FailedServices must contain BOTH in the walk order (rds then s3).
+	if len(result.FailedServices) != 2 {
+		t.Fatalf("Result.FailedServices length = %d, want 2; got %v", len(result.FailedServices), result.FailedServices)
+	}
+	if result.FailedServices[0] != "rds" || result.FailedServices[1] != "s3" {
+		t.Errorf("Result.FailedServices = %v, want [\"rds\", \"s3\"] in walk order", result.FailedServices)
 	}
 }
 
