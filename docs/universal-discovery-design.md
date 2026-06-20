@@ -170,13 +170,14 @@ role if they discovered the role ARN. The `ExternalId` is the
 shared secret that proves the assume-role request originated from
 the specific Squadron deployment the customer authorized.
 
-### Permissions policy (slice 1 + slice 2 + slice 3a)
+### Permissions policy (slice 1 + slice 2 + slice 3a + slice 3b)
 
 The role's permissions policy is strictly read-only. Slice 1 covered
 EC2 + Lambda (9 actions); slice 2 (v0.87) added RDS as the third
-service Squadron walks (1 action); slice 3a (v0.88.0) adds S3 (5
-actions) and ELBv2 / ALB / NLB (3 actions), bringing the total to
-17 read-only actions. The slice 3a policy:
+service Squadron walks (1 action); slice 3a (v0.88.0) added S3 (5
+actions) and ELBv2 / ALB / NLB (3 actions); slice 3b (v0.89.0) adds
+EKS (5 actions), bringing the total to 22 read-only actions. The
+slice 3b policy:
 
 ```json
 {
@@ -201,7 +202,12 @@ actions) and ELBv2 / ALB / NLB (3 actions), bringing the total to
         "s3:GetBucketRequestPayment",
         "elasticloadbalancing:DescribeLoadBalancers",
         "elasticloadbalancing:DescribeLoadBalancerAttributes",
-        "elasticloadbalancing:DescribeTags"
+        "elasticloadbalancing:DescribeTags",
+        "eks:ListClusters",
+        "eks:DescribeCluster",
+        "eks:ListAddons",
+        "eks:DescribeAddon",
+        "eks:ListNodegroups"
       ],
       "Resource": "*"
     }
@@ -257,11 +263,31 @@ the following AWS write APIs:
 - `rds:ModifyDBInstance`
 - `s3:PutBucketLogging`
 - `elasticloadbalancing:ModifyLoadBalancerAttributes`
+- `eks:UpdateCluster` / `eks:CreateAddon` / `eks:DeleteCluster` / `eks:Update*`
 - `ec2:RunInstances` / `ec2:Terminate*` / `ec2:Modify*`
 - `lambda:UpdateFunctionConfiguration` / `lambda:Update*`
 - any `iam:*` action
 
-When slice 3b adds EKS, this policy expands by additional
+Slice 3b's EKS actions return cluster metadata only:
+`eks:ListClusters` returns cluster NAMES (one identifier per
+cluster, no contents); `eks:DescribeCluster` returns the
+control-plane logging config + Kubernetes version + status + ARN
++ tags + endpoint URL (the URL is metadata, not access — Squadron
+never connects to the K8s API); `eks:ListAddons` returns add-on
+NAMES; `eks:DescribeAddon` returns add-on version + status;
+`eks:ListNodegroups` returns nodegroup NAMES (informational count
+only — Squadron does not read instance details, pod state, or any
+in-cluster runtime data). The discovery role does NOT get
+Kubernetes RBAC, does NOT use `aws-auth` ConfigMap mappings, does
+NOT call any K8s API, and does NOT see pod data, K8s secrets, or
+any in-cluster runtime state. The threat surface is strictly the
+AWS-side cluster metadata. The proposer surfaces enablement
+recommendations as plan steps — Terraform that calls
+`aws_eks_cluster.enabled_cluster_log_types` and
+`aws_eks_addon`. **Squadron does NOT execute `eks:UpdateCluster`
+or `eks:CreateAddon`**.
+
+Each future slice expands this policy by additional
 Describe/List/Get actions only. The "no write actions" invariant
 holds across every slice. If a future slice ever needs write
 actions, that's a fundamentally different posture (the remediation
@@ -339,7 +365,7 @@ What's the blast radius at each posture? This section is the
 honest answer to the security review question "what happens if
 Squadron is compromised."
 
-### Posture: Discovery role only (slice 1 + slice 2 + slice 3a)
+### Posture: Discovery role only (slice 1 + slice 2 + slice 3a + slice 3b)
 
 If an attacker compromises a Squadron deployment and the only IAM
 role connected is the discovery role:

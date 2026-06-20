@@ -64,6 +64,17 @@ type DiscoveryScanContext struct {
 	// rather than asking the operator to invent one.
 	LoadBalancers []LoadBalancerCandidate
 
+	// Clusters joins the inventory list in slice 3b (v0.89.0). EKS
+	// today; GKE / AKS slot into the same field in later slices.
+	// The proposer's instrumented rule for clusters is COMPOSITE —
+	// control plane logging on (api + audit minimum) AND an ACTIVE
+	// observability addon (adot or amazon-cloudwatch-observability)
+	// must BOTH hold. The proposer reasons at cluster level and
+	// emits a single plan step per uncovered cluster covering both
+	// axes. Squadron NEVER executes eks:UpdateCluster or
+	// eks:CreateAddon — read-only invariant.
+	Clusters []ClusterCandidate
+
 	// Coverage assessment, denormalized so the prompt body can
 	// reference the totals without recounting. Match the scanner
 	// Result fields one-to-one.
@@ -164,6 +175,28 @@ type LoadBalancerCandidate struct {
 	Region             string `json:"region"`
 }
 
+// ClusterCandidate is one EKS-shaped row from the scan. Mirrors
+// scanner.ClusterSnapshot for the same import-boundary reason as
+// the other candidates.
+//
+// The proposer's instrumented rule for clusters is COMPOSITE.
+// Axis 1: ControlPlaneLogging must include BOTH "api" AND "audit".
+// Axis 2: AddonNames must contain "adot" OR
+// "amazon-cloudwatch-observability". (The dispatch glue at the
+// handler layer flattens addons[*].name where status is ACTIVE
+// before populating AddonNames here, so the proposer prompt body
+// doesn't have to re-implement the status filter.) Both axes must
+// hold for a cluster to count as covered; either alone is
+// insufficient.
+type ClusterCandidate struct {
+	ResourceID          string   `json:"resource_id"`
+	Name                string   `json:"name"`
+	KubernetesVersion   string   `json:"kubernetes_version"`
+	ControlPlaneLogging []string `json:"control_plane_logging"`
+	AddonNames          []string `json:"addon_names"`
+	Region              string   `json:"region"`
+}
+
 // ProposeFromDiscoveryScan is the v0.85 sibling of
 // ProposeFromCostSpike. Same proposer engine, different entry point.
 // The model receives a Squadron-discovered AWS inventory snapshot and
@@ -202,6 +235,9 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 	if err := validateLoadBalancerCandidates(in.LoadBalancers); err != nil {
+		return nil, fmt.Errorf("discovery scan context: %w", err)
+	}
+	if err := validateClusterCandidates(in.Clusters); err != nil {
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 
@@ -341,6 +377,25 @@ func validateLoadBalancerCandidates(lbs []LoadBalancerCandidate) error {
 		}
 		if strings.TrimSpace(l.Type) == "" {
 			return fmt.Errorf("load_balancers[%d]: type is required", i)
+		}
+	}
+	return nil
+}
+
+// validateClusterCandidates mirrors validateDatabaseCandidates for
+// the slice 3b (v0.89.0) EKS candidate type. Each row must carry a
+// non-empty ResourceID (the cluster ARN) and Name — the proposer
+// cites them back via the evidence array. KubernetesVersion and the
+// two axis fields (ControlPlaneLogging, AddonNames) are not
+// enforced; an empty slice on either is a valid uncovered signal
+// the proposer reasons about directly.
+func validateClusterCandidates(cs []ClusterCandidate) error {
+	for i, c := range cs {
+		if strings.TrimSpace(c.ResourceID) == "" {
+			return fmt.Errorf("clusters[%d]: resource_id is required", i)
+		}
+		if strings.TrimSpace(c.Name) == "" {
+			return fmt.Errorf("clusters[%d]: name is required", i)
 		}
 	}
 	return nil

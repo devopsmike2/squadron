@@ -473,3 +473,79 @@ func TestProposeFromDiscoveryScan_RequestsProposerMaxTokens(t *testing.T) {
 	assert.Equal(t, float64(8192), gotMaxTokens,
 		"ProposerMaxTokens itself should stay at 8192 unless we also extend docs/ai-features.md")
 }
+
+// TestProposeFromDiscoveryScan_ClusterValidation pins the slice 3b
+// (v0.89.0) pre-call validator on ClusterCandidate rows. A row
+// missing resource_id or name is a converter bug — the proposer
+// cites them back via the evidence array, and an empty value would
+// surface in the model's reasoning as an unactionable row.
+// ControlPlaneLogging and AddonNames are NOT enforced because the
+// "uncovered" signal IS an empty-or-missing axis; the validator
+// only enforces identifier fields.
+func TestProposeFromDiscoveryScan_ClusterValidation(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	t.Run("missing resource_id is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.Clusters = []ClusterCandidate{{Name: "x"}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resource_id")
+	})
+	t.Run("missing name is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.Clusters = []ClusterCandidate{{
+			ResourceID: "arn:aws:eks:us-east-1:123:cluster/x",
+		}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "name")
+	})
+}
+
+// TestBuildDiscoveryUserMessage_Clusters verifies the slice 3b
+// user-prompt builder threads each ClusterCandidate field into the
+// rendered message body and emits the four-corner coverage
+// shorthand strings the system prompt teaches (covered /
+// logs-only / addon-only / uncovered). Pins the rule rendering
+// so a future prompt edit can't silently regress the framing.
+func TestBuildDiscoveryUserMessage_Clusters(t *testing.T) {
+	ctx := discoveryContextForTest()
+	ctx.Clusters = []ClusterCandidate{
+		{
+			ResourceID: "arn:aws:eks:us-east-1:123:cluster/covered",
+			Name:       "covered", KubernetesVersion: "1.29",
+			ControlPlaneLogging: []string{"api", "audit"},
+			AddonNames:          []string{"adot"},
+			Region:              "us-east-1",
+		},
+		{
+			ResourceID: "arn:aws:eks:us-east-1:123:cluster/logs-only",
+			Name:       "logs-only", KubernetesVersion: "1.29",
+			ControlPlaneLogging: []string{"api", "audit"},
+			Region:              "us-east-1",
+		},
+		{
+			ResourceID: "arn:aws:eks:us-east-1:123:cluster/addon-only",
+			Name:       "addon-only", KubernetesVersion: "1.29",
+			AddonNames: []string{"amazon-cloudwatch-observability"},
+			Region:     "us-east-1",
+		},
+		{
+			ResourceID: "arn:aws:eks:us-east-1:123:cluster/uncovered",
+			Name:       "uncovered", KubernetesVersion: "1.29",
+			Region: "us-east-1",
+		},
+	}
+	got := buildDiscoveryUserMessage(*ctx)
+	assert.Contains(t, got, "Clusters (4 total):")
+	assert.Contains(t, got, "covered")
+	assert.Contains(t, got, "logs-only")
+	assert.Contains(t, got, "addon-only")
+	assert.Contains(t, got, "uncovered")
+	assert.Contains(t, got, "adot")
+	assert.Contains(t, got, "amazon-cloudwatch-observability")
+	assert.Contains(t, got, "k8s=1.29")
+}

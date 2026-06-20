@@ -5,12 +5,15 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -248,12 +251,112 @@ func (f *fakeELBv2) DescribeTags(_ context.Context, in *elasticloadbalancingv2.D
 	return out, nil
 }
 
+// fakeEKS is the slice 3b (v0.89.0) EKS double. Services the six
+// methods the EKSClient interface requires. Pagination follows the
+// same NextToken shape as the SDK. Per-cluster expansion responses
+// are keyed by cluster name so each test scenario can wire its
+// own per-cluster behavior.
+type fakeEKS struct {
+	listClustersPages    []*eks.ListClustersOutput
+	listClustersIdx      int
+	listClustersErr      error
+	describeByName       map[string]*eks.DescribeClusterOutput
+	describeErr          error
+	listAddonsByCluster  map[string]*eks.ListAddonsOutput
+	listAddonsErr        error
+	describeAddonByKey   map[string]*eks.DescribeAddonOutput // key = cluster + "/" + addon
+	describeAddonErr     error
+	listNodegroupsByName map[string]*eks.ListNodegroupsOutput
+	listNodegroupsErr    error
+	listFargateByName    map[string]*eks.ListFargateProfilesOutput
+	listFargateErr       error
+}
+
+func (f *fakeEKS) ListClusters(_ context.Context, _ *eks.ListClustersInput, _ ...func(*eks.Options)) (*eks.ListClustersOutput, error) {
+	if f.listClustersErr != nil {
+		return nil, f.listClustersErr
+	}
+	if f.listClustersIdx >= len(f.listClustersPages) {
+		return &eks.ListClustersOutput{}, nil
+	}
+	out := f.listClustersPages[f.listClustersIdx]
+	f.listClustersIdx++
+	return out, nil
+}
+
+func (f *fakeEKS) DescribeCluster(_ context.Context, in *eks.DescribeClusterInput, _ ...func(*eks.Options)) (*eks.DescribeClusterOutput, error) {
+	if f.describeErr != nil {
+		return nil, f.describeErr
+	}
+	if in == nil || in.Name == nil {
+		return &eks.DescribeClusterOutput{}, nil
+	}
+	if out, ok := f.describeByName[*in.Name]; ok && out != nil {
+		return out, nil
+	}
+	return &eks.DescribeClusterOutput{}, nil
+}
+
+func (f *fakeEKS) ListAddons(_ context.Context, in *eks.ListAddonsInput, _ ...func(*eks.Options)) (*eks.ListAddonsOutput, error) {
+	if f.listAddonsErr != nil {
+		return nil, f.listAddonsErr
+	}
+	if in == nil || in.ClusterName == nil {
+		return &eks.ListAddonsOutput{}, nil
+	}
+	if out, ok := f.listAddonsByCluster[*in.ClusterName]; ok && out != nil {
+		return out, nil
+	}
+	return &eks.ListAddonsOutput{}, nil
+}
+
+func (f *fakeEKS) DescribeAddon(_ context.Context, in *eks.DescribeAddonInput, _ ...func(*eks.Options)) (*eks.DescribeAddonOutput, error) {
+	if f.describeAddonErr != nil {
+		return nil, f.describeAddonErr
+	}
+	if in == nil || in.ClusterName == nil || in.AddonName == nil {
+		return &eks.DescribeAddonOutput{}, nil
+	}
+	key := *in.ClusterName + "/" + *in.AddonName
+	if out, ok := f.describeAddonByKey[key]; ok && out != nil {
+		return out, nil
+	}
+	return &eks.DescribeAddonOutput{}, nil
+}
+
+func (f *fakeEKS) ListNodegroups(_ context.Context, in *eks.ListNodegroupsInput, _ ...func(*eks.Options)) (*eks.ListNodegroupsOutput, error) {
+	if f.listNodegroupsErr != nil {
+		return nil, f.listNodegroupsErr
+	}
+	if in == nil || in.ClusterName == nil {
+		return &eks.ListNodegroupsOutput{}, nil
+	}
+	if out, ok := f.listNodegroupsByName[*in.ClusterName]; ok && out != nil {
+		return out, nil
+	}
+	return &eks.ListNodegroupsOutput{}, nil
+}
+
+func (f *fakeEKS) ListFargateProfiles(_ context.Context, in *eks.ListFargateProfilesInput, _ ...func(*eks.Options)) (*eks.ListFargateProfilesOutput, error) {
+	if f.listFargateErr != nil {
+		return nil, f.listFargateErr
+	}
+	if in == nil || in.ClusterName == nil {
+		return &eks.ListFargateProfilesOutput{}, nil
+	}
+	if out, ok := f.listFargateByName[*in.ClusterName]; ok && out != nil {
+		return out, nil
+	}
+	return &eks.ListFargateProfilesOutput{}, nil
+}
+
 type fakeFactory struct {
 	ec2    EC2Client
 	lambda LambdaClient
 	rds    RDSClient
 	s3     S3Client
 	elbv2  ELBv2Client
+	eks    EKSClient
 	sts    STSClient
 }
 
@@ -290,6 +393,15 @@ func (f *fakeFactory) ELBv2(_ context.Context, _ string) (ELBv2Client, error) {
 		return &fakeELBv2{}, nil
 	}
 	return f.elbv2, nil
+}
+
+// EKS returns the configured fake EKS client. Same zero-output
+// fallback as the other services. Slice 3b (v0.89.0).
+func (f *fakeFactory) EKS(_ context.Context, _ string) (EKSClient, error) {
+	if f.eks == nil {
+		return &fakeEKS{}, nil
+	}
+	return f.eks, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake
@@ -538,11 +650,12 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 		t.Fatalf("AssumeRoleOK should be true on the happy path; AssumeRoleErr=%+v", vr.AssumeRoleErr)
 	}
 	// Slice 3a (v0.88.0) added s3 + alb as the 4th and 5th preflight
-	// rows — assert all five services land in the validation panel.
-	// Slice 1 shipped ec2+lambda; slice 2 (v0.87) added rds; slice 3a
-	// (v0.88.0) adds s3+alb.
-	if len(vr.Preflight) != 5 {
-		t.Fatalf("Preflight rows = %d, want 5 (ec2 + lambda + rds + s3 + alb)", len(vr.Preflight))
+	// rows; slice 3b (v0.89.0) adds eks as the 6th — assert all six
+	// services land in the validation panel. Slice 1 shipped
+	// ec2+lambda; slice 2 (v0.87) added rds; slice 3a (v0.88.0) added
+	// s3+alb; slice 3b (v0.89.0) adds eks.
+	if len(vr.Preflight) != 6 {
+		t.Fatalf("Preflight rows = %d, want 6 (ec2 + lambda + rds + s3 + alb + eks)", len(vr.Preflight))
 	}
 	services := map[string]bool{}
 	for _, p := range vr.Preflight {
@@ -551,7 +664,7 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 			t.Errorf("Preflight %q OK=false, err=%+v", p.Service, p.Err)
 		}
 	}
-	for _, want := range []string{"ec2", "lambda", "rds", "s3", "alb"} {
+	for _, want := range []string{"ec2", "lambda", "rds", "s3", "alb", "eks"} {
 		if !services[want] {
 			t.Errorf("Validate did not produce a %q preflight row", want)
 		}
@@ -1276,4 +1389,225 @@ func TestScanner_ScanALBFailureSetsPartialAndFailedServices(t *testing.T) {
 	if !hasALB {
 		t.Errorf("Result.FailedServices = %v, want to include \"alb\"", result.FailedServices)
 	}
+}
+
+// TestScanner_ScanMapsEKSResult is the slice 3b (v0.89.0) mapping
+// happy path: a single cluster returned by ListClusters expands
+// through DescribeCluster + ListAddons + DescribeAddon + node /
+// fargate listings into a populated ClusterSnapshot. Both axes of
+// the composite instrumented rule are exercised: control plane
+// logging includes api + audit AND an ACTIVE adot add-on is
+// present, so the cluster lands in InstrumentedCount.
+func TestScanner_ScanMapsEKSResult(t *testing.T) {
+	enabled := true
+	clusterName := "prod"
+	clusterARN := "arn:aws:eks:us-east-1:123456789012:cluster/prod"
+	version := "1.29"
+	addonName := "adot"
+	addonVersion := "v0.92.0-eksbuild.1"
+	feks := &fakeEKS{
+		listClustersPages: []*eks.ListClustersOutput{
+			{Clusters: []string{clusterName}},
+		},
+		describeByName: map[string]*eks.DescribeClusterOutput{
+			clusterName: {
+				Cluster: &ekstypes.Cluster{
+					Arn:     awssdk.String(clusterARN),
+					Version: awssdk.String(version),
+					Status:  ekstypes.ClusterStatusActive,
+					Logging: &ekstypes.Logging{
+						ClusterLogging: []ekstypes.LogSetup{
+							{Enabled: &enabled, Types: []ekstypes.LogType{ekstypes.LogTypeApi, ekstypes.LogTypeAudit}},
+						},
+					},
+					Tags: map[string]string{"env": "prod"},
+				},
+			},
+		},
+		listAddonsByCluster: map[string]*eks.ListAddonsOutput{
+			clusterName: {Addons: []string{addonName}},
+		},
+		describeAddonByKey: map[string]*eks.DescribeAddonOutput{
+			clusterName + "/" + addonName: {
+				Addon: &ekstypes.Addon{
+					AddonName:    awssdk.String(addonName),
+					AddonVersion: awssdk.String(addonVersion),
+					Status:       ekstypes.AddonStatusActive,
+				},
+			},
+		},
+		listNodegroupsByName: map[string]*eks.ListNodegroupsOutput{
+			clusterName: {Nodegroups: []string{"ng-1", "ng-2"}},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, eks: feks, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	r, err := s.Scan(context.Background(), conn, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.Clusters) != 1 {
+		t.Fatalf("Clusters len = %d, want 1", len(r.Clusters))
+	}
+	c := r.Clusters[0]
+	if c.ResourceID != clusterARN {
+		t.Errorf("ResourceID = %q, want %q", c.ResourceID, clusterARN)
+	}
+	if c.Name != clusterName {
+		t.Errorf("Name = %q, want %q", c.Name, clusterName)
+	}
+	if c.KubernetesVersion != version {
+		t.Errorf("KubernetesVersion = %q, want %q", c.KubernetesVersion, version)
+	}
+	if len(c.ControlPlaneLogging) != 2 {
+		t.Fatalf("ControlPlaneLogging len = %d, want 2", len(c.ControlPlaneLogging))
+	}
+	gotLogs := strings.Join(c.ControlPlaneLogging, ",")
+	if !strings.Contains(gotLogs, "api") || !strings.Contains(gotLogs, "audit") {
+		t.Errorf("ControlPlaneLogging = %v, want api + audit", c.ControlPlaneLogging)
+	}
+	if len(c.Addons) != 1 || c.Addons[0].Name != addonName || c.Addons[0].Status != "ACTIVE" {
+		t.Errorf("Addons = %+v, want one ACTIVE adot", c.Addons)
+	}
+	if c.NodegroupCount != 2 {
+		t.Errorf("NodegroupCount = %d, want 2", c.NodegroupCount)
+	}
+	if c.Region != "us-east-1" {
+		t.Errorf("Region = %q, want us-east-1", c.Region)
+	}
+	if r.InstrumentedCount != 1 {
+		t.Errorf("InstrumentedCount = %d, want 1 (cluster is covered)", r.InstrumentedCount)
+	}
+}
+
+// TestScanner_EKSCompositeInstrumentedRule exercises the four
+// corners of the composite rule: covered / logs-only / addon-only
+// / uncovered. The InstrumentedCount tally should only catch the
+// COVERED cluster; the other three are UninstrumentedCount.
+func TestScanner_EKSCompositeInstrumentedRule(t *testing.T) {
+	enabled := true
+	clusters := []struct {
+		name   string
+		logs   []ekstypes.LogType
+		addons []ekstypes.AddonStatus
+	}{
+		{name: "covered", logs: []ekstypes.LogType{ekstypes.LogTypeApi, ekstypes.LogTypeAudit}, addons: []ekstypes.AddonStatus{ekstypes.AddonStatusActive}},
+		{name: "logs-only", logs: []ekstypes.LogType{ekstypes.LogTypeApi, ekstypes.LogTypeAudit}, addons: nil},
+		{name: "addon-only", logs: nil, addons: []ekstypes.AddonStatus{ekstypes.AddonStatusActive}},
+		{name: "uncovered", logs: nil, addons: nil},
+	}
+	feks := &fakeEKS{
+		describeByName:       map[string]*eks.DescribeClusterOutput{},
+		listAddonsByCluster:  map[string]*eks.ListAddonsOutput{},
+		describeAddonByKey:   map[string]*eks.DescribeAddonOutput{},
+		listNodegroupsByName: map[string]*eks.ListNodegroupsOutput{},
+	}
+	names := make([]string, 0, len(clusters))
+	for _, c := range clusters {
+		names = append(names, c.name)
+		desc := &ekstypes.Cluster{
+			Arn:     awssdk.String("arn:aws:eks:us-east-1:123:cluster/" + c.name),
+			Version: awssdk.String("1.29"),
+			Status:  ekstypes.ClusterStatusActive,
+		}
+		if len(c.logs) > 0 {
+			desc.Logging = &ekstypes.Logging{
+				ClusterLogging: []ekstypes.LogSetup{{Enabled: &enabled, Types: c.logs}},
+			}
+		}
+		feks.describeByName[c.name] = &eks.DescribeClusterOutput{Cluster: desc}
+		if len(c.addons) > 0 {
+			feks.listAddonsByCluster[c.name] = &eks.ListAddonsOutput{Addons: []string{"adot"}}
+			feks.describeAddonByKey[c.name+"/adot"] = &eks.DescribeAddonOutput{
+				Addon: &ekstypes.Addon{
+					AddonName: awssdk.String("adot"),
+					Status:    c.addons[0],
+				},
+			}
+		}
+	}
+	feks.listClustersPages = []*eks.ListClustersOutput{{Clusters: names}}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, eks: feks, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	r, err := s.Scan(context.Background(), conn, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.Clusters) != 4 {
+		t.Fatalf("Clusters len = %d, want 4", len(r.Clusters))
+	}
+	if r.InstrumentedCount != 1 {
+		t.Errorf("InstrumentedCount = %d, want 1 (only the covered cluster)", r.InstrumentedCount)
+	}
+	if r.UninstrumentedCount != 3 {
+		t.Errorf("UninstrumentedCount = %d, want 3 (logs-only + addon-only + uncovered)", r.UninstrumentedCount)
+	}
+}
+
+// TestScanner_ScanEKSFailureSetsPartialAndFailedServices pins the
+// slice 3b failure path: when the EKS walk fails, FailedServices
+// carries "eks" and PartialReason carries the formatted
+// explanation. Routes through recordPartialFailure per v0.88.3's
+// accumulator helper.
+func TestScanner_ScanEKSFailureSetsPartialAndFailedServices(t *testing.T) {
+	feks := &fakeEKS{listClustersErr: errors.New("AccessDenied: eks:ListClusters")}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, eks: feks, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	r, err := s.Scan(context.Background(), conn, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !r.Partial {
+		t.Error("Partial = false, want true")
+	}
+	if !containsString(r.FailedServices, "eks") {
+		t.Errorf("FailedServices = %v, want it to contain \"eks\"", r.FailedServices)
+	}
+	if !strings.Contains(r.PartialReason, "eks scan failed") {
+		t.Errorf("PartialReason = %q, want it to mention eks scan failed", r.PartialReason)
+	}
+}
+
+// TestScanner_EKSPreflightAccessDenied pins the preflight failure
+// path: when ListClusters returns AccessDenied, the preflight check
+// for "eks" lands on the ValidationResult with OK=false and the
+// trust-policy step suggestion (per HumanizeError's AccessDenied
+// branch which is shared across all services).
+func TestScanner_EKSPreflightAccessDenied(t *testing.T) {
+	feks := &fakeEKS{listClustersErr: &apiErr{code: "AccessDenied", msg: "User cannot perform eks:ListClusters"}}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, eks: feks, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	vr, err := s.Validate(context.Background(), conn)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	var got *scanner.PreflightCheck
+	for i := range vr.Preflight {
+		if vr.Preflight[i].Service == "eks" {
+			got = &vr.Preflight[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("Preflight missing \"eks\" entry: %+v", vr.Preflight)
+	}
+	if got.OK {
+		t.Errorf("eks preflight OK = true, want false")
+	}
+	if got.Err == nil || got.Err.SuggestedStep != "trust-policy" {
+		t.Errorf("eks preflight Err = %+v, want SuggestedStep=trust-policy", got.Err)
+	}
+}
+
+// containsString is a small helper used by the EKS failure test.
+// The discovery test file already has many ad-hoc helpers; this
+// one was kept local to the slice 3b additions so a future
+// rename of the file's existing helpers won't ripple here.
+func containsString(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
 }
