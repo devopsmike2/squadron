@@ -775,8 +775,13 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 // section:
 //   - discovery.aws.scan_started fires BEFORE the scan begins
 //   - discovery.aws.scan_completed fires AFTER the scan returns, with
-//     compute_count, function_count, instrumented_count,
-//     uninstrumented_count, and the partial flag in the payload
+//     compute_count, function_count, database_count,
+//     instrumented_count, uninstrumented_count, the partial flag,
+//     partial_reason (the operator-visible explanation when partial
+//     is true), and failed_services (structured list of service
+//     identifiers — "ec2"/"lambda"/"rds"/"assume_role" — for SIEM
+//     forwarders and the proposer's future scan-history loop to
+//     pattern-match against) in the payload
 //   - both events carry the account_id and (for scan_completed) the
 //     scan_id, so an auditor can reconstruct any scan's lifecycle from
 //     the audit log alone
@@ -923,6 +928,8 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 				"instrumented_count":   result.InstrumentedCount,
 				"uninstrumented_count": result.UninstrumentedCount,
 				"partial":              result.Partial,
+				"partial_reason":       result.PartialReason,
+				"failed_services":      result.FailedServices,
 				"recorded_at":          time.Now().UTC(),
 			},
 		})

@@ -5,6 +5,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -102,6 +103,86 @@ func TestScannerInterfaceCompiles(t *testing.T) {
 	if len(vr.Preflight) != 1 || vr.Preflight[0].Service != "ec2" {
 		t.Fatalf("Preflight row lost service tag: %+v", vr.Preflight)
 	}
+}
+
+// TestResult_PartialFieldsJSONRoundTrip pins the wire shape for the
+// two partial-scan fields the v0.87.3 audit-shape hotfix surfaces in
+// the discovery.aws.scan_completed audit payload (and which existing
+// HTTP consumers already see via the json tags on Result):
+//   - partial_reason (omitempty, human-readable)
+//   - failed_services (omitempty, structured list of service IDs)
+//
+// Audit consumers (SIEM forwarders, Timeline UI, squadronctl, the
+// proposer's future scan-history learning loop) pattern-match against
+// failed_services rather than parsing partial_reason; a JSON-shape
+// regression here would silently break them.
+func TestResult_PartialFieldsJSONRoundTrip(t *testing.T) {
+	original := &Result{
+		ScanID:         "scan-partial-1",
+		Provider:       credstore.ProviderAWS,
+		AccountID:      "123456789012",
+		Regions:        []string{"us-east-1"},
+		Partial:        true,
+		PartialReason:  "rds scan failed in us-east-1: AccessDenied",
+		FailedServices: []string{"rds"},
+	}
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Spot-check the snake_case keys land in the byte stream. The
+	// audit payload, the HTTP response, and any future Result
+	// serializer all share this shape.
+	s := string(raw)
+	for _, want := range []string{
+		`"partial":true`,
+		`"partial_reason":"rds scan failed in us-east-1: AccessDenied"`,
+		`"failed_services":["rds"]`,
+	} {
+		if !contains(s, want) {
+			t.Errorf("marshal output missing %q; got: %s", want, s)
+		}
+	}
+
+	var round Result
+	if err := json.Unmarshal(raw, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !round.Partial {
+		t.Errorf("Partial round-trip lost: %v", round.Partial)
+	}
+	if round.PartialReason != original.PartialReason {
+		t.Errorf("PartialReason round-trip = %q, want %q", round.PartialReason, original.PartialReason)
+	}
+	if len(round.FailedServices) != 1 || round.FailedServices[0] != "rds" {
+		t.Errorf("FailedServices round-trip = %v, want [\"rds\"]", round.FailedServices)
+	}
+
+	// Empty FailedServices stays out of the wire shape entirely
+	// (omitempty). Operators filtering on partial:false should not
+	// see a stray failed_services:[] key.
+	clean := &Result{ScanID: "scan-ok", Partial: false}
+	cleanRaw, err := json.Marshal(clean)
+	if err != nil {
+		t.Fatalf("marshal clean: %v", err)
+	}
+	if contains(string(cleanRaw), "failed_services") {
+		t.Errorf("clean Result should omit failed_services; got: %s", string(cleanRaw))
+	}
+	if contains(string(cleanRaw), "partial_reason") {
+		t.Errorf("clean Result should omit partial_reason; got: %s", string(cleanRaw))
+	}
+}
+
+// contains is a tiny helper so this package-level test stays
+// dependency-free — strings is otherwise unused in scanner_test.go.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // noopScanner satisfies the Scanner interface without doing anything
