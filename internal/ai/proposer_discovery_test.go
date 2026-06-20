@@ -267,6 +267,115 @@ func TestBuildDiscoveryUserMessage_Databases(t *testing.T) {
 	}
 }
 
+// TestProposeFromDiscoveryScan_ObjectStoreValidation pins the slice
+// 3a (v0.88.0) pre-call validator on ObjectStoreCandidate rows. A
+// row missing resource_id or region is a converter bug; the
+// proposer call fails loudly rather than threading the half-populated
+// row into the prompt body. Same posture as the v0.87 database
+// validator.
+func TestProposeFromDiscoveryScan_ObjectStoreValidation(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	t.Run("missing resource_id is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.ObjectStores = []ObjectStoreCandidate{{Region: "us-east-1"}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resource_id")
+	})
+
+	t.Run("missing region is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.ObjectStores = []ObjectStoreCandidate{{ResourceID: "prod-bucket"}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "region")
+	})
+}
+
+// TestProposeFromDiscoveryScan_LoadBalancerValidation pins the slice
+// 3a (v0.88.0) pre-call validator on LoadBalancerCandidate rows. A
+// row missing resource_id, name, or type is a converter bug.
+func TestProposeFromDiscoveryScan_LoadBalancerValidation(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	t.Run("missing resource_id is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.LoadBalancers = []LoadBalancerCandidate{{Name: "alb", Type: "application"}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resource_id")
+	})
+	t.Run("missing name is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.LoadBalancers = []LoadBalancerCandidate{{
+			ResourceID: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y",
+			Type:       "application",
+		}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "name")
+	})
+	t.Run("missing type is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.LoadBalancers = []LoadBalancerCandidate{{
+			ResourceID: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y",
+			Name:       "x",
+		}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "type")
+	})
+}
+
+// TestBuildDiscoveryUserMessage_ObjectStores_LoadBalancers verifies
+// the slice 3a user prompt builder threads each ObjectStore + LB
+// field into the message body and renders the coverage shorthand
+// strings the system prompt teaches (covered / uncovered) for both
+// categories. Pins the ALB→S3 cross-reference rendering: when an
+// ALB has access_logs_s3_bucket populated, the bucket name appears
+// in the rendered row so the model can match it against the
+// inventory.
+func TestBuildDiscoveryUserMessage_ObjectStores_LoadBalancers(t *testing.T) {
+	ctx := discoveryContextForTest()
+	ctx.ObjectStores = []ObjectStoreCandidate{
+		{ResourceID: "prod-data", Region: "us-east-1", ServerAccessLoggingEnabled: true},
+		{ResourceID: "staging-data", Region: "us-east-1", ServerAccessLoggingEnabled: false},
+	}
+	ctx.LoadBalancers = []LoadBalancerCandidate{
+		{
+			ResourceID: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/api-prod/abc",
+			Name:       "api-prod", Type: "application", Scheme: "internet-facing",
+			AccessLogsEnabled: true, AccessLogsS3Bucket: "prod-logs", Region: "us-east-1",
+		},
+		{
+			ResourceID: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/api-staging/def",
+			Name:       "api-staging", Type: "application", Scheme: "internal",
+			AccessLogsEnabled: false, Region: "us-east-1",
+		},
+	}
+	msg := buildDiscoveryUserMessage(*ctx)
+
+	for _, want := range []string{
+		"Object stores (2 total)",
+		"prod-data", "staging-data",
+		"covered", "uncovered",
+		"Load balancers (2 total)",
+		"api-prod", "api-staging",
+		"application", "internet-facing", "internal",
+		// Cross-reference rendering: the ALB's currently-configured
+		// access-logs target bucket appears in the rendered row so
+		// the model can decide whether to re-recommend.
+		"logs-to=prod-logs",
+	} {
+		assert.Contains(t, msg, want, "prompt should include %q", want)
+	}
+}
+
 // TestProposeFromDiscoveryScan_Disabled documents the gate: a service
 // constructed without an API key short-circuits to ErrDisabled so
 // callers don't have to nil-check the service.

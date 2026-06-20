@@ -89,7 +89,39 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`policy is read-only (rds:DescribeDBInstances). Each RDS plan step's ` +
 	`inline_config_snippet is Terraform the operator runs through their own IaC ` +
 	`pipeline — same posture as the Lambda + EC2 steps. Never imply Squadron flips PI ` +
-	`or EM on for the operator.` + "\n\n" +
+	`or EM on for the operator.` + "\n" +
+	`  - S3 buckets: the single observability lever is SERVER ACCESS LOGGING. An object ` +
+	`store is covered when server_access_logging_enabled is true; when false, recommend ` +
+	`enabling. The Terraform updates aws_s3_bucket_logging.target_bucket and ` +
+	`target_prefix. The TARGET BUCKET and PREFIX are operator choices — never invent a ` +
+	`specific bucket name; surface them as plan step parameters the operator fills in ` +
+	`before applying. A typical recommendation reads: "Enable Server Access Logging on ` +
+	`{bucket-list} — target bucket=<operator-choice>, prefix=<operator-choice>". ` +
+	`RequestMetrics (per-bucket CloudWatch request-rate observability) is informational ` +
+	`only — it does NOT gate the instrumented rule and you should not emit ` +
+	`recommendations for it. SQUADRON DOES NOT EXECUTE s3:PutBucketLogging. The ` +
+	`discovery IAM policy is read-only (s3:ListAllMyBuckets + s3:GetBucketLocation + ` +
+	`s3:GetBucketLogging + s3:GetBucketTagging). Each S3 plan step's ` +
+	`inline_config_snippet is Terraform the operator runs through their own IaC ` +
+	`pipeline.` + "\n" +
+	`  - Application / Network Load Balancers (ALB / NLB): the single observability ` +
+	`lever is ACCESS LOGS, which writes to an S3 bucket. A load balancer is covered ` +
+	`when access_logs_enabled is true; when false, recommend enabling. The Terraform ` +
+	`updates aws_lb.access_logs.bucket and aws_lb.access_logs.enabled = true. The ` +
+	`TARGET BUCKET is an operator choice with one cross-reference rule: WHEN THE ` +
+	`SCAN'S INVENTORY CONTAINS S3 BUCKETS (the "Object stores" section in the user ` +
+	`message), PREFER NAMING AN EXISTING INSTRUMENTED BUCKET as the target rather ` +
+	`than asking the operator to invent one. The operator can always override, but ` +
+	`defaulting to a bucket Squadron already sees in the inventory is the slice-3a ` +
+	`forward-dependency payoff — Squadron is the only piece in the operator's toolchain ` +
+	`that sees both sides of the ALB→S3 access-log relationship. When NO S3 buckets ` +
+	`exist in the inventory, the target bucket falls back to an operator-fill-in ` +
+	`placeholder. SQUADRON DOES NOT EXECUTE ` +
+	`elasticloadbalancing:ModifyLoadBalancerAttributes. The discovery IAM policy is ` +
+	`read-only (elasticloadbalancing:DescribeLoadBalancers + ` +
+	`elasticloadbalancing:DescribeLoadBalancerAttributes + ` +
+	`elasticloadbalancing:DescribeTags). Each ALB plan step's inline_config_snippet is ` +
+	`Terraform the operator runs through their own IaC pipeline.` + "\n\n" +
 
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
@@ -257,6 +289,59 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	if len(in.Databases) > len(dsample) {
 		fmt.Fprintf(&b, "  ... and %d more\n", len(in.Databases)-len(dsample))
+	}
+	b.WriteString("\n")
+
+	// Object stores. Slice 3a (v0.88.0) — same sampling rule.
+	// Render the single instrumented-rule axis (server access
+	// logging) explicitly because the proposer's per-row reasoning
+	// keys off whether that lever is missing. The "covered" /
+	// "uncovered" shorthand matches the prompt body's
+	// instructions.
+	fmt.Fprintf(&b, "Object stores (%d total):\n", len(in.ObjectStores))
+	osample := in.ObjectStores
+	if len(osample) > 20 {
+		osample = osample[:20]
+	}
+	for _, o := range osample {
+		coverage := "uncovered"
+		if o.ServerAccessLoggingEnabled {
+			coverage = "covered"
+		}
+		fmt.Fprintf(&b, "  - %s (region=%s, %s)\n",
+			o.ResourceID, o.Region, coverage)
+	}
+	if len(in.ObjectStores) > len(osample) {
+		fmt.Fprintf(&b, "  ... and %d more\n", len(in.ObjectStores)-len(osample))
+	}
+	b.WriteString("\n")
+
+	// Load balancers. Slice 3a (v0.88.0) — same sampling rule. The
+	// AccessLogsS3Bucket field surfaces alongside coverage so the
+	// proposer's cross-reference rule has both halves: when an ALB
+	// is uncovered AND the inventory has S3 buckets, the proposer
+	// can name an existing bucket as the target. When access_logs
+	// are enabled, the configured target bucket renders so the
+	// proposer can decline to re-recommend.
+	fmt.Fprintf(&b, "Load balancers (%d total):\n", len(in.LoadBalancers))
+	lsample := in.LoadBalancers
+	if len(lsample) > 20 {
+		lsample = lsample[:20]
+	}
+	for _, l := range lsample {
+		coverage := "uncovered"
+		if l.AccessLogsEnabled {
+			coverage = "covered"
+		}
+		target := ""
+		if l.AccessLogsS3Bucket != "" {
+			target = " logs-to=" + l.AccessLogsS3Bucket
+		}
+		fmt.Fprintf(&b, "  - %s (name=%s, type=%s, scheme=%s, region=%s, %s%s)\n",
+			l.ResourceID, l.Name, l.Type, l.Scheme, l.Region, coverage, target)
+	}
+	if len(in.LoadBalancers) > len(lsample) {
+		fmt.Fprintf(&b, "  ... and %d more\n", len(in.LoadBalancers)-len(lsample))
 	}
 	b.WriteString("\n")
 

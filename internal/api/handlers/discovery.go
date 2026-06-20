@@ -656,19 +656,26 @@ type awsRunScanRequest struct {
 // so we walk it once into a tagged struct rather than emit the Go
 // field names verbatim.
 type awsScanResponse struct {
-	ScanID              string                   `json:"scan_id"`
-	ScanStartedAt       time.Time                `json:"scan_started_at"`
-	ScanCompletedAt     time.Time                `json:"scan_completed_at"`
-	AccountID           string                   `json:"account_id"`
-	Provider            string                   `json:"provider"`
-	Regions             []string                 `json:"regions"`
-	Compute             []awsComputeInstanceRow  `json:"compute"`
-	Functions           []awsFunctionRuntimeRow  `json:"functions"`
-	Databases           []awsDatabaseInstanceRow `json:"databases"`
-	InstrumentedCount   int                      `json:"instrumented_count"`
-	UninstrumentedCount int                      `json:"uninstrumented_count"`
-	Partial             bool                     `json:"partial"`
-	PartialReason       string                   `json:"partial_reason,omitempty"`
+	ScanID          string                   `json:"scan_id"`
+	ScanStartedAt   time.Time                `json:"scan_started_at"`
+	ScanCompletedAt time.Time                `json:"scan_completed_at"`
+	AccountID       string                   `json:"account_id"`
+	Provider        string                   `json:"provider"`
+	Regions         []string                 `json:"regions"`
+	Compute         []awsComputeInstanceRow  `json:"compute"`
+	Functions       []awsFunctionRuntimeRow  `json:"functions"`
+	Databases       []awsDatabaseInstanceRow `json:"databases"`
+	// ObjectStores + LoadBalancers join the wire shape in slice 3a
+	// (v0.88.0). Always emitted as arrays (never null) so the UI's
+	// empty-state branch is a single `.length === 0` check —
+	// matching the existing Compute / Functions / Databases
+	// posture.
+	ObjectStores        []awsObjectStoreRow  `json:"object_stores"`
+	LoadBalancers       []awsLoadBalancerRow `json:"load_balancers"`
+	InstrumentedCount   int                  `json:"instrumented_count"`
+	UninstrumentedCount int                  `json:"uninstrumented_count"`
+	Partial             bool                 `json:"partial"`
+	PartialReason       string               `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -704,6 +711,36 @@ type awsDatabaseInstanceRow struct {
 	Tags                       map[string]string `json:"tags"`
 }
 
+// awsObjectStoreRow is the snake_case wire shape for one S3 row.
+// Slice 3a (v0.88.0). Mirrors scanner.ObjectStoreSnapshot — the
+// single instrumented-rule axis (server_access_logging_enabled)
+// surfaces as a boolean; request_metrics_enabled is the
+// informational badge column the Inventory tab renders alongside it.
+type awsObjectStoreRow struct {
+	ResourceID                 string            `json:"resource_id"`
+	Region                     string            `json:"region"`
+	ServerAccessLoggingEnabled bool              `json:"server_access_logging_enabled"`
+	RequestMetricsEnabled      bool              `json:"request_metrics_enabled"`
+	Tags                       map[string]string `json:"tags"`
+}
+
+// awsLoadBalancerRow is the snake_case wire shape for one ALB / NLB /
+// GWLB row. Slice 3a (v0.88.0). Mirrors
+// scanner.LoadBalancerSnapshot — the single instrumented-rule axis
+// (access_logs_enabled) surfaces as a boolean alongside the
+// access_logs_s3_bucket target so the Inventory tab can render the
+// cross-reference to the operator's S3 inventory in a single column.
+type awsLoadBalancerRow struct {
+	ResourceID         string            `json:"resource_id"`
+	Name               string            `json:"name"`
+	Type               string            `json:"type"`
+	Scheme             string            `json:"scheme"`
+	AccessLogsEnabled  bool              `json:"access_logs_enabled"`
+	AccessLogsS3Bucket string            `json:"access_logs_s3_bucket,omitempty"`
+	Region             string            `json:"region"`
+	Tags               map[string]string `json:"tags"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -718,6 +755,8 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		Compute:             make([]awsComputeInstanceRow, 0, len(r.Compute)),
 		Functions:           make([]awsFunctionRuntimeRow, 0, len(r.Functions)),
 		Databases:           make([]awsDatabaseInstanceRow, 0, len(r.Databases)),
+		ObjectStores:        make([]awsObjectStoreRow, 0, len(r.ObjectStores)),
+		LoadBalancers:       make([]awsLoadBalancerRow, 0, len(r.LoadBalancers)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -754,6 +793,27 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			Tags:                       db.Tags,
 		})
 	}
+	for _, o := range r.ObjectStores {
+		out.ObjectStores = append(out.ObjectStores, awsObjectStoreRow{
+			ResourceID:                 o.ResourceID,
+			Region:                     o.Region,
+			ServerAccessLoggingEnabled: o.ServerAccessLoggingEnabled,
+			RequestMetricsEnabled:      o.RequestMetricsEnabled,
+			Tags:                       o.Tags,
+		})
+	}
+	for _, l := range r.LoadBalancers {
+		out.LoadBalancers = append(out.LoadBalancers, awsLoadBalancerRow{
+			ResourceID:         l.ResourceID,
+			Name:               l.Name,
+			Type:               l.Type,
+			Scheme:             l.Scheme,
+			AccessLogsEnabled:  l.AccessLogsEnabled,
+			AccessLogsS3Bucket: l.AccessLogsS3Bucket,
+			Region:             l.Region,
+			Tags:               l.Tags,
+		})
+	}
 	return out
 }
 
@@ -776,10 +836,12 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 //   - discovery.aws.scan_started fires BEFORE the scan begins
 //   - discovery.aws.scan_completed fires AFTER the scan returns, with
 //     compute_count, function_count, database_count,
-//     instrumented_count, uninstrumented_count, the partial flag,
-//     partial_reason (the operator-visible explanation when partial
-//     is true), and failed_services (structured list of service
-//     identifiers — "ec2"/"lambda"/"rds"/"assume_role" — for SIEM
+//     object_store_count (slice 3a / v0.88.0), load_balancer_count
+//     (slice 3a / v0.88.0), instrumented_count, uninstrumented_count,
+//     the partial flag, partial_reason (the operator-visible
+//     explanation when partial is true), and failed_services
+//     (structured list of service identifiers —
+//     "ec2"/"lambda"/"rds"/"s3"/"alb"/"assume_role" — for SIEM
 //     forwarders and the proposer's future scan-history loop to
 //     pattern-match against) in the payload
 //   - both events carry the account_id and (for scan_completed) the
@@ -926,11 +988,21 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 		// failure path emits the same plus partial_reason +
 		// failed_services. Symmetric with the typed HTTP response.
 		payload := map[string]any{
-			"account_id":           accountID,
-			"scan_id":              result.ScanID,
-			"compute_count":        len(result.Compute),
-			"function_count":       len(result.Functions),
-			"database_count":       len(result.Databases),
+			"account_id":     accountID,
+			"scan_id":        result.ScanID,
+			"compute_count":  len(result.Compute),
+			"function_count": len(result.Functions),
+			"database_count": len(result.Databases),
+			// Slice 3a (v0.88.0) — object_store_count +
+			// load_balancer_count join the audit payload as
+			// MANDATORY fields (always present, never omitempty).
+			// Same posture as compute_count / function_count /
+			// database_count: an operator skimming the audit
+			// timeline should see the slice 3a categories' counts
+			// even on the happy path. Empty inventories emit "0";
+			// they do NOT drop out via omitempty.
+			"object_store_count":   len(result.ObjectStores),
+			"load_balancer_count":  len(result.LoadBalancers),
 			"instrumented_count":   result.InstrumentedCount,
 			"uninstrumented_count": result.UninstrumentedCount,
 			"partial":              result.Partial,
@@ -1158,6 +1230,33 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			PerformanceInsightsEnabled: db.PerformanceInsightsEnabled,
 			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
 			Region:                     db.Region,
+		})
+	}
+	// ObjectStores + LoadBalancers — slice 3a (v0.88.0). The proposer
+	// keys its single-axis instrumentation reasoning off the boolean
+	// flag in each row. AccessLogsS3Bucket is passed through so the
+	// proposer's ALB→S3 cross-reference rule can decide whether to
+	// re-recommend (decline) or recommend a different target
+	// (operator-chosen). RequestMetricsEnabled is intentionally NOT
+	// in ObjectStoreCandidate — slice 3a's instrumented rule is
+	// single-axis on server access logging; request-metrics is
+	// operator-facing information and stays out of the prompt body.
+	for _, o := range req.ScanResult.ObjectStores {
+		aiCtx.ObjectStores = append(aiCtx.ObjectStores, ai.ObjectStoreCandidate{
+			ResourceID:                 o.ResourceID,
+			Region:                     o.Region,
+			ServerAccessLoggingEnabled: o.ServerAccessLoggingEnabled,
+		})
+	}
+	for _, l := range req.ScanResult.LoadBalancers {
+		aiCtx.LoadBalancers = append(aiCtx.LoadBalancers, ai.LoadBalancerCandidate{
+			ResourceID:         l.ResourceID,
+			Name:               l.Name,
+			Type:               l.Type,
+			Scheme:             l.Scheme,
+			AccessLogsEnabled:  l.AccessLogsEnabled,
+			AccessLogsS3Bucket: l.AccessLogsS3Bucket,
+			Region:             l.Region,
 		})
 	}
 

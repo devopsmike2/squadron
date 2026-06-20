@@ -5,8 +5,10 @@ package aws
 
 import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // Local type aliases that keep the AWS SDK type names from leaking
@@ -23,3 +25,10 @@ type ec2Instance = ec2types.Instance
 type lambdaFunction = lambdatypes.FunctionConfiguration
 
 type rdsDBInstance = rdstypes.DBInstance
+
+// s3Bucket / elbv2LoadBalancer are the slice 3a (v0.88.0) additions.
+// Same alias rationale: keep mapping function signatures readable
+// without leaking the SDK's nested package paths.
+type s3Bucket = s3types.Bucket
+
+type elbv2LoadBalancer = elbv2types.LoadBalancer

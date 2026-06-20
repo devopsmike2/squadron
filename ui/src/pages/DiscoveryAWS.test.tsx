@@ -160,6 +160,37 @@ const sampleScan: ScanResult = {
       tags: {},
     },
   ],
+  // Slice 3a (v0.88.0) — two buckets (one with logging, one without)
+  // and one ALB pointing access logs at the logging-enabled bucket so
+  // the test verifies the cross-reference rendering.
+  object_stores: [
+    {
+      resource_id: "prod-logs",
+      region: "us-east-1",
+      server_access_logging_enabled: true,
+      request_metrics_enabled: false,
+      tags: {},
+    },
+    {
+      resource_id: "user-uploads",
+      region: "us-east-1",
+      server_access_logging_enabled: false,
+      request_metrics_enabled: false,
+      tags: {},
+    },
+  ],
+  load_balancers: [
+    {
+      resource_id: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/api-prod/aaaa",
+      name: "api-prod",
+      type: "application",
+      scheme: "internet-facing",
+      access_logs_enabled: true,
+      access_logs_s3_bucket: "prod-logs",
+      region: "us-east-1",
+      tags: {},
+    },
+  ],
   instrumented_count: 2,
   uninstrumented_count: 2,
   partial: false,
@@ -309,6 +340,27 @@ describe("DiscoveryAWSPage", () => {
     expect(
       within(document.body).getAllByText(/Enhanced Monitoring/i).length,
     ).toBeGreaterThan(0);
+
+    // Slice 3a (v0.88.0) — the Object stores section renders both
+    // buckets; the Load balancers section renders the ALB.
+    expect(screen.getByText("prod-logs")).toBeInTheDocument();
+    expect(screen.getByText("user-uploads")).toBeInTheDocument();
+    expect(screen.getByText("api-prod")).toBeInTheDocument();
+    // S3 lever badge label appears (one row covered, one
+    // uncovered). Request Metrics label appears for both rows.
+    expect(
+      within(document.body).getAllByText(/Server Access Logging/i).length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(document.body).getAllByText(/Request Metrics/i).length,
+    ).toBeGreaterThan(0);
+    // ALB lever badge label appears.
+    expect(
+      within(document.body).getAllByText(/Access Logs/i).length,
+    ).toBeGreaterThan(0);
+    // ALB→S3 cross-reference: the configured target bucket renders
+    // under the Access Logs badge for the covered row.
+    expect(screen.getByText(/→ prod-logs/i)).toBeInTheDocument();
 
     // Scanner was called exactly once with the chosen account ID.
     expect(mockedRunAWSScan).toHaveBeenCalledTimes(1);

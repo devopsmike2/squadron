@@ -466,8 +466,10 @@ function ScanResultPanel({
             Regions {result.regions.join(", ") || "(none)"} · completed{" "}
             {formatTime(result.scan_completed_at)} · scanned{" "}
             {result.compute.length} compute instances,{" "}
-            {result.functions.length} functions, and{" "}
-            {(result.databases ?? []).length} databases.
+            {result.functions.length} functions,{" "}
+            {(result.databases ?? []).length} databases,{" "}
+            {(result.object_stores ?? []).length} object stores, and{" "}
+            {(result.load_balancers ?? []).length} load balancers.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -518,6 +520,10 @@ function ScanResultPanel({
 
       {/* Databases section (slice 2 — v0.87) */}
       <DatabasesSection databases={result.databases ?? []} />
+
+      {/* Object stores + Load balancers sections (slice 3a — v0.88.0) */}
+      <ObjectStoresSection objectStores={result.object_stores ?? []} />
+      <LoadBalancersSection loadBalancers={result.load_balancers ?? []} />
     </div>
   );
 }
@@ -731,6 +737,154 @@ function LeverBadge({ ok, label }: { ok: boolean; label: string }) {
       <X className="h-3 w-3" aria-hidden />
       {label}
     </Badge>
+  );
+}
+
+// ObjectStoresSection renders the S3 bucket list. Slice 3a (v0.88.0).
+// Server Access Logging is the single instrumented-rule axis;
+// Request Metrics is rendered alongside as informational only —
+// matching the proposer prompt's "Server Access Logging is the only
+// lever" framing.
+function ObjectStoresSection({
+  objectStores,
+}: {
+  objectStores: ScanResult["object_stores"];
+}) {
+  const [open, setOpen] = useState(objectStores.length > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+        >
+          <CardTitle className="text-base">
+            Object stores ({objectStores.length})
+          </CardTitle>
+          {open ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {objectStores.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No object stores visible in the scanned regions.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {objectStores.map((o) => (
+                <li
+                  key={o.resource_id}
+                  className="rounded-md border bg-muted/20 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <code className="font-mono text-sm">{o.resource_id}</code>
+                      <p className="text-xs text-muted-foreground">
+                        {o.region}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <LeverBadge
+                        ok={o.server_access_logging_enabled}
+                        label="Server Access Logging"
+                      />
+                      <LeverBadge
+                        ok={o.request_metrics_enabled}
+                        label="Request Metrics"
+                      />
+                    </div>
+                  </div>
+                  <TagPills tags={o.tags} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// LoadBalancersSection renders the ALB / NLB / GWLB row list. Slice
+// 3a (v0.88.0). The Access Logs badge surfaces the configured target
+// bucket inline so the operator can see the ALB→S3 cross-reference
+// at a glance — matches the proposer prompt's "prefer an existing
+// instrumented bucket as the target" rule.
+function LoadBalancersSection({
+  loadBalancers,
+}: {
+  loadBalancers: ScanResult["load_balancers"];
+}) {
+  const [open, setOpen] = useState(loadBalancers.length > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+        >
+          <CardTitle className="text-base">
+            Load balancers ({loadBalancers.length})
+          </CardTitle>
+          {open ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {loadBalancers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No load balancers visible in the scanned regions.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {loadBalancers.map((l) => (
+                <li
+                  key={l.resource_id}
+                  className="rounded-md border bg-muted/20 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-medium">{l.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {l.type} · {l.scheme} · {l.region}
+                      </p>
+                      <code className="mt-1 block font-mono text-[10px] text-muted-foreground">
+                        {l.resource_id}
+                      </code>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <LeverBadge
+                        ok={l.access_logs_enabled}
+                        label="Access Logs"
+                      />
+                      {l.access_logs_enabled && l.access_logs_s3_bucket && (
+                        <span className="text-[10px] text-muted-foreground">
+                          → {l.access_logs_s3_bucket}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <TagPills tags={l.tags} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      )}
+    </Card>
   );
 }
 
