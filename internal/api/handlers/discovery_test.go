@@ -1006,6 +1006,102 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 	}
 }
 
+// TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices pins the
+// v0.87.3 audit-shape widening — the scan_completed event payload MUST
+// surface BOTH the human-readable partial_reason and the structured
+// failed_services list when the scanner returns Partial=true. The bug
+// surfaced by Track 3 prerequisite verification (task #584) was that
+// audit consumers (SIEM forwarders, Timeline UI, squadronctl, the
+// proposer's future scan-history learning loop) could see partial:true
+// but had no way to identify which service caused the partial scan.
+//
+// Regression discipline: if this test fails because the handler
+// regressed to omitting either field, the audit log loses operator-
+// visible failure attribution — a v0.87.3-shape contract violation.
+func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	// Live reproducer shape: rds:DescribeDBInstances revoked from the
+	// SquadronDiscoveryReadOnly inline policy. Scan returns
+	// Partial=true with the rds walk's failure as PartialReason and
+	// "rds" as the only FailedServices entry. Mirrors the
+	// scanner.go emission site at the rds branch of the per-region
+	// loop.
+	scanResult := &scanner.Result{
+		ScanID:              "test-scan-partial-rds",
+		ScanStartedAt:       now,
+		ScanCompletedAt:     now.Add(2 * time.Second),
+		Provider:            credstore.ProviderAWS,
+		AccountID:           "123456789012",
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   0,
+		UninstrumentedCount: 0,
+		Partial:             true,
+		PartialReason:       "rds scan failed in us-east-1: AccessDenied",
+		FailedServices:      []string{"rds"},
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	if got := len(audit.entries); got != 2 {
+		t.Fatalf("audit entries = %d, want 2", got)
+	}
+	completed := audit.entries[1]
+	if completed.EventType != "discovery.aws.scan_completed" {
+		t.Fatalf("entry[1].event_type = %q", completed.EventType)
+	}
+
+	// Pin both fields. partial_reason carries the operator-visible
+	// string; failed_services carries the structured list audit
+	// consumers pattern-match against.
+	gotReason, ok := completed.Payload["partial_reason"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing partial_reason key: %+v", completed.Payload)
+	}
+	if got, want := gotReason, "rds scan failed in us-east-1: AccessDenied"; got != want {
+		t.Errorf("partial_reason = %v, want %q", got, want)
+	}
+
+	gotServices, ok := completed.Payload["failed_services"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing failed_services key: %+v", completed.Payload)
+	}
+	gotSlice, ok := gotServices.([]string)
+	if !ok {
+		t.Fatalf("failed_services = %T (%v), want []string", gotServices, gotServices)
+	}
+	if len(gotSlice) != 1 || gotSlice[0] != "rds" {
+		t.Errorf("failed_services = %v, want [\"rds\"]", gotSlice)
+	}
+
+	// partial itself stays true, mirroring the existing invariant.
+	if got, _ := completed.Payload["partial"].(bool); !got {
+		t.Errorf("partial = %v, want true", completed.Payload["partial"])
+	}
+}
+
 // --- HandleAWSGenerateRecommendations tests (Stream 2F) --------------
 
 // mockAIProposer records the context it was handed and returns a

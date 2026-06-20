@@ -113,6 +113,22 @@ type Result struct {
 	// is the operator-visible explanation.
 	Partial       bool   `json:"partial"`
 	PartialReason string `json:"partial_reason,omitempty"`
+
+	// FailedServices is the structured list of service identifiers
+	// (e.g. "ec2", "lambda", "rds") whose walk produced a non-fatal
+	// error during this scan. Mirrors the human-readable
+	// PartialReason — audit consumers and the proposer's future
+	// "learn from past scans" loop pattern-match against this field
+	// rather than parsing the formatted string. Empty when Partial
+	// is false.
+	//
+	// TODO(v0.87.4+): the AWS scanner currently OVERWRITES
+	// PartialReason on each service failure rather than accumulating.
+	// FailedServices is wired the same way for now (slice into a list
+	// but slice 3 paths each call clear-then-append). When the
+	// accumulator fix lands, both fields collect every failure.
+	// Filed as a separate task.
+	FailedServices []string `json:"failed_services,omitempty"`
 }
 
 // ComputeInstanceSnapshot is the category-typed view of a virtual
