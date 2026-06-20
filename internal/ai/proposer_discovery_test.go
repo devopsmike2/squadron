@@ -433,7 +433,9 @@ func TestBuildDiscoveryUserMessage(t *testing.T) {
 
 // TestProposeFromDiscoveryScan_RequestsProposerMaxTokens pins the same
 // invariant the cost-spike test pins (#550): the proposer call must
-// carry the per-call MaxTokens override (ProposerMaxTokens = 4096), not
+// carry the per-call MaxTokens override (ProposerMaxTokens — was 4096
+// in v0.82, bumped to 8192 in v0.88.2 for slice 3a discovery output
+// per #597), not
 // the global s.cfg.MaxTokens default (1024). Discovery plans emit
 // Terraform per step — at least as token-heavy as a collector YAML —
 // so the override matters here for the same reason it matters for
@@ -468,6 +470,6 @@ func TestProposeFromDiscoveryScan_RequestsProposerMaxTokens(t *testing.T) {
 	assert.Equal(t, float64(ProposerMaxTokens), gotMaxTokens,
 		"discovery proposer must use ProposerMaxTokens (%d), not the global s.cfg.MaxTokens (1024)",
 		ProposerMaxTokens)
-	assert.Equal(t, float64(4096), gotMaxTokens,
-		"ProposerMaxTokens itself should stay at 4096 unless we also extend docs/ai-features.md")
+	assert.Equal(t, float64(8192), gotMaxTokens,
+		"ProposerMaxTokens itself should stay at 8192 unless we also extend docs/ai-features.md")
 }

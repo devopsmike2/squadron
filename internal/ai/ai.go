@@ -56,17 +56,19 @@ const (
 	// inline_config_snippet (the v0.78 contract). The global default
 	// of 1024 tokens proved too tight in v0.82 testing: the second
 	// seeded spike returned a JSON truncated mid-config and the
-	// bridge silently dropped it (#550). 4096 covers 2-step plans
-	// with generous headroom and leaves room for the 3-4 step plans
-	// the v0.79 prompt examples suggest. Cost is the model's actual
-	// output, not the cap — raising the ceiling adds no per-call
-	// charge for short responses. Per-call override keeps explain /
-	// ask / merge on the small 1024 cap appropriate for their
-	// short-answer use cases. A future release that wants to drop
-	// the cap can compress inline_config_snippet to a diff format
-	// instead of a full YAML — that's a v0.78 contract pivot, not a
-	// hotfix.
-	ProposerMaxTokens = 4096
+	// bridge silently dropped it (#550). v0.82 set 4096 — enough
+	// for JARVIS 2-3 step plans.
+	//
+	// v0.88.2 bumps to 8192: slice 3a's discovery proposer ships
+	// plan steps for FIVE service categories (compute / functions /
+	// databases / object stores / load balancers), each with its
+	// own inline_config_snippet. A real-inventory call against a
+	// 17-resource AWS account truncated mid-config at the 4096
+	// cap (#597). 8192 covers the slice 3a output envelope with
+	// headroom; slice 3b's EKS arc adds a 6th category and may
+	// elevate the cap question again. Cost is actual output not
+	// cap — raising adds no per-call charge for short responses.
+	ProposerMaxTokens = 8192
 	DefaultMaxTokens    = 1024
 
 	apiVersion       = "2023-06-01"
