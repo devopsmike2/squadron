@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,6 +34,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery"
+	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
@@ -661,6 +664,32 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			zap.String("merge_model", aiService.Capabilities().MergeModel))
 	} else {
 		logger.Info("AI assist not configured (set ANTHROPIC_API_KEY + ai.enabled=true to enable)")
+	}
+
+	// v0.85 — universal discovery credential substrate. Wires the
+	// credstore.Store + key onto the API server so /api/v1/discovery/*
+	// routes become reachable. Opt-in: if SQUADRON_SECRETS_KEY is
+	// unset, discovery stays 503 and Squadron continues to boot. This
+	// keeps existing deployments working unchanged.
+	if credKey, err := credstore.LoadKeyFromEnv(); err != nil {
+		logger.Info("discovery credstore not configured (set SQUADRON_SECRETS_KEY to enable AWS connect-account)",
+			zap.String("hint", "generate with: head -c 32 /dev/urandom | base64"))
+	} else {
+		credDBPath := filepath.Join(filepath.Dir(config.Storage.App.Path), "credstore.db")
+		credDB, err := sql.Open("sqlite3", credDBPath)
+		if err != nil {
+			logger.Warn("discovery credstore: failed to open DB; discovery disabled", zap.Error(err))
+		} else {
+			backend := credstore.NewSQLiteSecretsBackend(credKey)
+			credStore, err := credstore.NewStore(context.Background(), credDB, backend, auditService)
+			if err != nil {
+				logger.Warn("discovery credstore: NewStore failed; discovery disabled", zap.Error(err))
+			} else {
+				apiServer.SetDiscoveryCredStore(credStore)
+				apiServer.SetDiscoveryCredKey(credKey)
+				logger.Info("discovery credstore wired", zap.String("path", credDBPath))
+			}
+		}
 	}
 
 	// v0.54 Move 3 — incident drafter bridge. After an action runs
