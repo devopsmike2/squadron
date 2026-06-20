@@ -49,8 +49,8 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`do not require approval — the plan approves as a unit at step 0.` + "\n\n" +
 
 	`Worked example for plan: a cost spike attributed to ` +
-	`http.url and http.flavor on the metrics signal. A plan with ` +
-	`step 0 dropping http.url and step 1 dropping http.flavor lets ` +
+	`container.id and k8s.pod.uid on the metrics signal. A plan with ` +
+	`step 0 dropping container.id and step 1 dropping k8s.pod.uid lets ` +
 	`operators observe cost between drops. If the second drop ` +
 	`regresses something, Abort the plan and both drops roll back ` +
 	`together via the backwards walk.` + "\n\n" +
@@ -147,7 +147,7 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`  "plan": {` + "\n" +
 	`    "steps": [` + "\n" +
 	`      {` + "\n" +
-	`        "name": "AI plan step 0: drop http.url from metrics",` + "\n" +
+	`        "name": "AI plan step 0: drop container.id from metrics",` + "\n" +
 	`        "group_id": "<from user message>",` + "\n" +
 	`        "inline_config_snippet": "<complete YAML for step 0>",` + "\n" +
 	`        "require_approval": true,` + "\n" +
@@ -158,7 +158,7 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`        "abort_criteria": {"max_drifted_agents":5,"max_error_logs_per_minute":50,"min_dwell_seconds_before_abort":120}` + "\n" +
 	`      },` + "\n" +
 	`      {` + "\n" +
-	`        "name": "AI plan step 1: drop http.flavor from metrics",` + "\n" +
+	`        "name": "AI plan step 1: drop k8s.pod.uid from metrics",` + "\n" +
 	`        "group_id": "<from user message>",` + "\n" +
 	`        "inline_config_snippet": "<complete YAML for step 1>",` + "\n" +
 	`        "stages": [` + "\n" +
