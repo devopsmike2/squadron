@@ -39,6 +39,7 @@ import {
 } from "@/api/discovery";
 import {
   AWS_IAM_ROLE_CREATE_URL,
+  AWS_PERMISSIONS_POLICY_TEMPLATE,
   AWS_TRUST_POLICY_TEMPLATE,
 } from "@/data/awsWizard";
 import { cn } from "@/lib/utils";
@@ -88,11 +89,56 @@ function placeholderFromPayload(payload: unknown): string {
   return "";
 }
 
-// renderTrustPolicy substitutes the live ExternalId into the
+// PRINCIPAL_OVERRIDE_RE validates the optional principal_override
+// input on the trust-policy step. Accepts user / role / root ARNs;
+// rejects anything else so a typo can't slip into the rendered trust
+// policy. The wizard falls back to the account-root default whenever
+// the override is empty or fails this check.
+export const PRINCIPAL_OVERRIDE_RE =
+  /^arn:aws:iam::\d{12}:(user|role|root)(\/[\w+=,.@/-]*)?$/;
+
+// EXTERNAL_ID_OVERRIDE_RE validates the optional
+// external_id_override input on the trust-policy step. Lowercase
+// canonical UUID shape; rejects anything else so a malformed paste
+// doesn't end up in the policy or the validate payload. The wizard
+// falls back to the auto-generated UUID whenever the override is
+// empty or fails this check.
+export const EXTERNAL_ID_OVERRIDE_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// renderTrustPolicy substitutes the principal and ExternalId into the
 // trust-policy template. Centralized so the test can call it
 // independently of the React tree.
-export function renderTrustPolicy(externalId: string): string {
-  return AWS_TRUST_POLICY_TEMPLATE.replace("<UUID-PLACEHOLDER>", externalId);
+//
+// principalOverride: optional explicit principal ARN. When non-empty
+// AND matches PRINCIPAL_OVERRIDE_RE, it replaces the default
+// arn:aws:iam::<accountId>:root principal. Empty or malformed input
+// falls back to the default so a bad paste never breaks the wizard.
+export function renderTrustPolicy(
+  externalId: string,
+  accountId: string,
+  principalOverride?: string,
+): string {
+  const defaultPrincipal = `arn:aws:iam::${accountId || "<account-id>"}:root`;
+  const principal =
+    principalOverride && PRINCIPAL_OVERRIDE_RE.test(principalOverride)
+      ? principalOverride
+      : defaultPrincipal;
+  return AWS_TRUST_POLICY_TEMPLATE
+    .replace("<PRINCIPAL-PLACEHOLDER>", principal)
+    .replace("<UUID-PLACEHOLDER>", externalId);
+}
+
+// effectiveExternalId returns the override when present and well-formed,
+// otherwise the auto-generated ExternalId. Used by both the trust-policy
+// render and the validate/save payload so the operator sees one value
+// across the wizard.
+export function effectiveExternalId(
+  generated: string,
+  override?: string,
+): string {
+  if (override && EXTERNAL_ID_OVERRIDE_RE.test(override)) return override;
+  return generated;
 }
 
 // validateInline runs a step's ValidationRule against an input value
@@ -156,6 +202,20 @@ export function ConnectorWizard({
 
   const stepCount = wizard.steps.length;
   const step = wizard.steps[stepIndex];
+
+  // effectiveExternalId honours the operator's override when set and
+  // well-formed; otherwise falls back to the auto-generated UUID. We
+  // compute this once per render so the trust-policy display, the
+  // validate payload, and the save payload all use the same value.
+  const liveExternalId = effectiveExternalId(externalId, draft.external_id_override);
+
+  // showAdvancedTrust toggles the disclosure that surfaces the
+  // principal_override and external_id_override inputs. Defaulted to
+  // closed: the account-root + auto-UUID defaults work for the
+  // common case; the disclosure is only there for operators who
+  // pre-created a dedicated IAM identity or are resuming an
+  // interrupted wizard flow.
+  const [showAdvancedTrust, setShowAdvancedTrust] = useState(false);
 
   // Map step IDs to indices once per wizard so the
   // HumanizedError.suggested_step jump is O(1) and the call site can
@@ -226,7 +286,7 @@ export function ConnectorWizard({
     try {
       const res = await onValidate({
         role_arn: draft.role_arn ?? "",
-        external_id: externalId,
+        external_id: liveExternalId,
         regions: draft.regions ?? ["us-east-1"],
         account_id: draft.account_id,
       });
@@ -234,7 +294,7 @@ export function ConnectorWizard({
     } finally {
       setValidating(false);
     }
-  }, [onValidate, draft, externalId]);
+  }, [onValidate, draft, liveExternalId]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -243,7 +303,7 @@ export function ConnectorWizard({
       const res = await onSave({
         account_id: draft.account_id ?? "",
         role_arn: draft.role_arn ?? "",
-        external_id: externalId,
+        external_id: liveExternalId,
         display_name: draft.display_name ?? draft.account_id ?? "",
         regions: draft.regions ?? ["us-east-1"],
       });
@@ -254,7 +314,7 @@ export function ConnectorWizard({
     } finally {
       setSaving(false);
     }
-  }, [onSave, draft, externalId, onComplete]);
+  }, [onSave, draft, liveExternalId, onComplete]);
 
   const jumpToStep = useCallback(
     (id: string) => {
@@ -371,14 +431,28 @@ export function ConnectorWizard({
           {step.action.kind === "copy_value" && step.id === "trust-policy" && (
             <div className="space-y-2">
               <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
-                <code>{renderTrustPolicy(externalId)}</code>
+                <code>
+                  {renderTrustPolicy(
+                    liveExternalId,
+                    draft.account_id ?? "",
+                    draft.principal_override,
+                  )}
+                </code>
               </pre>
               <div className="flex gap-2">
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => handleCopy(renderTrustPolicy(externalId))}
+                  onClick={() =>
+                    handleCopy(
+                      renderTrustPolicy(
+                        liveExternalId,
+                        draft.account_id ?? "",
+                        draft.principal_override,
+                      ),
+                    )
+                  }
                 >
                   <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
                   Copy trust policy
@@ -395,7 +469,116 @@ export function ConnectorWizard({
               </div>
               <p className="text-xs text-muted-foreground">
                 ExternalId:{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-[10px]">{externalId || "generating..."}</code>
+                <code className="rounded bg-muted px-1 py-0.5 text-[10px]">
+                  {liveExternalId || "generating..."}
+                </code>
+              </p>
+
+              {/* Advanced disclosure — surfaces the principal_override
+                  and external_id_override inputs. Defaulted closed so
+                  the common case (account-root principal + auto-UUID)
+                  stays a one-step flow. */}
+              <div className="pt-2">
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={() => setShowAdvancedTrust((v) => !v)}
+                  aria-expanded={showAdvancedTrust}
+                >
+                  {showAdvancedTrust ? "Hide advanced options" : "Advanced options"}
+                </Button>
+              </div>
+
+              {showAdvancedTrust && (
+                <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold" htmlFor="principal-override">
+                      Advanced: scope to a specific IAM identity
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Default trusts the account root. Override with a
+                      specific user or role ARN if you pre-created a
+                      dedicated IAM identity for Squadron.
+                    </p>
+                    <Input
+                      id="principal-override"
+                      aria-label="Principal override ARN"
+                      aria-invalid={
+                        !!draft.principal_override &&
+                        !PRINCIPAL_OVERRIDE_RE.test(draft.principal_override)
+                      }
+                      placeholder="arn:aws:iam::123456789012:user/squadron-bot"
+                      value={draft.principal_override ?? ""}
+                      onChange={(e) =>
+                        handleFieldChange("principal_override", e.target.value)
+                      }
+                    />
+                    {draft.principal_override &&
+                      !PRINCIPAL_OVERRIDE_RE.test(draft.principal_override) && (
+                        <p className="text-xs text-destructive">
+                          Override must look like arn:aws:iam::123456789012:user/Name
+                          (or role/Name, or root). Reverting to account root until valid.
+                        </p>
+                      )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold" htmlFor="external-id-override">
+                      Advanced: resume with existing ExternalId
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Paste the ExternalId you previously copied into
+                      AWS if the wizard restarted. The wizard will
+                      substitute this value everywhere instead of the
+                      auto-generated one.
+                    </p>
+                    <Input
+                      id="external-id-override"
+                      aria-label="ExternalId override"
+                      aria-invalid={
+                        !!draft.external_id_override &&
+                        !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override)
+                      }
+                      placeholder="00000000-0000-0000-0000-000000000000"
+                      value={draft.external_id_override ?? ""}
+                      onChange={(e) =>
+                        handleFieldChange("external_id_override", e.target.value)
+                      }
+                    />
+                    {draft.external_id_override &&
+                      !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override) && (
+                        <p className="text-xs text-destructive">
+                          Must be a lowercase UUID v4 shape. Reverting to
+                          the auto-generated ExternalId until valid.
+                        </p>
+                      )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {step.action.kind === "copy_value" && step.id === "permissions-policy" && (
+            <div className="space-y-2">
+              <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
+                <code>{AWS_PERMISSIONS_POLICY_TEMPLATE}</code>
+              </pre>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleCopy(AWS_PERMISSIONS_POLICY_TEMPLATE)}
+                >
+                  <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
+                  Copy permissions policy
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Read-only across EC2, Lambda, and RDS. No write/modify
+                actions are granted.
               </p>
             </div>
           )}
@@ -421,7 +604,7 @@ export function ConnectorWizard({
               <Button
                 type="button"
                 onClick={handleValidate}
-                disabled={validating || !draft.role_arn || !externalId}
+                disabled={validating || !draft.role_arn || !liveExternalId}
               >
                 {validating && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />}
                 Validate connection
