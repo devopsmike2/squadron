@@ -180,6 +180,95 @@ func TestHandleAWSValidate_ScannerCalled(t *testing.T) {
 	}
 }
 
+// TestHandleAWSValidate_NoCredentialsReturnsHumanizedError covers the
+// v0.85.0 SEV2 regression: when Squadron itself has no AWS credentials
+// configured (no env vars, no shared config file, not on EC2), the
+// validator surfaces a NoCredentials humanized error through
+// ValidationResult.AssumeRoleErr — the handler must return 200 with
+// the humanized payload (the wizard's "what just happened" panel
+// renders it verbatim) and the response must arrive in well under the
+// handler's 60s safety budget. Pre-fix the call hung for 30+ seconds.
+func TestHandleAWSValidate_NoCredentialsReturnsHumanizedError(t *testing.T) {
+	mv := &mockValidator{
+		result: &scanner.ValidationResult{
+			AssumeRoleOK: false,
+			AssumeRoleErr: &scanner.HumanizedError{
+				Code:          "no_credentials",
+				Message:       "Squadron has no AWS credentials configured. Set AWS_REGION + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY in Squadron's environment, or run Squadron on an EC2/ECS/EKS instance with an IAM role attached.",
+				SuggestedStep: "role-arn",
+				DocLink:       "https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html",
+			},
+		},
+	}
+	h := newTestHandlers(t, mv)
+	body := `{"role_arn":"arn:aws:iam::123456789012:role/SquadronDiscovery","external_id":"xid","regions":["us-east-1"],"account_id":"123456789012"}`
+
+	start := time.Now()
+	w := doRequest(h, body)
+	elapsed := time.Since(start)
+
+	// The handler returns 200 even on AssumeRole failure — the
+	// failure is in the typed body, not the HTTP status. The wizard
+	// reads `assume_role_ok=false` and `assume_role_err` from the
+	// payload.
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	// Hard upper bound: comfortably below the 60s safety budget AND
+	// below the pre-fix 30s hang. A mock validator returns
+	// instantly, so anything beyond a couple seconds indicates the
+	// handler grew a synchronous block.
+	if elapsed > 6*time.Second {
+		t.Fatalf("validate handler took %v with a mock validator; pre-fix bug returning?", elapsed)
+	}
+	if !mv.called {
+		t.Fatalf("validator was not called")
+	}
+
+	var resp struct {
+		AssumeRoleOK  bool `json:"assume_role_ok"`
+		AssumeRoleErr *struct {
+			Code          string `json:"Code"`
+			Message       string `json:"Message"`
+			SuggestedStep string `json:"SuggestedStep"`
+			DocLink       string `json:"DocLink"`
+		} `json:"assume_role_err"`
+		Errors []struct {
+			Code    string `json:"Code"`
+			Message string `json:"Message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response body did not decode: %v body=%s", err, w.Body.String())
+	}
+	if resp.AssumeRoleOK {
+		t.Errorf("assume_role_ok = true, want false on no-credentials path")
+	}
+	if resp.AssumeRoleErr == nil {
+		t.Fatalf("assume_role_err missing from response; body=%s", w.Body.String())
+	}
+	if resp.AssumeRoleErr.Code != "no_credentials" {
+		t.Errorf("AssumeRoleErr.Code = %q, want %q", resp.AssumeRoleErr.Code, "no_credentials")
+	}
+	if !strings.Contains(resp.AssumeRoleErr.Message, "AWS_ACCESS_KEY_ID") {
+		t.Errorf("AssumeRoleErr.Message should name the env vars: %q", resp.AssumeRoleErr.Message)
+	}
+	if !strings.Contains(resp.AssumeRoleErr.Message, "EC2/ECS/EKS") {
+		t.Errorf("AssumeRoleErr.Message should mention the EC2/ECS/EKS instance-role alternative: %q", resp.AssumeRoleErr.Message)
+	}
+	if resp.AssumeRoleErr.SuggestedStep != "role-arn" {
+		t.Errorf("SuggestedStep = %q, want role-arn", resp.AssumeRoleErr.SuggestedStep)
+	}
+	// The top-level errors[] convenience field must also carry the
+	// humanized error so the UI's flat-list rendering picks it up
+	// without re-walking the typed struct.
+	if len(resp.Errors) == 0 {
+		t.Errorf("top-level errors[] should include the assume-role failure; body=%s", w.Body.String())
+	} else if resp.Errors[0].Code != "no_credentials" {
+		t.Errorf("errors[0].Code = %q, want no_credentials", resp.Errors[0].Code)
+	}
+}
+
 // --- HandleAWSSaveConnection tests ----------------------------------
 
 // spyStore records the connection it was asked to persist. The Save

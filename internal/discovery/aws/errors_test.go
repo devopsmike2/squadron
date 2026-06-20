@@ -4,6 +4,7 @@
 package aws
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -127,5 +128,97 @@ func TestHumanizeError_DefaultFallback_NonAPIError(t *testing.T) {
 	}
 	if got.Code != "" {
 		t.Errorf("Code = %q, want empty for non-APIError input", got.Code)
+	}
+}
+
+// TestHumanizeError_NoCredentials_DeadlineExceeded verifies that a bare
+// context.DeadlineExceeded — which is what the 5s
+// credentialDiscoveryTimeout in client.go produces when IMDSv2 is
+// unreachable — maps to the NoCredentials humanized error. The wizard
+// must surface the recoverable action (set env vars or run on EC2),
+// NOT a generic "AWS returned an error: context deadline exceeded".
+func TestHumanizeError_NoCredentials_DeadlineExceeded(t *testing.T) {
+	got := HumanizeError(context.DeadlineExceeded)
+	if got == nil {
+		t.Fatalf("HumanizeError(context.DeadlineExceeded) returned nil")
+	}
+	if got.Code != ErrCodeNoCredentials {
+		t.Errorf("Code = %q, want %q", got.Code, ErrCodeNoCredentials)
+	}
+	if !strings.Contains(got.Message, "AWS_ACCESS_KEY_ID") {
+		t.Errorf("Message %q should name the env vars the operator must set", got.Message)
+	}
+	if !strings.Contains(got.Message, "EC2/ECS/EKS") {
+		t.Errorf("Message %q should mention the EC2/ECS/EKS instance-role alternative", got.Message)
+	}
+	if got.SuggestedStep != "role-arn" {
+		t.Errorf("SuggestedStep = %q, want role-arn (the wizard navigation anchor)", got.SuggestedStep)
+	}
+	if got.DocLink == "" {
+		t.Errorf("DocLink should be populated so operators can read the standardized-credentials reference")
+	}
+}
+
+// TestHumanizeError_NoCredentials_DeadlineExceeded_Wrapped covers the
+// production shape — newSDKClientFactory wraps the SDK error via
+// fmt.Errorf("aws: load default config: %w", err) before it reaches
+// HumanizeError. errors.Is must walk the wrap chain.
+func TestHumanizeError_NoCredentials_DeadlineExceeded_Wrapped(t *testing.T) {
+	wrapped := fmt.Errorf("aws: load default config: %w", context.DeadlineExceeded)
+	got := HumanizeError(wrapped)
+	if got == nil {
+		t.Fatalf("HumanizeError(wrapped DeadlineExceeded) returned nil")
+	}
+	if got.Code != ErrCodeNoCredentials {
+		t.Errorf("Code = %q, want %q (errors.Is must unwrap)", got.Code, ErrCodeNoCredentials)
+	}
+}
+
+// TestHumanizeError_NoCredentials_NoIMDSRole covers the SDK's
+// "no EC2 IMDS role found" signal — what an EC2 instance with no role
+// attached returns from the credential chain. Same humanized error
+// applies: Squadron's host needs credentials.
+func TestHumanizeError_NoCredentials_NoIMDSRole(t *testing.T) {
+	err := errors.New("operation error: no EC2 IMDS role found")
+	got := HumanizeError(err)
+	if got == nil {
+		t.Fatalf("HumanizeError returned nil")
+	}
+	if got.Code != ErrCodeNoCredentials {
+		t.Errorf("Code = %q, want %q", got.Code, ErrCodeNoCredentials)
+	}
+	if !strings.Contains(got.Message, "AWS_ACCESS_KEY_ID") {
+		t.Errorf("Message %q should name the env vars to set", got.Message)
+	}
+}
+
+// TestHumanizeError_NoCredentials_FailedToRetrieve covers the SDK v2
+// wrapping shape — when the credential chain dry-runs and produces
+// "failed to retrieve credentials: ..." with the underlying provider
+// errors attached. The substring match keeps the humanizer robust to
+// future SDK message tweaks.
+func TestHumanizeError_NoCredentials_FailedToRetrieve(t *testing.T) {
+	err := errors.New("aws: load default config: failed to retrieve credentials: no providers in chain")
+	got := HumanizeError(err)
+	if got == nil {
+		t.Fatalf("HumanizeError returned nil")
+	}
+	if got.Code != ErrCodeNoCredentials {
+		t.Errorf("Code = %q, want %q", got.Code, ErrCodeNoCredentials)
+	}
+}
+
+// TestHumanizeError_NoCredentials_LegacyNoCredentialProviders covers
+// the older SDK shape some transitive dependencies still surface.
+// Defensive match — keeps the wizard friendly even if a future
+// downstream update reintroduces the legacy error string.
+func TestHumanizeError_NoCredentials_LegacyNoCredentialProviders(t *testing.T) {
+	err := errors.New("NoCredentialProviders: no valid providers in chain")
+	got := HumanizeError(err)
+	if got == nil {
+		t.Fatalf("HumanizeError returned nil")
+	}
+	if got.Code != ErrCodeNoCredentials {
+		t.Errorf("Code = %q, want %q", got.Code, ErrCodeNoCredentials)
 	}
 }
