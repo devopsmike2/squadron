@@ -16,8 +16,9 @@
 // the top (Provider field on Result) but category-typed underneath —
 // ComputeInstanceSnapshot covers ec2 / gce / azure vm / vmware vm;
 // FunctionRuntimeSnapshot covers lambda / cloud functions / azure
-// functions. The proposer reasons about categories, not provider-
-// specific resource types.
+// functions; DatabaseInstanceSnapshot covers rds / cloud sql / azure
+// sql. The proposer reasons about categories, not provider-specific
+// resource types.
 package scanner
 
 import (
@@ -86,9 +87,24 @@ type Result struct {
 	// inventory.
 	Functions []FunctionRuntimeSnapshot `json:"functions"`
 
-	// InstrumentedCount sums Compute+Functions entries where OTel
-	// presence was detected. UninstrumentedCount is the complement.
-	// Both are denormalized so consumers don't need to recount.
+	// Databases is the RDS / Cloud SQL / Azure SQL inventory. Added in
+	// slice 2 of the universal-observation arc — the proposer's
+	// recommendation surface for databases reasons about Performance
+	// Insights + Enhanced Monitoring enablement rather than an OTel
+	// agent install (the latter is not how managed-database
+	// observability works).
+	Databases []DatabaseInstanceSnapshot `json:"databases"`
+
+	// InstrumentedCount sums Compute+Functions+Databases entries where
+	// observability presence was detected. UninstrumentedCount is the
+	// complement. Both are denormalized so consumers don't need to
+	// recount.
+	//
+	// Per-category "instrumented" rules:
+	//   - Compute: HasOTel == true
+	//   - Functions: HasOTelLayer == true
+	//   - Databases: PerformanceInsightsEnabled AND
+	//     EnhancedMonitoringEnabled (both lights, the two-part rule)
 	InstrumentedCount   int `json:"instrumented_count"`
 	UninstrumentedCount int `json:"uninstrumented_count"`
 
@@ -131,6 +147,57 @@ type ComputeInstanceSnapshot struct {
 	// snapshot so the proposer can reason about collector
 	// colocation without referring back to the Result.
 	Region string `json:"region"`
+}
+
+// DatabaseInstanceSnapshot is the category-typed view of a managed
+// database instance. Provider-specific scanners populate this from
+// RDS DescribeDBInstances / Cloud SQL list / Azure SQL list. The
+// proposer reasons about category-level levers (perf insights,
+// enhanced monitoring, slow-query log shipping) rather than
+// provider-specific feature names.
+//
+// Slice 2's "instrumented" rule for databases is two-part:
+// PerformanceInsightsEnabled AND EnhancedMonitoringEnabled must both
+// be true. The two levers are independent IAM permissions and
+// independent ModifyDBInstance call shapes, so the proposer emits
+// them as independent plan steps when either is missing — but the
+// substrate's instrumented-count tally treats the row as covered only
+// when both are on.
+type DatabaseInstanceSnapshot struct {
+	// ResourceID is the provider-native ID: RDS DB instance ARN /
+	// Cloud SQL connection name / Azure SQL resource ID.
+	ResourceID string `json:"resource_id"`
+
+	// Engine is the provider-typed engine string: "postgres",
+	// "mysql", "mariadb", "sqlserver", "oracle", "aurora-postgresql",
+	// "aurora-mysql". The proposer keys its guidance off this.
+	Engine string `json:"engine"`
+
+	// EngineVersion is the provider-typed version, e.g. "15.4" for
+	// postgres. Surfaced raw — the proposer only needs major version
+	// class for instrumentation reasoning.
+	EngineVersion string `json:"engine_version"`
+
+	// InstanceClass is the provider-specific shape: db.r6g.large /
+	// db-custom-2-7680 / GP_S_Gen5_2. Raw string — the proposer
+	// normalizes when reasoning about cost.
+	InstanceClass string `json:"instance_class"`
+
+	// PerformanceInsightsEnabled signals AWS RDS Performance Insights
+	// (or equivalent on other clouds). The proposer's primary RDS
+	// lever — when false, recommend enabling.
+	PerformanceInsightsEnabled bool `json:"performance_insights_enabled"`
+
+	// EnhancedMonitoringEnabled signals AWS RDS Enhanced Monitoring
+	// (per-second OS metrics via CloudWatch). The proposer's second
+	// RDS lever.
+	EnhancedMonitoringEnabled bool `json:"enhanced_monitoring_enabled"`
+
+	// Region is where the instance lives.
+	Region string `json:"region"`
+
+	// Tags follows the same flattened shape as ComputeInstanceSnapshot.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // FunctionRuntimeSnapshot is the category-typed view of a serverless
@@ -186,8 +253,8 @@ type ValidationResult struct {
 // wizard is not running a real scan; it's just confirming
 // permissions.
 type PreflightCheck struct {
-	// Service is the slice-1 service identifier: "ec2" or "lambda".
-	// Future slices add "rds", "s3", "alb", and so on.
+	// Service is the per-service identifier: "ec2", "lambda", "rds".
+	// Slice 2 added "rds"; future slices add "s3", "alb", and so on.
 	Service string `json:"service"`
 
 	// OK is true when the preflight call returned without an error.

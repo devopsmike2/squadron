@@ -465,8 +465,9 @@ function ScanResultPanel({
           <CardDescription>
             Regions {result.regions.join(", ") || "(none)"} · completed{" "}
             {formatTime(result.scan_completed_at)} · scanned{" "}
-            {result.compute.length} compute instances and{" "}
-            {result.functions.length} functions.
+            {result.compute.length} compute instances,{" "}
+            {result.functions.length} functions, and{" "}
+            {(result.databases ?? []).length} databases.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -514,6 +515,9 @@ function ScanResultPanel({
 
       {/* Functions section */}
       <FunctionsSection functions={result.functions} />
+
+      {/* Databases section (slice 2 — v0.87) */}
+      <DatabasesSection databases={result.databases ?? []} />
     </div>
   );
 }
@@ -628,6 +632,105 @@ function FunctionsSection({
         </CardContent>
       )}
     </Card>
+  );
+}
+
+// DatabasesSection renders the RDS row list. Slice 2 (v0.87) of the
+// universal-observation arc. Two badge columns surface the two
+// independent observability levers — Performance Insights and
+// Enhanced Monitoring — so the operator can see at a glance which
+// lever is missing on each row. The proposer prompt treats them as
+// independent (separate plan steps per missing lever); the UI matches
+// that framing.
+function DatabasesSection({
+  databases,
+}: {
+  databases: ScanResult["databases"];
+}) {
+  const [open, setOpen] = useState(databases.length > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+        >
+          <CardTitle className="text-base">
+            Databases ({databases.length})
+          </CardTitle>
+          {open ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {databases.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No databases visible in the scanned regions.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {databases.map((d) => (
+                <li
+                  key={d.resource_id}
+                  className="rounded-md border bg-muted/20 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <code className="font-mono text-sm">{d.resource_id}</code>
+                      <p className="text-xs text-muted-foreground">
+                        {d.engine} {d.engine_version} · {d.instance_class} ·{" "}
+                        {d.region}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <LeverBadge
+                        ok={d.performance_insights_enabled}
+                        label="Performance Insights"
+                      />
+                      <LeverBadge
+                        ok={d.enhanced_monitoring_enabled}
+                        label="Enhanced Monitoring"
+                      />
+                    </div>
+                  </div>
+                  <TagPills tags={d.tags} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// LeverBadge is the on/off badge for a single observability lever
+// (Performance Insights or Enhanced Monitoring). Reuses the same
+// green/muted palette as OtelBadge so the operator's visual
+// vocabulary stays consistent across the three Inventory sections.
+function LeverBadge({ ok, label }: { ok: boolean; label: string }) {
+  if (ok) {
+    return (
+      <Badge
+        variant="outline"
+        className="border-green-600/50 text-green-700 dark:text-green-400"
+      >
+        <Check className="h-3 w-3" aria-hidden />
+        {label}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-muted-foreground">
+      <X className="h-3 w-3" aria-hidden />
+      {label}
+    </Badge>
   );
 }
 

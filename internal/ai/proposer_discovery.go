@@ -41,6 +41,11 @@ type DiscoveryScanContext struct {
 	// count + runtime + coverage gap.
 	ComputeInstances []ComputeResourceCandidate
 	Functions        []FunctionResourceCandidate
+	// Databases joins Compute + Functions in slice 2 of the
+	// universal-observation arc. RDS-shaped today; Cloud SQL / Azure
+	// SQL slot into the same field in later slices since the
+	// observability-lever model (PI + EM) generalizes.
+	Databases []DatabaseResourceCandidate
 
 	// Coverage assessment, denormalized so the prompt body can
 	// reference the totals without recounting. Match the scanner
@@ -80,6 +85,27 @@ type FunctionResourceCandidate struct {
 	HasOTelLayer bool
 }
 
+// DatabaseResourceCandidate is one RDS-shaped row from the scan.
+// Mirrors scanner.DatabaseInstanceSnapshot for the same
+// import-boundary reason as the other two candidates.
+//
+// The proposer treats Performance Insights and Enhanced Monitoring as
+// independent levers: each is enabled by a separate IAM permission
+// (rds:ModifyDBInstance with a different request shape), so when only
+// one is missing the model emits a single-lever plan step; when both
+// are missing, two steps. The handler-side validator below enforces
+// ResourceID + Engine non-empty so the prompt body's reasoning has
+// something to bind to.
+type DatabaseResourceCandidate struct {
+	ResourceID                 string
+	Engine                     string
+	EngineVersion              string
+	InstanceClass              string
+	PerformanceInsightsEnabled bool
+	EnhancedMonitoringEnabled  bool
+	Region                     string
+}
+
 // ProposeFromDiscoveryScan is the v0.85 sibling of
 // ProposeFromCostSpike. Same proposer engine, different entry point.
 // The model receives a Squadron-discovered AWS inventory snapshot and
@@ -110,6 +136,9 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 	}
 	if in.AccountID == "" {
 		return nil, errors.New("account_id is required")
+	}
+	if err := validateDatabaseCandidates(in.Databases); err != nil {
+		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 
 	resp, err := s.callMessages(ctx, callOpts{
@@ -190,6 +219,28 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 		return nil, fmt.Errorf("propose from discovery scan: model returned an invalid plan: %w", err)
 	}
 	return result, nil
+}
+
+// validateDatabaseCandidates is the pre-call validator for the
+// DatabaseResourceCandidate rows the caller assembled from the
+// scan. Each row must carry a non-empty ResourceID and Engine — the
+// proposer prompt cites them back via the evidence array, and an
+// empty value would surface in the model's reasoning as "the row
+// with empty ARN" which the operator can't act on. Cheap to check
+// here; the scanner already enforces ResourceID non-empty on the
+// snapshot side, but the candidate types are public and the handler
+// converter is fan-in code that's easy to mis-wire — better to fail
+// loudly in the proposer call than silently in the prompt body.
+func validateDatabaseCandidates(dbs []DatabaseResourceCandidate) error {
+	for i, d := range dbs {
+		if strings.TrimSpace(d.ResourceID) == "" {
+			return fmt.Errorf("databases[%d]: resource_id is required", i)
+		}
+		if strings.TrimSpace(d.Engine) == "" {
+			return fmt.Errorf("databases[%d]: engine is required", i)
+		}
+	}
+	return nil
 }
 
 // validateDiscoveryPlan is the discovery-side smoke test on the

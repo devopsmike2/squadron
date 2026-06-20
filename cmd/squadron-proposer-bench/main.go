@@ -88,11 +88,13 @@ type seed struct {
 	expectPlan bool                    // hint for the human reading the report; not asserted
 }
 
-// corpus is a hand-curated 14-scenario set covering both proposer
+// corpus is a hand-curated 15-scenario set covering both proposer
 // arcs: 8 cost-spike seeds (the v0.83 originals — #550 truncation,
-// #552 preamble) and 6 discovery seeds (the v0.86 Stream 2F arc).
+// #552 preamble) and 7 discovery seeds (the v0.86 Stream 2F arc plus
+// v0.87's RDS seed added when the universal-observation arc grew to
+// cover databases).
 // v0.84+ can expand this — for now small + diverse beats large +
-// redundant. Cost per run stays ~$0.20 at 14 seeds.
+// redundant. Cost per run stays ~$0.20 at 15 seeds.
 func corpus() []seed {
 	return []seed{
 		{
@@ -359,6 +361,52 @@ func corpus() []seed {
 					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:java-batch", Name: "java-batch", Runtime: "java17", Region: "us-east-1", HasOTelLayer: false},
 					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:java-ingest", Name: "java-ingest", Runtime: "java17", Region: "us-east-1", HasOTelLayer: false},
 					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:dotnet-export", Name: "dotnet-export", Runtime: "dotnet8", Region: "us-east-1", HasOTelLayer: false},
+				},
+			},
+			expectPlan: true,
+		},
+
+		// --- v0.87 RDS seed (slice 2 of universal observation arc) ---
+		// One RDS-flavored seed proves the slice 2 prompt extension
+		// works without bloating the bench. Slice 3 (S3 + ALB) adds
+		// their own seeds; same disciplined slicing as v0.86 used for
+		// the discovery arc itself.
+
+		{
+			// Mixed RDS coverage across engines + lever states. The
+			// proposer should:
+			//   - emit a PI-enable step for the 2 postgres DBs (PI off,
+			//     EM on)
+			//   - emit a PI+EM step (two sub-steps) for the mysql DB
+			//   - skip the aurora-postgresql (already covered)
+			//   - call out the sqlserver edition caveat for the EM-only
+			//     row (PI on certain editions only)
+			// Plus the 3 uncovered EC2 + 2 uncovered Lambdas to exercise
+			// the full multi-category plan posture — the operator's
+			// "full slice 2 view" matches the real customer scenario.
+			name: "discovery_rds_mixed_coverage",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-7",
+				AccountID:           "777788889999",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   1, // only the aurora-postgresql row counts as PI+EM covered
+				UninstrumentedCount: 9, // 4 RDS partial/uncovered + 3 EC2 + 2 Lambda
+				ComputeInstances: []ai.ComputeResourceCandidate{
+					{ResourceID: "i-0e01", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0e02", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0e03", InstanceType: "c5.xlarge", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+				},
+				Functions: []ai.FunctionResourceCandidate{
+					{ResourceID: "arn:aws:lambda:us-east-1:777788889999:function:order-router", Name: "order-router", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:777788889999:function:billing-aggregator", Name: "billing-aggregator", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+				},
+				Databases: []ai.DatabaseResourceCandidate{
+					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-orders-1", Engine: "postgres", EngineVersion: "15.4", InstanceClass: "db.r6g.large", PerformanceInsightsEnabled: false, EnhancedMonitoringEnabled: true, Region: "us-east-1"},
+					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-orders-2", Engine: "postgres", EngineVersion: "15.4", InstanceClass: "db.r6g.large", PerformanceInsightsEnabled: false, EnhancedMonitoringEnabled: true, Region: "us-east-1"},
+					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-analytics", Engine: "mysql", EngineVersion: "8.0", InstanceClass: "db.r6g.large", PerformanceInsightsEnabled: false, EnhancedMonitoringEnabled: false, Region: "us-east-1"},
+					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-platform", Engine: "aurora-postgresql", EngineVersion: "14.7", InstanceClass: "db.r6g.large", PerformanceInsightsEnabled: true, EnhancedMonitoringEnabled: true, Region: "us-east-1"},
+					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-legacy-mssql", Engine: "sqlserver-se", EngineVersion: "15.00.4198.2.v1", InstanceClass: "db.m5.xlarge", PerformanceInsightsEnabled: false, EnhancedMonitoringEnabled: true, Region: "us-east-1"},
 				},
 			},
 			expectPlan: true,
