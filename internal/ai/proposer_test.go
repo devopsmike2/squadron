@@ -253,7 +253,9 @@ func TestBuildProposeUserMessage_IncludesContext(t *testing.T) {
 // bridge silently dropped the spike.
 //
 // v0.82 fixed this by adding a per-call MaxTokens override in
-// callOpts and wiring the proposer to use ProposerMaxTokens (4096).
+// callOpts and wiring the proposer to use ProposerMaxTokens (was 4096
+// in v0.82, bumped to 8192 in v0.88.2 for slice 3a discovery output —
+// #597).
 // This test asserts the wire request actually carries that value —
 // catches accidental regressions where someone removes the override
 // thinking it's redundant. It does NOT reproduce the truncation
@@ -296,6 +298,6 @@ func TestProposeFromCostSpike_RequestsProposerMaxTokens(t *testing.T) {
 	assert.Equal(t, float64(ProposerMaxTokens), gotMaxTokens,
 		"proposer call must use ProposerMaxTokens (%d) not the global s.cfg.MaxTokens (1024); raising the cap is what fixes #550",
 		ProposerMaxTokens)
-	assert.Equal(t, float64(4096), gotMaxTokens,
-		"ProposerMaxTokens itself should stay at 4096 unless we also extend docs/ai-features.md")
+	assert.Equal(t, float64(8192), gotMaxTokens,
+		"ProposerMaxTokens itself should stay at 8192 unless we also extend docs/ai-features.md")
 }

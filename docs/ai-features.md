@@ -29,12 +29,18 @@ The service-wide `max_tokens` cap in `squadron.yaml` (default
 `1024`) governs the upper bound on response length for the short
 surfaces — explain, ask, merge — where the model is expected to
 emit a couple of paragraphs and stop. The proposer is the
-exception: as of v0.82 it carries a per-call override of 4096
-tokens (`ai.ProposerMaxTokens`) because plan-kind responses can
-include a complete inline OpenTelemetry Collector YAML per step
-(the v0.78 inline\_config\_snippet contract). At the 1024 default
-those responses would truncate mid-config and the bridge would
-silently drop the spike (this is what `#550` was). The trade-off:
+exception: it carries a per-call override (`ai.ProposerMaxTokens`)
+because plan-kind responses can include a complete inline
+OpenTelemetry Collector YAML per step (the v0.78
+inline\_config\_snippet contract). At the 1024 default those
+responses would truncate mid-config and the bridge would silently
+drop the spike (this is what `#550` was). v0.82 set the override
+to 4096 — enough for JARVIS 2-3 step plans. v0.88.2 bumped to 8192
+because slice 3a's discovery proposer emits plan steps for FIVE
+service categories (compute / functions / databases / object stores
+/ load balancers), each carrying its own `inline_config_snippet`;
+the 4096 ceiling truncated discovery responses against a 17-resource
+live AWS account (#597). The trade-off:
 the cap is a ceiling, not a per-call bill — the model only uses
 what it needs, so raising the ceiling adds no cost on short
 responses. A future release that wants to drop the cap should
