@@ -10,10 +10,14 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -104,10 +108,151 @@ func (f *fakeSTS) GetCallerIdentity(_ context.Context, _ *sts.GetCallerIdentityI
 	return f.resp, nil
 }
 
+// fakeS3 is the slice 3a (v0.88.0) S3 double. It services the four
+// API methods the S3Client interface requires. ListBuckets returns
+// the configured page; GetBucketLocation returns the configured
+// region (per bucket name); GetBucketLogging + GetBucketTagging
+// return per-bucket configured responses. Any of the four can be
+// configured with an error to exercise the failure path.
+type fakeS3 struct {
+	listBucketsOutput *s3.ListBucketsOutput
+	listBucketsErr    error
+	// locations maps bucket name to the LocationConstraint string
+	// the fake returns. An entry of "" returns empty constraint
+	// (us-east-1 legacy quirk).
+	locations map[string]string
+	// loggingByBucket maps bucket name to a non-nil LoggingEnabled
+	// pointer. Buckets absent from the map return an empty
+	// LoggingEnabled, signaling logging disabled.
+	loggingByBucket map[string]*s3types.LoggingEnabled
+	// taggingByBucket maps bucket name to its tag list. Buckets
+	// absent return an empty TagSet, modeling the NoSuchTagSet
+	// path via taggingErr below when needed.
+	taggingByBucket map[string][]s3types.Tag
+	// taggingErr is returned from GetBucketTagging for ANY bucket
+	// the test wants to fail. Tests that need per-bucket selective
+	// failures should add a per-bucket map; current tests only
+	// need the all-or-nothing shape.
+	taggingErr error
+	// loggingErr is returned from GetBucketLogging unconditionally
+	// when set. Used by the FailedServices test.
+	loggingErr error
+}
+
+func (f *fakeS3) ListBuckets(_ context.Context, _ *s3.ListBucketsInput, _ ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
+	if f.listBucketsErr != nil {
+		return nil, f.listBucketsErr
+	}
+	if f.listBucketsOutput == nil {
+		return &s3.ListBucketsOutput{}, nil
+	}
+	return f.listBucketsOutput, nil
+}
+
+func (f *fakeS3) GetBucketLocation(_ context.Context, in *s3.GetBucketLocationInput, _ ...func(*s3.Options)) (*s3.GetBucketLocationOutput, error) {
+	out := &s3.GetBucketLocationOutput{}
+	if in == nil || in.Bucket == nil {
+		return out, nil
+	}
+	if loc, ok := f.locations[*in.Bucket]; ok {
+		out.LocationConstraint = s3types.BucketLocationConstraint(loc)
+	}
+	return out, nil
+}
+
+func (f *fakeS3) GetBucketLogging(_ context.Context, in *s3.GetBucketLoggingInput, _ ...func(*s3.Options)) (*s3.GetBucketLoggingOutput, error) {
+	if f.loggingErr != nil {
+		return nil, f.loggingErr
+	}
+	out := &s3.GetBucketLoggingOutput{}
+	if in == nil || in.Bucket == nil {
+		return out, nil
+	}
+	if le, ok := f.loggingByBucket[*in.Bucket]; ok {
+		out.LoggingEnabled = le
+	}
+	return out, nil
+}
+
+func (f *fakeS3) GetBucketTagging(_ context.Context, in *s3.GetBucketTaggingInput, _ ...func(*s3.Options)) (*s3.GetBucketTaggingOutput, error) {
+	if f.taggingErr != nil {
+		return nil, f.taggingErr
+	}
+	out := &s3.GetBucketTaggingOutput{}
+	if in == nil || in.Bucket == nil {
+		return out, nil
+	}
+	if tags, ok := f.taggingByBucket[*in.Bucket]; ok {
+		out.TagSet = tags
+	}
+	return out, nil
+}
+
+// fakeELBv2 is the slice 3a ALB / NLB / GWLB double. Services the
+// three methods the ELBv2Client interface requires. Pagination
+// follows the same shape as fakeRDS — pages slice + callIdx
+// advances on each DescribeLoadBalancers call.
+type fakeELBv2 struct {
+	pages          []*elasticloadbalancingv2.DescribeLoadBalancersOutput
+	callIdx        int
+	describeLBErr  error
+	attrsByARN     map[string]*elasticloadbalancingv2.DescribeLoadBalancerAttributesOutput
+	attrErr        error
+	tagsByARN      map[string][]elbv2types.Tag
+	describeTagErr error
+}
+
+func (f *fakeELBv2) DescribeLoadBalancers(_ context.Context, _ *elasticloadbalancingv2.DescribeLoadBalancersInput, _ ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancersOutput, error) {
+	if f.describeLBErr != nil {
+		return nil, f.describeLBErr
+	}
+	if f.callIdx >= len(f.pages) {
+		return &elasticloadbalancingv2.DescribeLoadBalancersOutput{}, nil
+	}
+	out := f.pages[f.callIdx]
+	f.callIdx++
+	return out, nil
+}
+
+func (f *fakeELBv2) DescribeLoadBalancerAttributes(_ context.Context, in *elasticloadbalancingv2.DescribeLoadBalancerAttributesInput, _ ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeLoadBalancerAttributesOutput, error) {
+	if f.attrErr != nil {
+		return nil, f.attrErr
+	}
+	out := &elasticloadbalancingv2.DescribeLoadBalancerAttributesOutput{}
+	if in == nil || in.LoadBalancerArn == nil {
+		return out, nil
+	}
+	if a, ok := f.attrsByARN[*in.LoadBalancerArn]; ok && a != nil {
+		return a, nil
+	}
+	return out, nil
+}
+
+func (f *fakeELBv2) DescribeTags(_ context.Context, in *elasticloadbalancingv2.DescribeTagsInput, _ ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeTagsOutput, error) {
+	if f.describeTagErr != nil {
+		return nil, f.describeTagErr
+	}
+	out := &elasticloadbalancingv2.DescribeTagsOutput{}
+	if in == nil {
+		return out, nil
+	}
+	for _, arn := range in.ResourceArns {
+		arn := arn
+		desc := elbv2types.TagDescription{ResourceArn: awssdk.String(arn)}
+		if tags, ok := f.tagsByARN[arn]; ok {
+			desc.Tags = tags
+		}
+		out.TagDescriptions = append(out.TagDescriptions, desc)
+	}
+	return out, nil
+}
+
 type fakeFactory struct {
 	ec2    EC2Client
 	lambda LambdaClient
 	rds    RDSClient
+	s3     S3Client
+	elbv2  ELBv2Client
 	sts    STSClient
 }
 
@@ -124,6 +269,26 @@ func (f *fakeFactory) RDS(_ context.Context, _ string) (RDSClient, error) {
 		return &fakeRDS{}, nil
 	}
 	return f.rds, nil
+}
+
+// S3 returns the configured fake S3 client. Tests that don't set
+// the s3 field get a zero-output fake so S3 calls return an empty
+// inventory rather than nil-panicking — same posture as RDS. Slice
+// 3a (v0.88.0).
+func (f *fakeFactory) S3(_ context.Context, _ string) (S3Client, error) {
+	if f.s3 == nil {
+		return &fakeS3{}, nil
+	}
+	return f.s3, nil
+}
+
+// ELBv2 returns the configured fake ELBv2 client. Same zero-output
+// fallback as the other services. Slice 3a (v0.88.0).
+func (f *fakeFactory) ELBv2(_ context.Context, _ string) (ELBv2Client, error) {
+	if f.elbv2 == nil {
+		return &fakeELBv2{}, nil
+	}
+	return f.elbv2, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake
@@ -371,10 +536,12 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 	if !vr.AssumeRoleOK {
 		t.Fatalf("AssumeRoleOK should be true on the happy path; AssumeRoleErr=%+v", vr.AssumeRoleErr)
 	}
-	// Slice 2 (v0.87) added rds as the third preflight row — assert all
-	// three services land in the validation panel.
-	if len(vr.Preflight) != 3 {
-		t.Fatalf("Preflight rows = %d, want 3 (ec2 + lambda + rds)", len(vr.Preflight))
+	// Slice 3a (v0.88.0) added s3 + alb as the 4th and 5th preflight
+	// rows — assert all five services land in the validation panel.
+	// Slice 1 shipped ec2+lambda; slice 2 (v0.87) added rds; slice 3a
+	// (v0.88.0) adds s3+alb.
+	if len(vr.Preflight) != 5 {
+		t.Fatalf("Preflight rows = %d, want 5 (ec2 + lambda + rds + s3 + alb)", len(vr.Preflight))
 	}
 	services := map[string]bool{}
 	for _, p := range vr.Preflight {
@@ -383,7 +550,7 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 			t.Errorf("Preflight %q OK=false, err=%+v", p.Service, p.Err)
 		}
 	}
-	for _, want := range []string{"ec2", "lambda", "rds"} {
+	for _, want := range []string{"ec2", "lambda", "rds", "s3", "alb"} {
 		if !services[want] {
 			t.Errorf("Validate did not produce a %q preflight row", want)
 		}
@@ -645,5 +812,415 @@ func TestScanner_ScanRDSFailureSetsPartialAndFailedServices(t *testing.T) {
 	// string. Single-service-failure case: exactly one entry.
 	if len(result.FailedServices) != 1 || result.FailedServices[0] != "rds" {
 		t.Errorf("Result.FailedServices = %v, want [\"rds\"]", result.FailedServices)
+	}
+}
+
+// --- S3 tests (slice 3a, v0.88.0) -----------------------------------
+
+// TestScanner_ScanMapsS3Result drives the per-region S3 walk through
+// ListBuckets + GetBucketLocation + GetBucketLogging +
+// GetBucketTagging and verifies the mapping —
+// server_access_logging_enabled, tags, region — round-trips into
+// the scanner.Result.
+//
+// The bucket is in us-east-1 (empty LocationConstraint is the legacy
+// AWS quirk the scanner normalizes); the connection's region list
+// matches. ServerAccessLoggingEnabled is true because
+// GetBucketLogging returns a non-empty LoggingEnabled.TargetBucket.
+func TestScanner_ScanMapsS3Result(t *testing.T) {
+	s3Fake := &fakeS3{
+		listBucketsOutput: &s3.ListBucketsOutput{
+			Buckets: []s3types.Bucket{{
+				Name: awssdk.String("squadron-logs-prod"),
+			}},
+		},
+		locations: map[string]string{
+			// Empty constraint means us-east-1; the scanner
+			// normalizes.
+			"squadron-logs-prod": "",
+		},
+		loggingByBucket: map[string]*s3types.LoggingEnabled{
+			"squadron-logs-prod": {
+				TargetBucket: awssdk.String("squadron-logs-archive"),
+				TargetPrefix: awssdk.String("prod-logs/"),
+			},
+		},
+		taggingByBucket: map[string][]s3types.Tag{
+			"squadron-logs-prod": {
+				{Key: awssdk.String("Env"), Value: awssdk.String("prod")},
+			},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{
+		ec2: &fakeEC2{}, lambda: &fakeLambda{}, rds: &fakeRDS{},
+		s3: s3Fake, sts: &fakeSTS{},
+	})
+
+	conn := &credstore.CloudConnection{
+		AccountID: "123456789012",
+		Provider:  credstore.ProviderAWS,
+		Regions:   []string{"us-east-1"},
+	}
+	result, err := s.Scan(context.Background(), conn, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(result.ObjectStores) != 1 {
+		t.Fatalf("ObjectStores = %d, want 1", len(result.ObjectStores))
+	}
+	o := result.ObjectStores[0]
+	if o.ResourceID != "squadron-logs-prod" {
+		t.Errorf("ResourceID = %q", o.ResourceID)
+	}
+	if o.Region != "us-east-1" {
+		t.Errorf("Region = %q, want us-east-1 (empty LocationConstraint normalizes)", o.Region)
+	}
+	if !o.ServerAccessLoggingEnabled {
+		t.Errorf("ServerAccessLoggingEnabled = false, want true (LoggingEnabled.TargetBucket present)")
+	}
+	if o.RequestMetricsEnabled {
+		t.Errorf("RequestMetricsEnabled = true; slice 3a leaves this informational/false until the scanner adds the lookup")
+	}
+	if got := o.Tags["Env"]; got != "prod" {
+		t.Errorf("Tags[Env] = %q, want prod", got)
+	}
+	// One logging-enabled bucket, zero EC2 / Lambda / RDS / ALB →
+	// 1 instrumented, 0 uninstrumented under the slice 3a
+	// single-axis rule.
+	if result.InstrumentedCount != 1 || result.UninstrumentedCount != 0 {
+		t.Errorf("counts = (instrumented=%d, uninstrumented=%d), want (1, 0)",
+			result.InstrumentedCount, result.UninstrumentedCount)
+	}
+}
+
+// TestScanner_S3FiltersOutOfRegionBuckets pins the region-filter
+// contract: a bucket whose home region isn't in the connection's
+// region list does NOT appear in result.ObjectStores. Operators who
+// want broader visibility add more regions to the connection.
+func TestScanner_S3FiltersOutOfRegionBuckets(t *testing.T) {
+	s3Fake := &fakeS3{
+		listBucketsOutput: &s3.ListBucketsOutput{
+			Buckets: []s3types.Bucket{
+				{Name: awssdk.String("in-region")},
+				{Name: awssdk.String("out-of-region")},
+			},
+		},
+		locations: map[string]string{
+			"in-region":     "us-east-1",
+			"out-of-region": "eu-west-1",
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{
+		ec2: &fakeEC2{}, lambda: &fakeLambda{}, rds: &fakeRDS{},
+		s3: s3Fake, sts: &fakeSTS{},
+	})
+	result, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(result.ObjectStores) != 1 {
+		t.Fatalf("ObjectStores = %d, want 1 (out-of-region bucket should be filtered)", len(result.ObjectStores))
+	}
+	if result.ObjectStores[0].ResourceID != "in-region" {
+		t.Errorf("ResourceID = %q, want in-region", result.ObjectStores[0].ResourceID)
+	}
+}
+
+// TestScanner_S3IgnoresNoSuchTagSet verifies the
+// collectBucketDetails handler treats the NoSuchTagSet API error as
+// "this bucket has no tags" rather than a walk-breaking failure.
+// The mapped snapshot lands with nil Tags.
+func TestScanner_S3IgnoresNoSuchTagSet(t *testing.T) {
+	s3Fake := &fakeS3{
+		listBucketsOutput: &s3.ListBucketsOutput{
+			Buckets: []s3types.Bucket{{Name: awssdk.String("untagged-bucket")}},
+		},
+		locations:       map[string]string{"untagged-bucket": "us-east-1"},
+		loggingByBucket: map[string]*s3types.LoggingEnabled{},
+		taggingErr:      &apiErr{code: "NoSuchTagSet", msg: "The TagSet does not exist"},
+	}
+	s := newTestScanner(t, &fakeFactory{
+		ec2: &fakeEC2{}, lambda: &fakeLambda{}, rds: &fakeRDS{},
+		s3: s3Fake, sts: &fakeSTS{},
+	})
+	result, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v (NoSuchTagSet should not break the walk)", err)
+	}
+	if len(result.ObjectStores) != 1 {
+		t.Fatalf("ObjectStores = %d, want 1", len(result.ObjectStores))
+	}
+	if result.ObjectStores[0].Tags != nil {
+		t.Errorf("Tags = %v, want nil for NoSuchTagSet path", result.ObjectStores[0].Tags)
+	}
+}
+
+// TestScanner_S3PreflightAccessDenied exercises the error path —
+// s3:ListAllMyBuckets is missing from the permissions policy. The
+// preflight row carries the trust-policy step pointer and the other
+// preflight rows stay green.
+func TestScanner_S3PreflightAccessDenied(t *testing.T) {
+	s := newTestScanner(t, &fakeFactory{
+		ec2:    &fakeEC2{},
+		lambda: &fakeLambda{},
+		rds:    &fakeRDS{},
+		s3:     &fakeS3{listBucketsErr: &apiErr{code: "AccessDenied", msg: "s3:ListAllMyBuckets denied"}},
+		sts:    &fakeSTS{resp: &sts.GetCallerIdentityOutput{Account: awssdk.String("123456789012")}},
+	})
+	vr, err := s.Validate(context.Background(), &credstore.CloudConnection{Regions: []string{"us-east-1"}})
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+	if !vr.AssumeRoleOK {
+		t.Fatalf("AssumeRoleOK should be true even when S3 preflight fails")
+	}
+	var s3Row *scanner.PreflightCheck
+	for i := range vr.Preflight {
+		if vr.Preflight[i].Service == "s3" {
+			s3Row = &vr.Preflight[i]
+		}
+	}
+	if s3Row == nil {
+		t.Fatalf("no s3 preflight row in result: %+v", vr.Preflight)
+	}
+	if s3Row.OK {
+		t.Fatalf("s3 preflight OK should be false on AccessDenied")
+	}
+	if s3Row.Err == nil {
+		t.Fatalf("s3 preflight Err should be populated")
+	}
+	if s3Row.Err.SuggestedStep != "trust-policy" {
+		t.Errorf("SuggestedStep = %q, want trust-policy", s3Row.Err.SuggestedStep)
+	}
+}
+
+// TestScanner_ScanS3FailureSetsPartialAndFailedServices pins the
+// v0.87.3 audit-shape contract for the slice 3a S3 service: when
+// the per-region S3 walk fails (s3:ListAllMyBuckets revoked),
+// Result.Partial flips to true, PartialReason carries the
+// human-readable explanation, AND FailedServices includes "s3".
+// Mirrors TestScanner_ScanRDSFailureSetsPartialAndFailedServices.
+func TestScanner_ScanS3FailureSetsPartialAndFailedServices(t *testing.T) {
+	s := newTestScanner(t, &fakeFactory{
+		ec2:    &fakeEC2{},
+		lambda: &fakeLambda{},
+		rds:    &fakeRDS{},
+		s3:     &fakeS3{listBucketsErr: &apiErr{code: "AccessDenied", msg: "s3:ListAllMyBuckets denied"}},
+		sts:    &fakeSTS{},
+	})
+	result, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v (Scanner contract says Partial=true, not a Go error)", err)
+	}
+	if !result.Partial {
+		t.Fatalf("Result.Partial = false, want true when the s3 walk fails")
+	}
+	if result.PartialReason == "" {
+		t.Errorf("Result.PartialReason is empty; want the s3-walk failure explanation")
+	}
+	hasS3 := false
+	for _, fs := range result.FailedServices {
+		if fs == "s3" {
+			hasS3 = true
+		}
+	}
+	if !hasS3 {
+		t.Errorf("Result.FailedServices = %v, want to include \"s3\"", result.FailedServices)
+	}
+}
+
+// --- ALB tests (slice 3a, v0.88.0) ----------------------------------
+
+// TestScanner_ScanMapsALBResult drives the per-region ALB walk
+// through DescribeLoadBalancers + DescribeLoadBalancerAttributes +
+// DescribeTags and verifies the mapping — name, type, scheme,
+// access_logs_enabled, access_logs_s3_bucket, region, tags —
+// round-trips.
+func TestScanner_ScanMapsALBResult(t *testing.T) {
+	albARN := "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-alb/abcdef1234567890"
+	elbv2Fake := &fakeELBv2{
+		pages: []*elasticloadbalancingv2.DescribeLoadBalancersOutput{{
+			LoadBalancers: []elbv2types.LoadBalancer{{
+				LoadBalancerArn:  awssdk.String(albARN),
+				LoadBalancerName: awssdk.String("prod-alb"),
+				Type:             elbv2types.LoadBalancerTypeEnumApplication,
+				Scheme:           elbv2types.LoadBalancerSchemeEnumInternetFacing,
+			}},
+		}},
+		attrsByARN: map[string]*elasticloadbalancingv2.DescribeLoadBalancerAttributesOutput{
+			albARN: {
+				Attributes: []elbv2types.LoadBalancerAttribute{
+					{Key: awssdk.String("access_logs.s3.enabled"), Value: awssdk.String("true")},
+					{Key: awssdk.String("access_logs.s3.bucket"), Value: awssdk.String("squadron-logs-prod")},
+				},
+			},
+		},
+		tagsByARN: map[string][]elbv2types.Tag{
+			albARN: {{Key: awssdk.String("Env"), Value: awssdk.String("prod")}},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{
+		ec2: &fakeEC2{}, lambda: &fakeLambda{}, rds: &fakeRDS{},
+		elbv2: elbv2Fake, sts: &fakeSTS{},
+	})
+
+	result, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(result.LoadBalancers) != 1 {
+		t.Fatalf("LoadBalancers = %d, want 1", len(result.LoadBalancers))
+	}
+	lb := result.LoadBalancers[0]
+	if lb.ResourceID != albARN {
+		t.Errorf("ResourceID = %q", lb.ResourceID)
+	}
+	if lb.Name != "prod-alb" {
+		t.Errorf("Name = %q, want prod-alb", lb.Name)
+	}
+	if lb.Type != "application" {
+		t.Errorf("Type = %q, want application", lb.Type)
+	}
+	if lb.Scheme != "internet-facing" {
+		t.Errorf("Scheme = %q, want internet-facing", lb.Scheme)
+	}
+	if !lb.AccessLogsEnabled {
+		t.Errorf("AccessLogsEnabled = false, want true (access_logs.s3.enabled=true attribute)")
+	}
+	if lb.AccessLogsS3Bucket != "squadron-logs-prod" {
+		t.Errorf("AccessLogsS3Bucket = %q, want squadron-logs-prod", lb.AccessLogsS3Bucket)
+	}
+	if lb.Region != "us-east-1" {
+		t.Errorf("Region = %q, want us-east-1", lb.Region)
+	}
+	if got := lb.Tags["Env"]; got != "prod" {
+		t.Errorf("Tags[Env] = %q, want prod", got)
+	}
+	// One access-logs-enabled ALB → 1 instrumented, 0 uninstrumented
+	// under the slice 3a single-axis rule.
+	if result.InstrumentedCount != 1 || result.UninstrumentedCount != 0 {
+		t.Errorf("counts = (instrumented=%d, uninstrumented=%d), want (1, 0)",
+			result.InstrumentedCount, result.UninstrumentedCount)
+	}
+}
+
+// TestScanner_ALBPaginates verifies the scan walks past the first
+// page of DescribeLoadBalancers when the SDK returns a non-empty
+// NextMarker. Mirrors the existing RDS pagination posture.
+func TestScanner_ALBPaginates(t *testing.T) {
+	elbv2Fake := &fakeELBv2{
+		pages: []*elasticloadbalancingv2.DescribeLoadBalancersOutput{
+			{
+				LoadBalancers: []elbv2types.LoadBalancer{{
+					LoadBalancerArn:  awssdk.String("arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/page1/x"),
+					LoadBalancerName: awssdk.String("page1"),
+					Type:             elbv2types.LoadBalancerTypeEnumApplication,
+					Scheme:           elbv2types.LoadBalancerSchemeEnumInternal,
+				}},
+				NextMarker: awssdk.String("next"),
+			},
+			{
+				LoadBalancers: []elbv2types.LoadBalancer{{
+					LoadBalancerArn:  awssdk.String("arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/page2/y"),
+					LoadBalancerName: awssdk.String("page2"),
+					Type:             elbv2types.LoadBalancerTypeEnumApplication,
+					Scheme:           elbv2types.LoadBalancerSchemeEnumInternal,
+				}},
+			},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{
+		ec2: &fakeEC2{}, lambda: &fakeLambda{}, rds: &fakeRDS{},
+		elbv2: elbv2Fake, sts: &fakeSTS{},
+	})
+	result, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(result.LoadBalancers) != 2 {
+		t.Fatalf("LoadBalancers = %d, want 2 (both pages)", len(result.LoadBalancers))
+	}
+}
+
+// TestScanner_ALBPreflightAccessDenied exercises the error path —
+// elasticloadbalancing:DescribeLoadBalancers missing from the
+// permissions policy. Same shape as the rds + s3 preflight tests.
+func TestScanner_ALBPreflightAccessDenied(t *testing.T) {
+	s := newTestScanner(t, &fakeFactory{
+		ec2:    &fakeEC2{},
+		lambda: &fakeLambda{},
+		rds:    &fakeRDS{},
+		elbv2:  &fakeELBv2{describeLBErr: &apiErr{code: "AccessDenied", msg: "elasticloadbalancing:DescribeLoadBalancers denied"}},
+		sts:    &fakeSTS{resp: &sts.GetCallerIdentityOutput{Account: awssdk.String("123456789012")}},
+	})
+	vr, err := s.Validate(context.Background(), &credstore.CloudConnection{Regions: []string{"us-east-1"}})
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+	if !vr.AssumeRoleOK {
+		t.Fatalf("AssumeRoleOK should be true even when ALB preflight fails")
+	}
+	var albRow *scanner.PreflightCheck
+	for i := range vr.Preflight {
+		if vr.Preflight[i].Service == "alb" {
+			albRow = &vr.Preflight[i]
+		}
+	}
+	if albRow == nil {
+		t.Fatalf("no alb preflight row in result: %+v", vr.Preflight)
+	}
+	if albRow.OK {
+		t.Fatalf("alb preflight OK should be false on AccessDenied")
+	}
+	if albRow.Err == nil {
+		t.Fatalf("alb preflight Err should be populated")
+	}
+	if albRow.Err.SuggestedStep != "trust-policy" {
+		t.Errorf("SuggestedStep = %q, want trust-policy", albRow.Err.SuggestedStep)
+	}
+}
+
+// TestScanner_ScanALBFailureSetsPartialAndFailedServices pins the
+// v0.87.3 audit-shape contract for the slice 3a ALB service: when
+// the per-region ALB walk fails, Result.Partial flips, PartialReason
+// is set, AND FailedServices includes "alb".
+func TestScanner_ScanALBFailureSetsPartialAndFailedServices(t *testing.T) {
+	s := newTestScanner(t, &fakeFactory{
+		ec2:    &fakeEC2{},
+		lambda: &fakeLambda{},
+		rds:    &fakeRDS{},
+		elbv2:  &fakeELBv2{describeLBErr: &apiErr{code: "AccessDenied", msg: "elasticloadbalancing:DescribeLoadBalancers denied"}},
+		sts:    &fakeSTS{},
+	})
+	result, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if !result.Partial {
+		t.Fatalf("Result.Partial = false, want true when the alb walk fails")
+	}
+	if result.PartialReason == "" {
+		t.Errorf("Result.PartialReason is empty; want the alb-walk failure explanation")
+	}
+	hasALB := false
+	for _, fs := range result.FailedServices {
+		if fs == "alb" {
+			hasALB = true
+		}
+	}
+	if !hasALB {
+		t.Errorf("Result.FailedServices = %v, want to include \"alb\"", result.FailedServices)
 	}
 }

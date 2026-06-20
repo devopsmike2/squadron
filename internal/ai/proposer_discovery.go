@@ -47,6 +47,23 @@ type DiscoveryScanContext struct {
 	// observability-lever model (PI + EM) generalizes.
 	Databases []DatabaseResourceCandidate
 
+	// ObjectStores joins Compute + Functions + Databases in slice
+	// 3a of the universal-observation arc (v0.88.0). S3-shaped
+	// today; GCS / Azure Blob slot into the same field in later
+	// slices. The proposer's single lever for object stores is
+	// Server Access Logging — when off, recommend enabling with
+	// an operator-chosen target bucket + prefix.
+	ObjectStores []ObjectStoreCandidate
+
+	// LoadBalancers joins the inventory list in slice 3a (v0.88.0).
+	// ALB / NLB / Gateway LB today; GCLB / Azure LB slot into the
+	// same field in later slices. The proposer's single lever for
+	// load balancers is Access Logs (writes to an S3 bucket). When
+	// off, recommend enabling — prefer naming an existing
+	// instrumented bucket from the ObjectStores list as the target
+	// rather than asking the operator to invent one.
+	LoadBalancers []LoadBalancerCandidate
+
 	// Coverage assessment, denormalized so the prompt body can
 	// reference the totals without recounting. Match the scanner
 	// Result fields one-to-one.
@@ -106,6 +123,47 @@ type DatabaseResourceCandidate struct {
 	Region                     string
 }
 
+// ObjectStoreCandidate is one S3-shaped row from the scan. Mirrors
+// scanner.ObjectStoreSnapshot for the same import-boundary reason as
+// the other candidates.
+//
+// The proposer's single S3 lever is Server Access Logging — when
+// false, the recommendation is to enable logging to an
+// operator-chosen target bucket and prefix. The target bucket can be
+// any bucket in the operator's environment; the proposer surfaces
+// `inline_config_snippet` placeholders the operator fills in. The
+// candidate's RequestMetricsEnabled is intentionally omitted from
+// the prompt input — slice 3a's instrumented rule is single-axis
+// (server access logging), and request-metrics is operator-facing
+// information only.
+type ObjectStoreCandidate struct {
+	ResourceID                 string `json:"resource_id"`
+	Region                     string `json:"region"`
+	ServerAccessLoggingEnabled bool   `json:"server_access_logging_enabled"`
+}
+
+// LoadBalancerCandidate is one ALB-shaped row from the scan. Mirrors
+// scanner.LoadBalancerSnapshot for the same import-boundary reason
+// as the other candidates.
+//
+// The proposer's single ALB lever is Access Logs (writes to an S3
+// bucket). When AccessLogsEnabled is false, the recommendation
+// names a target bucket. Cross-reference rule: when the inventory
+// contains ObjectStores, the proposer prefers naming a bucket
+// Squadron already sees as the target rather than asking the
+// operator to invent one. AccessLogsS3Bucket is the currently-
+// configured target when logging is enabled — surfaced so the
+// proposer can decline to re-recommend on already-on rows.
+type LoadBalancerCandidate struct {
+	ResourceID         string `json:"resource_id"`
+	Name               string `json:"name"`
+	Type               string `json:"type"`
+	Scheme             string `json:"scheme"`
+	AccessLogsEnabled  bool   `json:"access_logs_enabled"`
+	AccessLogsS3Bucket string `json:"access_logs_s3_bucket,omitempty"`
+	Region             string `json:"region"`
+}
+
 // ProposeFromDiscoveryScan is the v0.85 sibling of
 // ProposeFromCostSpike. Same proposer engine, different entry point.
 // The model receives a Squadron-discovered AWS inventory snapshot and
@@ -138,6 +196,12 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 		return nil, errors.New("account_id is required")
 	}
 	if err := validateDatabaseCandidates(in.Databases); err != nil {
+		return nil, fmt.Errorf("discovery scan context: %w", err)
+	}
+	if err := validateObjectStoreCandidates(in.ObjectStores); err != nil {
+		return nil, fmt.Errorf("discovery scan context: %w", err)
+	}
+	if err := validateLoadBalancerCandidates(in.LoadBalancers); err != nil {
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 
@@ -238,6 +302,45 @@ func validateDatabaseCandidates(dbs []DatabaseResourceCandidate) error {
 		}
 		if strings.TrimSpace(d.Engine) == "" {
 			return fmt.Errorf("databases[%d]: engine is required", i)
+		}
+	}
+	return nil
+}
+
+// validateObjectStoreCandidates mirrors validateDatabaseCandidates
+// for the slice 3a (v0.88.0) S3 candidate type. Each row must carry
+// a non-empty ResourceID (the bucket name) and Region (the bucket's
+// home region) — the proposer cites them back via the evidence
+// array, and empty values surface in the model's reasoning as
+// unactionable rows.
+func validateObjectStoreCandidates(stores []ObjectStoreCandidate) error {
+	for i, o := range stores {
+		if strings.TrimSpace(o.ResourceID) == "" {
+			return fmt.Errorf("object_stores[%d]: resource_id is required", i)
+		}
+		if strings.TrimSpace(o.Region) == "" {
+			return fmt.Errorf("object_stores[%d]: region is required", i)
+		}
+	}
+	return nil
+}
+
+// validateLoadBalancerCandidates mirrors validateDatabaseCandidates
+// for the slice 3a load-balancer candidate type. ResourceID (the
+// ARN) and Name + Type are required so the prompt body's reasoning
+// has something to bind to; Scheme + Region are denormalized for
+// completeness but not enforced (an empty Scheme just renders as
+// "scheme=" in the prompt body, which the model handles gracefully).
+func validateLoadBalancerCandidates(lbs []LoadBalancerCandidate) error {
+	for i, l := range lbs {
+		if strings.TrimSpace(l.ResourceID) == "" {
+			return fmt.Errorf("load_balancers[%d]: resource_id is required", i)
+		}
+		if strings.TrimSpace(l.Name) == "" {
+			return fmt.Errorf("load_balancers[%d]: name is required", i)
+		}
+		if strings.TrimSpace(l.Type) == "" {
+			return fmt.Errorf("load_balancers[%d]: type is required", i)
 		}
 	}
 	return nil
