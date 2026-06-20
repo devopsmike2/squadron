@@ -238,10 +238,13 @@ func AWSWizard() ConnectorWizard {
 				// the failure mode impossible to miss. The template
 				// JSON lives in AWS_PERMISSIONS_POLICY_TEMPLATE in
 				// ui/src/data/awsWizard.ts — same drift-tradeoff as
-				// the trust-policy template.
+				// the trust-policy template. Slice 3a (v0.88.0)
+				// extended the template with 8 new actions (5 S3 + 3
+				// ELBv2); the description is updated to mention the
+				// five service categories Squadron now reads from.
 				ID:          "permissions-policy",
 				Title:       "Add this permissions policy to the role",
-				Description: "Squadron needs read-only access to EC2, Lambda, and RDS in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
+				Description: "Squadron needs read-only access to EC2, Lambda, RDS, S3, and ELBv2 (ALB / NLB) in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
 				Action: WizardAction{
 					Kind: ActionCopyValue,
 					Payload: map[string]string{
@@ -253,7 +256,7 @@ func AWSWizard() ConnectorWizard {
 					Kind: ValidationNone,
 				},
 				DocLink:      "https://docs.squadron.example/discovery/aws#permissions-policy",
-				RecoveryHint: "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
+				RecoveryHint: "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
 			},
 			{
 				ID:          "role-arn",
@@ -277,7 +280,7 @@ func AWSWizard() ConnectorWizard {
 			{
 				ID:          "validate",
 				Title:       "Validate the connection",
-				Description: "Squadron will run sts:AssumeRole and a tiny EC2 + Lambda probe to confirm the role works. No records are created until you click Save on the next step.",
+				Description: "Squadron will run sts:AssumeRole and tiny EC2 + Lambda + RDS + S3 + ALB probes to confirm the role works. No records are created until you click Save on the next step.",
 				Action: WizardAction{
 					Kind: ActionTestConnection,
 				},

@@ -88,13 +88,14 @@ type seed struct {
 	expectPlan bool                    // hint for the human reading the report; not asserted
 }
 
-// corpus is a hand-curated 15-scenario set covering both proposer
+// corpus is a hand-curated 17-scenario set covering both proposer
 // arcs: 8 cost-spike seeds (the v0.83 originals — #550 truncation,
-// #552 preamble) and 7 discovery seeds (the v0.86 Stream 2F arc plus
+// #552 preamble) and 9 discovery seeds (the v0.86 Stream 2F arc,
 // v0.87's RDS seed added when the universal-observation arc grew to
-// cover databases).
+// cover databases, plus v0.88's S3 + ALB seeds added when slice 3a
+// covered object stores + load balancers).
 // v0.84+ can expand this — for now small + diverse beats large +
-// redundant. Cost per run stays ~$0.20 at 15 seeds.
+// redundant. Cost per run stays ~$0.20-0.32 at 17 seeds.
 func corpus() []seed {
 	return []seed{
 		{
@@ -407,6 +408,104 @@ func corpus() []seed {
 					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-analytics", Engine: "mysql", EngineVersion: "8.0", InstanceClass: "db.r6g.large", PerformanceInsightsEnabled: false, EnhancedMonitoringEnabled: false, Region: "us-east-1"},
 					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-platform", Engine: "aurora-postgresql", EngineVersion: "14.7", InstanceClass: "db.r6g.large", PerformanceInsightsEnabled: true, EnhancedMonitoringEnabled: true, Region: "us-east-1"},
 					{ResourceID: "arn:aws:rds:us-east-1:777788889999:db:db-legacy-mssql", Engine: "sqlserver-se", EngineVersion: "15.00.4198.2.v1", InstanceClass: "db.m5.xlarge", PerformanceInsightsEnabled: false, EnhancedMonitoringEnabled: true, Region: "us-east-1"},
+				},
+			},
+			expectPlan: true,
+		},
+
+		// --- v0.88 S3 + ALB seeds (slice 3a of universal observation arc) ---
+		// These exercise the slice 3a single-axis instrumentation
+		// rules — Server Access Logging on S3 and Access Logs on
+		// ALB — plus the ALB→S3 cross-reference where the proposer
+		// should prefer an existing instrumented bucket as the
+		// access-logs target. AccountIDs are fictional; the bench
+		// never calls AWS, only the Anthropic API.
+
+		{
+			// Mixed S3 coverage across regions. The proposer should:
+			//   - emit a Server-Access-Logging-enable step for the
+			//     5 buckets where ServerAccessLoggingEnabled=false
+			//     (target bucket + prefix as operator-fill-in)
+			//   - skip the 3 already-instrumented buckets
+			//   - NOT recommend anything based on RequestMetrics
+			//     (informational only)
+			// Plus 3 uncovered EC2 + 2 uncovered Lambdas so the
+			// proposer sees a realistic multi-category scan and the
+			// plan stays sensibly batched.
+			name: "discovery_s3_mixed_coverage",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-8",
+				AccountID:           "888899990000",
+				Regions:             []string{"us-east-1", "us-west-2"},
+				InstrumentedCount:   3,  // the 3 logging-enabled buckets
+				UninstrumentedCount: 10, // 5 unlogged buckets + 3 EC2 + 2 Lambda
+				ComputeInstances: []ai.ComputeResourceCandidate{
+					{ResourceID: "i-0f01", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0f02", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0f03", InstanceType: "c5.xlarge", Region: "us-west-2", OSFamily: "linux", HasOTel: false},
+				},
+				Functions: []ai.FunctionResourceCandidate{
+					{ResourceID: "arn:aws:lambda:us-east-1:888899990000:function:order-router", Name: "order-router", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:888899990000:function:webhook-handler", Name: "webhook-handler", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+				},
+				ObjectStores: []ai.ObjectStoreCandidate{
+					{ResourceID: "squadron-logs-archive", Region: "us-east-1", ServerAccessLoggingEnabled: true},
+					{ResourceID: "compliance-audit-prod", Region: "us-east-1", ServerAccessLoggingEnabled: true},
+					{ResourceID: "compliance-audit-staging", Region: "us-east-1", ServerAccessLoggingEnabled: true},
+					{ResourceID: "user-uploads-prod", Region: "us-east-1", ServerAccessLoggingEnabled: false},
+					{ResourceID: "user-uploads-staging", Region: "us-east-1", ServerAccessLoggingEnabled: false},
+					{ResourceID: "asset-cache-prod", Region: "us-east-1", ServerAccessLoggingEnabled: false},
+					{ResourceID: "data-lake-west-1", Region: "us-west-2", ServerAccessLoggingEnabled: false},
+					{ResourceID: "data-lake-west-2", Region: "us-west-2", ServerAccessLoggingEnabled: false},
+				},
+			},
+			expectPlan: true,
+		},
+		{
+			// ALB mixed coverage with the slice 3a cross-reference
+			// payoff: 2 already-covered ALBs log to different
+			// existing S3 buckets; 3 uncovered ALBs need a target.
+			// The 2 instrumented S3 buckets in the inventory give
+			// the proposer a cross-reference target — the
+			// recommendation should PREFER naming
+			// squadron-alb-logs or compliance-audit-prod as the
+			// target rather than inventing a bucket name. The
+			// proposer's reasoning should explicitly call out the
+			// cross-reference (LinkedIn-beat-worthy: "Squadron is
+			// the only tool that sees both sides of the ALB→S3
+			// access-log relationship").
+			// Plus 4 uncovered EC2 + 3 uncovered Lambdas so the
+			// proposer batches sensibly.
+			name: "discovery_alb_mixed_coverage",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-9",
+				AccountID:           "999900001111",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   4,  // 2 covered ALBs + 2 covered S3 buckets
+				UninstrumentedCount: 10, // 3 uncovered ALBs + 4 EC2 + 3 Lambda
+				ComputeInstances: []ai.ComputeResourceCandidate{
+					{ResourceID: "i-0g01", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0g02", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0g03", InstanceType: "c5.xlarge", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0g04", InstanceType: "c5.xlarge", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+				},
+				Functions: []ai.FunctionResourceCandidate{
+					{ResourceID: "arn:aws:lambda:us-east-1:999900001111:function:webhook-1", Name: "webhook-1", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:999900001111:function:webhook-2", Name: "webhook-2", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:999900001111:function:image-resize", Name: "image-resize", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+				},
+				ObjectStores: []ai.ObjectStoreCandidate{
+					{ResourceID: "squadron-alb-logs", Region: "us-east-1", ServerAccessLoggingEnabled: true},
+					{ResourceID: "compliance-audit-prod", Region: "us-east-1", ServerAccessLoggingEnabled: true},
+				},
+				LoadBalancers: []ai.LoadBalancerCandidate{
+					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/app/api-prod/aaaa", Name: "api-prod", Type: "application", Scheme: "internet-facing", AccessLogsEnabled: true, AccessLogsS3Bucket: "squadron-alb-logs", Region: "us-east-1"},
+					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/app/admin-prod/bbbb", Name: "admin-prod", Type: "application", Scheme: "internal", AccessLogsEnabled: true, AccessLogsS3Bucket: "compliance-audit-prod", Region: "us-east-1"},
+					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/app/api-staging/cccc", Name: "api-staging", Type: "application", Scheme: "internet-facing", AccessLogsEnabled: false, Region: "us-east-1"},
+					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/app/api-dev/dddd", Name: "api-dev", Type: "application", Scheme: "internet-facing", AccessLogsEnabled: false, Region: "us-east-1"},
+					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/net/internal-grpc/eeee", Name: "internal-grpc", Type: "network", Scheme: "internal", AccessLogsEnabled: false, Region: "us-east-1"},
 				},
 			},
 			expectPlan: true,

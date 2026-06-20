@@ -95,16 +95,41 @@ type Result struct {
 	// observability works).
 	Databases []DatabaseInstanceSnapshot `json:"databases"`
 
-	// InstrumentedCount sums Compute+Functions+Databases entries where
-	// observability presence was detected. UninstrumentedCount is the
-	// complement. Both are denormalized so consumers don't need to
-	// recount.
+	// ObjectStores is the S3 / GCS / Azure Blob inventory. Added in
+	// slice 3a of the universal-observation arc (v0.88.0). The
+	// proposer's recommendation surface for object stores reasons
+	// about Server Access Logging enablement — a single-axis,
+	// operator-chosen-target lever; Squadron emits a recommendation
+	// to enable logging to an operator-chosen bucket, but never
+	// executes s3:PutBucketLogging.
+	ObjectStores []ObjectStoreSnapshot `json:"object_stores"`
+
+	// LoadBalancers is the ALB / NLB / GCLB / Azure LB inventory.
+	// Added in slice 3a of the universal-observation arc (v0.88.0).
+	// The proposer's recommendation surface for load balancers
+	// reasons about Access Logs enablement, with a cross-reference
+	// rule: when the inventory already contains S3 buckets, prefer
+	// naming an existing bucket as the access-logs target so the
+	// operator doesn't have to invent one. Squadron never executes
+	// elasticloadbalancing:ModifyLoadBalancerAttributes.
+	LoadBalancers []LoadBalancerSnapshot `json:"load_balancers"`
+
+	// InstrumentedCount sums Compute+Functions+Databases+ObjectStores+
+	// LoadBalancers entries where observability presence was detected.
+	// UninstrumentedCount is the complement. Both are denormalized so
+	// consumers don't need to recount.
 	//
 	// Per-category "instrumented" rules:
 	//   - Compute: HasOTel == true
 	//   - Functions: HasOTelLayer == true
 	//   - Databases: PerformanceInsightsEnabled AND
 	//     EnhancedMonitoringEnabled (both lights, the two-part rule)
+	//   - ObjectStores: ServerAccessLoggingEnabled == true. (Slice 3a
+	//     single-axis rule. RequestMetricsEnabled is informational only
+	//     and does NOT gate the rule — surfaced for operator context.)
+	//   - LoadBalancers: AccessLogsEnabled == true. (Slice 3a single-
+	//     axis rule. AccessLogsS3Bucket is the operator-chosen target
+	//     and stays informational.)
 	InstrumentedCount   int `json:"instrumented_count"`
 	UninstrumentedCount int `json:"uninstrumented_count"`
 
@@ -216,6 +241,123 @@ type DatabaseInstanceSnapshot struct {
 	Tags map[string]string `json:"tags,omitempty"`
 }
 
+// ObjectStoreSnapshot is the category-typed view of an object-storage
+// bucket. Provider-specific scanners populate this from S3
+// ListBuckets+GetBucketLogging / GCS list / Azure Blob list. The
+// proposer reasons about category-level levers (server access
+// logging, request metrics) rather than provider-specific feature
+// names.
+//
+// Slice 3a's "instrumented" rule for object stores is single-axis:
+// ServerAccessLoggingEnabled must be true. RequestMetricsEnabled is
+// informational only — surfaced so an operator can see request-rate
+// observability state at a glance, but it does NOT gate the
+// instrumented-count tally. The proposer prompt treats Server Access
+// Logging as the single lever; when off, it recommends enabling
+// (operator-chosen target bucket + prefix).
+//
+// Squadron does NOT execute s3:PutBucketLogging — discovery is
+// strictly read-only; the operator runs the enablement Terraform
+// through their own IaC pipeline. Same posture as RDS's PI / EM
+// levers.
+type ObjectStoreSnapshot struct {
+	// ResourceID is the provider-native ID: S3 bucket name / GCS
+	// bucket name / Azure Blob container path. Bucket names are
+	// globally unique on AWS so the bare name suffices.
+	ResourceID string `json:"resource_id"`
+
+	// Region is where the bucket lives. S3 is technically a
+	// global service for listing, but each bucket has a region
+	// (returned by GetBucketLocation) that the proposer reasons
+	// about for collector colocation.
+	Region string `json:"region"`
+
+	// ServerAccessLoggingEnabled signals AWS S3 Server Access
+	// Logging (or equivalent on other clouds). The proposer's
+	// primary S3 lever — when false, recommend enabling. Detection
+	// reads s3:GetBucketLogging; the LoggingEnabled.TargetBucket
+	// field being non-empty flips this to true.
+	ServerAccessLoggingEnabled bool `json:"server_access_logging_enabled"`
+
+	// RequestMetricsEnabled signals whether the bucket has S3
+	// Request Metrics enabled (CloudWatch per-bucket request-rate
+	// observability). Informational only — does NOT gate the
+	// instrumented-count tally. Surfaced so the operator can see
+	// request-rate observability state alongside the access-logging
+	// lever.
+	RequestMetricsEnabled bool `json:"request_metrics_enabled"`
+
+	// Tags follows the same flattened shape as
+	// ComputeInstanceSnapshot. Empty when GetBucketTagging returns
+	// NoSuchTagSet.
+	Tags map[string]string `json:"tags,omitempty"`
+}
+
+// LoadBalancerSnapshot is the category-typed view of a managed load
+// balancer. Provider-specific scanners populate this from
+// elasticloadbalancing:DescribeLoadBalancers (ALB / NLB / Gateway LB)
+// / GCP list / Azure Load Balancer list. The proposer reasons about
+// category-level levers (access logs to an object-storage target)
+// rather than provider-specific feature names.
+//
+// Slice 3a's "instrumented" rule for load balancers is single-axis:
+// AccessLogsEnabled must be true. AccessLogsS3Bucket is the
+// operator-chosen target the proposer cross-references against the
+// scan's ObjectStores list — recommending an ALB enable access logs
+// to a bucket Squadron already sees in the inventory is the slice
+// 3a forward-dependency payoff that justified pairing S3 and ALB in
+// the same release.
+//
+// Squadron does NOT execute
+// elasticloadbalancing:ModifyLoadBalancerAttributes — discovery is
+// strictly read-only.
+type LoadBalancerSnapshot struct {
+	// ResourceID is the provider-native ID: ALB / NLB / Gateway LB
+	// ARN / GCLB forwarding rule URL / Azure LB resource ID.
+	ResourceID string `json:"resource_id"`
+
+	// Name is the operator-readable name. Often the trailing
+	// component of ResourceID but kept separate so the UI doesn't
+	// have to parse ARNs.
+	Name string `json:"name"`
+
+	// Type is the load-balancer kind. On AWS one of "application",
+	// "network", "gateway"; populated from
+	// elasticloadbalancing:DescribeLoadBalancers' Type field.
+	Type string `json:"type"`
+
+	// Scheme is the load-balancer scheme: "internet-facing" or
+	// "internal". Populated from DescribeLoadBalancers' Scheme
+	// field. The proposer reasons about scheme when deciding
+	// whether access logs are likely to be a compliance lever (an
+	// internet-facing ALB without logs is a stronger
+	// recommendation than an internal one).
+	Scheme string `json:"scheme"`
+
+	// AccessLogsEnabled signals whether the load balancer has
+	// access logs enabled. The proposer's primary ALB lever — when
+	// false, recommend enabling. Detection reads
+	// DescribeLoadBalancerAttributes; the access_logs.s3.enabled
+	// attribute flips this to true.
+	AccessLogsEnabled bool `json:"access_logs_enabled"`
+
+	// AccessLogsS3Bucket is the bucket the load balancer logs to,
+	// when access logs are enabled. Populated from the
+	// access_logs.s3.bucket attribute. Empty when access logs are
+	// disabled or the attribute is unset. The proposer
+	// cross-references this against the scan's ObjectStores list so
+	// recommendations that name a target bucket can prefer one
+	// Squadron already sees.
+	AccessLogsS3Bucket string `json:"access_logs_s3_bucket,omitempty"`
+
+	// Region is where the load balancer lives.
+	Region string `json:"region"`
+
+	// Tags follows the same flattened shape as the other category
+	// snapshots.
+	Tags map[string]string `json:"tags,omitempty"`
+}
+
 // FunctionRuntimeSnapshot is the category-typed view of a serverless
 // function. Provider-specific scanners populate this from Lambda
 // ListFunctions / Cloud Functions list / Azure Functions list.
@@ -269,8 +411,9 @@ type ValidationResult struct {
 // wizard is not running a real scan; it's just confirming
 // permissions.
 type PreflightCheck struct {
-	// Service is the per-service identifier: "ec2", "lambda", "rds".
-	// Slice 2 added "rds"; future slices add "s3", "alb", and so on.
+	// Service is the per-service identifier: "ec2", "lambda", "rds",
+	// "s3", "alb". Slice 2 added "rds"; slice 3a (v0.88.0) added
+	// "s3" and "alb"; future slices add more.
 	Service string `json:"service"`
 
 	// OK is true when the preflight call returned without an error.

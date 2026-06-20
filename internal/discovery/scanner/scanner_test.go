@@ -174,6 +174,142 @@ func TestResult_PartialFieldsJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestObjectStoreSnapshot_JSONRoundTrip pins the slice 3a (v0.88.0)
+// wire shape for ObjectStoreSnapshot. Audit consumers, the HTTP
+// response, and the proposer's discovery scan context all share this
+// json shape — a regression here would silently break them.
+//
+// Pins the documented semantics:
+//   - ServerAccessLoggingEnabled is the single instrumented-rule axis
+//   - RequestMetricsEnabled stays informational (not part of the rule
+//     but present on the wire)
+//   - Tags use omitempty so an untagged bucket stays out of the
+//     payload entirely
+func TestObjectStoreSnapshot_JSONRoundTrip(t *testing.T) {
+	original := ObjectStoreSnapshot{
+		ResourceID:                 "squadron-logs-prod",
+		Region:                     "us-east-1",
+		ServerAccessLoggingEnabled: true,
+		RequestMetricsEnabled:      false,
+		Tags:                       map[string]string{"Env": "prod"},
+	}
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		`"resource_id":"squadron-logs-prod"`,
+		`"region":"us-east-1"`,
+		`"server_access_logging_enabled":true`,
+		`"request_metrics_enabled":false`,
+		`"tags":{"Env":"prod"}`,
+	} {
+		if !contains(s, want) {
+			t.Errorf("marshal output missing %q; got: %s", want, s)
+		}
+	}
+
+	var round ObjectStoreSnapshot
+	if err := json.Unmarshal(raw, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if round.ResourceID != original.ResourceID {
+		t.Errorf("ResourceID round-trip = %q, want %q", round.ResourceID, original.ResourceID)
+	}
+	if round.ServerAccessLoggingEnabled != original.ServerAccessLoggingEnabled {
+		t.Errorf("ServerAccessLoggingEnabled round-trip = %v, want %v",
+			round.ServerAccessLoggingEnabled, original.ServerAccessLoggingEnabled)
+	}
+	if round.RequestMetricsEnabled != original.RequestMetricsEnabled {
+		t.Errorf("RequestMetricsEnabled round-trip = %v, want %v",
+			round.RequestMetricsEnabled, original.RequestMetricsEnabled)
+	}
+
+	// Empty Tags map should stay out of the wire shape (omitempty).
+	noTags := ObjectStoreSnapshot{ResourceID: "b", Region: "us-east-1"}
+	noTagsRaw, err := json.Marshal(noTags)
+	if err != nil {
+		t.Fatalf("marshal noTags: %v", err)
+	}
+	if contains(string(noTagsRaw), `"tags"`) {
+		t.Errorf("empty Tags should be omitted from wire shape; got: %s", string(noTagsRaw))
+	}
+}
+
+// TestLoadBalancerSnapshot_JSONRoundTrip pins the slice 3a (v0.88.0)
+// wire shape for LoadBalancerSnapshot. Same audit-consumer +
+// proposer-context regression posture as the ObjectStore round-trip
+// above.
+//
+// AccessLogsS3Bucket uses omitempty since the field is only
+// meaningful when AccessLogsEnabled is true; on the off path it
+// should not appear on the wire.
+func TestLoadBalancerSnapshot_JSONRoundTrip(t *testing.T) {
+	original := LoadBalancerSnapshot{
+		ResourceID:         "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-alb/abcdef1234567890",
+		Name:               "prod-alb",
+		Type:               "application",
+		Scheme:             "internet-facing",
+		AccessLogsEnabled:  true,
+		AccessLogsS3Bucket: "squadron-logs-prod",
+		Region:             "us-east-1",
+		Tags:               map[string]string{"Env": "prod"},
+	}
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		`"resource_id":"arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/prod-alb/abcdef1234567890"`,
+		`"name":"prod-alb"`,
+		`"type":"application"`,
+		`"scheme":"internet-facing"`,
+		`"access_logs_enabled":true`,
+		`"access_logs_s3_bucket":"squadron-logs-prod"`,
+		`"region":"us-east-1"`,
+	} {
+		if !contains(s, want) {
+			t.Errorf("marshal output missing %q; got: %s", want, s)
+		}
+	}
+
+	var round LoadBalancerSnapshot
+	if err := json.Unmarshal(raw, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if round.Type != "application" {
+		t.Errorf("Type round-trip = %q, want application", round.Type)
+	}
+	if round.Scheme != "internet-facing" {
+		t.Errorf("Scheme round-trip = %q, want internet-facing", round.Scheme)
+	}
+	if !round.AccessLogsEnabled {
+		t.Errorf("AccessLogsEnabled round-trip = false, want true")
+	}
+	if round.AccessLogsS3Bucket != "squadron-logs-prod" {
+		t.Errorf("AccessLogsS3Bucket round-trip = %q, want squadron-logs-prod", round.AccessLogsS3Bucket)
+	}
+
+	// AccessLogsS3Bucket should drop out of the wire shape when
+	// AccessLogsEnabled is false (omitempty). Operators filtering on
+	// access_logs_enabled:false should not see a stray
+	// access_logs_s3_bucket:"" key.
+	off := LoadBalancerSnapshot{
+		ResourceID: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/no-logs/x",
+		Name:       "no-logs", Type: "application", Scheme: "internal",
+		AccessLogsEnabled: false, Region: "us-east-1",
+	}
+	offRaw, err := json.Marshal(off)
+	if err != nil {
+		t.Fatalf("marshal off: %v", err)
+	}
+	if contains(string(offRaw), "access_logs_s3_bucket") {
+		t.Errorf("AccessLogsS3Bucket should be omitted when empty; got: %s", string(offRaw))
+	}
+}
+
 // contains is a tiny helper so this package-level test stays
 // dependency-free — strings is otherwise unused in scanner_test.go.
 func contains(haystack, needle string) bool {
