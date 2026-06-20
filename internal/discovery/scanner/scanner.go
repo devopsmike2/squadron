@@ -59,44 +59,44 @@ type Scanner interface {
 type Result struct {
 	// ScanID identifies this scan in audit + recommendation events.
 	// Implementations are expected to set a UUID at scan start.
-	ScanID string
+	ScanID string `json:"scan_id"`
 
 	// ScanStartedAt / ScanCompletedAt bracket the scan. Both are set
 	// even when Partial is true.
-	ScanStartedAt   time.Time
-	ScanCompletedAt time.Time
+	ScanStartedAt   time.Time `json:"scan_started_at"`
+	ScanCompletedAt time.Time `json:"scan_completed_at"`
 
 	// Provider mirrors Scanner.Provider() — denormalized here so the
 	// Result is self-describing once it leaves the scanner package.
-	Provider credstore.Provider
+	Provider credstore.Provider `json:"provider"`
 
 	// AccountID is the provider-native primary identifier of the
 	// scanned connection (account_id / project_id / subscription_id /
 	// site_id).
-	AccountID string
+	AccountID string `json:"account_id"`
 
 	// Regions is the list of regions actually walked. Slice 1 ships
 	// single-entry slices; slice 3 will iterate.
-	Regions []string
+	Regions []string `json:"regions"`
 
 	// Compute is the EC2 / GCE / Azure VM / VMware VM inventory.
-	Compute []ComputeInstanceSnapshot
+	Compute []ComputeInstanceSnapshot `json:"compute"`
 
 	// Functions is the Lambda / Cloud Functions / Azure Functions
 	// inventory.
-	Functions []FunctionRuntimeSnapshot
+	Functions []FunctionRuntimeSnapshot `json:"functions"`
 
 	// InstrumentedCount sums Compute+Functions entries where OTel
 	// presence was detected. UninstrumentedCount is the complement.
 	// Both are denormalized so consumers don't need to recount.
-	InstrumentedCount   int
-	UninstrumentedCount int
+	InstrumentedCount   int `json:"instrumented_count"`
+	UninstrumentedCount int `json:"uninstrumented_count"`
 
 	// Partial is true when the scan completed but did not cover the
 	// full inventory (e.g. AWS rate-limited the walk). PartialReason
 	// is the operator-visible explanation.
-	Partial       bool
-	PartialReason string
+	Partial       bool   `json:"partial"`
+	PartialReason string `json:"partial_reason,omitempty"`
 }
 
 // ComputeInstanceSnapshot is the category-typed view of a virtual
@@ -105,32 +105,32 @@ type Result struct {
 type ComputeInstanceSnapshot struct {
 	// ResourceID is the provider-native ID: EC2 instance id / GCE
 	// instance name / Azure VM id / VMware vmref.
-	ResourceID string
+	ResourceID string `json:"resource_id"`
 
 	// InstanceType is the provider-specific shape: m5.large /
 	// n2-standard-4 / Standard_D4s_v3 / etc. Left as a raw string —
 	// the proposer normalizes when reasoning about cost.
-	InstanceType string
+	InstanceType string `json:"instance_type"`
 
 	// Tags is the provider's tag map normalized to string/string. EC2
 	// tags arrive as a list of {Key,Value}; the scanner flattens
 	// before populating this field.
-	Tags map[string]string
+	Tags map[string]string `json:"tags,omitempty"`
 
 	// HasOTel is the scanner's best-effort detection of an OTel
 	// agent on the instance. Slice 1 uses tag heuristics (any tag
 	// key matching otel* case-insensitive). Slice 2 will add
 	// process-list heuristics via SSM.
-	HasOTel bool
+	HasOTel bool `json:"has_otel"`
 
 	// OSFamily is "linux", "windows", or "unknown". Drives the
 	// proposer's choice of installation snippet.
-	OSFamily string
+	OSFamily string `json:"os_family"`
 
 	// Region is where the instance lives. Denormalized into the
 	// snapshot so the proposer can reason about collector
 	// colocation without referring back to the Result.
-	Region string
+	Region string `json:"region"`
 }
 
 // FunctionRuntimeSnapshot is the category-typed view of a serverless
@@ -139,25 +139,25 @@ type ComputeInstanceSnapshot struct {
 type FunctionRuntimeSnapshot struct {
 	// ResourceID is the provider-native identifier: Lambda ARN /
 	// GCP function id / Azure function name. Stable across scans.
-	ResourceID string
+	ResourceID string `json:"resource_id"`
 
 	// Name is the operator-readable name. Often the trailing
 	// component of ResourceID but kept separate so the UI doesn't
 	// have to parse ARNs.
-	Name string
+	Name string `json:"name"`
 
 	// Runtime is the provider-typed runtime string: "nodejs20",
 	// "python3.11", "go1.21", etc. The proposer keys its
 	// instrumentation guidance off this value.
-	Runtime string
+	Runtime string `json:"runtime"`
 
 	// HasOTelLayer is true when the function has an OTel layer (AWS),
 	// extension (Azure), or lib import (GCP) attached. Slice 1
 	// implements layer-ARN substring matching for AWS only.
-	HasOTelLayer bool
+	HasOTelLayer bool `json:"has_otel_layer"`
 
 	// Region is where the function lives.
-	Region string
+	Region string `json:"region"`
 }
 
 // ValidationResult is the response shape for Scanner.Validate. The
@@ -168,17 +168,17 @@ type ValidationResult struct {
 	// configured role (AWS), exchanged the workload identity (GCP),
 	// or authenticated the principal (Azure). When false,
 	// AssumeRoleErr carries the humanized explanation.
-	AssumeRoleOK bool
+	AssumeRoleOK bool `json:"assume_role_ok"`
 
 	// AssumeRoleErr is non-nil only when AssumeRoleOK is false.
 	// Carries the humanized message the wizard renders verbatim.
-	AssumeRoleErr *HumanizedError
+	AssumeRoleErr *HumanizedError `json:"assume_role_err,omitempty"`
 
 	// Preflight is the per-service "can we actually list things"
 	// check. Slice 1 runs one PreflightCheck per (ec2, lambda) ×
 	// (first region in the connection). Slice 3 will iterate
 	// regions.
-	Preflight []PreflightCheck
+	Preflight []PreflightCheck `json:"preflight"`
 }
 
 // PreflightCheck is the per-service result of the connector wizard's
@@ -188,19 +188,19 @@ type ValidationResult struct {
 type PreflightCheck struct {
 	// Service is the slice-1 service identifier: "ec2" or "lambda".
 	// Future slices add "rds", "s3", "alb", and so on.
-	Service string
+	Service string `json:"service"`
 
 	// OK is true when the preflight call returned without an error.
-	OK bool
+	OK bool `json:"ok"`
 
 	// SampleCount is the number of resources observed by the
 	// preflight call (capped at 5 — this is a permissions probe,
 	// not an inventory walk).
-	SampleCount int
+	SampleCount int `json:"sample_count"`
 
 	// Err is non-nil only when OK is false. Carries the humanized
 	// message naming the wizard step the operator should return to.
-	Err *HumanizedError
+	Err *HumanizedError `json:"err,omitempty"`
 }
 
 // HumanizedError is the wizard-friendly error envelope. Every cloud
@@ -211,18 +211,18 @@ type HumanizedError struct {
 	// Code is the provider's raw error code. Surfaced so support
 	// agents helping a stuck operator can pattern-match against the
 	// provider's own documentation.
-	Code string
+	Code string `json:"code"`
 
 	// Message is the operator-visible explanation. Plain prose,
 	// names the recoverable action.
-	Message string
+	Message string `json:"message"`
 
 	// SuggestedStep is the ConnectorWizard step ID the wizard should
 	// scroll/navigate the operator back to. Common values:
 	// "trust-policy", "role-arn", "validate".
-	SuggestedStep string
+	SuggestedStep string `json:"suggested_step"`
 
 	// DocLink is an optional deep link into Squadron's docs (or the
 	// provider's docs) for the operator who wants more context.
-	DocLink string
+	DocLink string `json:"doc_link"`
 }
