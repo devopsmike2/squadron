@@ -1312,10 +1312,16 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		if title == "" {
 			title = "Discovery recommendation"
 		}
-		detail := result.Reasoning
-		if detail == "" {
-			detail = "AI-emitted instrumentation plan step. Run the Terraform through your IaC pipeline."
-		}
+		// v0.88.4: per-step Detail was previously set to result.Reasoning,
+		// which duplicated the overall proposer-reasoning text into every
+		// step card. The Recommendations tab already renders the overall
+		// reasoning in a single panel at the top of the page; surfacing
+		// the same string on every step was operator-visible noise that
+		// pushed the actual Terraform snippet down the fold. v0.88.4
+		// leaves Detail as a short generic per-step descriptor; the
+		// proposer's overall narrative is read once from the top-level
+		// Reasoning field.
+		detail := "AI-emitted instrumentation plan step. Run the Terraform through your IaC pipeline."
 		rec := recommendations.Recommendation{
 			ID:              "discovery-" + req.ScanResult.ScanID + "-" + strconv.Itoa(i),
 			Category:        recommendations.CategoryEmptySignal, // closest existing semantic match: "resource emits no telemetry"
