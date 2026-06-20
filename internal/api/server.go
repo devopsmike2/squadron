@@ -1012,6 +1012,38 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSSaveConnection(c) }))
 
+		// v0.85 Stream 2E — connector list endpoint. Returns the
+		// display fields of every stored AWS connection so the
+		// /discovery/aws page's Account tab can render its connection
+		// cards. NEVER returns the role ARN, the ExternalId, or any
+		// encrypted credential bytes — operators see "this account is
+		// connected" but cannot read back trust-policy material.
+		//
+		// agents:read is the right scope: this is a read-only view of
+		// the substrate that mirrors what the Save endpoint accepted.
+		v1.GET("/discovery/aws/connections",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSListConnections(c) }))
+
+		// v0.85 Stream 2E — on-demand scan endpoint. Looks up the
+		// connection, emits discovery.aws.scan_started, runs the
+		// scanner synchronously, emits discovery.aws.scan_completed
+		// with per-category counts + the partial flag, and returns
+		// the typed scanner.Result as JSON.
+		//
+		// Known trade-off: slice 1 scans block the HTTP request. A
+		// large account could hang the request for minutes — slice 3's
+		// scheduled-scan engine will move to async with persisted
+		// results. The route stays stable.
+		//
+		// agents:read is the right scope: the scan creates audit events
+		// but no persisted Squadron state (no inventory_aws table in
+		// slice 1) — the operator is reading the cloud's current
+		// state, mediated by Squadron's read-only role.
+		v1.POST("/discovery/aws/connections/:id/scan",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRunScan(c) }))
+
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
 		// of the cost-insights surface.
