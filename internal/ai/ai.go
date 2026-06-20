@@ -72,11 +72,17 @@ const (
 	apiVersion       = "2023-06-01"
 	defaultUserAgent = "squadron/v0.26 (+https://github.com/devopsmike2/squadron)"
 
-	// requestTimeout is the per-call HTTP timeout. Anthropic's
-	// median latency at the small token counts we use is well
-	// under 5s, so 30s leaves comfortable headroom for tail and
-	// keeps the UI from spinning forever if something gets stuck.
-	requestTimeout = 30 * time.Second
+	// requestTimeout is the per-call HTTP timeout. The original
+	// 30s was sized for v0.79's small JARVIS cost-spike calls
+	// (median <5s, p99 ~25s in the bench). v0.88.0's discovery
+	// proposer ships a much larger prompt (slice 1+2+3a teaches
+	// the model about 5 service categories) and is called with a
+	// real-inventory user message that can carry 50+ resources.
+	// Bumping to 90s in v0.88.1 after a Track A live-deploy hit
+	// the 30s wall at 17 resources. JARVIS calls still finish
+	// well under 30s; the new ceiling only kicks in for the
+	// genuinely-large discovery payload case.
+	requestTimeout = 90 * time.Second
 )
 
 // Config is what the operator sets in squadron.yaml (or via the

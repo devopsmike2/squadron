@@ -53,12 +53,29 @@ export const simpleRequest = async <T = unknown>(
   }
 
   if (!response.ok) {
-    // Try to get detailed error message from response body
+    // Try to get detailed error message from response body.
+    //
+    // v0.88.1 fix: prior to this, `errorMessage = errorData.error`
+    // assigned the entire humanized error envelope ({code, message,
+    // suggested_step, doc_link}) to a string variable. When that
+    // landed in `new Error(errorMessage)`, the Error's .message
+    // serialized via Object.toString() as "[object Object]". Every
+    // humanized-error surface in the UI (DiscoveryAWS recommendations,
+    // wizard validate panel, etc.) rendered the placeholder instead
+    // of the actual operator-visible message. Fix: extract .message
+    // when error is an object, fall back to the value itself when
+    // it's already a string (legacy { error: "string" } shape from
+    // older handlers).
     let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
     try {
       const errorData = await response.json();
       if (errorData.error) {
-        errorMessage = errorData.error;
+        if (typeof errorData.error === "string") {
+          errorMessage = errorData.error;
+        } else if (typeof errorData.error === "object" && errorData.error !== null) {
+          // Humanized error envelope shape.
+          errorMessage = errorData.error.message ?? JSON.stringify(errorData.error);
+        }
         if (errorData.details) {
           errorMessage += `: ${errorData.details}`;
         }
