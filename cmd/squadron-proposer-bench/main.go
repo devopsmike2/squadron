@@ -2,10 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // squadron-proposer-bench runs a small fixed corpus of cost-spike
-// scenarios against the real Anthropic API via the proposer service
-// and emits a graded report. Distinct from internal/proposer's
-// stress_live_test.go: that test gates on pass/fail; this command
-// produces metrics an operator can compare release-over-release.
+// AND discovery scenarios against the real Anthropic API via the
+// proposer service and emits a graded report. Distinct from
+// internal/proposer's stress_live_test.go: that test gates on
+// pass/fail; this command produces metrics an operator can compare
+// release-over-release.
+//
+// v0.86 made the bench bi-modal: it covers both proposer entry
+// points (ProposeFromCostSpike and ProposeFromDiscoveryScan) so the
+// same calibration discipline that v0.83 established for the
+// cost-spike arc now covers the discovery arc too. Outcome bucketing
+// is shared — succeeded / declined / truncated /
+// parse_failed_preamble / parse_failed_other / llm_error apply
+// cleanly to both arcs — and the report's ByKind slice surfaces
+// per-arc totals so an operator can see at a glance which prompt
+// regressed.
 //
 // What v0.83 measures per scenario:
 //   - Outcome bucket (succeeded / declined / truncated /
@@ -56,21 +67,37 @@ const (
 	pricePerMillionOutputUSD = 15.0
 )
 
+// seedKind discriminates which proposer entry point a seed drives.
+// v0.86 introduces the second arc (discovery) so the bench covers
+// both proposer paths in the same run.
+type seedKind string
+
+const (
+	seedKindCostSpike seedKind = "cost_spike"
+	seedKindDiscovery seedKind = "discovery"
+)
+
 // seed is one scenario the bench drives through the proposer. The
-// fields shadow ai.CostSpikeContext to keep the corpus list flat.
+// kind discriminator picks which proposer entry point gets called
+// and which context struct (spike or scan) is populated.
 type seed struct {
 	name       string
-	spike      ai.CostSpikeContext
-	expectPlan bool // hint for the human reading the report; not asserted
+	kind       seedKind
+	spike      ai.CostSpikeContext     // populated when kind == seedKindCostSpike
+	scan       ai.DiscoveryScanContext // populated when kind == seedKindDiscovery
+	expectPlan bool                    // hint for the human reading the report; not asserted
 }
 
-// corpus is a hand-curated 8-scenario set covering the failure modes
-// v0.82 surfaced (#550 truncation, #552 preamble). v0.84+ can expand
-// this — for now small + diverse beats large + redundant.
+// corpus is a hand-curated 14-scenario set covering both proposer
+// arcs: 8 cost-spike seeds (the v0.83 originals — #550 truncation,
+// #552 preamble) and 6 discovery seeds (the v0.86 Stream 2F arc).
+// v0.84+ can expand this — for now small + diverse beats large +
+// redundant. Cost per run stays ~$0.20 at 14 seeds.
 func corpus() []seed {
 	return []seed{
 		{
 			name: "rollout_clean_single_attr",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-1", Signal: "metrics", Severity: "warn",
 				BaselineMonthlyUSD: 400, PeakMonthlyUSD: 800, PeakPctAboveBaseline: 100,
@@ -81,6 +108,7 @@ func corpus() []seed {
 		},
 		{
 			name: "plan_two_indep_attrs",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-2", Signal: "metrics", Severity: "critical",
 				BaselineMonthlyUSD: 400, PeakMonthlyUSD: 1648, PeakPctAboveBaseline: 312,
@@ -92,6 +120,7 @@ func corpus() []seed {
 		},
 		{
 			name: "plan_three_related_attrs",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-3", Signal: "metrics", Severity: "critical",
 				BaselineMonthlyUSD: 500, PeakMonthlyUSD: 2200, PeakPctAboveBaseline: 340,
@@ -103,6 +132,7 @@ func corpus() []seed {
 		},
 		{
 			name: "declined_zero_spike",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-4", Signal: "metrics", Severity: "warn",
 				BaselineMonthlyUSD: 500, PeakMonthlyUSD: 500, PeakPctAboveBaseline: 0,
@@ -114,6 +144,7 @@ func corpus() []seed {
 		},
 		{
 			name: "declined_no_attribution",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-5", Signal: "metrics", Severity: "warn",
 				BaselineMonthlyUSD: 500, PeakMonthlyUSD: 1500, PeakPctAboveBaseline: 200,
@@ -122,6 +153,7 @@ func corpus() []seed {
 		},
 		{
 			name: "adversarial_prompt_injection",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-6", Signal: "metrics", Severity: "warn",
 				BaselineMonthlyUSD: 400, PeakMonthlyUSD: 900, PeakPctAboveBaseline: 125,
@@ -135,6 +167,7 @@ func corpus() []seed {
 		},
 		{
 			name: "boundary_tiny_fleet",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-7", Signal: "metrics", Severity: "warn",
 				BaselineMonthlyUSD: 50, PeakMonthlyUSD: 200, PeakPctAboveBaseline: 300,
@@ -145,6 +178,7 @@ func corpus() []seed {
 		},
 		{
 			name: "sparse_context_low_signal",
+			kind: seedKindCostSpike,
 			spike: ai.CostSpikeContext{
 				SpikeID: "bench-8", Signal: "metrics", Severity: "warn",
 				BaselineMonthlyUSD: 800, PeakMonthlyUSD: 1000, PeakPctAboveBaseline: 25,
@@ -153,15 +187,197 @@ func corpus() []seed {
 				TopAttributes: []string{"net.peer.ip"},
 			},
 		},
+
+		// --- v0.86 discovery seeds (Stream 2F arc) ---
+		// These exercise ProposeFromDiscoveryScan. AccountIDs are
+		// fictional 12-digit AWS-shaped strings; regions are real but
+		// the bench never calls AWS, only the Anthropic API.
+
+		{
+			// Small uninstrumented fleet — minimal happy path for the
+			// discovery prompt. 3 EC2 + 2 Lambda, all uncovered. The
+			// model should emit a small plan (one Lambda batch + one
+			// EC2 batch).
+			name: "discovery_small_fleet_uninstrumented",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-1",
+				AccountID:           "111122223333",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   0,
+				UninstrumentedCount: 5,
+				ComputeInstances: []ai.ComputeResourceCandidate{
+					{ResourceID: "i-0a01", InstanceType: "t3.medium", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0a02", InstanceType: "t3.medium", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0a03", InstanceType: "t3.large", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+				},
+				Functions: []ai.FunctionResourceCandidate{
+					{ResourceID: "arn:aws:lambda:us-east-1:111122223333:function:checkout-handler", Name: "checkout-handler", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:111122223333:function:webhook-router", Name: "webhook-router", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+				},
+			},
+			expectPlan: true,
+		},
+		{
+			// Mixed coverage — the plan should target the uncovered
+			// subset and ignore the already-instrumented resources.
+			// Tests the model's ability to read the per-resource
+			// HasOTel / HasOTelLayer flags and batch accordingly.
+			name: "discovery_mixed_coverage",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-2",
+				AccountID:           "222233334444",
+				Regions:             []string{"us-east-1", "us-west-2"},
+				InstrumentedCount:   7,
+				UninstrumentedCount: 11,
+				ComputeInstances: []ai.ComputeResourceCandidate{
+					{ResourceID: "i-0b01", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0b02", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0b03", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0b04", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0b05", InstanceType: "m5.xlarge", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0b06", InstanceType: "m5.xlarge", Region: "us-east-1", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0b07", InstanceType: "m5.xlarge", Region: "us-west-2", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0b08", InstanceType: "m5.xlarge", Region: "us-west-2", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0b09", InstanceType: "c5.large", Region: "us-west-2", OSFamily: "linux", HasOTel: false},
+					{ResourceID: "i-0b10", InstanceType: "c5.large", Region: "us-west-2", OSFamily: "linux", HasOTel: false},
+				},
+				Functions: []ai.FunctionResourceCandidate{
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:billing-aggregator", Name: "billing-aggregator", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: true},
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:user-sync", Name: "user-sync", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: true},
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:audit-writer", Name: "audit-writer", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: true},
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:report-builder", Name: "report-builder", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:email-sender", Name: "email-sender", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:metrics-rollup", Name: "metrics-rollup", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:slack-notifier", Name: "slack-notifier", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:222233334444:function:webhook-fanout", Name: "webhook-fanout", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+				},
+			},
+			expectPlan: true,
+		},
+		{
+			// Empty inventory — the model should decline. Tests the
+			// declined-bucket path through the discovery prompt.
+			name: "discovery_zero_resources",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-3",
+				AccountID:           "333344445555",
+				Regions:             []string{"eu-west-1"},
+				InstrumentedCount:   0,
+				UninstrumentedCount: 0,
+				ComputeInstances:    []ai.ComputeResourceCandidate{},
+				Functions:           []ai.FunctionResourceCandidate{},
+			},
+		},
+		{
+			// Fully covered — every resource already has OTel. Model
+			// should decline (nothing to instrument). Tests that the
+			// model reads the per-resource flags rather than just the
+			// total count.
+			name: "discovery_fully_instrumented",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-4",
+				AccountID:           "444455556666",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   13,
+				UninstrumentedCount: 0,
+				ComputeInstances: []ai.ComputeResourceCandidate{
+					{ResourceID: "i-0c01", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0c02", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0c03", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0c04", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0c05", InstanceType: "m5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0c06", InstanceType: "c5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0c07", InstanceType: "c5.large", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+					{ResourceID: "i-0c08", InstanceType: "c5.xlarge", Region: "us-east-1", OSFamily: "linux", HasOTel: true},
+				},
+				Functions: []ai.FunctionResourceCandidate{
+					{ResourceID: "arn:aws:lambda:us-east-1:444455556666:function:fn-1", Name: "fn-1", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: true},
+					{ResourceID: "arn:aws:lambda:us-east-1:444455556666:function:fn-2", Name: "fn-2", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: true},
+					{ResourceID: "arn:aws:lambda:us-east-1:444455556666:function:fn-3", Name: "fn-3", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: true},
+					{ResourceID: "arn:aws:lambda:us-east-1:444455556666:function:fn-4", Name: "fn-4", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: true},
+					{ResourceID: "arn:aws:lambda:us-east-1:444455556666:function:fn-5", Name: "fn-5", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: true},
+				},
+			},
+		},
+		{
+			// Windows-heavy fleet — exercises the OS dimension. The
+			// ADOT Linux user-data / SSM patterns don't translate
+			// cleanly to Windows; the model needs to reason about the
+			// Windows-specific install path (SSM Run Command against
+			// the Windows ADOT collector). 0 Lambda so the plan has to
+			// be EC2-only.
+			name: "discovery_windows_heavy",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-5",
+				AccountID:           "555566667777",
+				Regions:             []string{"us-east-2"},
+				InstrumentedCount:   0,
+				UninstrumentedCount: 6,
+				ComputeInstances: []ai.ComputeResourceCandidate{
+					{ResourceID: "i-0d01", InstanceType: "m5.large", Region: "us-east-2", OSFamily: "windows", HasOTel: false},
+					{ResourceID: "i-0d02", InstanceType: "m5.large", Region: "us-east-2", OSFamily: "windows", HasOTel: false},
+					{ResourceID: "i-0d03", InstanceType: "m5.large", Region: "us-east-2", OSFamily: "windows", HasOTel: false},
+					{ResourceID: "i-0d04", InstanceType: "m5.xlarge", Region: "us-east-2", OSFamily: "windows", HasOTel: false},
+					{ResourceID: "i-0d05", InstanceType: "m5.xlarge", Region: "us-east-2", OSFamily: "windows", HasOTel: false},
+					{ResourceID: "i-0d06", InstanceType: "m5.xlarge", Region: "us-east-2", OSFamily: "windows", HasOTel: false},
+				},
+				Functions: []ai.FunctionResourceCandidate{},
+			},
+			expectPlan: true,
+		},
+		{
+			// Runtime variety — 0 EC2, 12 Lambda across 5 runtimes,
+			// none instrumented. The ADOT Lambda layer ARN is
+			// runtime-specific (aws-otel-python / -nodejs / -java /
+			// etc.); the model must reason about per-runtime
+			// instrumentation or batch by runtime rather than emitting
+			// a single one-size-fits-all Lambda step.
+			name: "discovery_lambda_runtime_variety",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-6",
+				AccountID:           "666677778888",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   0,
+				UninstrumentedCount: 12,
+				ComputeInstances:    []ai.ComputeResourceCandidate{},
+				Functions: []ai.FunctionResourceCandidate{
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:py-checkout", Name: "py-checkout", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:py-billing", Name: "py-billing", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:py-reports", Name: "py-reports", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:py-audit", Name: "py-audit", Runtime: "python3.11", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:node-webhooks", Name: "node-webhooks", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:node-slack", Name: "node-slack", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:node-pdf", Name: "node-pdf", Runtime: "nodejs20.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:go-router", Name: "go-router", Runtime: "go1.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:go-aggregator", Name: "go-aggregator", Runtime: "go1.x", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:java-batch", Name: "java-batch", Runtime: "java17", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:java-ingest", Name: "java-ingest", Runtime: "java17", Region: "us-east-1", HasOTelLayer: false},
+					{ResourceID: "arn:aws:lambda:us-east-1:666677778888:function:dotnet-export", Name: "dotnet-export", Runtime: "dotnet8", Region: "us-east-1", HasOTelLayer: false},
+				},
+			},
+			expectPlan: true,
+		},
 	}
 }
 
 // seedResult is the per-scenario record emitted by the bench. JSON
 // tags are stable — release-over-release diffing relies on these.
 type seedResult struct {
-	Seed         string  `json:"seed"`
+	Seed string `json:"seed"`
+	// SeedKind names which proposer arc this seed exercised — either
+	// "cost_spike" (ProposeFromCostSpike) or "discovery"
+	// (ProposeFromDiscoveryScan). v0.86 added the discovery arc; the
+	// field distinguishes the two in the per-seed table and the
+	// ByKind aggregate.
+	SeedKind     string  `json:"seed_kind"`
 	Outcome      string  `json:"outcome"`
-	Kind         string  `json:"kind,omitempty"`
+	Kind         string  `json:"kind,omitempty"` // proposal kind (rollout / plan), from ai.ProposalResult
 	StepCount    int     `json:"step_count,omitempty"`
 	TokensIn     int     `json:"tokens_in"`
 	TokensOut    int     `json:"tokens_out"`
@@ -227,29 +443,49 @@ func estimatedUSD(tokensIn, tokensOut int) float64 {
 		float64(tokensOut)/1e6*pricePerMillionOutputUSD
 }
 
+// kindCounts is the per-arc slice in the ByKind aggregate. v0.86 adds
+// it so the bench can split totals by seed_kind without changing how
+// the outcome buckets are computed — buckets apply cleanly to both
+// arcs (cost_spike and discovery share succeeded / declined /
+// truncated / parse_failed_preamble / parse_failed_other / llm_error).
+// Failed = total - succeeded - declined; anything in a parse / truncate
+// / llm bucket counts as failed for the purpose of the per-kind
+// summary line.
+type kindCounts struct {
+	Total     int `json:"total"`
+	Succeeded int `json:"succeeded"`
+	Declined  int `json:"declined"`
+	Failed    int `json:"failed"`
+}
+
 // aggregate is the report emitted at the end of the run. Outcome
 // buckets are a map for forward-compat with new classification
-// buckets future releases add.
+// buckets future releases add. ByKind is the v0.86 split that lets
+// an operator see at a glance that, say, the cost-spike arc is green
+// while the discovery arc is regressing — without that split a
+// single bucket counter hides which prompt drifted.
 type aggregate struct {
-	Total            int            `json:"total"`
-	OutcomeBuckets   map[string]int `json:"outcome_buckets"`
-	TokensInP50      int            `json:"tokens_in_p50"`
-	TokensInP95      int            `json:"tokens_in_p95"`
-	TokensOutP50     int            `json:"tokens_out_p50"`
-	TokensOutP95     int            `json:"tokens_out_p95"`
-	TokensOutMax     int            `json:"tokens_out_max"`
-	ProposerMaxToken int            `json:"proposer_max_tokens"`
-	LatencyMsP50     int            `json:"latency_ms_p50"`
-	LatencyMsP95     int            `json:"latency_ms_p95"`
-	LatencyMsP99     int            `json:"latency_ms_p99"`
-	EstimatedCostUSD float64        `json:"estimated_cost_usd"`
-	Results          []seedResult   `json:"results"`
+	Total            int                   `json:"total"`
+	OutcomeBuckets   map[string]int        `json:"outcome_buckets"`
+	ByKind           map[string]kindCounts `json:"by_kind"`
+	TokensInP50      int                   `json:"tokens_in_p50"`
+	TokensInP95      int                   `json:"tokens_in_p95"`
+	TokensOutP50     int                   `json:"tokens_out_p50"`
+	TokensOutP95     int                   `json:"tokens_out_p95"`
+	TokensOutMax     int                   `json:"tokens_out_max"`
+	ProposerMaxToken int                   `json:"proposer_max_tokens"`
+	LatencyMsP50     int                   `json:"latency_ms_p50"`
+	LatencyMsP95     int                   `json:"latency_ms_p95"`
+	LatencyMsP99     int                   `json:"latency_ms_p99"`
+	EstimatedCostUSD float64               `json:"estimated_cost_usd"`
+	Results          []seedResult          `json:"results"`
 }
 
 func buildAggregate(results []seedResult) aggregate {
 	a := aggregate{
 		Total:            len(results),
 		OutcomeBuckets:   map[string]int{},
+		ByKind:           map[string]kindCounts{},
 		ProposerMaxToken: ai.ProposerMaxTokens,
 		Results:          results,
 	}
@@ -263,6 +499,25 @@ func buildAggregate(results []seedResult) aggregate {
 		if r.TokensOut > a.TokensOutMax {
 			a.TokensOutMax = r.TokensOut
 		}
+
+		k := r.SeedKind
+		if k == "" {
+			// Defensive: pre-v0.86 results lack SeedKind. Group them
+			// under "cost_spike" because the v0.83 corpus was
+			// cost-spike-only.
+			k = string(seedKindCostSpike)
+		}
+		kc := a.ByKind[k]
+		kc.Total++
+		switch r.Outcome {
+		case "succeeded":
+			kc.Succeeded++
+		case "declined":
+			kc.Declined++
+		default:
+			kc.Failed++
+		}
+		a.ByKind[k] = kc
 	}
 	sort.Ints(tIn)
 	sort.Ints(tOut)
@@ -278,19 +533,41 @@ func buildAggregate(results []seedResult) aggregate {
 }
 
 func renderText(a aggregate, w *strings.Builder) {
+	// Header — surface the bi-modal posture by naming the per-kind
+	// totals so an operator skimming the report can see at a glance
+	// whether both arcs ran.
+	cs := a.ByKind[string(seedKindCostSpike)].Total
+	dc := a.ByKind[string(seedKindDiscovery)].Total
 	fmt.Fprintf(w, "squadron-proposer-bench — %d scenarios\n\n", a.Total)
-	fmt.Fprintf(w, "Per-seed results\n")
-	fmt.Fprintf(w, "%-32s  %-22s  %-8s  %-8s  %-7s  %s\n",
-		"SEED", "OUTCOME", "TOK_IN", "TOK_OUT", "LAT_MS", "USD")
+	fmt.Fprintf(w, "Per-seed results (cost_spike: %d, discovery: %d)\n", cs, dc)
+	fmt.Fprintf(w, "%-32s  %-12s  %-22s  %-8s  %-8s  %-7s  %s\n",
+		"SEED", "KIND", "OUTCOME", "TOK_IN", "TOK_OUT", "LAT_MS", "USD")
 	for _, r := range a.Results {
-		fmt.Fprintf(w, "%-32s  %-22s  %-8d  %-8d  %-7d  %.4f\n",
-			r.Seed, r.Outcome, r.TokensIn, r.TokensOut, r.LatencyMs, r.EstimatedUSD)
+		fmt.Fprintf(w, "%-32s  %-12s  %-22s  %-8d  %-8d  %-7d  %.4f\n",
+			r.Seed, r.SeedKind, r.Outcome, r.TokensIn, r.TokensOut, r.LatencyMs, r.EstimatedUSD)
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Aggregate\n")
+	fmt.Fprintf(w, "  by kind:\n")
+	// Stable ordering so release-over-release diffs line up.
+	kindOrder := []string{string(seedKindCostSpike), string(seedKindDiscovery)}
+	for _, k := range kindOrder {
+		kc, ok := a.ByKind[k]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(w, "    %-12s  %d seeds | succeeded: %d | declined: %d | failed: %d\n",
+			k, kc.Total, kc.Succeeded, kc.Declined, kc.Failed)
+	}
 	fmt.Fprintf(w, "  outcome buckets:\n")
-	for bucket, n := range a.OutcomeBuckets {
-		fmt.Fprintf(w, "    %-22s  %d\n", bucket, n)
+	// Sort bucket keys for deterministic output.
+	bucketKeys := make([]string, 0, len(a.OutcomeBuckets))
+	for bucket := range a.OutcomeBuckets {
+		bucketKeys = append(bucketKeys, bucket)
+	}
+	sort.Strings(bucketKeys)
+	for _, bucket := range bucketKeys {
+		fmt.Fprintf(w, "    %-22s  %d\n", bucket, a.OutcomeBuckets[bucket])
 	}
 	fmt.Fprintf(w, "  tokens in  : p50=%d  p95=%d\n", a.TokensInP50, a.TokensInP95)
 	fmt.Fprintf(w, "  tokens out : p50=%d  p95=%d  max=%d  cap=%d (%.0f%% of cap at max)\n",
@@ -337,12 +614,28 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		start := time.Now()
-		res, err := svc.ProposeFromCostSpike(ctx, sd.spike)
+		var res *ai.ProposalResult
+		var err error
+		switch sd.kind {
+		case seedKindCostSpike:
+			res, err = svc.ProposeFromCostSpike(ctx, sd.spike)
+		case seedKindDiscovery:
+			scan := sd.scan
+			res, err = svc.ProposeFromDiscoveryScan(ctx, &scan)
+		default:
+			// Defensive: an unset kind in the corpus is a bug, not a
+			// run-time error to bubble up to the API. Mark and skip
+			// the call so the operator sees the mistake in the report
+			// instead of paying for a model call that can't be
+			// classified.
+			err = fmt.Errorf("seed %q has unknown kind %q", sd.name, sd.kind)
+		}
 		latency := time.Since(start)
 		cancel()
 
 		r := seedResult{
 			Seed:      sd.name,
+			SeedKind:  string(sd.kind),
 			Outcome:   classify(res, err),
 			LatencyMs: int(latency.Milliseconds()),
 		}
