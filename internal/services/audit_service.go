@@ -65,6 +65,7 @@ type AuditEvent struct {
 
 // AuditEventFilter narrows a List query. All fields are optional.
 type AuditEventFilter struct {
+	EventType  string
 	TargetType string
 	TargetID   string
 	Since      time.Time

@@ -65,6 +65,55 @@ func TestAuditService_RecordAndList(t *testing.T) {
 	assert.Equal(t, AuditEventAgentDriftDrifted, a[0].EventType)
 }
 
+func TestAuditService_EventTypeFilter(t *testing.T) {
+	// Regression guard for #580 (v0.87.2): the AuditEventFilter struct
+	// previously had no EventType field; the SQL store had no
+	// "AND event_type = ?" clause. This test seeds two distinct event
+	// types and pins that filtering by EventType returns only matching
+	// rows. Memory-store coverage stands in for the SQL clause too —
+	// the in-memory walk mirrors the SQL filter shape.
+	svc := NewAuditService(memory.NewStore(), nil, zap.NewNop())
+	ctx := context.Background()
+
+	const wanted = "discovery.aws.connection_created"
+	const other = "discovery.aws.connection_read"
+
+	for i := 0; i < 2; i++ {
+		require.NoError(t, svc.Record(ctx, AuditEntry{
+			Actor:      AuditActorSystem,
+			EventType:  wanted,
+			TargetType: "aws_connection",
+			TargetID:   "acct-w",
+			Action:     "created",
+		}))
+	}
+	for i := 0; i < 4; i++ {
+		require.NoError(t, svc.Record(ctx, AuditEntry{
+			Actor:      AuditActorSystem,
+			EventType:  other,
+			TargetType: "aws_connection",
+			TargetID:   "acct-r",
+			Action:     "read",
+		}))
+	}
+
+	got, err := svc.List(ctx, AuditEventFilter{EventType: wanted})
+	require.NoError(t, err)
+	require.Len(t, got, 2, "EventType filter must narrow to seeded count; if 6, the store ignored the filter")
+	for i, ev := range got {
+		assert.Equal(t, wanted, ev.EventType,
+			"row[%d].EventType = %q, want %q", i, ev.EventType, wanted)
+	}
+
+	// EventType combines with TargetType (AND semantics, not OR).
+	mixed, err := svc.List(ctx, AuditEventFilter{
+		EventType:  wanted,
+		TargetType: "aws_connection",
+	})
+	require.NoError(t, err)
+	assert.Len(t, mixed, 2)
+}
+
 func TestAuditService_SinceFilter(t *testing.T) {
 	svc := NewAuditService(memory.NewStore(), nil, zap.NewNop())
 	ctx := context.Background()

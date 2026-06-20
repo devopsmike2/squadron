@@ -1432,6 +1432,10 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 	// of the clauses are appended conditionally.
 	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE 1=1"
 	var args []any
+	if filter.EventType != "" {
+		q += " AND event_type = ?"
+		args = append(args, filter.EventType)
+	}
 	if filter.TargetType != "" {
 		q += " AND target_type = ?"
 		args = append(args, filter.TargetType)
