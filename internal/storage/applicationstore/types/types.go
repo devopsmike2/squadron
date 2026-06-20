@@ -579,6 +579,7 @@ type AuditEvent struct {
 // All fields are optional. An empty filter returns the most recent events
 // across the whole fleet (subject to Limit).
 type AuditEventFilter struct {
+	EventType  string    // exact-match on dotted event_type; empty disables the filter
 	TargetType string
 	TargetID   string
 	Since      time.Time // events with Timestamp >= Since; zero value disables the filter
