@@ -11,13 +11,17 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 )
 
-// TestAWSWizardHasFiveSteps locks the slice-1 step count. A change to
+// TestAWSWizardHasSixSteps locks the v0.87.1 step count. A change to
 // this assertion is a signal to revisit the design doc's "Connector
 // workflow design > Architecture" section — adding or removing a step
 // without updating the doc is a process violation.
-func TestAWSWizardHasFiveSteps(t *testing.T) {
+//
+// v0.87.0 had five steps; v0.87.1 added permissions-policy between
+// trust-policy and role-arn (#575) so operators no longer have to
+// read the design doc to discover the IAM permission set.
+func TestAWSWizardHasSixSteps(t *testing.T) {
 	w := AWSWizard()
-	if got, want := len(w.Steps), 5; got != want {
+	if got, want := len(w.Steps), 6; got != want {
 		t.Fatalf("AWSWizard step count = %d, want %d", got, want)
 	}
 	if w.Provider != credstore.ProviderAWS {
@@ -25,6 +29,47 @@ func TestAWSWizardHasFiveSteps(t *testing.T) {
 	}
 	if strings.TrimSpace(w.Title) == "" {
 		t.Errorf("AWSWizard.Title should not be empty")
+	}
+
+	// Pin the step ID order so a future refactor that reorders the
+	// steps trips this test and forces a doc + Go test re-read.
+	wantIDs := []string{
+		"account-id",
+		"trust-policy",
+		"permissions-policy",
+		"role-arn",
+		"validate",
+		"save",
+	}
+	for i, want := range wantIDs {
+		if got := w.Steps[i].ID; got != want {
+			t.Errorf("step[%d].ID = %q, want %q", i, got, want)
+		}
+	}
+}
+
+// TestAWSWizardPermissionsPolicyStep pins the shape of the
+// permissions-policy step added by #575. The shell renders this
+// step's body via a hard-coded branch on (action.kind, payload.field);
+// drift in either field would silently break the copy-policy UX.
+func TestAWSWizardPermissionsPolicyStep(t *testing.T) {
+	step := findStep(t, "permissions-policy")
+
+	if step.Action.Kind != ActionCopyValue {
+		t.Errorf("permissions-policy step kind = %q, want %q",
+			step.Action.Kind, ActionCopyValue)
+	}
+
+	payload, ok := step.Action.Payload.(map[string]string)
+	if !ok {
+		t.Fatalf("permissions-policy payload type = %T, want map[string]string",
+			step.Action.Payload)
+	}
+	if got, want := payload["field"], "permissions_policy"; got != want {
+		t.Errorf("permissions-policy payload[field] = %q, want %q", got, want)
+	}
+	if got, want := payload["language"], "json"; got != want {
+		t.Errorf("permissions-policy payload[language] = %q, want %q", got, want)
 	}
 }
 
