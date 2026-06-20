@@ -165,7 +165,7 @@ permissions** → **Create inline policy**. Switch to the JSON editor
 and paste the policy from the Squadron wizard's step 3 (the new
 permissions-policy step added in v0.87.1).
 
-For reference, the v0.88.0 wizard's permissions policy is:
+For reference, the v0.89.0 wizard's permissions policy is:
 
 ```json
 {
@@ -190,7 +190,12 @@ For reference, the v0.88.0 wizard's permissions policy is:
         "s3:GetBucketRequestPayment",
         "elasticloadbalancing:DescribeLoadBalancers",
         "elasticloadbalancing:DescribeLoadBalancerAttributes",
-        "elasticloadbalancing:DescribeTags"
+        "elasticloadbalancing:DescribeTags",
+        "eks:ListClusters",
+        "eks:DescribeCluster",
+        "eks:ListAddons",
+        "eks:DescribeAddon",
+        "eks:ListNodegroups"
       ],
       "Resource": "*"
     }
@@ -198,8 +203,8 @@ For reference, the v0.88.0 wizard's permissions policy is:
 }
 ```
 
-17 actions total: 4 EC2 + 4 Lambda + 1 RDS + 5 S3 + 3 ELBv2. All
-Describe/List/Get; no write actions. Click **Next**. Policy name:
+22 actions total: 4 EC2 + 4 Lambda + 1 RDS + 5 S3 + 3 ELBv2 + 5 EKS.
+All Describe/List/Get; no write actions. Click **Next**. Policy name:
 `SquadronDiscoveryReadOnly`. Click **Create policy**.
 
 The role is now ready.
@@ -307,7 +312,7 @@ Return to the Squadron wizard tab. Click through:
   `arn:aws:iam::<ACCOUNT_ID>:role/SquadronDiscovery`. Next.
 - Step 5 (validate) — click **Validate connection**.
 
-The "What just happened" panel should show six green checks:
+The "What just happened" panel should show seven green checks:
 
 - ✓ `sts:AssumeRole`
 - ✓ `ec2 probe` (with a sample count — 0 if you have no EC2
@@ -319,6 +324,8 @@ The "What just happened" panel should show six green checks:
 - ✓ `alb probe` (slice 3a, v0.88.0 — single
   `elasticloadbalancing:DescribeLoadBalancers` call with
   PageSize=1)
+- ✓ `eks probe` (slice 3b, v0.89.0 — single `eks:ListClusters`
+  call with MaxResults=1)
 
 If any check fails, the panel renders a humanized error with a
 `SuggestedStep` jump-back button — click it, fix the IAM
@@ -333,7 +340,7 @@ Common failure modes:
   policy on `SquadronDiscovery` references a different ExternalId
   than the wizard's current state. Update one to match the other.
 - **`ec2 probe` / `lambda probe` / `rds probe` / `s3 probe` /
-  `alb probe` fails with AccessDenied** — the
+  `alb probe` / `eks probe` fails with AccessDenied** — the
   `SquadronDiscoveryReadOnly` inline policy on the role is missing
   or scoped wrong. Re-check step 3d above.
 - **`sts:AssumeRole` hangs for 30+ seconds then fails with "no
@@ -360,12 +367,13 @@ accounts" list on `/discovery/aws`.
 ## Step 10 — Trigger your first scan
 
 The Inventory tab on `/discovery/aws` triggers a scan against the
-connection. If your account has EC2 / Lambda / RDS / S3 / ALB
+connection. If your account has EC2 / Lambda / RDS / S3 / ALB / EKS
 resources, they populate the Compute / Functions / Databases /
-Object stores / Load balancers sections. The Recommendations tab
-populates from the proposer's analysis of the inventory.
+Object stores / Load balancers / Clusters sections. The
+Recommendations tab populates from the proposer's analysis of the
+inventory.
 
-If your account is empty (fresh test account), all five sections
+If your account is empty (fresh test account), all six sections
 will show "no resources found" — that's expected and confirms the
 scanner walked the API successfully with no items to return. Spin
 up a free-tier t2.micro EC2 instance — or an empty S3 bucket — to
@@ -398,7 +406,7 @@ If you connected your AWS account on an earlier Squadron release and
 have since upgraded, your inline `SquadronDiscoveryReadOnly` policy
 may be missing actions that newer releases need. The symptom is a
 partial scan: the audit event `discovery.aws.scan_completed` carries
-`partial: true` and `failed_services: ["s3", "alb", ...]` naming the
+`partial: true` and `failed_services: ["s3", "alb", "eks", ...]` naming the
 service walks that hit `AccessDenied`. (v0.88.3 surfaces every failed
 service in `partial_reason`, joined by `; ` — earlier releases only
 showed the last one.)
@@ -415,7 +423,7 @@ Squadron's discovery role explicitly does not have permission to do.
 | v0.85.0 (slice 1) | `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:DescribeRegions`, `ec2:DescribeTags`, `lambda:ListFunctions`, `lambda:GetFunction`, `lambda:GetFunctionConfiguration`, `lambda:ListTags` | 8 |
 | v0.87.0 (slice 2 — RDS) | `rds:DescribeDBInstances` | 9 |
 | v0.88.0 (slice 3a — S3 + ALB) | `s3:ListAllMyBuckets`, `s3:GetBucketLocation`, `s3:GetBucketLogging`, `s3:GetBucketTagging`, `s3:GetBucketRequestPayment`, `elasticloadbalancing:DescribeLoadBalancers`, `elasticloadbalancing:DescribeLoadBalancerAttributes`, `elasticloadbalancing:DescribeTags` | 17 |
-| v0.89.0 (slice 3b — EKS) | TBD — planned: `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups` | 22 |
+| v0.89.0 (slice 3b — EKS) | `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups` | 22 |
 
 ### How to update
 
@@ -440,7 +448,7 @@ A quick health check after the update:
 
 ```bash
 # Compares the action count in your live role to the expected
-# v0.88.x count (17 actions). Run as the squadron-terraform or
+# v0.89.x count (22 actions). Run as the squadron-terraform or
 # any IAM-read-capable profile (not squadron-bot — that profile
 # only has sts:AssumeRole, not iam:GetRolePolicy).
 AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
@@ -449,17 +457,17 @@ AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
   --query 'PolicyDocument.Statement[0].Action | length(@)'
 ```
 
-Expected output: `17` for v0.88.x. Anything less means you're
+Expected output: `22` for v0.89.x. Anything less means you're
 missing actions for one of the shipped slices.
 
 ## What this does NOT cover
 
 The IAM permissions Squadron asks for cover slice 1 (EC2 + Lambda,
-v0.85.0), slice 2 (+ RDS, v0.87.0), and slice 3a (+ S3 + ALB,
-v0.88.0). Slice 3b (+ EKS, v0.89.0) is the next planned addition;
-ECS / Fargate is parked for a later slice. Each future slice
-expands the permissions-policy template in the same place — the
-policy you copied in step 3d.
+v0.85.0), slice 2 (+ RDS, v0.87.0), slice 3a (+ S3 + ALB,
+v0.88.0), and slice 3b (+ EKS, v0.89.0). ECS / Fargate is the
+next major service category candidate and is parked for a later
+slice. Each future slice expands the permissions-policy template
+in the same place — the policy you copied in step 3d.
 
 The role does **not** include any write or modify permission. The
 proposer surfaces recommendations as Terraform snippets or plan

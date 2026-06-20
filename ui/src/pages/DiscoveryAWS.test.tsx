@@ -191,8 +191,43 @@ const sampleScan: ScanResult = {
       tags: {},
     },
   ],
-  instrumented_count: 2,
-  uninstrumented_count: 2,
+  // Slice 3b (v0.89.0) — two EKS clusters exercising the composite
+  // instrumented rule: one with logging on (api + audit) AND an
+  // ACTIVE adot addon → COVERED; one with logging off and a
+  // non-observability addon (aws-ebs-csi-driver) → UNCOVERED. The
+  // assertions check both axes render and that ADOT highlights.
+  clusters: [
+    {
+      resource_id: "arn:aws:eks:us-east-1:123:cluster/prod-cluster",
+      name: "prod-cluster",
+      kubernetes_version: "1.29",
+      status: "ACTIVE",
+      control_plane_logging: ["api", "audit"],
+      addons: [
+        { name: "adot", version: "v0.92.0-eksbuild.1", status: "ACTIVE" },
+      ],
+      nodegroup_count: 2,
+      fargate_profile_count: 0,
+      region: "us-east-1",
+      tags: {},
+    },
+    {
+      resource_id: "arn:aws:eks:us-east-1:123:cluster/staging-cluster",
+      name: "staging-cluster",
+      kubernetes_version: "1.29",
+      status: "ACTIVE",
+      control_plane_logging: [],
+      addons: [
+        { name: "aws-ebs-csi-driver", version: "v1.0.0", status: "ACTIVE" },
+      ],
+      nodegroup_count: 1,
+      fargate_profile_count: 0,
+      region: "us-east-1",
+      tags: {},
+    },
+  ],
+  instrumented_count: 3,
+  uninstrumented_count: 3,
   partial: false,
 };
 
@@ -361,6 +396,32 @@ describe("DiscoveryAWSPage", () => {
     // ALB→S3 cross-reference: the configured target bucket renders
     // under the Access Logs badge for the covered row.
     expect(screen.getByText(/→ prod-logs/i)).toBeInTheDocument();
+
+    // Slice 3b (v0.89.0) — the Clusters section renders both
+    // clusters and surfaces the composite-rule axes as
+    // independent badge groups.
+    expect(screen.getByText("prod-cluster")).toBeInTheDocument();
+    expect(screen.getByText("staging-cluster")).toBeInTheDocument();
+    // Control plane logging badge for the covered cluster
+    // renders "api" + "audit" (both required for axis 1).
+    expect(
+      within(document.body).getAllByText(/^api$/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(document.body).getAllByText(/^audit$/).length,
+    ).toBeGreaterThan(0);
+    // ADOT add-on label appears as the observability addon
+    // highlight (axis 2 — covered for prod-cluster).
+    expect(screen.getByText("adot")).toBeInTheDocument();
+    // The non-observability add-on still renders (informationally)
+    // — confirms the section walks all addons, not just the
+    // observability ones.
+    expect(screen.getByText("aws-ebs-csi-driver")).toBeInTheDocument();
+    // Uncovered cluster (staging-cluster) shows "none" badge for
+    // its empty control_plane_logging axis.
+    expect(
+      within(document.body).getAllByText(/^none$/i).length,
+    ).toBeGreaterThan(0);
 
     // Scanner was called exactly once with the chosen account ID.
     expect(mockedRunAWSScan).toHaveBeenCalledTimes(1);

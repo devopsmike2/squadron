@@ -114,8 +114,23 @@ type Result struct {
 	// elasticloadbalancing:ModifyLoadBalancerAttributes.
 	LoadBalancers []LoadBalancerSnapshot `json:"load_balancers"`
 
+	// Clusters is the EKS / GKE / AKS managed-Kubernetes inventory.
+	// Added in slice 3b of the universal-observation arc (v0.89.0).
+	// The proposer's recommendation surface for clusters reasons
+	// about a COMPOSITE rule: control plane logging (api + audit
+	// minimum) AND an observability add-on (ADOT or CloudWatch
+	// Observability) must BOTH be on. Single-axis recommendations
+	// here would miss half the lever surface — operators with logs
+	// on but no add-on still have no metrics/traces, and operators
+	// with the add-on but no control-plane logging miss the
+	// authentication / audit trail. Squadron emits enablement
+	// recommendations as plan steps; never executes
+	// eks:UpdateCluster or eks:CreateAddon.
+	Clusters []ClusterSnapshot `json:"clusters"`
+
 	// InstrumentedCount sums Compute+Functions+Databases+ObjectStores+
-	// LoadBalancers entries where observability presence was detected.
+	// LoadBalancers+Clusters entries where observability presence
+	// was detected.
 	// UninstrumentedCount is the complement. Both are denormalized so
 	// consumers don't need to recount.
 	//
@@ -130,6 +145,13 @@ type Result struct {
 	//   - LoadBalancers: AccessLogsEnabled == true. (Slice 3a single-
 	//     axis rule. AccessLogsS3Bucket is the operator-chosen target
 	//     and stays informational.)
+	//   - Clusters: control plane logging includes BOTH "api" AND
+	//     "audit", AND at least one addon has Name=="adot" OR
+	//     Name=="amazon-cloudwatch-observability" with
+	//     Status=="ACTIVE". (Slice 3b composite rule — both axes
+	//     required. Single-axis presence is informationally surfaced
+	//     in the Inventory tab but does not count toward
+	//     InstrumentedCount.)
 	InstrumentedCount   int `json:"instrumented_count"`
 	UninstrumentedCount int `json:"uninstrumented_count"`
 
@@ -358,6 +380,134 @@ type LoadBalancerSnapshot struct {
 	Tags map[string]string `json:"tags,omitempty"`
 }
 
+// ClusterSnapshot is the category-typed view of a managed Kubernetes
+// cluster. Provider-specific scanners populate this from EKS
+// DescribeCluster + ListAddons + ListNodegroups / GKE clusters.get
+// / AKS managedClusters.get. The proposer reasons about
+// category-level levers (control plane logging + observability
+// add-on) rather than provider-specific feature names.
+//
+// Slice 3b's "instrumented" rule for clusters is COMPOSITE — two
+// axes, both required:
+//  1. Control plane logging on AT LEAST "api" AND "audit" types.
+//     EKS supports five log types (api, audit, authenticator,
+//     controllerManager, scheduler); the rule requires api +
+//     audit because those two carry the load-bearing audit trail
+//     Squadron's posture story depends on. Operators who turn on
+//     authenticator / controllerManager / scheduler in addition
+//     are MORE covered, not less, but the minimum is api+audit.
+//  2. At least one addon with Name == "adot" (AWS Distro for
+//     OpenTelemetry) OR Name == "amazon-cloudwatch-observability"
+//     AND Status == "ACTIVE". DEGRADED / CREATE_FAILED / DELETING
+//     addons do not count toward coverage even when present.
+//
+// Both axes must hold; either alone is insufficient. The proposer
+// prompt teaches the same rule, so the operator-visible Inventory
+// tab and the AI's reasoning denominate coverage identically.
+//
+// Squadron does NOT execute eks:UpdateCluster or eks:CreateAddon.
+// The discovery role's permissions policy is strictly read-only
+// (eks:ListClusters + eks:DescribeCluster + eks:ListAddons +
+// eks:DescribeAddon + eks:ListNodegroups). The proposer surfaces
+// enablement recommendations as plan steps; the operator runs the
+// modify call through their own IaC tooling.
+//
+// Note on add-on naming: the observability add-on namespace AWS
+// publishes evolves over time (today: "adot",
+// "amazon-cloudwatch-observability"; new entrants are expected).
+// This list lives in code so a future slice can extend it without
+// touching the wire shape.
+type ClusterSnapshot struct {
+	// ResourceID is the provider-native ID: EKS cluster ARN / GKE
+	// cluster path / AKS managed-cluster resource ID.
+	ResourceID string `json:"resource_id"`
+
+	// Name is the operator-readable cluster name. Often the
+	// trailing component of ResourceID but kept separate so the UI
+	// doesn't have to parse ARNs.
+	Name string `json:"name"`
+
+	// KubernetesVersion is the cluster's Kubernetes version string
+	// (e.g. "1.29"). Surfaced raw — the proposer reads it for
+	// per-version guidance (e.g. ADOT operator compatibility
+	// floors).
+	KubernetesVersion string `json:"kubernetes_version"`
+
+	// Status is the provider-typed cluster status string:
+	// "ACTIVE" / "CREATING" / "DELETING" / "FAILED" / "UPDATING".
+	// Surfaced raw so the Inventory tab can dim non-ACTIVE rows
+	// and the proposer can decline to recommend against a
+	// non-ACTIVE cluster (mid-create / mid-delete clusters can't
+	// usefully receive a plan step).
+	Status string `json:"status"`
+
+	// ControlPlaneLogging is the list of log types enabled for the
+	// cluster's EKS control plane. AWS enum values:
+	// "api" / "audit" / "authenticator" / "controllerManager" /
+	// "scheduler". Empty slice means no log types are enabled.
+	// The instrumented rule requires BOTH "api" AND "audit" be
+	// present; other types are informationally surfaced.
+	ControlPlaneLogging []string `json:"control_plane_logging"`
+
+	// Addons is the per-cluster list of EKS managed add-ons. The
+	// proposer reads the names to detect observability add-on
+	// presence (ADOT or CloudWatch observability); the version +
+	// status are denormalized so the Inventory tab can show
+	// degradation state at a glance.
+	Addons []ClusterAddon `json:"addons"`
+
+	// NodegroupCount is the number of EKS managed node groups
+	// attached to the cluster. Surfaced informationally — the
+	// proposer does NOT emit per-nodegroup recommendations (the
+	// cluster-level lever is the right scope for OTel coverage).
+	NodegroupCount int `json:"nodegroup_count"`
+
+	// FargateProfileCount is the number of EKS Fargate profiles
+	// attached to the cluster. Surfaced informationally for the
+	// same reason as NodegroupCount.
+	FargateProfileCount int `json:"fargate_profile_count"`
+
+	// Region is where the cluster lives.
+	Region string `json:"region"`
+
+	// Tags follows the same flattened shape as the other category
+	// snapshots.
+	Tags map[string]string `json:"tags,omitempty"`
+}
+
+// ClusterAddon is a single EKS managed add-on attached to a
+// ClusterSnapshot. The instrumented rule reads Name + Status —
+// Name identifies whether the add-on is an observability one
+// (adot / amazon-cloudwatch-observability), Status whether it's
+// actually running (ACTIVE) or in a degraded state (DEGRADED /
+// CREATE_FAILED / DELETING — none of which count toward
+// coverage).
+type ClusterAddon struct {
+	// Name is the AWS add-on name. Observability names recognized
+	// by the instrumented rule today:
+	//   - "adot" (AWS Distro for OpenTelemetry operator)
+	//   - "amazon-cloudwatch-observability" (CloudWatch agent
+	//     + Container Insights with enhanced observability)
+	// Other names (aws-ebs-csi-driver, vpc-cni, coredns,
+	// kube-proxy, etc.) are inventoried but do NOT flip the
+	// instrumented bit.
+	Name string `json:"name"`
+
+	// Version is the add-on version (AWS returns this as a
+	// semver-like string, e.g. "v0.92.0-eksbuild.1"). Surfaced
+	// raw — the proposer doesn't reason about it today, but the
+	// Inventory tab renders it as informational context.
+	Version string `json:"version"`
+
+	// Status is the AWS add-on status enum value. Values:
+	// "CREATING" / "ACTIVE" / "CREATE_FAILED" / "UPDATING" /
+	// "DELETING" / "DELETE_FAILED" / "DEGRADED" / "UPDATE_FAILED".
+	// Only "ACTIVE" counts toward the observability coverage
+	// rule — DEGRADED / CREATE_FAILED / DELETING are surfaced but
+	// not counted.
+	Status string `json:"status"`
+}
+
 // FunctionRuntimeSnapshot is the category-typed view of a serverless
 // function. Provider-specific scanners populate this from Lambda
 // ListFunctions / Cloud Functions list / Azure Functions list.
@@ -412,8 +562,9 @@ type ValidationResult struct {
 // permissions.
 type PreflightCheck struct {
 	// Service is the per-service identifier: "ec2", "lambda", "rds",
-	// "s3", "alb". Slice 2 added "rds"; slice 3a (v0.88.0) added
-	// "s3" and "alb"; future slices add more.
+	// "s3", "alb", "eks". Slice 2 added "rds"; slice 3a (v0.88.0)
+	// added "s3" and "alb"; slice 3b (v0.89.0) added "eks"; future
+	// slices add more.
 	Service string `json:"service"`
 
 	// OK is true when the preflight call returned without an error.

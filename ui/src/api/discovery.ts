@@ -202,6 +202,38 @@ export interface LoadBalancerSnapshot {
   tags: Record<string, string>;
 }
 
+// ClusterAddon mirrors scanner.ClusterAddon. Slice 3b (v0.89.0).
+// Name + status drive the EKS observability-detection rule the
+// proposer reads (ADOT or amazon-cloudwatch-observability addon,
+// ACTIVE status). version is informational; it renders in the
+// Inventory tab badge tooltip but does not gate the rule.
+export interface ClusterAddon {
+  name: string;
+  version: string;
+  status: string;
+}
+
+// ClusterSnapshot mirrors scanner.ClusterSnapshot. Slice 3b
+// (v0.89.0) — EKS / GKE / AKS observability is a COMPOSITE rule:
+// `control_plane_logging` must contain BOTH "api" AND "audit" AND
+// at least one `addons` entry must have name == "adot" OR
+// "amazon-cloudwatch-observability" with status == "ACTIVE". The
+// Inventory tab surfaces both axes as independent badge groups so
+// the operator sees at a glance which axis is missing, matching
+// the proposer prompt's "BOTH must hold" framing.
+export interface ClusterSnapshot {
+  resource_id: string;
+  name: string;
+  kubernetes_version: string;
+  status: string;
+  control_plane_logging: string[];
+  addons: ClusterAddon[];
+  nodegroup_count: number;
+  fargate_profile_count: number;
+  region: string;
+  tags: Record<string, string>;
+}
+
 // ScanResult is the typed payload the scan endpoint returns. Mirrors
 // scanner.Result via the marshalScanResult wire shape on the Go side.
 // scan_started_at / scan_completed_at are ISO-8601 strings; partial
@@ -226,6 +258,9 @@ export interface ScanResult {
   // check.
   object_stores: ObjectStoreSnapshot[];
   load_balancers: LoadBalancerSnapshot[];
+  // clusters joins the wire shape in slice 3b (v0.89.0). Same
+  // non-optional posture as the other category arrays.
+  clusters: ClusterSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;
