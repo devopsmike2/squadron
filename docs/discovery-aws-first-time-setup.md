@@ -392,6 +392,66 @@ If you want to rotate the key without re-walking the whole flow:
 4. Verify the next validate still succeeds.
 5. Deactivate, then delete, the old key.
 
+## Upgrading the IAM policy when Squadron ships a new slice
+
+If you connected your AWS account on an earlier Squadron release and
+have since upgraded, your inline `SquadronDiscoveryReadOnly` policy
+may be missing actions that newer releases need. The symptom is a
+partial scan: the audit event `discovery.aws.scan_completed` carries
+`partial: true` and `failed_services: ["s3", "alb", ...]` naming the
+service walks that hit `AccessDenied`. (v0.88.3 surfaces every failed
+service in `partial_reason`, joined by `; ` — earlier releases only
+showed the last one.)
+
+The fix is operator-side: edit the inline policy in the IAM console
+and add the missing actions. **Squadron does not auto-migrate your
+role's IAM policy** — that's a write operation on your IAM, which
+Squadron's discovery role explicitly does not have permission to do.
+
+### Slice-to-IAM mapping
+
+| Release | New actions added | Cumulative count |
+| ------- | ----------------- | :-: |
+| v0.85.0 (slice 1) | `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:DescribeRegions`, `ec2:DescribeTags`, `lambda:ListFunctions`, `lambda:GetFunction`, `lambda:GetFunctionConfiguration`, `lambda:ListTags` | 8 |
+| v0.87.0 (slice 2 — RDS) | `rds:DescribeDBInstances` | 9 |
+| v0.88.0 (slice 3a — S3 + ALB) | `s3:ListAllMyBuckets`, `s3:GetBucketLocation`, `s3:GetBucketLogging`, `s3:GetBucketTagging`, `s3:GetBucketRequestPayment`, `elasticloadbalancing:DescribeLoadBalancers`, `elasticloadbalancing:DescribeLoadBalancerAttributes`, `elasticloadbalancing:DescribeTags` | 17 |
+| v0.89.0 (slice 3b — EKS) | TBD — planned: `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups` | 22 |
+
+### How to update
+
+1. AWS console → IAM → Roles → `SquadronDiscovery` → Permissions tab.
+2. Click the **SquadronDiscoveryReadOnly** policy to expand, then
+   **Edit**.
+3. Replace the entire JSON with the latest policy block from
+   **Step 3d** of this runbook (which always reflects the most
+   recent shipped release). The full action list is cumulative —
+   never delete an earlier slice's actions when adding a new
+   slice's actions.
+4. Click **Next** → **Save changes**. The next `sts:AssumeRole`
+   Squadron makes picks up the new permissions immediately (STS
+   tokens are issued fresh per scan).
+5. Trigger a scan from `/discovery/aws` and confirm
+   `partial: false` in the response and in the
+   `discovery.aws.scan_completed` audit event.
+
+### Verifying the policy is up to date
+
+A quick health check after the update:
+
+```bash
+# Compares the action count in your live role to the expected
+# v0.88.x count (17 actions). Run as the squadron-terraform or
+# any IAM-read-capable profile (not squadron-bot — that profile
+# only has sts:AssumeRole, not iam:GetRolePolicy).
+AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
+  --role-name SquadronDiscovery \
+  --policy-name SquadronDiscoveryReadOnly \
+  --query 'PolicyDocument.Statement[0].Action | length(@)'
+```
+
+Expected output: `17` for v0.88.x. Anything less means you're
+missing actions for one of the shipped slices.
+
 ## What this does NOT cover
 
 The IAM permissions Squadron asks for cover slice 1 (EC2 + Lambda,

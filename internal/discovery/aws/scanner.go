@@ -359,56 +359,42 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 		result.ScanCompletedAt = time.Now().UTC()
 	}()
 
-	// TODO(v0.87.4+): PartialReason and FailedServices currently
-	// overwrite/clobber on multiple service failures rather than
-	// accumulate — the last failed service wins. Single-service-failure
-	// is the slice 1+2 common case; slice 3 multi-service scans (S3 +
-	// ALB + EKS) will elevate the accumulator question. Separate
-	// follow-up; do not fix here.
+	// v0.88.3: closes #586. Prior to this, each failure emission site
+	// OVERWROTE result.PartialReason — so when two services failed in
+	// the same scan, only the last one's diagnostic survived. The
+	// FailedServices slice was always correctly accumulating (it's an
+	// append), so audit consumers had the structured list right, but
+	// the human-readable string lost the earlier failure. Now both
+	// fields accumulate. recordPartialFailure is the single emission
+	// site; new services append to the existing chain instead of
+	// clobbering. Operationally visible during Track A live-deploy
+	// (#586 — when both rds:DescribeDBInstances and the (subsequent)
+	// alb walk failed, only the alb message showed in PartialReason).
 	factory, err := s.ensureFactory(ctx, regions[0])
 	if err != nil {
-		result.Partial = true
-		result.PartialReason = fmt.Sprintf("assume-role failed: %s", err.Error())
 		// Sentinel "assume_role" distinguishes credentials-layer
 		// failures from per-service walk failures for audit consumers
 		// pattern-matching against FailedServices.
-		result.FailedServices = append(result.FailedServices, "assume_role")
+		recordPartialFailure(result, "assume_role", fmt.Sprintf("assume-role failed: %s", err.Error()))
 		return result, nil
 	}
 
 	for _, region := range regions {
 		if err := s.scanRegionEC2(ctx, factory, region, result); err != nil {
-			result.Partial = true
-			result.PartialReason = fmt.Sprintf("ec2 scan failed in %s: %s", region, err.Error())
-			result.FailedServices = append(result.FailedServices, "ec2")
+			recordPartialFailure(result, "ec2", fmt.Sprintf("ec2 scan failed in %s: %s", region, err.Error()))
 		}
 		if err := s.scanRegionLambda(ctx, factory, region, result); err != nil {
-			result.Partial = true
-			result.PartialReason = fmt.Sprintf("lambda scan failed in %s: %s", region, err.Error())
-			result.FailedServices = append(result.FailedServices, "lambda")
+			recordPartialFailure(result, "lambda", fmt.Sprintf("lambda scan failed in %s: %s", region, err.Error()))
 		}
 		if err := s.scanRegionRDS(ctx, factory, region, result); err != nil {
-			result.Partial = true
-			result.PartialReason = fmt.Sprintf("rds scan failed in %s: %s", region, err.Error())
-			result.FailedServices = append(result.FailedServices, "rds")
+			recordPartialFailure(result, "rds", fmt.Sprintf("rds scan failed in %s: %s", region, err.Error()))
 		}
 		// Slice 3a (v0.88.0) — S3 + ALB join the per-region walk.
-		// Each emission site mirrors the v0.87.3 rds branch exactly:
-		// FailedServices gets the service identifier appended,
-		// PartialReason carries the formatted explanation, and
-		// Partial flips to true. The TODO(v0.87.4+) accumulator
-		// comment above applies the same way — the last failed
-		// service wins on PartialReason; FailedServices accumulates
-		// across services.
 		if err := s.scanRegionS3(ctx, factory, region, result); err != nil {
-			result.Partial = true
-			result.PartialReason = fmt.Sprintf("s3 scan failed in %s: %s", region, err.Error())
-			result.FailedServices = append(result.FailedServices, "s3")
+			recordPartialFailure(result, "s3", fmt.Sprintf("s3 scan failed in %s: %s", region, err.Error()))
 		}
 		if err := s.scanRegionALB(ctx, factory, region, result); err != nil {
-			result.Partial = true
-			result.PartialReason = fmt.Sprintf("alb scan failed in %s: %s", region, err.Error())
-			result.FailedServices = append(result.FailedServices, "alb")
+			recordPartialFailure(result, "alb", fmt.Sprintf("alb scan failed in %s: %s", region, err.Error()))
 		}
 	}
 
@@ -1122,4 +1108,30 @@ func isThrottlingError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// recordPartialFailure marks the scan partial and appends both a
+// service identifier to FailedServices AND a human-readable reason to
+// PartialReason. v0.88.3 fix for #586: prior versions OVERWROTE
+// PartialReason at each failure site, so when two services failed in
+// the same scan only the last one's diagnostic survived (operationally
+// observed during Track A — when both rds and alb failed in different
+// runs, the alb message would replace rds). FailedServices was always
+// accumulating correctly (it's an append), so audit consumers had the
+// structured list right; the human-readable string lost the earlier
+// failure. Now both fields accumulate, joined by "; " in
+// PartialReason. Single-failure scans are unaffected — the join only
+// kicks in on the second-and-subsequent failures.
+//
+// Service identifiers shipping today: "assume_role" (sentinel for
+// credentials-layer failures), "ec2", "lambda", "rds", "s3", "alb".
+// Slice 3b (v0.89.0) adds "eks".
+func recordPartialFailure(result *scanner.Result, service, reason string) {
+	result.Partial = true
+	if result.PartialReason == "" {
+		result.PartialReason = reason
+	} else {
+		result.PartialReason = result.PartialReason + "; " + reason
+	}
+	result.FailedServices = append(result.FailedServices, service)
 }
