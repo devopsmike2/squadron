@@ -37,6 +37,26 @@ type DiscoveryValidator interface {
 // tests wire a mock.
 type AWSValidatorFactory func(creds credstore.AWSCredentials, accountID string) DiscoveryValidator
 
+// DiscoveryScanner is the slim contract HandleAWSRunScan calls
+// against. It mirrors the Scan portion of scanner.Scanner; the handler
+// uses an interface rather than the concrete *aws.Scanner so tests can
+// inject a stub without dragging in the AWS SDK.
+//
+// Implementations are constructed per request through AWSScannerFactory
+// — production decrypts the connection's credentials via the credstore
+// Key and hands back an *aws.Scanner; tests return a pre-canned result.
+type DiscoveryScanner interface {
+	Scan(ctx context.Context, conn *credstore.CloudConnection, regions []string) (*scanner.Result, error)
+}
+
+// AWSScannerFactory builds a DiscoveryScanner from a stored connection.
+// Indirected so the scan handler doesn't import the AWS SDK directly;
+// the production factory (defaultAWSScannerFactory in
+// discovery_aws_wire.go) closes over the credstore Key supplied via
+// WithCredstoreKey. A nil factory means "scan endpoint not wired" and
+// the handler 500s with a humanized error.
+type AWSScannerFactory func(conn *credstore.CloudConnection) (DiscoveryScanner, error)
+
 // DiscoveryHandlers serves the connector-wizard surface — slice 1
 // ships AWS validate + save; future slices add GCP and Azure
 // equivalents behind the same handler shape.
@@ -61,6 +81,7 @@ type DiscoveryHandlers struct {
 	credStore         credstore.Store
 	awsValidatorFor   AWSValidatorFactory
 	awsCredMarshaller AWSCredMarshaller
+	awsScannerFor     AWSScannerFactory
 	auditService      services.AuditService
 	logger            *zap.Logger
 }
@@ -109,10 +130,18 @@ func (h *DiscoveryHandlers) WithAuditService(a services.AuditService) *Discovery
 // credstore.Store was opened with — that's the only way the later scan
 // engine can decrypt the row. Tests use WithCredMarshaller below to
 // substitute a pass-through.
+//
+// Wiring the key here also installs the production AWSScannerFactory:
+// the same key the Save handler uses to encrypt credentials is what
+// the scan handler needs to decrypt them back when the operator
+// triggers a run. Keeping both behind the same setter avoids the
+// half-wired posture where Save persists rows the scan handler can't
+// read.
 func (h *DiscoveryHandlers) WithCredstoreKey(key *credstore.Key) *DiscoveryHandlers {
 	h.awsCredMarshaller = func(creds credstore.AWSCredentials) ([]byte, []byte, error) {
 		return credstore.MarshalAWSCredentials(creds, key)
 	}
+	h.awsScannerFor = defaultAWSScannerFactory(key)
 	return h
 }
 
@@ -121,6 +150,17 @@ func (h *DiscoveryHandlers) WithCredstoreKey(key *credstore.Key) *DiscoveryHandl
 // invoking the AEAD; production callers use WithCredstoreKey.
 func (h *DiscoveryHandlers) WithCredMarshaller(m AWSCredMarshaller) *DiscoveryHandlers {
 	h.awsCredMarshaller = m
+	return h
+}
+
+// WithAWSScannerFactory overrides the AWS scanner factory. Tests use
+// this to inject a stub scanner that returns a pre-canned Result
+// without ever calling AWS; production callers either let
+// WithCredstoreKey install the default or, in test_server.go's
+// no-discovery posture, leave it nil so the scan endpoint 500s with a
+// clear "scanner not wired" humanized error.
+func (h *DiscoveryHandlers) WithAWSScannerFactory(f AWSScannerFactory) *DiscoveryHandlers {
+	h.awsScannerFor = f
 	return h
 }
 
@@ -445,6 +485,340 @@ func (h *DiscoveryHandlers) HandleAWSSaveConnection(c *gin.Context) {
 		ConnectionID: req.AccountID,
 		Status:       "connected",
 	})
+}
+
+// awsConnectionRow is the redacted view of a stored CloudConnection
+// the list endpoint returns. ONLY display fields land here — never the
+// role ARN, never the encrypted credentials blob, never the
+// CredentialsNonce, never the ExternalId.
+//
+// The substrate's CloudConnection struct already json:"-" the
+// Credentials + CredentialsNonce bytes, but the role ARN ciphertext
+// would still slip through if we marshaled the whole row. Defining a
+// purpose-built row type makes the redaction explicit and survives a
+// future addition of new fields to CloudConnection without leaking
+// them by default.
+type awsConnectionRow struct {
+	AccountID   string    `json:"account_id"`
+	DisplayName string    `json:"display_name"`
+	Regions     []string  `json:"regions"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// awsListConnectionsResponse is the wire shape the Account tab fetches.
+// Empty array (NOT null) when no connections exist — the UI's empty
+// state keys off `connections.length === 0`, not on a missing field.
+type awsListConnectionsResponse struct {
+	Connections []awsConnectionRow `json:"connections"`
+}
+
+// HandleAWSListConnections — GET /api/v1/discovery/aws/connections.
+//
+// Returns every stored AWS connection's display fields. Operators see
+// "this account is connected" plus the display name, regions, and
+// creation time; they cannot read back the role ARN, the external_id,
+// or any encrypted credential material. The Credentials /
+// CredentialsNonce bytes never leave this handler — they're not even
+// surfaced into the response struct.
+//
+// Empty store returns {"connections": []} with 200 (NOT 404). The
+// Account tab treats both as a "no accounts yet" empty state.
+func (h *DiscoveryHandlers) HandleAWSListConnections(c *gin.Context) {
+	if h.credStore == nil {
+		// Belt-and-braces: the trampoline already 503s. This keeps the
+		// handler safe to call from struct-literal construction in
+		// tests that forget to wire a store.
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "CredStoreNotWired",
+			Message:       "Squadron's credential substrate isn't configured.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+
+	conns, err := h.credStore.ListConnections(c.Request.Context(), credstore.ListFilter{
+		Provider: credstore.ProviderAWS,
+	})
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws list connections: credstore read failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "CredStoreReadFailed",
+			Message:       "Squadron could not read the connection list. The error has been logged; retry in a moment.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+
+	// Always emit an array — never null — so the UI's empty-state
+	// branch is a single .length check.
+	rows := make([]awsConnectionRow, 0, len(conns))
+	for _, conn := range conns {
+		if conn == nil {
+			continue
+		}
+		rows = append(rows, awsConnectionRow{
+			AccountID:   conn.AccountID,
+			DisplayName: conn.DisplayName,
+			Regions:     conn.Regions,
+			CreatedAt:   conn.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, awsListConnectionsResponse{Connections: rows})
+}
+
+// awsRunScanRequest is the optional body for the scan endpoint. When
+// Regions is empty (or the body is absent altogether), the scanner
+// falls back to the connection's stored Regions list. Slice 1's UI
+// always populates the field to make the per-scan region selection
+// explicit; the empty-body path keeps the endpoint curl-friendly.
+type awsRunScanRequest struct {
+	Regions []string `json:"regions"`
+}
+
+// awsScanResponse is the snake_case wire shape the React Inventory tab
+// consumes. scanner.Result is defined without JSON tags (the scanner
+// package is provider-agnostic and the handler owns the wire contract),
+// so we walk it once into a tagged struct rather than emit the Go
+// field names verbatim.
+type awsScanResponse struct {
+	ScanID              string                  `json:"scan_id"`
+	ScanStartedAt       time.Time               `json:"scan_started_at"`
+	ScanCompletedAt     time.Time               `json:"scan_completed_at"`
+	AccountID           string                  `json:"account_id"`
+	Provider            string                  `json:"provider"`
+	Regions             []string                `json:"regions"`
+	Compute             []awsComputeInstanceRow `json:"compute"`
+	Functions           []awsFunctionRuntimeRow `json:"functions"`
+	InstrumentedCount   int                     `json:"instrumented_count"`
+	UninstrumentedCount int                     `json:"uninstrumented_count"`
+	Partial             bool                    `json:"partial"`
+	PartialReason       string                  `json:"partial_reason,omitempty"`
+}
+
+type awsComputeInstanceRow struct {
+	ResourceID   string            `json:"resource_id"`
+	InstanceType string            `json:"instance_type"`
+	Tags         map[string]string `json:"tags"`
+	HasOTel      bool              `json:"has_otel"`
+	OSFamily     string            `json:"os_family"`
+	Region       string            `json:"region"`
+}
+
+type awsFunctionRuntimeRow struct {
+	ResourceID   string `json:"resource_id"`
+	Name         string `json:"name"`
+	Runtime      string `json:"runtime"`
+	HasOTelLayer bool   `json:"has_otel_layer"`
+	Region       string `json:"region"`
+}
+
+// marshalScanResult walks the scanner.Result into the snake_case wire
+// shape. Empty slices stay empty (never null) so the UI's empty-state
+// rendering keys off .length === 0 rather than nil-checking.
+func marshalScanResult(r *scanner.Result) awsScanResponse {
+	out := awsScanResponse{
+		ScanID:              r.ScanID,
+		ScanStartedAt:       r.ScanStartedAt,
+		ScanCompletedAt:     r.ScanCompletedAt,
+		AccountID:           r.AccountID,
+		Provider:            string(r.Provider),
+		Regions:             append([]string{}, r.Regions...),
+		Compute:             make([]awsComputeInstanceRow, 0, len(r.Compute)),
+		Functions:           make([]awsFunctionRuntimeRow, 0, len(r.Functions)),
+		InstrumentedCount:   r.InstrumentedCount,
+		UninstrumentedCount: r.UninstrumentedCount,
+		Partial:             r.Partial,
+		PartialReason:       r.PartialReason,
+	}
+	for _, ci := range r.Compute {
+		out.Compute = append(out.Compute, awsComputeInstanceRow{
+			ResourceID:   ci.ResourceID,
+			InstanceType: ci.InstanceType,
+			Tags:         ci.Tags,
+			HasOTel:      ci.HasOTel,
+			OSFamily:     ci.OSFamily,
+			Region:       ci.Region,
+		})
+	}
+	for _, fn := range r.Functions {
+		out.Functions = append(out.Functions, awsFunctionRuntimeRow{
+			ResourceID:   fn.ResourceID,
+			Name:         fn.Name,
+			Runtime:      fn.Runtime,
+			HasOTelLayer: fn.HasOTelLayer,
+			Region:       fn.Region,
+		})
+	}
+	return out
+}
+
+// HandleAWSRunScan — POST /api/v1/discovery/aws/connections/:id/scan.
+//
+// Looks up the stored connection by account_id, emits a scan_started
+// audit event, runs the scanner synchronously, emits a scan_completed
+// event with per-category counts and the partial flag, then returns
+// the typed scanner.Result as JSON.
+//
+// Known trade-off: the scan blocks the HTTP request. A large account
+// (50k+ resources) could hang for minutes. Acceptable for slice 1 per
+// the design doc's "Failure modes" section; slice 3 introduces
+// scheduled scans with the result persisted asynchronously, at which
+// point this endpoint can shrink to "scan_id, queued" semantics. The
+// route stays stable.
+//
+// Audit invariants per the design doc's "Audit trail invariants"
+// section:
+//   - discovery.aws.scan_started fires BEFORE the scan begins
+//   - discovery.aws.scan_completed fires AFTER the scan returns, with
+//     compute_count, function_count, instrumented_count,
+//     uninstrumented_count, and the partial flag in the payload
+//   - both events carry the account_id and (for scan_completed) the
+//     scan_id, so an auditor can reconstruct any scan's lifecycle from
+//     the audit log alone
+func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
+	accountID := strings.TrimSpace(c.Param("id"))
+	if accountID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingAccountID",
+			Message: "Account ID path parameter is required.",
+		}})
+		return
+	}
+
+	if h.credStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "CredStoreNotWired",
+			Message:       "Squadron's credential substrate isn't configured.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+	if h.awsScannerFor == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "ScannerNotWired",
+			Message:       "Squadron's scanner factory isn't configured. The Save flow wires it via the credstore key.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+
+	// Body is optional — the empty-body path falls back to the
+	// connection's stored Regions. Parse failures fall through to the
+	// empty-body branch rather than 400ing; the operator's intent is
+	// "scan whatever's configured" and we honor that even when the
+	// browser sent no payload.
+	var req awsRunScanRequest
+	_ = c.ShouldBindJSON(&req)
+
+	conn, err := h.credStore.GetConnection(c.Request.Context(), accountID)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws run scan: credstore read failed", zap.Error(err), zap.String("account_id", accountID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "CredStoreReadFailed",
+			Message:       "Squadron could not read the connection. The error has been logged; retry in a moment.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+	if conn == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ConnectionNotFound",
+			Message: "No AWS connection exists with that account ID. Connect the account from the wizard first.",
+		}})
+		return
+	}
+
+	// Resolve the regions to scan. Empty request body falls back to
+	// the connection's stored list — slice 1 ships single-entry lists,
+	// slice 3 will iterate.
+	regions := req.Regions
+	if len(regions) == 0 {
+		regions = append([]string(nil), conn.Regions...)
+	}
+
+	// scan_started fires BEFORE the scan call. If the scanner factory
+	// fails to build a scanner (e.g. credential decryption error), the
+	// audit trail still shows the operator's intent — a forensic reader
+	// can see a scan_started with no matching scan_completed and infer
+	// the failure happened before the scan began. Mirrors the
+	// "Squadron crashes mid-scan" failure-mode contract.
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      "system",
+			EventType:  "discovery.aws.scan_started",
+			TargetType: credstore.TargetTypeCloudConnection,
+			TargetID:   accountID,
+			Action:     "scan_started",
+			Payload: map[string]any{
+				"account_id":  accountID,
+				"regions":     regions,
+				"recorded_at": time.Now().UTC(),
+			},
+		})
+	}
+
+	awsScanner, err := h.awsScannerFor(conn)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws run scan: scanner construction failed", zap.Error(err), zap.String("account_id", accountID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "ScannerConstructFailed",
+			Message:       "Squadron could not decrypt the connection credentials. Re-validate from the wizard.",
+			SuggestedStep: "validate",
+		}})
+		return
+	}
+
+	result, err := awsScanner.Scan(c.Request.Context(), conn, regions)
+	if err != nil {
+		// Per scanner.Scanner's contract the AWS implementation sets
+		// Partial=true with PartialReason rather than returning a Go
+		// error. A non-nil error here means a future implementation
+		// broke that contract — surface as 500 with the humanized
+		// error.
+		if h.logger != nil {
+			h.logger.Error("aws run scan: scanner returned error", zap.Error(err), zap.String("account_id", accountID))
+		}
+		// HumanizeError lives in the aws package — and importing it
+		// here would pull the SDK into the handler's import graph. The
+		// scanner's Result.PartialReason already carries the humanized
+		// text on the contract-honoring path; the fallback uses the
+		// raw error string.
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "ScannerInternal",
+			Message:       "Scan failed unexpectedly: " + err.Error(),
+			SuggestedStep: "validate",
+		}})
+		return
+	}
+
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      "system",
+			EventType:  "discovery.aws.scan_completed",
+			TargetType: credstore.TargetTypeCloudConnection,
+			TargetID:   accountID,
+			Action:     "scan_completed",
+			Payload: map[string]any{
+				"account_id":           accountID,
+				"scan_id":              result.ScanID,
+				"compute_count":        len(result.Compute),
+				"function_count":       len(result.Functions),
+				"instrumented_count":   result.InstrumentedCount,
+				"uninstrumented_count": result.UninstrumentedCount,
+				"partial":              result.Partial,
+				"recorded_at":          time.Now().UTC(),
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, marshalScanResult(result))
 }
 
 // marshalValidationResult flattens scanner.ValidationResult into the
