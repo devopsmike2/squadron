@@ -311,4 +311,17 @@ export interface WizardDraft {
   role_arn?: string;
   display_name?: string;
   regions?: string[];
+  // principal_override is an optional ARN the operator can supply on
+  // the trust-policy step to scope the trust to a specific IAM
+  // identity instead of the default arn:aws:iam::<account>:root.
+  // Validated client-side as an IAM ARN shape; the value flows into
+  // the rendered trust-policy template only and is never sent to the
+  // server (the customer is the only consumer — AWS itself).
+  principal_override?: string;
+  // external_id_override lets an operator resume an interrupted
+  // wizard flow with the ExternalId they already pasted into AWS.
+  // Validated client-side as a UUID v4 shape; when set, it replaces
+  // the auto-generated UUID in both the rendered trust policy and
+  // the validate/save payload. See #578.
+  external_id_override?: string;
 }
