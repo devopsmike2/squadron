@@ -85,11 +85,15 @@ so scope creep is visible and refusable.
 **Explicitly out of scope for slice 1:**
 - Multi-account connections (single account at MVP; slice 3)
 - Multi-region per scan (single region at MVP; slice 3)
-- Other AWS service types — RDS, S3, ALB, ECS (slice 2)
+- Other AWS service types — RDS (slice 2, shipped v0.87), S3 / ALB
+  (slice 3, planned v0.88), ECS (later slice)
 - GCP, Azure, on-prem (slice 4, 5, 6)
 - Multi-format IaC — CDK, Pulumi, CloudFormation (slice 7)
 - Remediation posture — anything where Squadron has write permissions
-  to the customer's cloud (post-slice-6, behind Compliance Pack)
+  to the customer's cloud (post-slice-6, behind Compliance Pack).
+  Specifically: Squadron does NOT execute `rds:ModifyDBInstance`
+  even though slice 2 RDS recommendations propose enabling PI / EM;
+  the operator runs the Terraform through their own IaC pipeline.
 - Squadron-initiated mutations of customer cloud resources, ever, in
   any slice
 
@@ -160,10 +164,11 @@ role if they discovered the role ARN. The `ExternalId` is the
 shared secret that proves the assume-role request originated from
 the specific Squadron deployment the customer authorized.
 
-### Permissions policy (slice 1)
+### Permissions policy (slice 1 + slice 2)
 
-The role's permissions policy is strictly read-only and scoped to
-the two service types slice 1 supports:
+The role's permissions policy is strictly read-only. Slice 1 covered
+EC2 + Lambda; slice 2 (v0.87) adds RDS as the third service Squadron
+walks. The slice 2 policy:
 
 ```json
 {
@@ -179,7 +184,8 @@ the two service types slice 1 supports:
         "lambda:ListFunctions",
         "lambda:GetFunction",
         "lambda:GetFunctionConfiguration",
-        "lambda:ListTags"
+        "lambda:ListTags",
+        "rds:DescribeDBInstances"
       ],
       "Resource": "*"
     }
@@ -192,7 +198,18 @@ No `*:Update*`. No `*:Modify*`. No `*:Create*`. No `*:Delete*`. No
 at the policy level so even a fully compromised Squadron cannot
 escalate to write actions.
 
-When slice 2 adds RDS / S3 / ALB, this policy expands by additional
+Slice 2's `rds:DescribeDBInstances` returns the per-instance
+Performance Insights flag and the Enhanced Monitoring interval that
+drive the proposer's RDS recommendations. The proposer surfaces
+ENABLEMENT recommendations as plan steps — Terraform that calls
+`aws_db_instance.performance_insights_enabled = true` /
+`aws_db_instance.monitoring_interval = 60`. **Squadron does NOT
+execute the `rds:ModifyDBInstance` call**; the operator runs the
+Terraform through their own IaC pipeline. The discovery role's
+permissions policy never grants `rds:ModifyDBInstance` — the
+read-only invariant holds.
+
+When slice 3 adds S3 / ALB, this policy expands by additional
 Describe/List/Get actions only. The "no write actions" invariant
 holds across every slice. If a future slice ever needs write
 actions, that's a fundamentally different posture (the remediation
@@ -270,21 +287,28 @@ What's the blast radius at each posture? This section is the
 honest answer to the security review question "what happens if
 Squadron is compromised."
 
-### Posture: Discovery role only (slice 1)
+### Posture: Discovery role only (slice 1 + slice 2)
 
 If an attacker compromises a Squadron deployment and the only IAM
 role connected is the discovery role:
 
 **The attacker can:**
-- Enumerate EC2 instances and Lambda functions in the connected
-  region of the connected account
+- Enumerate EC2 instances, Lambda functions, and RDS DB instances
+  in the connected region of the connected account
 - Read instance metadata, security group references, tags
 - Read Lambda function configuration including environment variable
   KEYS (not values — `lambda:GetFunctionConfiguration` returns
   variable names but redacts values for sensitive content)
+- Read RDS DB instance metadata: engine + version, instance class,
+  Performance Insights / Enhanced Monitoring enablement flags, tags.
+  `rds:DescribeDBInstances` does NOT return endpoint credentials,
+  master passwords, or any data inside the database.
 
 **The attacker cannot:**
-- Modify anything in the customer's AWS account
+- Modify anything in the customer's AWS account (no
+  `rds:ModifyDBInstance`, no `ec2:RunInstances`, no
+  `lambda:UpdateFunctionConfiguration` — the policy is strictly
+  Describe/List/Get)
 - Read EC2 instance memory, disk, or network traffic
 - Read Lambda function code (would require `lambda:GetFunction` to
   fetch the deployment package — included in slice 1 because the

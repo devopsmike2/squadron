@@ -136,8 +136,32 @@ const sampleScan: ScanResult = {
       region: "us-east-1",
     },
   ],
-  instrumented_count: 1,
-  uninstrumented_count: 1,
+  // Slice 2 (v0.87) — one fully-covered RDS row plus one PI-only row so
+  // the test verifies both lever-badge states render.
+  databases: [
+    {
+      resource_id: "arn:aws:rds:us-east-1:123:db:db-covered",
+      engine: "postgres",
+      engine_version: "15.4",
+      instance_class: "db.r6g.large",
+      performance_insights_enabled: true,
+      enhanced_monitoring_enabled: true,
+      region: "us-east-1",
+      tags: {},
+    },
+    {
+      resource_id: "arn:aws:rds:us-east-1:123:db:db-pi-only",
+      engine: "mysql",
+      engine_version: "8.0",
+      instance_class: "db.t3.medium",
+      performance_insights_enabled: true,
+      enhanced_monitoring_enabled: false,
+      region: "us-east-1",
+      tags: {},
+    },
+  ],
+  instrumented_count: 2,
+  uninstrumented_count: 2,
   partial: false,
 };
 
@@ -255,19 +279,35 @@ describe("DiscoveryAWSPage", () => {
     expect(runBtn).not.toBeDisabled();
     await user.click(runBtn);
 
-    // Result panel renders with the compute + functions rows and OTel
-    // badges visible.
+    // Result panel renders with the compute + functions + databases
+    // rows and OTel badges visible.
     await waitFor(() => {
       expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
     });
     expect(screen.getByText("i-aaa")).toBeInTheDocument();
     expect(screen.getByText("hello")).toBeInTheDocument();
+    // Slice 2 (v0.87) — the Databases section renders the RDS rows.
+    expect(
+      screen.getByText("arn:aws:rds:us-east-1:123:db:db-covered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("arn:aws:rds:us-east-1:123:db:db-pi-only"),
+    ).toBeInTheDocument();
     // OTel detection badges — the compute row has has_otel=true, the
     // function has has_otel_layer=false; both shapes must render.
     expect(screen.getByText(/OTel detected/i)).toBeInTheDocument();
     // "No OTel" appears at least once (the function row).
     expect(
       within(document.body).getAllByText(/No OTel/i).length,
+    ).toBeGreaterThan(0);
+    // RDS lever badges — Performance Insights renders on both rows
+    // (covered + PI-only), Enhanced Monitoring renders on both with
+    // different states. Confirm at least one of each label is present.
+    expect(
+      within(document.body).getAllByText(/Performance Insights/i).length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(document.body).getAllByText(/Enhanced Monitoring/i).length,
     ).toBeGreaterThan(0);
 
     // Scanner was called exactly once with the chosen account ID.
