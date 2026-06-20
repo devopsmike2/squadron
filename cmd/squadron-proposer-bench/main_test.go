@@ -109,6 +109,119 @@ func TestEstimatedUSD(t *testing.T) {
 	}
 }
 
+// TestSeedKindDispatch verifies the v0.86 bi-modal corpus shape:
+// both arcs are present, every seed declares a kind, and discovery
+// seeds carry a non-empty scan.AccountID (the discovery proposer's
+// validator hard-fails on empty account_id, so an empty value in the
+// corpus would manifest as an llm_error / validation rejection at
+// run time instead of an obvious data-shape error here).
+func TestSeedKindDispatch(t *testing.T) {
+	seen := map[seedKind]int{}
+	for _, sd := range corpus() {
+		if sd.kind == "" {
+			t.Errorf("seed %q has empty kind", sd.name)
+			continue
+		}
+		seen[sd.kind]++
+		switch sd.kind {
+		case seedKindCostSpike:
+			if sd.spike.SpikeID == "" {
+				t.Errorf("cost_spike seed %q has empty SpikeID", sd.name)
+			}
+		case seedKindDiscovery:
+			if sd.scan.AccountID == "" {
+				t.Errorf("discovery seed %q has empty scan.AccountID", sd.name)
+			}
+			if sd.scan.ScanID == "" {
+				t.Errorf("discovery seed %q has empty scan.ScanID", sd.name)
+			}
+		default:
+			t.Errorf("seed %q has unknown kind %q", sd.name, sd.kind)
+		}
+	}
+	if seen[seedKindCostSpike] == 0 {
+		t.Error("corpus has no cost_spike seeds; the bench is no longer bi-modal")
+	}
+	if seen[seedKindDiscovery] == 0 {
+		t.Error("corpus has no discovery seeds; the bench is no longer bi-modal")
+	}
+}
+
+// TestClassify_StillHandlesDeclineForDiscovery is a regression guard:
+// the v0.86 discovery arc reuses the same classify() function as the
+// cost-spike arc. The "declined" bucket has to keep working when a
+// discovery scan returns a ProposalResult with Declined=true (e.g.
+// the empty-inventory and fully-instrumented seeds). The function is
+// already kind-agnostic — it only reads Declined and err — so this
+// test pins that the absence of kind-specific branching is correct.
+func TestClassify_StillHandlesDeclineForDiscovery(t *testing.T) {
+	// Discovery results carry Kind = ProposalKindPlan when accepted;
+	// Declined=true is the empty-inventory / fully-covered outcome.
+	res := &ai.ProposalResult{Declined: true, Reason: "no uninstrumented resources"}
+	if got := classify(res, nil); got != "declined" {
+		t.Errorf("classify(declined discovery result) = %q, want \"declined\"", got)
+	}
+	// And a plan-kind successful discovery result still classifies
+	// as "succeeded" — same as the cost-spike plan-kind path.
+	res2 := &ai.ProposalResult{Kind: ai.ProposalKindPlan}
+	if got := classify(res2, nil); got != "succeeded" {
+		t.Errorf("classify(plan-kind discovery result) = %q, want \"succeeded\"", got)
+	}
+}
+
+// TestAggregate_ByKindCountsCorrectly feeds a known mix of seed
+// results through buildAggregate and pins the ByKind map's sums.
+// Catches the two easy mistakes: (1) the per-kind totals double-
+// counting, and (2) the failed-bucket count missing one of the
+// non-succeeded / non-declined outcome strings.
+func TestAggregate_ByKindCountsCorrectly(t *testing.T) {
+	results := []seedResult{
+		{Seed: "cs1", SeedKind: string(seedKindCostSpike), Outcome: "succeeded"},
+		{Seed: "cs2", SeedKind: string(seedKindCostSpike), Outcome: "succeeded"},
+		{Seed: "cs3", SeedKind: string(seedKindCostSpike), Outcome: "declined"},
+		{Seed: "cs4", SeedKind: string(seedKindCostSpike), Outcome: "truncated"},
+		{Seed: "d1", SeedKind: string(seedKindDiscovery), Outcome: "succeeded"},
+		{Seed: "d2", SeedKind: string(seedKindDiscovery), Outcome: "declined"},
+		{Seed: "d3", SeedKind: string(seedKindDiscovery), Outcome: "declined"},
+		{Seed: "d4", SeedKind: string(seedKindDiscovery), Outcome: "parse_failed_preamble"},
+		{Seed: "d5", SeedKind: string(seedKindDiscovery), Outcome: "llm_error"},
+	}
+	agg := buildAggregate(results)
+
+	cs, ok := agg.ByKind[string(seedKindCostSpike)]
+	if !ok {
+		t.Fatalf("ByKind missing cost_spike entry: %+v", agg.ByKind)
+	}
+	if cs.Total != 4 || cs.Succeeded != 2 || cs.Declined != 1 || cs.Failed != 1 {
+		t.Errorf("cost_spike counts = %+v, want {Total:4 Succeeded:2 Declined:1 Failed:1}", cs)
+	}
+
+	dc, ok := agg.ByKind[string(seedKindDiscovery)]
+	if !ok {
+		t.Fatalf("ByKind missing discovery entry: %+v", agg.ByKind)
+	}
+	if dc.Total != 5 || dc.Succeeded != 1 || dc.Declined != 2 || dc.Failed != 2 {
+		t.Errorf("discovery counts = %+v, want {Total:5 Succeeded:1 Declined:2 Failed:2}", dc)
+	}
+
+	// Sanity: ByKind totals reconcile with the top-level Total.
+	if cs.Total+dc.Total != agg.Total {
+		t.Errorf("ByKind totals (cs=%d + d=%d = %d) != agg.Total (%d)",
+			cs.Total, dc.Total, cs.Total+dc.Total, agg.Total)
+	}
+
+	// Sanity: succeeded + declined + failed per kind reconciles with
+	// per-kind total.
+	if cs.Succeeded+cs.Declined+cs.Failed != cs.Total {
+		t.Errorf("cost_spike per-bucket sums (%d) != Total (%d)",
+			cs.Succeeded+cs.Declined+cs.Failed, cs.Total)
+	}
+	if dc.Succeeded+dc.Declined+dc.Failed != dc.Total {
+		t.Errorf("discovery per-bucket sums (%d) != Total (%d)",
+			dc.Succeeded+dc.Declined+dc.Failed, dc.Total)
+	}
+}
+
 func TestHasPreambleSignature(t *testing.T) {
 	cases := []struct {
 		name string
