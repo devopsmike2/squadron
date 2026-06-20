@@ -18,6 +18,7 @@
 // piece — the wizard is small (5 steps) and rarely changes.
 
 import { apiGet, apiPost } from "./base";
+import type { Recommendation } from "./recommendations";
 
 // --- Validation endpoint shapes -------------------------------------
 
@@ -179,6 +180,44 @@ export function runAWSScan(
   return apiPost<ScanResult>(
     `/discovery/aws/connections/${encodeURIComponent(accountID)}/scan`,
     { regions: regions ?? [] },
+  );
+}
+
+// --- Generate-recommendations endpoint shapes (Stream 2F) -----------
+
+// GenerateRecommendationsResponse mirrors the Go
+// awsGenerateRecommendationsResponse. When the proposer declines (no
+// productive plan exists for the scan), `declined` is true and
+// `reason` carries the model's brief explanation; the recommendations
+// array is empty. Otherwise `reasoning` is the prose explanation that
+// renders above the recommendations and `recommendations` is one
+// entry per plan step — each with the IaC Terraform the operator
+// runs through their existing IaC pipeline.
+export interface GenerateRecommendationsResponse {
+  declined: boolean;
+  reason?: string;
+  reasoning?: string;
+  recommendations: Recommendation[];
+}
+
+// generateAWSRecommendations asks the discovery proposer to draft an
+// instrumentation plan from the supplied scan result. The browser
+// POSTs the scan result it just rendered; the server converts it to
+// an ai.DiscoveryScanContext, calls ProposeFromDiscoveryScan, and
+// walks the plan-kind result into typed Recommendations.
+//
+// The call may take 5-15 seconds depending on model latency — the
+// Inventory tab's UX is "set a loading state, then auto-switch to the
+// Recommendations tab when the response lands". The server emits a
+// discovery.aws.recommendations_generated audit event on success and
+// no audit event on declined.
+export function generateAWSRecommendations(
+  accountID: string,
+  scanResult: ScanResult,
+): Promise<GenerateRecommendationsResponse> {
+  return apiPost<GenerateRecommendationsResponse>(
+    `/discovery/aws/connections/${encodeURIComponent(accountID)}/recommendations`,
+    { scan_result: scanResult },
   );
 }
 
