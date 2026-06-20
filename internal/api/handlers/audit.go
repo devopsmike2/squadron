@@ -49,6 +49,7 @@ func NewAuditHandlers(
 // HandleListAuditEvents serves GET /api/v1/audit/events.
 //
 // Query parameters (all optional):
+//   - event_type=<dotted name, e.g. discovery.aws.connection_created>
 //   - target_type=agent|group|config|rule
 //   - target_id=<uuid|string>
 //   - since=<RFC3339 timestamp>
@@ -57,6 +58,7 @@ func NewAuditHandlers(
 // Returns {events: [...]} sorted newest-first.
 func (h *AuditHandlers) HandleListAuditEvents(c *gin.Context) {
 	filter := services.AuditEventFilter{
+		EventType:  c.Query("event_type"),
 		TargetType: c.Query("target_type"),
 		TargetID:   c.Query("target_id"),
 	}

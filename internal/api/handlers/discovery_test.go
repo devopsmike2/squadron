@@ -682,6 +682,97 @@ func TestHandleAWSListConnections_Populated(t *testing.T) {
 	}
 }
 
+func TestHandleAWSListConnections_SurfacesConnectionID(t *testing.T) {
+	// Regression guard for #581 (v0.87.2): the list endpoint omitted
+	// connection_id even though the save response and the scan endpoint
+	// both use it as the canonical handle. The UI had to infer
+	// connection_id from account_id, which works today because the
+	// substrate has no separate UUID — but the wire shape was
+	// asymmetric and a future substrate change would silently break
+	// scan URLs.
+	//
+	// This test pins:
+	//   1. connection_id is present on every row,
+	//   2. its value equals account_id (today's substrate invariant),
+	//   3. the redaction posture still holds — no role_arn, no
+	//      external_id, no credentials material in the response.
+	now := time.Now().UTC()
+	rows := []*credstore.CloudConnection{
+		{
+			AccountID:        "111111111111",
+			Provider:         credstore.ProviderAWS,
+			ConnectionType:   credstore.ConnectionAPIDiscovered,
+			DisplayName:      "Prod AWS",
+			Regions:          []string{"us-east-1"},
+			Credentials:      []byte("ciphertext-one"),
+			CredentialsNonce: []byte("nonce-one"),
+			CreatedAt:        now,
+		},
+		{
+			AccountID:        "222222222222",
+			Provider:         credstore.ProviderAWS,
+			ConnectionType:   credstore.ConnectionAPIDiscovered,
+			DisplayName:      "Staging AWS",
+			Regions:          []string{"us-west-2"},
+			Credentials:      []byte("ciphertext-two"),
+			CredentialsNonce: []byte("nonce-two"),
+			CreatedAt:        now,
+		},
+	}
+	store := &listSpyStore{listResult: rows}
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	w := doListRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Connections []struct {
+			ConnectionID string `json:"connection_id"`
+			AccountID    string `json:"account_id"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if got := len(resp.Connections); got != 2 {
+		t.Fatalf("connections length = %d, want 2; body=%s", got, w.Body.String())
+	}
+
+	// (1) connection_id non-empty on every row, (2) equal to account_id.
+	for i, row := range resp.Connections {
+		if row.ConnectionID == "" {
+			t.Errorf("row[%d].connection_id is empty; the list endpoint must surface it so the UI can build /connections/:id/scan URLs", i)
+		}
+		if row.ConnectionID != row.AccountID {
+			t.Errorf("row[%d].connection_id = %q, want %q (account_id); substrate has no separate UUID today",
+				i, row.ConnectionID, row.AccountID)
+		}
+	}
+
+	// (3) Redaction must still hold. Adding connection_id does not
+	// loosen the posture; the list response still must NOT contain any
+	// credential material. A future change that widens the row with a
+	// sensitive field (role_arn, external_id, credentials_v2, ...) will
+	// fail here.
+	body := w.Body.String()
+	for _, forbidden := range []string{
+		"role_arn",
+		"external_id",
+		"credentials",
+		"credentials_ciphertext",
+		"credentials_nonce",
+		"ciphertext-one",
+		"ciphertext-two",
+		"nonce-one",
+		"nonce-two",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("response contains forbidden token %q: %s", forbidden, body)
+		}
+	}
+}
+
 // --- HandleAWSRunScan tests -----------------------------------------
 
 // mockScanner records the args it was handed and returns the

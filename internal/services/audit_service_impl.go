@@ -184,6 +184,7 @@ func (s *AuditServiceImpl) Record(ctx context.Context, entry AuditEntry) error {
 
 func (s *AuditServiceImpl) List(ctx context.Context, filter AuditEventFilter) ([]*AuditEvent, error) {
 	stored, err := s.appStore.ListAuditEvents(ctx, applicationstore.AuditEventFilter{
+		EventType:  filter.EventType,
 		TargetType: filter.TargetType,
 		TargetID:   filter.TargetID,
 		Since:      filter.Since,
