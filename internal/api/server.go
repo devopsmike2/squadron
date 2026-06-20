@@ -94,6 +94,14 @@ type Server struct {
 	// when the entire discovery surface is unwired so the test
 	// server's existing no-config posture stays intact.
 	discoveryCredStore credstore.Store
+	// v0.85 Stream 2D — discovery credstore Key. Optional at
+	// construction; SetDiscoveryCredKey wires the key the substrate
+	// was opened with so the Save handler can encrypt
+	// AWSCredentials with the same key the later scan engine
+	// decrypts them with. Without it, the Save endpoint 500s with a
+	// "key not wired" humanized error; the validate endpoint stays
+	// unaffected because it never touches the store.
+	discoveryCredKey *credstore.Key
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -358,12 +366,31 @@ func (s *Server) SetDiscoveryCredStore(store credstore.Store) {
 	s.discoveryCredStore = store
 }
 
+// SetDiscoveryCredKey wires the credstore encryption key the Save
+// handler uses to seal AWSCredentials before they reach the substrate.
+// Optional in the same posture as SetDiscoveryCredStore: a nil key
+// leaves Save 500ing with a humanized "key not wired" error while
+// Validate keeps working (Validate creates zero records).
+//
+// Production callers pass the key the credstore was opened with so the
+// ciphertext stored at Save time decrypts cleanly when the (future)
+// scan engine reads it back. Calling this without also calling
+// SetDiscoveryCredStore is a no-op for the wizard.
+func (s *Server) SetDiscoveryCredKey(key *credstore.Key) {
+	s.discoveryCredKey = key
+}
+
 // discoveryTrampoline late-binds a discovery handler call so the
 // route table can be registered before SetDiscoveryCredStore runs.
 // Mirrors the insights / recommendations / AI trampolines. 503s with
 // a clear message when the credstore is still nil — that's the right
 // state for the test_server.go path that doesn't wire discovery at
 // all.
+//
+// The handler is built per-request because the auditService is
+// supplied via WithAuditService and the credstore Key via
+// WithCredstoreKey — both are set on Server post-construction and the
+// trampoline picks up whatever's there at request time.
 func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.Context)) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.discoveryCredStore == nil {
@@ -374,6 +401,12 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 			return
 		}
 		h := handlers.NewDiscoveryHandlers(s.discoveryCredStore, s.logger)
+		if s.auditService != nil {
+			h.WithAuditService(s.auditService)
+		}
+		if s.discoveryCredKey != nil {
+			h.WithCredstoreKey(s.discoveryCredKey)
+		}
 		fn(h, c)
 	}
 }
@@ -963,6 +996,21 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/aws/validate",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSValidate(c) }))
+
+		// v0.85 Stream 2D — connector wizard Save endpoint.
+		// Persists the trust-policy metadata via credstore, emits a
+		// discovery.aws.connection_created audit event, and returns
+		// {connection_id, status:"connected"} on success. ZERO writes
+		// happen when validation fails — the handler re-runs
+		// scanner.Validate one last time before persisting to catch a
+		// role edit between the wizard's Validate step and Save.
+		//
+		// agents:write is the right scope: this is the first real
+		// substrate write on the discovery path. Validate stays on
+		// agents:read because it's a probe; Save is the mutation.
+		v1.POST("/discovery/aws/connections",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSSaveConnection(c) }))
 
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
