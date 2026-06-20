@@ -88,14 +88,15 @@ type seed struct {
 	expectPlan bool                    // hint for the human reading the report; not asserted
 }
 
-// corpus is a hand-curated 17-scenario set covering both proposer
+// corpus is a hand-curated 18-scenario set covering both proposer
 // arcs: 8 cost-spike seeds (the v0.83 originals — #550 truncation,
-// #552 preamble) and 9 discovery seeds (the v0.86 Stream 2F arc,
+// #552 preamble) and 10 discovery seeds (the v0.86 Stream 2F arc,
 // v0.87's RDS seed added when the universal-observation arc grew to
-// cover databases, plus v0.88's S3 + ALB seeds added when slice 3a
-// covered object stores + load balancers).
+// cover databases, v0.88's S3 + ALB seeds added when slice 3a
+// covered object stores + load balancers, and v0.89's EKS seed
+// added when slice 3b covered managed Kubernetes clusters).
 // v0.84+ can expand this — for now small + diverse beats large +
-// redundant. Cost per run stays ~$0.20-0.32 at 17 seeds.
+// redundant. Cost per run stays ~$0.22-0.32 at 18 seeds.
 func corpus() []seed {
 	return []seed{
 		{
@@ -506,6 +507,66 @@ func corpus() []seed {
 					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/app/api-staging/cccc", Name: "api-staging", Type: "application", Scheme: "internet-facing", AccessLogsEnabled: false, Region: "us-east-1"},
 					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/app/api-dev/dddd", Name: "api-dev", Type: "application", Scheme: "internet-facing", AccessLogsEnabled: false, Region: "us-east-1"},
 					{ResourceID: "arn:aws:elasticloadbalancing:us-east-1:999900001111:loadbalancer/net/internal-grpc/eeee", Name: "internal-grpc", Type: "network", Scheme: "internal", AccessLogsEnabled: false, Region: "us-east-1"},
+				},
+			},
+			expectPlan: true,
+		},
+		{
+			// EKS mixed coverage — slice 3b (v0.89.0). Three
+			// clusters exercise the composite instrumented rule's
+			// four corners (covered, logs-only, addon-only,
+			// uncovered) so the proposer's per-cluster reasoning
+			// has to distinguish them and emit a single plan step
+			// per UNCOVERED cluster covering BOTH axes.
+			//   - cluster 1 (squadron-bench-cluster-1): control
+			//     plane logging on (api + audit + authenticator)
+			//     AND adot addon ACTIVE → COVERED. Proposer must
+			//     NOT recommend.
+			//   - cluster 2 (squadron-bench-cluster-2): control
+			//     plane logging on api ONLY, no addons →
+			//     UNCOVERED (logging axis incomplete — needs
+			//     audit; addon axis absent). Proposer recommends
+			//     enabling api+audit logging AND installing adot.
+			//   - cluster 3 (squadron-bench-cluster-3): control
+			//     plane logging off, aws-ebs-csi-driver addon
+			//     ACTIVE (not an observability addon) →
+			//     UNCOVERED. Proposer must NOT count
+			//     aws-ebs-csi-driver toward coverage and must
+			//     still recommend enabling control plane logging
+			//     AND installing adot.
+			name: "discovery_eks_mixed_coverage",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-10",
+				AccountID:           "111122223333",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   1, // 1 covered cluster
+				UninstrumentedCount: 2, // 2 uncovered clusters
+				Clusters: []ai.ClusterCandidate{
+					{
+						ResourceID:          "arn:aws:eks:us-east-1:111122223333:cluster/squadron-bench-cluster-1",
+						Name:                "squadron-bench-cluster-1",
+						KubernetesVersion:   "1.29",
+						ControlPlaneLogging: []string{"api", "audit", "authenticator"},
+						AddonNames:          []string{"adot"},
+						Region:              "us-east-1",
+					},
+					{
+						ResourceID:          "arn:aws:eks:us-east-1:111122223333:cluster/squadron-bench-cluster-2",
+						Name:                "squadron-bench-cluster-2",
+						KubernetesVersion:   "1.29",
+						ControlPlaneLogging: []string{"api"},
+						AddonNames:          nil,
+						Region:              "us-east-1",
+					},
+					{
+						ResourceID:          "arn:aws:eks:us-east-1:111122223333:cluster/squadron-bench-cluster-3",
+						Name:                "squadron-bench-cluster-3",
+						KubernetesVersion:   "1.29",
+						ControlPlaneLogging: nil,
+						AddonNames:          []string{"aws-ebs-csi-driver"},
+						Region:              "us-east-1",
+					},
 				},
 			},
 			expectPlan: true,

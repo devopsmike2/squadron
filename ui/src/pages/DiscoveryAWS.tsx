@@ -468,8 +468,9 @@ function ScanResultPanel({
             {result.compute.length} compute instances,{" "}
             {result.functions.length} functions,{" "}
             {(result.databases ?? []).length} databases,{" "}
-            {(result.object_stores ?? []).length} object stores, and{" "}
-            {(result.load_balancers ?? []).length} load balancers.
+            {(result.object_stores ?? []).length} object stores,{" "}
+            {(result.load_balancers ?? []).length} load balancers, and{" "}
+            {(result.clusters ?? []).length} clusters.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -524,6 +525,9 @@ function ScanResultPanel({
       {/* Object stores + Load balancers sections (slice 3a — v0.88.0) */}
       <ObjectStoresSection objectStores={result.object_stores ?? []} />
       <LoadBalancersSection loadBalancers={result.load_balancers ?? []} />
+
+      {/* Clusters section (slice 3b — v0.89.0) */}
+      <ClustersSection clusters={result.clusters ?? []} />
     </div>
   );
 }
@@ -878,6 +882,137 @@ function LoadBalancersSection({
                     </div>
                   </div>
                   <TagPills tags={l.tags} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// ClustersSection renders the EKS / GKE / AKS cluster list. Slice
+// 3b (v0.89.0). The composite instrumented rule surfaces as two
+// independent badge groups per row: Control Plane Logging (one
+// badge per enabled log type, with api+audit highlighted as the
+// minimum-required pair) and Add-ons (one badge per add-on with
+// ADOT / cloudwatch-observability highlighted as the observability
+// names). The k8s version + status render alongside as
+// informational columns.
+function ClustersSection({
+  clusters,
+}: {
+  clusters: ScanResult["clusters"];
+}) {
+  const [open, setOpen] = useState(clusters.length > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+        >
+          <CardTitle className="text-base">
+            Clusters ({clusters.length})
+          </CardTitle>
+          {open ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {clusters.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No clusters visible in the scanned regions.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {clusters.map((c) => (
+                <li
+                  key={c.resource_id}
+                  className="rounded-md border bg-muted/20 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-medium">{c.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        k8s {c.kubernetes_version} · {c.status} · {c.region}
+                      </p>
+                      <code className="mt-1 block font-mono text-[10px] text-muted-foreground">
+                        {c.resource_id}
+                      </code>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="text-[10px] uppercase text-muted-foreground">
+                        Control Plane Logging:
+                      </span>
+                      {c.control_plane_logging.length === 0 ? (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          none
+                        </Badge>
+                      ) : (
+                        c.control_plane_logging.map((t) => {
+                          const required = t === "api" || t === "audit";
+                          return (
+                            <Badge
+                              key={t}
+                              variant="outline"
+                              className={
+                                required
+                                  ? "border-green-600/50 text-green-700 dark:text-green-400"
+                                  : "text-muted-foreground"
+                              }
+                            >
+                              {t}
+                            </Badge>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="text-[10px] uppercase text-muted-foreground">
+                        Add-ons:
+                      </span>
+                      {c.addons.length === 0 ? (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          none
+                        </Badge>
+                      ) : (
+                        c.addons.map((a) => {
+                          const isObs =
+                            a.name === "adot" ||
+                            a.name === "amazon-cloudwatch-observability";
+                          const isActive = a.status === "ACTIVE";
+                          const highlight = isObs && isActive;
+                          return (
+                            <Badge
+                              key={a.name}
+                              variant="outline"
+                              className={
+                                highlight
+                                  ? "border-green-600/50 text-green-700 dark:text-green-400"
+                                  : isObs
+                                    ? "border-yellow-500/50 text-yellow-700 dark:text-yellow-400"
+                                    : "text-muted-foreground"
+                              }
+                              title={`${a.status}${a.version ? " · " + a.version : ""}`}
+                            >
+                              {a.name}
+                            </Badge>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                  <TagPills tags={c.tags} />
                 </li>
               ))}
             </ul>

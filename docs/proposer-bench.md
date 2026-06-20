@@ -47,18 +47,19 @@ Aggregated:
 
 ## Cost ceiling
 
-At the v0.88 corpus size (17 seeds: 8 cost-spike + 9 discovery) and
-typical token sizes, expect roughly **\$0.18–\$0.32 per run**. The
+At the v0.89 corpus size (18 seeds: 8 cost-spike + 10 discovery) and
+typical token sizes, expect roughly **\$0.20–\$0.34 per run**. The
 bench prints `total cost` on every run so the operator sees the
 number after each invocation. Discovery seeds run at a similar token
 profile to cost-spike seeds — the per-seed cost is comparable, so
-adding 9 discovery seeds on top of 8 cost-spike seeds keeps the
+adding 10 discovery seeds on top of 8 cost-spike seeds keeps the
 total inside the same envelope. The v0.87 RDS seed
-(`discovery_rds_mixed_coverage`) and the v0.88 S3 + ALB seeds
-(`discovery_s3_mixed_coverage`, `discovery_alb_mixed_coverage`)
-carry larger inventory lists than the slice-1 discovery seeds
-(5–10 rows per category instead of 2–3); the per-seed cost stays
-inside the discovery-arc range.
+(`discovery_rds_mixed_coverage`), the v0.88 S3 + ALB seeds
+(`discovery_s3_mixed_coverage`, `discovery_alb_mixed_coverage`),
+and the v0.89 EKS seed (`discovery_eks_mixed_coverage`) carry
+larger inventory lists than the slice-1 discovery seeds (5–10 rows
+per category instead of 2–3); the per-seed cost stays inside the
+discovery-arc range.
 
 For scheduled CI: a daily run for thirty days is ~\$5-7. Costs scale
 linearly with corpus size; v0.84+ expansions to the corpus should
@@ -94,7 +95,7 @@ shows up as a bucket count moving in the wrong direction —
 
 ## Corpus
 
-Seventeen hand-curated scenarios at v0.88 — split across the two
+Eighteen hand-curated scenarios at v0.89 — split across the two
 proposer arcs.
 
 ### Cost-spike arc (8 seeds, drives `ProposeFromCostSpike`)
@@ -110,7 +111,7 @@ proposer arcs.
 | `boundary_tiny_fleet`         | Single-agent fleet                                            |
 | `sparse_context_low_signal`   | Low-confidence spike (25% over baseline)                      |
 
-### Discovery arc (9 seeds, drives `ProposeFromDiscoveryScan`)
+### Discovery arc (10 seeds, drives `ProposeFromDiscoveryScan`)
 
 | Seed                                   | What it tests                                                                                       |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -123,6 +124,7 @@ proposer arcs.
 | `discovery_rds_mixed_coverage`         | 5 RDS across 4 engines (PI/EM mixed) + 3 EC2 + 2 Lambda; exercises slice 2 RDS PI/EM independent-levers reasoning |
 | `discovery_s3_mixed_coverage`          | 8 S3 buckets (3 logging-enabled, 5 not) + 3 EC2 + 2 Lambda; exercises slice 3a S3 Server Access Logging single-axis recommendation with operator-fill-in target |
 | `discovery_alb_mixed_coverage`         | 5 ALBs (2 covered to different S3 buckets, 3 uncovered) + 2 instrumented S3 buckets + 4 EC2 + 3 Lambda; exercises slice 3a ALB Access Logs single-axis recommendation with the ALB→S3 cross-reference rule (target bucket should be one Squadron already sees) |
+| `discovery_eks_mixed_coverage`         | 3 EKS clusters exercising the composite-rule corners (1 covered, 2 uncovered for different reasons — logs-only and addon-only with a non-observability addon); exercises slice 3b EKS recommendation with the BOTH-axes-must-hold framing and ADOT-as-preferred-addon guidance |
 
 The list is intentionally small. v0.84 will refactor the
 `internal/proposer` stress corpus into a shared module so the bench
@@ -144,9 +146,9 @@ discovery path; the next regression that would have shipped as a
 viral failure story gets caught here for the discovery prompt
 before it hits production.
 
-The discovery arc has 9 seeds at v0.88 (up from 6 at v0.86 and 7
-at v0.87) — slice 3a (S3 + ALB) added two seeds at the same
-discipline. Each new scanner category that lands in production
+The discovery arc has 10 seeds at v0.89 (up from 9 at v0.88, 7 at
+v0.87, and 6 at v0.86) — slice 3a (S3 + ALB) added two seeds and
+slice 3b (EKS) added one more at the same discipline. Each new scanner category that lands in production
 gets a paired bench seed so the proposer's prompt extension
 surface stays calibrated.
 

@@ -1225,6 +1225,153 @@ func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_ALB(t *testin
 	}
 }
 
+// TestHandleAWSRunScan_AuditEmitsClusterCount pins the slice 3b
+// (v0.89.0) audit-shape extension — the scan_completed event
+// payload now carries cluster_count as a MANDATORY field. It
+// always emits (even when the cluster inventory is empty) so an
+// operator skimming the audit log sees the slice 3b category's
+// coverage alongside the others.
+//
+// Regression discipline: if a future refactor moves cluster_count
+// into the conditional-insert path (partial_reason /
+// failed_services style), the audit log loses operator-visible
+// counts for empty inventories — a v0.89.0-shape contract
+// violation.
+func TestHandleAWSRunScan_AuditEmitsClusterCount(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	scanResult := &scanner.Result{
+		ScanID:          "test-scan-cluster-count",
+		ScanStartedAt:   now,
+		ScanCompletedAt: now.Add(2 * time.Second),
+		Provider:        credstore.ProviderAWS,
+		AccountID:       "123456789012",
+		Regions:         []string{"us-east-1"},
+		Clusters: []scanner.ClusterSnapshot{
+			{
+				ResourceID:          "arn:aws:eks:us-east-1:123:cluster/a",
+				Name:                "a",
+				KubernetesVersion:   "1.29",
+				Status:              "ACTIVE",
+				ControlPlaneLogging: []string{"api", "audit"},
+				Addons: []scanner.ClusterAddon{
+					{Name: "adot", Version: "v0.92.0-eksbuild.1", Status: "ACTIVE"},
+				},
+				Region: "us-east-1",
+			},
+			{
+				ResourceID:        "arn:aws:eks:us-east-1:123:cluster/b",
+				Name:              "b",
+				KubernetesVersion: "1.29",
+				Status:            "ACTIVE",
+				Region:            "us-east-1",
+			},
+		},
+		InstrumentedCount:   1,
+		UninstrumentedCount: 1,
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	completed := audit.entries[1]
+	if completed.EventType != "discovery.aws.scan_completed" {
+		t.Fatalf("entry[1].event_type = %q", completed.EventType)
+	}
+	gotCC, ok := completed.Payload["cluster_count"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing cluster_count key: %+v", completed.Payload)
+	}
+	if got, _ := gotCC.(int); got != 2 {
+		t.Errorf("cluster_count = %v, want 2", gotCC)
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_EKS
+// is the slice 3b (v0.89.0) EKS failure parallel to the slice 3a
+// s3 + alb tests. When the eks walk fails, FailedServices carries
+// ["eks"] and PartialReason carries the formatted explanation.
+func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_EKS(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	scanResult := &scanner.Result{
+		ScanID:              "test-scan-partial-eks",
+		ScanStartedAt:       now,
+		ScanCompletedAt:     now.Add(2 * time.Second),
+		Provider:            credstore.ProviderAWS,
+		AccountID:           "123456789012",
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   0,
+		UninstrumentedCount: 0,
+		Partial:             true,
+		PartialReason:       "eks scan failed in us-east-1: AccessDenied",
+		FailedServices:      []string{"eks"},
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	completed := audit.entries[1]
+	gotReason, ok := completed.Payload["partial_reason"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing partial_reason key: %+v", completed.Payload)
+	}
+	if got, want := gotReason, "eks scan failed in us-east-1: AccessDenied"; got != want {
+		t.Errorf("partial_reason = %v, want %q", got, want)
+	}
+	gotServices, ok := completed.Payload["failed_services"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing failed_services key: %+v", completed.Payload)
+	}
+	gotSlice, ok := gotServices.([]string)
+	if !ok {
+		t.Fatalf("failed_services = %T (%v), want []string", gotServices, gotServices)
+	}
+	if len(gotSlice) != 1 || gotSlice[0] != "eks" {
+		t.Errorf("failed_services = %v, want [\"eks\"]", gotSlice)
+	}
+}
+
 // TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices pins the
 // v0.87.3 audit-shape widening — the scan_completed event payload MUST
 // surface BOTH the human-readable partial_reason and the structured

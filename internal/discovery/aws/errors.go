@@ -124,7 +124,9 @@ func HumanizeError(err error) *scanner.HumanizedError {
 			// s3:GetBucketLocation (slice 3a),
 			// elasticloadbalancing:DescribeLoadBalancers +
 			// elasticloadbalancing:DescribeLoadBalancerAttributes +
-			// elasticloadbalancing:DescribeTags (slice 3a). The
+			// elasticloadbalancing:DescribeTags (slice 3a),
+			// eks:ListClusters + eks:DescribeCluster + eks:ListAddons +
+			// eks:DescribeAddon + eks:ListNodegroups (slice 3b). The
 			// recoverable action is always the same: re-paste the
 			// permissions policy from Step 3 (or the trust policy from
 			// Step 2 if it's an assume-role layer failure). The wizard's

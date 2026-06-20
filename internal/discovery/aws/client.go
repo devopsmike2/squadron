@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -109,6 +110,31 @@ type ELBv2Client interface {
 	DescribeTags(ctx context.Context, params *elasticloadbalancingv2.DescribeTagsInput, optFns ...func(*elasticloadbalancingv2.Options)) (*elasticloadbalancingv2.DescribeTagsOutput, error)
 }
 
+// EKSClient is the narrow EKS surface the scanner depends on. Slice
+// 3b (v0.89.0) of the universal-observation arc walks per-region
+// clusters in two passes:
+//
+//   - Pass 1: ListClusters returns the region's cluster name list
+//     (paginated via NextToken).
+//   - Pass 2: per cluster, DescribeCluster returns the control
+//     plane logging config + Kubernetes version + status; ListAddons
+//     returns add-on names (paginated, then for each addon the
+//     scanner calls DescribeAddon to read Status + Version);
+//     ListNodegroups + ListFargateProfiles return informational
+//     counts. The two-pass shape mirrors how real EKS clusters
+//     expose their state — there's no DescribeAllClusters batch
+//     endpoint.
+//
+// Same narrow-interface rationale as the other service clients.
+type EKSClient interface {
+	ListClusters(ctx context.Context, params *eks.ListClustersInput, optFns ...func(*eks.Options)) (*eks.ListClustersOutput, error)
+	DescribeCluster(ctx context.Context, params *eks.DescribeClusterInput, optFns ...func(*eks.Options)) (*eks.DescribeClusterOutput, error)
+	ListAddons(ctx context.Context, params *eks.ListAddonsInput, optFns ...func(*eks.Options)) (*eks.ListAddonsOutput, error)
+	DescribeAddon(ctx context.Context, params *eks.DescribeAddonInput, optFns ...func(*eks.Options)) (*eks.DescribeAddonOutput, error)
+	ListNodegroups(ctx context.Context, params *eks.ListNodegroupsInput, optFns ...func(*eks.Options)) (*eks.ListNodegroupsOutput, error)
+	ListFargateProfiles(ctx context.Context, params *eks.ListFargateProfilesInput, optFns ...func(*eks.Options)) (*eks.ListFargateProfilesOutput, error)
+}
+
 // STSClient is the narrow STS surface used by Validate to confirm the
 // AssumeRole chain is functional. The real *sts.Client satisfies it.
 type STSClient interface {
@@ -158,6 +184,12 @@ type ClientFactory interface {
 	// per-region API — the supplied region is where
 	// DescribeLoadBalancers walks.
 	ELBv2(ctx context.Context, region string) (ELBv2Client, error)
+
+	// EKS returns an EKS client for the supplied region. Added in
+	// slice 3b of the universal-observation arc (v0.89.0). EKS is
+	// a per-region API — the supplied region is where ListClusters
+	// walks.
+	EKS(ctx context.Context, region string) (EKSClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -293,6 +325,13 @@ func (f *sdkClientFactory) S3(_ context.Context, region string) (S3Client, error
 
 func (f *sdkClientFactory) ELBv2(_ context.Context, region string) (ELBv2Client, error) {
 	return elasticloadbalancingv2.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) EKS(_ context.Context, region string) (EKSClient, error) {
+	return eks.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil
