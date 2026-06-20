@@ -228,14 +228,14 @@ func TestHandleAWSValidate_NoCredentialsReturnsHumanizedError(t *testing.T) {
 	var resp struct {
 		AssumeRoleOK  bool `json:"assume_role_ok"`
 		AssumeRoleErr *struct {
-			Code          string `json:"Code"`
-			Message       string `json:"Message"`
-			SuggestedStep string `json:"SuggestedStep"`
-			DocLink       string `json:"DocLink"`
+			Code          string `json:"code"`
+			Message       string `json:"message"`
+			SuggestedStep string `json:"suggested_step"`
+			DocLink       string `json:"doc_link"`
 		} `json:"assume_role_err"`
 		Errors []struct {
-			Code    string `json:"Code"`
-			Message string `json:"Message"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
