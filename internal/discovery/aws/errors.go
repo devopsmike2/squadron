@@ -4,6 +4,7 @@
 package aws
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +25,61 @@ const (
 	stepValidate    = "validate"
 )
 
+// ErrCodeNoCredentials is the humanized error code the wizard renders
+// when Squadron itself has no AWS credentials configured (the base
+// identity that calls sts:AssumeRole). It is a Squadron-host config
+// problem, not a customer-role problem — the SuggestedStep points the
+// operator at the role-arn step only for navigation context; the fix
+// is to set AWS_REGION + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY in
+// the Squadron process environment or to run Squadron on an
+// EC2/ECS/EKS instance with an IAM role attached.
+const ErrCodeNoCredentials = "no_credentials"
+
+// isNoCredentialsError reports whether err is the result of credential
+// discovery failing — either the credentialDiscoveryTimeout fired (the
+// IMDSv2 probe couldn't reach 169.254.169.254) or the SDK explicitly
+// said no credentials were available. Matched substrings:
+//   - "failed to retrieve credentials" — SDK v2's wrapping of a
+//     credential-chain dry run.
+//   - "no EC2 IMDS role found" — the IMDS-specific signal when the
+//     instance has no role attached.
+//   - "NoCredentialProviders" — older SDK shape, defensive.
+//
+// The DeadlineExceeded branch is intentionally broad: in production
+// the only context that gets a sub-second budget on this code path is
+// the credential-discovery context from client.go.
+func isNoCredentialsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "failed to retrieve credentials"):
+		return true
+	case strings.Contains(msg, "no EC2 IMDS role found"):
+		return true
+	case strings.Contains(msg, "NoCredentialProviders"):
+		return true
+	}
+	return false
+}
+
+// noCredentialsHumanizedError builds the wizard-facing payload for the
+// "Squadron has no AWS credentials" failure mode. Extracted so both
+// HumanizeError and the validate handler can produce the same shape
+// without duplicating the message text.
+func noCredentialsHumanizedError() *scanner.HumanizedError {
+	return &scanner.HumanizedError{
+		Code:          ErrCodeNoCredentials,
+		Message:       "Squadron has no AWS credentials configured. Set AWS_REGION + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY in Squadron's environment, or run Squadron on an EC2/ECS/EKS instance with an IAM role attached.",
+		SuggestedStep: stepRoleARN,
+		DocLink:       "https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html",
+	}
+}
+
 // HumanizeError converts a raw AWS SDK error into a wizard-friendly
 // HumanizedError. The wizard renders Message verbatim; SuggestedStep
 // drives the deep-link back to the step the operator needs to fix.
@@ -39,6 +95,18 @@ const (
 func HumanizeError(err error) *scanner.HumanizedError {
 	if err == nil {
 		return nil
+	}
+
+	// Check the "no credentials configured" branch BEFORE the
+	// smithy.APIError check. The SDK v2 wraps a credential-chain
+	// dry-run failure as a plain error (not an APIError), and the
+	// v0.85.0 post-ship E2E sweep showed that letting it fall through
+	// to the default fallback surfaces a confusing "AWS returned an
+	// error: failed to retrieve credentials" message that doesn't
+	// name the recoverable action (set env vars OR run on EC2). The
+	// dedicated branch makes the fix discoverable.
+	if isNoCredentialsError(err) {
+		return noCredentialsHumanizedError()
 	}
 
 	// Pull the smithy.APIError shape if present — every typed AWS

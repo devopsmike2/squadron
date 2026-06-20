@@ -196,6 +196,23 @@ func (h *DiscoveryHandlers) WithAIProposer(p DiscoveryAIProposer) *DiscoveryHand
 	return h
 }
 
+// validateHandlerTimeout caps the validate endpoint's total wall-clock
+// budget. Defense in depth: the AWS SDK call path is already wrapped
+// in a 5s credential-discovery context (client.go), but if a future
+// regression re-introduces a slow path the HTTP handler must never
+// hang beyond a known budget. 60s comfortably exceeds the SDK's
+// happy-path round trip (sub-second for sts:AssumeRole on a healthy
+// link) while still bounding the worst case.
+const validateHandlerTimeout = 60 * time.Second
+
+// scanHandlerTimeout caps the scan endpoint's total wall-clock budget.
+// Scans can legitimately span minutes on a 50k+ resource account
+// (DescribeInstances paginates 100 per call, plus a Lambda
+// ListFunctions sweep per region). 5 minutes is the design doc's
+// upper bound for slice 1; slice 3 introduces async scans where this
+// budget shrinks to enqueue latency.
+const scanHandlerTimeout = 5 * time.Minute
+
 // awsValidateRequest is the JSON wire shape the wizard's
 // test-before-commit step POSTs. Mirrors the design doc's
 // "Validation endpoint" section.
@@ -290,7 +307,17 @@ func (h *DiscoveryHandlers) HandleAWSValidate(c *gin.Context) {
 		ExternalID: req.ExternalID,
 	}, req.AccountID)
 
-	vr, err := validator.Validate(c.Request.Context(), conn)
+	// Defense in depth: even though the AWS SDK call path in
+	// internal/discovery/aws/client.go already wraps credential
+	// discovery in a 5s budget, the HTTP handler enforces its own
+	// 60s ceiling so a future regression on the slow path can't
+	// resurrect the v0.85.0 30-second-hang bug. The wizard's
+	// "Validate connection" spinner stays bounded by a value the
+	// operator can recognize as "something went wrong" rather than
+	// "the page is still loading".
+	ctx, cancel := context.WithTimeout(c.Request.Context(), validateHandlerTimeout)
+	defer cancel()
+	vr, err := validator.Validate(ctx, conn)
 	if err != nil {
 		// scanner.Validate is documented as never returning an
 		// error on the AWS path — all failures land in AssumeRoleErr
@@ -431,7 +458,12 @@ func (h *DiscoveryHandlers) HandleAWSSaveConnection(c *gin.Context) {
 		RoleARN:    req.RoleARN,
 		ExternalID: req.ExternalID,
 	}, req.AccountID)
-	vr, err := validator.Validate(c.Request.Context(), transientConn)
+	// Same 60s ceiling as HandleAWSValidate — the re-validate step
+	// runs the same code path and must never resurrect the v0.85.0
+	// 30-second-hang bug.
+	saveCtx, saveCancel := context.WithTimeout(c.Request.Context(), validateHandlerTimeout)
+	defer saveCancel()
+	vr, err := validator.Validate(saveCtx, transientConn)
 	if err != nil {
 		if h.logger != nil {
 			h.logger.Warn("aws save: pre-persist validator error", zap.Error(err))
@@ -807,7 +839,14 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 		return
 	}
 
-	result, err := awsScanner.Scan(c.Request.Context(), conn, regions)
+	// Same defense-in-depth posture as HandleAWSValidate: even though
+	// the underlying SDK calls are bounded, the HTTP handler enforces
+	// its own ceiling. 5 minutes accommodates large-account scans
+	// (the design doc's slice-1 upper bound) while still preventing
+	// an indefinite hang if a future regression introduces one.
+	scanCtx, scanCancel := context.WithTimeout(c.Request.Context(), scanHandlerTimeout)
+	defer scanCancel()
+	result, err := awsScanner.Scan(scanCtx, conn, regions)
 	if err != nil {
 		// Per scanner.Scanner's contract the AWS implementation sets
 		// Partial=true with PartialReason rather than returning a Go
