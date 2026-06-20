@@ -15,18 +15,19 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/actions"
-	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
-	"github.com/devopsmike2/squadron/internal/configs"
-	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/billing"
+	"github.com/devopsmike2/squadron/internal/configs"
+	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/deploy"
+	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
 	"github.com/devopsmike2/squadron/internal/metrics"
-	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
@@ -72,20 +73,27 @@ type Server struct {
 	authConfig        AuthConfig
 	commander         AgentCommander
 	broker            *events.Broker
-	configsTracer     *configs.Tracer  // optional; nil disables config-push spans on direct handler pushes
+	configsTracer     *configs.Tracer   // optional; nil disables config-push spans on direct handler pushes
 	opampPort         int               // v0.27.1: the OpAMP port we tell quickstart-generated agents to dial
 	insightsService   *insights.Service // optional; nil disables the /api/v1/insights/* routes (no telemetry reader configured)
 	recsEngine        *recommendations.Engine
-	recsDismissals    handlers.DismissalStore // optional; nil disables /api/v1/recommendations/* (paired with recsEngine)
-	aiService         *ai.Service             // optional; nil keeps /api/v1/ai/status responsive (returns enabled=false) but mutation routes 503
-	pricer            *pricing.Projector      // optional; v0.27 $/month projection. nil → /api/v1/pricing/* returns enabled=false
-	costSpikes        handlers.CostSpikeStore // optional; v0.29 cost-spike alerting storage
-	costSpikeDetector *costspikes.Detector    // optional; nil disables /tick + the background detector loop
-	pipelineHealth    *pipelinehealth.Service // optional; v0.31 collector self-metrics surface — nil → /api/v1/pipeline-health/* returns 503
-	inventory         *inventory.Service      // optional; v0.32 expected-vs-actual reconciliation — nil → /api/v1/inventory/* returns 503
-	deploy            *deploy.Service         // optional; v0.34 GitHub Actions deploy trigger — nil or Enabled()==false → /api/v1/deploy/* returns 503
+	recsDismissals    handlers.DismissalStore  // optional; nil disables /api/v1/recommendations/* (paired with recsEngine)
+	aiService         *ai.Service              // optional; nil keeps /api/v1/ai/status responsive (returns enabled=false) but mutation routes 503
+	pricer            *pricing.Projector       // optional; v0.27 $/month projection. nil → /api/v1/pricing/* returns enabled=false
+	costSpikes        handlers.CostSpikeStore  // optional; v0.29 cost-spike alerting storage
+	costSpikeDetector *costspikes.Detector     // optional; nil disables /tick + the background detector loop
+	pipelineHealth    *pipelinehealth.Service  // optional; v0.31 collector self-metrics surface — nil → /api/v1/pipeline-health/* returns 503
+	inventory         *inventory.Service       // optional; v0.32 expected-vs-actual reconciliation — nil → /api/v1/inventory/* returns 503
+	deploy            *deploy.Service          // optional; v0.34 GitHub Actions deploy trigger — nil or Enabled()==false → /api/v1/deploy/* returns 503
 	billingProvider   billing.SnapshotProvider // optional; v0.42 — nil → /api/v1/billing/snapshot returns 204
-	siemService       services.SiemService    // optional; v0.50.2 — nil → /api/v1/siem/* returns 503
+	siemService       services.SiemService     // optional; v0.50.2 — nil → /api/v1/siem/* returns 503
+	// v0.85 Stream 2C — discovery substrate. The credstore is
+	// optional: the validate endpoint doesn't read or write it
+	// (zero records by design), so a nil credStore still serves
+	// the wizard's test-before-commit flow. The trampoline 503s
+	// when the entire discovery surface is unwired so the test
+	// server's existing no-config posture stays intact.
+	discoveryCredStore credstore.Store
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -108,9 +116,9 @@ type Server struct {
 	// vars are set.
 	incidentsPublishers incidents.PublisherRegistry
 	logger              *zap.Logger
-	httpServer        *http.Server
-	metrics           *metrics.APIMetrics
-	registry          *prometheus.Registry
+	httpServer          *http.Server
+	metrics             *metrics.APIMetrics
+	registry            *prometheus.Registry
 }
 
 // NewServer creates a new API server.
@@ -332,6 +340,42 @@ func (s *Server) pricingTrampoline(fn func(*handlers.PricingHandlers, *gin.Conte
 // AI at all.
 func (s *Server) SetAIService(svc *ai.Service) {
 	s.aiService = svc
+}
+
+// SetDiscoveryCredStore wires the v0.85 discovery credential
+// substrate. The validate endpoint itself does NOT read or write the
+// store — it constructs a transient CloudConnection from the request
+// body and runs the AWS assume-role probe in memory — but the
+// store's presence is what gates the discovery surface as a whole
+// being available. A nil store at request time means "discovery
+// isn't wired here" and the trampoline 503s rather than running a
+// half-configured probe.
+//
+// Setter pattern mirrors the other optional services: NewServer's
+// signature doesn't grow, and the test_server.go path can leave the
+// surface disabled by skipping the call.
+func (s *Server) SetDiscoveryCredStore(store credstore.Store) {
+	s.discoveryCredStore = store
+}
+
+// discoveryTrampoline late-binds a discovery handler call so the
+// route table can be registered before SetDiscoveryCredStore runs.
+// Mirrors the insights / recommendations / AI trampolines. 503s with
+// a clear message when the credstore is still nil — that's the right
+// state for the test_server.go path that doesn't wire discovery at
+// all.
+func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.discoveryCredStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "Discovery is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewDiscoveryHandlers(s.discoveryCredStore, s.logger)
+		fn(h, c)
+	}
 }
 
 // aiTrampoline late-binds an AI handler call. Same shape as the
@@ -903,6 +947,22 @@ func (s *Server) registerRoutes() {
 		v1.POST("/ai/ask",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.askTrampoline())
+
+		// v0.85 Stream 2C — connector wizard pre-commit validation.
+		// POST a transient role-ARN + external-ID + region triple;
+		// the handler runs sts:AssumeRole + a tiny EC2/Lambda probe
+		// in-memory and returns the typed ValidationResult the
+		// wizard renders as its "what just happened" panel. ZERO
+		// records created — neither the credstore nor the audit log
+		// is touched. Save lands in a separate later endpoint.
+		//
+		// agents:read is the right scope: the operator is reading
+		// the connect-account capability surface, not yet mutating
+		// any persisted Squadron state. A future connect-write scope
+		// gates the Save endpoint.
+		v1.POST("/discovery/aws/validate",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSValidate(c) }))
 
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
