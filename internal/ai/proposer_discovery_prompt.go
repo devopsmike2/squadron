@@ -121,7 +121,33 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`read-only (elasticloadbalancing:DescribeLoadBalancers + ` +
 	`elasticloadbalancing:DescribeLoadBalancerAttributes + ` +
 	`elasticloadbalancing:DescribeTags). Each ALB plan step's inline_config_snippet is ` +
-	`Terraform the operator runs through their own IaC pipeline.` + "\n\n" +
+	`Terraform the operator runs through their own IaC pipeline.` + "\n" +
+	`  - EKS clusters: observability has a COMPOSITE rule on two ` +
+	`axes that MUST BOTH be on. Axis 1: control plane logging must include BOTH "api" AND ` +
+	`"audit" types at minimum. Axis 2: at least one EKS managed add-on must have name ` +
+	`"adot" (AWS Distro for OpenTelemetry, PREFERRED) OR ` +
+	`"amazon-cloudwatch-observability" — and that add-on must be ACTIVE (the dispatch ` +
+	`glue at the handler layer filters out DEGRADED / CREATE_FAILED / DELETING add-ons ` +
+	`before populating addon_names on the candidate, so any name present in addon_names ` +
+	`is already ACTIVE). A cluster is COVERED only when BOTH axes hold. When EITHER axis ` +
+	`is missing, recommend enabling. A typical recommendation reads: "Enable control plane ` +
+	`logging (types: api, audit) on {cluster-name} AND install adot add-on" as a SINGLE ` +
+	`plan step per cluster — do NOT bundle multiple clusters into one step (each cluster ` +
+	`is its own Terraform target with its own region pin), and do NOT split the two axes ` +
+	`into separate steps for the same cluster (operators applying enable-logging without ` +
+	`enable-addon end up half-covered, which is the exact failure mode the composite rule ` +
+	`exists to prevent). The Terraform updates aws_eks_cluster.enabled_cluster_log_types and ` +
+	`creates an aws_eks_addon resource pinned to the cluster. The ADOT add-on is ` +
+	`PREFERRED over amazon-cloudwatch-observability because it gives the operator a ` +
+	`vendor-neutral OTel collector path; only recommend cloudwatch-observability when the ` +
+	`operator's reasoning explicitly calls for the CloudWatch Container Insights enhanced ` +
+	`integration. Do NOT recommend per-worker-node DaemonSet installs of an OTel collector ` +
+	`even when the cluster has visible nodegroups — the cluster-level add-on is the right ` +
+	`lever; per-node DaemonSets are a fallback for clusters Squadron does NOT see the ` +
+	`control plane of. SQUADRON DOES NOT EXECUTE eks:UpdateCluster OR eks:CreateAddon. The ` +
+	`discovery IAM policy is read-only (eks:ListClusters + eks:DescribeCluster + ` +
+	`eks:ListAddons + eks:DescribeAddon + eks:ListNodegroups). Each EKS plan step's ` +
+	`inline_config_snippet is Terraform the operator runs through their own IaC pipeline.` + "\n\n" +
 
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
@@ -342,6 +368,61 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	if len(in.LoadBalancers) > len(lsample) {
 		fmt.Fprintf(&b, "  ... and %d more\n", len(in.LoadBalancers)-len(lsample))
+	}
+	b.WriteString("\n")
+
+	// Clusters. Slice 3b (v0.89.0) — same sampling rule. Render both
+	// axes of the composite instrumented rule explicitly because the
+	// proposer's per-cluster reasoning keys off which axis is missing
+	// (or whether both are). The "covered" / "logs-only" / "addon-only"
+	// / "uncovered" shorthand matches the prompt body's instructions
+	// for the four cases the model must distinguish.
+	fmt.Fprintf(&b, "Clusters (%d total):\n", len(in.Clusters))
+	csample := in.Clusters
+	if len(csample) > 20 {
+		csample = csample[:20]
+	}
+	for _, c := range csample {
+		hasAPI, hasAudit := false, false
+		for _, t := range c.ControlPlaneLogging {
+			switch strings.ToLower(t) {
+			case "api":
+				hasAPI = true
+			case "audit":
+				hasAudit = true
+			}
+		}
+		hasObsAddon := false
+		for _, n := range c.AddonNames {
+			lower := strings.ToLower(n)
+			if lower == "adot" || lower == "amazon-cloudwatch-observability" {
+				hasObsAddon = true
+				break
+			}
+		}
+		logsOn := hasAPI && hasAudit
+		coverage := "uncovered"
+		switch {
+		case logsOn && hasObsAddon:
+			coverage = "covered"
+		case logsOn:
+			coverage = "logs-only"
+		case hasObsAddon:
+			coverage = "addon-only"
+		}
+		logs := strings.Join(c.ControlPlaneLogging, ",")
+		if logs == "" {
+			logs = "none"
+		}
+		addons := strings.Join(c.AddonNames, ",")
+		if addons == "" {
+			addons = "none"
+		}
+		fmt.Fprintf(&b, "  - %s (name=%s, k8s=%s, region=%s, logging=%s, addons=%s, %s)\n",
+			c.ResourceID, c.Name, c.KubernetesVersion, c.Region, logs, addons, coverage)
+	}
+	if len(in.Clusters) > len(csample) {
+		fmt.Fprintf(&b, "  ... and %d more\n", len(in.Clusters)-len(csample))
 	}
 	b.WriteString("\n")
 

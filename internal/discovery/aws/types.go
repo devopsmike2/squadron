@@ -5,6 +5,7 @@ package aws
 
 import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
@@ -32,3 +33,10 @@ type rdsDBInstance = rdstypes.DBInstance
 type s3Bucket = s3types.Bucket
 
 type elbv2LoadBalancer = elbv2types.LoadBalancer
+
+// eksCluster + eksAddon are the slice 3b (v0.89.0) additions. Same
+// alias rationale: keep mapper signatures readable without leaking
+// the SDK's nested package paths.
+type eksCluster = ekstypes.Cluster
+
+type eksAddon = ekstypes.Addon

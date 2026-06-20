@@ -670,12 +670,15 @@ type awsScanResponse struct {
 	// empty-state branch is a single `.length === 0` check —
 	// matching the existing Compute / Functions / Databases
 	// posture.
-	ObjectStores        []awsObjectStoreRow  `json:"object_stores"`
-	LoadBalancers       []awsLoadBalancerRow `json:"load_balancers"`
-	InstrumentedCount   int                  `json:"instrumented_count"`
-	UninstrumentedCount int                  `json:"uninstrumented_count"`
-	Partial             bool                 `json:"partial"`
-	PartialReason       string               `json:"partial_reason,omitempty"`
+	ObjectStores  []awsObjectStoreRow  `json:"object_stores"`
+	LoadBalancers []awsLoadBalancerRow `json:"load_balancers"`
+	// Clusters joins the wire shape in slice 3b (v0.89.0). Same
+	// non-null posture as the other category arrays.
+	Clusters            []awsClusterRow `json:"clusters"`
+	InstrumentedCount   int             `json:"instrumented_count"`
+	UninstrumentedCount int             `json:"uninstrumented_count"`
+	Partial             bool            `json:"partial"`
+	PartialReason       string          `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -741,6 +744,34 @@ type awsLoadBalancerRow struct {
 	Tags               map[string]string `json:"tags"`
 }
 
+// awsClusterRow is the snake_case wire shape for one EKS / GKE / AKS
+// cluster row. Slice 3b (v0.89.0). Mirrors scanner.ClusterSnapshot —
+// the composite instrumented-rule axes (control_plane_logging +
+// addons[*].name+status) surface as their own fields so the
+// Inventory tab renders both axes as independent badge groups,
+// matching the proposer prompt's "BOTH must hold" framing.
+type awsClusterRow struct {
+	ResourceID          string               `json:"resource_id"`
+	Name                string               `json:"name"`
+	KubernetesVersion   string               `json:"kubernetes_version"`
+	Status              string               `json:"status"`
+	ControlPlaneLogging []string             `json:"control_plane_logging"`
+	Addons              []awsClusterAddonRow `json:"addons"`
+	NodegroupCount      int                  `json:"nodegroup_count"`
+	FargateProfileCount int                  `json:"fargate_profile_count"`
+	Region              string               `json:"region"`
+	Tags                map[string]string    `json:"tags"`
+}
+
+// awsClusterAddonRow is the snake_case wire shape for one EKS add-on
+// row. Slice 3b (v0.89.0). Mirrors scanner.ClusterAddon — Name +
+// Status drive the observability-detection rule the proposer reads.
+type awsClusterAddonRow struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Status  string `json:"status"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -757,6 +788,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		Databases:           make([]awsDatabaseInstanceRow, 0, len(r.Databases)),
 		ObjectStores:        make([]awsObjectStoreRow, 0, len(r.ObjectStores)),
 		LoadBalancers:       make([]awsLoadBalancerRow, 0, len(r.LoadBalancers)),
+		Clusters:            make([]awsClusterRow, 0, len(r.Clusters)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -814,6 +846,28 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			Tags:               l.Tags,
 		})
 	}
+	for _, c := range r.Clusters {
+		row := awsClusterRow{
+			ResourceID:          c.ResourceID,
+			Name:                c.Name,
+			KubernetesVersion:   c.KubernetesVersion,
+			Status:              c.Status,
+			ControlPlaneLogging: append([]string(nil), c.ControlPlaneLogging...),
+			Addons:              make([]awsClusterAddonRow, 0, len(c.Addons)),
+			NodegroupCount:      c.NodegroupCount,
+			FargateProfileCount: c.FargateProfileCount,
+			Region:              c.Region,
+			Tags:                c.Tags,
+		}
+		for _, a := range c.Addons {
+			row.Addons = append(row.Addons, awsClusterAddonRow{
+				Name:    a.Name,
+				Version: a.Version,
+				Status:  a.Status,
+			})
+		}
+		out.Clusters = append(out.Clusters, row)
+	}
 	return out
 }
 
@@ -837,13 +891,14 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 //   - discovery.aws.scan_completed fires AFTER the scan returns, with
 //     compute_count, function_count, database_count,
 //     object_store_count (slice 3a / v0.88.0), load_balancer_count
-//     (slice 3a / v0.88.0), instrumented_count, uninstrumented_count,
-//     the partial flag, partial_reason (the operator-visible
-//     explanation when partial is true), and failed_services
-//     (structured list of service identifiers —
-//     "ec2"/"lambda"/"rds"/"s3"/"alb"/"assume_role" — for SIEM
-//     forwarders and the proposer's future scan-history loop to
-//     pattern-match against) in the payload
+//     (slice 3a / v0.88.0), cluster_count (slice 3b / v0.89.0),
+//     instrumented_count, uninstrumented_count, the partial flag,
+//     partial_reason (the operator-visible explanation when partial
+//     is true), and failed_services (structured list of service
+//     identifiers —
+//     "ec2"/"lambda"/"rds"/"s3"/"alb"/"eks"/"assume_role" — for
+//     SIEM forwarders and the proposer's future scan-history loop
+//     to pattern-match against) in the payload
 //   - both events carry the account_id and (for scan_completed) the
 //     scan_id, so an auditor can reconstruct any scan's lifecycle from
 //     the audit log alone
@@ -1001,8 +1056,17 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 			// timeline should see the slice 3a categories' counts
 			// even on the happy path. Empty inventories emit "0";
 			// they do NOT drop out via omitempty.
-			"object_store_count":   len(result.ObjectStores),
-			"load_balancer_count":  len(result.LoadBalancers),
+			"object_store_count":  len(result.ObjectStores),
+			"load_balancer_count": len(result.LoadBalancers),
+			// Slice 3b (v0.89.0) — cluster_count joins the audit
+			// payload as a MANDATORY field (always present, never
+			// omitempty). Same posture as compute_count /
+			// function_count / database_count / object_store_count /
+			// load_balancer_count: an operator skimming the audit
+			// timeline should see the slice 3b cluster category's
+			// count even on the happy path. Empty inventories emit
+			// "0"; they do NOT drop out via omitempty.
+			"cluster_count":        len(result.Clusters),
 			"instrumented_count":   result.InstrumentedCount,
 			"uninstrumented_count": result.UninstrumentedCount,
 			"partial":              result.Partial,
@@ -1257,6 +1321,32 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			AccessLogsEnabled:  l.AccessLogsEnabled,
 			AccessLogsS3Bucket: l.AccessLogsS3Bucket,
 			Region:             l.Region,
+		})
+	}
+	// Clusters — slice 3b (v0.89.0). The proposer's composite
+	// instrumented rule keys off ControlPlaneLogging (axis 1) AND
+	// AddonNames (axis 2 — flattened from the wire row's
+	// addons[*].name where the addon's status is ACTIVE). The
+	// status-filtering happens HERE in the dispatch glue so the
+	// proposer prompt body deals with a clean string list rather
+	// than re-implementing the ACTIVE check. NodegroupCount /
+	// FargateProfileCount are informational and not pushed into
+	// the prompt body — the proposer reasons at cluster level.
+	for _, c := range req.ScanResult.Clusters {
+		addonNames := make([]string, 0, len(c.Addons))
+		for _, a := range c.Addons {
+			if !strings.EqualFold(a.Status, "ACTIVE") {
+				continue
+			}
+			addonNames = append(addonNames, a.Name)
+		}
+		aiCtx.Clusters = append(aiCtx.Clusters, ai.ClusterCandidate{
+			ResourceID:          c.ResourceID,
+			Name:                c.Name,
+			KubernetesVersion:   c.KubernetesVersion,
+			ControlPlaneLogging: append([]string(nil), c.ControlPlaneLogging...),
+			AddonNames:          addonNames,
+			Region:              c.Region,
 		})
 	}
 

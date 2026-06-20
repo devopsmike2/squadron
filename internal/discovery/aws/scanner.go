@@ -12,6 +12,8 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -39,6 +41,14 @@ import (
 // cross-reference to the scan's S3 inventory). Same strictly-read-only
 // posture: Squadron NEVER executes s3:PutBucketLogging or
 // elasticloadbalancing:ModifyLoadBalancerAttributes.
+//
+// Slice 3b (v0.89.0) adds EKS as the 6th service category. Unlike
+// the single-pass services, EKS requires a two-pass walk: ListClusters
+// returns names, then per-cluster DescribeCluster + ListAddons +
+// DescribeAddon (per addon) + ListNodegroups + ListFargateProfiles
+// surface the COMPOSITE instrumented rule (control plane logging on
+// AND observability addon present). Same strictly-read-only posture:
+// Squadron NEVER executes eks:UpdateCluster or eks:CreateAddon.
 //
 // Construct via NewScannerForValidation when serving the connector
 // wizard's validate endpoint (the connection has not yet been
@@ -195,6 +205,11 @@ func (s *Scanner) Validate(ctx context.Context, conn *credstore.CloudConnection)
 	if check := s.preflightALB(ctx, factory, primaryRegion); check != nil {
 		result.Preflight = append(result.Preflight, *check)
 	}
+	// Slice 3b (v0.89.0) — EKS joins the preflight battery via a
+	// single low-cost ListClusters call with MaxResults=1.
+	if check := s.preflightEKS(ctx, factory, primaryRegion); check != nil {
+		result.Preflight = append(result.Preflight, *check)
+	}
 
 	return result, nil
 }
@@ -334,6 +349,39 @@ func (s *Scanner) preflightALB(ctx context.Context, factory ClientFactory, regio
 	return &scanner.PreflightCheck{Service: "alb", OK: true, SampleCount: sample}
 }
 
+// preflightEKS runs a single ListClusters call with MaxResults=1
+// against the supplied region. Mirrors preflightALB — a misconfigured
+// role fails fast, and a properly configured one returns at most one
+// row. The per-cluster fan-out (DescribeCluster + ListAddons +
+// ListNodegroups + ListFargateProfiles) only fires at scan time, so
+// the preflight intentionally stops at ListClusters: the cheap signal
+// is enough to deep-link the operator back to the trust-policy step
+// on AccessDenied.
+//
+// Slice 3b (v0.89.0) — the rest of the EKS instrumentation read path
+// (DescribeCluster, ListAddons, DescribeAddon, ListNodegroups,
+// ListFargateProfiles) only fires at scan time, so the preflight
+// proves eks:ListClusters is granted; the other four permissions
+// surface at scan time and emit "eks" to Result.FailedServices on
+// the failure path.
+func (s *Scanner) preflightEKS(ctx context.Context, factory ClientFactory, region string) *scanner.PreflightCheck {
+	client, err := factory.EKS(ctx, region)
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "eks", OK: false, Err: HumanizeError(err)}
+	}
+	out, err := client.ListClusters(ctx, &eks.ListClustersInput{
+		MaxResults: awssdk.Int32(1),
+	})
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "eks", OK: false, Err: HumanizeError(err)}
+	}
+	sample := len(out.Clusters)
+	if sample > 5 {
+		sample = 5
+	}
+	return &scanner.PreflightCheck{Service: "eks", OK: true, SampleCount: sample}
+}
+
 // Scan satisfies scanner.Scanner. Walks each region in turn,
 // paginating DescribeInstances, ListFunctions, and DescribeDBInstances
 // with exponential backoff on throttling. On unrecoverable errors
@@ -396,6 +444,10 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 		if err := s.scanRegionALB(ctx, factory, region, result); err != nil {
 			recordPartialFailure(result, "alb", fmt.Sprintf("alb scan failed in %s: %s", region, err.Error()))
 		}
+		// Slice 3b (v0.89.0) — EKS joins the per-region walk.
+		if err := s.scanRegionEKS(ctx, factory, region, result); err != nil {
+			recordPartialFailure(result, "eks", fmt.Sprintf("eks scan failed in %s: %s", region, err.Error()))
+		}
 	}
 
 	for _, c := range result.Compute {
@@ -443,8 +495,57 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 			result.UninstrumentedCount++
 		}
 	}
+	// Slice 3b (v0.89.0) — EKS clusters count as instrumented only
+	// when BOTH the control plane logging axis (api + audit present)
+	// AND the observability addon axis (an ACTIVE adot or
+	// amazon-cloudwatch-observability addon) hold. The composite rule
+	// is documented on scanner.ClusterSnapshot; clusterIsInstrumented
+	// is the shared predicate the proposer prompt and the Inventory
+	// tally use.
+	for _, c := range result.Clusters {
+		if clusterIsInstrumented(c) {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
 
 	return result, nil
+}
+
+// clusterIsInstrumented implements the slice 3b composite
+// instrumented rule. The function is exported-shaped (capitalized
+// in code) only conceptually — it lives in the aws package and is
+// package-private; the proposer-side check uses a parallel
+// implementation against ClusterCandidate (which carries the same
+// two axes flattened from the snapshot).
+func clusterIsInstrumented(c scanner.ClusterSnapshot) bool {
+	// Axis 1: control plane logging includes BOTH "api" AND "audit".
+	hasAPI, hasAudit := false, false
+	for _, t := range c.ControlPlaneLogging {
+		switch strings.ToLower(t) {
+		case "api":
+			hasAPI = true
+		case "audit":
+			hasAudit = true
+		}
+	}
+	if !hasAPI || !hasAudit {
+		return false
+	}
+	// Axis 2: at least one ACTIVE observability addon. Names checked
+	// case-insensitively; the EKS API canonicalizes to lowercase but
+	// defense-in-depth is cheap here.
+	for _, a := range c.Addons {
+		if !strings.EqualFold(a.Status, "ACTIVE") {
+			continue
+		}
+		name := strings.ToLower(a.Name)
+		if name == "adot" || name == "amazon-cloudwatch-observability" {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveRegions picks the regions slice the caller's request implied.
@@ -858,6 +959,241 @@ func (s *Scanner) scanRegionALB(ctx context.Context, factory ClientFactory, regi
 	return nil
 }
 
+// scanRegionEKS walks the region's EKS clusters in two passes and
+// appends mapped snapshots to result.Clusters. Unlike the single-pass
+// services (EC2 / Lambda / RDS / S3 / ALB) the EKS API surface
+// requires a per-cluster fan-out: ListClusters returns only the
+// cluster name list, and the observability state (control plane
+// logging config + add-ons) lives behind DescribeCluster + ListAddons
+// + DescribeAddon. Nodegroup + Fargate-profile counts are
+// informational and come from ListNodegroups + ListFargateProfiles.
+//
+// IAM permissions required: eks:ListClusters + eks:DescribeCluster +
+// eks:ListAddons + eks:DescribeAddon + eks:ListNodegroups. The
+// permissions policy snippet in docs/universal-discovery-design.md
+// adds all five when slice 3b ships. ListFargateProfiles reuses
+// eks:ListClusters scope — no separate permission needed (the AWS
+// docs list it under the cluster's IAM action set).
+//
+// Squadron does NOT execute eks:UpdateCluster or eks:CreateAddon —
+// discovery is strictly read-only.
+//
+// Per-cluster fan-out runs SEQUENTIALLY in v0.89.0. Real operators
+// at 50+ clusters per region will likely hit a wall here; deferring
+// concurrency to a follow-up slice keeps this ship small. The
+// retryWithBackoff helper protects each per-cluster call against
+// throttling.
+//
+// On any per-cluster API failure the function returns the error so
+// the caller records "eks" on FailedServices via
+// recordPartialFailure. Partial per-cluster failures (one cluster's
+// DescribeCluster fails, others succeed) currently fail the whole
+// EKS walk in the region — same posture as scanRegionS3's
+// per-bucket failure handling.
+func (s *Scanner) scanRegionEKS(ctx context.Context, factory ClientFactory, region string, result *scanner.Result) error {
+	client, err := factory.EKS(ctx, region)
+	if err != nil {
+		return err
+	}
+	// Pass 1: ListClusters, paginated via NextToken.
+	var names []string
+	var nextToken *string
+	for {
+		in := &eks.ListClustersInput{}
+		if nextToken != nil {
+			in.NextToken = nextToken
+		}
+		var out *eks.ListClustersOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			out, e = client.ListClusters(ctx, in)
+			return e
+		})
+		if callErr != nil {
+			return callErr
+		}
+		names = append(names, out.Clusters...)
+		if out.NextToken == nil || *out.NextToken == "" {
+			break
+		}
+		nextToken = out.NextToken
+	}
+	// Pass 2: per-cluster expand.
+	for _, name := range names {
+		snap, err := s.expandEKSCluster(ctx, client, name, region)
+		if err != nil {
+			return err
+		}
+		result.Clusters = append(result.Clusters, snap)
+	}
+	return nil
+}
+
+// expandEKSCluster runs the per-cluster fan-out: DescribeCluster +
+// ListAddons (+ DescribeAddon per add-on) + ListNodegroups +
+// ListFargateProfiles. Returns the populated ClusterSnapshot or the
+// first error encountered. Extracted for readability; the per-cluster
+// fan-out is the most complex part of the EKS walk.
+func (s *Scanner) expandEKSCluster(ctx context.Context, client EKSClient, name, region string) (scanner.ClusterSnapshot, error) {
+	snap := scanner.ClusterSnapshot{
+		Name:   name,
+		Region: region,
+	}
+	// DescribeCluster — control plane logging + version + status +
+	// ARN + tags.
+	var descOut *eks.DescribeClusterOutput
+	err := retryWithBackoff(ctx, func() error {
+		var e error
+		descOut, e = client.DescribeCluster(ctx, &eks.DescribeClusterInput{
+			Name: awssdk.String(name),
+		})
+		return e
+	})
+	if err != nil {
+		return snap, err
+	}
+	if descOut != nil && descOut.Cluster != nil {
+		applyEKSClusterDescription(&snap, descOut.Cluster)
+	}
+	// ListAddons — paginated; then per-addon DescribeAddon.
+	var addonNames []string
+	var addonToken *string
+	for {
+		in := &eks.ListAddonsInput{ClusterName: awssdk.String(name)}
+		if addonToken != nil {
+			in.NextToken = addonToken
+		}
+		var out *eks.ListAddonsOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			out, e = client.ListAddons(ctx, in)
+			return e
+		})
+		if callErr != nil {
+			return snap, callErr
+		}
+		addonNames = append(addonNames, out.Addons...)
+		if out.NextToken == nil || *out.NextToken == "" {
+			break
+		}
+		addonToken = out.NextToken
+	}
+	for _, an := range addonNames {
+		var out *eks.DescribeAddonOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			out, e = client.DescribeAddon(ctx, &eks.DescribeAddonInput{
+				ClusterName: awssdk.String(name),
+				AddonName:   awssdk.String(an),
+			})
+			return e
+		})
+		if callErr != nil {
+			return snap, callErr
+		}
+		if out == nil || out.Addon == nil {
+			continue
+		}
+		snap.Addons = append(snap.Addons, mapEKSAddon(*out.Addon))
+	}
+	// ListNodegroups — count only; the proposer reasons at the
+	// cluster level, not per-nodegroup.
+	var ngToken *string
+	for {
+		in := &eks.ListNodegroupsInput{ClusterName: awssdk.String(name)}
+		if ngToken != nil {
+			in.NextToken = ngToken
+		}
+		var out *eks.ListNodegroupsOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			out, e = client.ListNodegroups(ctx, in)
+			return e
+		})
+		if callErr != nil {
+			return snap, callErr
+		}
+		snap.NodegroupCount += len(out.Nodegroups)
+		if out.NextToken == nil || *out.NextToken == "" {
+			break
+		}
+		ngToken = out.NextToken
+	}
+	// ListFargateProfiles — count only. Same posture as nodegroups.
+	var fpToken *string
+	for {
+		in := &eks.ListFargateProfilesInput{ClusterName: awssdk.String(name)}
+		if fpToken != nil {
+			in.NextToken = fpToken
+		}
+		var out *eks.ListFargateProfilesOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			out, e = client.ListFargateProfiles(ctx, in)
+			return e
+		})
+		if callErr != nil {
+			return snap, callErr
+		}
+		snap.FargateProfileCount += len(out.FargateProfileNames)
+		if out.NextToken == nil || *out.NextToken == "" {
+			break
+		}
+		fpToken = out.NextToken
+	}
+	return snap, nil
+}
+
+// applyEKSClusterDescription pulls the control plane logging config
+// + version + status + ARN + tags off an SDK Cluster value and
+// populates the snapshot. Extracted so the snapshot construction
+// stays readable.
+//
+// Control plane logging: EKS exposes the config as a list of
+// LogSetup entries; each entry is { Types: [...], Enabled: bool }.
+// Squadron's snapshot only carries the ENABLED log types
+// (disabled-with-types entries are filtered out at the mapper).
+func applyEKSClusterDescription(snap *scanner.ClusterSnapshot, c *ekstypes.Cluster) {
+	if c.Arn != nil {
+		snap.ResourceID = *c.Arn
+	}
+	if c.Version != nil {
+		snap.KubernetesVersion = *c.Version
+	}
+	snap.Status = string(c.Status)
+	if c.Logging != nil {
+		for _, setup := range c.Logging.ClusterLogging {
+			if setup.Enabled == nil || !*setup.Enabled {
+				continue
+			}
+			for _, t := range setup.Types {
+				snap.ControlPlaneLogging = append(snap.ControlPlaneLogging, string(t))
+			}
+		}
+	}
+	if len(c.Tags) > 0 {
+		snap.Tags = make(map[string]string, len(c.Tags))
+		for k, v := range c.Tags {
+			snap.Tags[k] = v
+		}
+	}
+}
+
+// mapEKSAddon turns an SDK Addon into the snapshot's ClusterAddon
+// shape. Status enums (ACTIVE / DEGRADED / etc.) come straight off
+// the SDK string-typed value.
+func mapEKSAddon(a eksAddon) scanner.ClusterAddon {
+	out := scanner.ClusterAddon{}
+	if a.AddonName != nil {
+		out.Name = *a.AddonName
+	}
+	if a.AddonVersion != nil {
+		out.Version = *a.AddonVersion
+	}
+	out.Status = string(a.Status)
+	return out
+}
+
 // mapALBBase turns an SDK LoadBalancer into the base snapshot — name,
 // type, scheme, region, ARN — without the per-LB attributes that
 // require a follow-up call. applyALBAttributes fills in the
@@ -1124,8 +1460,8 @@ func isThrottlingError(err error) bool {
 // kicks in on the second-and-subsequent failures.
 //
 // Service identifiers shipping today: "assume_role" (sentinel for
-// credentials-layer failures), "ec2", "lambda", "rds", "s3", "alb".
-// Slice 3b (v0.89.0) adds "eks".
+// credentials-layer failures), "ec2", "lambda", "rds", "s3", "alb",
+// "eks" (slice 3b — v0.89.0).
 func recordPartialFailure(result *scanner.Result, service, reason string) {
 	result.Partial = true
 	if result.PartialReason == "" {

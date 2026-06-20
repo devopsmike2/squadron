@@ -51,10 +51,11 @@ export const AWS_TRUST_POLICY_TEMPLATE = `{
 }`;
 
 // Permissions-policy JSON template. Verbatim from the
-// "Permissions policy (slice 1 + slice 2 + slice 3a)" section of
-// docs/universal-discovery-design.md. Slice 1 covered EC2 + Lambda;
-// slice 2 (v0.87) added RDS; slice 3a (v0.88.0) added S3 (5 actions)
-// + ELBv2 / ALB / NLB (3 actions) — bringing the total to 17
+// "Permissions policy (slice 1 + slice 2 + slice 3a + slice 3b)"
+// section of docs/universal-discovery-design.md. Slice 1 covered
+// EC2 + Lambda; slice 2 (v0.87) added RDS; slice 3a (v0.88.0)
+// added S3 (5 actions) + ELBv2 / ALB / NLB (3 actions); slice 3b
+// (v0.89.0) adds EKS (5 actions) — bringing the total to 22
 // read-only actions. No write actions; the principle of least
 // privilege is enforced at the policy level so even a fully
 // compromised Squadron cannot escalate.
@@ -85,7 +86,12 @@ export const AWS_PERMISSIONS_POLICY_TEMPLATE = `{
         "s3:GetBucketRequestPayment",
         "elasticloadbalancing:DescribeLoadBalancers",
         "elasticloadbalancing:DescribeLoadBalancerAttributes",
-        "elasticloadbalancing:DescribeTags"
+        "elasticloadbalancing:DescribeTags",
+        "eks:ListClusters",
+        "eks:DescribeCluster",
+        "eks:ListAddons",
+        "eks:DescribeAddon",
+        "eks:ListNodegroups"
       ],
       "Resource": "*"
     }
@@ -144,7 +150,7 @@ export const awsWizard: ConnectorWizard = {
       id: "permissions-policy",
       title: "Add this permissions policy to the role",
       description:
-        "Squadron needs read-only access to EC2, Lambda, RDS, S3, and ELBv2 (ALB / NLB) in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
+        "Squadron needs read-only access to EC2, Lambda, RDS, S3, ELBv2 (ALB / NLB), and EKS in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
       action: {
         kind: "copy_value",
         payload: {
@@ -155,7 +161,7 @@ export const awsWizard: ConnectorWizard = {
       validation: { kind: "none" },
       doc_link: "https://docs.squadron.example/discovery/aws#permissions-policy",
       recovery_hint:
-        "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
+        "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB/EKS probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
     },
     {
       id: "role-arn",
@@ -183,7 +189,7 @@ export const awsWizard: ConnectorWizard = {
       id: "validate",
       title: "Validate the connection",
       description:
-        "Squadron will run sts:AssumeRole and tiny EC2 + Lambda + RDS + S3 + ALB probes to confirm the role works. No records are created until you click Save on the next step.",
+        "Squadron will run sts:AssumeRole and tiny EC2 + Lambda + RDS + S3 + ALB + EKS probes to confirm the role works. No records are created until you click Save on the next step.",
       action: { kind: "test_connection" },
       validation: { kind: "none" },
       doc_link: "https://docs.squadron.example/discovery/aws#validate",
