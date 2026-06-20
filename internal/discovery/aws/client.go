@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -53,6 +54,16 @@ type LambdaClient interface {
 	ListFunctions(ctx context.Context, params *lambda.ListFunctionsInput, optFns ...func(*lambda.Options)) (*lambda.ListFunctionsOutput, error)
 }
 
+// RDSClient is the narrow RDS surface the scanner depends on. Slice 2
+// of the universal-observation arc only consumes DescribeDBInstances —
+// it's the single API call that returns the inventory plus the two
+// observability lever flags (Performance Insights + Enhanced
+// Monitoring) the proposer reasons about. Same shape rationale as
+// EC2Client.
+type RDSClient interface {
+	DescribeDBInstances(ctx context.Context, params *rds.DescribeDBInstancesInput, optFns ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error)
+}
+
 // STSClient is the narrow STS surface used by Validate to confirm the
 // AssumeRole chain is functional. The real *sts.Client satisfies it.
 type STSClient interface {
@@ -81,6 +92,10 @@ type ClientFactory interface {
 
 	// Lambda returns a Lambda client for the supplied region.
 	Lambda(ctx context.Context, region string) (LambdaClient, error)
+
+	// RDS returns an RDS client for the supplied region. Added in
+	// slice 2 of the universal-observation arc.
+	RDS(ctx context.Context, region string) (RDSClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -195,6 +210,13 @@ func (f *sdkClientFactory) EC2(_ context.Context, region string) (EC2Client, err
 
 func (f *sdkClientFactory) Lambda(_ context.Context, region string) (LambdaClient, error) {
 	return lambda.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) RDS(_ context.Context, region string) (RDSClient, error) {
+	return rds.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil

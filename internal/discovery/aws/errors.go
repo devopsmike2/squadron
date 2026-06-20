@@ -117,6 +117,16 @@ func HumanizeError(err error) *scanner.HumanizedError {
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorCode() {
 		case "AccessDenied":
+			// AccessDenied surfaces uniformly across every service the
+			// scanner walks — ec2:DescribeInstances, lambda:ListFunctions,
+			// rds:DescribeDBInstances (slice 2). The recoverable action
+			// is always the same: re-paste the trust policy from Step 2,
+			// which is what the wizard's deep-link target covers. The
+			// service-specific Action name is preserved in the raw error
+			// message the model field carries, but the humanized step
+			// pointer stays generic so an operator who's failing on the
+			// third service doesn't see a different wizard navigation
+			// hint than they'd see on the first.
 			return &scanner.HumanizedError{
 				Code:          "AccessDenied",
 				Message:       "The role's trust policy doesn't authorize Squadron's principal. Did you paste the trust policy from Step 2?",

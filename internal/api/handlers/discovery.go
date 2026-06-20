@@ -648,18 +648,19 @@ type awsRunScanRequest struct {
 // so we walk it once into a tagged struct rather than emit the Go
 // field names verbatim.
 type awsScanResponse struct {
-	ScanID              string                  `json:"scan_id"`
-	ScanStartedAt       time.Time               `json:"scan_started_at"`
-	ScanCompletedAt     time.Time               `json:"scan_completed_at"`
-	AccountID           string                  `json:"account_id"`
-	Provider            string                  `json:"provider"`
-	Regions             []string                `json:"regions"`
-	Compute             []awsComputeInstanceRow `json:"compute"`
-	Functions           []awsFunctionRuntimeRow `json:"functions"`
-	InstrumentedCount   int                     `json:"instrumented_count"`
-	UninstrumentedCount int                     `json:"uninstrumented_count"`
-	Partial             bool                    `json:"partial"`
-	PartialReason       string                  `json:"partial_reason,omitempty"`
+	ScanID              string                   `json:"scan_id"`
+	ScanStartedAt       time.Time                `json:"scan_started_at"`
+	ScanCompletedAt     time.Time                `json:"scan_completed_at"`
+	AccountID           string                   `json:"account_id"`
+	Provider            string                   `json:"provider"`
+	Regions             []string                 `json:"regions"`
+	Compute             []awsComputeInstanceRow  `json:"compute"`
+	Functions           []awsFunctionRuntimeRow  `json:"functions"`
+	Databases           []awsDatabaseInstanceRow `json:"databases"`
+	InstrumentedCount   int                      `json:"instrumented_count"`
+	UninstrumentedCount int                      `json:"uninstrumented_count"`
+	Partial             bool                     `json:"partial"`
+	PartialReason       string                   `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -679,6 +680,22 @@ type awsFunctionRuntimeRow struct {
 	Region       string `json:"region"`
 }
 
+// awsDatabaseInstanceRow is the snake_case wire shape for one RDS row.
+// Mirrors scanner.DatabaseInstanceSnapshot — the two observability
+// lever flags surface as separate booleans so the Inventory tab can
+// render them as independent badge columns, matching the proposer
+// prompt's "treat PI + EM as independent levers" framing.
+type awsDatabaseInstanceRow struct {
+	ResourceID                 string            `json:"resource_id"`
+	Engine                     string            `json:"engine"`
+	EngineVersion              string            `json:"engine_version"`
+	InstanceClass              string            `json:"instance_class"`
+	PerformanceInsightsEnabled bool              `json:"performance_insights_enabled"`
+	EnhancedMonitoringEnabled  bool              `json:"enhanced_monitoring_enabled"`
+	Region                     string            `json:"region"`
+	Tags                       map[string]string `json:"tags"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -692,6 +709,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		Regions:             append([]string{}, r.Regions...),
 		Compute:             make([]awsComputeInstanceRow, 0, len(r.Compute)),
 		Functions:           make([]awsFunctionRuntimeRow, 0, len(r.Functions)),
+		Databases:           make([]awsDatabaseInstanceRow, 0, len(r.Databases)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -714,6 +732,18 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			Runtime:      fn.Runtime,
 			HasOTelLayer: fn.HasOTelLayer,
 			Region:       fn.Region,
+		})
+	}
+	for _, db := range r.Databases {
+		out.Databases = append(out.Databases, awsDatabaseInstanceRow{
+			ResourceID:                 db.ResourceID,
+			Engine:                     db.Engine,
+			EngineVersion:              db.EngineVersion,
+			InstanceClass:              db.InstanceClass,
+			PerformanceInsightsEnabled: db.PerformanceInsightsEnabled,
+			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
+			Region:                     db.Region,
+			Tags:                       db.Tags,
 		})
 	}
 	return out
@@ -881,6 +911,7 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 				"scan_id":              result.ScanID,
 				"compute_count":        len(result.Compute),
 				"function_count":       len(result.Functions),
+				"database_count":       len(result.Databases),
 				"instrumented_count":   result.InstrumentedCount,
 				"uninstrumented_count": result.UninstrumentedCount,
 				"partial":              result.Partial,
@@ -1078,6 +1109,23 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			Runtime:      fn.Runtime,
 			Region:       fn.Region,
 			HasOTelLayer: fn.HasOTelLayer,
+		})
+	}
+	// Databases — slice 2 (v0.87). The proposer keys its PI/EM
+	// reasoning off the two boolean flags carried straight from the
+	// scanner. Engine + EngineVersion + InstanceClass are passed
+	// through raw; the prompt body's per-engine notes (aurora-postgresql
+	// inherits PI+EM, sqlserver caveats Performance Insights by
+	// edition) read from these fields.
+	for _, db := range req.ScanResult.Databases {
+		aiCtx.Databases = append(aiCtx.Databases, ai.DatabaseResourceCandidate{
+			ResourceID:                 db.ResourceID,
+			Engine:                     db.Engine,
+			EngineVersion:              db.EngineVersion,
+			InstanceClass:              db.InstanceClass,
+			PerformanceInsightsEnabled: db.PerformanceInsightsEnabled,
+			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
+			Region:                     db.Region,
 		})
 	}
 

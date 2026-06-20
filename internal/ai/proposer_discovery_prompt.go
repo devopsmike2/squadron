@@ -71,7 +71,25 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`aws_lambda_function.layers and sets the AWS_LAMBDA_EXEC_WRAPPER environment variable.` + "\n" +
 	`  - EC2 instances: install the ADOT (AWS Distro for OpenTelemetry) collector via ` +
 	`SSM Run Command or a user-data block — the Terraform attaches the SSM document or ` +
-	`templates the user-data, scoped by tag.` + "\n\n" +
+	`templates the user-data, scoped by tag.` + "\n" +
+	`  - RDS databases: enable Performance Insights AND Enhanced Monitoring. An RDS ` +
+	`instance is covered when BOTH are on; treat them as INDEPENDENT levers — each has ` +
+	`its own IAM permission and its own ModifyDBInstance request shape, so when only one ` +
+	`is missing emit a single-lever plan step, and when both are missing emit TWO plan ` +
+	`steps (do not bundle PI and EM into one step). The Terraform updates ` +
+	`aws_db_instance.performance_insights_enabled and ` +
+	`aws_db_instance.monitoring_interval respectively. Pick a sensible monitoring ` +
+	`interval (15 or 60 seconds) and a Performance Insights retention period (7 days for ` +
+	`the free tier, longer for paid). Engine-specific notes: aurora-postgresql and ` +
+	`aurora-mysql inherit the same PI+EM model; sqlserver supports Enhanced Monitoring on ` +
+	`all editions but Performance Insights only on certain editions — when targeting ` +
+	`sqlserver, surface the edition caveat in the reasoning so the operator can verify ` +
+	`before applying.` + "\n" +
+	`  - SQUADRON DOES NOT EXECUTE THE rds:ModifyDBInstance CALL. The discovery IAM ` +
+	`policy is read-only (rds:DescribeDBInstances). Each RDS plan step's ` +
+	`inline_config_snippet is Terraform the operator runs through their own IaC ` +
+	`pipeline — same posture as the Lambda + EC2 steps. Never imply Squadron flips PI ` +
+	`or EM on for the operator.` + "\n\n" +
 
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
@@ -210,6 +228,35 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	if len(in.Functions) > len(fsample) {
 		fmt.Fprintf(&b, "  ... and %d more\n", len(in.Functions)-len(fsample))
+	}
+	b.WriteString("\n")
+
+	// Databases. Slice 2 (v0.87) — same sampling rule. Render the two
+	// observability lever flags explicitly because the proposer's
+	// per-row reasoning keys off which lever is missing. The
+	// "covered/PI-only/EM-only/uncovered" shorthand matches the prompt
+	// body's instructions for the four cases the model must
+	// distinguish.
+	fmt.Fprintf(&b, "Databases (%d total):\n", len(in.Databases))
+	dsample := in.Databases
+	if len(dsample) > 20 {
+		dsample = dsample[:20]
+	}
+	for _, d := range dsample {
+		coverage := "uncovered"
+		switch {
+		case d.PerformanceInsightsEnabled && d.EnhancedMonitoringEnabled:
+			coverage = "covered"
+		case d.PerformanceInsightsEnabled:
+			coverage = "pi-only"
+		case d.EnhancedMonitoringEnabled:
+			coverage = "em-only"
+		}
+		fmt.Fprintf(&b, "  - %s (engine=%s %s, class=%s, %s, %s)\n",
+			d.ResourceID, d.Engine, d.EngineVersion, d.InstanceClass, d.Region, coverage)
+	}
+	if len(in.Databases) > len(dsample) {
+		fmt.Fprintf(&b, "  ... and %d more\n", len(in.Databases)-len(dsample))
 	}
 	b.WriteString("\n")
 
