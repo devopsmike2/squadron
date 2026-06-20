@@ -179,9 +179,11 @@ type ValidationRule struct {
 	Message string         `json:"message,omitempty"`
 }
 
-// AWSWizard returns the slice-1 AWS ConnectorWizard. The five steps
+// AWSWizard returns the slice-1 AWS ConnectorWizard. The six steps
 // mirror the design doc's "Connector workflow design > Architecture"
-// section: Account ID → Trust policy → Role ARN → Validate → Save.
+// section: Account ID → Trust policy → Permissions policy →
+// Role ARN → Validate → Save. (Permissions policy was added in
+// v0.87.1 by #575; see the trust-policy step's comment for context.)
 //
 // The function returns a value (not a package-level var) so callers
 // get an independent copy — a future test or admin tool that mutates
@@ -213,7 +215,7 @@ func AWSWizard() ConnectorWizard {
 			{
 				ID:          "trust-policy",
 				Title:       "Create the IAM role with this trust policy",
-				Description: "Squadron generated a per-deployment ExternalId for you. Copy the trust policy below verbatim and paste it into the AWS IAM role creation flow. The ExternalId defeats the confused-deputy problem — never share it.",
+				Description: "Squadron generated a per-deployment ExternalId for you. By default this trust policy lets any IAM identity in your AWS account assume the SquadronDiscovery role, provided that identity has sts:AssumeRole permission and passes the ExternalId — the AWS-recommended bootstrap shape for self-hosted Squadron. Copy the trust policy below verbatim and paste it into the AWS IAM role creation flow. Use the Advanced section to scope to a single IAM identity, or to resume with an ExternalId you already pasted into AWS.",
 				Action: WizardAction{
 					Kind: ActionCopyValue,
 					Payload: map[string]string{
@@ -225,7 +227,33 @@ func AWSWizard() ConnectorWizard {
 					Kind: ValidationNone,
 				},
 				DocLink:      "https://docs.squadron.example/discovery/aws#trust-policy",
-				RecoveryHint: "Re-copy the trust policy from this step — don't edit the JSON. The ExternalId condition is required; removing it makes the role unsafe.",
+				RecoveryHint: "Re-copy the trust policy from this step — don't edit the JSON. The ExternalId condition is required; removing it makes the role unsafe. If you previously pasted a different ExternalId into AWS, use the Advanced > Resume with existing ExternalId field to match it.",
+			},
+			{
+				// permissions-policy was added in v0.87.1 (#575). The
+				// validate step's sts:AssumeRole succeeds even with no
+				// permissions attached; the operator only finds out at
+				// scan time that the role can't actually list anything.
+				// Surfacing the policy as its own copy_value step makes
+				// the failure mode impossible to miss. The template
+				// JSON lives in AWS_PERMISSIONS_POLICY_TEMPLATE in
+				// ui/src/data/awsWizard.ts — same drift-tradeoff as
+				// the trust-policy template.
+				ID:          "permissions-policy",
+				Title:       "Add this permissions policy to the role",
+				Description: "Squadron needs read-only access to EC2, Lambda, and RDS in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
+				Action: WizardAction{
+					Kind: ActionCopyValue,
+					Payload: map[string]string{
+						"field":    "permissions_policy",
+						"language": "json",
+					},
+				},
+				Validation: ValidationRule{
+					Kind: ValidationNone,
+				},
+				DocLink:      "https://docs.squadron.example/discovery/aws#permissions-policy",
+				RecoveryHint: "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
 			},
 			{
 				ID:          "role-arn",
