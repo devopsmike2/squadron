@@ -17,6 +17,7 @@ import ConfigsPage from "./pages/Configs";
 import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
 import DeployPage from "./pages/Deploy";
+import DiscoveryAWSPage from "./pages/DiscoveryAWS";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
 import IncidentsPage from "./pages/Incidents";
@@ -171,6 +172,10 @@ function AuthBoundary() {
             element={<ProposerPlaygroundPage />}
           />
           <Route path="/deploy" element={<DeployPage />} />
+          {/* v0.85 Stream 2E — universal-discovery first user-facing
+              payoff. /discovery/aws hosts the Account / Inventory /
+              Recommendations triptych the design doc calls out. */}
+          <Route path="/discovery/aws" element={<DiscoveryAWSPage />} />
           {/* v0.55 SQ-2.8 / N4 — operational visibility into the action
               runner system. /actions lists every signed request
               Squadron dispatched; /runners lists the daemons that
