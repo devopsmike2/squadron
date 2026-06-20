@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -18,6 +20,22 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 )
+
+// credentialDiscoveryTimeout caps how long LoadDefaultConfig is allowed
+// to spend walking the credential chain. Real credential lookups (env
+// vars, shared config file) complete in milliseconds — this budget only
+// fires when the chain falls through to the IMDSv2 probe and the
+// 169.254.169.254 endpoint is non-routable (i.e. Squadron is not on an
+// EC2/ECS/EKS instance). The v0.85.0 post-ship E2E sweep caught the
+// 30-second hang the SDK's default would otherwise produce.
+const credentialDiscoveryTimeout = 5 * time.Second
+
+// credentialDiscoveryHTTPTimeout backstops the IMDSv2 HTTP probe so a
+// single hung request can't extend the credential discovery beyond
+// credentialDiscoveryTimeout. 5s mirrors the context budget; in
+// practice the probe either returns immediately (on EC2) or fails
+// immediately (off-EC2 with a non-routable endpoint).
+const credentialDiscoveryHTTPTimeout = 5 * time.Second
 
 // EC2Client is the narrow EC2 surface the scanner depends on. The
 // real *ec2.Client satisfies it (DescribeInstances is its API method);
@@ -101,9 +119,45 @@ func newSDKClientFactory(ctx context.Context, awsCreds credstore.AWSCredentials,
 	// file, the instance metadata service, etc. This is the identity
 	// that calls sts:AssumeRole; it must already have permissions to
 	// assume the customer's role.
-	baseCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(defaultRegion))
+	//
+	// Credential discovery is wrapped in a short context budget. Real
+	// lookups complete in milliseconds; the budget only fires when the
+	// SDK's default credential chain falls through to the IMDSv2 probe
+	// (169.254.169.254). On a non-AWS host with no env vars and no
+	// shared config file, that probe would otherwise hang for the
+	// SDK's default HTTP timeout (~30s) and translate into a 30-second
+	// hang in the wizard's "Validate" step. The 5s budget plus the
+	// matching HTTP client timeout caps the worst case at ~5s and
+	// surfaces a deterministic context.DeadlineExceeded that
+	// HumanizeError maps to the NoCredentialsFound humanized message.
+	credCtx, cancel := context.WithTimeout(ctx, credentialDiscoveryTimeout)
+	defer cancel()
+	baseCfg, err := config.LoadDefaultConfig(credCtx,
+		config.WithRegion(defaultRegion),
+		// Bound the SDK's HTTP transport with an explicit timeout so a
+		// non-routable IMDSv2 endpoint can't outlast credCtx. The SDK
+		// keeps IMDS in its default-enabled state (env vars and shared
+		// config still take precedence in the credential chain) — only
+		// the per-request HTTP timeout is overridden.
+		config.WithHTTPClient(&http.Client{Timeout: credentialDiscoveryHTTPTimeout}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("aws: load default config: %w", err)
+	}
+
+	// Dry-run the base credential chain inside credCtx. LoadDefaultConfig
+	// itself returns successfully even when no credentials are reachable
+	// — it installs deferred providers and lets the actual retrieval
+	// happen at first AWS call. The v0.85.0 bug came from that deferred
+	// retrieval: the assume-role provider's call to sts:AssumeRole
+	// triggered the IMDSv2 probe at GetCallerIdentity time, well after
+	// credCtx had been discarded. Forcing the dry-run here keeps the
+	// fail-fast budget meaningful — Retrieve walks the chain (env vars,
+	// shared config, IMDS) and either returns credentials quickly or
+	// surfaces a chain-exhausted error that HumanizeError maps to the
+	// NoCredentials humanized message.
+	if _, err := baseCfg.Credentials.Retrieve(credCtx); err != nil {
+		return nil, fmt.Errorf("aws: retrieve base credentials: %w", err)
 	}
 
 	// Build the assume-role provider with the customer's ExternalID
