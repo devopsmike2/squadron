@@ -2,9 +2,17 @@
 
 `squadron-proposer-bench` is the v0.83 command for measuring the
 proposer's behavior against the real Anthropic API. It runs a small
-fixed corpus of cost-spike scenarios and emits a graded report so
-an operator (or a scheduled CI job) can spot regressions across
-releases.
+fixed corpus of cost-spike AND discovery scenarios and emits a graded
+report so an operator (or a scheduled CI job) can spot regressions
+across releases.
+
+As of v0.86 the bench is **bi-modal**: it exercises both proposer
+entry points — `ProposeFromCostSpike` and `ProposeFromDiscoveryScan` —
+in the same run. The same metrics surface across both arcs, and
+regression detection works the same way on each: a bucket count
+moving in the wrong direction (a `discovery` seed flipping from
+`succeeded` to `parse_failed_preamble`, say) shows up in the same
+report the cost-spike arc has shown up in since v0.83.
 
 It is the runtime sibling of `internal/proposer/stress_live_test.go`:
 the live stress test gates on pass/fail; the bench reports
@@ -39,12 +47,16 @@ Aggregated:
 
 ## Cost ceiling
 
-At v0.83 corpus size + token sizes, expect roughly **\$0.15–\$0.25 per
-run**. The bench prints `total cost` on every run so the operator
-sees the number after each invocation.
+At the v0.86 corpus size (14 seeds: 8 cost-spike + 6 discovery) and
+typical token sizes, expect roughly **\$0.15–\$0.25 per run**. The
+bench prints `total cost` on every run so the operator sees the
+number after each invocation. Discovery seeds run at a similar token
+profile to cost-spike seeds — the per-seed cost is comparable, so
+adding 6 discovery seeds on top of 8 cost-spike seeds keeps the
+total inside the same envelope.
 
 For scheduled CI: a daily run for thirty days is ~\$5-7. Costs scale
-linearly with corpus size; v0.84 expansions to the corpus should
+linearly with corpus size; v0.84+ expansions to the corpus should
 update this number.
 
 ## Running
@@ -77,7 +89,10 @@ shows up as a bucket count moving in the wrong direction —
 
 ## Corpus
 
-Eight hand-curated scenarios at v0.83:
+Fourteen hand-curated scenarios at v0.86 — split across the two
+proposer arcs.
+
+### Cost-spike arc (8 seeds, drives `ProposeFromCostSpike`)
 
 | Seed                          | What it tests                                                 |
 | ----------------------------- | ------------------------------------------------------------- |
@@ -90,10 +105,36 @@ Eight hand-curated scenarios at v0.83:
 | `boundary_tiny_fleet`         | Single-agent fleet                                            |
 | `sparse_context_low_signal`   | Low-confidence spike (25% over baseline)                      |
 
+### Discovery arc (6 seeds, drives `ProposeFromDiscoveryScan`)
+
+| Seed                                   | What it tests                                                          |
+| -------------------------------------- | ---------------------------------------------------------------------- |
+| `discovery_small_fleet_uninstrumented` | 3 EC2 + 2 Lambda, all uncovered — minimal plan happy path              |
+| `discovery_mixed_coverage`             | 10 EC2 (4 covered) + 8 Lambda (3 covered); plan must skip the covered  |
+| `discovery_zero_resources`             | Empty inventory; should decline (`declined` bucket through discovery)  |
+| `discovery_fully_instrumented`         | 8 EC2 + 5 Lambda, all covered; should decline                          |
+| `discovery_windows_heavy`              | 6 Windows EC2, 0 Lambda — exercises OS-family reasoning                |
+| `discovery_lambda_runtime_variety`     | 12 Lambda across 5 runtimes; exercises per-runtime OTel layer batching |
+
 The list is intentionally small. v0.84 will refactor the
 `internal/proposer` stress corpus into a shared module so the bench
 and the stress test exercise the same scenarios. Until then, expand
 the list in `cmd/squadron-proposer-bench/main.go` directly.
+
+### Bi-modal posture
+
+Outcome bucketing is shared across arcs — `succeeded`, `declined`,
+`truncated`, `parse_failed_preamble`, `parse_failed_other`,
+`llm_error` apply cleanly to both `ProposeFromCostSpike` and
+`ProposeFromDiscoveryScan`. The report's `by kind:` summary line
+splits the bucket counts per arc so an operator can see at a glance
+that, say, the cost-spike arc is green while the discovery arc has
+a `truncated` regression — without that split a single global
+counter would hide which prompt drifted. Same calibration discipline
+v0.83 established for the cost-spike proposer now covers the
+discovery path; the next regression that would have shipped as a
+viral failure story gets caught here for the discovery prompt
+before it hits production.
 
 ## Reading the report
 
@@ -101,9 +142,12 @@ A clean baseline looks like:
 
 ```
 Aggregate
+  by kind:
+    cost_spike    8 seeds | succeeded: 6 | declined: 2 | failed: 0
+    discovery     6 seeds | succeeded: 4 | declined: 2 | failed: 0
   outcome buckets:
-    succeeded     6
-    declined      2
+    declined      4
+    succeeded     10
   tokens in  : p50=1850  p95=1880
   tokens out : p50=900  p95=1200  max=1500  cap=4096 (37% of cap at max)
   latency ms : p50=12000  p95=18000  p99=22000
