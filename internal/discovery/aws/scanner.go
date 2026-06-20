@@ -280,10 +280,20 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 		result.ScanCompletedAt = time.Now().UTC()
 	}()
 
+	// TODO(v0.87.4+): PartialReason and FailedServices currently
+	// overwrite/clobber on multiple service failures rather than
+	// accumulate — the last failed service wins. Single-service-failure
+	// is the slice 1+2 common case; slice 3 multi-service scans (S3 +
+	// ALB + EKS) will elevate the accumulator question. Separate
+	// follow-up; do not fix here.
 	factory, err := s.ensureFactory(ctx, regions[0])
 	if err != nil {
 		result.Partial = true
 		result.PartialReason = fmt.Sprintf("assume-role failed: %s", err.Error())
+		// Sentinel "assume_role" distinguishes credentials-layer
+		// failures from per-service walk failures for audit consumers
+		// pattern-matching against FailedServices.
+		result.FailedServices = append(result.FailedServices, "assume_role")
 		return result, nil
 	}
 
@@ -291,14 +301,17 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 		if err := s.scanRegionEC2(ctx, factory, region, result); err != nil {
 			result.Partial = true
 			result.PartialReason = fmt.Sprintf("ec2 scan failed in %s: %s", region, err.Error())
+			result.FailedServices = append(result.FailedServices, "ec2")
 		}
 		if err := s.scanRegionLambda(ctx, factory, region, result); err != nil {
 			result.Partial = true
 			result.PartialReason = fmt.Sprintf("lambda scan failed in %s: %s", region, err.Error())
+			result.FailedServices = append(result.FailedServices, "lambda")
 		}
 		if err := s.scanRegionRDS(ctx, factory, region, result); err != nil {
 			result.Partial = true
 			result.PartialReason = fmt.Sprintf("rds scan failed in %s: %s", region, err.Error())
+			result.FailedServices = append(result.FailedServices, "rds")
 		}
 	}
 

@@ -609,3 +609,41 @@ func TestScanner_RDSPreflightAccessDenied(t *testing.T) {
 		t.Errorf("Code = %q, want AccessDenied", rdsRow.Err.Code)
 	}
 }
+
+// TestScanner_ScanRDSFailureSetsPartialAndFailedServices pins the
+// v0.87.3 audit-shape contract on the scanner side: when the rds
+// per-region walk fails (the live reproducer from task #584 is
+// rds:DescribeDBInstances revoked from the SquadronDiscoveryReadOnly
+// inline policy), Result.Partial flips to true, Result.PartialReason
+// carries the human-readable explanation, AND Result.FailedServices
+// carries the structured ["rds"] entry the discovery handler's
+// scan_completed audit event now surfaces.
+//
+// Mirrors TestScanner_RDSPreflightAccessDenied's posture but exercises
+// the Scan path (not Validate) — same single-service-failure shape the
+// audit payload is widened around.
+func TestScanner_ScanRDSFailureSetsPartialAndFailedServices(t *testing.T) {
+	s := newTestScanner(t, &fakeFactory{
+		ec2:    &fakeEC2{},
+		lambda: &fakeLambda{},
+		rds:    &fakeRDS{callErr: &apiErr{code: "AccessDenied", msg: "rds:DescribeDBInstances denied"}},
+		sts:    &fakeSTS{},
+	})
+	result, err := s.Scan(context.Background(), &credstore.CloudConnection{Regions: []string{"us-east-1"}}, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v (Scanner contract says Partial=true, not a Go error)", err)
+	}
+	if !result.Partial {
+		t.Fatalf("Result.Partial = false, want true when the rds walk fails")
+	}
+	if result.PartialReason == "" {
+		t.Errorf("Result.PartialReason is empty; want the rds-walk failure explanation")
+	}
+	// Pin the structured failed-services list so audit consumers and
+	// the proposer's future "learn from past scans" loop can pattern-
+	// match against "rds" without parsing the formatted PartialReason
+	// string. Single-service-failure case: exactly one entry.
+	if len(result.FailedServices) != 1 || result.FailedServices[0] != "rds" {
+		t.Errorf("Result.FailedServices = %v, want [\"rds\"]", result.FailedServices)
+	}
+}
