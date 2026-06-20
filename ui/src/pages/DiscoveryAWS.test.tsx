@@ -30,11 +30,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import DiscoveryAWSPage from "./DiscoveryAWS";
 
 import {
+  generateAWSRecommendations,
   listAWSConnections,
   runAWSScan,
   type CloudConnection,
+  type GenerateRecommendationsResponse,
   type ScanResult,
 } from "@/api/discovery";
+import type { Recommendation } from "@/api/recommendations";
 
 // Mock the discovery API module. The page imports the four named
 // exports we care about — listAWSConnections, runAWSScan,
@@ -70,11 +73,13 @@ vi.mock("@/api/discovery", async () => {
     runAWSScan: vi.fn(),
     saveAWSConnection: vi.fn(),
     validateAWSConnection: vi.fn(),
+    generateAWSRecommendations: vi.fn(),
   };
 });
 
 const mockedListAWSConnections = vi.mocked(listAWSConnections);
 const mockedRunAWSScan = vi.mocked(runAWSScan);
+const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
 
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Without this, the second test in the file would
@@ -268,5 +273,163 @@ describe("DiscoveryAWSPage", () => {
     // Scanner was called exactly once with the chosen account ID.
     expect(mockedRunAWSScan).toHaveBeenCalledTimes(1);
     expect(mockedRunAWSScan).toHaveBeenCalledWith("123456789012");
+  });
+
+  // --- Stream 2F: Generate recommendations flow --------------------
+
+  it("Inventory: Generate recommendations button appears after scan", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue(sampleScan);
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+
+    // Pre-scan: no Generate-recommendations button rendered.
+    expect(
+      screen.queryByRole("button", { name: /Generate recommendations/i }),
+    ).not.toBeInTheDocument();
+
+    // Trigger a scan.
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByText(/Prod AWS \(123456789012\)/);
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    // Post-scan: the Generate-recommendations button is rendered in the
+    // scan result panel and is enabled.
+    await waitFor(() => {
+      expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+    });
+    const genBtn = await screen.findByRole("button", {
+      name: /Generate recommendations/i,
+    });
+    expect(genBtn).toBeInTheDocument();
+    expect(genBtn).not.toBeDisabled();
+  });
+
+  it("Inventory: clicking Generate recommendations calls the API and switches tabs", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue(sampleScan);
+
+    // Two-step plan with real-looking Terraform per step. The test
+    // verifies the Terraform body renders in the Recommendations tab
+    // after the auto-switch.
+    const sampleRecs: Recommendation[] = [
+      {
+        id: "discovery-scan-uuid-0",
+        category: "empty_signal",
+        severity: "warn",
+        title: "AI plan step 0: instrument 2 Lambdas",
+        detail: "Two Lambdas plus one EC2 instance lack OTel.",
+        est_savings_bytes: 0,
+        generated_at: new Date().toISOString(),
+        source: { kind: "discovery_scan", ref_id: "scan-uuid" },
+        action: { kind: "plan", payload: {} },
+        iac: {
+          format: "terraform",
+          source: 'resource "aws_lambda_function" "hello" {\n  layers = [...]\n}',
+        },
+      },
+      {
+        id: "discovery-scan-uuid-1",
+        category: "empty_signal",
+        severity: "warn",
+        title: "AI plan step 1: instrument 1 EC2 instance",
+        detail: "Stage EC2 after Lambda so you can observe between batches.",
+        est_savings_bytes: 0,
+        generated_at: new Date().toISOString(),
+        source: { kind: "discovery_scan", ref_id: "scan-uuid" },
+        action: { kind: "plan", payload: {} },
+        iac: {
+          format: "terraform",
+          source: 'resource "aws_ssm_association" "adot" {\n  name = "..."\n}',
+        },
+      },
+    ];
+    const sampleResp: GenerateRecommendationsResponse = {
+      declined: false,
+      reasoning:
+        "Two Lambdas plus one EC2 instance lack OTel. Stage Lambda first.",
+      recommendations: sampleRecs,
+    };
+    mockedGenerateAWSRecommendations.mockResolvedValue(sampleResp);
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+
+    // Scan first.
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByText(/Prod AWS \(123456789012\)/);
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+    });
+
+    // Generate.
+    const genBtn = await screen.findByRole("button", {
+      name: /Generate recommendations/i,
+    });
+    await user.click(genBtn);
+
+    // API was called with the scan's account ID and the scan result.
+    await waitFor(() => {
+      expect(mockedGenerateAWSRecommendations).toHaveBeenCalledTimes(1);
+    });
+    expect(mockedGenerateAWSRecommendations).toHaveBeenCalledWith(
+      "123456789012",
+      sampleScan,
+    );
+
+    // Auto-switched to the Recommendations tab — the proposer reasoning
+    // and both step titles render.
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Proposer reasoning/i),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/AI plan step 0: instrument 2 Lambdas/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/AI plan step 1: instrument 1 EC2 instance/i),
+    ).toBeInTheDocument();
+    // The Terraform bodies render verbatim — operator copies them into
+    // their IaC pipeline.
+    expect(
+      within(document.body).getAllByText(/aws_lambda_function/i).length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(document.body).getAllByText(/aws_ssm_association/i).length,
+    ).toBeGreaterThan(0);
   });
 });

@@ -31,13 +31,16 @@ import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 
 import {
+  generateAWSRecommendations,
   listAWSConnections,
   runAWSScan,
   saveAWSConnection,
   validateAWSConnection,
   type CloudConnection,
+  type GenerateRecommendationsResponse,
   type ScanResult,
 } from "@/api/discovery";
+import type { Recommendation } from "@/api/recommendations";
 import { ConnectorWizard } from "@/components/discovery/ConnectorWizard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,6 +92,21 @@ function formatTime(iso: string): string {
 }
 
 export default function DiscoveryAWSPage() {
+  // Tabs are controlled at the page level so the Inventory tab's
+  // "Generate recommendations" button can hop the operator straight
+  // into the Recommendations tab after the proposer responds. Without
+  // a controlled value the auto-switch would require ref-driven
+  // imperative trigger-clicks, which Radix Tabs handles cleanly but
+  // is harder to test.
+  const [activeTab, setActiveTab] = useState<string>(ACCOUNT_TAB);
+
+  // Recommendations live at the page level too — Inventory writes
+  // them, Recommendations reads them. State is per-session: refreshing
+  // the page clears the panel, matching the slice-1 posture that
+  // recommendations themselves aren't persisted.
+  const [recs, setRecs] =
+    useState<GenerateRecommendationsResponse | null>(null);
+
   return (
     <div className="space-y-4 p-6">
       <header>
@@ -101,7 +119,7 @@ export default function DiscoveryAWSPage() {
         </p>
       </header>
 
-      <Tabs defaultValue={ACCOUNT_TAB}>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value={ACCOUNT_TAB}>Account</TabsTrigger>
           <TabsTrigger value={INVENTORY_TAB}>Inventory</TabsTrigger>
@@ -112,10 +130,15 @@ export default function DiscoveryAWSPage() {
           <AccountTab />
         </TabsContent>
         <TabsContent value={INVENTORY_TAB} className="mt-4">
-          <InventoryTab />
+          <InventoryTab
+            onRecommendations={(r) => {
+              setRecs(r);
+              setActiveTab(RECS_TAB);
+            }}
+          />
         </TabsContent>
         <TabsContent value={RECS_TAB} className="mt-4">
-          <RecommendationsTab />
+          <RecommendationsTab recs={recs} />
         </TabsContent>
       </Tabs>
     </div>
@@ -258,7 +281,13 @@ function AccountEmptyState() {
 
 // --- Inventory tab -------------------------------------------------
 
-function InventoryTab() {
+function InventoryTab({
+  onRecommendations,
+}: {
+  // Called when the proposer responds (declined or otherwise) so the
+  // page can hop to the Recommendations tab and surface the result.
+  onRecommendations: (r: GenerateRecommendationsResponse) => void;
+}) {
   const { data: connData } = useSWR("/discovery/aws/connections", () =>
     listAWSConnections(),
   );
@@ -269,11 +298,20 @@ function InventoryTab() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Recommendations-generation loading + error state. Kept local to the
+  // Inventory tab — the recommendations themselves bubble up to the
+  // parent via onRecommendations.
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+
   const onRun = useCallback(async () => {
     if (!selected || scanning) return;
     setScanning(true);
     setError(null);
     setResult(null);
+    // Clear any stale generate state from a previous scan — a new scan
+    // invalidates the prior recommendations panel.
+    setGenError(null);
     try {
       const r = await runAWSScan(selected);
       setResult(r);
@@ -283,6 +321,20 @@ function InventoryTab() {
       setScanning(false);
     }
   }, [selected, scanning]);
+
+  const onGenerate = useCallback(async () => {
+    if (!result || generating) return;
+    setGenerating(true);
+    setGenError(null);
+    try {
+      const r = await generateAWSRecommendations(result.account_id, result);
+      onRecommendations(r);
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenerating(false);
+    }
+  }, [result, generating, onRecommendations]);
 
   return (
     <div className="space-y-4">
@@ -350,7 +402,14 @@ function InventoryTab() {
 
       {!scanning && !result && !error && <InventoryEmptyState />}
 
-      {result && <ScanResultPanel result={result} />}
+      {result && (
+        <ScanResultPanel
+          result={result}
+          generating={generating}
+          genError={genError}
+          onGenerate={onGenerate}
+        />
+      )}
     </div>
   );
 }
@@ -378,10 +437,23 @@ function InventoryEmptyState() {
   );
 }
 
-function ScanResultPanel({ result }: { result: ScanResult }) {
+function ScanResultPanel({
+  result,
+  generating,
+  genError,
+  onGenerate,
+}: {
+  result: ScanResult;
+  generating: boolean;
+  genError: string | null;
+  onGenerate: () => void;
+}) {
   return (
     <div className="space-y-4">
-      {/* Summary header */}
+      {/* Summary header — plus the Generate-recommendations CTA. We
+          stack the button under the summary so a new operator scans the
+          result top-to-bottom and lands naturally on the next action,
+          rather than hunting for it after the Functions list. */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
@@ -397,6 +469,33 @@ function ScanResultPanel({ result }: { result: ScanResult }) {
             {result.functions.length} functions.
           </CardDescription>
         </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <p className="text-xs text-muted-foreground">
+              Ask the AI proposer to draft Terraform that instruments the
+              uninstrumented resources. Snippets are for your IaC pipeline —
+              Squadron does not apply them.
+            </p>
+            <Button
+              onClick={onGenerate}
+              disabled={generating}
+              variant="default"
+              className="gap-1"
+            >
+              {generating ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Sparkles className="h-4 w-4" aria-hidden />
+              )}
+              {generating ? "Generating recommendations…" : "Generate recommendations"}
+            </Button>
+          </div>
+          {genError && (
+            <p className="text-xs text-destructive">
+              Recommendation generation failed: {genError}
+            </p>
+          )}
+        </CardContent>
       </Card>
 
       {/* Partial warning */}
@@ -580,27 +679,125 @@ function TagPills({ tags }: { tags: Record<string, string> }) {
 
 // --- Recommendations tab -------------------------------------------
 
-function RecommendationsTab() {
+function RecommendationsTab({
+  recs,
+}: {
+  recs: GenerateRecommendationsResponse | null;
+}) {
+  // Three states: never generated (empty), declined by the proposer
+  // (informational), recommendations present (full list). Kept inline
+  // rather than reusing the v0.25 RecommendationsPanel because that
+  // panel fetches its own data via SWR; the discovery-source
+  // recommendations are pushed in via props per scan.
+
+  if (!recs) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 p-8 text-center">
+          <Sparkles className="h-8 w-8 text-violet-500" aria-hidden />
+          <div>
+            <h3 className="text-base font-semibold">No recommendations yet.</h3>
+            <p className="mt-2 max-w-md text-sm text-muted-foreground">
+              Run a scan and click &quot;Generate recommendations&quot; from
+              the Inventory tab.
+            </p>
+            <p className="mt-3 max-w-md text-xs text-muted-foreground">
+              Recommendations arrive as Terraform snippets for your IaC
+              pipeline — Squadron never mutates your cloud.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (recs.declined) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 p-8 text-center">
+          <Sparkles className="h-8 w-8 text-muted-foreground" aria-hidden />
+          <div>
+            <h3 className="text-base font-semibold">
+              No productive recommendations for this scan.
+            </h3>
+            <p className="mt-2 max-w-md text-sm text-muted-foreground">
+              {recs.reason ??
+                "The proposer declined; nothing actionable to surface."}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {recs.reasoning && (
+        <Card>
+          <CardContent className="p-4 text-sm">
+            <p className="text-xs uppercase tracking-wider text-muted-foreground">
+              Proposer reasoning
+            </p>
+            <blockquote className="mt-1 border-l-2 border-violet-500/50 pl-3 italic text-muted-foreground">
+              {recs.reasoning}
+            </blockquote>
+          </CardContent>
+        </Card>
+      )}
+      <ul className="space-y-3">
+        {recs.recommendations.map((rec) => (
+          <li key={rec.id}>
+            <DiscoveryRecommendationCard rec={rec} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// DiscoveryRecommendationCard renders one discovery-source
+// Recommendation. Re-implements the IaC snippet pattern from
+// RecommendationsPanel.tsx inline rather than reusing the panel
+// component because that panel owns its own SWR fetcher; the data flow
+// here is push-from-props.
+function DiscoveryRecommendationCard({ rec }: { rec: Recommendation }) {
+  const [iacOpen, setIacOpen] = useState(true);
   return (
     <Card>
-      <CardContent className="flex flex-col items-center gap-3 p-8 text-center">
-        <Sparkles className="h-8 w-8 text-violet-500" aria-hidden />
-        <div>
-          <h3 className="text-base font-semibold">
-            Recommendations coming in the next slice.
-          </h3>
-          <p className="mt-2 max-w-md text-sm text-muted-foreground">
-            The v0.66 generalized recommendation surface (Stream 2B) is ready
-            to receive discovery-source recommendations once the proposer&apos;s
-            observation mode ships. For now, the Inventory tab is the surface
-            for understanding coverage.
-          </p>
-          <p className="mt-3 max-w-md text-xs text-muted-foreground">
-            Heads up: when they land, recommendations will arrive as Terraform
-            snippets you paste into your existing pipeline — Squadron never
-            mutates your cloud.
-          </p>
-        </div>
+      <CardHeader>
+        <CardTitle className="text-base">{rec.title}</CardTitle>
+        <CardDescription>
+          {rec.source?.kind === "discovery_scan" && rec.source.ref_id ? (
+            <>
+              Discovery scan{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                {rec.source.ref_id}
+              </code>
+            </>
+          ) : null}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {rec.detail && (
+          <p className="text-sm text-muted-foreground">{rec.detail}</p>
+        )}
+        {rec.iac && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setIacOpen((v) => !v)}
+              className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+              aria-expanded={iacOpen}
+            >
+              {iacOpen ? "Hide" : "Show"} Terraform ({rec.iac.format})
+            </button>
+            {iacOpen && (
+              <pre className="mt-2 max-h-64 overflow-auto rounded-sm bg-muted/60 p-2 font-mono text-[11px] leading-snug">
+                {rec.iac.source}
+              </pre>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
