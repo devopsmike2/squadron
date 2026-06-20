@@ -692,6 +692,20 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// v0.85 Stream 2F — wire the AI service onto the discovery
+	// surface so the recommendations route can call
+	// ProposeFromDiscoveryScan. Mirrors the credstore wire-up above;
+	// the call is unconditional because *ai.Service short-circuits
+	// with ErrDisabled when AI isn't configured (the trampoline 503s
+	// for the recommendations route in that case). Keeping the
+	// wire-up right beside the credstore block closes the gap that
+	// prompted the credstore follow-up commit — if discovery is
+	// wired but AI isn't passed through here, the recommendations
+	// route returns a misleading "not configured" payload at the
+	// trampoline rather than at the proposer's own ErrDisabled
+	// surface.
+	apiServer.SetDiscoveryAIService(aiService)
+
 	// v0.54 Move 3 — incident drafter bridge. After an action runs
 	// on a node, the bridge asks the AI drafter for a postmortem
 	// style ticket draft. The operator reviews the draft through

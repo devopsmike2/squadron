@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -822,6 +823,357 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 		if !strings.Contains(string(payloadJSON), want) {
 			t.Errorf("scan_completed payload missing %q: %s", want, payloadJSON)
 		}
+	}
+}
+
+// --- HandleAWSGenerateRecommendations tests (Stream 2F) --------------
+
+// mockAIProposer records the context it was handed and returns a
+// pre-canned ProposalResult. Lets the recommendations handler tests
+// exercise the convert/validate/walk path without touching the
+// Anthropic SDK.
+type mockAIProposer struct {
+	called bool
+	gotCtx *ai.DiscoveryScanContext
+	result *ai.ProposalResult
+	err    error
+}
+
+func (m *mockAIProposer) ProposeFromDiscoveryScan(_ context.Context, in *ai.DiscoveryScanContext) (*ai.ProposalResult, error) {
+	m.called = true
+	m.gotCtx = in
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
+}
+
+// sampleRecsScanResultBody returns a JSON body the recommendations
+// handler will accept — a minimal scan_result with the same account_id
+// the test uses on the path.
+func sampleRecsScanResultBody(accountID string) string {
+	body := map[string]any{
+		"scan_result": map[string]any{
+			"scan_id":              "scan-test-uuid",
+			"scan_started_at":      time.Now().UTC().Format(time.RFC3339),
+			"scan_completed_at":    time.Now().UTC().Format(time.RFC3339),
+			"account_id":           accountID,
+			"provider":             "aws",
+			"regions":              []string{"us-east-1"},
+			"compute":              []map[string]any{{"resource_id": "i-aaa", "instance_type": "t3.micro", "tags": map[string]string{}, "has_otel": false, "os_family": "linux", "region": "us-east-1"}},
+			"functions":            []map[string]any{{"resource_id": "arn:aws:lambda:us-east-1:123:function:hello", "name": "hello", "runtime": "python3.11", "has_otel_layer": false, "region": "us-east-1"}},
+			"instrumented_count":   0,
+			"uninstrumented_count": 2,
+			"partial":              false,
+		},
+	}
+	buf, _ := json.Marshal(body)
+	return string(buf)
+}
+
+func doRecsRequest(h *DiscoveryHandlers, accountID, body string) *httptest.ResponseRecorder {
+	r := gin.New()
+	r.POST("/api/v1/discovery/aws/connections/:id/recommendations", h.HandleAWSGenerateRecommendations)
+	url := "/api/v1/discovery/aws/connections/" + accountID + "/recommendations"
+	var req *http.Request
+	if body == "" {
+		req = httptest.NewRequest(http.MethodPost, url, nil)
+	} else {
+		req = httptest.NewRequest(http.MethodPost, url, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// newRecsHandlers wires the recommendations handler with a stored
+// connection (so the credstore lookup hits), an AI proposer stub, and
+// an audit recorder. Tests adjust the proposer's pre-canned result
+// per-scenario.
+func newRecsHandlers(t *testing.T, conn *credstore.CloudConnection, mp *mockAIProposer, audit services.AuditService) *DiscoveryHandlers {
+	t.Helper()
+	store := &spyStore{getResult: conn}
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAIProposer(mp)
+	if audit != nil {
+		h.WithAuditService(audit)
+	}
+	return h
+}
+
+func TestHandleAWSGenerateRecommendations_BadRequest(t *testing.T) {
+	mp := &mockAIProposer{}
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	h := newRecsHandlers(t, conn, mp, nil)
+	w := doRecsRequest(h, "123456789012", `{`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if mp.called {
+		t.Errorf("proposer should not be called on malformed body")
+	}
+}
+
+func TestHandleAWSGenerateRecommendations_AccountMismatch(t *testing.T) {
+	mp := &mockAIProposer{}
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	h := newRecsHandlers(t, conn, mp, nil)
+	// URL :id = 123456789012; scan_result.account_id = 999... — mismatch.
+	body := sampleRecsScanResultBody("999999999999")
+	w := doRecsRequest(h, "123456789012", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AccountIDMismatch") && !strings.Contains(w.Body.String(), "does not match") {
+		t.Errorf("response should explain the mismatch: %s", w.Body.String())
+	}
+	if mp.called {
+		t.Errorf("proposer should not be called when account_id mismatches")
+	}
+}
+
+func TestHandleAWSGenerateRecommendations_ConnectionNotFound(t *testing.T) {
+	mp := &mockAIProposer{}
+	// spyStore.getResult is nil by default → "no row matches".
+	store := &spyStore{}
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAIProposer(mp)
+	w := doRecsRequest(h, "999999999999", sampleRecsScanResultBody("999999999999"))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	if mp.called {
+		t.Errorf("proposer should not be called for an unknown connection")
+	}
+}
+
+func TestHandleAWSGenerateRecommendations_Declined(t *testing.T) {
+	mp := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Declined: true,
+			Reason:   "Every scanned resource already has OTel coverage.",
+			Kind:     ai.ProposalKindPlan,
+		},
+	}
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	audit := &discoveryRecordingAudit{}
+	h := newRecsHandlers(t, conn, mp, audit)
+	w := doRecsRequest(h, "123456789012", sampleRecsScanResultBody("123456789012"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Declined        bool   `json:"declined"`
+		Reason          string `json:"reason"`
+		Recommendations []any  `json:"recommendations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if !resp.Declined {
+		t.Errorf("response.declined should be true")
+	}
+	if !strings.Contains(resp.Reason, "already has OTel coverage") {
+		t.Errorf("reason not surfaced: %q", resp.Reason)
+	}
+	if len(resp.Recommendations) != 0 {
+		t.Errorf("recommendations should be empty on declined; got %d", len(resp.Recommendations))
+	}
+
+	// No recommendations_generated audit event when nothing was
+	// generated. The proposer call WAS recorded by the mock (called
+	// flag), but no audit row should fire from the handler.
+	for _, e := range audit.entries {
+		if e.EventType == "discovery.aws.recommendations_generated" {
+			t.Errorf("recommendations_generated event should not fire on declined; got %+v", e)
+		}
+	}
+}
+
+func TestHandleAWSGenerateRecommendations_HappyPath(t *testing.T) {
+	// Two-step plan with real-looking Terraform per step. The
+	// audit-payload-leak assertion below checks the snippet text does
+	// NOT appear in the marshaled audit payload — the most important
+	// invariant of this endpoint.
+	const tfStep0 = `resource "aws_lambda_function" "hello" {
+  function_name = "hello"
+  layers = ["arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-21-0:1"]
+}
+`
+	const tfStep1 = `resource "aws_ssm_association" "adot_install" {
+  name = "AWS-RunShellScript"
+}
+`
+	mp := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Declined:  false,
+			Kind:      ai.ProposalKindPlan,
+			Reasoning: "Two Lambdas plus one EC2 instance lack OTel. Stage Lambda first, then EC2.",
+			Plan: ai.PlanCandidate{
+				Steps: []ai.PlanStepCandidate{
+					{
+						Name:                "AI plan step 0: instrument 2 Lambda functions with OpenTelemetry layer",
+						GroupID:             "123456789012",
+						InlineConfigSnippet: tfStep0,
+						RequireApproval:     true,
+						Stages:              []ai.RolloutStageCandidate{{Mode: "percent", Percentage: 100, DwellSeconds: 0}},
+						AbortCriteria:       ai.AbortCriteriaCandidate{MaxDriftedAgents: 5, MaxErrorLogsPerMinute: 50, MinDwellSecondsBeforeAbort: 120},
+					},
+					{
+						Name:                "AI plan step 1: instrument 1 EC2 instance with ADOT collector",
+						GroupID:             "123456789012",
+						InlineConfigSnippet: tfStep1,
+						Stages:              []ai.RolloutStageCandidate{{Mode: "percent", Percentage: 100, DwellSeconds: 0}},
+						AbortCriteria:       ai.AbortCriteriaCandidate{MaxDriftedAgents: 5, MaxErrorLogsPerMinute: 50, MinDwellSecondsBeforeAbort: 120},
+					},
+				},
+			},
+			Evidence:  []ai.EvidenceRefCandidate{{Kind: "audit_event", ID: "scan-test-uuid"}},
+			Model:     "claude-sonnet-4-6",
+			TokensIn:  123,
+			TokensOut: 456,
+		},
+	}
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	audit := &discoveryRecordingAudit{}
+	h := newRecsHandlers(t, conn, mp, audit)
+	w := doRecsRequest(h, "123456789012", sampleRecsScanResultBody("123456789012"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// Proposer was called with the converted context.
+	if !mp.called {
+		t.Fatalf("proposer was not called")
+	}
+	if mp.gotCtx == nil || mp.gotCtx.AccountID != "123456789012" {
+		t.Errorf("proposer received ctx = %+v", mp.gotCtx)
+	}
+	if mp.gotCtx.ScanID != "scan-test-uuid" {
+		t.Errorf("proposer received scan_id = %q", mp.gotCtx.ScanID)
+	}
+	if len(mp.gotCtx.Functions) != 1 || mp.gotCtx.Functions[0].Runtime != "python3.11" {
+		t.Errorf("functions did not round-trip into the AI context: %+v", mp.gotCtx.Functions)
+	}
+	if len(mp.gotCtx.ComputeInstances) != 1 || mp.gotCtx.ComputeInstances[0].ResourceID != "i-aaa" {
+		t.Errorf("compute did not round-trip: %+v", mp.gotCtx.ComputeInstances)
+	}
+
+	// Response shape: 2 recommendations, each with the right Source +
+	// IaC + Action fields.
+	var resp struct {
+		Declined        bool   `json:"declined"`
+		Reasoning       string `json:"reasoning"`
+		Recommendations []struct {
+			ID     string `json:"id"`
+			Title  string `json:"title"`
+			Source struct {
+				Kind  string `json:"kind"`
+				RefID string `json:"ref_id"`
+			} `json:"source"`
+			Action struct {
+				Kind    string          `json:"kind"`
+				Payload json.RawMessage `json:"payload"`
+			} `json:"action"`
+			IaC struct {
+				Format string `json:"format"`
+				Source string `json:"source"`
+			} `json:"iac"`
+		} `json:"recommendations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if resp.Declined {
+		t.Errorf("declined should be false on happy path")
+	}
+	if !strings.Contains(resp.Reasoning, "Two Lambdas") {
+		t.Errorf("reasoning not surfaced: %q", resp.Reasoning)
+	}
+	if got := len(resp.Recommendations); got != 2 {
+		t.Fatalf("recommendations length = %d, want 2", got)
+	}
+	r0 := resp.Recommendations[0]
+	if r0.Source.Kind != "discovery_scan" {
+		t.Errorf("rec[0].source.kind = %q, want discovery_scan", r0.Source.Kind)
+	}
+	if r0.Source.RefID != "scan-test-uuid" {
+		t.Errorf("rec[0].source.ref_id = %q", r0.Source.RefID)
+	}
+	if r0.IaC.Format != "terraform" {
+		t.Errorf("rec[0].iac.format = %q, want terraform", r0.IaC.Format)
+	}
+	if !strings.Contains(r0.IaC.Source, "aws_lambda_function") {
+		t.Errorf("rec[0].iac.source missing Lambda Terraform: %q", r0.IaC.Source)
+	}
+	if r0.Action.Kind != "plan" {
+		t.Errorf("rec[0].action.kind = %q, want plan", r0.Action.Kind)
+	}
+	if !strings.Contains(string(r0.Action.Payload), "aws_lambda_function") {
+		t.Errorf("rec[0].action.payload should include the step JSON: %s", r0.Action.Payload)
+	}
+
+	r1 := resp.Recommendations[1]
+	if !strings.Contains(r1.IaC.Source, "aws_ssm_association") {
+		t.Errorf("rec[1].iac.source missing SSM Terraform: %q", r1.IaC.Source)
+	}
+
+	// Audit event fires with the right shape — AND the Terraform
+	// content is NOT in the payload. This is the load-bearing
+	// invariant of this endpoint: the audit log shouldn't grow with
+	// snippet size, AND auditors should not have to scrub
+	// customer-cloud Terraform out of compliance exports.
+	var generated *services.AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].EventType == "discovery.aws.recommendations_generated" {
+			generated = &audit.entries[i]
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("recommendations_generated audit event did not fire; entries = %+v", audit.entries)
+	}
+	if generated.TargetID != "123456789012" {
+		t.Errorf("audit TargetID = %q", generated.TargetID)
+	}
+	if generated.TargetType != credstore.TargetTypeCloudConnection {
+		t.Errorf("audit TargetType = %q", generated.TargetType)
+	}
+	payloadJSON, _ := json.Marshal(generated.Payload)
+	for _, want := range []string{"account_id", "scan_id", "step_count", "tokens_in", "tokens_out"} {
+		if !strings.Contains(string(payloadJSON), want) {
+			t.Errorf("audit payload missing %q: %s", want, payloadJSON)
+		}
+	}
+	// THE LOAD-BEARING ASSERTION: no Terraform snippet content in the
+	// audit payload. A regression that started serializing the step
+	// into the payload (e.g. via map[string]any{"plan": result.Plan})
+	// would leak the entire Terraform body into every audit row.
+	for _, forbidden := range []string{
+		"aws_lambda_function",
+		"aws_ssm_association",
+		"aws-otel-python",
+	} {
+		if strings.Contains(string(payloadJSON), forbidden) {
+			t.Fatalf("Terraform content leaked into audit payload (%q): %s", forbidden, payloadJSON)
+		}
+	}
+}
+
+func TestHandleAWSGenerateRecommendations_AINotWired(t *testing.T) {
+	// Direct-struct construction (no WithAIProposer call). The
+	// handler should 503 — the trampoline 503s too on the production
+	// path, but this guards the struct-literal route.
+	store := &spyStore{getResult: &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}}
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	w := doRecsRequest(h, "123456789012", sampleRecsScanResultBody("123456789012"))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AI assist is not configured") {
+		t.Errorf("response should name the AI-not-configured cause: %s", w.Body.String())
 	}
 }
 
