@@ -89,6 +89,65 @@ func TestHandleListAuditEvents_TargetFilter(t *testing.T) {
 	assert.Equal(t, services.AuditTargetAgent, resp.Events[0].TargetType)
 }
 
+func TestHandleListAuditEvents_EventTypeFilter(t *testing.T) {
+	// Regression guard for #580 (v0.87.2): the handler used to read
+	// target_type / target_id / since / limit but silently ignored
+	// event_type, returning the full unfiltered set. The client side
+	// dedupes on event_type as a workaround, but that masks
+	// "filter ignored" from "no matching rows". This test seeds two
+	// distinct event types and pins that ?event_type=X returns only
+	// rows whose event_type is X.
+	h, svc := setupAuditHandlers(t)
+	ctx := t.Context()
+
+	const wanted = "discovery.aws.connection_created"
+	const other = "discovery.aws.connection_read"
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, svc.Record(ctx, services.AuditEntry{
+			Actor:      services.AuditActorSystem,
+			EventType:  wanted,
+			TargetType: "aws_connection",
+			TargetID:   "acct-w",
+			Action:     "created",
+		}))
+	}
+	for i := 0; i < 5; i++ {
+		require.NoError(t, svc.Record(ctx, services.AuditEntry{
+			Actor:      services.AuditActorSystem,
+			EventType:  other,
+			TargetType: "aws_connection",
+			TargetID:   "acct-r",
+			Action:     "read",
+		}))
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet,
+		"/api/v1/audit/events?event_type="+wanted, nil)
+	h.HandleListAuditEvents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Events []services.AuditEvent `json:"events"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Count must match the seeded "wanted" count exactly — if the
+	// handler regresses to ignoring event_type, this returns 8.
+	require.Len(t, resp.Events, 3,
+		"expected only the 3 %q rows; if this is 8 the handler ignored event_type", wanted)
+
+	// Every returned row must carry the requested event_type — pins
+	// that the filter is doing the right thing, not just returning
+	// the right count by coincidence.
+	for i, ev := range resp.Events {
+		assert.Equal(t, wanted, ev.EventType,
+			"row[%d].event_type = %q, want %q", i, ev.EventType, wanted)
+	}
+}
+
 func TestHandleListAuditEvents_RejectsBadSince(t *testing.T) {
 	h, _ := setupAuditHandlers(t)
 	w := httptest.NewRecorder()

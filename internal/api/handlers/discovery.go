@@ -562,11 +562,18 @@ func (h *DiscoveryHandlers) HandleAWSSaveConnection(c *gin.Context) {
 // purpose-built row type makes the redaction explicit and survives a
 // future addition of new fields to CloudConnection without leaking
 // them by default.
+//
+// The connection_id field is equal to account_id today — the
+// substrate's CloudConnection has no separate UUID. Surfacing it as a
+// named field lets the UI construct /connections/:id/scan URLs without
+// inferring that account_id IS the connection id, and lets a future
+// substrate change to UUIDs not require a wire-shape break.
 type awsConnectionRow struct {
-	AccountID   string    `json:"account_id"`
-	DisplayName string    `json:"display_name"`
-	Regions     []string  `json:"regions"`
-	CreatedAt   time.Time `json:"created_at"`
+	ConnectionID string    `json:"connection_id"`
+	AccountID    string    `json:"account_id"`
+	DisplayName  string    `json:"display_name"`
+	Regions      []string  `json:"regions"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // awsListConnectionsResponse is the wire shape the Account tab fetches.
@@ -623,10 +630,11 @@ func (h *DiscoveryHandlers) HandleAWSListConnections(c *gin.Context) {
 			continue
 		}
 		rows = append(rows, awsConnectionRow{
-			AccountID:   conn.AccountID,
-			DisplayName: conn.DisplayName,
-			Regions:     conn.Regions,
-			CreatedAt:   conn.CreatedAt,
+			ConnectionID: conn.AccountID,
+			AccountID:    conn.AccountID,
+			DisplayName:  conn.DisplayName,
+			Regions:      conn.Regions,
+			CreatedAt:    conn.CreatedAt,
 		})
 	}
 

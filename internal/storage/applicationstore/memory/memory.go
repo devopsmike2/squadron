@@ -593,6 +593,9 @@ func (s *Store) ListAuditEvents(ctx context.Context, filter types.AuditEventFilt
 	out := make([]*types.AuditEvent, 0)
 	for i := len(s.auditEvents) - 1; i >= 0; i-- {
 		e := s.auditEvents[i]
+		if filter.EventType != "" && e.EventType != filter.EventType {
+			continue
+		}
 		if filter.TargetType != "" && e.TargetType != filter.TargetType {
 			continue
 		}
