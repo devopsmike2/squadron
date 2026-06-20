@@ -17,7 +17,7 @@
 // the very first frame of the connect flow and removes one moving
 // piece — the wizard is small (5 steps) and rarely changes.
 
-import { apiPost } from "./base";
+import { apiGet, apiPost } from "./base";
 
 // --- Validation endpoint shapes -------------------------------------
 
@@ -97,6 +97,89 @@ export function saveAWSConnection(
   req: SaveConnectionRequest,
 ): Promise<SaveConnectionResponse> {
   return apiPost<SaveConnectionResponse>("/discovery/aws/connections", req);
+}
+
+// --- List endpoint shapes (Stream 2E) -------------------------------
+
+// CloudConnection mirrors the awsConnectionRow wire shape the list
+// handler emits. ONLY display fields — the role ARN, ExternalId, and
+// encrypted credential bytes are never returned to the browser.
+// Operators see "this account is connected"; they cannot read back
+// trust-policy material from the UI.
+export interface CloudConnection {
+  account_id: string;
+  display_name: string;
+  regions: string[];
+  // created_at is an ISO-8601 timestamp string. The card UI formats it
+  // as a relative time via lib/utils helpers.
+  created_at: string;
+}
+
+export interface ListConnectionsResponse {
+  connections: CloudConnection[];
+}
+
+export function listAWSConnections(): Promise<ListConnectionsResponse> {
+  return apiGet<ListConnectionsResponse>("/discovery/aws/connections");
+}
+
+// --- Scan endpoint shapes (Stream 2E) -------------------------------
+
+// ComputeInstanceSnapshot mirrors scanner.ComputeInstanceSnapshot. The
+// Inventory tab renders one row per entry — resource_id, instance_type,
+// region, and a HasOTel detection badge.
+export interface ComputeInstanceSnapshot {
+  resource_id: string;
+  instance_type: string;
+  tags: Record<string, string>;
+  has_otel: boolean;
+  os_family: string;
+  region: string;
+}
+
+// FunctionRuntimeSnapshot mirrors scanner.FunctionRuntimeSnapshot.
+export interface FunctionRuntimeSnapshot {
+  resource_id: string;
+  name: string;
+  runtime: string;
+  has_otel_layer: boolean;
+  region: string;
+}
+
+// ScanResult is the typed payload the scan endpoint returns. Mirrors
+// scanner.Result via the marshalScanResult wire shape on the Go side.
+// scan_started_at / scan_completed_at are ISO-8601 strings; partial
+// flags an incomplete walk (the UI renders a yellow warning above the
+// section list when set).
+export interface ScanResult {
+  scan_id: string;
+  scan_started_at: string;
+  scan_completed_at: string;
+  account_id: string;
+  provider: string;
+  regions: string[];
+  compute: ComputeInstanceSnapshot[];
+  functions: FunctionRuntimeSnapshot[];
+  instrumented_count: number;
+  uninstrumented_count: number;
+  partial: boolean;
+  partial_reason?: string;
+}
+
+// runAWSScan triggers an on-demand scan against the supplied
+// connection. Empty regions array falls back to the connection's
+// stored Regions list (the server resolves the default). The endpoint
+// blocks for the duration of the scan — slice 1 doesn't have async
+// scans, which is fine for typical accounts but a known trade-off for
+// 50k+ resource counts.
+export function runAWSScan(
+  accountID: string,
+  regions?: string[],
+): Promise<ScanResult> {
+  return apiPost<ScanResult>(
+    `/discovery/aws/connections/${encodeURIComponent(accountID)}/scan`,
+    { regions: regions ?? [] },
+  );
 }
 
 // --- Wizard shape (mirrors Go internal/discovery/wizard) ------------
