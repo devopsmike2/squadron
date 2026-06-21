@@ -907,6 +907,13 @@ func (s *Server) registerRoutes() {
 			// + rollback steps + derived state). Same scope as
 			// /rollouts/:id since the data is a view over rollouts.
 			rollouts.GET("/plans/:id", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleGetPlan)
+			// v0.89.2 — plan list backfill (#554). The v0.77
+			// squadronctl plans subcommand shipped get/create only
+			// and deferred list as a backfill; this is the
+			// matching server endpoint. Same scope as plans/:id —
+			// list is a read over rollouts the same token already
+			// reaches via GET /rollouts.
+			rollouts.GET("/plans", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleListPlans)
 			rollouts.GET("/:id", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleGetRollout)
 			rollouts.POST("/:id/abort", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleAbortRollout)
 			rollouts.POST("/:id/pause", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandlePauseRollout)

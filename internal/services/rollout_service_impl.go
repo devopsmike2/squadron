@@ -574,6 +574,131 @@ func (s *RolloutServiceImpl) GetPlan(ctx context.Context, planID string) (*Plan,
 	return envelope, nil
 }
 
+// ListPlans returns plan envelopes filtered by PlanFilter. v0.89.2
+// (#554, backfill of the v0.77 squadronctl plans backfill).
+//
+// Implemented as List + group-by-PlanID + derive: pull every rollout
+// that carries a non-empty PlanID, bucket them by PlanID, derive an
+// envelope from each bucket the same way GetPlan does, then apply
+// the filter and sort newest-first by Plan.CreatedAt (which is step
+// 0's CreatedAt). Returns an empty slice (never nil) so handlers
+// can JSON-encode unconditionally.
+//
+// Limit semantics mirror AuditService.List: zero (the zero value) is
+// treated as the default of 100; values above 1000 are clamped to
+// 1000. The clamp keeps a misconfigured client from pulling the
+// whole plan history on every poll.
+func (s *RolloutServiceImpl) ListPlans(ctx context.Context, filter PlanFilter) ([]*Plan, error) {
+	// Pull every rollout the storage layer can give us. The cap of
+	// 1000 mirrors NextPlanStep's posture above: plans aren't a
+	// first class storage entity so we have to do the bucketing
+	// here, and the storage layer caps internally anyway. If the
+	// fleet ever holds enough rollouts to make this hot, the
+	// storage layer gets a dedicated (plan_id IS NOT NULL) query
+	// without disturbing the service contract.
+	stored, err := s.appStore.ListRollouts(ctx, applicationstore.RolloutFilter{
+		Limit: 1000,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Bucket by PlanID. Rollouts with empty PlanID are standalone
+	// (the v0.4–v0.68 path) and are ignored — they're not part of
+	// any plan.
+	buckets := make(map[string][]*Rollout)
+	for _, r := range stored {
+		if r == nil || r.PlanID == "" {
+			continue
+		}
+		buckets[r.PlanID] = append(buckets[r.PlanID], toServiceRollout(r))
+	}
+
+	envelopes := make([]*Plan, 0, len(buckets))
+	for planID, bucket := range buckets {
+		// Same separation GetPlan uses: forward steps have
+		// PlanStepIndex >= 0, rollback steps (v0.72 backwards
+		// walk) have negative PlanStepIndex. Sort the same way:
+		// forward ascending (0, 1, 2 …), rollbacks with -1 first.
+		var forward, rollbacks []*Rollout
+		for _, r := range bucket {
+			if r.PlanStepIndex < 0 {
+				rollbacks = append(rollbacks, r)
+			} else {
+				forward = append(forward, r)
+			}
+		}
+		sort.Slice(forward, func(i, j int) bool {
+			return forward[i].PlanStepIndex < forward[j].PlanStepIndex
+		})
+		sort.Slice(rollbacks, func(i, j int) bool {
+			return rollbacks[i].PlanStepIndex > rollbacks[j].PlanStepIndex
+		})
+
+		env := &Plan{
+			PlanID:        planID,
+			StepCount:     len(forward),
+			Steps:         forward,
+			RollbackSteps: rollbacks,
+		}
+		if len(forward) > 0 {
+			env.GroupID = forward[0].GroupID
+			env.CreatedAt = forward[0].CreatedAt
+		}
+		env.UpdatedAt = env.CreatedAt
+		for _, r := range forward {
+			if r.UpdatedAt.After(env.UpdatedAt) {
+				env.UpdatedAt = r.UpdatedAt
+			}
+		}
+		for _, r := range rollbacks {
+			if r.UpdatedAt.After(env.UpdatedAt) {
+				env.UpdatedAt = r.UpdatedAt
+			}
+		}
+		env.State = derivePlanState(forward, rollbacks)
+		envelopes = append(envelopes, env)
+	}
+
+	// Apply filter. State / GroupID are exact match; Since is the
+	// inclusive `>=` semantics AuditEventFilter uses.
+	out := envelopes[:0]
+	for _, env := range envelopes {
+		if filter.State != "" && env.State != filter.State {
+			continue
+		}
+		if filter.GroupID != "" && env.GroupID != filter.GroupID {
+			continue
+		}
+		if !filter.Since.IsZero() && env.CreatedAt.Before(filter.Since) {
+			continue
+		}
+		out = append(out, env)
+	}
+
+	// Newest first by Plan.CreatedAt — the same anchor GetPlan
+	// emits, so a UI paging through ListPlans sees the same
+	// timestamp on the plan card as GetPlan reports.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+
+	// Limit: default 100, cap at 1000. Mirrors the storage layer's
+	// cap on the underlying rollout / audit lists.
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
 // derivePlanState collapses the forward + rollback steps into a
 // single status word for the envelope. v0.74. The mapping is
 // best effort — the per step rollout.* + plan.* audit events are
