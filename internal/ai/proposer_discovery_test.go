@@ -583,6 +583,110 @@ func TestProposeFromDiscoveryScan_ClusterValidation(t *testing.T) {
 	})
 }
 
+// TestProposeFromDiscoveryScan_DynamoDBValidation pins the slice 4
+// (v0.89.6) pre-call validator on DynamoDBTableCandidate rows. A
+// row missing resource_id or name is a converter bug; the proposer
+// cites them back via the evidence array.
+// ContributorInsightsStatus is NOT enforced because the
+// "uncovered" signal IS an empty-or-non-ENABLED status; the
+// validator only enforces identifier fields. Mirrors the v0.89.0
+// EKS cluster validator.
+func TestProposeFromDiscoveryScan_DynamoDBValidation(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	t.Run("missing resource_id is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.DynamoDBTables = []DynamoDBTableCandidate{{Name: "x"}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resource_id")
+	})
+	t.Run("missing name is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.DynamoDBTables = []DynamoDBTableCandidate{{
+			ResourceID: "arn:aws:dynamodb:us-east-1:123:table/x",
+		}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "name")
+	})
+}
+
+// TestBuildDiscoveryUserMessage_DynamoDBTables verifies the slice 4
+// user-prompt builder threads each DynamoDBTableCandidate field
+// into the rendered message body and emits the three-state
+// coverage shorthand the prompt body teaches (covered /
+// uncovered / unknown — UNKNOWN for the scanner's AccessDenied
+// fallback). Pins the rule rendering so a future prompt edit
+// can't silently regress the framing.
+func TestBuildDiscoveryUserMessage_DynamoDBTables(t *testing.T) {
+	ctx := discoveryContextForTest()
+	ctx.DynamoDBTables = []DynamoDBTableCandidate{
+		{
+			ResourceID:                "arn:aws:dynamodb:us-east-1:123:table/orders",
+			Name:                      "orders",
+			BillingMode:               "PAY_PER_REQUEST",
+			ContributorInsightsStatus: "ENABLED",
+			Region:                    "us-east-1",
+		},
+		{
+			ResourceID:                "arn:aws:dynamodb:us-east-1:123:table/events",
+			Name:                      "events",
+			BillingMode:               "PROVISIONED",
+			ContributorInsightsStatus: "DISABLED",
+			Region:                    "us-east-1",
+		},
+		{
+			ResourceID:                "arn:aws:dynamodb:us-east-1:123:table/legacy",
+			Name:                      "legacy",
+			ContributorInsightsStatus: "UNKNOWN",
+			Region:                    "us-east-1",
+		},
+	}
+	got := buildDiscoveryUserMessage(*ctx)
+	assert.Contains(t, got, "DynamoDB tables (3 total):")
+	assert.Contains(t, got, "orders")
+	assert.Contains(t, got, "events")
+	assert.Contains(t, got, "legacy")
+	assert.Contains(t, got, "PAY_PER_REQUEST")
+	assert.Contains(t, got, "PROVISIONED")
+	assert.Contains(t, got, "ci=ENABLED")
+	assert.Contains(t, got, "ci=DISABLED")
+	assert.Contains(t, got, "ci=UNKNOWN")
+	assert.Contains(t, got, "covered")
+	assert.Contains(t, got, "uncovered")
+	assert.Contains(t, got, "unknown")
+}
+
+// TestProposeFromDiscoveryScanSystemPrompt_TeachesDynamoDBRule pins
+// the slice 4 (v0.89.6) prompt extension: the system message must
+// teach the model the single-axis rule on Contributor Insights AND
+// the resource_kind name AND the canonical Terraform shape AND the
+// SDK-side limitation. A regression that drops any of these is
+// silently a "DynamoDB recommendations don't ship" failure mode in
+// production.
+func TestProposeFromDiscoveryScanSystemPrompt_TeachesDynamoDBRule(t *testing.T) {
+	for _, want := range []string{
+		"CONTRIBUTOR INSIGHTS",
+		"contributor_insights_status",
+		`"ENABLED"`,
+		"aws_dynamodb_contributor_insights",
+		// SDK-side limitation must appear verbatim-ish in the
+		// prompt so the model can hedge in its reasoning.
+		"SDK-side OpenTelemetry",
+		"cloud-API-only scanning",
+		// The four-action IAM list is named so the model knows
+		// what's read-only.
+		"dynamodb:ListTables",
+		"dynamodb:DescribeContributorInsights",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt should teach DynamoDB rule: %q", want)
+	}
+}
+
 // TestBuildDiscoveryUserMessage_Clusters verifies the slice 3b
 // user-prompt builder threads each ClusterCandidate field into the
 // rendered message body and emits the four-corner coverage

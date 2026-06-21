@@ -1,10 +1,12 @@
 // Static data for the v0.89.3 #603 Stream 19 Connect-IaC-repo wizard.
 //
-// The seven slice-1 resource_kind rows match docs/proposals/603-
+// The eight canonical resource_kind rows match docs/proposals/603-
 // connect-iac-repo.md §6 and the canonical kinds used by the proposer
-// in internal/ai/proposer_discovery.go. The wizard pre-populates the
-// placement map with these rows; operators set per-row file paths (or
-// flip per-row Skip toggles for kinds they don't manage in this repo).
+// in internal/ai/proposer_discovery.go. Slice 4 (v0.89.6) added the
+// eighth row (dynamodb-contributor-insights). The wizard pre-populates
+// the placement map with these rows; operators set per-row file paths
+// (or flip per-row Skip toggles for kinds they don't manage in this
+// repo).
 //
 // Description lines are engineer-to-engineer terse — one sentence per
 // row, no marketing tone, the same posture as the AWS wizard's step
@@ -70,6 +72,20 @@ export const IAC_GITHUB_PLACEMENT_KINDS: PlacementKindRow[] = [
     display_name: "EKS observability addon",
     description:
       "Installs the adot or amazon-cloudwatch-observability addon on clusters without one ACTIVE.",
+  },
+  {
+    // Slice 4 (v0.89.6) — DynamoDB Contributor Insights. Single-axis
+    // observability rule per the proposer prompt: a table is covered
+    // iff contributor_insights_status == "ENABLED". The proposer's
+    // Terraform shape per uncovered table is
+    // resource "aws_dynamodb_contributor_insights" "<name>" {
+    //   table_name = "..."
+    // } — placement lands in the operator-declared file path.
+    provider: "aws",
+    resource_kind: "dynamodb-contributor-insights",
+    display_name: "DynamoDB Contributor Insights",
+    description:
+      "Enables CloudWatch Contributor Insights on DynamoDB tables to surface top-accessed keys and most-throttled keys.",
   },
 ];
 

@@ -75,6 +75,20 @@ type DiscoveryScanContext struct {
 	// eks:CreateAddon — read-only invariant.
 	Clusters []ClusterCandidate
 
+	// DynamoDBTables joins the inventory list in slice 4 (v0.89.6).
+	// DynamoDB today; Cosmos DB / Cloud Bigtable slot into the same
+	// field in later slices. The proposer's instrumented rule for
+	// DynamoDB is SINGLE-axis: ContributorInsightsStatus must be
+	// "ENABLED". This is a deliberate downgrade from EKS slice 3b's
+	// composite rule — DynamoDB has exactly one cloud-API-visible
+	// observability signal per table. Squadron does NOT detect
+	// SDK-side OpenTelemetry or X-Ray instrumentation in application
+	// code; tables whose SDK is OTel-wrapped on the client side
+	// are reported as uninstrumented (cloud-API-only limitation).
+	// Squadron NEVER executes dynamodb:UpdateContributorInsights —
+	// read-only invariant.
+	DynamoDBTables []DynamoDBTableCandidate
+
 	// Coverage assessment, denormalized so the prompt body can
 	// reference the totals without recounting. Match the scanner
 	// Result fields one-to-one.
@@ -197,6 +211,35 @@ type ClusterCandidate struct {
 	Region              string   `json:"region"`
 }
 
+// DynamoDBTableCandidate is one DynamoDB-shaped row from the scan.
+// Mirrors scanner.DynamoDBTableSnapshot for the same import-boundary
+// reason as the other candidates.
+//
+// The proposer's single DynamoDB lever is Contributor Insights
+// enablement. ContributorInsightsStatus carries the four AWS API
+// enum values ("ENABLED", "DISABLED", "ENABLING", "DISABLING",
+// "FAILED") plus the scanner's "UNKNOWN" sentinel surfaced when
+// the operator's policy granted dynamodb:DescribeTable but not
+// dynamodb:DescribeContributorInsights. The instrumented rule is
+// "ENABLED" only — every other value (including UNKNOWN) counts
+// as uninstrumented.
+//
+// SDK-side limitation (honest restatement at the import boundary):
+// Squadron detects resource-side Contributor Insights via the
+// DescribeContributorInsights API. Squadron does not detect
+// SDK-side OpenTelemetry or X-Ray instrumentation in your
+// application code. The proposer prompt repeats this limitation
+// so the model can hedge in its reasoning when the operator's
+// preferred backend implies SDK-side instrumentation is likely
+// already present.
+type DynamoDBTableCandidate struct {
+	ResourceID                string `json:"resource_id"`
+	Name                      string `json:"name"`
+	BillingMode               string `json:"billing_mode,omitempty"`
+	ContributorInsightsStatus string `json:"contributor_insights_status"`
+	Region                    string `json:"region"`
+}
+
 // ProposeFromDiscoveryScan is the v0.85 sibling of
 // ProposeFromCostSpike. Same proposer engine, different entry point.
 // The model receives a Squadron-discovered AWS inventory snapshot and
@@ -238,6 +281,9 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 	if err := validateClusterCandidates(in.Clusters); err != nil {
+		return nil, fmt.Errorf("discovery scan context: %w", err)
+	}
+	if err := validateDynamoDBTableCandidates(in.DynamoDBTables); err != nil {
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 
@@ -396,6 +442,24 @@ func validateClusterCandidates(cs []ClusterCandidate) error {
 		}
 		if strings.TrimSpace(c.Name) == "" {
 			return fmt.Errorf("clusters[%d]: name is required", i)
+		}
+	}
+	return nil
+}
+
+// validateDynamoDBTableCandidates mirrors validateClusterCandidates
+// for the slice 4 (v0.89.6) DynamoDB candidate type. Each row must
+// carry a non-empty ResourceID (the table ARN) and Name. The
+// ContributorInsightsStatus field is NOT enforced because the
+// "uncovered" signal IS an empty-or-non-ENABLED status; the
+// validator only enforces identifier fields.
+func validateDynamoDBTableCandidates(ts []DynamoDBTableCandidate) error {
+	for i, t := range ts {
+		if strings.TrimSpace(t.ResourceID) == "" {
+			return fmt.Errorf("dynamodb_tables[%d]: resource_id is required", i)
+		}
+		if strings.TrimSpace(t.Name) == "" {
+			return fmt.Errorf("dynamodb_tables[%d]: name is required", i)
 		}
 	}
 	return nil

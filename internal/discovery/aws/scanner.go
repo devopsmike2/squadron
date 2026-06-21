@@ -11,6 +11,8 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
@@ -210,6 +212,11 @@ func (s *Scanner) Validate(ctx context.Context, conn *credstore.CloudConnection)
 	if check := s.preflightEKS(ctx, factory, primaryRegion); check != nil {
 		result.Preflight = append(result.Preflight, *check)
 	}
+	// Slice 4 (v0.89.6) — DynamoDB joins the preflight battery via
+	// a single low-cost ListTables call with Limit=1.
+	if check := s.preflightDynamoDB(ctx, factory, primaryRegion); check != nil {
+		result.Preflight = append(result.Preflight, *check)
+	}
 
 	return result, nil
 }
@@ -382,6 +389,34 @@ func (s *Scanner) preflightEKS(ctx context.Context, factory ClientFactory, regio
 	return &scanner.PreflightCheck{Service: "eks", OK: true, SampleCount: sample}
 }
 
+// preflightDynamoDB runs a single ListTables call with Limit=1
+// against the supplied region. Mirrors preflightEKS — a
+// misconfigured role fails fast, and a properly configured one
+// returns at most one row. The per-table fan-out (DescribeTable +
+// DescribeContributorInsights + ListTagsOfResource) only fires at
+// scan time, so the preflight proves dynamodb:ListTables is granted;
+// the other three permissions surface at scan time and emit
+// "dynamodb" to Result.FailedServices on the failure path.
+//
+// Slice 4 (v0.89.6).
+func (s *Scanner) preflightDynamoDB(ctx context.Context, factory ClientFactory, region string) *scanner.PreflightCheck {
+	client, err := factory.DynamoDB(ctx, region)
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "dynamodb", OK: false, Err: HumanizeError(err)}
+	}
+	out, err := client.ListTables(ctx, &dynamodb.ListTablesInput{
+		Limit: awssdk.Int32(1),
+	})
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "dynamodb", OK: false, Err: HumanizeError(err)}
+	}
+	sample := len(out.TableNames)
+	if sample > 5 {
+		sample = 5
+	}
+	return &scanner.PreflightCheck{Service: "dynamodb", OK: true, SampleCount: sample}
+}
+
 // Scan satisfies scanner.Scanner. Walks each region in turn,
 // paginating DescribeInstances, ListFunctions, and DescribeDBInstances
 // with exponential backoff on throttling. On unrecoverable errors
@@ -448,6 +483,10 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 		if err := s.scanRegionEKS(ctx, factory, region, result); err != nil {
 			recordPartialFailure(result, "eks", fmt.Sprintf("eks scan failed in %s: %s", region, err.Error()))
 		}
+		// Slice 4 (v0.89.6) — DynamoDB joins the per-region walk.
+		if err := s.scanRegionDynamoDB(ctx, factory, region, result); err != nil {
+			recordPartialFailure(result, "dynamodb", fmt.Sprintf("dynamodb scan failed in %s: %s", region, err.Error()))
+		}
 	}
 
 	for _, c := range result.Compute {
@@ -504,6 +543,18 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 	// tally use.
 	for _, c := range result.Clusters {
 		if clusterIsInstrumented(c) {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Slice 4 (v0.89.6) — DynamoDB tables count as instrumented when
+	// ContributorInsightsStatus == "ENABLED" (the single-axis rule
+	// documented on scanner.DynamoDBTableSnapshot). The shared
+	// IsInstrumented predicate is what the scanner-side tally, the
+	// proposer-side reasoning, and the Inventory tab use.
+	for _, t := range result.DynamoDBTables {
+		if t.IsInstrumented() {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++
@@ -1194,6 +1245,260 @@ func mapEKSAddon(a eksAddon) scanner.ClusterAddon {
 	return out
 }
 
+// scanRegionDynamoDB walks the region's DynamoDB tables in two
+// passes and appends mapped snapshots to result.DynamoDBTables.
+// Unlike the single-pass S3 / RDS / ALB services, DynamoDB requires
+// a per-table fan-out: ListTables returns only the table name list,
+// and the observability state lives behind DescribeTable +
+// DescribeContributorInsights. Mirrors the EKS two-pass shape.
+//
+// IAM permissions required: dynamodb:ListTables +
+// dynamodb:DescribeTable + dynamodb:DescribeContributorInsights +
+// dynamodb:ListTagsOfResource. The permissions policy snippet in
+// docs/universal-discovery-design.md adds all four when slice 4
+// ships. Squadron does NOT execute
+// dynamodb:UpdateContributorInsights — discovery is strictly
+// read-only.
+//
+// Honest SDK-side limitation (re-stated from the type godoc):
+// Squadron detects RESOURCE-SIDE Contributor Insights via the
+// DescribeContributorInsights API. Squadron does NOT detect
+// SDK-side OpenTelemetry or X-Ray instrumentation in your
+// application code. If your DynamoDB SDK is OTel-wrapped on the
+// client side, Squadron will report the table as uninstrumented —
+// this is a known limitation of cloud-API-only scanning.
+//
+// Per-table fan-out runs SEQUENTIALLY in v0.89.6 (same posture as
+// EKS slice 3b). Real operators at 100+ tables per region will
+// hit a wall; deferring concurrency to a follow-up keeps this
+// ship small.
+//
+// On any per-table API failure the function returns the error so
+// the caller records "dynamodb" on FailedServices via
+// recordPartialFailure. Two surgical exceptions live inside
+// expandDynamoDBTable: (a) ResourceNotFoundException from
+// DescribeTable (race against deletion between ListTables and
+// DescribeTable) silently skips the table; (b) AccessDenied
+// specifically from DescribeContributorInsights falls back to the
+// "UNKNOWN" status sentinel rather than failing the whole walk,
+// so an operator who granted DescribeTable but forgot
+// DescribeContributorInsights still sees their inventory and the
+// rule treats UNKNOWN as uninstrumented.
+func (s *Scanner) scanRegionDynamoDB(ctx context.Context, factory ClientFactory, region string, result *scanner.Result) error {
+	client, err := factory.DynamoDB(ctx, region)
+	if err != nil {
+		return err
+	}
+	// Pass 1: ListTables, paginated via ExclusiveStartTableName /
+	// LastEvaluatedTableName. The AWS API returns up to 100 names
+	// per call.
+	var names []string
+	var startTable *string
+	for {
+		in := &dynamodb.ListTablesInput{}
+		if startTable != nil {
+			in.ExclusiveStartTableName = startTable
+		}
+		var out *dynamodb.ListTablesOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			out, e = client.ListTables(ctx, in)
+			return e
+		})
+		if callErr != nil {
+			return callErr
+		}
+		names = append(names, out.TableNames...)
+		if out.LastEvaluatedTableName == nil || *out.LastEvaluatedTableName == "" {
+			break
+		}
+		startTable = out.LastEvaluatedTableName
+	}
+	// Pass 2: per-table expand.
+	for _, name := range names {
+		snap, skip, err := s.expandDynamoDBTable(ctx, client, name, region)
+		if err != nil {
+			return err
+		}
+		if skip {
+			continue
+		}
+		result.DynamoDBTables = append(result.DynamoDBTables, snap)
+	}
+	return nil
+}
+
+// expandDynamoDBTable runs the per-table fan-out: DescribeTable +
+// DescribeContributorInsights + ListTagsOfResource. Returns the
+// populated DynamoDBTableSnapshot, a "skip this table" flag, and
+// the first non-recoverable error encountered.
+//
+// Two surgical fallbacks live here:
+//
+//   - DescribeTable returning ResourceNotFoundException is the
+//     "table was deleted between ListTables and DescribeTable" race
+//     window. Skip the table silently and return skip=true. AWS
+//     wraps the error in smithy.APIError with ErrorCode
+//     "ResourceNotFoundException".
+//
+//   - DescribeContributorInsights returning AccessDenied means the
+//     operator's policy granted dynamodb:DescribeTable but not
+//     dynamodb:DescribeContributorInsights. Don't fail the whole
+//     walk — the table inventory is still useful, the operator just
+//     can't see the observability axis. Fall back to setting
+//     ContributorInsightsStatus = "UNKNOWN" so the IsInstrumented
+//     predicate treats it as uninstrumented (Squadron cannot prove
+//     coverage) and the operator sees the row.
+//
+// Every other API failure (Throttling already gets retried;
+// AccessDenied on DescribeTable; etc.) returns the raw error so the
+// caller records "dynamodb" on FailedServices.
+func (s *Scanner) expandDynamoDBTable(ctx context.Context, client DynamoDBClient, name, region string) (scanner.DynamoDBTableSnapshot, bool, error) {
+	snap := scanner.DynamoDBTableSnapshot{
+		Name:   name,
+		Region: region,
+	}
+	// DescribeTable — ARN + status + billing mode + (legacy) tags
+	// surface here.
+	var descOut *dynamodb.DescribeTableOutput
+	err := retryWithBackoff(ctx, func() error {
+		var e error
+		descOut, e = client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+			TableName: awssdk.String(name),
+		})
+		return e
+	})
+	if err != nil {
+		if isDynamoDBNotFound(err) {
+			// Race against deletion. Skip the table silently.
+			return snap, true, nil
+		}
+		return snap, false, err
+	}
+	if descOut != nil && descOut.Table != nil {
+		applyDynamoDBTableDescription(&snap, descOut.Table)
+	}
+	// DescribeContributorInsights — the single observability axis.
+	// AccessDenied falls back to the "UNKNOWN" sentinel rather than
+	// failing the walk.
+	var ciOut *dynamodb.DescribeContributorInsightsOutput
+	err = retryWithBackoff(ctx, func() error {
+		var e error
+		ciOut, e = client.DescribeContributorInsights(ctx, &dynamodb.DescribeContributorInsightsInput{
+			TableName: awssdk.String(name),
+		})
+		return e
+	})
+	if err != nil {
+		if isAccessDenied(err) {
+			snap.ContributorInsightsStatus = "UNKNOWN"
+		} else if isDynamoDBNotFound(err) {
+			// Same race as above — table deleted between
+			// DescribeTable and DescribeContributorInsights.
+			return snap, true, nil
+		} else {
+			return snap, false, err
+		}
+	} else if ciOut != nil {
+		snap.ContributorInsightsStatus = string(ciOut.ContributorInsightsStatus)
+	}
+	// ListTagsOfResource — paginated via NextToken. The DescribeTable
+	// path does NOT return DynamoDB tags directly (unlike RDS); a
+	// per-resource call is required. ListTagsOfResource needs the
+	// table ARN, which DescribeTable just populated.
+	if snap.ResourceID != "" {
+		var nextToken *string
+		for {
+			in := &dynamodb.ListTagsOfResourceInput{
+				ResourceArn: awssdk.String(snap.ResourceID),
+			}
+			if nextToken != nil {
+				in.NextToken = nextToken
+			}
+			var out *dynamodb.ListTagsOfResourceOutput
+			callErr := retryWithBackoff(ctx, func() error {
+				var e error
+				out, e = client.ListTagsOfResource(ctx, in)
+				return e
+			})
+			if callErr != nil {
+				return snap, false, callErr
+			}
+			if len(out.Tags) > 0 {
+				if snap.Tags == nil {
+					snap.Tags = make(map[string]string, len(out.Tags))
+				}
+				for _, t := range out.Tags {
+					if t.Key == nil {
+						continue
+					}
+					key := *t.Key
+					val := ""
+					if t.Value != nil {
+						val = *t.Value
+					}
+					snap.Tags[key] = val
+				}
+			}
+			if out.NextToken == nil || *out.NextToken == "" {
+				break
+			}
+			nextToken = out.NextToken
+		}
+	}
+	return snap, false, nil
+}
+
+// applyDynamoDBTableDescription pulls the ARN + status + billing
+// mode off an SDK TableDescription value and populates the
+// snapshot. Extracted so the snapshot construction stays readable.
+// Tags are NOT read here — DynamoDB requires a separate
+// ListTagsOfResource call against the table ARN.
+func applyDynamoDBTableDescription(snap *scanner.DynamoDBTableSnapshot, t *dynamodbtypes.TableDescription) {
+	if t.TableArn != nil {
+		snap.ResourceID = *t.TableArn
+	}
+	if t.TableName != nil && snap.Name == "" {
+		snap.Name = *t.TableName
+	}
+	snap.Status = string(t.TableStatus)
+	if t.BillingModeSummary != nil {
+		snap.BillingMode = string(t.BillingModeSummary.BillingMode)
+	}
+}
+
+// isDynamoDBNotFound pattern-matches the smithy.APIError shape
+// against the DynamoDB ResourceNotFoundException code. Used by
+// expandDynamoDBTable to handle the race window where a table is
+// deleted between ListTables and the per-table follow-up calls.
+func isDynamoDBNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.ErrorCode() == "ResourceNotFoundException"
+}
+
+// isAccessDenied pattern-matches the smithy.APIError shape against
+// the canonical AWS AccessDenied error codes. Used by
+// expandDynamoDBTable to fall back to the UNKNOWN sentinel when
+// the operator's policy granted DescribeTable but not
+// DescribeContributorInsights. Multiple codes are checked because
+// DynamoDB historically returns "AccessDeniedException" while some
+// other services return "AccessDenied" — defense-in-depth across
+// the family.
+func isAccessDenied(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode() {
+	case "AccessDenied", "AccessDeniedException", "UnauthorizedOperation":
+		return true
+	}
+	return false
+}
+
 // mapALBBase turns an SDK LoadBalancer into the base snapshot — name,
 // type, scheme, region, ARN — without the per-LB attributes that
 // require a follow-up call. applyALBAttributes fills in the
@@ -1461,7 +1766,7 @@ func isThrottlingError(err error) bool {
 //
 // Service identifiers shipping today: "assume_role" (sentinel for
 // credentials-layer failures), "ec2", "lambda", "rds", "s3", "alb",
-// "eks" (slice 3b — v0.89.0).
+// "eks" (slice 3b — v0.89.0), "dynamodb" (slice 4 — v0.89.6).
 func recordPartialFailure(result *scanner.Result, service, reason string) {
 	result.Partial = true
 	if result.PartialReason == "" {

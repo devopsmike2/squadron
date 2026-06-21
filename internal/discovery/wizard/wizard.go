@@ -244,7 +244,7 @@ func AWSWizard() ConnectorWizard {
 				// five service categories Squadron now reads from.
 				ID:          "permissions-policy",
 				Title:       "Add this permissions policy to the role",
-				Description: "Squadron needs read-only access to EC2, Lambda, RDS, S3, ELBv2 (ALB / NLB), and EKS in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
+				Description: "Squadron needs read-only access to EC2, Lambda, RDS, S3, ELBv2 (ALB / NLB), EKS, and DynamoDB in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
 				Action: WizardAction{
 					Kind: ActionCopyValue,
 					Payload: map[string]string{
@@ -256,7 +256,7 @@ func AWSWizard() ConnectorWizard {
 					Kind: ValidationNone,
 				},
 				DocLink:      "https://docs.squadron.example/discovery/aws#permissions-policy",
-				RecoveryHint: "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB/EKS probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
+				RecoveryHint: "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB/EKS/DynamoDB probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
 			},
 			{
 				ID:          "role-arn",
@@ -280,7 +280,7 @@ func AWSWizard() ConnectorWizard {
 			{
 				ID:          "validate",
 				Title:       "Validate the connection",
-				Description: "Squadron will run sts:AssumeRole and tiny EC2 + Lambda + RDS + S3 + ALB + EKS probes to confirm the role works. No records are created until you click Save on the next step.",
+				Description: "Squadron will run sts:AssumeRole and tiny EC2 + Lambda + RDS + S3 + ALB + EKS + DynamoDB probes to confirm the role works. No records are created until you click Save on the next step.",
 				Action: WizardAction{
 					Kind: ActionTestConnection,
 				},

@@ -243,7 +243,7 @@ Click **Next**.
 
 ## Step 6 — Placement map
 
-This is the substantive step. Squadron's proposer emits seven kinds
+This is the substantive step. Squadron's proposer emits eight kinds
 of recommendations today:
 
 | `resource_kind` | What the snippet does |
@@ -255,6 +255,7 @@ of recommendations today:
 | `alb-access-logs` | Enables ALB access logs on load balancers that don't have them. |
 | `eks-cluster-logging` | Enables EKS control plane logging (api, audit, authenticator). |
 | `eks-observability-addon` | Installs the `amazon-cloudwatch-observability` EKS addon. |
+| `dynamodb-contributor-insights` | Enables CloudWatch Contributor Insights on DynamoDB tables to surface top-accessed keys and most-throttled keys. |
 
 For each row, declare the **one file path** in your repo where
 Squadron should append the snippet. Placeholder examples adapt to

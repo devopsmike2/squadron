@@ -674,11 +674,14 @@ type awsScanResponse struct {
 	LoadBalancers []awsLoadBalancerRow `json:"load_balancers"`
 	// Clusters joins the wire shape in slice 3b (v0.89.0). Same
 	// non-null posture as the other category arrays.
-	Clusters            []awsClusterRow `json:"clusters"`
-	InstrumentedCount   int             `json:"instrumented_count"`
-	UninstrumentedCount int             `json:"uninstrumented_count"`
-	Partial             bool            `json:"partial"`
-	PartialReason       string          `json:"partial_reason,omitempty"`
+	Clusters []awsClusterRow `json:"clusters"`
+	// DynamoDBTables joins the wire shape in slice 4 (v0.89.6).
+	// Same non-null posture as the other category arrays.
+	DynamoDBTables      []awsDynamoDBTableRow `json:"dynamodb_tables"`
+	InstrumentedCount   int                   `json:"instrumented_count"`
+	UninstrumentedCount int                   `json:"uninstrumented_count"`
+	Partial             bool                  `json:"partial"`
+	PartialReason       string                `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -772,6 +775,28 @@ type awsClusterAddonRow struct {
 	Status  string `json:"status"`
 }
 
+// awsDynamoDBTableRow is the snake_case wire shape for one DynamoDB
+// table row. Slice 4 (v0.89.6). Mirrors
+// scanner.DynamoDBTableSnapshot — the single instrumented-rule axis
+// (contributor_insights_status) surfaces as a string so the
+// Inventory tab can render the four AWS API enum values plus the
+// scanner's "UNKNOWN" fallback sentinel in a single badge column.
+//
+// SDK-side limitation (re-stated honestly): Squadron detects
+// resource-side Contributor Insights here. Squadron does not detect
+// SDK-side OpenTelemetry or X-Ray instrumentation in application
+// code; tables whose DynamoDB SDK is OTel-wrapped on the client
+// side render as uninstrumented in the inventory.
+type awsDynamoDBTableRow struct {
+	ResourceID                string            `json:"resource_id"`
+	Name                      string            `json:"name"`
+	Status                    string            `json:"status"`
+	BillingMode               string            `json:"billing_mode,omitempty"`
+	ContributorInsightsStatus string            `json:"contributor_insights_status"`
+	Region                    string            `json:"region"`
+	Tags                      map[string]string `json:"tags"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -789,6 +814,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		ObjectStores:        make([]awsObjectStoreRow, 0, len(r.ObjectStores)),
 		LoadBalancers:       make([]awsLoadBalancerRow, 0, len(r.LoadBalancers)),
 		Clusters:            make([]awsClusterRow, 0, len(r.Clusters)),
+		DynamoDBTables:      make([]awsDynamoDBTableRow, 0, len(r.DynamoDBTables)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -868,6 +894,17 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		}
 		out.Clusters = append(out.Clusters, row)
 	}
+	for _, t := range r.DynamoDBTables {
+		out.DynamoDBTables = append(out.DynamoDBTables, awsDynamoDBTableRow{
+			ResourceID:                t.ResourceID,
+			Name:                      t.Name,
+			Status:                    t.Status,
+			BillingMode:               t.BillingMode,
+			ContributorInsightsStatus: t.ContributorInsightsStatus,
+			Region:                    t.Region,
+			Tags:                      t.Tags,
+		})
+	}
 	return out
 }
 
@@ -892,13 +929,14 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 //     compute_count, function_count, database_count,
 //     object_store_count (slice 3a / v0.88.0), load_balancer_count
 //     (slice 3a / v0.88.0), cluster_count (slice 3b / v0.89.0),
-//     instrumented_count, uninstrumented_count, the partial flag,
-//     partial_reason (the operator-visible explanation when partial
-//     is true), and failed_services (structured list of service
-//     identifiers —
-//     "ec2"/"lambda"/"rds"/"s3"/"alb"/"eks"/"assume_role" — for
-//     SIEM forwarders and the proposer's future scan-history loop
-//     to pattern-match against) in the payload
+//     dynamodb_count + instrumented_dynamodb_count (slice 4 /
+//     v0.89.6), instrumented_count, uninstrumented_count, the
+//     partial flag, partial_reason (the operator-visible explanation
+//     when partial is true), and failed_services (structured list
+//     of service identifiers —
+//     "ec2"/"lambda"/"rds"/"s3"/"alb"/"eks"/"dynamodb"/"assume_role"
+//     — for SIEM forwarders and the proposer's future scan-history
+//     loop to pattern-match against) in the payload
 //   - both events carry the account_id and (for scan_completed) the
 //     scan_id, so an auditor can reconstruct any scan's lifecycle from
 //     the audit log alone
@@ -1066,11 +1104,23 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 			// timeline should see the slice 3b cluster category's
 			// count even on the happy path. Empty inventories emit
 			// "0"; they do NOT drop out via omitempty.
-			"cluster_count":        len(result.Clusters),
-			"instrumented_count":   result.InstrumentedCount,
-			"uninstrumented_count": result.UninstrumentedCount,
-			"partial":              result.Partial,
-			"recorded_at":          time.Now().UTC(),
+			"cluster_count": len(result.Clusters),
+			// Slice 4 (v0.89.6) — dynamodb_count joins the audit
+			// payload as a MANDATORY field (always present, never
+			// omitempty). instrumented_dynamodb_count surfaces the
+			// per-category instrumented tally alongside it so an
+			// operator skimming the audit timeline can see DynamoDB
+			// coverage without recomputing from the overall
+			// instrumented_count. The two fields move together —
+			// dropping either into the conditional-insert path
+			// would lose the operator-visible coverage signal on
+			// happy-path scans.
+			"dynamodb_count":              len(result.DynamoDBTables),
+			"instrumented_dynamodb_count": countInstrumentedDynamoDB(result.DynamoDBTables),
+			"instrumented_count":          result.InstrumentedCount,
+			"uninstrumented_count":        result.UninstrumentedCount,
+			"partial":                     result.Partial,
+			"recorded_at":                 time.Now().UTC(),
 		}
 		if result.PartialReason != "" {
 			payload["partial_reason"] = result.PartialReason
@@ -1349,6 +1399,23 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			Region:              c.Region,
 		})
 	}
+	// DynamoDB tables — slice 4 (v0.89.6). The proposer's single-
+	// axis instrumented rule keys off ContributorInsightsStatus.
+	// BillingMode is passed through so the prompt body's per-table
+	// reasoning can hedge "enabling Contributor Insights on a
+	// high-throughput PAY_PER_REQUEST table adds cost" when
+	// surfacing the recommendation. The "UNKNOWN" sentinel from
+	// the scanner's AccessDenied fallback is passed through verbatim
+	// so the proposer can decline or hedge as appropriate.
+	for _, t := range req.ScanResult.DynamoDBTables {
+		aiCtx.DynamoDBTables = append(aiCtx.DynamoDBTables, ai.DynamoDBTableCandidate{
+			ResourceID:                t.ResourceID,
+			Name:                      t.Name,
+			BillingMode:               t.BillingMode,
+			ContributorInsightsStatus: t.ContributorInsightsStatus,
+			Region:                    t.Region,
+		})
+	}
 
 	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
 	if err != nil {
@@ -1520,6 +1587,8 @@ func classifyResourceKind(stepName, snippet string) string {
 		return "eks-observability-addon"
 	case strings.Contains(lower, "aws_eks_cluster"):
 		return "eks-cluster-logging"
+	case strings.Contains(lower, "aws_dynamodb_contributor_insights"):
+		return "dynamodb-contributor-insights"
 	case strings.Contains(lower, "aws_lambda_function"),
 		strings.Contains(lower, "aws_lambda_layer_version"):
 		return "lambda-otel-layer"
@@ -1559,7 +1628,26 @@ func classifyResourceKind(stepName, snippet string) string {
 		return "eks-observability-addon"
 	case strings.Contains(nameLower, "eks"):
 		return "eks-cluster-logging"
+	case strings.Contains(nameLower, "dynamodb"),
+		strings.Contains(nameLower, "contributor insights"):
+		return "dynamodb-contributor-insights"
 	}
 
 	return ""
+}
+
+// countInstrumentedDynamoDB tallies the slice 4 (v0.89.6) tables in
+// the scan result whose ContributorInsightsStatus == "ENABLED" — the
+// single-axis instrumented rule. Used by the scan_completed audit
+// payload's instrumented_dynamodb_count field so SIEM forwarders
+// and the proposer's future scan-history loop don't have to
+// recompute from the row list.
+func countInstrumentedDynamoDB(tables []scanner.DynamoDBTableSnapshot) int {
+	n := 0
+	for _, t := range tables {
+		if t.IsInstrumented() {
+			n++
+		}
+	}
+	return n
 }

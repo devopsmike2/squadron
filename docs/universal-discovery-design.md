@@ -170,14 +170,16 @@ role if they discovered the role ARN. The `ExternalId` is the
 shared secret that proves the assume-role request originated from
 the specific Squadron deployment the customer authorized.
 
-### Permissions policy (slice 1 + slice 2 + slice 3a + slice 3b)
+### Permissions policy (slice 1 + slice 2 + slice 3a + slice 3b + slice 4)
 
 The role's permissions policy is strictly read-only. Slice 1 covered
-EC2 + Lambda (9 actions); slice 2 (v0.87) added RDS as the third
+EC2 + Lambda (8 actions); slice 2 (v0.87) added RDS as the third
 service Squadron walks (1 action); slice 3a (v0.88.0) added S3 (5
-actions) and ELBv2 / ALB / NLB (3 actions); slice 3b (v0.89.0) adds
-EKS (5 actions), bringing the total to 22 read-only actions. The
-slice 3b policy:
+actions) and ELBv2 / ALB / NLB (3 actions); slice 3b (v0.89.0) added
+EKS (5 actions, hotfixed to 6 in v0.89.1 when the scanner's
+`eks:ListFargateProfiles` call surfaced); slice 4 (v0.89.6) adds
+DynamoDB (4 actions), bringing the total to 27 read-only actions.
+The slice 4 policy:
 
 ```json
 {
@@ -208,7 +210,11 @@ slice 3b policy:
         "eks:ListAddons",
         "eks:DescribeAddon",
         "eks:ListNodegroups",
-        "eks:ListFargateProfiles"
+        "eks:ListFargateProfiles",
+        "dynamodb:ListTables",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeContributorInsights",
+        "dynamodb:ListTagsOfResource"
       ],
       "Resource": "*"
     }
@@ -265,6 +271,7 @@ the following AWS write APIs:
 - `s3:PutBucketLogging`
 - `elasticloadbalancing:ModifyLoadBalancerAttributes`
 - `eks:UpdateCluster` / `eks:CreateAddon` / `eks:DeleteCluster` / `eks:Update*`
+- `dynamodb:UpdateContributorInsights` / `dynamodb:UpdateTable` / `dynamodb:DeleteTable` / `dynamodb:PutItem` / `dynamodb:UpdateItem` / `dynamodb:DeleteItem`
 - `ec2:RunInstances` / `ec2:Terminate*` / `ec2:Modify*`
 - `lambda:UpdateFunctionConfiguration` / `lambda:Update*`
 - any `iam:*` action
@@ -287,6 +294,55 @@ recommendations as plan steps — Terraform that calls
 `aws_eks_cluster.enabled_cluster_log_types` and
 `aws_eks_addon`. **Squadron does NOT execute `eks:UpdateCluster`
 or `eks:CreateAddon`**.
+
+Slice 4's DynamoDB actions return per-table metadata only:
+`dynamodb:ListTables` returns table NAMES (one identifier per
+table, no contents — the API has no separate "list with detail"
+endpoint); `dynamodb:DescribeTable` returns the table ARN +
+status + billing mode + key schema + provisioned-throughput
+metadata; `dynamodb:DescribeContributorInsights` returns the
+single observability axis (Contributor Insights status: ENABLED
+/ DISABLED / ENABLING / DISABLING / FAILED) plus the
+contributor-insights rule list (rule names, NOT the actual
+top-key / throttled-key data those rules surface in CloudWatch);
+`dynamodb:ListTagsOfResource` returns the per-table tags. No
+action in the slice 4 policy returns item data, the table's
+attribute values, the Streams contents, or any data stored
+inside DynamoDB. The proposer surfaces enablement
+recommendations as plan steps — Terraform that calls
+`aws_dynamodb_contributor_insights` (the Terraform AWS provider
+supports this resource since 4.x). **Squadron does NOT execute
+`dynamodb:UpdateContributorInsights`**.
+
+The slice 4 instrumented rule for DynamoDB is SINGLE-axis:
+ContributorInsightsStatus == "ENABLED". This is a deliberate
+downgrade from EKS slice 3b's composite rule — DynamoDB has
+exactly one cloud-API-visible observability signal per table
+that the operator must explicitly enable. Pretending the rule
+is composite would either invent a fake second axis or pull in
+unrelated operational signals (PITR, DAX presence) that aren't
+actually observability.
+
+**SDK-side limitation (honestly stated): Squadron detects
+resource-side Contributor Insights; Squadron does not detect
+SDK-side OpenTelemetry or X-Ray instrumentation in your
+application code. If your DynamoDB SDK is OTel-wrapped on the
+client side, Squadron will report the table as uninstrumented —
+this is a known limitation of cloud-API-only scanning.** This is
+the same honest-tradeoff posture the design doc takes for the
+slice 1 EC2 / Lambda OTel detection (also resource-side only —
+Squadron sees Lambda layers and EC2 tags but not in-application
+SDK instrumentation). An operator whose DynamoDB SDK is already
+OTel-wrapped can decline the recommendation and re-tag the
+table as out of scope.
+
+The scanner also emits the sentinel value `"UNKNOWN"` for
+`ContributorInsightsStatus` when the policy granted
+`dynamodb:DescribeTable` and `dynamodb:ListTagsOfResource` but
+NOT `dynamodb:DescribeContributorInsights`. The row is surfaced
+so the operator sees the inventory and can fix the policy; the
+instrumented rule treats `UNKNOWN` as uninstrumented because
+Squadron cannot prove coverage.
 
 Each future slice expands this policy by additional
 Describe/List/Get actions only. The "no write actions" invariant
@@ -366,7 +422,7 @@ What's the blast radius at each posture? This section is the
 honest answer to the security review question "what happens if
 Squadron is compromised."
 
-### Posture: Discovery role only (slice 1 + slice 2 + slice 3a + slice 3b)
+### Posture: Discovery role only (slice 1 + slice 2 + slice 3a + slice 3b + slice 4)
 
 If an attacker compromises a Squadron deployment and the only IAM
 role connected is the discovery role:
