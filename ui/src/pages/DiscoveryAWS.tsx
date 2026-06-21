@@ -1308,13 +1308,13 @@ function DiscoveryRecommendationCard({
         resource_kind: rec.resource_kind,
         snippet: snippetSource,
         proposer_reasoning: proposerReasoning,
-        // affected_resources is best-effort in slice 1. The proposer
-        // doesn't expose a clean list per step; the audit story carries
-        // resource_ids via the evidence URLs. Sending an empty list is
-        // safe — the PR body's "Affected resources" section just omits
-        // the bullet list, and the count in the title falls to zero
-        // (which reads as "the snippet itself").
-        affected_resources: [],
+        // v0.89.4 (#611) — forward the proposer-emitted per-step
+        // resource id list verbatim. Empty when the proposer model
+        // didn't emit the field (cold-start with an old prompt);
+        // the backend's PR title falls back to "for 0 resources" and
+        // the body's section is omitted — same as the Phase-4
+        // posture, just lit up for newer proposer outputs.
+        affected_resources: rec.affected_resources ?? [],
         account_id: accountID || undefined,
       });
       setOpenPRResult(res);
@@ -1352,6 +1352,7 @@ function DiscoveryRecommendationCard({
   }, [
     connection,
     rec.resource_kind,
+    rec.affected_resources,
     snippetSource,
     scanID,
     stepIdx,

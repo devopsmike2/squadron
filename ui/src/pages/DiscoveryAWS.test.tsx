@@ -640,6 +640,14 @@ describe("DiscoveryAWSPage", () => {
       source: 'resource "aws_lambda_function" "hello" {\n  layers = [...]\n}',
     },
     resource_kind: "lambda-otel-layer",
+    // v0.89.4 (#611) — the discovery proposer emits per-step
+    // affected_resources; the Open-PR call forwards this verbatim
+    // so the backend's PR title's "for <N> resources" count and
+    // the PR body's "Affected resources" bullets are accurate.
+    affected_resources: [
+      "arn:aws:lambda:us-east-1:123:function:hello",
+      "arn:aws:lambda:us-east-1:123:function:goodbye",
+    ],
   };
 
   function makeRecsResp(
@@ -836,6 +844,16 @@ describe("DiscoveryAWSPage", () => {
     expect(callBody.resource_kind).toBe("lambda-otel-layer");
     expect(callBody.account_id).toBe("123456789012");
     expect(callBody.snippet).toContain("aws_lambda_function");
+    // v0.89.4 (#611) — affected_resources from the recommendation
+    // rides through to the Open-PR call payload verbatim. The
+    // backend's PR title's "for <N> resources" count and the body's
+    // bullets read off this array. A regression that hard-coded
+    // [] (the Phase 4 stopgap) would silently revert the title to
+    // "for 0 resources" in production.
+    expect(callBody.affected_resources).toEqual([
+      "arn:aws:lambda:us-east-1:123:function:hello",
+      "arn:aws:lambda:us-east-1:123:function:goodbye",
+    ]);
 
     // Success card rendered; Open PR button is gone (one PR per
     // click); PR link is target=_blank to the GitHub URL.

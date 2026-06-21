@@ -175,6 +175,23 @@ type Recommendation struct {
 	// decide whether the Open-PR action is available, and to send
 	// it on the POST /iac/github/connections/:id/open-pr payload.
 	ResourceKind string `json:"resource_kind,omitempty"`
+
+	// AffectedResources — v0.89.4 #611 Stream 19 Phase 4 follow-on
+	// — list of resource identifiers (ARNs for AWS where
+	// available, otherwise the canonical id Squadron uses
+	// internally) that this recommendation's plan step instruments.
+	// Sourced from the discovery proposer's per-step
+	// affected_resources output. The Recommendations tab forwards
+	// this list to the Open-PR backend, which uses len() in the PR
+	// title ("instrument <kind> for <N> resources") and renders the
+	// list as the "Affected resources" bullet list in the PR body.
+	// Empty when the proposer model didn't emit the field — the PR
+	// title falls back to "for 0 resources" (same as Phase 4
+	// behavior) rather than erroring; the body's section is
+	// omitted. The Recommendations tab UI does NOT render this
+	// list to the operator in slice 1.5; it is metadata for the
+	// backend's PR-text construction.
+	AffectedResources []string `json:"affected_resources,omitempty"`
 }
 
 // SourceKind is the typed enum carried on RecommendationSource.
