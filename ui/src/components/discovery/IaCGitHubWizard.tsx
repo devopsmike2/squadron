@@ -48,7 +48,7 @@ import {
   MinusCircle,
   XCircle,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type IaCGitHubPreflightRow,
@@ -56,6 +56,7 @@ import {
   type IaCHumanizedError,
   type IaCPlacementEntry,
   saveIaCGitHubConnection,
+  updateIaCGitHubPlacementMap,
   validateIaCGitHub,
 } from "@/api/iacGithub";
 import { Badge } from "@/components/ui/badge";
@@ -113,25 +114,69 @@ interface PlacementRowState {
   skipped: boolean;
 }
 
+// IaCGitHubWizardEditPlacementMode is the v0.89.4 #610 deep-link
+// shape. When supplied, the wizard renders ONLY the placement-map
+// step (no provider / PAT / repo / layout / validate chrome) and
+// Save calls PATCH /iac/github/connections/:id/placement-map instead
+// of POST /iac/github/connections. The page builds this from the
+// query-param triple ?connection_id=...&step=placement&kind=...
+// after looking up the connection in the SWR list cache.
+export interface IaCGitHubWizardEditPlacementMode {
+  kind: "edit-placement";
+  connectionID: string;
+  repoFullName: string;
+  repoLayout: "mono" | "multi";
+  // Seed rows for the placement-map step. Built from the connection's
+  // existing placement_map joined against the canonical seven kinds —
+  // rows the operator did not configure at create time render as
+  // empty + non-skipped so they can be filled in here.
+  initialRows: IaCPlacementEntry[];
+  // The resource_kind from the URL ?kind=<...> query param. The
+  // wizard scrolls this row into view + outlines it on first render.
+  // null when the URL param was missing or unknown.
+  focusedResourceKind: string | null;
+}
+
 export interface IaCGitHubWizardProps {
   // onComplete fires after a successful save. The page calls mutate()
-  // on the connection-list SWR key and closes the dialog.
+  // on the connection-list SWR key and closes the dialog. The shape
+  // matches both create + edit-placement modes; in the edit-placement
+  // mode the connection_id is the existing row's ID (not a fresh one).
   onComplete: (connection: { connection_id: string; repo_full_name: string }) => void;
+  // editMode opt-in for the v0.89.4 #610 deep-link path. When unset,
+  // the wizard runs the full six-step create flow as before
+  // (regression posture for the Phase-3 callers).
+  editMode?: IaCGitHubWizardEditPlacementMode;
 }
 
 // initialPlacementRows seeds the placement-map step from the canonical
 // resource-kind list. The state machine mutates these rows in place;
 // the wizard does not re-seed across step navigations so the operator
 // keeps any partial work when they jump back from the validate step.
-function initialPlacementRows(): PlacementRowState[] {
-  return IAC_GITHUB_PLACEMENT_KINDS.map((k) => ({
-    provider: k.provider,
-    resource_kind: k.resource_kind,
-    display_name: k.display_name,
-    description: k.description,
-    file_path: "",
-    skipped: false,
-  }));
+//
+// When existing is supplied (v0.89.4 #610 edit-placement deep link),
+// each canonical row is joined against the existing connection: rows
+// the operator already configured carry the saved file_path; rows
+// they didn't render empty + non-skipped so they can be filled in
+// here from the deep-linked entry point.
+function initialPlacementRows(
+  existing?: IaCPlacementEntry[],
+): PlacementRowState[] {
+  const byKind = new Map<string, IaCPlacementEntry>();
+  for (const e of existing ?? []) {
+    byKind.set(e.resource_kind, e);
+  }
+  return IAC_GITHUB_PLACEMENT_KINDS.map((k) => {
+    const ex = byKind.get(k.resource_kind);
+    return {
+      provider: k.provider,
+      resource_kind: k.resource_kind,
+      display_name: k.display_name,
+      description: k.description,
+      file_path: ex?.file_path ?? "",
+      skipped: false,
+    };
+  });
 }
 
 // placementRowsToEntries flattens the wizard's row state to the wire
@@ -148,7 +193,24 @@ function placementRowsToEntries(rows: PlacementRowState[]): IaCPlacementEntry[] 
     }));
 }
 
-export function IaCGitHubWizard({ onComplete }: IaCGitHubWizardProps) {
+// IaCGitHubWizard is the top-level wizard entry point. It branches
+// between two component implementations based on editMode so the
+// hooks-rule contract per implementation stays clean: the create
+// flow uses ~15 useState calls + memos; the placement-only edit
+// flow uses a smaller set. Switching between them inside one
+// function body would violate the rules-of-hooks contract.
+export function IaCGitHubWizard({ onComplete, editMode }: IaCGitHubWizardProps) {
+  if (editMode) {
+    return <PlacementOnlyEditor editMode={editMode} onComplete={onComplete} />;
+  }
+  return <IaCGitHubWizardCreate onComplete={onComplete} />;
+}
+
+function IaCGitHubWizardCreate({
+  onComplete,
+}: {
+  onComplete: IaCGitHubWizardProps["onComplete"];
+}) {
   const [stepIndex, setStepIndex] = useState(0);
 
   // Token — held in component state ONLY. No localStorage. No
@@ -915,6 +977,7 @@ function PlacementMapStep({
   onToggleRowSkipped,
   onSkipAll,
   onUnskipAll,
+  focusedResourceKind,
 }: {
   rows: PlacementRowState[];
   repoLayout: "mono" | "multi";
@@ -925,6 +988,11 @@ function PlacementMapStep({
   onToggleRowSkipped: (idx: number) => void;
   onSkipAll: () => void;
   onUnskipAll: () => void;
+  // v0.89.4 #610 — when set, the row matching this resource_kind is
+  // scrolled into view + outlined so operators landing here via the
+  // deep-link see exactly which row needs attention without scanning
+  // a list of seven.
+  focusedResourceKind?: string | null;
 }) {
   const allSkipped = rows.every((r) => r.skipped);
   const activeCount = rows.filter((r) => !r.skipped).length;
@@ -932,6 +1000,20 @@ function PlacementMapStep({
     repoLayout === "mono"
       ? "environments/prod/{kind}/main.tf"
       : "modules/{kind}/main.tf";
+
+  // Focus-row plumbing. The ref lands on the <li> that matches
+  // focusedResourceKind; the effect scrolls it into view once on
+  // first render (no infinite-scroll loop because the dep array
+  // tracks the kind itself, not the ref). The outline ring is
+  // expressed via a CSS class on the <li>.
+  const focusedRowRef = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    if (!focusedResourceKind) return;
+    const el = focusedRowRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center", behavior: "auto" });
+    }
+  }, [focusedResourceKind]);
 
   return (
     <div className="space-y-4">
@@ -1000,12 +1082,21 @@ function PlacementMapStep({
       </div>
 
       <ul className="space-y-2">
-        {rows.map((row, idx) => (
+        {rows.map((row, idx) => {
+          const isFocused =
+            focusedResourceKind != null &&
+            row.resource_kind === focusedResourceKind;
+          return (
           <li
             key={row.resource_kind}
+            ref={isFocused ? focusedRowRef : undefined}
+            data-focused={isFocused ? "true" : undefined}
+            data-testid={`iac-github-placement-row-${row.resource_kind}`}
             className={cn(
               "rounded-md border bg-card p-3",
               row.skipped && "opacity-60",
+              isFocused &&
+                "border-violet-500 ring-2 ring-violet-500/50",
             )}
           >
             <div className="flex items-start justify-between gap-3">
@@ -1064,7 +1155,8 @@ function PlacementMapStep({
               />
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );
@@ -1344,6 +1436,160 @@ function ConnectedCard({
           {connectionID}
         </code>
       </p>
+    </div>
+  );
+}
+
+// --- v0.89.4 #610 placement-only editor ---------------------------
+//
+// PlacementOnlyEditor is the deep-linked-wizard render path. The
+// page (/discovery/iac/github) constructs it from query params:
+//   ?connection_id=<uuid>&step=placement&kind=<resource_kind>
+// after looking up the connection in the SWR list cache. The
+// editor reuses PlacementMapStep verbatim (same bulk-pattern
+// affordance, same Skip toggles, same focus-row plumbing) and adds
+// a Save button that calls PATCH /iac/github/connections/:id/
+// placement-map. NO token round-trip — the substrate's stored
+// ciphertext is preserved untouched. NO Validate step — Open-PR's
+// own preflight catches a broken row at PR time, and forcing a
+// re-run of GitHub I/O here would slow the "fix the row and retry
+// Open PR" loop the deep link exists to optimize.
+function PlacementOnlyEditor({
+  editMode,
+  onComplete,
+}: {
+  editMode: IaCGitHubWizardEditPlacementMode;
+  onComplete: (c: { connection_id: string; repo_full_name: string }) => void;
+}) {
+  // Pre-populated row state. Skipped flag is always false on first
+  // mount — operators reach this surface to ADD a row (the deep
+  // link is fired specifically because Open-PR failed on a missing
+  // row), so unifying around "all rows visible + editable" beats
+  // re-running the wizard's skip-all affordance.
+  const [rows, setRows] = useState<PlacementRowState[]>(() =>
+    initialPlacementRows(editMode.initialRows),
+  );
+  const [bulkPattern, setBulkPattern] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const entries = useMemo(() => placementRowsToEntries(rows), [rows]);
+
+  const setRowFilePath = useCallback((idx: number, file_path: string) => {
+    setRows((rs) => rs.map((r, i) => (i === idx ? { ...r, file_path } : r)));
+  }, []);
+  const toggleRowSkipped = useCallback((idx: number) => {
+    setRows((rs) =>
+      rs.map((r, i) => (i === idx ? { ...r, skipped: !r.skipped } : r)),
+    );
+  }, []);
+  const skipAll = useCallback(() => {
+    setRows((rs) => rs.map((r) => ({ ...r, skipped: true })));
+  }, []);
+  const unskipAll = useCallback(() => {
+    setRows((rs) => rs.map((r) => ({ ...r, skipped: false })));
+  }, []);
+  const applyBulkPattern = useCallback(() => {
+    const pat = bulkPattern.trim();
+    if (pat === "") return;
+    setRows((rs) =>
+      rs.map((r) => {
+        if (r.skipped) return r;
+        if (r.file_path.trim() !== "") return r;
+        return { ...r, file_path: pat.replace(/\{kind\}/g, r.resource_kind) };
+      }),
+    );
+  }, [bulkPattern]);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await updateIaCGitHubPlacementMap(editMode.connectionID, {
+        placement_map: entries,
+      });
+      setSaved(true);
+      onComplete({
+        connection_id: res.connection_id,
+        repo_full_name: res.repo_full_name,
+      });
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [editMode.connectionID, entries, onComplete]);
+
+  if (saved) {
+    return (
+      <div className="rounded-lg border bg-card p-6">
+        <div className="flex items-center gap-3">
+          <CheckCircle2 className="h-6 w-6 text-green-600" aria-hidden />
+          <h2 className="text-lg font-semibold">Placement map updated</h2>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Squadron will use the new mapping when opening PRs against{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">
+            {editMode.repoFullName}
+          </code>
+          .
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold">Edit placement map</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Updating placement map for{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">
+            {editMode.repoFullName}
+          </code>
+          . The connection&apos;s token, branch prefix, and reviewer team
+          stay as they were.
+        </p>
+      </div>
+
+      <div className="rounded-lg border bg-card p-6">
+        <h3 className="text-base font-semibold">
+          {STEP_TITLES[STEP_PLACEMENT_MAP]}
+        </h3>
+        <div className="mt-4">
+          <PlacementMapStep
+            rows={rows}
+            repoLayout={editMode.repoLayout}
+            bulkPattern={bulkPattern}
+            onBulkPatternChange={setBulkPattern}
+            onApplyBulkPattern={applyBulkPattern}
+            onRowFilePathChange={setRowFilePath}
+            onToggleRowSkipped={toggleRowSkipped}
+            onSkipAll={skipAll}
+            onUnskipAll={unskipAll}
+            focusedResourceKind={editMode.focusedResourceKind}
+          />
+        </div>
+      </div>
+
+      {saveError && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+          {saveError}
+        </div>
+      )}
+
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-xs text-muted-foreground">
+          Saving {entries.length} placement{entries.length === 1 ? "" : "s"}.
+        </span>
+        <Button type="button" onClick={handleSave} disabled={saving}>
+          {saving && (
+            <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
+          )}
+          Save placement map
+        </Button>
+      </div>
     </div>
   );
 }

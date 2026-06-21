@@ -780,8 +780,16 @@ describe("DiscoveryAWSPage", () => {
     expect(
       screen.getByText(/lambda-otel-layer/),
     ).toBeInTheDocument();
+    // v0.89.4 (#610) — State-B link target deep-links the wizard
+    // via ?connection_id=...&step=placement&kind=<resource_kind>
+    // so the operator lands on the right placement row in one
+    // click. Bare /discovery/iac/github is the Phase-4 stopgap and
+    // is no longer the expected href.
     const link = screen.getByRole("link", { name: /Configure placement/i });
-    expect(link).toHaveAttribute("href", "/discovery/iac/github");
+    expect(link).toHaveAttribute(
+      "href",
+      "/discovery/iac/github?connection_id=conn-1&step=placement&kind=lambda-otel-layer",
+    );
   });
 
   it("RecommendationCard_OpenPR_success_renders_PR_link_and_disables_button", async () => {
@@ -893,7 +901,15 @@ describe("DiscoveryAWSPage", () => {
     const link = screen.getByRole("link", {
       name: /Configure the missing placement row/i,
     });
-    expect(link).toHaveAttribute("href", "/discovery/iac/github");
+    // v0.89.4 (#610) — NoPlacementMapping recovery deep-links the
+    // wizard via the same shape as State B so the operator lands
+    // on the missing row in one click instead of scanning the
+    // connections list. Bare /discovery/iac/github was the
+    // Phase-4 stopgap.
+    expect(link).toHaveAttribute(
+      "href",
+      "/discovery/iac/github?connection_id=conn-1&step=placement&kind=lambda-otel-layer",
+    );
     // Open PR button is still rendered so the operator can retry
     // once the placement is configured.
     expect(

@@ -642,6 +642,142 @@ func (h *IaCGitHubHandlers) HandleDeleteIaCGitHubConnection(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// iacGitHubUpdatePlacementMapRequest is the v0.89.4 #610 placement-map
+// edit payload. Operators reach this through the deep-linked wizard
+// (DiscoveryAWS's NoPlacementMapping / State-B link target):
+// /discovery/iac/github?connection_id=<uuid>&step=placement&kind=<kind>.
+// The wizard pre-fills with the connection's existing rows, the
+// operator edits, and Save here mutates the substrate row in place.
+//
+// Only the placement_map is mutable through this endpoint — branch
+// prefix, reviewer team, token, repo are owned by the create-time
+// wizard. Slice 1 design doc §6 invariant: credential rotation is
+// Delete + re-create, not in-place edit.
+type iacGitHubUpdatePlacementMapRequest struct {
+	PlacementMap []iacGitHubPlacementEntryReq `json:"placement_map"`
+}
+
+// HandleIaCGitHubUpdatePlacementMap — PATCH
+// /api/v1/iac/github/connections/:id/placement-map.
+//
+// Replaces the placement_map column on the connection identified by
+// :id. 404 if no such connection exists. Emits
+// iac.github.placement_map_updated on success (design doc §8 +
+// v0.89.4 audit-event-registry addendum). Token bytes NEVER touch this
+// flow — the substrate's cred_ciphertext is preserved untouched.
+func (h *IaCGitHubHandlers) HandleIaCGitHubUpdatePlacementMap(c *gin.Context) {
+	connectionID := strings.TrimSpace(c.Param("id"))
+	if connectionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
+		}})
+		return
+	}
+
+	var req iacGitHubUpdatePlacementMapRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message:       "Request body could not be parsed as JSON.",
+			SuggestedStep: "placement-map",
+		}})
+		return
+	}
+
+	if h.store == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "IaCStoreNotWired",
+			Message:       "Squadron's IaC connection substrate isn't configured.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+
+	// Look the connection up before the write so we can a) 404 cleanly
+	// (separate from "store down") and b) carry repo_full_name into
+	// the audit payload — the timeline humanizer keys off it.
+	conn, err := h.store.Get(c.Request.Context(), connectionID)
+	if err != nil {
+		if errors.Is(err, iacconnstore.ErrConnectionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code:    "ConnectionNotFound",
+				Message: "No IaC connection exists with that ID. The connection may have been deleted; re-run the connect wizard.",
+			}})
+			return
+		}
+		if h.logger != nil {
+			h.logger.Error("iac github placement-map update: store get failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "IaCStoreReadFailed",
+			Message: "Squadron could not read the IaC connection. The error has been logged.",
+		}})
+		return
+	}
+
+	placement := make([]iacconnstore.PlacementMapEntry, 0, len(req.PlacementMap))
+	for _, e := range req.PlacementMap {
+		placement = append(placement, iacconnstore.PlacementMapEntry{
+			Provider:     e.Provider,
+			ResourceKind: e.ResourceKind,
+			FilePath:     e.FilePath,
+		})
+	}
+
+	if err := h.store.UpdatePlacementMap(c.Request.Context(), connectionID, placement); err != nil {
+		if errors.Is(err, iacconnstore.ErrConnectionNotFound) {
+			// Race: row vanished between the Get above and the Update.
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code:    "ConnectionNotFound",
+				Message: "The IaC connection was deleted while the update was in flight.",
+			}})
+			return
+		}
+		if h.logger != nil {
+			h.logger.Error("iac github placement-map update: store write failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "IaCStoreWriteFailed",
+			Message:       "Squadron could not persist the placement-map update. The error has been logged; retry in a moment.",
+			SuggestedStep: "placement-map",
+		}})
+		return
+	}
+
+	// Audit. Token bytes NEVER in payload (design doc §8 invariant);
+	// the row's CredCiphertext is untouched by this call so there's
+	// nothing token-shaped to leak.
+	if h.auditService != nil {
+		placementForAudit := make([]map[string]string, 0, len(placement))
+		for _, e := range placement {
+			placementForAudit = append(placementForAudit, map[string]string{
+				"provider":      e.Provider,
+				"resource_kind": e.ResourceKind,
+				"file_path":     e.FilePath,
+			})
+		}
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      services.AuditActorSystem,
+			EventType:  services.AuditEventIaCGitHubPlacementMapUpdated,
+			TargetType: services.AuditTargetIaCConnection,
+			TargetID:   conn.ConnectionID,
+			Action:     "placement_map_updated",
+			Payload: map[string]any{
+				"connection_id":  conn.ConnectionID,
+				"repo_full_name": conn.RepoFullName,
+				"placement_map":  placementForAudit,
+				"recorded_at":    time.Now().UTC(),
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"connection_id":  conn.ConnectionID,
+		"repo_full_name": conn.RepoFullName,
+		"placement_map":  placement,
+	})
+}
+
 // iacGitHubOpenPRRequest is the Recommendations-tab Open-PR payload.
 // Mirrors the design doc §5: scan_id + step_idx pin down which
 // recommendation; resource_kind keys the placement-map lookup;

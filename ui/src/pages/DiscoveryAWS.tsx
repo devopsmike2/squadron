@@ -1496,7 +1496,11 @@ function DiscoveryRecommendationCard({
                 {/* State B — connection exists, no placement row for
                     this resource_kind. Reachable when the operator
                     skipped this kind in the wizard or when a new
-                    resource_kind ships after their connect. */}
+                    resource_kind ships after their connect. v0.89.4
+                    (#610) deep-links the link target to auto-open
+                    the wizard at the right placement row in one
+                    click instead of dropping the operator on the
+                    connections list. */}
                 {connection &&
                   rec.resource_kind &&
                   !placementFilePath && (
@@ -1511,7 +1515,10 @@ function DiscoveryRecommendationCard({
                       </code>{" "}
                       connection.{" "}
                       <Link
-                        to="/discovery/iac/github"
+                        to={buildIaCPlacementDeepLink(
+                          connection.connection_id,
+                          rec.resource_kind,
+                        )}
                         className="text-violet-500 hover:underline"
                       >
                         Configure placement
@@ -1548,7 +1555,11 @@ function DiscoveryRecommendationCard({
                   >
                     <p className="font-medium">{openPRError.message}</p>
                     <p className="mt-1 text-muted-foreground">
-                      {openPRErrorRecoveryHint(openPRError, connection)}
+                      {openPRErrorRecoveryHint(
+                        openPRError,
+                        connection,
+                        rec.resource_kind,
+                      )}
                     </p>
                   </div>
                 )}
@@ -1564,16 +1575,36 @@ function DiscoveryRecommendationCard({
 // openPRErrorRecoveryHint renders a one-line recovery hint keyed on
 // the typed error code. JSX-returning helper so the case statement
 // stays out of the renderer's body.
+//
+// v0.89.4 (#610): the NoPlacementMapping recovery hint now deep-links
+// to the wizard with the right connection + kind so the operator
+// lands on the row that needs editing in one click.
 function openPRErrorRecoveryHint(
   err: IaCGitHubOpenPRError,
   connection: IaCGitHubConnection | null,
+  resourceKind: string | undefined,
 ): ReactElement {
-  const connHref = "/discovery/iac/github";
+  const bareHref = "/discovery/iac/github";
   switch (err.code) {
     case "NoPlacementMapping":
+      // Deep-link when we have both pieces — we virtually always do
+      // here because NoPlacementMapping is only raised after the
+      // server confirmed the connection exists and resolved a
+      // resource_kind. Fall through to the bare link in the
+      // degenerate case so the operator still has a path forward.
       return (
         <>
-          <Link to={connHref} className="text-violet-500 hover:underline">
+          <Link
+            to={
+              connection && resourceKind
+                ? buildIaCPlacementDeepLink(
+                    connection.connection_id,
+                    resourceKind,
+                  )
+                : bareHref
+            }
+            className="text-violet-500 hover:underline"
+          >
             Configure the missing placement row
           </Link>{" "}
           in your IaC connection and retry.
@@ -1584,7 +1615,7 @@ function openPRErrorRecoveryHint(
     case "CredentialDecryptFailed":
       return (
         <>
-          <Link to={connHref} className="text-violet-500 hover:underline">
+          <Link to={bareHref} className="text-violet-500 hover:underline">
             Re-run the IaC connect wizard
           </Link>{" "}
           to refresh the connection
@@ -1603,7 +1634,7 @@ function openPRErrorRecoveryHint(
         <>
           Squadron could not read the placement file. Confirm the path in
           your{" "}
-          <Link to={connHref} className="text-violet-500 hover:underline">
+          <Link to={bareHref} className="text-violet-500 hover:underline">
             IaC connection
           </Link>{" "}
           still exists on the default branch.
@@ -1617,4 +1648,26 @@ function openPRErrorRecoveryHint(
         </>
       );
   }
+}
+
+// buildIaCPlacementDeepLink renders the v0.89.4 (#610) query-param
+// shape the DiscoveryIaCGitHub page consumes:
+//   /discovery/iac/github?connection_id=<uuid>&step=placement&kind=<resource_kind>
+//
+// The page validates connection_id against the SWR list (renders a
+// stale notice if not found) and validates kind against the canonical
+// seven (silently drops + opens at the placement step without a
+// focused row if not). The helper is the only site that should
+// assemble these params — link sites import it rather than
+// concatenating strings so a future query-shape change touches one
+// place.
+function buildIaCPlacementDeepLink(
+  connectionID: string,
+  resourceKind: string,
+): string {
+  const params = new URLSearchParams();
+  params.set("connection_id", connectionID);
+  params.set("step", "placement");
+  params.set("kind", resourceKind);
+  return `/discovery/iac/github?${params.toString()}`;
 }

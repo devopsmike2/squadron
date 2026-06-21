@@ -145,15 +145,22 @@ const (
 	//     repo_full_name, default_branch, auth_kind, placement_map.
 	//   - iac.github.connection_validated: repo_full_name,
 	//     default_branch, preflight_results[].
+	//   - iac.github.placement_map_updated: connection_id,
+	//     repo_full_name, placement_map. v0.89.4 (#610) — emitted when
+	//     the placement map is edited in-place via the deep-linked
+	//     wizard (PATCH /iac/github/connections/:id/placement-map).
+	//     Token bytes NEVER in payload; same posture as
+	//     iac.github.connection_created.
 	//   - recommendation.pr_opened: scan_id, step_idx, account_id,
 	//     repo_full_name, pr_number, pr_url, branch, commit_sha,
 	//     file_path, actor.
 	//   - recommendation.pr_open_failed: as above with error_code +
 	//     humanized_message; pr_number omitted when no PR opened.
-	AuditEventIaCGitHubConnectionCreated   = "iac.github.connection_created"
-	AuditEventIaCGitHubConnectionValidated = "iac.github.connection_validated"
-	AuditEventRecommendationPROpened       = "recommendation.pr_opened"
-	AuditEventRecommendationPROpenFailed   = "recommendation.pr_open_failed"
+	AuditEventIaCGitHubConnectionCreated     = "iac.github.connection_created"
+	AuditEventIaCGitHubConnectionValidated   = "iac.github.connection_validated"
+	AuditEventIaCGitHubPlacementMapUpdated   = "iac.github.placement_map_updated"
+	AuditEventRecommendationPROpened         = "recommendation.pr_opened"
+	AuditEventRecommendationPROpenFailed     = "recommendation.pr_open_failed"
 
 	// Target type strings for the v0.89.3 IaC events. Used by the
 	// timeline humanizer to group connection-lifecycle events
