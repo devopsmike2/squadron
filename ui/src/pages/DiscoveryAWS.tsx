@@ -18,6 +18,7 @@
 // recognizes from Squadron's AI surface.
 
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   ChevronRight,
@@ -25,13 +26,14 @@ import {
   Copy,
   ExternalLink,
   GitPullRequest,
+  Layers,
   Loader2,
   Play,
   Sparkles,
   X,
 } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactElement } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import useSWR from "swr";
 
 import {
@@ -39,7 +41,9 @@ import {
   listAWSConnections,
   runAWSScan,
   saveAWSConnection,
+  scanAllAWS,
   validateAWSConnection,
+  type AWSScanAllResponse,
   type CloudConnection,
   type GenerateRecommendationsResponse,
   type ScanResult,
@@ -85,6 +89,28 @@ import { awsWizard } from "@/data/awsWizard";
 const ACCOUNT_TAB = "account";
 const INVENTORY_TAB = "inventory";
 const RECS_TAB = "recommendations";
+
+// v0.89.7b (#619 Stream 23) — query-param key + sentinel value for the
+// account selector. URL is the source of truth so refresh + deep-link
+// land the operator in the same view they bookmarked. Component state
+// mirrors the URL.
+//
+// The aggregate sentinel "all" is a string literal rather than the
+// absence of the param because "missing param" and "explicit all" are
+// the same operator intent. Using a sentinel lets the AccountSelector
+// be a controlled component without a tri-state default.
+const ACCOUNT_QUERY_PARAM = "account";
+const ACCOUNT_ALL = "all";
+
+// shortenAccountID renders the per-account badge label. AWS account
+// IDs are 12 digits and uninformative in full; the last 4 are enough
+// to distinguish accounts in a one-glance scan of a recommendation
+// list. Falls back to the full id if it's shorter than the cutoff
+// (defensive — should never happen in production).
+function shortenAccountID(accountID: string): string {
+  if (accountID.length <= 4) return accountID;
+  return accountID.slice(-4);
+}
 
 // IAC_GITHUB_CONNECTIONS_SWR_KEY — shared with DiscoveryIaCGitHub.tsx
 // so the Recommendations tab and the IaC connections page sip from
@@ -132,6 +158,65 @@ export default function DiscoveryAWSPage() {
   const [recsAccountID, setRecsAccountID] = useState<string>("");
   const [recsScanID, setRecsScanID] = useState<string>("");
 
+  // v0.89.7b (#619 Stream 23) — last scan-all result kept at page
+  // level so the Inventory tab's aggregate summary card and the
+  // top-of-page scan-all status grid sip from the same source. Reset
+  // is per-session; the operator re-runs Scan all to refresh.
+  const [scanAllResult, setScanAllResult] = useState<AWSScanAllResponse | null>(
+    null,
+  );
+  const [scanAllInFlight, setScanAllInFlight] = useState(false);
+  const [scanAllError, setScanAllError] = useState<string | null>(null);
+
+  // v0.89.7b (#619 Stream 23) — account selector reads/writes the URL.
+  // The selector lives at the top of the page so it's visible
+  // regardless of which tab is active; switching accounts in the
+  // middle of an Inventory scan flow swaps the InventoryTab's mounted
+  // child via the `key` prop below, which resets the per-account
+  // scan state cleanly.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const accountParam = searchParams.get(ACCOUNT_QUERY_PARAM) ?? ACCOUNT_ALL;
+  const isAggregateView = accountParam === ACCOUNT_ALL;
+  const selectedAccountID = isAggregateView ? "" : accountParam;
+
+  const onAccountChange = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams);
+      if (next === ACCOUNT_ALL) {
+        params.delete(ACCOUNT_QUERY_PARAM);
+      } else {
+        params.set(ACCOUNT_QUERY_PARAM, next);
+      }
+      setSearchParams(params, { replace: false });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  // Connections drive the selector + the scan-all per-account grid.
+  // Fetched at page level so the selector and the scan-all status
+  // grid share the same SWR cache as the Account tab.
+  const { data: connData } = useSWR("/discovery/aws/connections", () =>
+    listAWSConnections(),
+  );
+  const connections = connData?.connections ?? [];
+
+  const onScanAll = useCallback(async () => {
+    if (scanAllInFlight) return;
+    setScanAllInFlight(true);
+    setScanAllError(null);
+    // Clear the previous result so the in-flight grid shows
+    // "scanning…" for every connection, not stale per-account ticks.
+    setScanAllResult(null);
+    try {
+      const r = await scanAllAWS({});
+      setScanAllResult(r);
+    } catch (e) {
+      setScanAllError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanAllInFlight(false);
+    }
+  }, [scanAllInFlight]);
+
   return (
     <div className="space-y-4 p-6">
       <header>
@@ -144,6 +229,26 @@ export default function DiscoveryAWSPage() {
         </p>
       </header>
 
+      <AccountSelectorBar
+        connections={connections}
+        selectedAccountID={accountParam}
+        onAccountChange={onAccountChange}
+        isAggregateView={isAggregateView}
+        scanAllInFlight={scanAllInFlight}
+        onScanAll={onScanAll}
+      />
+
+      {isAggregateView &&
+        (scanAllInFlight || scanAllResult || scanAllError) && (
+          <ScanAllStatusGrid
+            connections={connections}
+            inFlight={scanAllInFlight}
+            result={scanAllResult}
+            error={scanAllError}
+            onPickAccount={onAccountChange}
+          />
+        )}
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value={ACCOUNT_TAB}>Account</TabsTrigger>
@@ -155,24 +260,511 @@ export default function DiscoveryAWSPage() {
           <AccountTab />
         </TabsContent>
         <TabsContent value={INVENTORY_TAB} className="mt-4">
-          <InventoryTab
-            onRecommendations={(r, accountID, scanID) => {
-              setRecs(r);
-              setRecsAccountID(accountID);
-              setRecsScanID(scanID);
-              setActiveTab(RECS_TAB);
-            }}
-          />
+          {isAggregateView ? (
+            <AggregateInventorySummary
+              result={scanAllResult}
+              onPickAccount={onAccountChange}
+            />
+          ) : (
+            <InventoryTab
+              // Remount when the operator picks a different single
+              // account — the InventoryTab owns per-account scan
+              // state which would be stale across an account swap.
+              key={selectedAccountID}
+              initialAccountID={selectedAccountID}
+              onRecommendations={(r, accountID, scanID) => {
+                setRecs(r);
+                setRecsAccountID(accountID);
+                setRecsScanID(scanID);
+                setActiveTab(RECS_TAB);
+              }}
+            />
+          )}
         </TabsContent>
         <TabsContent value={RECS_TAB} className="mt-4">
-          <RecommendationsTab
-            recs={recs}
-            accountID={recsAccountID}
-            scanID={recsScanID}
-          />
+          {isAggregateView ? (
+            <AggregateRecommendationsNotice
+              onPickAccount={onAccountChange}
+              connections={connections}
+            />
+          ) : (
+            <RecommendationsTab
+              recs={recs}
+              accountID={recsAccountID}
+              scanID={recsScanID}
+            />
+          )}
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// AccountSelectorBar — the top-of-page picker + Scan-all CTA. v0.89.7b
+// (#619 Stream 23). Renders a Select with "All accounts" + one option
+// per connected account; selection drives the URL via the parent's
+// onAccountChange. The Scan-all CTA only renders in aggregate view —
+// a per-account "Run scan" CTA already lives in the Inventory tab and
+// shadowing it at the page level would double the operator's choices
+// without adding clarity.
+function AccountSelectorBar({
+  connections,
+  selectedAccountID,
+  onAccountChange,
+  isAggregateView,
+  scanAllInFlight,
+  onScanAll,
+}: {
+  connections: CloudConnection[];
+  selectedAccountID: string;
+  onAccountChange: (next: string) => void;
+  isAggregateView: boolean;
+  scanAllInFlight: boolean;
+  onScanAll: () => void;
+}) {
+  const hasConnections = connections.length > 0;
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-1 flex-col gap-2 md:flex-row md:items-center">
+          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            View
+          </span>
+          <div className="md:w-72">
+            <Select
+              value={hasConnections ? selectedAccountID : ""}
+              onValueChange={onAccountChange}
+              disabled={!hasConnections}
+            >
+              <SelectTrigger
+                aria-label="Account selector"
+                disabled={!hasConnections}
+              >
+                <SelectValue
+                  placeholder={
+                    hasConnections
+                      ? "All accounts"
+                      : "Connect an AWS account first"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ACCOUNT_ALL}>All accounts</SelectItem>
+                {connections.map((c) => (
+                  // The page-level selector renders display_name + a
+                  // separator + the short account id (last 4). The
+                  // Inventory tab's per-account Select renders the
+                  // full `display_name (account_id)` shape — two
+                  // distinct labels mean test queries can target one
+                  // or the other unambiguously.
+                  <SelectItem key={c.account_id} value={c.account_id}>
+                    {c.display_name} — …{shortenAccountID(c.account_id)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {!hasConnections && (
+            <Link
+              to="#"
+              onClick={(e) => {
+                // Anchor click is a no-op here — the Connect new
+                // account CTA lives inside the Account tab's dialog
+                // trigger. We keep the link as a hint pointing the
+                // operator at the Account tab below.
+                e.preventDefault();
+              }}
+              className="text-xs text-violet-500 hover:underline"
+            >
+              Connect an AWS account
+            </Link>
+          )}
+        </div>
+        {isAggregateView && hasConnections && (
+          <Button
+            onClick={onScanAll}
+            disabled={scanAllInFlight}
+            aria-label="Scan all accounts"
+            className="gap-1"
+          >
+            {scanAllInFlight ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            ) : (
+              <Layers className="h-4 w-4" aria-hidden />
+            )}
+            {scanAllInFlight ? "Scanning all accounts…" : "Scan all accounts"}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ScanAllStatusGrid — the per-account in-flight + result grid that
+// renders below the AccountSelectorBar in aggregate view. v0.89.7b
+// (#619 Stream 23). While the scan-all request is in flight, every
+// connection card shows "Scanning…". When the response lands all
+// cards flip at once — succeeded rows render per-account counts,
+// failed rows render the humanized error_code message. Forward-
+// compatible with a future streaming endpoint that would feed
+// per-account updates without a UI shape change.
+function ScanAllStatusGrid({
+  connections,
+  inFlight,
+  result,
+  error,
+  onPickAccount,
+}: {
+  connections: CloudConnection[];
+  inFlight: boolean;
+  result: AWSScanAllResponse | null;
+  error: string | null;
+  onPickAccount: (accountID: string) => void;
+}) {
+  // Build a quick lookup from account_id → succeeded / failed entry
+  // so the per-connection card can pick the right shape without
+  // re-walking the response arrays on every render.
+  const lookup = useMemo(() => {
+    const succeeded = new Map<
+      string,
+      AWSScanAllResponse["succeeded_accounts"][number]
+    >();
+    const failed = new Map<
+      string,
+      AWSScanAllResponse["failed_accounts"][number]
+    >();
+    if (result) {
+      for (const s of result.succeeded_accounts) {
+        succeeded.set(s.account_id, s);
+      }
+      for (const f of result.failed_accounts) {
+        failed.set(f.account_id, f);
+      }
+    }
+    return { succeeded, failed };
+  }, [result]);
+
+  return (
+    <div className="space-y-3">
+      {result && result.partial && (
+        <Card
+          role="status"
+          className="border-yellow-500/50 bg-yellow-500/5"
+        >
+          <CardContent className="p-3 text-sm">
+            <span className="font-medium">Partial scan-all:</span>{" "}
+            {result.failed_accounts.length} of {result.total_accounts} accounts
+            failed. The per-account cards below show the humanized error;
+            re-run after addressing each.
+          </CardContent>
+        </Card>
+      )}
+      {error && (
+        <Card>
+          <CardContent
+            role="alert"
+            className="p-3 text-sm text-destructive"
+          >
+            Scan all failed: {error}
+          </CardContent>
+        </Card>
+      )}
+      {result && !result.partial && (
+        <Card className="border-green-500/40 bg-green-500/5">
+          <CardContent className="p-3 text-sm">
+            <span className="font-medium">
+              Scanned {result.total_accounts} account
+              {result.total_accounts === 1 ? "" : "s"}:
+            </span>{" "}
+            {result.total_resources} resources discovered,{" "}
+            {result.total_instrumented} instrumented,{" "}
+            {result.total_uninstrumented} uninstrumented.
+          </CardContent>
+        </Card>
+      )}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {connections.map((c) => {
+          const succ = lookup.succeeded.get(c.account_id);
+          const fail = lookup.failed.get(c.account_id);
+          return (
+            <ScanAllAccountCard
+              key={c.account_id}
+              conn={c}
+              inFlight={inFlight}
+              succeeded={succ}
+              failed={fail}
+              onPickAccount={onPickAccount}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ScanAllAccountCard({
+  conn,
+  inFlight,
+  succeeded,
+  failed,
+  onPickAccount,
+}: {
+  conn: CloudConnection;
+  inFlight: boolean;
+  succeeded?: AWSScanAllResponse["succeeded_accounts"][number];
+  failed?: AWSScanAllResponse["failed_accounts"][number];
+  onPickAccount: (accountID: string) => void;
+}) {
+  // Card status picks one of four states. In-flight wins over any
+  // stale prior result so the operator's "scanning…" expectation
+  // matches the visible state during a re-scan.
+  const status: "scanning" | "succeeded" | "failed" | "idle" = inFlight
+    ? "scanning"
+    : failed
+      ? "failed"
+      : succeeded
+        ? "succeeded"
+        : "idle";
+
+  return (
+    <Card
+      data-account-id={conn.account_id}
+      data-status={status}
+      className={
+        status === "failed"
+          ? "border-destructive/40 bg-destructive/5"
+          : status === "succeeded"
+            ? "border-green-500/40 bg-green-500/5"
+            : undefined
+      }
+    >
+      <CardHeader>
+        <CardTitle className="text-sm">
+          <button
+            type="button"
+            onClick={() => onPickAccount(conn.account_id)}
+            className="text-left font-semibold hover:underline"
+            aria-label={`View ${conn.display_name} only`}
+          >
+            {conn.display_name}
+          </button>
+        </CardTitle>
+        <CardDescription className="text-xs">
+          <code className="rounded bg-muted px-1 py-0.5 font-mono">
+            {conn.account_id}
+          </code>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1 text-xs">
+        {status === "scanning" && (
+          <p className="flex items-center gap-1 text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> Scanning…
+          </p>
+        )}
+        {status === "succeeded" && succeeded && (
+          <>
+            <p className="flex items-center gap-1 text-green-700 dark:text-green-400">
+              <Check className="h-3 w-3" aria-hidden /> Scan succeeded
+            </p>
+            <p className="text-muted-foreground">
+              {succeeded.resource_count} resources ·{" "}
+              {succeeded.instrumented_count} instrumented ·{" "}
+              {succeeded.uninstrumented_count} uninstrumented
+            </p>
+          </>
+        )}
+        {status === "failed" && failed && (
+          <>
+            <p className="flex items-center gap-1 text-destructive">
+              <X className="h-3 w-3" aria-hidden /> {failed.error_code}
+            </p>
+            <p className="text-muted-foreground">{failed.humanized_message}</p>
+          </>
+        )}
+        {status === "idle" && (
+          <p className="text-muted-foreground">No recent scan-all result.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// AggregateInventorySummary — the slice-1 Inventory tab content for
+// the aggregate view. v0.89.7b (#619 Stream 23) — the honest scope
+// check from the task brief: full per-row aggregation across N
+// accounts of inventory data is a follow-on, not slice 1. The summary
+// card here shows the last scan-all aggregate counts; the operator
+// switches to a single account for the per-row inventory detail they
+// already know from the per-account view.
+function AggregateInventorySummary({
+  result,
+  onPickAccount,
+}: {
+  result: AWSScanAllResponse | null;
+  onPickAccount: (accountID: string) => void;
+}) {
+  if (!result) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-2 p-8 text-center">
+          <Layers className="h-8 w-8 text-muted-foreground" aria-hidden />
+          <p className="text-sm font-medium">
+            Run &quot;Scan all accounts&quot; to populate the aggregate summary.
+          </p>
+          <p className="max-w-md text-xs text-muted-foreground">
+            Slice 1 surfaces aggregate counts only; switch to a single account
+            to drill into per-resource inventory.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Aggregate inventory</CardTitle>
+          <CardDescription>
+            Across {result.total_accounts} account
+            {result.total_accounts === 1 ? "" : "s"} ·{" "}
+            scan_all_id{" "}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              {result.scan_all_id}
+            </code>
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <SummaryStat
+            label="Resources"
+            value={result.total_resources}
+            tone="neutral"
+          />
+          <SummaryStat
+            label="Instrumented"
+            value={result.total_instrumented}
+            tone="ok"
+          />
+          <SummaryStat
+            label="Uninstrumented"
+            value={result.total_uninstrumented}
+            tone="warn"
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="flex items-start gap-2 p-4 text-sm">
+          <Sparkles
+            className="mt-0.5 h-4 w-4 text-violet-500"
+            aria-hidden
+          />
+          <div>
+            <p className="font-medium">
+              Switch to a single account to see per-resource inventory.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Aggregate per-row inventory rendering is a follow-on; slice 1
+              ships the count summary above. Pick an account from the dropdown
+              to see EC2 / Lambda / RDS / S3 / ALB / EKS / DynamoDB rows.
+            </p>
+            {result.succeeded_accounts.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {result.succeeded_accounts.map((s) => (
+                  <Button
+                    key={s.account_id}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onPickAccount(s.account_id)}
+                    className="h-7 text-xs"
+                  >
+                    <code className="font-mono">{s.account_id}</code>
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "ok" | "warn" | "neutral";
+}) {
+  const toneClass =
+    tone === "ok"
+      ? "text-green-700 dark:text-green-400"
+      : tone === "warn"
+        ? "text-yellow-700 dark:text-yellow-400"
+        : "text-foreground";
+  return (
+    <div className="rounded-md border bg-muted/20 p-3">
+      <p className="text-xs uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
+      <p className={`mt-1 text-2xl font-semibold ${toneClass}`}>{value}</p>
+    </div>
+  );
+}
+
+// AggregateRecommendationsNotice — slice-1 Recommendations tab content
+// for aggregate view. v0.89.7b (#619 Stream 23) — the aggregate
+// Recommendations endpoint doesn't exist yet (proposer is per-scan,
+// and a multi-scan synthesis is its own follow-on). This panel tells
+// the operator what slice 1 supports and offers one-click pickers to
+// hop into a single-account view where Generate-recommendations
+// works exactly as today.
+function AggregateRecommendationsNotice({
+  onPickAccount,
+  connections,
+}: {
+  onPickAccount: (accountID: string) => void;
+  connections: CloudConnection[];
+}) {
+  return (
+    <Card>
+      <CardContent className="flex flex-col items-start gap-3 p-6">
+        <div className="flex items-center gap-2">
+          <AlertTriangle
+            className="h-5 w-5 text-yellow-600 dark:text-yellow-400"
+            aria-hidden
+          />
+          <p className="text-base font-medium">
+            Switch to a single account to see recommendations.
+          </p>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Slice 1 punts on cross-account recommendation aggregation —
+          recommendations are still generated per-scan via the proposer.
+          Pick an account below to see Inventory + Recommendations work
+          exactly as in the single-account view.
+        </p>
+        {connections.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {connections.map((c) => (
+              <Button
+                key={c.account_id}
+                variant="outline"
+                size="sm"
+                onClick={() => onPickAccount(c.account_id)}
+                className="h-7 text-xs"
+              >
+                {c.display_name}{" "}
+                <code className="ml-1 font-mono text-muted-foreground">
+                  ({c.account_id})
+                </code>
+              </Button>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -314,6 +906,7 @@ function AccountEmptyState() {
 
 function InventoryTab({
   onRecommendations,
+  initialAccountID,
 }: {
   // Called when the proposer responds (declined or otherwise) so the
   // page can hop to the Recommendations tab and surface the result.
@@ -325,13 +918,20 @@ function InventoryTab({
     accountID: string,
     scanID: string,
   ) => void;
+  // v0.89.7b (#619 Stream 23) — preselect the account from the
+  // page-level URL state so the operator who landed via
+  // ?account=<id> sees the Select pre-filled. Empty falls back to
+  // the legacy "operator must pick" UX. The component is remounted
+  // via the parent's key when this value changes, so we read it as
+  // initial state rather than syncing it on every render.
+  initialAccountID?: string;
 }) {
   const { data: connData } = useSWR("/discovery/aws/connections", () =>
     listAWSConnections(),
   );
   const connections = connData?.connections ?? [];
 
-  const [selected, setSelected] = useState<string>("");
+  const [selected, setSelected] = useState<string>(initialAccountID ?? "");
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1233,13 +1833,15 @@ function RecommendationsTab({
 // (PR link target=_blank, file path, "Squadron will not push to this
 // branch again" footer). On failure the card renders a humanized
 // message + a recovery action keyed on the error code.
-function DiscoveryRecommendationCard({
+export function DiscoveryRecommendationCard({
   rec,
   stepIdx,
   scanID,
   accountID,
   proposerReasoning,
   iacConnections,
+  inAggregateView = false,
+  onPickAccount,
 }: {
   rec: Recommendation;
   stepIdx: number;
@@ -1247,6 +1849,15 @@ function DiscoveryRecommendationCard({
   accountID: string;
   proposerReasoning: string;
   iacConnections: IaCGitHubConnection[];
+  // v0.89.7b (#619 Stream 23) — when rendered in the aggregate view
+  // (?account=all), the card gains a clickable account badge that
+  // filters the page down to a single account. In single-account
+  // view (?account=<id>) the badge is suppressed — the operator
+  // already picked an account, no signal to add.
+  inAggregateView?: boolean;
+  // onPickAccount drives the badge-click navigation. Required when
+  // inAggregateView is true; otherwise unused.
+  onPickAccount?: (accountID: string) => void;
 }) {
   const [iacOpen, setIacOpen] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -1361,10 +1972,34 @@ function DiscoveryRecommendationCard({
     opening,
   ]);
 
+  // v0.89.7b (#619 Stream 23) — account badge rendered only in
+  // aggregate view. Clicking it filters the page to the single
+  // account this recommendation came from (URL updates via the
+  // page-level onPickAccount). Suppressed in single-account view
+  // because the operator already picked an account.
+  const showAccountBadge = inAggregateView && !!accountID;
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{rec.title}</CardTitle>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <CardTitle className="text-base">{rec.title}</CardTitle>
+          {showAccountBadge && (
+            <button
+              type="button"
+              onClick={() => onPickAccount?.(accountID)}
+              aria-label={`Filter to account ${accountID}`}
+              className="inline-flex"
+            >
+              <Badge
+                variant="outline"
+                className="cursor-pointer border-violet-500/40 text-xs text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
+              >
+                from {shortenAccountID(accountID)}
+              </Badge>
+            </button>
+          )}
+        </div>
         <CardDescription>
           {rec.source?.kind === "discovery_scan" && rec.source.ref_id ? (
             <>

@@ -283,6 +283,78 @@ export function runAWSScan(
   );
 }
 
+// --- Scan-all endpoint shapes (v0.89.7b Stream 23, #619) ------------
+
+// AWSScanAllSucceededAccount mirrors the awsScanAllAccountRow shape on
+// the wire (snake_case keys). Per-account counts are surfaced so the
+// UI can compute per-account coverage ratios without re-fetching the
+// per-account /scan endpoint for each succeeded row.
+export interface AWSScanAllSucceededAccount {
+  account_id: string;
+  scan_id: string;
+  resource_count: number;
+  instrumented_count: number;
+  uninstrumented_count: number;
+}
+
+// AWSScanAllFailedAccount mirrors the awsScanAllFailureRow shape on
+// the wire. error_code is the stable identifier (matches the per-
+// account scan handler's HumanizedError.Code convention);
+// humanized_message is the operator-visible prose the UI renders
+// verbatim under the per-account "scan failed" card.
+export interface AWSScanAllFailedAccount {
+  account_id: string;
+  error_code: string;
+  humanized_message: string;
+}
+
+// AWSScanAllResponse mirrors awsScanAllResponse on the wire. partial
+// is true when at least one account in the fan-out failed; the UI
+// renders a yellow banner above the per-account result grid in that
+// case. concurrency is the EFFECTIVE bound the orchestrator used
+// after defaults + cap were applied — diagnostic surface for the
+// operator who passed a value and wants to see what was honored.
+export interface AWSScanAllResponse {
+  scan_all_id: string;
+  total_accounts: number;
+  succeeded_accounts: AWSScanAllSucceededAccount[];
+  failed_accounts: AWSScanAllFailedAccount[];
+  total_resources: number;
+  total_instrumented: number;
+  total_uninstrumented: number;
+  partial: boolean;
+  concurrency: number;
+}
+
+// scanAllAWS fans out a multi-account scan via the v0.89.7a Stream 21
+// orchestrator endpoint. The request shape is query-param-only — the
+// orchestrator drives every connection it can find in the credstore
+// rather than accepting a per-call account list. Empty regions slips
+// the connection's stored region list through; explicit regions
+// override per-connection storage. Empty / omitted concurrency falls
+// back to the orchestrator's default (3) and clamps at the cap (8).
+//
+// The endpoint blocks for the duration of the slowest per-account
+// scan in the fan-out — slice 1 (UI half) doesn't stream per-account
+// completions. The spinner UX in DiscoveryAWS.tsx is "all accounts
+// scanning… → all flip at once" which is honest about the response
+// shape and forward-compatible with a future streaming endpoint.
+export function scanAllAWS(opts: {
+  regions?: string[];
+  concurrency?: number;
+}): Promise<AWSScanAllResponse> {
+  const params = new URLSearchParams();
+  if (opts.regions && opts.regions.length > 0) {
+    params.set("regions", opts.regions.join(","));
+  }
+  if (opts.concurrency && opts.concurrency > 0) {
+    params.set("concurrency", String(opts.concurrency));
+  }
+  const qs = params.toString();
+  const path = `/discovery/aws/scan-all${qs ? `?${qs}` : ""}`;
+  return apiPost<AWSScanAllResponse>(path);
+}
+
 // --- Generate-recommendations endpoint shapes (Stream 2F) -----------
 
 // GenerateRecommendationsResponse mirrors the Go

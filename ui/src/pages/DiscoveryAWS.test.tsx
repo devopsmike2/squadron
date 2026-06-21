@@ -81,6 +81,12 @@ vi.mock("@/api/discovery", async () => {
     saveAWSConnection: vi.fn(),
     validateAWSConnection: vi.fn(),
     generateAWSRecommendations: vi.fn(),
+    // v0.89.7b (#619 Stream 23) — scanAllAWS is mocked via vi.spyOn
+    // inside the scan-all tests; declaring it as vi.fn() here lets
+    // vi.mocked(...) typing work without breaking the tests that
+    // don't touch the scan-all path (they get a stub that throws if
+    // accidentally called).
+    scanAllAWS: vi.fn(),
   };
 });
 
@@ -108,15 +114,32 @@ const mockedOpenPullRequest = vi.mocked(openIaCGitHubPullRequest);
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Without this, the second test in the file would
 // see the prior test's mocked connection list.
-function renderPage() {
+//
+// v0.89.7b (#619 Stream 23) — initialEntries threads through to
+// MemoryRouter so a test can land in aggregate (?account=all, default)
+// or single-account (?account=<id>) view. Pre-Stream-23 tests that
+// drive the Inventory tab default to a single-account entry because
+// aggregate mode renders the summary card instead of the per-account
+// dropdown those tests assert against.
+function renderPage(initialEntries: string[] = ["/discovery/aws?account=all"]) {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-        <MemoryRouter>{children}</MemoryRouter>
+        <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
       </SWRConfig>
     );
   }
   return render(<DiscoveryAWSPage />, { wrapper: Wrapper });
+}
+
+// renderPageSingleAccount is the existing-test entry point. Pre-Stream
+// 23 the Inventory tab always rendered with a dropdown; in Stream 23
+// that's only the case in single-account view. This helper drops the
+// existing tests on ?account=<id> so the per-account dropdown is
+// visible exactly as before.
+const SINGLE_ACCOUNT_PATH = "/discovery/aws?account=123456789012";
+function renderPageInSingleAccountView() {
+  return renderPage([SINGLE_ACCOUNT_PATH]);
 }
 
 const sampleConnections: CloudConnection[] = [
@@ -342,7 +365,7 @@ describe("DiscoveryAWSPage", () => {
     // both branch on pointerdown/pointerup, which fireEvent.click
     // doesn't dispatch in jsdom.
     const user = userEvent.setup();
-    renderPage();
+    renderPageInSingleAccountView();
 
     // Wait for the Account tab's connection load to settle so the
     // Inventory tab's Select can read the cached SWR result without
@@ -364,7 +387,9 @@ describe("DiscoveryAWSPage", () => {
       name: /Connected account/i,
     });
     await user.click(select);
-    const option = await screen.findByText(/Prod AWS \(123456789012\)/);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
     await user.click(option);
 
     // The Run scan button is enabled once a connection is selected.
@@ -463,7 +488,7 @@ describe("DiscoveryAWSPage", () => {
     });
     mockedRunAWSScan.mockResolvedValue(sampleScan);
     const user = userEvent.setup();
-    renderPage();
+    renderPageInSingleAccountView();
 
     await waitFor(() => {
       expect(screen.getByText("Prod AWS")).toBeInTheDocument();
@@ -484,7 +509,9 @@ describe("DiscoveryAWSPage", () => {
       name: /Connected account/i,
     });
     await user.click(select);
-    const option = await screen.findByText(/Prod AWS \(123456789012\)/);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
     await user.click(option);
     const runBtn = await screen.findByRole("button", { name: /Run scan/i });
     await user.click(runBtn);
@@ -551,7 +578,7 @@ describe("DiscoveryAWSPage", () => {
     mockedGenerateAWSRecommendations.mockResolvedValue(sampleResp);
 
     const user = userEvent.setup();
-    renderPage();
+    renderPageInSingleAccountView();
 
     await waitFor(() => {
       expect(screen.getByText("Prod AWS")).toBeInTheDocument();
@@ -567,7 +594,9 @@ describe("DiscoveryAWSPage", () => {
       name: /Connected account/i,
     });
     await user.click(select);
-    const option = await screen.findByText(/Prod AWS \(123456789012\)/);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
     await user.click(option);
     const runBtn = await screen.findByRole("button", { name: /Run scan/i });
     await user.click(runBtn);
@@ -669,7 +698,7 @@ describe("DiscoveryAWSPage", () => {
     });
     mockedRunAWSScan.mockResolvedValue(sampleScan);
     mockedGenerateAWSRecommendations.mockResolvedValue(recsResp);
-    renderPage();
+    renderPageInSingleAccountView();
     await waitFor(() => {
       expect(screen.getByText("Prod AWS")).toBeInTheDocument();
     });
@@ -678,7 +707,9 @@ describe("DiscoveryAWSPage", () => {
       name: /Connected account/i,
     });
     await user.click(select);
-    const option = await screen.findByText(/Prod AWS \(123456789012\)/);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
     await user.click(option);
     const runBtn = await screen.findByRole("button", { name: /Run scan/i });
     await user.click(runBtn);
@@ -1022,5 +1053,362 @@ describe("DiscoveryAWSPage", () => {
       name: /Re-run the IaC connect wizard/i,
     });
     expect(link).toHaveAttribute("href", "/discovery/iac/github");
+  });
+
+  // ---------------------------------------------------------------
+  // v0.89.7b #619 Stream 23 — multi-account scan UI surfaces.
+  // These tests cover the account selector dropdown's URL state,
+  // the aggregate vs single-account view branching, and the scan-
+  // all in-flight grid + success/failed split rendering.
+  // ---------------------------------------------------------------
+
+  it("DiscoveryAWS_DefaultsToAllAccountsWhenNoQueryParam", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    const user = userEvent.setup();
+    // No ?account= param — page should default to aggregate view.
+    renderPage(["/discovery/aws"]);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /Account selector/i }),
+      ).toBeInTheDocument();
+    });
+    // Aggregate view shows the Scan-all CTA at the top of the page.
+    expect(
+      screen.getByRole("button", { name: /Scan all accounts/i }),
+    ).toBeInTheDocument();
+    // Inventory tab in aggregate view renders the summary CTA, not
+    // the per-account dropdown. Radix Tabs branch on pointer events
+    // so userEvent.click is required (fireEvent.click won't flip the
+    // tab state in jsdom). The JSX uses &quot; for the quoted string
+    // which can render as discrete text nodes; use a substring match
+    // that skips the inner quotes.
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/to populate the aggregate summary/i),
+      ).toBeInTheDocument();
+    });
+    // Per-account Run-scan UI is NOT rendered in aggregate Inventory.
+    expect(
+      screen.queryByText(/Run an inventory scan/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("DiscoveryAWS_RespectsAccountQueryParam", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    const user = userEvent.setup();
+    // ?account=<id> drops the operator on the single-account view.
+    renderPage(["/discovery/aws?account=123456789012"]);
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    // Scan-all CTA is hidden in single-account view; the page-level
+    // selector still renders.
+    expect(
+      screen.queryByRole("button", { name: /Scan all accounts/i }),
+    ).not.toBeInTheDocument();
+    // Inventory tab renders the per-account dropdown.
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+  });
+
+  it("DiscoveryAWS_AccountSelectorChangeUpdatesURL", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    const user = userEvent.setup();
+    renderPage(["/discovery/aws"]);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /Account selector/i }),
+      ).toBeInTheDocument();
+    });
+    // Pick a single account — Scan-all CTA should disappear and the
+    // single-account Inventory tab should be available. The top-level
+    // selector renders display_name + last-4 to differentiate from
+    // the InventoryTab's per-account picker label shape.
+    await user.click(
+      screen.getByRole("combobox", { name: /Account selector/i }),
+    );
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS — …9012/,
+    });
+    await user.click(option);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /Scan all accounts/i }),
+      ).not.toBeInTheDocument();
+    });
+    // The page is now in single-account view. Inventory tab renders
+    // its per-account dropdown.
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+  });
+
+  it("DiscoveryAWS_AggregateView_ShowsScanAllCTA", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    renderPage(["/discovery/aws?account=all"]);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Scan all accounts/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("DiscoveryAWS_SingleAccountView_HidesScanAllCTA_ShowsPerAccountScanCTA", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    const user = userEvent.setup();
+    renderPage(["/discovery/aws?account=123456789012"]);
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    // Top-of-page Scan-all CTA is absent in single-account view.
+    expect(
+      screen.queryByRole("button", { name: /Scan all accounts/i }),
+    ).not.toBeInTheDocument();
+    // Per-account Run-scan CTA is present in the Inventory tab. The
+    // button label matches the existing /Run scan/i pattern (the
+    // button text reads "Run scan" when not in-flight).
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("DiscoveryAWS_ScanAllSuccess_RendersSucceededFailedSplit", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    // Configure a mixed-result scan-all so the success/failed split
+    // is visible on the rendered grid.
+    const scanAllResp = {
+      scan_all_id: "scan-all-uuid",
+      total_accounts: 2,
+      succeeded_accounts: [
+        {
+          account_id: "123456789012",
+          scan_id: "scan-1",
+          resource_count: 10,
+          instrumented_count: 6,
+          uninstrumented_count: 4,
+        },
+      ],
+      failed_accounts: [
+        {
+          account_id: "987654321098",
+          error_code: "AccessDenied",
+          humanized_message:
+            "Squadron's IAM role lacks ec2:DescribeInstances. Update the trust policy.",
+        },
+      ],
+      total_resources: 10,
+      total_instrumented: 6,
+      total_uninstrumented: 4,
+      partial: true,
+      concurrency: 3,
+    };
+    // Mock the scan-all API on the discovery module.
+    const discoveryModule = await import("@/api/discovery");
+    const scanAllSpy = vi
+      .spyOn(discoveryModule, "scanAllAWS")
+      .mockResolvedValue(scanAllResp);
+
+    const user = userEvent.setup();
+    renderPage(["/discovery/aws?account=all"]);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Scan all accounts/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(
+      screen.getByRole("button", { name: /Scan all accounts/i }),
+    );
+
+    // Succeeded card: shows resource counts. Failed card: shows the
+    // humanized error message + the error_code.
+    await waitFor(() => {
+      expect(screen.getByText(/Scan succeeded/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        /10 resources · 6 instrumented · 4 uninstrumented/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("AccessDenied")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Squadron's IAM role lacks ec2:DescribeInstances/i),
+    ).toBeInTheDocument();
+
+    expect(scanAllSpy).toHaveBeenCalledTimes(1);
+    scanAllSpy.mockRestore();
+  });
+
+  it("DiscoveryAWS_ScanAllPartialFailure_RendersPartialBanner", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    const scanAllResp = {
+      scan_all_id: "scan-all-uuid",
+      total_accounts: 2,
+      succeeded_accounts: [
+        {
+          account_id: "123456789012",
+          scan_id: "scan-1",
+          resource_count: 10,
+          instrumented_count: 6,
+          uninstrumented_count: 4,
+        },
+      ],
+      failed_accounts: [
+        {
+          account_id: "987654321098",
+          error_code: "AccessDenied",
+          humanized_message: "lacks permissions",
+        },
+      ],
+      total_resources: 10,
+      total_instrumented: 6,
+      total_uninstrumented: 4,
+      partial: true,
+      concurrency: 3,
+    };
+    const discoveryModule = await import("@/api/discovery");
+    const scanAllSpy = vi
+      .spyOn(discoveryModule, "scanAllAWS")
+      .mockResolvedValue(scanAllResp);
+
+    const user = userEvent.setup();
+    renderPage(["/discovery/aws?account=all"]);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Scan all accounts/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(
+      screen.getByRole("button", { name: /Scan all accounts/i }),
+    );
+
+    // Partial banner renders above the per-account grid, naming the
+    // failure count.
+    await waitFor(() => {
+      expect(screen.getByText(/Partial scan-all/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/1 of 2 accounts failed/i),
+    ).toBeInTheDocument();
+    scanAllSpy.mockRestore();
+  });
+
+  it("DiscoveryAWS_RecommendationCard_ShowsAccountBadgeOnlyInAggregateView", async () => {
+    // Component-level render: prove the badge gates on inAggregateView
+    // without driving the full page flow. The page's aggregate
+    // Recommendations tab punts on cards (renders a notice instead),
+    // so the badge code path is tested via direct component render.
+    const { DiscoveryRecommendationCard } = await import("./DiscoveryAWS");
+    const rec: Recommendation = {
+      id: "rec-1",
+      category: "empty_signal",
+      severity: "warn",
+      title: "Instrument 1 Lambda",
+      detail: "lambda lacks otel",
+      est_savings_bytes: 0,
+      generated_at: new Date().toISOString(),
+      source: { kind: "discovery_scan", ref_id: "scan-x" },
+      action: { kind: "plan", payload: {} },
+      iac: { format: "terraform", source: "resource ..." },
+      resource_kind: "lambda-otel-layer",
+    };
+
+    // Aggregate view: badge present, showing the trailing four
+    // digits of the account id.
+    const { unmount } = render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <MemoryRouter>
+          <DiscoveryRecommendationCard
+            rec={rec}
+            stepIdx={0}
+            scanID="scan-x"
+            accountID="123456789012"
+            proposerReasoning=""
+            iacConnections={[]}
+            inAggregateView={true}
+            onPickAccount={() => {}}
+          />
+        </MemoryRouter>
+      </SWRConfig>,
+    );
+    expect(screen.getByText(/from 9012/)).toBeInTheDocument();
+    unmount();
+
+    // Single-account view: badge suppressed.
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <MemoryRouter>
+          <DiscoveryRecommendationCard
+            rec={rec}
+            stepIdx={0}
+            scanID="scan-x"
+            accountID="123456789012"
+            proposerReasoning=""
+            iacConnections={[]}
+            inAggregateView={false}
+          />
+        </MemoryRouter>
+      </SWRConfig>,
+    );
+    expect(screen.queryByText(/from 9012/)).not.toBeInTheDocument();
+  });
+
+  it("DiscoveryAWS_BadgeClickFiltersToSingleAccount", async () => {
+    const { DiscoveryRecommendationCard } = await import("./DiscoveryAWS");
+    const rec: Recommendation = {
+      id: "rec-1",
+      category: "empty_signal",
+      severity: "warn",
+      title: "Instrument 1 Lambda",
+      detail: "lambda lacks otel",
+      est_savings_bytes: 0,
+      generated_at: new Date().toISOString(),
+      source: { kind: "discovery_scan", ref_id: "scan-x" },
+      action: { kind: "plan", payload: {} },
+      iac: { format: "terraform", source: "resource ..." },
+      resource_kind: "lambda-otel-layer",
+    };
+    const onPick = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <MemoryRouter>
+          <DiscoveryRecommendationCard
+            rec={rec}
+            stepIdx={0}
+            scanID="scan-x"
+            accountID="123456789012"
+            proposerReasoning=""
+            iacConnections={[]}
+            inAggregateView={true}
+            onPickAccount={onPick}
+          />
+        </MemoryRouter>
+      </SWRConfig>,
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Filter to account 123456789012/i }),
+    );
+    expect(onPick).toHaveBeenCalledWith("123456789012");
   });
 });
