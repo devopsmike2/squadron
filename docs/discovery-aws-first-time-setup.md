@@ -195,7 +195,8 @@ For reference, the v0.89.0 wizard's permissions policy is:
         "eks:DescribeCluster",
         "eks:ListAddons",
         "eks:DescribeAddon",
-        "eks:ListNodegroups"
+        "eks:ListNodegroups",
+        "eks:ListFargateProfiles"
       ],
       "Resource": "*"
     }
@@ -423,7 +424,8 @@ Squadron's discovery role explicitly does not have permission to do.
 | v0.85.0 (slice 1) | `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:DescribeRegions`, `ec2:DescribeTags`, `lambda:ListFunctions`, `lambda:GetFunction`, `lambda:GetFunctionConfiguration`, `lambda:ListTags` | 8 |
 | v0.87.0 (slice 2 — RDS) | `rds:DescribeDBInstances` | 9 |
 | v0.88.0 (slice 3a — S3 + ALB) | `s3:ListAllMyBuckets`, `s3:GetBucketLocation`, `s3:GetBucketLogging`, `s3:GetBucketTagging`, `s3:GetBucketRequestPayment`, `elasticloadbalancing:DescribeLoadBalancers`, `elasticloadbalancing:DescribeLoadBalancerAttributes`, `elasticloadbalancing:DescribeTags` | 17 |
-| v0.89.0 (slice 3b — EKS) | `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups` | 22 |
+| v0.89.0 (slice 3b — EKS) | `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups`, `eks:ListFargateProfiles` | 23 |
+| v0.89.1 (hotfix — see #605) | (correction) v0.89.0 was published with 5 eks:* actions but the scanner also calls `eks:ListFargateProfiles`. Add the 6th action if you set up against the v0.89.0 template; no other change. | 23 |
 
 ### How to update
 
