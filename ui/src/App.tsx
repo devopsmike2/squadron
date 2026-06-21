@@ -18,6 +18,7 @@ import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
 import DeployPage from "./pages/Deploy";
 import DiscoveryAWSPage from "./pages/DiscoveryAWS";
+import DiscoveryIaCGitHubPage from "./pages/DiscoveryIaCGitHub";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
 import IncidentsPage from "./pages/Incidents";
@@ -176,6 +177,13 @@ function AuthBoundary() {
               payoff. /discovery/aws hosts the Account / Inventory /
               Recommendations triptych the design doc calls out. */}
           <Route path="/discovery/aws" element={<DiscoveryAWSPage />} />
+          {/* v0.89.3 Stream 19 — IaC connections list + Connect-IaC-repo
+              wizard. /discovery/iac/<provider> namespace leaves room
+              for slice-2 GitLab / Bitbucket without renaming routes. */}
+          <Route
+            path="/discovery/iac/github"
+            element={<DiscoveryIaCGitHubPage />}
+          />
           {/* v0.55 SQ-2.8 / N4 — operational visibility into the action
               runner system. /actions lists every signed request
               Squadron dispatched; /runners lists the daemons that
