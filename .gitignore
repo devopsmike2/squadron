@@ -13,8 +13,9 @@ dist/
 *.out
 coverage.html
 
-# Data directories
-data/
+# Data directories — anchored to repo root so subdirs like
+# ui/src/data/ don't get silently shadowed. See #606.
+/data/
 *.db
 *.duckdb
 
