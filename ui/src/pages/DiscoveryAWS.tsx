@@ -798,24 +798,36 @@ function AccountTab() {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <Button onClick={() => setOpen(true)}>Connect new account</Button>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
+          {/*
+           * Height-bounded flex column so the wizard body scrolls inside
+           * the viewport instead of clipping the dialog header and footer
+           * on shorter screens (#620, same class as the IaC wizard fix
+           * in #618). DialogContent itself has a max-h-[90vh] default from
+           * the shared component, but the per-instance flex column with
+           * a min-h-0 overflow-y-auto body keeps the DialogHeader pinned
+           * at top while the wizard's internal Back/Next + step body
+           * scroll together inside the bounded body section.
+           */}
+          <DialogContent className="flex max-w-2xl flex-col overflow-hidden">
+            <DialogHeader className="shrink-0">
               <DialogTitle>Connect AWS account</DialogTitle>
               <DialogDescription>
                 Walk through the five steps to grant Squadron read-only access
                 via IAM assume-role.
               </DialogDescription>
             </DialogHeader>
-            <ConnectorWizard
-              wizard={awsWizard}
-              onValidate={(req) => validateAWSConnection(req)}
-              onSave={(req) =>
-                saveAWSConnection(req).then((r) => ({
-                  connection_id: r.connection_id,
-                }))
-              }
-              onComplete={onWizardComplete}
-            />
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+              <ConnectorWizard
+                wizard={awsWizard}
+                onValidate={(req) => validateAWSConnection(req)}
+                onSave={(req) =>
+                  saveAWSConnection(req).then((r) => ({
+                    connection_id: r.connection_id,
+                  }))
+                }
+                onComplete={onWizardComplete}
+              />
+            </div>
           </DialogContent>
         </Dialog>
       </div>
