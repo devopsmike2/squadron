@@ -110,6 +110,14 @@ export const AWS_PERMISSIONS_POLICY_TEMPLATE = `{
 export const AWS_IAM_ROLE_CREATE_URL =
   "https://console.aws.amazon.com/iam/home#/roles$new?step=type&roleType=crossAccount";
 
+// AWS_TRUST_POLICY_ROOT_NOTE is the inline explanation rendered
+// directly under the trust-policy JSON in step 2. Operators read
+// `:root` as "the AWS root user" and panic; this note lives next to
+// the JSON they're looking at, not in the description text above it.
+// Filed as #621, fixed in #622.
+export const AWS_TRUST_POLICY_ROOT_NOTE =
+  "Note: `:root` here means 'any IAM identity in this account with `sts:AssumeRole` permission' — not the AWS root user. See Advanced options below to scope to a specific user instead.";
+
 export const awsWizard: ConnectorWizard = {
   provider: "aws",
   title: "Connect an AWS account",
@@ -139,7 +147,7 @@ export const awsWizard: ConnectorWizard = {
       id: "trust-policy",
       title: "Create the IAM role with this trust policy",
       description:
-        "Squadron generated a per-deployment ExternalId for you. By default this trust policy lets any IAM identity in your AWS account assume the SquadronDiscovery role, provided that identity has sts:AssumeRole permission and passes the ExternalId — the AWS-recommended bootstrap shape for self-hosted Squadron. Copy the trust policy below verbatim and paste it into the AWS IAM role creation flow. Use the Advanced section to scope to a single IAM identity, or to resume with an ExternalId you already pasted into AWS.",
+        "Squadron generated a per-deployment ExternalId for you. By default this trust policy lets any IAM identity in your AWS account assume the SquadronDiscovery role, provided that identity has sts:AssumeRole permission and passes the ExternalId — the AWS-recommended bootstrap shape for self-hosted Squadron. Copy the trust policy below verbatim and paste it into the AWS IAM role creation flow. See the two affordances below the JSON to scope to a single IAM identity, or to resume with an ExternalId you already pasted into AWS.",
       action: {
         kind: "copy_value",
         payload: {

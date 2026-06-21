@@ -40,6 +40,7 @@ import {
 import {
   AWS_IAM_ROLE_CREATE_URL,
   AWS_PERMISSIONS_POLICY_TEMPLATE,
+  AWS_TRUST_POLICY_ROOT_NOTE,
   AWS_TRUST_POLICY_TEMPLATE,
 } from "@/data/awsWizard";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,14 @@ export interface ConnectorWizardProps {
   // to /discovery/aws or renders a success card; the shell stays
   // mounted until then so the operator can re-read the result.
   onComplete: (connectionId: string) => void;
+  // resumeMode signals the operator entered the wizard via the
+  // "Resume an existing connection" entry point on the connections
+  // list. The shell renders a small "Existing ExternalId (optional)"
+  // field above the account-id input on step 1; a well-formed paste
+  // flows into draft.external_id_override and is threaded through
+  // the rest of the wizard via the existing #578 plumbing. Default
+  // false — the wizard generates a fresh UUID like before. See #622.
+  resumeMode?: boolean;
 }
 
 // fieldFromPayload extracts the typed `field` key from a fill_field
@@ -171,6 +180,7 @@ export function ConnectorWizard({
   onValidate,
   onSave,
   onComplete,
+  resumeMode = false,
 }: ConnectorWizardProps) {
   const [stepIndex, setStepIndex] = useState(0);
   const [draft, setDraft] = useState<WizardDraft>({ regions: ["us-east-1"] });
@@ -209,13 +219,19 @@ export function ConnectorWizard({
   // validate payload, and the save payload all use the same value.
   const liveExternalId = effectiveExternalId(externalId, draft.external_id_override);
 
-  // showAdvancedTrust toggles the disclosure that surfaces the
-  // principal_override and external_id_override inputs. Defaulted to
-  // closed: the account-root + auto-UUID defaults work for the
-  // common case; the disclosure is only there for operators who
-  // pre-created a dedicated IAM identity or are resuming an
-  // interrupted wizard flow.
-  const [showAdvancedTrust, setShowAdvancedTrust] = useState(false);
+  // showPrincipalOverride and showExternalIdResume toggle the two
+  // always-visible affordance rows under the trust-policy JSON.
+  // Each row's header (label + caption) is rendered up-front so the
+  // operator sees the affordance without scrolling or hunting through
+  // an "Advanced" disclosure (#621 was filed when both were buried).
+  // The inputs stay collapsed by default; clicking the row header
+  // expands the input next to that row only.
+  //
+  // showExternalIdResume defaults open in resumeMode so the operator
+  // who landed in the wizard via the connections-list "Resume an
+  // existing connection" entry point sees the paste field unfolded.
+  const [showPrincipalOverride, setShowPrincipalOverride] = useState(false);
+  const [showExternalIdResume, setShowExternalIdResume] = useState(resumeMode);
 
   // Map step IDs to indices once per wizard so the
   // HumanizedError.suggested_step jump is O(1) and the call site can
@@ -414,7 +430,46 @@ export function ConnectorWizard({
         {/* Action renderer */}
         <div className="mt-4">
           {step.action.kind === "fill_field" && fieldKey && (
-            <div className="space-y-2">
+            <div className="space-y-3">
+              {/* resumeMode pre-step — when the operator entered the
+                  wizard via the connections-list "Resume an existing
+                  connection" entry point, the first step gets an
+                  optional ExternalId paste field rendered ABOVE the
+                  account-id input. A well-formed paste populates
+                  draft.external_id_override; the existing #578
+                  plumbing threads it through to the trust-policy
+                  render and the validate/save payload. See #622. */}
+              {resumeMode && stepIndex === 0 && (
+                <div className="space-y-1 rounded-md border bg-muted/30 p-3">
+                  <label className="text-xs font-semibold" htmlFor="resume-external-id">
+                    Existing ExternalId (optional)
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Paste the UUID you previously configured in AWS.
+                    Leave empty to generate a fresh one.
+                  </p>
+                  <Input
+                    id="resume-external-id"
+                    aria-label="Existing ExternalId"
+                    aria-invalid={
+                      !!draft.external_id_override &&
+                      !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override)
+                    }
+                    placeholder="00000000-0000-0000-0000-000000000000"
+                    value={draft.external_id_override ?? ""}
+                    onChange={(e) =>
+                      handleFieldChange("external_id_override", e.target.value)
+                    }
+                  />
+                  {draft.external_id_override &&
+                    !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override) && (
+                      <p className="text-xs text-destructive">
+                        Must be a lowercase UUID v4 shape. Reverting to
+                        the auto-generated ExternalId until valid.
+                      </p>
+                    )}
+                </div>
+              )}
               <Input
                 aria-label={step.title}
                 aria-invalid={!inlineValid && currentValue !== ""}
@@ -474,89 +529,118 @@ export function ConnectorWizard({
                 </code>
               </p>
 
-              {/* Advanced disclosure — surfaces the principal_override
-                  and external_id_override inputs. Defaulted closed so
-                  the common case (account-root principal + auto-UUID)
-                  stays a one-step flow. */}
-              <div className="pt-2">
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  className="h-auto p-0 text-xs"
-                  onClick={() => setShowAdvancedTrust((v) => !v)}
-                  aria-expanded={showAdvancedTrust}
-                >
-                  {showAdvancedTrust ? "Hide advanced options" : "Advanced options"}
-                </Button>
-              </div>
+              {/* Inline :root explanation — verbatim text owned by
+                  awsWizard.ts. Operators read ":root" as the AWS root
+                  user; the note disambiguates without making them
+                  read the description paragraph above the JSON. #621. */}
+              <p className="text-xs text-muted-foreground" data-testid="root-principal-note">
+                {AWS_TRUST_POLICY_ROOT_NOTE}
+              </p>
 
-              {showAdvancedTrust && (
-                <div className="space-y-3 rounded-md border bg-muted/30 p-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold" htmlFor="principal-override">
-                      Advanced: scope to a specific IAM identity
-                    </label>
-                    <p className="text-xs text-muted-foreground">
-                      Default trusts the account root. Override with a
-                      specific user or role ARN if you pre-created a
-                      dedicated IAM identity for Squadron.
-                    </p>
-                    <Input
-                      id="principal-override"
-                      aria-label="Principal override ARN"
-                      aria-invalid={
-                        !!draft.principal_override &&
-                        !PRINCIPAL_OVERRIDE_RE.test(draft.principal_override)
-                      }
-                      placeholder="arn:aws:iam::123456789012:user/squadron-bot"
-                      value={draft.principal_override ?? ""}
-                      onChange={(e) =>
-                        handleFieldChange("principal_override", e.target.value)
-                      }
-                    />
-                    {draft.principal_override &&
-                      !PRINCIPAL_OVERRIDE_RE.test(draft.principal_override) && (
-                        <p className="text-xs text-destructive">
-                          Override must look like arn:aws:iam::123456789012:user/Name
-                          (or role/Name, or root). Reverting to account root until valid.
-                        </p>
-                      )}
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold" htmlFor="external-id-override">
-                      Advanced: resume with existing ExternalId
-                    </label>
-                    <p className="text-xs text-muted-foreground">
-                      Paste the ExternalId you previously copied into
-                      AWS if the wizard restarted. The wizard will
-                      substitute this value everywhere instead of the
-                      auto-generated one.
-                    </p>
-                    <Input
-                      id="external-id-override"
-                      aria-label="ExternalId override"
-                      aria-invalid={
-                        !!draft.external_id_override &&
-                        !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override)
-                      }
-                      placeholder="00000000-0000-0000-0000-000000000000"
-                      value={draft.external_id_override ?? ""}
-                      onChange={(e) =>
-                        handleFieldChange("external_id_override", e.target.value)
-                      }
-                    />
-                    {draft.external_id_override &&
-                      !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override) && (
-                        <p className="text-xs text-destructive">
-                          Must be a lowercase UUID v4 shape. Reverting to
-                          the auto-generated ExternalId until valid.
-                        </p>
-                      )}
-                  </div>
+              {/* Two always-visible affordance rows. #621 found both
+                  hidden behind a single "Advanced options" disclosure
+                  during a real-time walkthrough; replaced here per
+                  #622's locked design. Each row's header (label +
+                  caption) is up-front; the input expands inline when
+                  the operator clicks the row. */}
+              <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                {/* Row 1 — scope to a specific IAM identity */}
+                <div className="space-y-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="-mx-2 h-auto w-[calc(100%+1rem)] justify-start px-2 py-1 text-left"
+                    onClick={() => setShowPrincipalOverride((v) => !v)}
+                    aria-expanded={showPrincipalOverride}
+                    aria-controls="principal-override-input"
+                  >
+                    <div className="flex w-full flex-col gap-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold">
+                          Scope to a specific IAM identity
+                        </span>
+                        <span className="rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          recommended for prod
+                        </span>
+                      </div>
+                      <span className="text-xs font-normal text-muted-foreground">
+                        Tighter trust-policy scoping than the default.
+                      </span>
+                    </div>
+                  </Button>
+                  {showPrincipalOverride && (
+                    <div id="principal-override-input" className="space-y-1 pt-1">
+                      <Input
+                        id="principal-override"
+                        aria-label="Principal override ARN"
+                        aria-invalid={
+                          !!draft.principal_override &&
+                          !PRINCIPAL_OVERRIDE_RE.test(draft.principal_override)
+                        }
+                        placeholder="arn:aws:iam::123456789012:user/squadron-bot"
+                        value={draft.principal_override ?? ""}
+                        onChange={(e) =>
+                          handleFieldChange("principal_override", e.target.value)
+                        }
+                      />
+                      {draft.principal_override &&
+                        !PRINCIPAL_OVERRIDE_RE.test(draft.principal_override) && (
+                          <p className="text-xs text-destructive">
+                            Override must look like arn:aws:iam::123456789012:user/Name
+                            (or role/Name, or root). Reverting to account root until valid.
+                          </p>
+                        )}
+                    </div>
+                  )}
                 </div>
-              )}
+
+                {/* Row 2 — resume with existing ExternalId */}
+                <div className="space-y-1 border-t pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="-mx-2 h-auto w-[calc(100%+1rem)] justify-start px-2 py-1 text-left"
+                    onClick={() => setShowExternalIdResume((v) => !v)}
+                    aria-expanded={showExternalIdResume}
+                    aria-controls="external-id-override-input"
+                  >
+                    <div className="flex w-full flex-col gap-0.5">
+                      <span className="text-xs font-semibold">
+                        Resume with existing ExternalId
+                      </span>
+                      <span className="text-xs font-normal text-muted-foreground">
+                        If you&apos;ve connected this account in a previous Squadron deployment.
+                      </span>
+                    </div>
+                  </Button>
+                  {showExternalIdResume && (
+                    <div id="external-id-override-input" className="space-y-1 pt-1">
+                      <Input
+                        id="external-id-override"
+                        aria-label="ExternalId override"
+                        aria-invalid={
+                          !!draft.external_id_override &&
+                          !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override)
+                        }
+                        placeholder="00000000-0000-0000-0000-000000000000"
+                        value={draft.external_id_override ?? ""}
+                        onChange={(e) =>
+                          handleFieldChange("external_id_override", e.target.value)
+                        }
+                      />
+                      {draft.external_id_override &&
+                        !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override) && (
+                          <p className="text-xs text-destructive">
+                            Must be a lowercase UUID v4 shape. Reverting to
+                            the auto-generated ExternalId until valid.
+                          </p>
+                        )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
