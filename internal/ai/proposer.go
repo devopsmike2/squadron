@@ -160,6 +160,20 @@ type PlanStepCandidate struct {
 	// when the change is risky enough to gate behind operator
 	// approval.
 	RequireApproval bool `json:"require_approval,omitempty"`
+
+	// AffectedResources — v0.89.4 #611 — discovery-side per-step
+	// list of resource identifiers the step targets (ARNs for AWS
+	// where available; otherwise the canonical id Squadron uses
+	// internally). The discovery proposer prompt teaches the model
+	// to emit this; the cost-spike path does not — it stays empty
+	// on cost-spike outputs. The handler layer copies this through
+	// to the recommendation envelope, which the UI sends on the
+	// Open-PR request so the PR title's "for <N> resources" count
+	// and the PR body's "Affected resources" list are accurate.
+	// Empty when the model didn't emit the field (backward
+	// compatible — the PR title falls back to "for 0 resources"
+	// rather than erroring).
+	AffectedResources []string `json:"affected_resources,omitempty"`
 }
 
 // ProposalResult is what ProposeFromCostSpike returns. The proposer

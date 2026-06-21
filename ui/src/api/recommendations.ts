@@ -114,6 +114,15 @@ export interface Recommendation {
    * eks-observability-addon). Empty when the recommendation is
    * not Open-PR-eligible — the card falls back to Copy-only. */
   resource_kind?: string;
+  /** v0.89.4 #611 — list of resource identifiers (ARNs / ids) the
+   * discovery proposer named as the step's targets. The Open-PR
+   * call forwards this verbatim; the backend uses len() in the PR
+   * title's "for <N> resources" count and renders the list in the
+   * PR body's "Affected resources" section. Absent on pre-v0.89.4
+   * outputs and on cost-spike / collector-side recommendations.
+   * NOT rendered to the operator in the recommendation card —
+   * metadata for PR-text construction only. */
+  affected_resources?: string[];
 }
 
 export interface RecommendationsResponse {

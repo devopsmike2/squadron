@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1739,6 +1740,13 @@ func TestHandleAWSGenerateRecommendations_HappyPath(t *testing.T) {
 						RequireApproval:     true,
 						Stages:              []ai.RolloutStageCandidate{{Mode: "percent", Percentage: 100, DwellSeconds: 0}},
 						AbortCriteria:       ai.AbortCriteriaCandidate{MaxDriftedAgents: 5, MaxErrorLogsPerMinute: 50, MinDwellSecondsBeforeAbort: 120},
+						// v0.89.4 (#611) — the discovery proposer
+						// emits affected_resources per step (ARNs
+						// for Lambda).
+						AffectedResources: []string{
+							"arn:aws:lambda:us-east-1:123:function:hello",
+							"arn:aws:lambda:us-east-1:123:function:goodbye",
+						},
 					},
 					{
 						Name:                "AI plan step 1: instrument 1 EC2 instance with ADOT collector",
@@ -1746,6 +1754,10 @@ func TestHandleAWSGenerateRecommendations_HappyPath(t *testing.T) {
 						InlineConfigSnippet: tfStep1,
 						Stages:              []ai.RolloutStageCandidate{{Mode: "percent", Percentage: 100, DwellSeconds: 0}},
 						AbortCriteria:       ai.AbortCriteriaCandidate{MaxDriftedAgents: 5, MaxErrorLogsPerMinute: 50, MinDwellSecondsBeforeAbort: 120},
+						// v0.89.4 (#611) — EC2 uses the canonical
+						// instance id (no ARN-style id exists for
+						// raw EC2 instances).
+						AffectedResources: []string{"i-aaa"},
 					},
 				},
 			},
@@ -1855,6 +1867,32 @@ func TestHandleAWSGenerateRecommendations_HappyPath(t *testing.T) {
 	}
 	if got := withKind.Recommendations[1].ResourceKind; got != "ec2-otel-layer" {
 		t.Errorf("rec[1].resource_kind = %q, want ec2-otel-layer", got)
+	}
+
+	// v0.89.4 #611 — AffectedResources from the proposer step rides
+	// through to the recommendation envelope. The Recommendations
+	// tab forwards this on Open PR; the backend uses len() in the
+	// PR title and renders the bullets in the PR body. A regression
+	// that dropped the copy would silently revert the PR title to
+	// "for 0 resources".
+	var withAffected struct {
+		Recommendations []struct {
+			AffectedResources []string `json:"affected_resources"`
+		} `json:"recommendations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &withAffected); err != nil {
+		t.Fatalf("decode affected_resources: %v", err)
+	}
+	wantR0 := []string{
+		"arn:aws:lambda:us-east-1:123:function:hello",
+		"arn:aws:lambda:us-east-1:123:function:goodbye",
+	}
+	if got := withAffected.Recommendations[0].AffectedResources; !reflect.DeepEqual(got, wantR0) {
+		t.Errorf("rec[0].affected_resources = %+v, want %+v", got, wantR0)
+	}
+	wantR1 := []string{"i-aaa"}
+	if got := withAffected.Recommendations[1].AffectedResources; !reflect.DeepEqual(got, wantR1) {
+		t.Errorf("rec[1].affected_resources = %+v, want %+v", got, wantR1)
 	}
 
 	// Audit event fires with the right shape — AND the Terraform

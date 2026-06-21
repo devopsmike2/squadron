@@ -163,6 +163,16 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`  - Each step's stages: a single full-coverage stage at percent 100, dwell 0. ` +
 	`Discovery steps stage at the plan level (between steps); per-step staging would over-` +
 	`fragment the Terraform runs and confuse the operator.` + "\n" +
+	`  - Set "affected_resources" on every step: a JSON array of strings naming the ` +
+	`resource identifiers the step instruments. Use the FULL ARN when one was supplied ` +
+	`in the inventory (Lambda functions, RDS instances, load balancers, EKS clusters); ` +
+	`otherwise use the canonical id Squadron showed in the inventory (EC2 instance ids ` +
+	`like i-aaa, S3 bucket names). Include every resource the step's Terraform actually ` +
+	`targets — no more, no less. Do not list resources you skipped because they were ` +
+	`already covered. The handler threads this array into the PR title's resource count ` +
+	`and the PR body's "Affected resources" bullet list, so an inaccurate list shows up ` +
+	`as a wrong number in front of the operator. Same shape for every category: one ` +
+	`string per resource, identifiers only, no human prose.` + "\n" +
 	`  - You may decline (declined: true) if the scan returned zero uninstrumented ` +
 	`resources, or if every resource is so heterogeneous that no batch shares an ` +
 	`instrumentation strategy. State the reason briefly.` + "\n\n" +
@@ -198,6 +208,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`        "name": "AI plan step 0: instrument N Lambda functions with OpenTelemetry layer",` + "\n" +
 	`        "group_id": "<account_id from user message>",` + "\n" +
 	`        "inline_config_snippet": "<complete Terraform HCL for step 0>",` + "\n" +
+	`        "affected_resources": ["arn:aws:lambda:us-east-1:123:function:hello","arn:aws:lambda:us-east-1:123:function:goodbye"],` + "\n" +
 	`        "require_approval": true,` + "\n" +
 	`        "stages": [` + "\n" +
 	`          {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +
@@ -208,6 +219,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`        "name": "AI plan step 1: instrument N EC2 instances with ADOT collector",` + "\n" +
 	`        "group_id": "<account_id from user message>",` + "\n" +
 	`        "inline_config_snippet": "<complete Terraform HCL for step 1>",` + "\n" +
+	`        "affected_resources": ["i-aaa","i-bbb"],` + "\n" +
 	`        "stages": [` + "\n" +
 	`          {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +
 	`        ],` + "\n" +

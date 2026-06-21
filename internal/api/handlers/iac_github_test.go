@@ -530,6 +530,26 @@ func TestHandleIaCGitHubOpenPR_HappyPath_CreatesBranchWritesFileOpensPREmitsAudi
 	if mc.openPRCalls[0].Base != "main" {
 		t.Errorf("PR base = %q, want main", mc.openPRCalls[0].Base)
 	}
+	// v0.89.4 (#611) — the PR title's "for <N> resources" count
+	// must equal len(affected_resources) from the request body. The
+	// request above passed two ARNs; the title must say "for 2
+	// resources" (plural). A regression that dropped the count
+	// would silently revert to "for 0 resources".
+	if !strings.Contains(mc.openPRCalls[0].Title, "for 2 resources") {
+		t.Errorf("PR title should include 'for 2 resources'; got %q", mc.openPRCalls[0].Title)
+	}
+	// And the PR body must include each affected resource string
+	// verbatim — mirror Phase 2's snippet body-content check for
+	// the affected-resources list.
+	for _, want := range []string{
+		"Affected resources",
+		"arn:aws:lambda:us-east-1:111:function:a",
+		"arn:aws:lambda:us-east-1:111:function:b",
+	} {
+		if !strings.Contains(mc.openPRCalls[0].Body, want) {
+			t.Errorf("PR body missing %q; got %q", want, mc.openPRCalls[0].Body)
+		}
+	}
 	// Labels per design doc §7.
 	if len(mc.addLabelsCalls) != 1 {
 		t.Fatalf("addLabels calls = %d, want 1", len(mc.addLabelsCalls))

@@ -1439,6 +1439,14 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			// Terraform resource shape — the UI falls back to Copy-only
 			// in that case.
 			ResourceKind: classifyResourceKind(step.Name, step.InlineConfigSnippet),
+			// v0.89.4 #611 Stream 19 Phase 4 follow-on: thread the
+			// proposer-emitted per-step affected_resources list through
+			// so the Open-PR backend's PR title's "for <N> resources"
+			// count and the body's "Affected resources" bullet list
+			// reflect the actual resource population. Empty slice
+			// when the model didn't emit it — the backend's title
+			// falls back to "for 0 resources" rather than erroring.
+			AffectedResources: append([]string(nil), step.AffectedResources...),
 		}
 		recs = append(recs, rec)
 	}

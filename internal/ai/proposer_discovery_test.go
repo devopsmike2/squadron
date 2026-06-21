@@ -44,6 +44,13 @@ func discoveryContextForTest() *DiscoveryScanContext {
 // Verify the result rides through the parser without validation
 // complaining and that the Plan candidate carries the steps the model
 // emitted.
+//
+// v0.89.4 (#611) — also pins the proposer's per-step
+// AffectedResources field round-trip. The prompt teaches the model to
+// emit a JSON array of resource identifiers per step; the parser
+// must thread it onto each PlanStepCandidate so the handler layer
+// can copy it onto the recommendation envelope and the Open-PR
+// backend can build an accurate PR title + body.
 func TestProposeFromDiscoveryScan_HappyPath(t *testing.T) {
 	reply := anthropicReply(`{
   "kind": "plan",
@@ -55,6 +62,7 @@ func TestProposeFromDiscoveryScan_HappyPath(t *testing.T) {
         "name": "AI plan step 0: instrument 2 Lambda functions with OpenTelemetry layer",
         "group_id": "123456789012",
         "inline_config_snippet": "resource \"aws_lambda_function\" \"hello\" {\n  function_name = \"hello\"\n  layers = [\"arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-21-0:1\"]\n}\n",
+        "affected_resources": ["arn:aws:lambda:us-east-1:123:function:hello","arn:aws:lambda:us-east-1:123:function:goodbye"],
         "require_approval": true,
         "stages": [{"mode":"percent","percentage":100,"dwell_seconds":0}],
         "abort_criteria": {"max_drifted_agents":5,"max_error_logs_per_minute":50,"min_dwell_seconds_before_abort":120}
@@ -63,6 +71,7 @@ func TestProposeFromDiscoveryScan_HappyPath(t *testing.T) {
         "name": "AI plan step 1: instrument 1 EC2 instance with ADOT collector",
         "group_id": "123456789012",
         "inline_config_snippet": "resource \"aws_ssm_association\" \"adot_install\" {\n  name = \"AWS-RunShellScript\"\n  targets {\n    key = \"InstanceIds\"\n    values = [\"i-aaa\"]\n  }\n}\n",
+        "affected_resources": ["i-aaa"],
         "stages": [{"mode":"percent","percentage":100,"dwell_seconds":0}],
         "abort_criteria": {"max_drifted_agents":5,"max_error_logs_per_minute":50,"min_dwell_seconds_before_abort":120}
       }
@@ -89,10 +98,24 @@ func TestProposeFromDiscoveryScan_HappyPath(t *testing.T) {
 	assert.Equal(t, "123456789012", step0.GroupID, "step group_id should match context account_id")
 	assert.Contains(t, step0.InlineConfigSnippet, "aws_lambda_function", "step 0 Terraform should reference the Lambda resource")
 	assert.True(t, step0.RequireApproval, "discovery plans must require approval at step 0")
+	// v0.89.4 (#611) — AffectedResources rides through the parser.
+	assert.Equal(t,
+		[]string{
+			"arn:aws:lambda:us-east-1:123:function:hello",
+			"arn:aws:lambda:us-east-1:123:function:goodbye",
+		},
+		step0.AffectedResources,
+		"step 0 affected_resources should round-trip from the model output",
+	)
 
 	step1 := res.Plan.Steps[1]
 	assert.Equal(t, "123456789012", step1.GroupID)
 	assert.Contains(t, step1.InlineConfigSnippet, "aws_ssm_association", "step 1 Terraform should reference the SSM document")
+	// v0.89.4 (#611) — EC2 uses the canonical instance id rather
+	// than an ARN (no Lambda-style ARN exists for raw EC2); the
+	// proposer prompt explicitly allows the canonical id fallback.
+	assert.Equal(t, []string{"i-aaa"}, step1.AffectedResources,
+		"step 1 affected_resources should be the EC2 instance id")
 
 	assert.Contains(t, res.Reasoning, "Lambdas")
 	require.Len(t, res.Evidence, 1)
@@ -102,6 +125,43 @@ func TestProposeFromDiscoveryScan_HappyPath(t *testing.T) {
 	// Metering should round-trip from the fake server's usage block.
 	assert.Equal(t, 123, res.TokensIn)
 	assert.Equal(t, 456, res.TokensOut)
+}
+
+// TestProposeFromDiscoveryScan_OmitsAffectedResources_StillParses
+// pins the backward-compat path: a cold-start model that emits a
+// plan step WITHOUT the affected_resources field is not an error.
+// The PlanStepCandidate's AffectedResources stays nil, the handler
+// layer copies that through to the recommendation envelope, the UI
+// sends an empty array on Open PR, and the PR title falls back to
+// "for 0 resources" rather than failing the request. v0.89.4 (#611).
+func TestProposeFromDiscoveryScan_OmitsAffectedResources_StillParses(t *testing.T) {
+	reply := anthropicReply(`{
+  "kind": "plan",
+  "declined": false,
+  "plan": {
+    "steps": [
+      {
+        "name": "AI plan step 0: instrument 2 Lambdas",
+        "group_id": "123456789012",
+        "inline_config_snippet": "resource \"aws_lambda_function\" \"x\" {\n  layers = [\"x\"]\n}\n",
+        "require_approval": true,
+        "stages": [{"mode":"percent","percentage":100,"dwell_seconds":0}],
+        "abort_criteria": {"max_drifted_agents":5,"max_error_logs_per_minute":50,"min_dwell_seconds_before_abort":120}
+      }
+    ]
+  },
+  "reasoning": "..."
+}`)
+	srv := proposerTestServer(t, reply)
+	defer srv.Close()
+
+	svc := proposerServiceForTest(srv.URL)
+	res, err := svc.ProposeFromDiscoveryScan(context.Background(), discoveryContextForTest())
+	require.NoError(t, err, "missing affected_resources is backward-compat, not an error")
+	require.NotNil(t, res)
+	require.Len(t, res.Plan.Steps, 1)
+	assert.Empty(t, res.Plan.Steps[0].AffectedResources,
+		"AffectedResources is empty when the model didn't emit the field")
 }
 
 // TestProposeFromDiscoveryScan_Declined: the model said no productive
@@ -428,6 +488,24 @@ func TestBuildDiscoveryUserMessage(t *testing.T) {
 		"MUST equal",
 	} {
 		assert.Contains(t, msg, want, "prompt should include %q", want)
+	}
+}
+
+// TestProposeFromDiscoveryScanSystemPrompt_TeachesAffectedResources
+// pins the v0.89.4 (#611) addition to the prompt: the system message
+// must explicitly tell the model to emit a per-step
+// affected_resources array, both as a rule line and in the JSON
+// example skeleton. A regression that drops the prompt mention is
+// silently a "for 0 resources" PR title in production.
+func TestProposeFromDiscoveryScanSystemPrompt_TeachesAffectedResources(t *testing.T) {
+	for _, want := range []string{
+		// Rule-line mention so the model knows the field is required.
+		`Set "affected_resources" on every step`,
+		// JSON-shape example so the model knows where to put it.
+		`"affected_resources":`,
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt should teach affected_resources: %q", want)
 	}
 }
 
