@@ -174,6 +174,27 @@ type PlanStepCandidate struct {
 	// compatible — the PR title falls back to "for 0 resources"
 	// rather than erroring).
 	AffectedResources []string `json:"affected_resources,omitempty"`
+
+	// Disposition — v0.89.11 #626 Stream 27 — discovery-side per-
+	// step structural fact: "new_file" when the snippet defines a
+	// NET-NEW top-level Terraform resource that can be written as
+	// a sibling file, "patch_existing" when the snippet modifies
+	// an EXISTING top-level resource block and must be appended
+	// to the placement file with a manual-merge label on the PR.
+	//
+	// The discovery proposer prompt teaches the model to emit
+	// this per step. The Open-PR HANDLER overrides the model's
+	// choice with the canonical per-kind lookup
+	// (internal/iac.DispositionFor) on every request — the
+	// classification is structural, not a model judgment. The
+	// model's value flows through to the recommendation envelope
+	// for surface-area consistency (Timeline + UI badge) but the
+	// authoritative routing is the handler-side lookup.
+	//
+	// Empty on cost-spike outputs (the cost-spike path has no
+	// disposition concept) and on discovery outputs from older
+	// proposer prompts.
+	Disposition string `json:"disposition,omitempty"`
 }
 
 // ProposalResult is what ProposeFromCostSpike returns. The proposer

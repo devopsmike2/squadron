@@ -153,9 +153,15 @@ const (
 	//     iac.github.connection_created.
 	//   - recommendation.pr_opened: scan_id, step_idx, account_id,
 	//     repo_full_name, pr_number, pr_url, branch, commit_sha,
-	//     file_path, actor.
+	//     file_path, actor. v0.89.11 (#626 Stream 27) adds
+	//     disposition ("new_file" | "patch_existing"),
+	//     manual_merge_required (bool — true for patch_existing),
+	//     and on new_file also created_file_path naming the new
+	//     sibling file Squadron wrote.
 	//   - recommendation.pr_open_failed: as above with error_code +
 	//     humanized_message; pr_number omitted when no PR opened.
+	//     v0.89.11 adds disposition keyed off ResourceKind for
+	//     auditor-side correlation.
 	AuditEventIaCGitHubConnectionCreated     = "iac.github.connection_created"
 	AuditEventIaCGitHubConnectionValidated   = "iac.github.connection_validated"
 	AuditEventIaCGitHubPlacementMapUpdated   = "iac.github.placement_map_updated"

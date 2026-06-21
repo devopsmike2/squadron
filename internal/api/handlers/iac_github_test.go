@@ -19,6 +19,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
+	"github.com/devopsmike2/squadron/internal/iac"
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -550,13 +551,25 @@ func TestHandleIaCGitHubOpenPR_HappyPath_CreatesBranchWritesFileOpensPREmitsAudi
 			t.Errorf("PR body missing %q; got %q", want, mc.openPRCalls[0].Body)
 		}
 	}
-	// Labels per design doc §7.
+	// Labels per design doc §7, plus v0.89.11 (#626 Stream 27)
+	// slice-1.5 "squadron/needs-manual-merge" because
+	// lambda-otel-layer is a patch_existing kind. Order matters:
+	// the slice-1 labels stay first so SIEM forwarders that
+	// pattern-match on prefix still work; the slice-1.5 label is
+	// appended.
 	if len(mc.addLabelsCalls) != 1 {
 		t.Fatalf("addLabels calls = %d, want 1", len(mc.addLabelsCalls))
 	}
 	gotLabels := mc.addLabelsCalls[0].Labels
-	if len(gotLabels) != 2 || gotLabels[0] != "squadron" || gotLabels[1] != "squadron/lambda-otel-layer" {
-		t.Errorf("labels = %+v", gotLabels)
+	if len(gotLabels) != 3 ||
+		gotLabels[0] != "squadron" ||
+		gotLabels[1] != "squadron/lambda-otel-layer" ||
+		gotLabels[2] != "squadron/needs-manual-merge" {
+		t.Errorf("labels = %+v; want [squadron squadron/lambda-otel-layer squadron/needs-manual-merge]", gotLabels)
+	}
+	// Slice-1.5 PR title prefix for patch_existing.
+	if !strings.HasPrefix(mc.openPRCalls[0].Title, "[needs manual merge] ") {
+		t.Errorf("PR title missing slice-1.5 patch_existing prefix: %q", mc.openPRCalls[0].Title)
 	}
 
 	// Audit: exactly one connection_created + one pr_opened, no
@@ -888,5 +901,331 @@ func TestHandleIaCGitHubUpdatePlacementMap_UnknownConnection_Returns404(t *testi
 	}
 	if !strings.Contains(w.Body.String(), "ConnectionNotFound") {
 		t.Errorf("ConnectionNotFound code not surfaced: %s", w.Body.String())
+	}
+}
+
+// --- Open PR slice-1.5 disposition coverage (v0.89.11 #626 Stream 27) ---
+
+// TestHandleIaCGitHubOpenPR_NewFile_WritesSiblingFileWithCleanLabels
+// covers the new_file disposition end-to-end. s3-access-logging is
+// the canonical new_file kind: aws_s3_bucket_logging is its own
+// top-level resource that references an existing bucket by id.
+//
+// Assertions:
+//   - PUT lands at a sibling path squadron_s3-access-logging.tf in
+//     the placement file's directory (not at the placement file
+//     itself).
+//   - PUT carries no FileSHA (this is a CREATE on the new branch).
+//   - PR title does NOT carry the patch_existing prefix.
+//   - Labels do NOT include squadron/needs-manual-merge.
+//   - PR body carries the clean-drop-in NOTE banner.
+//   - Audit payload carries disposition="new_file", carries
+//     created_file_path, and manual_merge_required=false.
+//   - Response carries disposition="new_file" and
+//     ManualMergeRequired=false.
+func TestHandleIaCGitHubOpenPR_NewFile_WritesSiblingFileWithCleanLabels(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tipofmaindefaultsha",
+		// No fileResp / fileErr for either the placement file or the
+		// new sibling path → default GetFileContent returns
+		// ErrFileNotFound → no collision.
+		openPRResp: &iacgithub.PullRequest{
+			Number: 77, HTMLURL: "https://github.com/octo/widgets/pull/77", HeadSHA: "newcommit",
+		},
+	}
+	audit := &discoveryRecordingAudit{}
+	h, _ := newTestIaCHandlers(t, mc, audit)
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"s3-access-logging","file_path":"modules/s3/main.tf"}`)
+	body := `{
+		"scan_id": "scan9999999",
+		"step_idx": 0,
+		"resource_kind": "s3-access-logging",
+		"snippet": "resource \"aws_s3_bucket_logging\" \"example\" {\n  bucket = aws_s3_bucket.example.id\n  target_bucket = \"my-logs\"\n}",
+		"proposer_reasoning": "One bucket has no access logging.",
+		"affected_resources": ["my-bucket"],
+		"account_id": "111111111111"
+	}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/open-pr", openPRRegisterFor(h), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp iacGitHubOpenPRResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Disposition != iac.DispositionNewFile {
+		t.Errorf("resp.Disposition = %q, want %q", resp.Disposition, iac.DispositionNewFile)
+	}
+	if resp.ManualMergeRequired {
+		t.Errorf("resp.ManualMergeRequired = true, want false on new_file")
+	}
+	if resp.FilePath != "modules/s3/squadron_s3-access-logging.tf" {
+		t.Errorf("resp.FilePath = %q, want modules/s3/squadron_s3-access-logging.tf", resp.FilePath)
+	}
+
+	// PUT call: path is the sibling file, FileSHA empty (create).
+	if len(mc.putFileCalls) != 1 {
+		t.Fatalf("putFile calls = %d, want 1", len(mc.putFileCalls))
+	}
+	put := mc.putFileCalls[0]
+	if put.Path != "modules/s3/squadron_s3-access-logging.tf" {
+		t.Errorf("put.Path = %q, want modules/s3/squadron_s3-access-logging.tf", put.Path)
+	}
+	if put.FileSHA != "" {
+		t.Errorf("put.FileSHA = %q, want empty (create)", put.FileSHA)
+	}
+	// The file content carries the squadron header comment.
+	if !strings.Contains(string(put.Content), "# Authored by Squadron") {
+		t.Errorf("new-file content missing Squadron header: %q", string(put.Content))
+	}
+	if !strings.Contains(string(put.Content), "aws_s3_bucket_logging") {
+		t.Errorf("new-file content missing snippet bytes")
+	}
+
+	// PR title: no slice-1.5 prefix.
+	if strings.HasPrefix(mc.openPRCalls[0].Title, "[needs manual merge]") {
+		t.Errorf("PR title should NOT carry patch_existing prefix on new_file: %q",
+			mc.openPRCalls[0].Title)
+	}
+	// PR body: clean-drop-in NOTE banner.
+	if !strings.Contains(mc.openPRCalls[0].Body, "Clean drop-in") {
+		t.Errorf("PR body missing new_file NOTE banner: %q", mc.openPRCalls[0].Body)
+	}
+
+	// Labels: no slice-1.5 manual-merge label.
+	if len(mc.addLabelsCalls) != 1 {
+		t.Fatalf("addLabels calls = %d, want 1", len(mc.addLabelsCalls))
+	}
+	for _, lbl := range mc.addLabelsCalls[0].Labels {
+		if lbl == "squadron/needs-manual-merge" {
+			t.Errorf("new_file PR should NOT carry squadron/needs-manual-merge label: %+v",
+				mc.addLabelsCalls[0].Labels)
+		}
+	}
+
+	// Audit payload: disposition + created_file_path +
+	// manual_merge_required=false. Snippet still NOT present.
+	var prOpened *services.AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].EventType == services.AuditEventRecommendationPROpened {
+			prOpened = &audit.entries[i]
+		}
+	}
+	if prOpened == nil {
+		t.Fatalf("no recommendation.pr_opened event in audit log")
+	}
+	if got := prOpened.Payload["disposition"]; got != iac.DispositionNewFile {
+		t.Errorf("audit disposition = %v, want %q", got, iac.DispositionNewFile)
+	}
+	if got := prOpened.Payload["manual_merge_required"]; got != false {
+		t.Errorf("audit manual_merge_required = %v, want false", got)
+	}
+	if got := prOpened.Payload["created_file_path"]; got != "modules/s3/squadron_s3-access-logging.tf" {
+		t.Errorf("audit created_file_path = %v, want modules/s3/squadron_s3-access-logging.tf", got)
+	}
+	payloadBytes, _ := json.Marshal(prOpened.Payload)
+	if strings.Contains(string(payloadBytes), "aws_s3_bucket_logging") {
+		t.Errorf("snippet leaked into pr_opened payload: %s", string(payloadBytes))
+	}
+}
+
+// TestHandleIaCGitHubOpenPR_NewFile_PreexistingSiblingFile_Returns422
+// covers the slice-1.5 SquadronFileAlreadyExists error code. A prior
+// Squadron PR for the same kind already created the sibling file in
+// the operator's repo; the next Open-PR for the same kind would
+// collide. Slice 1.5 surfaces a 422 with the typed code; slice 2
+// (HCL-aware merging) will replace this with an update path.
+//
+// Assertions:
+//   - Status 422.
+//   - Response carries error_code = SquadronFileAlreadyExists.
+//   - No CreateBranch / PutFileContent / OpenPR calls happen (the
+//     pre-flight check fires before any write).
+//   - recommendation.pr_open_failed audit event emitted carrying
+//     disposition + the typed error code.
+func TestHandleIaCGitHubOpenPR_NewFile_PreexistingSiblingFile_Returns422(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tipofmaindefaultsha",
+		fileResp: map[string]*iacgithub.FileContent{
+			// The sibling file already exists on the default branch
+			// — a prior merged Squadron PR.
+			"modules/s3/squadron_s3-access-logging.tf": {
+				Path: "modules/s3/squadron_s3-access-logging.tf",
+				SHA:  "existingsiblingsha",
+				DecodedContent: []byte(
+					"# Authored by Squadron (resource_kind=s3-access-logging).\nresource \"aws_s3_bucket_logging\" \"old\" {}\n",
+				),
+			},
+		},
+	}
+	audit := &discoveryRecordingAudit{}
+	h, _ := newTestIaCHandlers(t, mc, audit)
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"s3-access-logging","file_path":"modules/s3/main.tf"}`)
+	body := `{
+		"scan_id": "scan8888888",
+		"step_idx": 0,
+		"resource_kind": "s3-access-logging",
+		"snippet": "resource \"aws_s3_bucket_logging\" \"example\" {\n  bucket = aws_s3_bucket.example.id\n}",
+		"affected_resources": ["my-bucket"],
+		"account_id": "111111111111"
+	}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/open-pr", openPRRegisterFor(h), body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "SquadronFileAlreadyExists") {
+		t.Errorf("error_code SquadronFileAlreadyExists not surfaced: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "modules/s3/squadron_s3-access-logging.tf") {
+		t.Errorf("humanized message should name the conflicting file path: %s", w.Body.String())
+	}
+
+	// Pre-flight check fires BEFORE any write.
+	if len(mc.createBranchCalls) != 0 {
+		t.Errorf("CreateBranch called %d times; want 0 (pre-flight should refuse before write)",
+			len(mc.createBranchCalls))
+	}
+	if len(mc.putFileCalls) != 0 {
+		t.Errorf("PutFileContent called %d times; want 0", len(mc.putFileCalls))
+	}
+	if len(mc.openPRCalls) != 0 {
+		t.Errorf("OpenPR called %d times; want 0", len(mc.openPRCalls))
+	}
+
+	// Audit event fires with disposition stamped.
+	var failed *services.AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].EventType == services.AuditEventRecommendationPROpenFailed {
+			failed = &audit.entries[i]
+		}
+	}
+	if failed == nil {
+		t.Fatalf("no recommendation.pr_open_failed event: %+v", audit.entries)
+	}
+	if got := failed.Payload["error_code"]; got != "SquadronFileAlreadyExists" {
+		t.Errorf("audit error_code = %v, want SquadronFileAlreadyExists", got)
+	}
+	if got := failed.Payload["disposition"]; got != iac.DispositionNewFile {
+		t.Errorf("audit disposition = %v, want %q", got, iac.DispositionNewFile)
+	}
+}
+
+// TestHandleIaCGitHubOpenPR_PatchExisting_KeepsAppendBehaviorAndLabelsManualMerge
+// covers the patch_existing disposition end-to-end. lambda-otel-layer
+// is the canonical patch_existing kind. The slice-1 happy-path test
+// above asserts the slice-1 append-only invariants; this test
+// asserts the slice-1.5 ADDITIONS without duplicating the slice-1
+// coverage: title prefix, manual-merge label, audit
+// manual_merge_required=true, response disposition+flag.
+func TestHandleIaCGitHubOpenPR_PatchExisting_PRTitlePrefixedAndAuditFlagged(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tipofmaindefaultsha",
+		fileResp: map[string]*iacgithub.FileContent{
+			"modules/lambda/main.tf": {
+				Path: "modules/lambda/main.tf", SHA: "existingblobsha",
+				DecodedContent: []byte("resource \"x\" \"y\" {}\n"),
+			},
+		},
+		openPRResp: &iacgithub.PullRequest{
+			Number: 99, HTMLURL: "https://github.com/octo/widgets/pull/99", HeadSHA: "c",
+		},
+	}
+	audit := &discoveryRecordingAudit{}
+	h, _ := newTestIaCHandlers(t, mc, audit)
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"lambda-otel-layer","file_path":"modules/lambda/main.tf"}`)
+	body := `{
+		"scan_id":"scan7777","step_idx":1,
+		"resource_kind":"lambda-otel-layer",
+		"snippet":"resource \"aws_lambda_function\" \"otel\" {\n  layers = [\"x\"]\n}",
+		"affected_resources":["arn:aws:lambda:us-east-1:111:function:a"],
+		"account_id":"111111111111"
+	}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/open-pr", openPRRegisterFor(h), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp iacGitHubOpenPRResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Disposition != iac.DispositionPatchExisting {
+		t.Errorf("resp.Disposition = %q, want %q", resp.Disposition, iac.DispositionPatchExisting)
+	}
+	if !resp.ManualMergeRequired {
+		t.Errorf("resp.ManualMergeRequired = false, want true on patch_existing")
+	}
+	if resp.FilePath != "modules/lambda/main.tf" {
+		t.Errorf("resp.FilePath = %q, want modules/lambda/main.tf (the placement file, slice-1 invariant)", resp.FilePath)
+	}
+
+	// PUT lands on the placement file with FileSHA carried over.
+	put := mc.putFileCalls[0]
+	if put.Path != "modules/lambda/main.tf" {
+		t.Errorf("put.Path = %q", put.Path)
+	}
+	if put.FileSHA != "existingblobsha" {
+		t.Errorf("put.FileSHA = %q, want existingblobsha (update path)", put.FileSHA)
+	}
+	// Append-only invariant preserved.
+	if !strings.Contains(string(put.Content), "resource \"x\" \"y\"") ||
+		!strings.Contains(string(put.Content), "aws_lambda_function") {
+		t.Errorf("append-only invariant broken on patch_existing: %q", string(put.Content))
+	}
+
+	// PR title carries the slice-1.5 prefix.
+	if !strings.HasPrefix(mc.openPRCalls[0].Title, "[needs manual merge] ") {
+		t.Errorf("PR title missing slice-1.5 prefix: %q", mc.openPRCalls[0].Title)
+	}
+	// PR body carries the loud WARNING banner.
+	if !strings.Contains(mc.openPRCalls[0].Body, "Manual merge required") {
+		t.Errorf("PR body missing patch_existing WARNING banner: %q", mc.openPRCalls[0].Body)
+	}
+	if !strings.Contains(mc.openPRCalls[0].Body, "duplicate-resource error") {
+		t.Errorf("PR body should call out the duplicate-resource symptom: %q", mc.openPRCalls[0].Body)
+	}
+
+	// Labels include the manual-merge label.
+	labels := mc.addLabelsCalls[0].Labels
+	found := false
+	for _, l := range labels {
+		if l == "squadron/needs-manual-merge" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("labels missing squadron/needs-manual-merge: %+v", labels)
+	}
+
+	// Audit carries the flag.
+	var prOpened *services.AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].EventType == services.AuditEventRecommendationPROpened {
+			prOpened = &audit.entries[i]
+		}
+	}
+	if prOpened == nil {
+		t.Fatalf("no recommendation.pr_opened event in audit log")
+	}
+	if got := prOpened.Payload["disposition"]; got != iac.DispositionPatchExisting {
+		t.Errorf("audit disposition = %v, want %q", got, iac.DispositionPatchExisting)
+	}
+	if got := prOpened.Payload["manual_merge_required"]; got != true {
+		t.Errorf("audit manual_merge_required = %v, want true", got)
+	}
+	// created_file_path is OMITTED on patch_existing (the field is
+	// new_file-specific). file_path = the placement file.
+	if _, ok := prOpened.Payload["created_file_path"]; ok {
+		t.Errorf("created_file_path should not be set on patch_existing: %+v", prOpened.Payload)
+	}
+	if got := prOpened.Payload["file_path"]; got != "modules/lambda/main.tf" {
+		t.Errorf("audit file_path = %v, want modules/lambda/main.tf", got)
 	}
 }

@@ -192,6 +192,32 @@ type Recommendation struct {
 	// list to the operator in slice 1.5; it is metadata for the
 	// backend's PR-text construction.
 	AffectedResources []string `json:"affected_resources,omitempty"`
+
+	// Disposition — v0.89.11 #626 Stream 27 (slice 1.5) — names
+	// HOW the Open-PR handler should land the snippet in the
+	// operator's IaC repo. Two values, from internal/iac:
+	//
+	//   - "new_file" — the snippet is a NET-NEW top-level resource;
+	//     Squadron writes a sibling file
+	//     squadron_<resource_kind>.tf in the placement file's
+	//     directory. Clean drop-in; merge-clean.
+	//   - "patch_existing" — the snippet modifies an EXISTING
+	//     top-level resource block; Squadron appends to the
+	//     placement file (slice-1 behavior) and labels the PR
+	//     "[needs manual merge]" so the operator knows hand
+	//     integration is required.
+	//
+	// The classification is STRUCTURAL (per the per-kind table in
+	// internal/iac/dispositions.go) — the proposer outputs it but
+	// the Open-PR handler OVERRIDES the model's choice with the
+	// canonical lookup on every request. The UI reads this field
+	// to render a "Needs manual merge" badge next to the Open PR
+	// button for patch_existing kinds.
+	//
+	// Empty for non-IaC recommendations (collector-side advice,
+	// cost-spike outputs) and for discovery recommendations whose
+	// ResourceKind is empty.
+	Disposition string `json:"disposition,omitempty"`
 }
 
 // SourceKind is the typed enum carried on RecommendationSource.

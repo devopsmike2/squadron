@@ -239,6 +239,27 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`and the PR body's "Affected resources" bullet list, so an inaccurate list shows up ` +
 	`as a wrong number in front of the operator. Same shape for every category: one ` +
 	`string per resource, identifiers only, no human prose.` + "\n" +
+	`  - Set "disposition" on every step naming how the Open-PR handler should land ` +
+	`the snippet in the operator's Terraform repo. Two values: "new_file" when the ` +
+	`step's snippet defines a NET-NEW top-level Terraform resource that does NOT ` +
+	`modify any existing block (Squadron writes a sibling file ` +
+	`squadron_<resource_kind>.tf — merge-clean); "patch_existing" when the step's ` +
+	`snippet MODIFIES an existing top-level resource block (Squadron appends to the ` +
+	`placement file and labels the PR "[needs manual merge]" so the operator knows ` +
+	`hand integration is required). The disposition is STRUCTURAL — it follows from ` +
+	`the Terraform resource shape your snippet emits, not from a judgment call. Use ` +
+	`this per-kind lookup table (Squadron's handler also overrides your choice with ` +
+	`this exact mapping, but emitting the right value keeps the model's output ` +
+	`self-consistent):` + "\n" +
+	`      ec2-otel-layer                → new_file       (aws_ssm_association is new top-level)` + "\n" +
+	`      lambda-otel-layer             → patch_existing (aws_lambda_function.layers modifies existing block)` + "\n" +
+	`      rds-pi-em                     → patch_existing (aws_db_instance attributes on existing block)` + "\n" +
+	`      s3-access-logging             → new_file       (aws_s3_bucket_logging is new top-level)` + "\n" +
+	`      alb-access-logs               → patch_existing (aws_lb.access_logs nested block on existing)` + "\n" +
+	`      eks-cluster-logging           → patch_existing (aws_eks_cluster.enabled_cluster_log_types on existing)` + "\n" +
+	`      eks-observability-addon       → new_file       (aws_eks_addon is new top-level)` + "\n" +
+	`      dynamodb-contributor-insights → new_file       (aws_dynamodb_contributor_insights is new top-level)` + "\n" +
+	`      ecs-container-insights        → patch_existing (aws_ecs_cluster.setting nested block on existing)` + "\n" +
 	`  - You may decline (declined: true) if the scan returned zero uninstrumented ` +
 	`resources, or if every resource is so heterogeneous that no batch shares an ` +
 	`instrumentation strategy. State the reason briefly.` + "\n\n" +
@@ -275,6 +296,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`        "group_id": "<account_id from user message>",` + "\n" +
 	`        "inline_config_snippet": "<complete Terraform HCL for step 0>",` + "\n" +
 	`        "affected_resources": ["arn:aws:lambda:us-east-1:123:function:hello","arn:aws:lambda:us-east-1:123:function:goodbye"],` + "\n" +
+	`        "disposition": "patch_existing",` + "\n" +
 	`        "require_approval": true,` + "\n" +
 	`        "stages": [` + "\n" +
 	`          {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +
@@ -286,6 +308,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`        "group_id": "<account_id from user message>",` + "\n" +
 	`        "inline_config_snippet": "<complete Terraform HCL for step 1>",` + "\n" +
 	`        "affected_resources": ["i-aaa","i-bbb"],` + "\n" +
+	`        "disposition": "new_file",` + "\n" +
 	`        "stages": [` + "\n" +
 	`          {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +
 	`        ],` + "\n" +

@@ -767,6 +767,10 @@ describe("DiscoveryAWSPage", () => {
       "arn:aws:lambda:us-east-1:123:function:hello",
       "arn:aws:lambda:us-east-1:123:function:goodbye",
     ],
+    // v0.89.11 (#626 Stream 27) — slice-1.5 disposition. lambda is
+    // a patch_existing kind; the Recommendations card renders a
+    // "Needs manual merge" badge next to Open PR for these.
+    disposition: "patch_existing",
   };
 
   function makeRecsResp(
@@ -1143,6 +1147,91 @@ describe("DiscoveryAWSPage", () => {
       name: /Re-run the IaC connect wizard/i,
     });
     expect(link).toHaveAttribute("href", "/discovery/iac/github");
+  });
+
+  // ---------------------------------------------------------------
+  // v0.89.11 (#626 Stream 27) — slice-1.5 hybrid PR disposition.
+  // For patch_existing kinds (lambda-otel-layer is canonical), the
+  // recommendation card renders a "Needs manual merge" badge next
+  // to the Open PR button so the operator sees the slice-1
+  // append-only friction BEFORE clicking. For new_file kinds the
+  // badge is absent — the implicit clean experience.
+  // ---------------------------------------------------------------
+
+  it("RecommendationCard_renders_NeedsManualMerge_badge_on_patch_existing", async () => {
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    // Badge is rendered next to the Open PR button. The Open PR
+    // button still renders — the badge is informational, not
+    // disabling.
+    expect(
+      screen.getByRole("button", { name: /^Open PR for/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Needs manual merge/i),
+    ).toBeInTheDocument();
+  });
+
+  it("RecommendationCard_does_NOT_render_NeedsManualMerge_badge_on_new_file", async () => {
+    // s3-access-logging is a new_file disposition. Card renders
+    // Open PR cleanly without the manual-merge badge.
+    const s3Rec: Recommendation = {
+      ...lambdaRec,
+      id: "discovery-scan-uuid-1",
+      title: "AI plan step 1: enable S3 access logging",
+      resource_kind: "s3-access-logging",
+      disposition: "new_file",
+      iac: {
+        format: "terraform",
+        source:
+          'resource "aws_s3_bucket_logging" "example" {\n  bucket = aws_s3_bucket.example.id\n}',
+      },
+    };
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "s3-access-logging",
+          file_path: "modules/s3/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    const user = userEvent.setup();
+    await driveToRecsTab(user, makeRecsResp([s3Rec]));
+
+    // Open PR present, badge absent.
+    expect(
+      screen.getByRole("button", { name: /^Open PR for/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Needs manual merge/i),
+    ).not.toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------

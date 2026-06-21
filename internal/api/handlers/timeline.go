@@ -523,8 +523,23 @@ func humanizeIaCAuditEvent(e *services.AuditEvent) (string, string, bool) {
 		}
 		// commit_sha intentionally omitted — noisy and the PR link
 		// already pins the diff.
+		//
+		// v0.89.11 (#626 Stream 27) — slice 1.5 — title gains a
+		// disposition-aware suffix so the operator reading the
+		// timeline sees the merge posture without clicking through.
+		// `disposition` is empty on pre-v0.89.11 payloads — fall
+		// back to the slice-1 phrasing for back-compat.
 		title := "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
 			" for " + kind
+		disp, _ := payloadString(e.Payload, "disposition")
+		switch disp {
+		case "new_file":
+			title = "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
+				" creating " + filePath
+		case "patch_existing":
+			title = "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
+				" — manual merge required for " + kind
+		}
 		sub := "Branch " + branch + ", file " + filePath
 		return title, sub, true
 

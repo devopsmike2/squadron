@@ -2112,6 +2112,21 @@ export function DiscoveryRecommendationCard({
                     {openPRResult.file_path}
                   </code>
                 </p>
+                {/* v0.89.11 (#626 Stream 27) — slice-1.5 manual-merge
+                    marker on the success card. Anchors the operator's
+                    recall to the same "[needs manual merge]" prefix
+                    the PR title carries on GitHub. */}
+                {openPRResult.manual_merge_required && (
+                  <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                    <AlertTriangle
+                      className="mr-1 inline h-3 w-3"
+                      aria-hidden
+                    />
+                    Manual merge required — Squadron appended the
+                    snippet to your placement file. Hand-integrate
+                    before merging.
+                  </p>
+                )}
                 <p className="mt-2 text-xs text-muted-foreground">
                   Squadron will not push to this branch again.
                 </p>
@@ -2166,6 +2181,30 @@ export function DiscoveryRecommendationCard({
                       {opening ? "Opening PR…" : "Open PR"}
                     </Button>
                   )}
+                  {/* v0.89.11 (#626 Stream 27) — slice-1.5 hybrid PR
+                      disposition. For patch_existing kinds (Lambda OTel
+                      layer, RDS PI/EM, ALB access logs, EKS cluster
+                      logging, ECS container insights), surface a
+                      "Needs manual merge" badge BEFORE the operator
+                      clicks Open PR so they know the slice-1 append-
+                      only behavior will require hand integration. For
+                      new_file kinds the badge is suppressed — the
+                      implicit "clean" experience. */}
+                  {openPREligible &&
+                    rec.disposition === "patch_existing" && (
+                      <Badge
+                        variant="outline"
+                        title="Squadron appends the snippet to the placement file. terraform plan will fail with a duplicate-resource error until you hand-integrate the change. Slice 2 (HCL-aware merging) will close this out."
+                        aria-label="Needs manual merge — patch_existing disposition"
+                        className="border-amber-500/40 text-xs text-amber-700 dark:text-amber-300"
+                      >
+                        <AlertTriangle
+                          className="mr-1 h-3 w-3"
+                          aria-hidden
+                        />
+                        Needs manual merge
+                      </Badge>
+                    )}
                   <Button
                     type="button"
                     size="sm"

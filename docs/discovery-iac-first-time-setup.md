@@ -77,6 +77,21 @@ limitations.
   the same name, `terraform plan` in your CI will surface a
   duplicate-resource error immediately and legibly — same signal
   you'd see if you'd pasted the snippet manually.
+- **Slice 1.5 (v0.89.11) softens this for 4 of 9 kinds.** For the
+  five recommendation kinds whose Terraform shape is a NET-NEW
+  top-level resource (EC2 ADOT SSM association, S3 access logging,
+  EKS observability addon, DynamoDB contributor insights), Squadron
+  now writes a SIBLING file `squadron_<resource_kind>.tf` in the
+  placement file's directory — clean drop-in, no conflict. For the
+  five kinds that MODIFY an existing resource block (Lambda OTel
+  layer, RDS PI/EM, ALB access logs, EKS cluster logging, ECS
+  container insights), the append-only behavior is preserved but
+  the PR is clearly labeled `[needs manual merge]` so you know
+  hand integration is required before clicking. See §"PR
+  disposition" below for the full table. Slice 2 (HCL-aware
+  merging — see
+  [proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md))
+  will close out the patch kinds.
 - **Squadron does not auto-merge.** Every PR is reviewable in the
   normal GitHub workflow. Auto-merge tools (Mergify, Auto-merge
   apps) on your side will treat Squadron PRs the same as any other
@@ -355,6 +370,52 @@ Re-run the Squadron scan after the apply lands. The previously
 uninstrumented resource should now report as instrumented; the
 recommendation drops from the Recommendations tab on its own.
 
+## PR disposition — new_file vs patch_existing
+
+Slice 1.5 (v0.89.11, #626 Stream 27) routes each Open PR through
+one of two dispositions based on the resource_kind's structural
+Terraform shape:
+
+- **`new_file`** — the snippet defines a NET-NEW top-level Terraform
+  resource. Squadron writes a SIBLING file named
+  `squadron_<resource_kind>.tf` in the placement file's directory.
+  Clean drop-in; `terraform plan` in your CI passes on first try.
+  The PR has the usual `squadron` + `squadron/<resource_kind>`
+  labels and no manual-merge marker.
+- **`patch_existing`** — the snippet modifies an EXISTING top-level
+  resource block (e.g. adding `layers = [...]` to an
+  `aws_lambda_function` your module already declares). Squadron
+  appends to the placement file (slice-1 behavior) and labels the
+  PR `[needs manual merge]` — the title carries that prefix, an
+  extra `squadron/needs-manual-merge` label is added, and the PR
+  body opens with a loud "Manual merge required" callout. You
+  hand-integrate the highlighted attributes into your existing
+  resource block, then merge.
+
+The disposition is STRUCTURAL — Squadron's server applies the same
+mapping on every request, independent of the proposer's output.
+The Recommendations card surfaces the disposition BEFORE you click:
+patch_existing kinds get a small amber "Needs manual merge" badge
+next to the Open PR button.
+
+Per-kind table:
+
+| resource_kind                   | disposition       | Terraform shape                                        |
+|---------------------------------|-------------------|--------------------------------------------------------|
+| `ec2-otel-layer`                | `new_file`        | `aws_ssm_association` is its own top-level resource    |
+| `lambda-otel-layer`             | `patch_existing`  | modifies `aws_lambda_function.layers`                  |
+| `rds-pi-em`                     | `patch_existing`  | modifies `aws_db_instance` attributes                  |
+| `s3-access-logging`             | `new_file`        | `aws_s3_bucket_logging` is its own top-level resource  |
+| `alb-access-logs`               | `patch_existing`  | modifies `aws_lb.access_logs` nested block             |
+| `eks-cluster-logging`           | `patch_existing`  | modifies `aws_eks_cluster.enabled_cluster_log_types`   |
+| `eks-observability-addon`       | `new_file`        | `aws_eks_addon` is its own top-level resource          |
+| `dynamodb-contributor-insights` | `new_file`        | `aws_dynamodb_contributor_insights` is its own resource|
+| `ecs-container-insights`        | `patch_existing`  | modifies `aws_ecs_cluster.setting` nested block        |
+
+Slice 2 will land HCL-aware merging so patch_existing kinds also
+produce merge-clean PRs. The design is being written in parallel
+at [proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md).
+
 ## Trust thesis — what Squadron does and does not do
 
 Read this if you're going to deploy Squadron in a regulated
@@ -485,6 +546,21 @@ click.
 - Fix: re-run §Step 1 to generate a fresh PAT, delete the existing
   connection, walk the wizard again.
 
+**`SquadronFileAlreadyExists`** — v0.89.11 (#626 Stream 27) slice-1.5
+only. You clicked Open PR for a `new_file`-disposition kind, but a
+prior Squadron PR for the same kind already created
+`squadron_<resource_kind>.tf` in the placement file's directory.
+The next Open PR for the same kind would collide because slice 1.5
+does not update an existing Squadron sibling file — that's slice 2
+territory.
+
+- Fix: in GitHub, find the existing
+  `squadron_<resource_kind>.tf` file. Either merge the open PR
+  that created it (preferred — the new scan's snippet may already
+  be redundant) or close that PR and delete the file from the
+  default branch, then re-run the scan. Squadron's next Open PR
+  will create a fresh file.
+
 ## Rotation and cleanup
 
 ### PAT rotation
@@ -539,10 +615,14 @@ ciphertext.
 - **Auto-merge.** Outside of Squadron's scope — your operator's
   call, configured on GitHub's side.
 - **GitLab, Bitbucket, Azure DevOps.** Roadmap, not slice 1.
-- **HCL-aware merging.** Slice 1 appends; it does not parse and
-  merge `resource` blocks. A duplicate-resource error from
-  `terraform plan` in your CI is immediately legible and the
-  operator's PR review catches anything subtler.
+- **HCL-aware merging.** Slice 1 appends; slice 1.5 (v0.89.11)
+  routes new_file kinds through a sibling-file write to avoid the
+  duplicate-resource problem entirely. Patch_existing kinds still
+  use the slice-1 append-only path and are labeled `[needs manual
+  merge]` so the operator knows hand integration is required.
+  Slice 2 ([proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md))
+  will land HCL-aware merging that closes out the patch_existing
+  kinds.
 
 ## See also
 
