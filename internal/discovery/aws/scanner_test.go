@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
@@ -350,14 +352,102 @@ func (f *fakeEKS) ListFargateProfiles(_ context.Context, in *eks.ListFargateProf
 	return &eks.ListFargateProfilesOutput{}, nil
 }
 
+// fakeDynamoDB is the slice 4 (v0.89.6) DynamoDB double. Services
+// the four methods the DynamoDBClient interface requires. Pagination
+// follows the same ExclusiveStartTableName / LastEvaluatedTableName
+// shape the SDK uses. Per-table expansion responses are keyed by
+// table name so each test scenario can wire its own per-table
+// behavior — mirrors fakeEKS's describeByName / describeAddonByKey
+// keying pattern.
+type fakeDynamoDB struct {
+	listTablesPages []*dynamodb.ListTablesOutput
+	listTablesIdx   int
+	listTablesErr   error
+	// describeByName keys on the table name supplied to
+	// DescribeTable. Tables not in the map return an empty
+	// DescribeTableOutput; tests that want a per-table not-found
+	// shape add a row with describeErrByName below.
+	describeByName    map[string]*dynamodb.DescribeTableOutput
+	describeErr       error
+	describeErrByName map[string]error
+	// ciByName keys on table name. Absent entries return an empty
+	// DescribeContributorInsightsOutput (status="" -> uninstrumented).
+	ciByName    map[string]*dynamodb.DescribeContributorInsightsOutput
+	ciErr       error
+	ciErrByName map[string]error
+	// tagsByARN keys on the table ARN supplied to
+	// ListTagsOfResource. Absent entries return an empty tag list.
+	tagsByARN map[string][]dynamodbtypes.Tag
+	tagsErr   error
+}
+
+func (f *fakeDynamoDB) ListTables(_ context.Context, _ *dynamodb.ListTablesInput, _ ...func(*dynamodb.Options)) (*dynamodb.ListTablesOutput, error) {
+	if f.listTablesErr != nil {
+		return nil, f.listTablesErr
+	}
+	if f.listTablesIdx >= len(f.listTablesPages) {
+		return &dynamodb.ListTablesOutput{}, nil
+	}
+	out := f.listTablesPages[f.listTablesIdx]
+	f.listTablesIdx++
+	return out, nil
+}
+
+func (f *fakeDynamoDB) DescribeTable(_ context.Context, in *dynamodb.DescribeTableInput, _ ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error) {
+	if f.describeErr != nil {
+		return nil, f.describeErr
+	}
+	if in == nil || in.TableName == nil {
+		return &dynamodb.DescribeTableOutput{}, nil
+	}
+	if err, ok := f.describeErrByName[*in.TableName]; ok && err != nil {
+		return nil, err
+	}
+	if out, ok := f.describeByName[*in.TableName]; ok && out != nil {
+		return out, nil
+	}
+	return &dynamodb.DescribeTableOutput{}, nil
+}
+
+func (f *fakeDynamoDB) DescribeContributorInsights(_ context.Context, in *dynamodb.DescribeContributorInsightsInput, _ ...func(*dynamodb.Options)) (*dynamodb.DescribeContributorInsightsOutput, error) {
+	if f.ciErr != nil {
+		return nil, f.ciErr
+	}
+	if in == nil || in.TableName == nil {
+		return &dynamodb.DescribeContributorInsightsOutput{}, nil
+	}
+	if err, ok := f.ciErrByName[*in.TableName]; ok && err != nil {
+		return nil, err
+	}
+	if out, ok := f.ciByName[*in.TableName]; ok && out != nil {
+		return out, nil
+	}
+	return &dynamodb.DescribeContributorInsightsOutput{}, nil
+}
+
+func (f *fakeDynamoDB) ListTagsOfResource(_ context.Context, in *dynamodb.ListTagsOfResourceInput, _ ...func(*dynamodb.Options)) (*dynamodb.ListTagsOfResourceOutput, error) {
+	if f.tagsErr != nil {
+		return nil, f.tagsErr
+	}
+	out := &dynamodb.ListTagsOfResourceOutput{}
+	if in == nil || in.ResourceArn == nil {
+		return out, nil
+	}
+	if tags, ok := f.tagsByARN[*in.ResourceArn]; ok {
+		out.Tags = tags
+	}
+	return out, nil
+}
+
 type fakeFactory struct {
-	ec2    EC2Client
-	lambda LambdaClient
-	rds    RDSClient
-	s3     S3Client
-	elbv2  ELBv2Client
-	eks    EKSClient
-	sts    STSClient
+	ec2      EC2Client
+	lambda   LambdaClient
+	rds      RDSClient
+	s3       S3Client
+	elbv2    ELBv2Client
+	eks      EKSClient
+	dynamodb DynamoDBClient
+	sts      STSClient
 }
 
 func (f *fakeFactory) STS(_ context.Context, _ string) (STSClient, error)       { return f.sts, nil }
@@ -402,6 +492,15 @@ func (f *fakeFactory) EKS(_ context.Context, _ string) (EKSClient, error) {
 		return &fakeEKS{}, nil
 	}
 	return f.eks, nil
+}
+
+// DynamoDB returns the configured fake DynamoDB client. Same
+// zero-output fallback as the other services. Slice 4 (v0.89.6).
+func (f *fakeFactory) DynamoDB(_ context.Context, _ string) (DynamoDBClient, error) {
+	if f.dynamodb == nil {
+		return &fakeDynamoDB{}, nil
+	}
+	return f.dynamodb, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake
@@ -650,12 +749,13 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 		t.Fatalf("AssumeRoleOK should be true on the happy path; AssumeRoleErr=%+v", vr.AssumeRoleErr)
 	}
 	// Slice 3a (v0.88.0) added s3 + alb as the 4th and 5th preflight
-	// rows; slice 3b (v0.89.0) adds eks as the 6th — assert all six
-	// services land in the validation panel. Slice 1 shipped
-	// ec2+lambda; slice 2 (v0.87) added rds; slice 3a (v0.88.0) added
-	// s3+alb; slice 3b (v0.89.0) adds eks.
-	if len(vr.Preflight) != 6 {
-		t.Fatalf("Preflight rows = %d, want 6 (ec2 + lambda + rds + s3 + alb + eks)", len(vr.Preflight))
+	// rows; slice 3b (v0.89.0) added eks as the 6th; slice 4
+	// (v0.89.6) adds dynamodb as the 7th — assert all seven services
+	// land in the validation panel. Slice 1 shipped ec2+lambda;
+	// slice 2 (v0.87) added rds; slice 3a (v0.88.0) added s3+alb;
+	// slice 3b (v0.89.0) added eks; slice 4 (v0.89.6) added dynamodb.
+	if len(vr.Preflight) != 7 {
+		t.Fatalf("Preflight rows = %d, want 7 (ec2 + lambda + rds + s3 + alb + eks + dynamodb)", len(vr.Preflight))
 	}
 	services := map[string]bool{}
 	for _, p := range vr.Preflight {
@@ -664,7 +764,7 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 			t.Errorf("Preflight %q OK=false, err=%+v", p.Service, p.Err)
 		}
 	}
-	for _, want := range []string{"ec2", "lambda", "rds", "s3", "alb", "eks"} {
+	for _, want := range []string{"ec2", "lambda", "rds", "s3", "alb", "eks", "dynamodb"} {
 		if !services[want] {
 			t.Errorf("Validate did not produce a %q preflight row", want)
 		}
@@ -1610,4 +1710,301 @@ func containsString(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// --- DynamoDB tests (slice 4, v0.89.6) -------------------------------
+
+// TestScanRegionDynamoDB_HappyPath_TwoTables_OneInstrumented_OneNot
+// drives the mapping happy path: two tables surface through
+// ListTables; the per-table fan-out populates ARN, status, billing
+// mode, and Contributor Insights status for each. The one with
+// ContributorInsightsStatus == "ENABLED" counts as instrumented;
+// the one with "DISABLED" counts as uninstrumented. The shared
+// IsInstrumented predicate evaluates per the single-axis rule.
+func TestScanRegionDynamoDB_HappyPath_TwoTables_OneInstrumented_OneNot(t *testing.T) {
+	const (
+		nameOn      = "orders"
+		nameOff     = "events"
+		arnOn       = "arn:aws:dynamodb:us-east-1:123456789012:table/orders"
+		arnOff      = "arn:aws:dynamodb:us-east-1:123456789012:table/events"
+		billingMode = "PAY_PER_REQUEST"
+	)
+	fdb := &fakeDynamoDB{
+		listTablesPages: []*dynamodb.ListTablesOutput{
+			{TableNames: []string{nameOn, nameOff}},
+		},
+		describeByName: map[string]*dynamodb.DescribeTableOutput{
+			nameOn: {Table: &dynamodbtypes.TableDescription{
+				TableArn:           awssdk.String(arnOn),
+				TableName:          awssdk.String(nameOn),
+				TableStatus:        dynamodbtypes.TableStatusActive,
+				BillingModeSummary: &dynamodbtypes.BillingModeSummary{BillingMode: dynamodbtypes.BillingModePayPerRequest},
+			}},
+			nameOff: {Table: &dynamodbtypes.TableDescription{
+				TableArn:           awssdk.String(arnOff),
+				TableName:          awssdk.String(nameOff),
+				TableStatus:        dynamodbtypes.TableStatusActive,
+				BillingModeSummary: &dynamodbtypes.BillingModeSummary{BillingMode: dynamodbtypes.BillingModePayPerRequest},
+			}},
+		},
+		ciByName: map[string]*dynamodb.DescribeContributorInsightsOutput{
+			nameOn:  {ContributorInsightsStatus: dynamodbtypes.ContributorInsightsStatusEnabled},
+			nameOff: {ContributorInsightsStatus: dynamodbtypes.ContributorInsightsStatusDisabled},
+		},
+		tagsByARN: map[string][]dynamodbtypes.Tag{
+			arnOn: {{Key: awssdk.String("Env"), Value: awssdk.String("prod")}},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, dynamodb: fdb, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	r, err := s.Scan(context.Background(), conn, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.DynamoDBTables) != 2 {
+		t.Fatalf("DynamoDBTables len = %d, want 2", len(r.DynamoDBTables))
+	}
+	byName := map[string]scanner.DynamoDBTableSnapshot{}
+	for _, tb := range r.DynamoDBTables {
+		byName[tb.Name] = tb
+	}
+	on, ok := byName[nameOn]
+	if !ok {
+		t.Fatalf("missing %q snapshot", nameOn)
+	}
+	if on.ResourceID != arnOn {
+		t.Errorf("on.ResourceID = %q, want %q", on.ResourceID, arnOn)
+	}
+	if on.Status != "ACTIVE" {
+		t.Errorf("on.Status = %q, want ACTIVE", on.Status)
+	}
+	if on.BillingMode != billingMode {
+		t.Errorf("on.BillingMode = %q, want %q", on.BillingMode, billingMode)
+	}
+	if on.ContributorInsightsStatus != "ENABLED" {
+		t.Errorf("on.ContributorInsightsStatus = %q, want ENABLED", on.ContributorInsightsStatus)
+	}
+	if !on.IsInstrumented() {
+		t.Errorf("on.IsInstrumented() = false, want true (Contributor Insights ENABLED)")
+	}
+	if on.Tags["Env"] != "prod" {
+		t.Errorf("on.Tags[Env] = %q, want prod", on.Tags["Env"])
+	}
+	off, ok := byName[nameOff]
+	if !ok {
+		t.Fatalf("missing %q snapshot", nameOff)
+	}
+	if off.ContributorInsightsStatus != "DISABLED" {
+		t.Errorf("off.ContributorInsightsStatus = %q, want DISABLED", off.ContributorInsightsStatus)
+	}
+	if off.IsInstrumented() {
+		t.Errorf("off.IsInstrumented() = true, want false (Contributor Insights DISABLED)")
+	}
+	// One ENABLED + one DISABLED -> 1 instrumented, 1 uninstrumented.
+	if r.InstrumentedCount != 1 || r.UninstrumentedCount != 1 {
+		t.Errorf("counts = (instrumented=%d, uninstrumented=%d), want (1, 1)",
+			r.InstrumentedCount, r.UninstrumentedCount)
+	}
+}
+
+// TestScanRegionDynamoDB_EmptyAccount_ReturnsEmptyList confirms an
+// account with zero tables produces zero DynamoDBTables snapshots
+// and no per-region failure — the empty-inventory shape every
+// category exposes.
+func TestScanRegionDynamoDB_EmptyAccount_ReturnsEmptyList(t *testing.T) {
+	fdb := &fakeDynamoDB{
+		listTablesPages: []*dynamodb.ListTablesOutput{{TableNames: nil}},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, dynamodb: fdb, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.DynamoDBTables) != 0 {
+		t.Errorf("DynamoDBTables = %d, want 0", len(r.DynamoDBTables))
+	}
+	if r.Partial {
+		t.Errorf("Partial = true on empty account; should be false")
+	}
+}
+
+// TestScanRegionDynamoDB_PaginationHandled drives the scan past the
+// first page of ListTables. Two pages of one table each must both
+// surface in DynamoDBTables.
+func TestScanRegionDynamoDB_PaginationHandled(t *testing.T) {
+	page1Name := "p1"
+	page2Name := "p2"
+	fdb := &fakeDynamoDB{
+		listTablesPages: []*dynamodb.ListTablesOutput{
+			{TableNames: []string{page1Name}, LastEvaluatedTableName: awssdk.String(page1Name)},
+			{TableNames: []string{page2Name}},
+		},
+		describeByName: map[string]*dynamodb.DescribeTableOutput{
+			page1Name: {Table: &dynamodbtypes.TableDescription{
+				TableArn:    awssdk.String("arn:aws:dynamodb:us-east-1:123:table/p1"),
+				TableName:   awssdk.String(page1Name),
+				TableStatus: dynamodbtypes.TableStatusActive,
+			}},
+			page2Name: {Table: &dynamodbtypes.TableDescription{
+				TableArn:    awssdk.String("arn:aws:dynamodb:us-east-1:123:table/p2"),
+				TableName:   awssdk.String(page2Name),
+				TableStatus: dynamodbtypes.TableStatusActive,
+			}},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, dynamodb: fdb, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.DynamoDBTables) != 2 {
+		t.Fatalf("DynamoDBTables = %d, want 2 (both pages should land)", len(r.DynamoDBTables))
+	}
+}
+
+// TestExpandDynamoDBTable_DescribeContributorInsightsAccessDenied_FallsBackToUnknownStatus
+// pins the documented fallback path: when a customer's policy grants
+// dynamodb:DescribeTable but not dynamodb:DescribeContributorInsights,
+// the scan does NOT fail the whole walk. The table is still returned;
+// its ContributorInsightsStatus is the sentinel "UNKNOWN" and
+// IsInstrumented() returns false (Squadron cannot prove coverage).
+func TestExpandDynamoDBTable_DescribeContributorInsightsAccessDenied_FallsBackToUnknownStatus(t *testing.T) {
+	const name = "orders"
+	const arn = "arn:aws:dynamodb:us-east-1:123:table/orders"
+	fdb := &fakeDynamoDB{
+		listTablesPages: []*dynamodb.ListTablesOutput{{TableNames: []string{name}}},
+		describeByName: map[string]*dynamodb.DescribeTableOutput{
+			name: {Table: &dynamodbtypes.TableDescription{
+				TableArn:    awssdk.String(arn),
+				TableName:   awssdk.String(name),
+				TableStatus: dynamodbtypes.TableStatusActive,
+			}},
+		},
+		ciErrByName: map[string]error{
+			name: &apiErr{code: "AccessDeniedException", msg: "User cannot perform dynamodb:DescribeContributorInsights"},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, dynamodb: fdb, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v (AccessDenied on DescribeContributorInsights should not break the walk)", err)
+	}
+	if r.Partial {
+		t.Errorf("Partial = true; AccessDenied on DescribeContributorInsights should be a per-table fallback, not a walk failure")
+	}
+	if len(r.DynamoDBTables) != 1 {
+		t.Fatalf("DynamoDBTables = %d, want 1 (the table should still surface with UNKNOWN sentinel)", len(r.DynamoDBTables))
+	}
+	got := r.DynamoDBTables[0]
+	if got.ContributorInsightsStatus != "UNKNOWN" {
+		t.Errorf("ContributorInsightsStatus = %q, want UNKNOWN", got.ContributorInsightsStatus)
+	}
+	if got.IsInstrumented() {
+		t.Errorf("IsInstrumented() = true, want false (UNKNOWN must not count as covered)")
+	}
+}
+
+// TestExpandDynamoDBTable_DescribeTableNotFound_SkipsTable pins the
+// race-against-deletion fallback: between ListTables and
+// DescribeTable, AWS deletes the table. DescribeTable returns
+// ResourceNotFoundException; the scan skips the table silently and
+// continues to the next one. Result.Partial stays false because the
+// race is a normal cloud-API condition, not a failed walk.
+func TestExpandDynamoDBTable_DescribeTableNotFound_SkipsTable(t *testing.T) {
+	const gone = "deleted-mid-scan"
+	const survives = "still-here"
+	fdb := &fakeDynamoDB{
+		listTablesPages: []*dynamodb.ListTablesOutput{{TableNames: []string{gone, survives}}},
+		describeByName: map[string]*dynamodb.DescribeTableOutput{
+			survives: {Table: &dynamodbtypes.TableDescription{
+				TableArn:    awssdk.String("arn:aws:dynamodb:us-east-1:123:table/still-here"),
+				TableName:   awssdk.String(survives),
+				TableStatus: dynamodbtypes.TableStatusActive,
+			}},
+		},
+		describeErrByName: map[string]error{
+			gone: &apiErr{code: "ResourceNotFoundException", msg: "Requested resource not found"},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, dynamodb: fdb, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v (ResourceNotFoundException should not break the walk)", err)
+	}
+	if r.Partial {
+		t.Errorf("Partial = true; per-table ResourceNotFoundException is a race, not a walk failure")
+	}
+	if len(r.DynamoDBTables) != 1 {
+		t.Fatalf("DynamoDBTables = %d, want 1 (the deleted table is skipped)", len(r.DynamoDBTables))
+	}
+	if r.DynamoDBTables[0].Name != survives {
+		t.Errorf("survivor name = %q, want %q", r.DynamoDBTables[0].Name, survives)
+	}
+}
+
+// TestScanRegionDynamoDB_ListTablesAccessDenied_SetsPartialAndFailedServices
+// pins the failure path: when dynamodb:ListTables itself is missing
+// from the policy, the per-region walk fails the way every other
+// service does — Result.Partial=true, FailedServices contains
+// "dynamodb", PartialReason carries the formatted explanation.
+// Routes through recordPartialFailure per the v0.88.3 accumulator
+// contract.
+func TestScanRegionDynamoDB_ListTablesAccessDenied_SetsPartialAndFailedServices(t *testing.T) {
+	fdb := &fakeDynamoDB{
+		listTablesErr: &apiErr{code: "AccessDeniedException", msg: "User cannot perform dynamodb:ListTables"},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, dynamodb: fdb, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !r.Partial {
+		t.Error("Partial = false, want true")
+	}
+	if !containsString(r.FailedServices, "dynamodb") {
+		t.Errorf("FailedServices = %v, want it to contain \"dynamodb\"", r.FailedServices)
+	}
+	if !strings.Contains(r.PartialReason, "dynamodb scan failed") {
+		t.Errorf("PartialReason = %q, want it to mention dynamodb scan failed", r.PartialReason)
+	}
+}
+
+// TestScanner_DynamoDBPreflightAccessDenied mirrors the EKS / S3 / ALB
+// preflight tests: when ListTables returns AccessDenied, the
+// preflight row for "dynamodb" lands on the ValidationResult with
+// OK=false and the trust-policy step suggestion.
+func TestScanner_DynamoDBPreflightAccessDenied(t *testing.T) {
+	fdb := &fakeDynamoDB{listTablesErr: &apiErr{code: "AccessDenied", msg: "User cannot perform dynamodb:ListTables"}}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, dynamodb: fdb, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	vr, err := s.Validate(context.Background(), conn)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	var got *scanner.PreflightCheck
+	for i := range vr.Preflight {
+		if vr.Preflight[i].Service == "dynamodb" {
+			got = &vr.Preflight[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("Preflight missing \"dynamodb\" entry: %+v", vr.Preflight)
+	}
+	if got.OK {
+		t.Errorf("dynamodb preflight OK = true, want false")
+	}
+	if got.Err == nil || got.Err.SuggestedStep != "trust-policy" {
+		t.Errorf("dynamodb preflight Err = %+v, want SuggestedStep=trust-policy", got.Err)
+	}
 }

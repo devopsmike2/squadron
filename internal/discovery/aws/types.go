@@ -4,6 +4,7 @@
 package aws
 
 import (
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
@@ -40,3 +41,11 @@ type elbv2LoadBalancer = elbv2types.LoadBalancer
 type eksCluster = ekstypes.Cluster
 
 type eksAddon = ekstypes.Addon
+
+// dynamoDBTable is the slice 4 (v0.89.6) addition. Same alias
+// rationale: keep mapper signatures readable without leaking the
+// SDK's nested package paths. AWS exposes the table description
+// behind TableDescription rather than a top-level Table (the
+// DescribeTable response carries a *TableDescription field), so
+// the alias mirrors what the scanner mapper actually receives.
+type dynamoDBTable = dynamodbtypes.TableDescription

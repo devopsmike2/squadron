@@ -74,6 +74,25 @@ func TestClassifyResourceKind(t *testing.T) {
 			snippet: `resource "aws_eks_cluster" "x" { enabled_cluster_log_types = ["api", "audit"] }`,
 			want:    "eks-cluster-logging",
 		},
+		{
+			// Slice 4 (v0.89.6): the snippet-first classifier matches
+			// aws_dynamodb_contributor_insights and returns the new
+			// canonical kind. The Open-PR button on the
+			// Recommendations tab reads this field to look up the
+			// 8th placement-map row.
+			name:    "dynamodb contributor insights by snippet",
+			stepNam: "Enable Contributor Insights on orders + events",
+			snippet: `resource "aws_dynamodb_contributor_insights" "orders" { table_name = "orders" }`,
+			want:    "dynamodb-contributor-insights",
+		},
+		{
+			// Step-name fallback: snippet doesn't name the canonical
+			// resource type but the step title is unambiguous.
+			name:    "dynamodb by step name fallback",
+			stepNam: "Enable Contributor Insights on DynamoDB tables",
+			snippet: `# Terraform body redacted`,
+			want:    "dynamodb-contributor-insights",
+		},
 		// Name-fallback cases: snippet doesn't contain a known
 		// resource type, classification falls back to the step name.
 		{

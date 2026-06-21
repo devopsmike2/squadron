@@ -147,7 +147,39 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`control plane of. SQUADRON DOES NOT EXECUTE eks:UpdateCluster OR eks:CreateAddon. The ` +
 	`discovery IAM policy is read-only (eks:ListClusters + eks:DescribeCluster + ` +
 	`eks:ListAddons + eks:DescribeAddon + eks:ListNodegroups). Each EKS plan step's ` +
-	`inline_config_snippet is Terraform the operator runs through their own IaC pipeline.` + "\n\n" +
+	`inline_config_snippet is Terraform the operator runs through their own IaC pipeline.` + "\n" +
+	`  - DynamoDB tables: the single observability lever is CONTRIBUTOR INSIGHTS — ` +
+	`CloudWatch Contributor Insights for DynamoDB surfaces top-accessed keys and ` +
+	`most-throttled keys per table. A table is covered when ` +
+	`contributor_insights_status == "ENABLED"; every other value (DISABLED, ENABLING, ` +
+	`DISABLING, FAILED, and the scanner's "UNKNOWN" sentinel) counts as uncovered. ` +
+	`This is a SINGLE-axis rule — a deliberate downgrade from EKS's composite rule, ` +
+	`because DynamoDB has exactly one cloud-API-visible observability signal per ` +
+	`table that the operator must explicitly enable. Pretending the rule is composite ` +
+	`would either invent a fake second axis or pull in unrelated operational signals ` +
+	`(PITR, DAX presence) that aren't actually observability. When uncovered, ` +
+	`recommend enabling — group multiple uncovered tables INTO ONE plan step (each ` +
+	`table is its own Terraform target, but the snippet emits one ` +
+	`aws_dynamodb_contributor_insights resource block per table inside the same step ` +
+	`so the operator's PR review covers the whole batch). A typical recommendation ` +
+	`reads: "Enable Contributor Insights on {table-list}". The Terraform shape per ` +
+	`table is: resource "aws_dynamodb_contributor_insights" "<name>" ` +
+	`{ table_name = "..." }. The Terraform AWS provider supports this resource ` +
+	`since 4.x. SDK-side limitation (state this in the reasoning when relevant): ` +
+	`Squadron detects RESOURCE-SIDE Contributor Insights; Squadron does NOT detect ` +
+	`SDK-side OpenTelemetry or X-Ray instrumentation in the operator's application ` +
+	`code. If the operator's DynamoDB SDK is OTel-wrapped on the client side, ` +
+	`Squadron reports the table as uninstrumented — this is a known limitation of ` +
+	`cloud-API-only scanning, and a recommendation against an SDK-instrumented ` +
+	`table is operator-recoverable (they can decline). When a table's status is ` +
+	`"UNKNOWN" (the scanner's AccessDenied-fallback sentinel), hedge: recommend ` +
+	`the operator either grant dynamodb:DescribeContributorInsights or apply the ` +
+	`enablement snippet and let the next scan confirm. SQUADRON DOES NOT EXECUTE ` +
+	`dynamodb:UpdateContributorInsights. The discovery IAM policy is read-only ` +
+	`(dynamodb:ListTables + dynamodb:DescribeTable + ` +
+	`dynamodb:DescribeContributorInsights + dynamodb:ListTagsOfResource). Each ` +
+	`DynamoDB plan step's inline_config_snippet is Terraform the operator runs ` +
+	`through their own IaC pipeline.` + "\n\n" +
 
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
@@ -435,6 +467,41 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	if len(in.Clusters) > len(csample) {
 		fmt.Fprintf(&b, "  ... and %d more\n", len(in.Clusters)-len(csample))
+	}
+	b.WriteString("\n")
+
+	// DynamoDB tables. Slice 4 (v0.89.6) — same sampling rule.
+	// Render the single instrumented-rule axis
+	// (contributor_insights_status) explicitly because the proposer's
+	// per-row reasoning keys off the four AWS API enum values
+	// (ENABLED / DISABLED / ENABLING / DISABLING / FAILED) plus the
+	// scanner's "UNKNOWN" sentinel. The "covered" / "uncovered" /
+	// "unknown" shorthand matches the prompt body's instructions.
+	// BillingMode surfaces alongside so the prompt body's hedging
+	// language ("enabling Contributor Insights on a high-throughput
+	// PAY_PER_REQUEST table adds cost") has the signal to bind to.
+	fmt.Fprintf(&b, "DynamoDB tables (%d total):\n", len(in.DynamoDBTables))
+	dbsample := in.DynamoDBTables
+	if len(dbsample) > 20 {
+		dbsample = dbsample[:20]
+	}
+	for _, d := range dbsample {
+		coverage := "uncovered"
+		switch d.ContributorInsightsStatus {
+		case "ENABLED":
+			coverage = "covered"
+		case "UNKNOWN":
+			coverage = "unknown"
+		}
+		billing := d.BillingMode
+		if billing == "" {
+			billing = "unspecified"
+		}
+		fmt.Fprintf(&b, "  - %s (name=%s, billing=%s, region=%s, ci=%s, %s)\n",
+			d.ResourceID, d.Name, billing, d.Region, d.ContributorInsightsStatus, coverage)
+	}
+	if len(in.DynamoDBTables) > len(dbsample) {
+		fmt.Fprintf(&b, "  ... and %d more\n", len(in.DynamoDBTables)-len(dbsample))
 	}
 	b.WriteString("\n")
 

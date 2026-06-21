@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
@@ -135,6 +136,31 @@ type EKSClient interface {
 	ListFargateProfiles(ctx context.Context, params *eks.ListFargateProfilesInput, optFns ...func(*eks.Options)) (*eks.ListFargateProfilesOutput, error)
 }
 
+// DynamoDBClient is the narrow DynamoDB surface the scanner depends
+// on. Slice 4 (v0.89.6) of the universal-observation arc walks
+// per-region tables in two passes:
+//
+//   - Pass 1: ListTables returns the region's table name list
+//     (paginated via ExclusiveStartTableName / LastEvaluatedTableName).
+//   - Pass 2: per table, DescribeTable returns the table's ARN +
+//     status + billing mode + tags; DescribeContributorInsights
+//     returns the single observability axis
+//     (ContributorInsightsStatus); ListTagsOfResource returns the
+//     per-table tags.
+//
+// Why two passes (matching EKS rather than the single-pass S3 /
+// RDS / ALB shape): DynamoDB's ListTables is name-only — the
+// observability state lives behind DescribeTable +
+// DescribeContributorInsights. There's no "DescribeAllTables"
+// batch endpoint. Same narrow-interface rationale as the other
+// service clients.
+type DynamoDBClient interface {
+	ListTables(ctx context.Context, params *dynamodb.ListTablesInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ListTablesOutput, error)
+	DescribeTable(ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
+	DescribeContributorInsights(ctx context.Context, params *dynamodb.DescribeContributorInsightsInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeContributorInsightsOutput, error)
+	ListTagsOfResource(ctx context.Context, params *dynamodb.ListTagsOfResourceInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ListTagsOfResourceOutput, error)
+}
+
 // STSClient is the narrow STS surface used by Validate to confirm the
 // AssumeRole chain is functional. The real *sts.Client satisfies it.
 type STSClient interface {
@@ -190,6 +216,12 @@ type ClientFactory interface {
 	// a per-region API — the supplied region is where ListClusters
 	// walks.
 	EKS(ctx context.Context, region string) (EKSClient, error)
+
+	// DynamoDB returns a DynamoDB client for the supplied region.
+	// Added in slice 4 of the universal-observation arc (v0.89.6).
+	// DynamoDB is a per-region API — the supplied region is where
+	// ListTables walks.
+	DynamoDB(ctx context.Context, region string) (DynamoDBClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -332,6 +364,13 @@ func (f *sdkClientFactory) ELBv2(_ context.Context, region string) (ELBv2Client,
 
 func (f *sdkClientFactory) EKS(_ context.Context, region string) (EKSClient, error) {
 	return eks.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) DynamoDB(_ context.Context, region string) (DynamoDBClient, error) {
+	return dynamodb.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil

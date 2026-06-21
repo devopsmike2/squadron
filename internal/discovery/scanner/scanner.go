@@ -128,9 +128,25 @@ type Result struct {
 	// eks:UpdateCluster or eks:CreateAddon.
 	Clusters []ClusterSnapshot `json:"clusters"`
 
+	// DynamoDBTables is the DynamoDB (and future Cosmos DB / Cloud
+	// Bigtable) inventory. Added in slice 4 of the
+	// universal-observation arc (v0.89.6). The proposer's
+	// recommendation surface for DynamoDB reasons about a
+	// SINGLE-axis rule: ContributorInsightsStatus must be
+	// "ENABLED". This is a deliberate downgrade from EKS slice 3b's
+	// composite rule — DynamoDB has exactly one cloud-API-visible
+	// observability signal per table that the operator must
+	// explicitly enable; pretending the rule is composite would
+	// either invent a fake second axis or pull in unrelated
+	// operational signals (PITR, DAX presence) that aren't actually
+	// observability. Squadron emits enablement recommendations as
+	// plan steps; never executes
+	// dynamodb:UpdateContributorInsights.
+	DynamoDBTables []DynamoDBTableSnapshot `json:"dynamodb_tables"`
+
 	// InstrumentedCount sums Compute+Functions+Databases+ObjectStores+
-	// LoadBalancers+Clusters entries where observability presence
-	// was detected.
+	// LoadBalancers+Clusters+DynamoDBTables entries where
+	// observability presence was detected.
 	// UninstrumentedCount is the complement. Both are denormalized so
 	// consumers don't need to recount.
 	//
@@ -152,6 +168,13 @@ type Result struct {
 	//     required. Single-axis presence is informationally surfaced
 	//     in the Inventory tab but does not count toward
 	//     InstrumentedCount.)
+	//   - DynamoDBTables: ContributorInsightsStatus == "ENABLED".
+	//     (Slice 4 single-axis rule. Squadron detects resource-side
+	//     Contributor Insights; Squadron does not detect SDK-side
+	//     OpenTelemetry or X-Ray instrumentation in your application
+	//     code. If your DynamoDB SDK is OTel-wrapped on the client
+	//     side, Squadron will report the table as uninstrumented —
+	//     this is a known limitation of cloud-API-only scanning.)
 	InstrumentedCount   int `json:"instrumented_count"`
 	UninstrumentedCount int `json:"uninstrumented_count"`
 
@@ -508,6 +531,104 @@ type ClusterAddon struct {
 	Status string `json:"status"`
 }
 
+// DynamoDBTableSnapshot is the category-typed view of a managed
+// NoSQL table. Provider-specific scanners populate this from
+// DynamoDB ListTables + DescribeTable + DescribeContributorInsights
+// / Cosmos DB account.tables.get / Cloud Bigtable instances.tables.
+// The proposer reasons about category-level levers (Contributor
+// Insights enablement on AWS, the equivalent throttling-and-hot-key
+// surface on the other clouds) rather than provider-specific
+// feature names.
+//
+// Slice 4's "instrumented" rule for NoSQL tables is single-axis:
+// ContributorInsightsStatus must be "ENABLED". This is a deliberate
+// downgrade from EKS slice 3b's composite rule — DynamoDB has
+// exactly one cloud-API-visible observability signal per table
+// that the operator must explicitly enable.
+//
+// SDK-side limitation (honestly stated): Squadron detects
+// resource-side Contributor Insights; Squadron does not detect
+// SDK-side OpenTelemetry or X-Ray instrumentation in your
+// application code. If your DynamoDB SDK is OTel-wrapped on the
+// client side, Squadron will report the table as uninstrumented —
+// this is a known limitation of cloud-API-only scanning.
+//
+// The ContributorInsightsStatus field carries an additional
+// sentinel value beyond what the AWS API enum exposes:
+// "UNKNOWN". The scanner emits "UNKNOWN" when
+// DescribeContributorInsights returned AccessDenied (the policy
+// granted dynamodb:DescribeTable + dynamodb:ListTagsOfResource
+// but not dynamodb:DescribeContributorInsights). The row is
+// surfaced so the operator sees the inventory and can fix the
+// policy; the "instrumented" rule counts UNKNOWN as
+// uninstrumented because Squadron cannot prove coverage.
+//
+// Squadron does NOT execute dynamodb:UpdateContributorInsights —
+// discovery is strictly read-only; the operator runs the
+// enablement Terraform through their own IaC pipeline. Same
+// posture as RDS's PI / EM and EKS's logging / addon levers.
+type DynamoDBTableSnapshot struct {
+	// ResourceID is the provider-native ID: DynamoDB table ARN /
+	// Cosmos DB resource ID / Cloud Bigtable table name. The
+	// scanner populates the full ARN for AWS so the proposer's
+	// evidence list and the recommendation envelope's
+	// AffectedResources field both surface the canonical
+	// identifier.
+	ResourceID string `json:"resource_id"`
+
+	// Name is the operator-readable table name. For AWS this is
+	// the trailing component of the ARN; kept separate so the UI
+	// doesn't have to parse ARNs.
+	Name string `json:"name"`
+
+	// Status is the provider-typed table status string:
+	// "ACTIVE" / "CREATING" / "UPDATING" / "DELETING" /
+	// "INACCESSIBLE_ENCRYPTION_CREDENTIALS" / "ARCHIVING" /
+	// "ARCHIVED". Surfaced raw so the Inventory tab can dim
+	// non-ACTIVE rows and the proposer can decline to recommend
+	// against a non-ACTIVE table.
+	Status string `json:"status"`
+
+	// BillingMode is the table's capacity-mode string:
+	// "PROVISIONED" or "PAY_PER_REQUEST". Surfaced
+	// informationally — the proposer doesn't reason about it
+	// today, but the Inventory tab renders it alongside the
+	// observability signal so the operator can see whether
+	// enabling Contributor Insights against a high-throughput
+	// PAY_PER_REQUEST table is going to add cost. Empty when the
+	// table has no BillingModeSummary (older tables created
+	// before PAY_PER_REQUEST existed default to PROVISIONED but
+	// don't populate the summary block).
+	BillingMode string `json:"billing_mode,omitempty"`
+
+	// ContributorInsightsStatus is the single observability-rule
+	// axis. AWS enum values: "ENABLED" / "DISABLED" / "ENABLING"
+	// / "DISABLING" / "FAILED". The scanner also emits the
+	// sentinel "UNKNOWN" when DescribeContributorInsights itself
+	// returned AccessDenied (see type godoc). The "instrumented"
+	// rule treats only "ENABLED" as covered; every other value
+	// (including UNKNOWN) counts as uninstrumented.
+	ContributorInsightsStatus string `json:"contributor_insights_status"`
+
+	// Region is where the table lives.
+	Region string `json:"region"`
+
+	// Tags follows the same flattened shape as the other category
+	// snapshots.
+	Tags map[string]string `json:"tags,omitempty"`
+}
+
+// IsInstrumented implements the slice 4 single-axis rule for
+// DynamoDB tables: a table counts as instrumented iff
+// ContributorInsightsStatus == "ENABLED". Every other value
+// (DISABLED / ENABLING / DISABLING / FAILED / UNKNOWN) counts as
+// uninstrumented. Kept as a method on the snapshot so the
+// scanner-side tally, the proposer-side reasoning, and the
+// Inventory tab can all reference the same predicate.
+func (t DynamoDBTableSnapshot) IsInstrumented() bool {
+	return t.ContributorInsightsStatus == "ENABLED"
+}
+
 // FunctionRuntimeSnapshot is the category-typed view of a serverless
 // function. Provider-specific scanners populate this from Lambda
 // ListFunctions / Cloud Functions list / Azure Functions list.
@@ -562,9 +683,10 @@ type ValidationResult struct {
 // permissions.
 type PreflightCheck struct {
 	// Service is the per-service identifier: "ec2", "lambda", "rds",
-	// "s3", "alb", "eks". Slice 2 added "rds"; slice 3a (v0.88.0)
-	// added "s3" and "alb"; slice 3b (v0.89.0) added "eks"; future
-	// slices add more.
+	// "s3", "alb", "eks", "dynamodb". Slice 2 added "rds"; slice 3a
+	// (v0.88.0) added "s3" and "alb"; slice 3b (v0.89.0) added
+	// "eks"; slice 4 (v0.89.6) added "dynamodb"; future slices add
+	// more.
 	Service string `json:"service"`
 
 	// OK is true when the preflight call returned without an error.

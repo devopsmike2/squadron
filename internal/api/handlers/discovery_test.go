@@ -992,8 +992,10 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 	// scan_completed payload carries the slice-1 counts the design
 	// doc's audit-invariants section names. Slice 2 added
 	// database_count; slice 3a (v0.88.0) added object_store_count +
-	// load_balancer_count. All count fields are mandatory and
-	// always present on the wire — they do NOT drop out via
+	// load_balancer_count; slice 3b (v0.89.0) added cluster_count;
+	// slice 4 (v0.89.6) added dynamodb_count +
+	// instrumented_dynamodb_count. All count fields are mandatory
+	// and always present on the wire — they do NOT drop out via
 	// omitempty even when the inventory is empty.
 	payloadJSON, _ := json.Marshal(completed.Payload)
 	for _, want := range []string{
@@ -1004,6 +1006,9 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 		"database_count",
 		"object_store_count",
 		"load_balancer_count",
+		"cluster_count",
+		"dynamodb_count",
+		"instrumented_dynamodb_count",
 		"instrumented_count",
 		"uninstrumented_count",
 		"partial",
@@ -1305,6 +1310,143 @@ func TestHandleAWSRunScan_AuditEmitsClusterCount(t *testing.T) {
 	}
 	if got, _ := gotCC.(int); got != 2 {
 		t.Errorf("cluster_count = %v, want 2", gotCC)
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsDynamoDBCounts pins the slice 4
+// (v0.89.6) audit-shape extension — the scan_completed event
+// payload now carries dynamodb_count AND
+// instrumented_dynamodb_count as MANDATORY fields. Both always
+// emit (even when the inventory is empty) so an operator skimming
+// the audit log sees DynamoDB coverage alongside the other
+// per-service counts. The two fields move together — dropping
+// either into the conditional-insert path would lose the
+// operator-visible coverage signal on happy-path scans.
+func TestHandleAWSRunScan_AuditEmitsDynamoDBCounts(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+	// Three tables: 1 ENABLED, 1 DISABLED, 1 UNKNOWN — total of 3,
+	// instrumented count of 1 (only ENABLED counts).
+	scanResult := &scanner.Result{
+		ScanID:          "test-scan-dynamodb-counts",
+		ScanStartedAt:   now,
+		ScanCompletedAt: now.Add(2 * time.Second),
+		Provider:        credstore.ProviderAWS,
+		AccountID:       "123456789012",
+		Regions:         []string{"us-east-1"},
+		DynamoDBTables: []scanner.DynamoDBTableSnapshot{
+			{ResourceID: "arn:aws:dynamodb:us-east-1:123:table/a", Name: "a", Status: "ACTIVE", ContributorInsightsStatus: "ENABLED", Region: "us-east-1"},
+			{ResourceID: "arn:aws:dynamodb:us-east-1:123:table/b", Name: "b", Status: "ACTIVE", ContributorInsightsStatus: "DISABLED", Region: "us-east-1"},
+			{ResourceID: "arn:aws:dynamodb:us-east-1:123:table/c", Name: "c", Status: "ACTIVE", ContributorInsightsStatus: "UNKNOWN", Region: "us-east-1"},
+		},
+		InstrumentedCount:   1,
+		UninstrumentedCount: 2,
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	completed := audit.entries[1]
+	if completed.EventType != "discovery.aws.scan_completed" {
+		t.Fatalf("entry[1].event_type = %q", completed.EventType)
+	}
+	gotDC, ok := completed.Payload["dynamodb_count"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing dynamodb_count key: %+v", completed.Payload)
+	}
+	if got, _ := gotDC.(int); got != 3 {
+		t.Errorf("dynamodb_count = %v, want 3", gotDC)
+	}
+	gotIDC, ok := completed.Payload["instrumented_dynamodb_count"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing instrumented_dynamodb_count key: %+v", completed.Payload)
+	}
+	if got, _ := gotIDC.(int); got != 1 {
+		t.Errorf("instrumented_dynamodb_count = %v, want 1 (only ENABLED counts)", gotIDC)
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_DynamoDB
+// is the slice 4 (v0.89.6) DynamoDB failure parallel to the slice
+// 3b eks test. When the dynamodb walk fails, FailedServices
+// carries ["dynamodb"] and PartialReason carries the formatted
+// explanation.
+func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_DynamoDB(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	scanResult := &scanner.Result{
+		ScanID:              "test-scan-partial-dynamodb",
+		ScanStartedAt:       now,
+		ScanCompletedAt:     now.Add(2 * time.Second),
+		Provider:            credstore.ProviderAWS,
+		AccountID:           "123456789012",
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   0,
+		UninstrumentedCount: 0,
+		Partial:             true,
+		PartialReason:       "dynamodb scan failed in us-east-1: AccessDenied",
+		FailedServices:      []string{"dynamodb"},
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	completed := audit.entries[1]
+	gotReason, ok := completed.Payload["partial_reason"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing partial_reason key: %+v", completed.Payload)
+	}
+	if got, want := gotReason, "dynamodb scan failed in us-east-1: AccessDenied"; got != want {
+		t.Errorf("partial_reason = %v, want %q", got, want)
+	}
+	gotServices, ok := completed.Payload["failed_services"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing failed_services key: %+v", completed.Payload)
+	}
+	gotSlice, ok := gotServices.([]string)
+	if !ok {
+		t.Fatalf("failed_services = %T (%v), want []string", gotServices, gotServices)
+	}
+	if len(gotSlice) != 1 || gotSlice[0] != "dynamodb" {
+		t.Errorf("failed_services = %v, want [\"dynamodb\"]", gotSlice)
 	}
 }
 
