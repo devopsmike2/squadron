@@ -161,6 +161,20 @@ type Recommendation struct {
 	// recommendations whose remediation is captured by the
 	// existing Snippet field (collector YAML).
 	IaC *IaCSnippet `json:"iac,omitempty"`
+
+	// ResourceKind — v0.89.3 #603 Stream 19 Phase 4 — keys this
+	// recommendation against the IaC connection's placement map.
+	// Set ONLY on discovery-source recommendations whose snippet
+	// targets a known kind from the slice-1 placement-map list
+	// (ec2-otel-layer, lambda-otel-layer, rds-pi-em,
+	// s3-access-logging, alb-access-logs, eks-cluster-logging,
+	// eks-observability-addon). Empty when the recommendation is
+	// not Open-PR-eligible (collector-side advice, or a discovery
+	// step whose snippet didn't classify into a known kind). The
+	// Recommendations tab's Open-PR button reads this field to
+	// decide whether the Open-PR action is available, and to send
+	// it on the POST /iac/github/connections/:id/open-pr payload.
+	ResourceKind string `json:"resource_kind,omitempty"`
 }
 
 // SourceKind is the typed enum carried on RecommendationSource.

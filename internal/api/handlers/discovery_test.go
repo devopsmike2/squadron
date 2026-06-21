@@ -1839,6 +1839,24 @@ func TestHandleAWSGenerateRecommendations_HappyPath(t *testing.T) {
 		t.Errorf("rec[1].iac.source missing SSM Terraform: %q", r1.IaC.Source)
 	}
 
+	// v0.89.3 #603 Stream 19 Phase 4 — ResourceKind is classified from
+	// the snippet's Terraform resource shape so the Recommendations
+	// tab's Open-PR button knows which placement-map row to look up.
+	var withKind struct {
+		Recommendations []struct {
+			ResourceKind string `json:"resource_kind"`
+		} `json:"recommendations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &withKind); err != nil {
+		t.Fatalf("decode resource_kind: %v", err)
+	}
+	if got := withKind.Recommendations[0].ResourceKind; got != "lambda-otel-layer" {
+		t.Errorf("rec[0].resource_kind = %q, want lambda-otel-layer", got)
+	}
+	if got := withKind.Recommendations[1].ResourceKind; got != "ec2-otel-layer" {
+		t.Errorf("rec[1].resource_kind = %q, want ec2-otel-layer", got)
+	}
+
 	// Audit event fires with the right shape — AND the Terraform
 	// content is NOT in the payload. This is the load-bearing
 	// invariant of this endpoint: the audit log shouldn't grow with

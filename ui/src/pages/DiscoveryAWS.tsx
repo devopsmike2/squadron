@@ -22,12 +22,16 @@ import {
   ChevronDown,
   ChevronRight,
   Cloud,
+  Copy,
+  ExternalLink,
+  GitPullRequest,
   Loader2,
   Play,
   Sparkles,
   X,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
+import { Link } from "react-router-dom";
 import useSWR from "swr";
 
 import {
@@ -40,6 +44,13 @@ import {
   type GenerateRecommendationsResponse,
   type ScanResult,
 } from "@/api/discovery";
+import {
+  IaCGitHubOpenPRError,
+  listIaCGitHubConnections,
+  openIaCGitHubPullRequest,
+  type IaCGitHubConnection,
+  type IaCGitHubOpenPRResponse,
+} from "@/api/iacGithub";
 import type { Recommendation } from "@/api/recommendations";
 import { ConnectorWizard } from "@/components/discovery/ConnectorWizard";
 import { Badge } from "@/components/ui/badge";
@@ -75,6 +86,13 @@ const ACCOUNT_TAB = "account";
 const INVENTORY_TAB = "inventory";
 const RECS_TAB = "recommendations";
 
+// IAC_GITHUB_CONNECTIONS_SWR_KEY — shared with DiscoveryIaCGitHub.tsx
+// so the Recommendations tab and the IaC connections page sip from
+// the same SWR cache. Defined as a string literal here (rather than
+// imported from the page file) so a circular import doesn't slip in
+// when the page file is later wrapped in its own lazy import.
+const IAC_GITHUB_CONNECTIONS_SWR_KEY = "/iac/github/connections";
+
 // formatTime renders an ISO timestamp as a relative ("3m ago") string
 // for recent values and falls back to a locale date for older ones.
 // Inlined to avoid a date-fns dependency on a single-use page —
@@ -106,6 +124,13 @@ export default function DiscoveryAWSPage() {
   // recommendations themselves aren't persisted.
   const [recs, setRecs] =
     useState<GenerateRecommendationsResponse | null>(null);
+  // v0.89.3 #603 Stream 19 Phase 4: account_id + scan_id of the scan
+  // the proposer just generated against. Threaded down to the Open-PR
+  // button so the per-card POST carries the right (scan_id, step_idx,
+  // account_id) tuple. Both are reset every time Inventory hands us
+  // a new recommendations response.
+  const [recsAccountID, setRecsAccountID] = useState<string>("");
+  const [recsScanID, setRecsScanID] = useState<string>("");
 
   return (
     <div className="space-y-4 p-6">
@@ -131,14 +156,20 @@ export default function DiscoveryAWSPage() {
         </TabsContent>
         <TabsContent value={INVENTORY_TAB} className="mt-4">
           <InventoryTab
-            onRecommendations={(r) => {
+            onRecommendations={(r, accountID, scanID) => {
               setRecs(r);
+              setRecsAccountID(accountID);
+              setRecsScanID(scanID);
               setActiveTab(RECS_TAB);
             }}
           />
         </TabsContent>
         <TabsContent value={RECS_TAB} className="mt-4">
-          <RecommendationsTab recs={recs} />
+          <RecommendationsTab
+            recs={recs}
+            accountID={recsAccountID}
+            scanID={recsScanID}
+          />
         </TabsContent>
       </Tabs>
     </div>
@@ -286,7 +317,14 @@ function InventoryTab({
 }: {
   // Called when the proposer responds (declined or otherwise) so the
   // page can hop to the Recommendations tab and surface the result.
-  onRecommendations: (r: GenerateRecommendationsResponse) => void;
+  // accountID and scanID are threaded alongside the response so the
+  // Recommendations tab's Open-PR button can address its per-step
+  // requests correctly. v0.89.3 #603 Stream 19 Phase 4.
+  onRecommendations: (
+    r: GenerateRecommendationsResponse,
+    accountID: string,
+    scanID: string,
+  ) => void;
 }) {
   const { data: connData } = useSWR("/discovery/aws/connections", () =>
     listAWSConnections(),
@@ -328,7 +366,7 @@ function InventoryTab({
     setGenError(null);
     try {
       const r = await generateAWSRecommendations(result.account_id, result);
-      onRecommendations(r);
+      onRecommendations(r, result.account_id, result.scan_id);
     } catch (e) {
       setGenError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1073,14 +1111,34 @@ function TagPills({ tags }: { tags: Record<string, string> }) {
 
 function RecommendationsTab({
   recs,
+  accountID,
+  scanID,
 }: {
   recs: GenerateRecommendationsResponse | null;
+  // v0.89.3 #603 Stream 19 Phase 4: scan + account context threaded
+  // down to each card so the Open-PR button can address its POST.
+  // Both empty before the first generate; populated after.
+  accountID: string;
+  scanID: string;
 }) {
   // Three states: never generated (empty), declined by the proposer
   // (informational), recommendations present (full list). Kept inline
   // rather than reusing the v0.25 RecommendationsPanel because that
   // panel fetches its own data via SWR; the discovery-source
   // recommendations are pushed in via props per scan.
+  //
+  // v0.89.3 #603 Stream 19 Phase 4: a single IaC-connections fetch
+  // lives at this level (one round trip per Recommendations-tab
+  // mount). Each card derives its connection-state (none / placement
+  // present / placement missing) from the cached list. The trade-off
+  // is intentional — slice 1 ships at most a few connections per
+  // deployment, so re-fetching per card would be needless network
+  // traffic.
+  const { data: iacData } = useSWR(
+    IAC_GITHUB_CONNECTIONS_SWR_KEY,
+    () => listIaCGitHubConnections(),
+  );
+  const iacConnections = iacData?.connections ?? [];
 
   if (!recs) {
     return (
@@ -1137,9 +1195,16 @@ function RecommendationsTab({
         </Card>
       )}
       <ul className="space-y-3">
-        {recs.recommendations.map((rec) => (
+        {recs.recommendations.map((rec, i) => (
           <li key={rec.id}>
-            <DiscoveryRecommendationCard rec={rec} />
+            <DiscoveryRecommendationCard
+              rec={rec}
+              stepIdx={i}
+              scanID={scanID || rec.source?.ref_id || ""}
+              accountID={accountID}
+              proposerReasoning={recs.reasoning ?? ""}
+              iacConnections={iacConnections}
+            />
           </li>
         ))}
       </ul>
@@ -1152,8 +1217,149 @@ function RecommendationsTab({
 // RecommendationsPanel.tsx inline rather than reusing the panel
 // component because that panel owns its own SWR fetcher; the data flow
 // here is push-from-props.
-function DiscoveryRecommendationCard({ rec }: { rec: Recommendation }) {
+//
+// v0.89.3 #603 Stream 19 Phase 4: closes the slice-1 copy-paste loop.
+// The card renders one of three states based on the IaC connection
+// inventory:
+//   A. A connection exists AND has a placement-map row for this
+//      recommendation's resource_kind → Open PR button (primary) +
+//      Copy snippet (secondary).
+//   B. A connection exists but no placement row for resource_kind →
+//      Copy only + inline notice with a link to the connections page
+//      so the operator can add the row.
+//   C. No connections at all → Copy only + inline notice with a link
+//      to the connect flow.
+// On success the button area collapses into a PR-opened success card
+// (PR link target=_blank, file path, "Squadron will not push to this
+// branch again" footer). On failure the card renders a humanized
+// message + a recovery action keyed on the error code.
+function DiscoveryRecommendationCard({
+  rec,
+  stepIdx,
+  scanID,
+  accountID,
+  proposerReasoning,
+  iacConnections,
+}: {
+  rec: Recommendation;
+  stepIdx: number;
+  scanID: string;
+  accountID: string;
+  proposerReasoning: string;
+  iacConnections: IaCGitHubConnection[];
+}) {
   const [iacOpen, setIacOpen] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [openPRResult, setOpenPRResult] =
+    useState<IaCGitHubOpenPRResponse | null>(null);
+  const [openPRError, setOpenPRError] =
+    useState<IaCGitHubOpenPRError | null>(null);
+
+  // Derive the per-card connection state from the page-level list.
+  // Slice 1 ships at most one IaC connection per deployment; the
+  // single-connection invariant lets us pick `iacConnections[0]` as
+  // "the" connection. A future slice that supports multiple
+  // connections per resource_kind will need a connection picker; for
+  // now, a clear constraint beats a half-baked UX.
+  const connection: IaCGitHubConnection | null = iacConnections[0] ?? null;
+  const placement = connection?.placement_map.find(
+    (p) => p.resource_kind === rec.resource_kind,
+  );
+  const placementFilePath = placement?.file_path ?? null;
+
+  // Open-PR-eligible iff the recommendation has a resource_kind, an
+  // IaC connection exists, and that connection has a placement-map
+  // row matching the resource_kind. Anything else routes through the
+  // State-B or State-C notices.
+  const openPREligible =
+    !!connection && !!placementFilePath && !!rec.resource_kind;
+
+  const snippetSource = rec.iac?.source ?? "";
+
+  const handleCopy = useCallback(async () => {
+    if (!snippetSource) return;
+    try {
+      await navigator.clipboard.writeText(snippetSource);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard may be blocked in non-https / iframe contexts.
+      // Operator can still expand the card and copy from the <pre>.
+    }
+  }, [snippetSource]);
+
+  const handleOpenPR = useCallback(async () => {
+    if (
+      !connection ||
+      !rec.resource_kind ||
+      !snippetSource ||
+      !scanID ||
+      opening
+    ) {
+      return;
+    }
+    setOpening(true);
+    setOpenPRError(null);
+    try {
+      const res = await openIaCGitHubPullRequest(connection.connection_id, {
+        scan_id: scanID,
+        step_idx: stepIdx,
+        resource_kind: rec.resource_kind,
+        snippet: snippetSource,
+        proposer_reasoning: proposerReasoning,
+        // affected_resources is best-effort in slice 1. The proposer
+        // doesn't expose a clean list per step; the audit story carries
+        // resource_ids via the evidence URLs. Sending an empty list is
+        // safe — the PR body's "Affected resources" section just omits
+        // the bullet list, and the count in the title falls to zero
+        // (which reads as "the snippet itself").
+        affected_resources: [],
+        account_id: accountID || undefined,
+      });
+      setOpenPRResult(res);
+    } catch (e) {
+      if (e instanceof IaCGitHubOpenPRError) {
+        setOpenPRError(e);
+        if (e.code === "DefaultBranchWriteRefused") {
+          // This is a code-layer regression — both the wizard and the
+          // backend refuse this. If it lands in the UI it's worth a
+          // diagnostic for the on-call rotation; the operator-visible
+          // message stays clean.
+          console.error("Open PR refused default-branch write", {
+            connection_id: connection.connection_id,
+            resource_kind: rec.resource_kind,
+          });
+        }
+      } else {
+        // Network failure or unexpected throw — wrap in a synthetic
+        // typed error so the renderer doesn't branch on raw Error.
+        setOpenPRError(
+          new IaCGitHubOpenPRError(
+            0,
+            {
+              code: "NetworkError",
+              message: e instanceof Error ? e.message : "Open PR failed.",
+              suggested_step: "",
+            },
+            "Open PR failed.",
+          ),
+        );
+      }
+    } finally {
+      setOpening(false);
+    }
+  }, [
+    connection,
+    rec.resource_kind,
+    snippetSource,
+    scanID,
+    stepIdx,
+    proposerReasoning,
+    accountID,
+    opening,
+  ]);
+
   return (
     <Card>
       <CardHeader>
@@ -1190,7 +1396,225 @@ function DiscoveryRecommendationCard({ rec }: { rec: Recommendation }) {
             )}
           </div>
         )}
+
+        {/* Action row: Copy + Open PR (State A), or Copy only with a
+            State-B / State-C notice. Hidden entirely when there's no
+            snippet to act on. */}
+        {snippetSource && (
+          <div className="space-y-2 pt-1">
+            {/* Success card — replaces the button row once the PR
+                is open. aria-live polite so screen readers
+                announce the PR-opened state without yanking focus. */}
+            {openPRResult ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-md border border-green-500/40 bg-green-500/5 p-3 text-sm"
+              >
+                <p className="font-medium">
+                  PR #{openPRResult.pr_number} opened in{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                    {openPRResult.repo_full_name}
+                  </code>
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  File:{" "}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                    {openPRResult.file_path}
+                  </code>
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Squadron will not push to this branch again.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <a
+                    href={openPRResult.pr_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-violet-500 hover:underline"
+                  >
+                    <ExternalLink className="h-3 w-3" aria-hidden />
+                    View PR
+                  </a>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCopy}
+                    className="text-xs"
+                  >
+                    {copied ? (
+                      <Check className="mr-1 h-3 w-3" aria-hidden />
+                    ) : (
+                      <Copy className="mr-1 h-3 w-3" aria-hidden />
+                    )}
+                    {copied ? "Copied" : "Copy snippet"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  {openPREligible && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleOpenPR}
+                      disabled={opening}
+                      aria-label={`Open PR for ${rec.title}`}
+                    >
+                      {opening ? (
+                        <Loader2
+                          className="mr-1 h-3 w-3 animate-spin"
+                          aria-hidden
+                        />
+                      ) : (
+                        <GitPullRequest
+                          className="mr-1 h-3 w-3"
+                          aria-hidden
+                        />
+                      )}
+                      {opening ? "Opening PR…" : "Open PR"}
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={openPREligible ? "outline" : "default"}
+                    onClick={handleCopy}
+                    aria-label={`Copy Terraform snippet for ${rec.title}`}
+                  >
+                    {copied ? (
+                      <Check className="mr-1 h-3 w-3" aria-hidden />
+                    ) : (
+                      <Copy className="mr-1 h-3 w-3" aria-hidden />
+                    )}
+                    {copied ? "Copied" : "Copy snippet"}
+                  </Button>
+                </div>
+
+                {/* State B — connection exists, no placement row for
+                    this resource_kind. Reachable when the operator
+                    skipped this kind in the wizard or when a new
+                    resource_kind ships after their connect. */}
+                {connection &&
+                  rec.resource_kind &&
+                  !placementFilePath && (
+                    <p className="text-xs text-muted-foreground">
+                      Open PR needs a Terraform file path for{" "}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                        {rec.resource_kind}
+                      </code>{" "}
+                      in your{" "}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                        {connection.repo_full_name}
+                      </code>{" "}
+                      connection.{" "}
+                      <Link
+                        to="/discovery/iac/github"
+                        className="text-violet-500 hover:underline"
+                      >
+                        Configure placement
+                      </Link>
+                    </p>
+                  )}
+
+                {/* State C — no connections at all. */}
+                {!connection && (
+                  <p className="text-xs text-muted-foreground">
+                    Want one-click PRs?{" "}
+                    <Link
+                      to="/discovery/iac/github"
+                      className="text-violet-500 hover:underline"
+                    >
+                      Connect a Terraform repo
+                    </Link>{" "}
+                    to enable Open PR on this recommendation.
+                  </p>
+                )}
+
+                {/* Open-PR failure — humanized message + recovery
+                    link keyed on the typed error code. Renders
+                    BELOW the action row so the operator can still
+                    retry from the same Open PR button. */}
+                {openPRError && (
+                  <div
+                    role="alert"
+                    className={
+                      openPRError.code === "DefaultBranchWriteRefused"
+                        ? "rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+                        : "rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs"
+                    }
+                  >
+                    <p className="font-medium">{openPRError.message}</p>
+                    <p className="mt-1 text-muted-foreground">
+                      {openPRErrorRecoveryHint(openPRError, connection)}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
+}
+
+// openPRErrorRecoveryHint renders a one-line recovery hint keyed on
+// the typed error code. JSX-returning helper so the case statement
+// stays out of the renderer's body.
+function openPRErrorRecoveryHint(
+  err: IaCGitHubOpenPRError,
+  connection: IaCGitHubConnection | null,
+): ReactElement {
+  const connHref = "/discovery/iac/github";
+  switch (err.code) {
+    case "NoPlacementMapping":
+      return (
+        <>
+          <Link to={connHref} className="text-violet-500 hover:underline">
+            Configure the missing placement row
+          </Link>{" "}
+          in your IaC connection and retry.
+        </>
+      );
+    case "RepoNotFound":
+    case "AuthFailed":
+    case "CredentialDecryptFailed":
+      return (
+        <>
+          <Link to={connHref} className="text-violet-500 hover:underline">
+            Re-run the IaC connect wizard
+          </Link>{" "}
+          to refresh the connection
+          {connection ? ` to ${connection.repo_full_name}` : ""}.
+        </>
+      );
+    case "DefaultBranchWriteRefused":
+      return (
+        <>
+          This is a Squadron bug. Check the audit timeline and report it —
+          Squadron should never attempt to push to the default branch.
+        </>
+      );
+    case "FileNotFound":
+      return (
+        <>
+          Squadron could not read the placement file. Confirm the path in
+          your{" "}
+          <Link to={connHref} className="text-violet-500 hover:underline">
+            IaC connection
+          </Link>{" "}
+          still exists on the default branch.
+        </>
+      );
+    default:
+      return (
+        <>
+          Squadron couldn&apos;t open the PR. Check the audit timeline for
+          details.
+        </>
+      );
+  }
 }

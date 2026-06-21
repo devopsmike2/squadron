@@ -1432,6 +1432,13 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 				Format: recommendations.IaCTerraform,
 				Source: step.InlineConfigSnippet,
 			},
+			// v0.89.3 #603 Stream 19 Phase 4: classify the step into one
+			// of the slice-1 placement-map kinds so the Recommendations
+			// tab's Open-PR button can look up the right placement row.
+			// Empty when the step's snippet doesn't match any known
+			// Terraform resource shape — the UI falls back to Copy-only
+			// in that case.
+			ResourceKind: classifyResourceKind(step.Name, step.InlineConfigSnippet),
 		}
 		recs = append(recs, rec)
 	}
@@ -1464,4 +1471,87 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		Reasoning:       result.Reasoning,
 		Recommendations: recs,
 	})
+}
+
+// classifyResourceKind maps a discovery plan step to one of the
+// slice-1 placement-map resource_kind strings. Returns "" when no
+// match — the Recommendations tab treats that as "Open PR not
+// available, copy-only".
+//
+// The classifier is intentionally snippet-first, name-second. The
+// Terraform resource type the proposer emits is a stable signal
+// (the prompt body in proposer_discovery_prompt.go pins these
+// resource shapes — aws_lambda_function for Lambda, aws_ssm_*
+// for EC2 ADOT, aws_db_instance for RDS PI/EM, etc.). The step
+// name is human prose and could drift across prompt revisions;
+// the snippet's resource type is the schema-stable wire artifact.
+//
+// EKS classification: the proposer emits a SINGLE step per
+// uncovered cluster covering BOTH axes (control-plane logging +
+// observability addon). The placement map has two rows for the
+// two axes. Slice-1 classification picks eks-observability-addon
+// when the snippet creates an aws_eks_addon resource — the more
+// specific lever. eks-cluster-logging is the fallback when the
+// snippet only touches aws_eks_cluster.enabled_cluster_log_types.
+// The PR builder appends to whichever placement file matches; the
+// operator's single PR review covers both axes regardless.
+func classifyResourceKind(stepName, snippet string) string {
+	body := snippet
+	if len(body) > 4096 {
+		// The classifier only needs the first few KB — a long snippet
+		// won't add resource types beyond the ones in the first block.
+		body = body[:4096]
+	}
+	lower := strings.ToLower(body)
+	nameLower := strings.ToLower(stepName)
+
+	// EKS is checked first because the addon snippet may also touch
+	// the cluster resource for the second axis; the addon kind wins.
+	switch {
+	case strings.Contains(lower, "aws_eks_addon"):
+		return "eks-observability-addon"
+	case strings.Contains(lower, "aws_eks_cluster"):
+		return "eks-cluster-logging"
+	case strings.Contains(lower, "aws_lambda_function"),
+		strings.Contains(lower, "aws_lambda_layer_version"):
+		return "lambda-otel-layer"
+	case strings.Contains(lower, "aws_ssm_association"),
+		strings.Contains(lower, "aws_ssm_document"),
+		strings.Contains(lower, "user_data") && strings.Contains(nameLower, "ec2"):
+		return "ec2-otel-layer"
+	case strings.Contains(lower, "aws_db_instance"),
+		strings.Contains(lower, "performance_insights"),
+		strings.Contains(lower, "monitoring_interval"):
+		return "rds-pi-em"
+	case strings.Contains(lower, "aws_s3_bucket_logging"),
+		strings.Contains(lower, "aws_s3_bucket_server_side_logging"):
+		return "s3-access-logging"
+	case strings.Contains(lower, "aws_lb") && strings.Contains(lower, "access_logs"),
+		strings.Contains(lower, "aws_alb"):
+		return "alb-access-logs"
+	}
+
+	// Step-name fallback for prompts that emit Terraform we don't
+	// recognize. Less reliable than the snippet match but keeps the
+	// UI's Open PR available when the proposer is verbose about the
+	// category in the step name.
+	switch {
+	case strings.Contains(nameLower, "lambda"):
+		return "lambda-otel-layer"
+	case strings.Contains(nameLower, "ec2"):
+		return "ec2-otel-layer"
+	case strings.Contains(nameLower, "rds"), strings.Contains(nameLower, "performance insights"):
+		return "rds-pi-em"
+	case strings.Contains(nameLower, "s3") && strings.Contains(nameLower, "access log"):
+		return "s3-access-logging"
+	case strings.Contains(nameLower, "alb"), strings.Contains(nameLower, "nlb"),
+		strings.Contains(nameLower, "load balancer"):
+		return "alb-access-logs"
+	case strings.Contains(nameLower, "eks") && strings.Contains(nameLower, "addon"):
+		return "eks-observability-addon"
+	case strings.Contains(nameLower, "eks"):
+		return "eks-cluster-logging"
+	}
+
+	return ""
 }
