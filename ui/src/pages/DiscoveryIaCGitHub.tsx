@@ -256,8 +256,15 @@ export default function DiscoveryIaCGitHubPage() {
         </div>
         <Dialog open={open} onOpenChange={onDialogOpenChange}>
           <Button onClick={() => setOpen(true)}>Connect IaC repo</Button>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
+          {/*
+           * Height-bounded flex column so the wizard body scrolls inside the
+           * viewport instead of clipping the dialog header and Back/Next
+           * footer on shorter screens (#618). max-h-[90vh] is the Radix
+           * convention; flex-1 min-h-0 on the body is required for the
+           * scroll container to compute its own bounds inside a flex parent.
+           */}
+          <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden">
+            <DialogHeader className="shrink-0">
               <DialogTitle>
                 {editMode ? "Edit placement map" : "Connect IaC repository"}
               </DialogTitle>
@@ -267,10 +274,12 @@ export default function DiscoveryIaCGitHubPage() {
                   : "Walk through the six steps to grant Squadron PR access via a GitHub Personal Access Token."}
               </DialogDescription>
             </DialogHeader>
-            <IaCGitHubWizard
-              onComplete={onWizardComplete}
-              editMode={editMode ?? undefined}
-            />
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+              <IaCGitHubWizard
+                onComplete={onWizardComplete}
+                editMode={editMode ?? undefined}
+              />
+            </div>
           </DialogContent>
         </Dialog>
       </div>
