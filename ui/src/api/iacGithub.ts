@@ -20,7 +20,7 @@
 import { apiBaseUrl } from "../config";
 
 import { getAuthToken, onAuthChallenge } from "./auth-store";
-import { apiDelete, apiGet, apiPost } from "./base";
+import { apiDelete, apiGet, apiPatch, apiPost } from "./base";
 
 // HumanizedError mirrors scanner.HumanizedError. The wizard renders
 // `message` verbatim and uses `suggested_step` to deep-link back to the
@@ -106,6 +106,39 @@ export function saveIaCGitHubConnection(
 ): Promise<IaCGitHubSaveConnectionResponse> {
   return apiPost<IaCGitHubSaveConnectionResponse>(
     "/iac/github/connections",
+    req,
+  );
+}
+
+// Update placement map endpoint ------------------------------------
+//
+// v0.89.4 (#610) — the deep-linked-wizard save target. The
+// connections page route accepts
+// `?connection_id=<uuid>&step=placement&kind=<resource_kind>` and
+// auto-opens the wizard on the placement-map step, pre-filled with
+// the connection's existing rows. Save in that flow calls this
+// endpoint (not the create endpoint) because the connection already
+// exists — we're editing the placement_map column only.
+//
+// Token is NEVER on the wire here — the substrate's stored
+// cred_ciphertext is preserved untouched.
+
+export interface IaCGitHubUpdatePlacementMapRequest {
+  placement_map: IaCPlacementEntry[];
+}
+
+export interface IaCGitHubUpdatePlacementMapResponse {
+  connection_id: string;
+  repo_full_name: string;
+  placement_map: IaCPlacementEntry[];
+}
+
+export function updateIaCGitHubPlacementMap(
+  connectionID: string,
+  req: IaCGitHubUpdatePlacementMapRequest,
+): Promise<IaCGitHubUpdatePlacementMapResponse> {
+  return apiPatch<IaCGitHubUpdatePlacementMapResponse>(
+    `/iac/github/connections/${encodeURIComponent(connectionID)}/placement-map`,
     req,
   );
 }

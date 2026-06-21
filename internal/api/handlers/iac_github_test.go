@@ -750,3 +750,123 @@ func TestStatusForGitHubError(t *testing.T) {
 		t.Errorf("unknown error should map to 500")
 	}
 }
+
+// --- UpdatePlacementMap (v0.89.4 #610) --------------------------------
+
+// seedConnectionForUpdate seeds an iacconnstore with one connection so
+// the placement-map-update tests have something to point at. Returns
+// the freshly minted connection_id.
+func seedConnectionForUpdate(t *testing.T, h *IaCGitHubHandlers) string {
+	t.Helper()
+	body := `{
+		"token": "ghp_seedToken",
+		"repo_full_name": "octo/widgets",
+		"repo_layout": "mono",
+		"placement_map": [
+			{"provider":"aws","resource_kind":"lambda-otel-layer","file_path":"modules/lambda/main.tf"}
+		]
+	}`
+	w := doIaCRequest(t, http.MethodPost, "/api/v1/iac/github/connections",
+		func(r *gin.Engine) { r.POST("/api/v1/iac/github/connections", h.HandleIaCGitHubSaveConnection) }, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("seed save status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var resp iacGitHubSaveConnectionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("seed decode: %v", err)
+	}
+	return resp.ConnectionID
+}
+
+// TestHandleIaCGitHubUpdatePlacementMap_HappyPath_PersistsAndEmitsAudit
+// covers the v0.89.4 #610 deep-linked-wizard save target: the operator
+// edits the placement map on an existing connection, the row is
+// rewritten, and the iac.github.placement_map_updated audit event is
+// emitted with the new placement map (and never the stored token).
+func TestHandleIaCGitHubUpdatePlacementMap_HappyPath_PersistsAndEmitsAudit(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp: &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+	}
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestIaCHandlers(t, mc, audit)
+	connID := seedConnectionForUpdate(t, h)
+	// Drop the seed-save audit entry so the assertions below count
+	// only the placement-map-update event.
+	audit.mu.Lock()
+	audit.entries = nil
+	audit.mu.Unlock()
+
+	body := `{
+		"placement_map": [
+			{"provider":"aws","resource_kind":"lambda-otel-layer","file_path":"modules/lambda/main.tf"},
+			{"provider":"aws","resource_kind":"eks-cluster-logging","file_path":"modules/eks/main.tf"}
+		]
+	}`
+	register := func(r *gin.Engine) {
+		r.PATCH("/api/v1/iac/github/connections/:id/placement-map", h.HandleIaCGitHubUpdatePlacementMap)
+	}
+	w := doIaCRequest(t, http.MethodPatch,
+		"/api/v1/iac/github/connections/"+connID+"/placement-map", register, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// The substrate row's placement map is the new two-row shape.
+	row, err := store.Get(context.Background(), connID)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if len(row.PlacementMap) != 2 {
+		t.Fatalf("row.PlacementMap len = %d, want 2", len(row.PlacementMap))
+	}
+	if row.PlacementMap[1].ResourceKind != "eks-cluster-logging" {
+		t.Errorf("second row kind = %q, want eks-cluster-logging", row.PlacementMap[1].ResourceKind)
+	}
+	// CredCiphertext untouched — the seed-save sealed bytes are still
+	// there (PATCH does not re-seal).
+	if len(row.CredCiphertext) == 0 {
+		t.Errorf("CredCiphertext blown away by PATCH — must be preserved")
+	}
+
+	// One audit entry, the placement_map_updated event.
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.EventType != services.AuditEventIaCGitHubPlacementMapUpdated {
+		t.Errorf("audit EventType = %q, want %q", e.EventType, services.AuditEventIaCGitHubPlacementMapUpdated)
+	}
+	if e.TargetType != services.AuditTargetIaCConnection {
+		t.Errorf("audit TargetType = %q", e.TargetType)
+	}
+	// Token NEVER in payload — even though this endpoint doesn't see
+	// the token at all, the assertion is the load-bearing invariant
+	// and stays alongside the other two iac.github.* audits.
+	payloadBytes, _ := json.Marshal(e.Payload)
+	if strings.Contains(string(payloadBytes), "ghp_seedToken") {
+		t.Fatalf("token leaked into audit payload: %s", string(payloadBytes))
+	}
+}
+
+// TestHandleIaCGitHubUpdatePlacementMap_UnknownConnection_Returns404
+// covers the stale-deep-link error path. If the operator lands on
+// /discovery/iac/github?connection_id=<deleted>, the wizard hands
+// the operator off to the bare connections list — but the API still
+// has to 404 cleanly in case anything reaches PATCH with a deleted
+// ID (race or scripted client).
+func TestHandleIaCGitHubUpdatePlacementMap_UnknownConnection_Returns404(t *testing.T) {
+	mc := &mockGitHubClient{}
+	h, _ := newTestIaCHandlers(t, mc, nil)
+	body := `{"placement_map":[]}`
+	register := func(r *gin.Engine) {
+		r.PATCH("/api/v1/iac/github/connections/:id/placement-map", h.HandleIaCGitHubUpdatePlacementMap)
+	}
+	w := doIaCRequest(t, http.MethodPatch,
+		"/api/v1/iac/github/connections/not-a-real-id/placement-map", register, body)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "ConnectionNotFound") {
+		t.Errorf("ConnectionNotFound code not surfaced: %s", w.Body.String())
+	}
+}

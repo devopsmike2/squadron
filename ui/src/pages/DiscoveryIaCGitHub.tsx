@@ -6,9 +6,29 @@
 // Slice 1 ships GitHub only. The page key is /discovery/iac/github so
 // future slices (GitLab / Bitbucket) can land under /discovery/iac/<p>
 // without renaming routes.
+//
+// v0.89.4 (#610) — query-param deep link. Landing on
+//   /discovery/iac/github?connection_id=<uuid>&step=placement&kind=<resource_kind>
+// auto-opens the wizard dialog in placement-only edit mode, pre-fills
+// with the connection's existing rows, and scrolls the row for the
+// target resource_kind into view + outlines it. The deep link is the
+// land-target for the DiscoveryAWS "Configure placement" /
+// NoPlacementMapping recovery hint (#610 closes the Phase-4 stopgap).
+//
+// Invariants:
+//   - The bare /discovery/iac/github URL (no query params) still
+//     renders the connections list — regression-guarded.
+//   - A stale connection_id (no row in the SWR list) surfaces an
+//     inline "That connection no longer exists" notice; the page
+//     still renders the connections list.
+//   - An unknown ?kind=... value is silently dropped; the wizard
+//     still opens at the placement step, just without a focused row.
+//   - On dialog close the query params are stripped via replaceState
+//     so the back button doesn't re-trigger the wizard.
 
-import { ExternalLink, Github, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { AlertTriangle, ExternalLink, Github, Sparkles, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 
 import {
@@ -16,7 +36,10 @@ import {
   type IaCGitHubConnection,
   listIaCGitHubConnections,
 } from "@/api/iacGithub";
-import { IaCGitHubWizard } from "@/components/discovery/IaCGitHubWizard";
+import {
+  IaCGitHubWizard,
+  type IaCGitHubWizardEditPlacementMode,
+} from "@/components/discovery/IaCGitHubWizard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,6 +58,21 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { IAC_GITHUB_PLACEMENT_KINDS } from "@/data/iacGithubWizard";
+
+// Canonical resource_kind set (the seven slice-1 kinds in
+// data/iacGithubWizard.ts). The deep link's ?kind=<...> param is
+// validated against this set; an unknown value is silently dropped.
+const CANONICAL_KINDS = new Set(
+  IAC_GITHUB_PLACEMENT_KINDS.map((k) => k.resource_kind),
+);
+
+// Deep-link query-param keys. Re-declared so a typo at the link
+// site flags at TS check time rather than at runtime.
+const QP_CONNECTION_ID = "connection_id";
+const QP_STEP = "step";
+const QP_KIND = "kind";
+const QP_STEP_PLACEMENT = "placement";
 
 // SWR cache key for the connections list. Exported because the wizard
 // dialog mutate()s on save so the new row lands without a refresh.
@@ -60,20 +98,126 @@ export default function DiscoveryIaCGitHubPage() {
     IAC_GITHUB_CONNECTIONS_SWR_KEY,
     () => listIaCGitHubConnections(),
   );
+  const location = useLocation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState<IaCGitHubConnection | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
+  // Stale-deep-link notice. When the URL points at a connection_id
+  // that doesn't exist in the SWR list, the page renders the
+  // connections list AND shows this banner so the operator's not
+  // left wondering why the wizard didn't open.
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
 
-  const connections = data?.connections ?? [];
+  // Wrap in useMemo so the array identity is stable across renders —
+  // the useMemo/useEffect hooks below key off `connections` and a
+  // fresh array per render would tank them.
+  const connections = useMemo(
+    () => data?.connections ?? [],
+    [data?.connections],
+  );
+
+  // Parse the URL query params on every render (cheap). The three
+  // shapes that lead to "auto-open the wizard in placement-edit
+  // mode":
+  //   1. connection_id present + step=placement + connection found:
+  //      build editMode with the matched connection's rows.
+  //   2. connection_id present + step=placement + connection NOT
+  //      found (and list has finished loading): set staleNotice.
+  //   3. connection_id present + step=placement + kind=<canonical>:
+  //      focused row = kind. Unknown kind → focused row = null
+  //      (open at placement step, but don't highlight anything).
+  // Anything else (bare URL, partial query) renders the bare list.
+  const editMode: IaCGitHubWizardEditPlacementMode | null = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const connID = params.get(QP_CONNECTION_ID);
+    const step = params.get(QP_STEP);
+    if (!connID || step !== QP_STEP_PLACEMENT) return null;
+    // Wait for the SWR list to settle before deciding stale-or-found.
+    // While isLoading, return null and the open-effect below holds off.
+    if (isLoading) return null;
+    const conn = connections.find((c) => c.connection_id === connID);
+    if (!conn) return null;
+    const kindParam = params.get(QP_KIND);
+    const focusedResourceKind =
+      kindParam && CANONICAL_KINDS.has(kindParam) ? kindParam : null;
+    return {
+      kind: "edit-placement",
+      connectionID: conn.connection_id,
+      repoFullName: conn.repo_full_name,
+      repoLayout:
+        conn.repo_layout === "mono" || conn.repo_layout === "multi"
+          ? conn.repo_layout
+          : "multi",
+      initialRows: conn.placement_map,
+      focusedResourceKind,
+    };
+  }, [connections, isLoading, location.search]);
+
+  // Stale-link detection runs separately so we can post the notice
+  // even when editMode is null (the wizard won't auto-open).
+  useEffect(() => {
+    if (isLoading) return;
+    const params = new URLSearchParams(location.search);
+    const connID = params.get(QP_CONNECTION_ID);
+    const step = params.get(QP_STEP);
+    if (!connID || step !== QP_STEP_PLACEMENT) {
+      setStaleNotice(null);
+      return;
+    }
+    const found = connections.some((c) => c.connection_id === connID);
+    if (!found) {
+      setStaleNotice(
+        "That IaC connection no longer exists. The link may be stale — pick a connection from the list below or run the wizard again.",
+      );
+    } else {
+      setStaleNotice(null);
+    }
+  }, [connections, isLoading, location.search]);
+
+  // stripQueryParams removes the deep-link params from the URL
+  // without pushing a new history entry. We use this on dialog close
+  // so the operator's back button doesn't re-trigger the wizard;
+  // pushing a new entry would mean a duplicate Back press to leave
+  // the page.
+  const stripQueryParams = useCallback(() => {
+    if (!location.search) return;
+    navigate(location.pathname, { replace: true });
+  }, [location.pathname, location.search, navigate]);
+
+  // Auto-open the wizard when a valid deep link landed. The effect
+  // fires once per editMode identity (which itself only changes when
+  // connections / search params change).
+  useEffect(() => {
+    if (editMode) {
+      setOpen(true);
+    }
+  }, [editMode]);
 
   const onWizardComplete = useCallback(() => {
     // Refresh the list so the new row lands. We delay the close by one
     // tick so the Connected card has a moment to render — same UX as
-    // the AWS wizard.
+    // the AWS wizard. The deep-link's edit-mode flow also calls the
+    // same mutate; the page's stale-notice effect will quiet down
+    // once the list reflects the saved row.
     void mutate();
-    setTimeout(() => setOpen(false), 1200);
-  }, [mutate]);
+    setTimeout(() => {
+      setOpen(false);
+      stripQueryParams();
+    }, 1200);
+  }, [mutate, stripQueryParams]);
+
+  // Dialog onOpenChange — when the operator closes via the X button
+  // or ESC, strip the query params too so the back button doesn't
+  // re-trigger.
+  const onDialogOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(next);
+      if (!next) stripQueryParams();
+    },
+    [stripQueryParams],
+  );
 
   const onDeleteConfirm = useCallback(async () => {
     if (!deleting) return;
@@ -110,20 +254,38 @@ export default function DiscoveryIaCGitHubPage() {
             One row per IaC connection. Slice 1 supports GitHub only.
           </p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={onDialogOpenChange}>
           <Button onClick={() => setOpen(true)}>Connect IaC repo</Button>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Connect IaC repository</DialogTitle>
+              <DialogTitle>
+                {editMode ? "Edit placement map" : "Connect IaC repository"}
+              </DialogTitle>
               <DialogDescription>
-                Walk through the six steps to grant Squadron PR access
-                via a GitHub Personal Access Token.
+                {editMode
+                  ? "Update which Terraform file each resource kind appends to. The connection's token, branch prefix, and reviewer team are unchanged."
+                  : "Walk through the six steps to grant Squadron PR access via a GitHub Personal Access Token."}
               </DialogDescription>
             </DialogHeader>
-            <IaCGitHubWizard onComplete={onWizardComplete} />
+            <IaCGitHubWizard
+              onComplete={onWizardComplete}
+              editMode={editMode ?? undefined}
+            />
           </DialogContent>
         </Dialog>
       </div>
+
+      {staleNotice && (
+        <Card role="alert" aria-live="polite">
+          <CardContent className="flex items-start gap-2 p-4 text-sm">
+            <AlertTriangle
+              className="mt-0.5 h-4 w-4 shrink-0 text-yellow-600 dark:text-yellow-400"
+              aria-hidden
+            />
+            <p>{staleNotice}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {error && (
         <Card>

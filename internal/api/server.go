@@ -1231,6 +1231,14 @@ func (s *Server) registerRoutes() {
 		v1.DELETE("/iac/github/connections/:id",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleDeleteIaCGitHubConnection(c) }))
+		// v0.89.4 (#610) — deep-linked-wizard placement-map edit. The
+		// /discovery/iac/github page accepts ?connection_id=...&step=
+		// placement query params and lets the operator change just the
+		// placement map on an existing connection; this route is the
+		// save target. agents:write because it mutates substrate state.
+		v1.PATCH("/iac/github/connections/:id/placement-map",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubUpdatePlacementMap(c) }))
 		v1.POST("/iac/github/connections/:id/open-pr",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubOpenPR(c) }))
