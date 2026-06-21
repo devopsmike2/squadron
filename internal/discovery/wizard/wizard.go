@@ -215,7 +215,7 @@ func AWSWizard() ConnectorWizard {
 			{
 				ID:          "trust-policy",
 				Title:       "Create the IAM role with this trust policy",
-				Description: "Squadron generated a per-deployment ExternalId for you. By default this trust policy lets any IAM identity in your AWS account assume the SquadronDiscovery role, provided that identity has sts:AssumeRole permission and passes the ExternalId — the AWS-recommended bootstrap shape for self-hosted Squadron. Copy the trust policy below verbatim and paste it into the AWS IAM role creation flow. Use the Advanced section to scope to a single IAM identity, or to resume with an ExternalId you already pasted into AWS.",
+				Description: "Squadron generated a per-deployment ExternalId for you. By default this trust policy lets any IAM identity in your AWS account assume the SquadronDiscovery role, provided that identity has sts:AssumeRole permission and passes the ExternalId — the AWS-recommended bootstrap shape for self-hosted Squadron. Copy the trust policy below verbatim and paste it into the AWS IAM role creation flow. See the two affordances below the JSON to scope to a single IAM identity, or to resume with an ExternalId you already pasted into AWS.",
 				Action: WizardAction{
 					Kind: ActionCopyValue,
 					Payload: map[string]string{

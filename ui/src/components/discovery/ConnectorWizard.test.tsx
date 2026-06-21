@@ -303,9 +303,12 @@ describe("ExternalId override UX", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
 
-    // Expand the Advanced disclosure to reveal the override input.
+    // Expand the "Resume with existing ExternalId" affordance row
+    // to reveal the override input. The pre-#622 disclosure was a
+    // single "Advanced options" toggle hiding both inputs; #622 split
+    // it into two always-visible rows with per-row expanders.
     fireEvent.click(
-      screen.getByRole("button", { name: /Advanced options/i }),
+      screen.getByRole("button", { name: /Resume with existing ExternalId/i }),
     );
 
     const override = "abcdef12-3456-7890-abcd-ef1234567890";
@@ -332,7 +335,7 @@ describe("ExternalId override UX", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
 
     fireEvent.click(
-      screen.getByRole("button", { name: /Advanced options/i }),
+      screen.getByRole("button", { name: /Resume with existing ExternalId/i }),
     );
 
     fireEvent.change(
@@ -350,6 +353,136 @@ describe("ExternalId override UX", () => {
     expect(
       screen.getByText(/lowercase UUID v4 shape/i),
     ).toBeInTheDocument();
+  });
+});
+
+// --- #622 Step 2 UX cleanup (fixes #621) -------------------------
+//
+// Three discoverability failures surfaced 20 minutes into a real-time
+// first-time walkthrough: the :root principal panicked the operator,
+// the Advanced options disclosure buried the two highest-value
+// affordances, and there was no entry point for the ExternalId
+// resume case. These tests cover the trust-policy step's share of
+// the fix — the connections-list entry point lives in
+// DiscoveryAWS.test.tsx.
+
+describe("ConnectorWizard step 2 UX (#622)", () => {
+  // Helper: walk the wizard to the trust-policy step (step 2).
+  function advanceToStep2() {
+    fireEvent.change(screen.getByPlaceholderText("123456789012"), {
+      target: { value: "111122223333" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+  }
+
+  it("ConnectorWizard_Step2_RendersInlineRootExplanation", () => {
+    render(<ConnectorWizard {...makeProps()} />);
+    advanceToStep2();
+    // Verbatim text owned by awsWizard.ts. Renders below the JSON
+    // block, not buried in the description paragraph above it.
+    const note = screen.getByTestId("root-principal-note");
+    expect(note).toBeInTheDocument();
+    expect(note.textContent).toMatch(
+      /:root.* means .*any IAM identity in this account/i,
+    );
+    expect(note.textContent).toMatch(/not the AWS root user/i);
+  });
+
+  it("ConnectorWizard_Step2_RendersScopeToIdentityAffordanceByDefault", () => {
+    render(<ConnectorWizard {...makeProps()} />);
+    advanceToStep2();
+    // The row header is visible from the moment step 2 renders — no
+    // "Advanced options" click needed. The recommended-for-prod badge
+    // and the caption are both on-screen.
+    expect(
+      screen.getByRole("button", { name: /Scope to a specific IAM identity/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/recommended for prod/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Tighter trust-policy scoping than the default/i),
+    ).toBeInTheDocument();
+  });
+
+  it("ConnectorWizard_Step2_RendersResumeWithExternalIdAffordanceByDefault", () => {
+    render(<ConnectorWizard {...makeProps()} />);
+    advanceToStep2();
+    // Same shape as row 1 — header + caption visible immediately.
+    expect(
+      screen.getByRole("button", { name: /Resume with existing ExternalId/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /you've connected this account in a previous Squadron deployment/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("ConnectorWizard_Step2_ResumeWithExternalIdPrefillsTheTrustPolicy", () => {
+    render(<ConnectorWizard {...makeProps()} />);
+    advanceToStep2();
+    // Expand row 2 and paste a well-formed UUID. The trust-policy
+    // <code> block reflects the override — same plumbing as the
+    // pre-#622 Advanced disclosure, just exposed sooner.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Resume with existing ExternalId/i }),
+    );
+    const override = "deadbeef-1234-5678-9abc-def012345678";
+    fireEvent.change(screen.getByLabelText(/ExternalId override/i), {
+      target: { value: override },
+    });
+    const codeBlock = document.querySelector("pre code");
+    expect(codeBlock?.textContent).toContain(override);
+  });
+
+  it("ConnectorWizard_Step2_ScopeToIdentityPrefillsThePrincipal", () => {
+    render(<ConnectorWizard {...makeProps()} />);
+    advanceToStep2();
+    // Expand row 1 and paste a well-formed user ARN. The trust-policy
+    // <code> block's Principal.AWS field reflects the override
+    // instead of the account-root default.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Scope to a specific IAM identity/i }),
+    );
+    const userArn = "arn:aws:iam::111122223333:user/squadron-bot";
+    fireEvent.change(screen.getByLabelText(/Principal override ARN/i), {
+      target: { value: userArn },
+    });
+    const codeBlock = document.querySelector("pre code");
+    expect(codeBlock?.textContent).toContain(`"AWS": "${userArn}"`);
+    // Account-root default must not also appear — guards against
+    // double-substitution.
+    expect(codeBlock?.textContent).not.toContain(
+      '"AWS": "arn:aws:iam::111122223333:root"',
+    );
+  });
+
+  it("renders the resume-mode ExternalId field on step 1 when resumeMode is set", () => {
+    render(<ConnectorWizard {...makeProps()} resumeMode />);
+    // The wizard mounts on step 1; the resume pre-step field is
+    // visible above the account-id input.
+    expect(
+      screen.getByLabelText(/Existing ExternalId/i),
+    ).toBeInTheDocument();
+    // A well-formed paste threads through to step 2's trust policy.
+    const override = "abcdef12-3456-7890-abcd-ef1234567890";
+    fireEvent.change(screen.getByLabelText(/Existing ExternalId/i), {
+      target: { value: override },
+    });
+    fireEvent.change(screen.getByPlaceholderText("123456789012"), {
+      target: { value: "111122223333" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const codeBlock = document.querySelector("pre code");
+    expect(codeBlock?.textContent).toContain(override);
+  });
+
+  it("does NOT render the resume-mode ExternalId field when resumeMode is unset", () => {
+    render(<ConnectorWizard {...makeProps()} />);
+    // The default flow keeps step 1 minimal — only the account-id
+    // input lands on screen.
+    expect(
+      screen.queryByLabelText(/Existing ExternalId/i),
+    ).not.toBeInTheDocument();
   });
 });
 

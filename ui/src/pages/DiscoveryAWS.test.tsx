@@ -356,7 +356,97 @@ describe("DiscoveryAWSPage", () => {
     });
   });
 
-  it("Inventory tab Run scan triggers scanner and renders result", async () => {
+  // --- #622 connections-list resume entry point ----------------
+  //
+  // The "I've connected this account before — Resume an existing
+  // ExternalId" entry point lives on the connections list page so
+  // an operator recovering from a previous Squadron deployment
+  // (Docker→local swap, reinstall) can paste their old UUID before
+  // the wizard generates a fresh one. Fixes the third failure from
+  // the #621 walkthrough.
+
+  it("DiscoveryAWS_RendersResumeEntryPointOnConnectionsList (empty state)", async () => {
+    mockedListAWSConnections.mockResolvedValue({ connections: [] });
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No accounts connected yet/i),
+      ).toBeInTheDocument();
+    });
+    // Empty-state copy variant — the affordance leads with the
+    // operator's own context ("Already have an ExternalId?").
+    expect(
+      screen.getByRole("button", {
+        name: /Already have an ExternalId\? Resume an existing connection/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("DiscoveryAWS_RendersResumeEntryPointOnConnectionsList (populated)", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    // Populated-state copy variant — terser since the operator has
+    // already seen the empty-state context.
+    expect(
+      screen.getByRole("button", { name: /^Resume an existing connection$/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("DiscoveryAWS_ResumeEntryPointOpensWizardWithExistingExternalIdField", async () => {
+    mockedListAWSConnections.mockResolvedValue({ connections: [] });
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No accounts connected yet/i),
+      ).toBeInTheDocument();
+    });
+    // Click the resume entry point — opens the wizard in resumeMode
+    // so step 1 renders the "Existing ExternalId (optional)" field
+    // above the account-id input.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Already have an ExternalId\? Resume an existing connection/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText(/Existing ExternalId/i),
+      ).toBeInTheDocument();
+    });
+    // The standard account-id input is still there — the resume
+    // field is additive, not replacement.
+    expect(
+      screen.getByPlaceholderText("123456789012"),
+    ).toBeInTheDocument();
+  });
+
+  it("Connect new account button (without resume) does NOT show the Existing ExternalId field", async () => {
+    mockedListAWSConnections.mockResolvedValue({ connections: [] });
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No accounts connected yet/i),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Connect new account$/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Enter your AWS account ID/i),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByLabelText(/Existing ExternalId/i),
+    ).not.toBeInTheDocument();
+  });
+
+    it("Inventory tab Run scan triggers scanner and renders result", async () => {
     mockedListAWSConnections.mockResolvedValue({
       connections: sampleConnections,
     });

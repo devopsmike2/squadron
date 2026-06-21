@@ -776,8 +776,22 @@ function AccountTab() {
     () => listAWSConnections(),
   );
   const [open, setOpen] = useState(false);
+  // resumeMode threads through to the wizard. The connections-list
+  // "Resume an existing connection" entry point sets this true before
+  // opening the dialog; the wizard then renders an "Existing
+  // ExternalId (optional)" field on step 1 (#622, fix for #621).
+  const [resumeMode, setResumeMode] = useState(false);
 
   const connections = data?.connections ?? [];
+
+  const openWizardFresh = useCallback(() => {
+    setResumeMode(false);
+    setOpen(true);
+  }, []);
+  const openWizardWithResume = useCallback(() => {
+    setResumeMode(true);
+    setOpen(true);
+  }, []);
 
   const onWizardComplete = useCallback(() => {
     // Refresh the SWR cache so the new connection card lands without a
@@ -785,19 +799,45 @@ function AccountTab() {
     // operator can read the wizard's success card.
     void mutate();
     setOpen(false);
+    // Reset resumeMode so the next "Connect new account" click lands
+    // on the standard fresh-UUID path.
+    setResumeMode(false);
   }, [mutate]);
+
+  const handleOpenChange = useCallback((next: boolean) => {
+    setOpen(next);
+    if (!next) setResumeMode(false);
+  }, []);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div>
           <h2 className="text-base font-semibold">Connected accounts</h2>
           <p className="text-xs text-muted-foreground">
             One row per AWS account Squadron is configured to scan.
           </p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <Button onClick={() => setOpen(true)}>Connect new account</Button>
+        <Dialog open={open} onOpenChange={handleOpenChange}>
+          <div className="flex flex-col items-end gap-1">
+            <Button onClick={openWizardFresh}>Connect new account</Button>
+            {/* Secondary "resume an existing connection" entry point.
+                Surfaces the #578 ExternalId-resume path from the
+                connections list so an operator recovering from a
+                previous deployment (Docker→local swap, reinstall,
+                etc.) can paste their old UUID before the wizard
+                generates a fresh one. #621 → #622. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-auto p-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
+              onClick={openWizardWithResume}
+            >
+              {connections.length > 0
+                ? "Resume an existing connection"
+                : "Already have an ExternalId? Resume an existing connection"}
+            </Button>
+          </div>
           {/*
            * Height-bounded flex column so the wizard body scrolls inside
            * the viewport instead of clipping the dialog header and footer
@@ -826,6 +866,7 @@ function AccountTab() {
                   }))
                 }
                 onComplete={onWizardComplete}
+                resumeMode={resumeMode}
               />
             </div>
           </DialogContent>
