@@ -91,7 +91,8 @@ export const AWS_PERMISSIONS_POLICY_TEMPLATE = `{
         "eks:DescribeCluster",
         "eks:ListAddons",
         "eks:DescribeAddon",
-        "eks:ListNodegroups"
+        "eks:ListNodegroups",
+        "eks:ListFargateProfiles"
       ],
       "Resource": "*"
     }

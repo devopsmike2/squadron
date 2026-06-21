@@ -207,7 +207,8 @@ slice 3b policy:
         "eks:DescribeCluster",
         "eks:ListAddons",
         "eks:DescribeAddon",
-        "eks:ListNodegroups"
+        "eks:ListNodegroups",
+        "eks:ListFargateProfiles"
       ],
       "Resource": "*"
     }
