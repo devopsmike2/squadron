@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -282,6 +283,18 @@ type spyStore struct {
 	storeErr  error
 	getResult *credstore.CloudConnection
 	getErr    error
+
+	// v0.89.7a (#616 Stream 21) — extra knobs for the multi-account
+	// scan-all path. listResult lets the test pre-load a slice of
+	// connections; perID lets GetConnection resolve to different
+	// rows per accountID (required when the orchestrator calls
+	// GetConnection once per connection in the fan-out). The
+	// legacy single-result getResult / getErr knobs still work
+	// unchanged when perID is nil so the existing single-account
+	// tests need no edits.
+	listResult []*credstore.CloudConnection
+	listErr    error
+	perID      map[string]*credstore.CloudConnection
 }
 
 func (s *spyStore) StoreConnection(_ context.Context, conn credstore.CloudConnection) error {
@@ -294,12 +307,21 @@ func (s *spyStore) StoreConnection(_ context.Context, conn credstore.CloudConnec
 	return nil
 }
 
-func (s *spyStore) GetConnection(_ context.Context, _ string) (*credstore.CloudConnection, error) {
-	return s.getResult, s.getErr
+func (s *spyStore) GetConnection(_ context.Context, accountID string) (*credstore.CloudConnection, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	if s.perID != nil {
+		return s.perID[accountID], nil
+	}
+	return s.getResult, nil
 }
 
 func (s *spyStore) ListConnections(_ context.Context, _ credstore.ListFilter) ([]*credstore.CloudConnection, error) {
-	return nil, nil
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.listResult, nil
 }
 
 func (s *spyStore) DeleteConnection(_ context.Context, _ string) error { return nil }
@@ -1016,6 +1038,18 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 		if !strings.Contains(string(payloadJSON), want) {
 			t.Errorf("scan_completed payload missing %q: %s", want, payloadJSON)
 		}
+	}
+	// v0.89.7a (#616 Stream 21) — the single-account endpoint
+	// passes scan_all_id="" to runAWSScan, and the conditional
+	// insert in runAWSScan keeps the key out of the payload. A
+	// regression that unconditionally inserts the key would emit
+	// "scan_all_id":"" on every single-account scan, polluting
+	// SIEM forwarders and the timeline humanizer.
+	if _, present := completed.Payload["scan_all_id"]; present {
+		t.Errorf("single-account scan_completed must omit scan_all_id; got payload=%s", payloadJSON)
+	}
+	if _, present := started.Payload["scan_all_id"]; present {
+		t.Errorf("single-account scan_started must omit scan_all_id; got payload=%+v", started.Payload)
 	}
 }
 
@@ -2117,4 +2151,498 @@ func TestHandleAWSValidate_ZeroPreflightOnAssumeFailure(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "AccessDenied") {
 		t.Errorf("assume-role err not surfaced: %s", w.Body.String())
 	}
+}
+
+// --- HandleAWSScanAll tests (v0.89.7a Stream 21, #616) --------------
+
+// perAccountScanner is a stub AWSScannerFactory that picks a per-
+// account Result / err from a map keyed by AccountID. The same
+// instance returns the same scanner across accounts; each
+// per-account scan call dispatches behavior based on conn.AccountID.
+type perAccountScanner struct {
+	resultsByID map[string]*scanner.Result
+	errsByID    map[string]error
+}
+
+func (p *perAccountScanner) factory() AWSScannerFactory {
+	return func(conn *credstore.CloudConnection) (DiscoveryScanner, error) {
+		return &accountScannerFunc{
+			run: func(_ context.Context, c *credstore.CloudConnection, _ []string) (*scanner.Result, error) {
+				if err, ok := p.errsByID[c.AccountID]; ok && err != nil {
+					return nil, err
+				}
+				return p.resultsByID[c.AccountID], nil
+			},
+		}, nil
+	}
+}
+
+type accountScannerFunc struct {
+	run func(ctx context.Context, conn *credstore.CloudConnection, regions []string) (*scanner.Result, error)
+}
+
+func (a *accountScannerFunc) Scan(ctx context.Context, conn *credstore.CloudConnection, regions []string) (*scanner.Result, error) {
+	return a.run(ctx, conn, regions)
+}
+
+// doScanAllRequest fires a POST against /api/v1/discovery/aws/scan-all
+// with the supplied query string. Mirrors doScanRequest's posture.
+func doScanAllRequest(h *DiscoveryHandlers, query string) *httptest.ResponseRecorder {
+	r := gin.New()
+	r.POST("/api/v1/discovery/aws/scan-all", h.HandleAWSScanAll)
+	url := "/api/v1/discovery/aws/scan-all"
+	if query != "" {
+		url += "?" + query
+	}
+	req := httptest.NewRequest(http.MethodPost, url, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// scanAllConn is a 3-line test helper that mirrors the orchestrator
+// test's awsConn but lives in the handler test package.
+func scanAllConn(accountID string) *credstore.CloudConnection {
+	return &credstore.CloudConnection{
+		AccountID:      accountID,
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "test-" + accountID,
+		Regions:        []string{"us-east-1"},
+	}
+}
+
+func scanAllResult(scanID string, compute int, instrumented int, uninstrumented int) *scanner.Result {
+	r := &scanner.Result{
+		ScanID:              scanID,
+		Provider:            credstore.ProviderAWS,
+		AccountID:           scanID,
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   instrumented,
+		UninstrumentedCount: uninstrumented,
+	}
+	for i := 0; i < compute; i++ {
+		r.Compute = append(r.Compute, scanner.ComputeInstanceSnapshot{ResourceID: scanID, Region: "us-east-1"})
+	}
+	return r
+}
+
+func TestHandleAWSScanAll_HappyPath_AggregateAuditEvent(t *testing.T) {
+	connA := scanAllConn("111111111111")
+	connB := scanAllConn("222222222222")
+	connC := scanAllConn("333333333333")
+	store := &spyStore{
+		listResult: []*credstore.CloudConnection{connA, connB, connC},
+		perID: map[string]*credstore.CloudConnection{
+			"111111111111": connA,
+			"222222222222": connB,
+			"333333333333": connC,
+		},
+	}
+	resA := scanAllResult("111111111111", 3, 2, 1)
+	resB := scanAllResult("222222222222", 5, 4, 1)
+	resC := scanAllResult("333333333333", 2, 0, 2)
+	scn := &perAccountScanner{resultsByID: map[string]*scanner.Result{
+		"111111111111": resA,
+		"222222222222": resB,
+		"333333333333": resC,
+	}}
+	audit := &discoveryRecordingAudit{}
+	h := NewDiscoveryHandlers(store, zap.NewNop()).
+		WithAWSScannerFactory(scn.factory()).
+		WithAuditService(audit)
+
+	w := doScanAllRequest(h, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		ScanAllID         string `json:"scan_all_id"`
+		TotalAccounts     int    `json:"total_accounts"`
+		SucceededAccounts []struct {
+			AccountID     string `json:"account_id"`
+			ScanID        string `json:"scan_id"`
+			ResourceCount int    `json:"resource_count"`
+		} `json:"succeeded_accounts"`
+		FailedAccounts      []awsScanAllFailureRow `json:"failed_accounts"`
+		TotalResources      int                    `json:"total_resources"`
+		TotalInstrumented   int                    `json:"total_instrumented"`
+		TotalUninstrumented int                    `json:"total_uninstrumented"`
+		Partial             bool                   `json:"partial"`
+		Concurrency         int                    `json:"concurrency"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if resp.ScanAllID == "" {
+		t.Errorf("scan_all_id must be non-empty")
+	}
+	if resp.TotalAccounts != 3 {
+		t.Errorf("total_accounts = %d, want 3", resp.TotalAccounts)
+	}
+	if len(resp.SucceededAccounts) != 3 {
+		t.Errorf("succeeded_accounts = %d, want 3", len(resp.SucceededAccounts))
+	}
+	if len(resp.FailedAccounts) != 0 {
+		t.Errorf("failed_accounts = %d, want 0", len(resp.FailedAccounts))
+	}
+	if resp.TotalResources != 10 {
+		t.Errorf("total_resources = %d, want 10", resp.TotalResources)
+	}
+	if resp.TotalInstrumented != 6 {
+		t.Errorf("total_instrumented = %d, want 6", resp.TotalInstrumented)
+	}
+	if resp.TotalUninstrumented != 4 {
+		t.Errorf("total_uninstrumented = %d, want 4", resp.TotalUninstrumented)
+	}
+	if resp.Partial {
+		t.Errorf("partial should be false on a clean fan-out")
+	}
+	if resp.Concurrency == 0 {
+		t.Errorf("concurrency should surface the effective bound; got 0")
+	}
+
+	// Audit: 3 per-account scan_started + 3 per-account scan_completed
+	// + 1 aggregate scan_all_completed = 7 entries.
+	if got := len(audit.entries); got != 7 {
+		t.Fatalf("audit entries = %d, want 7; entries=%+v", got, eventTypes(audit.entries))
+	}
+	// Find the aggregate event.
+	var aggregate *services.AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].EventType == services.AuditEventDiscoveryAWSScanAllCompleted {
+			e := audit.entries[i]
+			aggregate = &e
+			break
+		}
+	}
+	if aggregate == nil {
+		t.Fatalf("aggregate scan_all_completed event missing; events=%v", eventTypes(audit.entries))
+	}
+	if aggregate.TargetType != services.AuditTargetDiscoveryScanAll {
+		t.Errorf("aggregate.TargetType = %q, want %q", aggregate.TargetType, services.AuditTargetDiscoveryScanAll)
+	}
+	if aggregate.TargetID != resp.ScanAllID {
+		t.Errorf("aggregate.TargetID = %q, want %q (the scan_all_id)", aggregate.TargetID, resp.ScanAllID)
+	}
+	for _, k := range []string{
+		"scan_all_id", "total_accounts", "succeeded_accounts", "failed_accounts",
+		"total_resources", "total_instrumented", "total_uninstrumented", "partial",
+	} {
+		if _, ok := aggregate.Payload[k]; !ok {
+			t.Errorf("aggregate payload missing key %q; payload=%+v", k, aggregate.Payload)
+		}
+	}
+	if got, _ := aggregate.Payload["partial"].(bool); got {
+		t.Errorf("aggregate.partial = true on happy path")
+	}
+	if got, _ := aggregate.Payload["total_resources"].(int); got != 10 {
+		t.Errorf("aggregate.total_resources = %v, want 10", aggregate.Payload["total_resources"])
+	}
+	if got, _ := aggregate.Payload["total_instrumented"].(int); got != 6 {
+		t.Errorf("aggregate.total_instrumented = %v, want 6", aggregate.Payload["total_instrumented"])
+	}
+}
+
+func TestHandleAWSScanAll_PartialFailure_PartialAuditEvent(t *testing.T) {
+	connA := scanAllConn("111111111111")
+	connB := scanAllConn("222222222222") // this one will fail
+	connC := scanAllConn("333333333333")
+	store := &spyStore{
+		listResult: []*credstore.CloudConnection{connA, connB, connC},
+		perID: map[string]*credstore.CloudConnection{
+			"111111111111": connA,
+			"222222222222": connB,
+			"333333333333": connC,
+		},
+	}
+	scn := &perAccountScanner{
+		resultsByID: map[string]*scanner.Result{
+			"111111111111": scanAllResult("111111111111", 4, 3, 1),
+			"333333333333": scanAllResult("333333333333", 2, 1, 1),
+		},
+		errsByID: map[string]error{
+			"222222222222": errors.New("AccessDenied: role lost permissions to ec2:DescribeInstances"),
+		},
+	}
+	audit := &discoveryRecordingAudit{}
+	h := NewDiscoveryHandlers(store, zap.NewNop()).
+		WithAWSScannerFactory(scn.factory()).
+		WithAuditService(audit)
+
+	w := doScanAllRequest(h, "concurrency=2")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	// Defense in depth: response must not leak any credential
+	// material — the orchestrator never sees cleartext credentials
+	// and the audit payload must not either. The connection's
+	// credential bytes are not addressable from the audit code
+	// path; this assertion guards the wire envelope.
+	for _, forbidden := range []string{"ciphertext", "external_id", "ExternalID"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("response contains forbidden token %q: %s", forbidden, body)
+		}
+	}
+
+	var resp awsScanAllResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, body)
+	}
+	if !resp.Partial {
+		t.Errorf("partial should be true when an account failed")
+	}
+	if len(resp.FailedAccounts) != 1 {
+		t.Fatalf("failed_accounts = %d, want 1; resp=%+v", len(resp.FailedAccounts), resp)
+	}
+	if resp.FailedAccounts[0].AccountID != "222222222222" {
+		t.Errorf("failed_accounts[0].account_id = %q", resp.FailedAccounts[0].AccountID)
+	}
+	if resp.FailedAccounts[0].ErrorCode != "ScannerInternal" {
+		// The mock scanner returns a Go error; runAWSScan converts
+		// that to a HumanizedError with Code "ScannerInternal".
+		// (A real AccessDenied would come back from the AWS
+		// scanner as Partial=true with FailedServices=["assume_role"];
+		// the mock takes the synthetic error path here so the
+		// failure-propagation contract is the assertion.)
+		t.Errorf("failed_accounts[0].error_code = %q, want ScannerInternal", resp.FailedAccounts[0].ErrorCode)
+	}
+	if resp.FailedAccounts[0].HumanizedMessage == "" {
+		t.Errorf("failed_accounts[0].humanized_message must be non-empty")
+	}
+
+	// Aggregate event present, partial=true, failed_accounts payload
+	// names the failed account id, snippet/token content absent.
+	var aggregate *services.AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].EventType == services.AuditEventDiscoveryAWSScanAllCompleted {
+			e := audit.entries[i]
+			aggregate = &e
+			break
+		}
+	}
+	if aggregate == nil {
+		t.Fatalf("aggregate event missing")
+	}
+	if got, _ := aggregate.Payload["partial"].(bool); !got {
+		t.Errorf("aggregate.partial = false, want true on partial failure")
+	}
+	failedRows, ok := aggregate.Payload["failed_accounts"].([]map[string]any)
+	if !ok || len(failedRows) != 1 {
+		t.Fatalf("aggregate.failed_accounts shape unexpected: %#v", aggregate.Payload["failed_accounts"])
+	}
+	if got, _ := failedRows[0]["account_id"].(string); got != "222222222222" {
+		t.Errorf("aggregate.failed_accounts[0].account_id = %v, want 222222222222", failedRows[0]["account_id"])
+	}
+	// Roll-up only counts succeeded accounts.
+	if got, _ := aggregate.Payload["total_resources"].(int); got != 6 {
+		t.Errorf("aggregate.total_resources = %v, want 6", aggregate.Payload["total_resources"])
+	}
+	// failed_account_ids convenience list present and matches.
+	if ids, ok := aggregate.Payload["failed_account_ids"].([]string); !ok || len(ids) != 1 || ids[0] != "222222222222" {
+		t.Errorf("aggregate.failed_account_ids = %#v, want [222222222222]", aggregate.Payload["failed_account_ids"])
+	}
+
+	// Defense in depth: aggregate payload JSON must not embed
+	// cleartext credentials or external-id fields.
+	pj, _ := json.Marshal(aggregate.Payload)
+	for _, forbidden := range []string{"ciphertext", "external_id", "ExternalID", "role_arn", "RoleARN"} {
+		if strings.Contains(string(pj), forbidden) {
+			t.Errorf("aggregate payload contains forbidden token %q: %s", forbidden, pj)
+		}
+	}
+}
+
+func TestHandleAWSScanAll_ZeroConnections_ReturnsEmptyAndStillEmitsEvent(t *testing.T) {
+	store := &spyStore{listResult: nil}
+	scn := &perAccountScanner{resultsByID: map[string]*scanner.Result{}}
+	audit := &discoveryRecordingAudit{}
+	h := NewDiscoveryHandlers(store, zap.NewNop()).
+		WithAWSScannerFactory(scn.factory()).
+		WithAuditService(audit)
+
+	w := doScanAllRequest(h, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp awsScanAllResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if resp.TotalAccounts != 0 {
+		t.Errorf("total_accounts = %d, want 0", resp.TotalAccounts)
+	}
+	if len(resp.SucceededAccounts) != 0 || len(resp.FailedAccounts) != 0 {
+		t.Errorf("succeeded=%d failed=%d, want 0/0", len(resp.SucceededAccounts), len(resp.FailedAccounts))
+	}
+	if resp.Partial {
+		t.Errorf("partial=true on empty install — should be false")
+	}
+
+	// Aggregate event still fires (the operator's intent is visible
+	// in the timeline even when nothing to do).
+	if got := len(audit.entries); got != 1 {
+		t.Fatalf("audit entries = %d, want 1 (only the aggregate event)", got)
+	}
+	if audit.entries[0].EventType != services.AuditEventDiscoveryAWSScanAllCompleted {
+		t.Errorf("entry[0].event_type = %q, want %q", audit.entries[0].EventType, services.AuditEventDiscoveryAWSScanAllCompleted)
+	}
+}
+
+func TestHandleAWSScanAll_PerAccountEventStillFires_AndIncludesScanAllID(t *testing.T) {
+	connA := scanAllConn("111111111111")
+	connB := scanAllConn("222222222222")
+	store := &spyStore{
+		listResult: []*credstore.CloudConnection{connA, connB},
+		perID: map[string]*credstore.CloudConnection{
+			"111111111111": connA,
+			"222222222222": connB,
+		},
+	}
+	scn := &perAccountScanner{resultsByID: map[string]*scanner.Result{
+		"111111111111": scanAllResult("111111111111", 1, 1, 0),
+		"222222222222": scanAllResult("222222222222", 1, 1, 0),
+	}}
+	audit := &discoveryRecordingAudit{}
+	h := NewDiscoveryHandlers(store, zap.NewNop()).
+		WithAWSScannerFactory(scn.factory()).
+		WithAuditService(audit)
+
+	w := doScanAllRequest(h, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// Per-account events still fire: 2 scan_started + 2 scan_completed
+	// + 1 aggregate scan_all_completed = 5.
+	if got := len(audit.entries); got != 5 {
+		t.Fatalf("audit entries = %d, want 5", got)
+	}
+
+	// Find the aggregate event's scan_all_id; every per-account event
+	// must carry the same value in its scan_all_id payload field.
+	var aggregateID string
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventDiscoveryAWSScanAllCompleted {
+			aggregateID, _ = e.Payload["scan_all_id"].(string)
+		}
+	}
+	if aggregateID == "" {
+		t.Fatalf("aggregate event missing or scan_all_id empty")
+	}
+
+	completedCount := 0
+	for _, e := range audit.entries {
+		if e.EventType != "discovery.aws.scan_completed" {
+			continue
+		}
+		completedCount++
+		got, _ := e.Payload["scan_all_id"].(string)
+		if got != aggregateID {
+			t.Errorf("per-account scan_completed for %q has scan_all_id %q, want %q",
+				e.TargetID, got, aggregateID)
+		}
+	}
+	if completedCount != 2 {
+		t.Errorf("per-account scan_completed events = %d, want 2", completedCount)
+	}
+
+	// scan_started events also carry the scan_all_id.
+	startedCount := 0
+	for _, e := range audit.entries {
+		if e.EventType != "discovery.aws.scan_started" {
+			continue
+		}
+		startedCount++
+		got, _ := e.Payload["scan_all_id"].(string)
+		if got != aggregateID {
+			t.Errorf("per-account scan_started for %q has scan_all_id %q, want %q",
+				e.TargetID, got, aggregateID)
+		}
+	}
+	if startedCount != 2 {
+		t.Errorf("per-account scan_started events = %d, want 2", startedCount)
+	}
+}
+
+func TestHandleAWSScanAll_ConcurrencyQueryParamRespected(t *testing.T) {
+	// Asking for a concurrency above the cap surfaces the clamped
+	// value back in the response. Operators driving the endpoint
+	// from ops scripts can log this and see "I asked for 20 but
+	// got 8" without re-running.
+	connA := scanAllConn("111111111111")
+	store := &spyStore{
+		listResult: []*credstore.CloudConnection{connA},
+		perID:      map[string]*credstore.CloudConnection{"111111111111": connA},
+	}
+	scn := &perAccountScanner{resultsByID: map[string]*scanner.Result{
+		"111111111111": scanAllResult("s-a", 1, 1, 0),
+	}}
+	h := NewDiscoveryHandlers(store, zap.NewNop()).
+		WithAWSScannerFactory(scn.factory()).
+		WithAuditService(&discoveryRecordingAudit{})
+
+	w := doScanAllRequest(h, "concurrency=20")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var resp awsScanAllResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Concurrency != 8 {
+		t.Errorf("concurrency = %d, want 8 (clamped from 20)", resp.Concurrency)
+	}
+
+	// Omit the parameter — should default to 3.
+	w2 := doScanAllRequest(h, "")
+	var resp2 awsScanAllResponse
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp2)
+	if resp2.Concurrency != 3 {
+		t.Errorf("concurrency = %d, want 3 (default)", resp2.Concurrency)
+	}
+}
+
+func TestHandleAWSScanAll_RegionsQueryParam_PassedToPerAccountScan(t *testing.T) {
+	// The optional regions query param overrides every connection's
+	// stored region list. The per-account scanner receives the
+	// override (asserted via the Scan call's regions argument).
+	connA := scanAllConn("111111111111")
+	store := &spyStore{
+		listResult: []*credstore.CloudConnection{connA},
+		perID:      map[string]*credstore.CloudConnection{"111111111111": connA},
+	}
+	var gotRegions []string
+	var mu sync.Mutex
+	factory := func(_ *credstore.CloudConnection) (DiscoveryScanner, error) {
+		return &accountScannerFunc{run: func(_ context.Context, c *credstore.CloudConnection, regs []string) (*scanner.Result, error) {
+			mu.Lock()
+			gotRegions = append([]string(nil), regs...)
+			mu.Unlock()
+			return scanAllResult("s-a", 1, 1, 0), nil
+		}}, nil
+	}
+	h := NewDiscoveryHandlers(store, zap.NewNop()).
+		WithAWSScannerFactory(factory).
+		WithAuditService(&discoveryRecordingAudit{})
+
+	w := doScanAllRequest(h, "regions=eu-west-1,eu-central-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	if len(gotRegions) != 2 || gotRegions[0] != "eu-west-1" || gotRegions[1] != "eu-central-1" {
+		t.Errorf("scanner got regions = %v, want [eu-west-1 eu-central-1]", gotRegions)
+	}
+}
+
+// eventTypes returns the EventType field of every audit entry,
+// helping tests print a useful failure message when the count is
+// wrong.
+func eventTypes(entries []services.AuditEntry) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.EventType
+	}
+	return out
 }

@@ -168,4 +168,36 @@ const (
 	// PR-lifecycle events (recommendation.pr_*).
 	AuditTargetIaCConnection     = "iac_connection"
 	AuditTargetIaCRecommendation = "iac_recommendation"
+
+	// v0.89.7a — Multi-account AWS scan-all (#616 Stream 21) audit
+	// event. The orchestrator's POST /api/v1/discovery/aws/scan-all
+	// endpoint emits one of these in addition to the N per-account
+	// discovery.aws.scan_completed events the per-account scans
+	// produce. Payload carries scan_all_id (the trace link tying
+	// the aggregate event to the per-account events),
+	// total_accounts, succeeded_accounts (int count),
+	// failed_accounts ([]{account_id, error_code, humanized_message}),
+	// failed_account_ids (flat []string when non-empty — SIEM
+	// forwarders pattern-match on this), total_resources,
+	// total_instrumented, total_uninstrumented, partial (bool —
+	// true when any failed_accounts), recorded_at. Credential
+	// material is NEVER in the payload (the orchestrator never
+	// sees cleartext credentials). The per-account scan_completed
+	// events still fire unchanged but additionally carry the
+	// scan_all_id field via the orchestrator's PerAccountScan
+	// callback — operators reading the timeline see N per-account
+	// events linked to the aggregate event by the shared
+	// scan_all_id.
+	AuditEventDiscoveryAWSScanAllCompleted = "discovery.aws.scan_all_completed"
+
+	// AuditTargetDiscoveryScanAll groups the aggregate scan-all
+	// events together for timeline filtering. Distinct from
+	// credstore.TargetTypeCloudConnection (which the per-account
+	// scan_completed events use as their TargetType keyed by the
+	// connection's account_id) so the UI can filter
+	// "show me only aggregate multi-account events" cleanly. The
+	// TargetID of an aggregate event is the scan_all_id; the
+	// per-account events' TargetIDs are the individual account_ids
+	// — the two views correlate via the scan_all_id payload field.
+	AuditTargetDiscoveryScanAll = "discovery_scan_all"
 )
