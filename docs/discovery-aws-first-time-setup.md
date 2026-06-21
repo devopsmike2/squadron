@@ -511,3 +511,49 @@ for the GitHub PAT bootstrap and the IaC wizard walk. The IaC
 setup is independent of the AWS setup — you can keep scanning
 without it — but the close-the-loop demo Squadron is built around
 needs both halves wired.
+
+## Scanning multiple accounts
+
+Once you've connected more than one AWS account (re-run the wizard
+once per account — same trust policy template, same external-ID
+generation, same Save flow), v0.89.7a's multi-account orchestrator
+lets you kick off scans across every connected account in one
+call:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $SQUADRON_API_TOKEN" \
+  "http://localhost:8080/api/v1/discovery/aws/scan-all?concurrency=5"
+```
+
+No request body needed. The endpoint iterates every AWS connection
+in the credstore and runs the same per-account scan you'd run from
+the wizard, with bounded concurrency (default 3, max 8) so AWS
+doesn't throttle the STS calls. The response is a single JSON
+envelope with aggregate counts (`total_resources`,
+`total_instrumented`, `total_uninstrumented`), one row per
+succeeded account with its scan ID + counts, and one row per
+failed account with `error_code` + `humanized_message` (a single
+account's lapsed role won't block the rest).
+
+Optional query parameters:
+
+- `regions=us-east-1,eu-west-1` — override the per-call region
+  list. Empty falls back to each connection's stored region list
+  (the same posture as the per-account endpoint's empty-body
+  branch).
+- `concurrency=N` — maximum simultaneous per-account scans.
+  Values above 8 are clamped silently; the effective value is
+  echoed back in the response.
+
+The audit timeline shows one
+`discovery.aws.scan_all_completed` event linked to N per-account
+`discovery.aws.scan_completed` events via the shared
+`scan_all_id` payload field — a forensic reader can reconstruct
+every per-account scan from the aggregate event ID.
+
+The UI surface for multi-account scanning (the "Scan all" CTA on
+the Inventory tab, the account selector, per-account badges on
+the recommendation cards) lands in v0.89.7b. For now the endpoint
+is curl-friendly and well-suited to ops scripts that run
+overnight sweeps across an organization.

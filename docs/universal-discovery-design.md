@@ -829,6 +829,58 @@ Each is queryable via the existing audit API. Each carries the
 account_id + scan_id so an auditor can reconstruct any scan's full
 lifecycle from the audit log alone.
 
+## Multi-account scanning
+
+Added in v0.89.7a (#616 Stream 21). Operators with multiple AWS
+accounts connected can fan out a single scan across every
+connected account via:
+
+```
+POST /api/v1/discovery/aws/scan-all
+  ?regions=us-east-1,eu-west-1   (optional override; empty = each connection's stored regions)
+  &concurrency=5                  (optional bound; default 3, max 8)
+```
+
+No request body. The endpoint iterates every `CloudConnection`
+where `provider=aws` in the credstore and invokes the existing
+per-account scan path once per connection — bounded by the
+concurrency knob so an org with 30 connected accounts doesn't
+trip AWS-account-wide STS throttles.
+
+**Bounded concurrency.** Hand-rolled `chan struct{}` semaphore +
+`sync.WaitGroup` (matching the codebase's existing pattern from
+`internal/siem/dispatcher.go` and `internal/worker/pool.go`). The
+default of 3 keeps the fan-out gentle by default; ops scripts can
+ask for up to 8. Values above the cap are clamped silently and
+the effective value is surfaced in the response's `concurrency`
+field so the operator can see "I asked for 20 but got 8".
+
+**Partial-failure posture.** A single per-account failure does
+not block the rest of the fan-out. The failed account lands in
+`failed_accounts[]` with `account_id` + `error_code` +
+`humanized_message`; the rest of the accounts complete normally.
+The aggregate's `partial` flag is `true` whenever any account
+failed. Operators re-run the failed accounts via the per-account
+endpoint without re-scanning the rest.
+
+**Audit linkage via `scan_all_id`.** The orchestrator generates
+one UUID at the top of the fan-out and passes it to every
+per-account scan. The per-account `discovery.aws.scan_started`
+and `discovery.aws.scan_completed` events carry this value as
+the `scan_all_id` payload field (omitted when single-account
+endpoint is called directly — the field is conditional, not
+unconditional, so existing per-account event consumers see no
+shape change unless they opt in). One aggregate event,
+`discovery.aws.scan_all_completed`, fires after the fan-out
+with the aggregate counts, the failed-accounts list, and the
+partial flag. Operators reading the timeline see N per-account
+events plus one aggregate event, all linked by the shared
+`scan_all_id`.
+
+UI surface ships separately as v0.89.7b. The endpoint is
+curl-friendly today and is consumed by the v0.89.8 squadronctl
+iac CLI parity work.
+
 ## Failure modes
 
 What happens when things go wrong. Every failure mode listed here

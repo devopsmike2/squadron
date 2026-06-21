@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/ai"
+	awsorch "github.com/devopsmike2/squadron/internal/discovery/aws"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/recommendations"
@@ -950,23 +951,6 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 		return
 	}
 
-	if h.credStore == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
-			Code:          "CredStoreNotWired",
-			Message:       "Squadron's credential substrate isn't configured.",
-			SuggestedStep: "save",
-		}})
-		return
-	}
-	if h.awsScannerFor == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
-			Code:          "ScannerNotWired",
-			Message:       "Squadron's scanner factory isn't configured. The Save flow wires it via the credstore key.",
-			SuggestedStep: "save",
-		}})
-		return
-	}
-
 	// Body is optional — the empty-body path falls back to the
 	// connection's stored Regions. Parse failures fall through to the
 	// empty-body branch rather than 400ing; the operator's intent is
@@ -975,30 +959,85 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 	var req awsRunScanRequest
 	_ = c.ShouldBindJSON(&req)
 
-	conn, err := h.credStore.GetConnection(c.Request.Context(), accountID)
+	// runAWSScan emits scan_started + scan_completed audit events and
+	// drives the scanner. The single-account endpoint passes an empty
+	// scanAllID so the per-account scan_completed event omits the
+	// scan_all_id field (v0.89.7a trace linkage is only present when
+	// the orchestrator drives the per-account scan). The third return
+	// value is the HTTP status the handler should emit on failure;
+	// the orchestrator path ignores it.
+	result, herr, status := h.runAWSScan(c.Request.Context(), accountID, req.Regions, "" /* scanAllID */)
+	if herr != nil {
+		c.JSON(status, gin.H{"error": herr})
+		return
+	}
+	c.JSON(http.StatusOK, marshalScanResult(result))
+}
+
+// runAWSScan is the reusable per-account scan body — extracted from
+// HandleAWSRunScan in v0.89.7a (#616 Stream 21) so the multi-account
+// orchestrator can drive the same path without re-implementing the
+// audit emission or the partial-failure plumbing. The single-account
+// HTTP handler keeps its existing observable behavior: same audit
+// shape, same error envelope, same response.
+//
+// scanAllID is the v0.89.7a trace link tying a per-account scan to
+// the aggregate scan_all_completed event. The orchestrator passes
+// the UUID it generated at the top of the fan-out; the single-
+// account endpoint passes "". Empty values are omitted from the
+// per-account scan_completed payload (mirrors the conditional-insert
+// idiom for partial_reason / failed_services — map[string]any does
+// not honor omitempty).
+//
+// Return shape:
+//   - (*scanner.Result, nil, 0) on success
+//   - (nil, *HumanizedError, http.StatusXxx) on failure
+//
+// The scan_started event always fires before any failure that can
+// happen after the credstore lookup — the design doc's
+// "scan_started without scan_completed implies failure" invariant
+// is preserved here. ConnectionNotFound (404) and the pre-flight
+// wiring 500s happen BEFORE scan_started, matching the slice-1
+// posture (TestHandleAWSRunScan_NotFound asserts zero audit entries
+// for a 404).
+func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, requestedRegions []string, scanAllID string) (*scanner.Result, *scanner.HumanizedError, int) {
+	if h.credStore == nil {
+		return nil, &scanner.HumanizedError{
+			Code:          "CredStoreNotWired",
+			Message:       "Squadron's credential substrate isn't configured.",
+			SuggestedStep: "save",
+		}, http.StatusInternalServerError
+	}
+	if h.awsScannerFor == nil {
+		return nil, &scanner.HumanizedError{
+			Code:          "ScannerNotWired",
+			Message:       "Squadron's scanner factory isn't configured. The Save flow wires it via the credstore key.",
+			SuggestedStep: "save",
+		}, http.StatusInternalServerError
+	}
+
+	conn, err := h.credStore.GetConnection(ctx, accountID)
 	if err != nil {
 		if h.logger != nil {
 			h.logger.Error("aws run scan: credstore read failed", zap.Error(err), zap.String("account_id", accountID))
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+		return nil, &scanner.HumanizedError{
 			Code:          "CredStoreReadFailed",
 			Message:       "Squadron could not read the connection. The error has been logged; retry in a moment.",
 			SuggestedStep: "save",
-		}})
-		return
+		}, http.StatusInternalServerError
 	}
 	if conn == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+		return nil, &scanner.HumanizedError{
 			Code:    "ConnectionNotFound",
 			Message: "No AWS connection exists with that account ID. Connect the account from the wizard first.",
-		}})
-		return
+		}, http.StatusNotFound
 	}
 
 	// Resolve the regions to scan. Empty request body falls back to
 	// the connection's stored list — slice 1 ships single-entry lists,
 	// slice 3 will iterate.
-	regions := req.Regions
+	regions := requestedRegions
 	if len(regions) == 0 {
 		regions = append([]string(nil), conn.Regions...)
 	}
@@ -1010,17 +1049,27 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 	// the failure happened before the scan began. Mirrors the
 	// "Squadron crashes mid-scan" failure-mode contract.
 	if h.auditService != nil {
-		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+		startedPayload := map[string]any{
+			"account_id":  accountID,
+			"regions":     regions,
+			"recorded_at": time.Now().UTC(),
+		}
+		// v0.89.7a (#616 Stream 21) — when the orchestrator drives
+		// the per-account scan, scan_started also carries the
+		// scan_all_id so a forensic reader can correlate a stranded
+		// scan_started (no matching scan_completed) with the
+		// scan_all_completed aggregate event. Single-account calls
+		// pass "" and the field stays out of the payload.
+		if scanAllID != "" {
+			startedPayload["scan_all_id"] = scanAllID
+		}
+		_ = h.auditService.Record(ctx, services.AuditEntry{
 			Actor:      "system",
 			EventType:  "discovery.aws.scan_started",
 			TargetType: credstore.TargetTypeCloudConnection,
 			TargetID:   accountID,
 			Action:     "scan_started",
-			Payload: map[string]any{
-				"account_id":  accountID,
-				"regions":     regions,
-				"recorded_at": time.Now().UTC(),
-			},
+			Payload:    startedPayload,
 		})
 	}
 
@@ -1029,12 +1078,11 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 		if h.logger != nil {
 			h.logger.Error("aws run scan: scanner construction failed", zap.Error(err), zap.String("account_id", accountID))
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+		return nil, &scanner.HumanizedError{
 			Code:          "ScannerConstructFailed",
 			Message:       "Squadron could not decrypt the connection credentials. Re-validate from the wizard.",
 			SuggestedStep: "validate",
-		}})
-		return
+		}, http.StatusInternalServerError
 	}
 
 	// Same defense-in-depth posture as HandleAWSValidate: even though
@@ -1042,7 +1090,7 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 	// its own ceiling. 5 minutes accommodates large-account scans
 	// (the design doc's slice-1 upper bound) while still preventing
 	// an indefinite hang if a future regression introduces one.
-	scanCtx, scanCancel := context.WithTimeout(c.Request.Context(), scanHandlerTimeout)
+	scanCtx, scanCancel := context.WithTimeout(ctx, scanHandlerTimeout)
 	defer scanCancel()
 	result, err := awsScanner.Scan(scanCtx, conn, regions)
 	if err != nil {
@@ -1059,12 +1107,11 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 		// scanner's Result.PartialReason already carries the humanized
 		// text on the contract-honoring path; the fallback uses the
 		// raw error string.
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+		return nil, &scanner.HumanizedError{
 			Code:          "ScannerInternal",
 			Message:       "Scan failed unexpectedly: " + err.Error(),
 			SuggestedStep: "validate",
-		}})
-		return
+		}, http.StatusInternalServerError
 	}
 
 	if h.auditService != nil {
@@ -1128,7 +1175,17 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 		if len(result.FailedServices) > 0 {
 			payload["failed_services"] = result.FailedServices
 		}
-		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+		// v0.89.7a (#616 Stream 21) — scan_all_id is the trace link
+		// tying this per-account event to the aggregate
+		// scan_all_completed event. Only present when the
+		// orchestrator drove the scan; single-account calls (via
+		// the unchanged /discovery/aws/connections/:id/scan
+		// endpoint) pass "" and the field drops out, preserving
+		// the existing per-account event shape verbatim.
+		if scanAllID != "" {
+			payload["scan_all_id"] = scanAllID
+		}
+		_ = h.auditService.Record(ctx, services.AuditEntry{
 			Actor:      "system",
 			EventType:  "discovery.aws.scan_completed",
 			TargetType: credstore.TargetTypeCloudConnection,
@@ -1138,7 +1195,290 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, marshalScanResult(result))
+	return result, nil, 0
+}
+
+// --- HandleAWSScanAll (v0.89.7a Stream 21, #616) --------------------
+
+// awsScanAllResponse is the snake_case wire shape returned by the
+// multi-account scan-all endpoint. Mirrors awsorch.ScanAllResult
+// with json tags so the client receives a stable schema.
+//
+// The aggregate fields (total_resources, total_instrumented,
+// total_uninstrumented) sum across the per-account categories the
+// per-account scans produce — that's the v0.89.7a aggregate roll-up
+// posture. The aggregate does NOT enumerate per-service counts; the
+// per-account events still carry compute_count/function_count/etc.
+// for operators who want per-service drill-down.
+//
+// The wire shape is intentionally append-only — failed_accounts is
+// a structured list (account_id + error_code + humanized_message)
+// so a SIEM forwarder or the ops-script that called the endpoint
+// can pattern-match on the codes without parsing prose. Snake_case
+// throughout, matching the per-account endpoint's posture.
+type awsScanAllResponse struct {
+	ScanAllID           string                       `json:"scan_all_id"`
+	TotalAccounts       int                          `json:"total_accounts"`
+	SucceededAccounts   []awsScanAllAccountRow       `json:"succeeded_accounts"`
+	FailedAccounts      []awsScanAllFailureRow       `json:"failed_accounts"`
+	TotalResources      int                          `json:"total_resources"`
+	TotalInstrumented   int                          `json:"total_instrumented"`
+	TotalUninstrumented int                          `json:"total_uninstrumented"`
+	Partial             bool                         `json:"partial"`
+	// Concurrency surfaces the effective bound the orchestrator
+	// used after defaults + cap were applied. Operators who asked
+	// for 10 see 8 here; operators who omitted the parameter see
+	// the default. Useful diagnostic surface for ops scripts that
+	// log responses.
+	Concurrency int `json:"concurrency"`
+}
+
+// awsScanAllAccountRow mirrors awsorch.AccountScanResult on the
+// wire. Per-account counts are surfaced so a caller can compute
+// per-account coverage ratios without round-tripping the per-
+// account scan endpoint.
+type awsScanAllAccountRow struct {
+	AccountID           string `json:"account_id"`
+	ScanID              string `json:"scan_id"`
+	ResourceCount       int    `json:"resource_count"`
+	InstrumentedCount   int    `json:"instrumented_count"`
+	UninstrumentedCount int    `json:"uninstrumented_count"`
+}
+
+// awsScanAllFailureRow mirrors awsorch.AccountScanFailure on the
+// wire. error_code is the stable identifier (matches the per-
+// account handler's HumanizedError.Code convention);
+// humanized_message is the operator-visible prose. Neither field
+// ever carries credential material — the orchestrator never sees
+// cleartext credentials.
+type awsScanAllFailureRow struct {
+	AccountID        string `json:"account_id"`
+	ErrorCode        string `json:"error_code"`
+	HumanizedMessage string `json:"humanized_message"`
+}
+
+// HandleAWSScanAll — POST /api/v1/discovery/aws/scan-all.
+//
+// v0.89.7a Stream 21 (#616) — the multi-account scan-all endpoint.
+// Fans out per-account scans across every stored AWS connection in
+// the credstore, with bounded concurrency, aggregates the result,
+// and emits one discovery.aws.scan_all_completed audit event.
+//
+// Optional query parameters:
+//   - regions (comma-separated): per-call region override applied
+//     to every connection. Empty falls back to each connection's
+//     stored region list — same posture as the per-account
+//     endpoint's empty-body branch.
+//   - concurrency (int): max simultaneous per-account scans.
+//     Defaults to awsorch.DefaultScanAllConcurrency (3) when
+//     unset or <= 0; capped at awsorch.MaxScanAllConcurrency (8)
+//     when above. The effective value is surfaced back in the
+//     response's concurrency field.
+//
+// Audit invariants:
+//   - Per-account scan_started + scan_completed events still fire
+//     unchanged (the orchestrator drives the existing runAWSScan
+//     method). Both events additionally carry the scan_all_id so
+//     a forensic reader can correlate them with the aggregate
+//     event.
+//   - One discovery.aws.scan_all_completed event fires after the
+//     fan-out completes — with the aggregate counts, the failed
+//     accounts list, and the partial flag. Operators reading the
+//     timeline see: N per-account events, then one aggregate
+//     event with the same scan_all_id linking them.
+//   - Zero connections still emits the aggregate event so the
+//     operator's intent is visible in the timeline (proof the
+//     operation ran, even with nothing to do).
+//
+// Partial-failure posture: one account's failure does not block
+// the rest. The failed account lands in failed_accounts with its
+// error_code + humanized_message; the rest of the fan-out
+// continues unaffected. The aggregate's partial field is true
+// when any account failed.
+func (h *DiscoveryHandlers) HandleAWSScanAll(c *gin.Context) {
+	if h.credStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "CredStoreNotWired",
+			Message:       "Squadron's credential substrate isn't configured.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+	if h.awsScannerFor == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "ScannerNotWired",
+			Message:       "Squadron's scanner factory isn't configured. The Save flow wires it via the credstore key.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+
+	regions := parseScanAllRegions(c.Query("regions"))
+	concurrency := parseScanAllConcurrency(c.Query("concurrency"))
+
+	// Build the orchestrator per-request. The dependencies are the
+	// credstore (for ListConnections) and a closure that adapts
+	// h.runAWSScan to the PerAccountScan signature. The adapter
+	// converts the handler's (result, *HumanizedError, status) into
+	// the orchestrator's (result, *AccountScanFailure) shape; the
+	// HTTP status is dropped (the orchestrator aggregates failures
+	// rather than rendering one).
+	orch := awsorch.NewOrchestrator(h.credStore, func(ctx context.Context, conn *credstore.CloudConnection, regs []string, scanAllID string) (*scanner.Result, *awsorch.AccountScanFailure) {
+		result, herr, _ := h.runAWSScan(ctx, conn.AccountID, regs, scanAllID)
+		if herr != nil {
+			msg := herr.Message
+			if msg == "" {
+				msg = "Per-account scan failed."
+			}
+			return nil, &awsorch.AccountScanFailure{
+				AccountID:        conn.AccountID,
+				ErrorCode:        herr.Code,
+				HumanizedMessage: msg,
+			}
+		}
+		return result, nil
+	})
+
+	scanAllResult, err := orch.ScanAll(c.Request.Context(), awsorch.ScanAllRequest{
+		Regions:     regions,
+		Concurrency: concurrency,
+	})
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws scan-all: orchestrator failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:          "ScanAllInternal",
+			Message:       "Squadron could not start the multi-account scan. The error has been logged; retry in a moment.",
+			SuggestedStep: "save",
+		}})
+		return
+	}
+
+	effective := awsorch.NormalizeConcurrency(concurrency)
+
+	if h.auditService != nil {
+		// Aggregate audit event. Per the v0.89.7a spec:
+		//   - total/succeeded/failed account lists
+		//   - total_resources / total_instrumented / total_uninstrumented
+		//     (rolled up across all per-service categories)
+		//   - partial flag (true when any failed_accounts present)
+		// Never includes credential material — the orchestrator never
+		// sees cleartext credentials.
+		failedRows := make([]map[string]any, 0, len(scanAllResult.Failed))
+		failedAccountIDs := make([]string, 0, len(scanAllResult.Failed))
+		for _, f := range scanAllResult.Failed {
+			failedRows = append(failedRows, map[string]any{
+				"account_id":        f.AccountID,
+				"error_code":        f.ErrorCode,
+				"humanized_message": f.HumanizedMessage,
+			})
+			failedAccountIDs = append(failedAccountIDs, f.AccountID)
+		}
+		payload := map[string]any{
+			"scan_all_id":          scanAllResult.ScanAllID,
+			"total_accounts":       scanAllResult.TotalAccounts,
+			"succeeded_accounts":   len(scanAllResult.Succeeded),
+			"failed_accounts":      failedRows,
+			"total_resources":      scanAllResult.TotalResources,
+			"total_instrumented":   scanAllResult.TotalInstrumented,
+			"total_uninstrumented": scanAllResult.TotalUninstrumented,
+			"partial":              scanAllResult.Partial,
+			"recorded_at":          time.Now().UTC(),
+		}
+		if len(failedAccountIDs) > 0 {
+			// Convenience top-level list of failed account IDs for
+			// SIEM forwarders that pattern-match on flat fields
+			// rather than nested structs. The full structured
+			// failed_accounts above carries the same IDs plus the
+			// codes + prose.
+			payload["failed_account_ids"] = failedAccountIDs
+		}
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      services.AuditActorSystem,
+			EventType:  services.AuditEventDiscoveryAWSScanAllCompleted,
+			TargetType: services.AuditTargetDiscoveryScanAll,
+			TargetID:   scanAllResult.ScanAllID,
+			Action:     "scan_all_completed",
+			Payload:    payload,
+		})
+	}
+
+	c.JSON(http.StatusOK, marshalScanAllResult(scanAllResult, effective))
+}
+
+// parseScanAllRegions splits the optional comma-separated regions
+// query parameter into a slice. Empty / missing returns nil so the
+// orchestrator's empty-Regions fallback kicks in (each connection
+// uses its stored region list).
+func parseScanAllRegions(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// parseScanAllConcurrency parses the optional concurrency query
+// parameter. Empty / non-numeric returns 0 so the orchestrator's
+// normalizeConcurrency falls back to DefaultScanAllConcurrency.
+// The cap (MaxScanAllConcurrency) is enforced inside the
+// orchestrator — this function does not pre-clamp; passing the
+// raw value through means the response's concurrency field still
+// shows the effective post-cap value.
+func parseScanAllConcurrency(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// marshalScanAllResult walks the orchestrator's aggregate into the
+// snake_case wire shape. Empty slices stay empty (never null) so
+// the UI's empty-state branch is a single .length === 0 check —
+// matching the per-account endpoint's posture.
+func marshalScanAllResult(r *awsorch.ScanAllResult, effectiveConcurrency int) awsScanAllResponse {
+	out := awsScanAllResponse{
+		ScanAllID:           r.ScanAllID,
+		TotalAccounts:       r.TotalAccounts,
+		SucceededAccounts:   make([]awsScanAllAccountRow, 0, len(r.Succeeded)),
+		FailedAccounts:      make([]awsScanAllFailureRow, 0, len(r.Failed)),
+		TotalResources:      r.TotalResources,
+		TotalInstrumented:   r.TotalInstrumented,
+		TotalUninstrumented: r.TotalUninstrumented,
+		Partial:             r.Partial,
+		Concurrency:         effectiveConcurrency,
+	}
+	for _, s := range r.Succeeded {
+		out.SucceededAccounts = append(out.SucceededAccounts, awsScanAllAccountRow{
+			AccountID:           s.AccountID,
+			ScanID:              s.ScanID,
+			ResourceCount:       s.ResourceCount,
+			InstrumentedCount:   s.InstrumentedCount,
+			UninstrumentedCount: s.UninstrumentedCount,
+		})
+	}
+	for _, f := range r.Failed {
+		out.FailedAccounts = append(out.FailedAccounts, awsScanAllFailureRow{
+			AccountID:        f.AccountID,
+			ErrorCode:        f.ErrorCode,
+			HumanizedMessage: f.HumanizedMessage,
+		})
+	}
+	return out
 }
 
 // marshalValidationResult flattens scanner.ValidationResult into the

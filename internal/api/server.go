@@ -1173,6 +1173,33 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRunScan(c) }))
 
+		// v0.89.7a Stream 21 (#616) — multi-account AWS scan-all.
+		// Fans out per-account scans across every stored AWS
+		// connection in the credstore, with bounded concurrency
+		// (default 3, max 8), aggregates the result, and emits one
+		// discovery.aws.scan_all_completed audit event. The
+		// per-account discovery.aws.scan_completed events still
+		// fire — the aggregate is in addition, not a replacement;
+		// the two link via the scan_all_id payload field. The
+		// per-account endpoint above is completely unchanged.
+		//
+		// agents:read for the same reason the per-account scan uses
+		// it: the orchestrator creates audit events but no
+		// persisted Squadron state — the operator is reading every
+		// connected cloud's current state, mediated by Squadron's
+		// read-only roles. The aggregate "writes" only audit rows,
+		// which all read endpoints already do; agents:write is
+		// reserved for state-mutating endpoints (Save, Delete).
+		//
+		// Curl-friendly contract: optional regions + concurrency
+		// query parameters; no request body needed. Operators
+		// driving this from ops scripts pre-UI (v0.89.7b ships the
+		// UI surface) get a fully self-describing JSON response
+		// with the aggregate counts + per-account roll-up.
+		v1.POST("/discovery/aws/scan-all",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSScanAll(c) }))
+
 		// v0.85 Stream 2F — discovery-side AI recommendations route.
 		// The Inventory tab POSTs the scan result it just rendered; the
 		// handler converts it into an ai.DiscoveryScanContext, asks the
