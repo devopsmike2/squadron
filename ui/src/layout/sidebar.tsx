@@ -41,6 +41,7 @@ import {
   PlayCircle,
   Cpu,
   Cloud,
+  Github,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -277,6 +278,17 @@ export function AppSidebar() {
           title: "AWS",
           url: "/discovery/aws",
           icon: Cloud,
+        },
+        {
+          // v0.89.3 Stream 19 — #603 Connect-IaC-repo. Sits next to
+          // AWS under Discovery so the operator's muscle memory for
+          // "where I wire things up" stays in one place. Slice 1
+          // ships GitHub; slice 2 adds GitLab / Bitbucket under the
+          // same /discovery/iac/<provider> namespace.
+          key: "discovery-iac-github",
+          title: "IaC (GitHub)",
+          url: "/discovery/iac/github",
+          icon: Github,
         },
       ],
     },
