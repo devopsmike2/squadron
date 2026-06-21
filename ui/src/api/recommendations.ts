@@ -105,6 +105,15 @@ export interface Recommendation {
    * cloud-side discovery recommendations; absent for
    * collector-side advice. */
   iac?: IaCSnippet;
+  /** v0.89.3 #603 Stream 19 Phase 4 — placement-map key for the
+   * Recommendations tab's Open-PR button. Set ONLY on discovery-
+   * source recommendations whose snippet classified into one of
+   * the slice-1 placement-map rows (ec2-otel-layer,
+   * lambda-otel-layer, rds-pi-em, s3-access-logging,
+   * alb-access-logs, eks-cluster-logging,
+   * eks-observability-addon). Empty when the recommendation is
+   * not Open-PR-eligible — the card falls back to Copy-only. */
+  resource_kind?: string;
 }
 
 export interface RecommendationsResponse {

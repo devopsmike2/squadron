@@ -24,6 +24,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +38,12 @@ import {
   type GenerateRecommendationsResponse,
   type ScanResult,
 } from "@/api/discovery";
+import {
+  IaCGitHubOpenPRError,
+  listIaCGitHubConnections,
+  openIaCGitHubPullRequest,
+  type IaCGitHubConnection,
+} from "@/api/iacGithub";
 import type { Recommendation } from "@/api/recommendations";
 
 // Mock the discovery API module. The page imports the four named
@@ -77,9 +84,26 @@ vi.mock("@/api/discovery", async () => {
   };
 });
 
+// v0.89.3 #603 Stream 19 Phase 4: the Recommendations tab now reads
+// IaC-connection state to decide whether to render Open PR, the
+// configure-placement notice, or the connect-a-repo notice. The
+// mock replaces the live fetcher with a vi.fn each test configures.
+vi.mock("@/api/iacGithub", async () => {
+  const actual = await vi.importActual<typeof import("@/api/iacGithub")>(
+    "@/api/iacGithub",
+  );
+  return {
+    ...actual,
+    listIaCGitHubConnections: vi.fn(),
+    openIaCGitHubPullRequest: vi.fn(),
+  };
+});
+
 const mockedListAWSConnections = vi.mocked(listAWSConnections);
 const mockedRunAWSScan = vi.mocked(runAWSScan);
 const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
+const mockedListIaCConnections = vi.mocked(listIaCGitHubConnections);
+const mockedOpenPullRequest = vi.mocked(openIaCGitHubPullRequest);
 
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Without this, the second test in the file would
@@ -88,7 +112,7 @@ function renderPage() {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-        {children}
+        <MemoryRouter>{children}</MemoryRouter>
       </SWRConfig>
     );
   }
@@ -234,6 +258,9 @@ const sampleScan: ScanResult = {
 describe("DiscoveryAWSPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no IaC connections. Each Phase 4 test overrides this
+    // when it needs a connection + placement row to exist.
+    mockedListIaCConnections.mockResolvedValue({ connections: [] });
   });
 
   it("renders all three tabs", async () => {
@@ -584,5 +611,382 @@ describe("DiscoveryAWSPage", () => {
     expect(
       within(document.body).getAllByText(/aws_ssm_association/i).length,
     ).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------
+  // v0.89.3 #603 Stream 19 Phase 4 — Recommendations-tab Open-PR
+  // button. These tests cover the three card states (Open-PR
+  // available, connection-but-no-placement, no-connections-at-all)
+  // plus the success/error paths.
+  //
+  // The helper drives the page through scan → generate so each
+  // test starts from a known Recommendations-tab state. Tests
+  // configure the IaC-connection list before clicking Generate so
+  // the card derives the right state on render.
+  // ---------------------------------------------------------------
+
+  const lambdaRec: Recommendation = {
+    id: "discovery-scan-uuid-0",
+    category: "empty_signal",
+    severity: "warn",
+    title: "AI plan step 0: instrument 2 Lambdas",
+    detail: "Two Lambdas plus one EC2 instance lack OTel.",
+    est_savings_bytes: 0,
+    generated_at: new Date().toISOString(),
+    source: { kind: "discovery_scan", ref_id: "scan-uuid" },
+    action: { kind: "plan", payload: {} },
+    iac: {
+      format: "terraform",
+      source: 'resource "aws_lambda_function" "hello" {\n  layers = [...]\n}',
+    },
+    resource_kind: "lambda-otel-layer",
+  };
+
+  function makeRecsResp(
+    recs: Recommendation[] = [lambdaRec],
+  ): GenerateRecommendationsResponse {
+    return {
+      declined: false,
+      reasoning: "Lambdas first, EC2 second.",
+      recommendations: recs,
+    };
+  }
+
+  async function driveToRecsTab(
+    user: ReturnType<typeof userEvent.setup>,
+    recsResp: GenerateRecommendationsResponse = makeRecsResp(),
+  ) {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue(sampleScan);
+    mockedGenerateAWSRecommendations.mockResolvedValue(recsResp);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByText(/Prod AWS \(123456789012\)/);
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+    });
+    const genBtn = await screen.findByRole("button", {
+      name: /Generate recommendations/i,
+    });
+    await user.click(genBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Proposer reasoning/i)).toBeInTheDocument();
+    });
+  }
+
+  it("RecommendationCard_renders_Copy_only_when_no_iac_connections", async () => {
+    mockedListIaCConnections.mockResolvedValue({ connections: [] });
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    // Copy button present, Open PR not present, the State-C notice
+    // points the operator at the connect flow.
+    expect(
+      screen.getByRole("button", { name: /Copy Terraform snippet/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Open PR for/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Want one-click PRs\?/i),
+    ).toBeInTheDocument();
+    const link = screen.getByRole("link", {
+      name: /Connect a Terraform repo/i,
+    });
+    expect(link).toHaveAttribute("href", "/discovery/iac/github");
+  });
+
+  it("RecommendationCard_renders_OpenPR_button_when_connection_and_placement_exist", async () => {
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    // Open PR present, copy present, no State-C notice.
+    expect(
+      screen.getByRole("button", { name: /^Open PR for/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Copy Terraform snippet/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Want one-click PRs\?/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("RecommendationCard_renders_configure_placement_link_when_connection_but_no_placement", async () => {
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      // No row for lambda-otel-layer — connection is for a different
+      // resource_kind entirely. Card must render the State-B notice.
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "eks-cluster-logging",
+          file_path: "modules/eks/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    // Copy only; State-B notice names the missing kind and links to
+    // the connections page.
+    expect(
+      screen.getByRole("button", { name: /Copy Terraform snippet/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Open PR for/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Open PR needs a Terraform file path for/i),
+    ).toBeInTheDocument();
+    // The resource_kind name is in the notice (rendered inside a
+    // <code>); querying the surrounding paragraph is sufficient.
+    expect(
+      screen.getByText(/lambda-otel-layer/),
+    ).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /Configure placement/i });
+    expect(link).toHaveAttribute("href", "/discovery/iac/github");
+  });
+
+  it("RecommendationCard_OpenPR_success_renders_PR_link_and_disables_button", async () => {
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    mockedOpenPullRequest.mockResolvedValue({
+      pr_number: 42,
+      pr_url: "https://github.com/octo/infra/pull/42",
+      branch: "squadron/rec-scan-uu-0",
+      commit_sha: "abc1234",
+      file_path: "modules/lambda/main.tf",
+      repo_full_name: "octo/infra",
+    });
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    const openBtn = screen.getByRole("button", { name: /^Open PR for/i });
+    await user.click(openBtn);
+
+    // API was called with the full snippet, the resource_kind, the
+    // scan_id, and the account_id from the inventory flow.
+    await waitFor(() => {
+      expect(mockedOpenPullRequest).toHaveBeenCalledTimes(1);
+    });
+    const [callConnID, callBody] = mockedOpenPullRequest.mock.calls[0];
+    expect(callConnID).toBe("conn-1");
+    expect(callBody.scan_id).toBe("scan-uuid");
+    expect(callBody.step_idx).toBe(0);
+    expect(callBody.resource_kind).toBe("lambda-otel-layer");
+    expect(callBody.account_id).toBe("123456789012");
+    expect(callBody.snippet).toContain("aws_lambda_function");
+
+    // Success card rendered; Open PR button is gone (one PR per
+    // click); PR link is target=_blank to the GitHub URL.
+    await waitFor(() => {
+      expect(screen.getByText(/PR #42 opened in/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("button", { name: /^Open PR for/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Squadron will not push to this branch again/i),
+    ).toBeInTheDocument();
+    const viewLink = screen.getByRole("link", { name: /View PR/i });
+    expect(viewLink).toHaveAttribute(
+      "href",
+      "https://github.com/octo/infra/pull/42",
+    );
+    expect(viewLink).toHaveAttribute("target", "_blank");
+  });
+
+  it("RecommendationCard_OpenPR_NoPlacementMapping_error_renders_configure_link", async () => {
+    // Wizard state drifted between the page-mount fetch and the
+    // Open-PR click — the backend returns NoPlacementMapping. Card
+    // renders the humanized message + a configure link.
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    mockedOpenPullRequest.mockRejectedValue(
+      new IaCGitHubOpenPRError(
+        422,
+        {
+          code: "NoPlacementMapping",
+          message:
+            'No placement-map row exists for resource_kind "lambda-otel-layer".',
+          suggested_step: "placement-map",
+        },
+        "fallback",
+      ),
+    );
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    await user.click(screen.getByRole("button", { name: /^Open PR for/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No placement-map row exists/i),
+      ).toBeInTheDocument();
+    });
+    const link = screen.getByRole("link", {
+      name: /Configure the missing placement row/i,
+    });
+    expect(link).toHaveAttribute("href", "/discovery/iac/github");
+    // Open PR button is still rendered so the operator can retry
+    // once the placement is configured.
+    expect(
+      screen.getByRole("button", { name: /^Open PR for/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("RecommendationCard_OpenPR_RepoNotFound_error_renders_reconnect_link", async () => {
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    mockedOpenPullRequest.mockRejectedValue(
+      new IaCGitHubOpenPRError(
+        404,
+        {
+          code: "RepoNotFound",
+          message: 'The repo "octo/infra" is no longer reachable.',
+          suggested_step: "save",
+        },
+        "fallback",
+      ),
+    );
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    await user.click(screen.getByRole("button", { name: /^Open PR for/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/The repo "octo\/infra" is no longer reachable/i),
+      ).toBeInTheDocument();
+    });
+    const link = screen.getByRole("link", {
+      name: /Re-run the IaC connect wizard/i,
+    });
+    expect(link).toHaveAttribute("href", "/discovery/iac/github");
+  });
+
+  it("RecommendationCard_OpenPR_AuthFailed_error_renders_reconnect_link", async () => {
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    mockedOpenPullRequest.mockRejectedValue(
+      new IaCGitHubOpenPRError(
+        401,
+        {
+          code: "AuthFailed",
+          message:
+            "GitHub rejected the stored token. Re-run the IaC connect wizard.",
+          suggested_step: "save",
+        },
+        "fallback",
+      ),
+    );
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    await user.click(screen.getByRole("button", { name: /^Open PR for/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/GitHub rejected the stored token/i),
+      ).toBeInTheDocument();
+    });
+    const link = screen.getByRole("link", {
+      name: /Re-run the IaC connect wizard/i,
+    });
+    expect(link).toHaveAttribute("href", "/discovery/iac/github");
   });
 });

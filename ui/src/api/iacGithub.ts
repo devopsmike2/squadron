@@ -17,6 +17,9 @@
 // at integration time only, which the design doc calls out as a known
 // trade-off (same posture as ./discovery.ts).
 
+import { apiBaseUrl } from "../config";
+
+import { getAuthToken, onAuthChallenge } from "./auth-store";
 import { apiDelete, apiGet, apiPost } from "./base";
 
 // HumanizedError mirrors scanner.HumanizedError. The wizard renders
@@ -131,6 +134,143 @@ export interface IaCGitHubListConnectionsResponse {
 
 export function listIaCGitHubConnections(): Promise<IaCGitHubListConnectionsResponse> {
   return apiGet<IaCGitHubListConnectionsResponse>("/iac/github/connections");
+}
+
+// Open-PR endpoint --------------------------------------------------
+
+// IaCGitHubOpenPRRequest is the wire shape POSTed to
+// /iac/github/connections/:id/open-pr. The Recommendations tab
+// assembles this from the per-step recommendation + the page-level
+// account_id.
+//
+// snippet is the FULL Terraform body the proposer emitted, not a
+// truncated preview — the backend appends it byte-for-byte to the
+// placement-map file. Any truncation client-side would silently
+// land a broken PR.
+export interface IaCGitHubOpenPRRequest {
+  scan_id: string;
+  step_idx: number;
+  resource_kind: string;
+  snippet: string;
+  proposer_reasoning: string;
+  affected_resources: string[];
+  account_id?: string;
+}
+
+export interface IaCGitHubOpenPRResponse {
+  pr_number: number;
+  pr_url: string;
+  branch: string;
+  commit_sha: string;
+  file_path: string;
+  repo_full_name: string;
+}
+
+// IaCGitHubOpenPRError is a typed Error subclass that preserves the
+// server's humanized-error envelope. The default base.ts fetch wrapper
+// flattens 4xx bodies into a plain Error whose .message is the
+// envelope's message but loses the code / suggested_step. The
+// Recommendations tab needs the typed code to route NoPlacementMapping
+// → wizard, RepoNotFound / AuthFailed → reconnect, etc., so this
+// helper bypasses the base wrapper for the Open-PR path and surfaces
+// the full envelope.
+export class IaCGitHubOpenPRError extends Error {
+  readonly code: string;
+  readonly suggested_step: string;
+  readonly doc_link?: string;
+  readonly status: number;
+  constructor(
+    status: number,
+    envelope: IaCHumanizedError | undefined,
+    fallbackMessage: string,
+  ) {
+    super(envelope?.message ?? fallbackMessage);
+    this.name = "IaCGitHubOpenPRError";
+    this.code = envelope?.code ?? "Unknown";
+    this.suggested_step = envelope?.suggested_step ?? "";
+    this.doc_link = envelope?.doc_link;
+    this.status = status;
+  }
+}
+
+// openIaCGitHubPullRequest posts to the Open-PR endpoint, preserves
+// the humanized-error code on failure (via IaCGitHubOpenPRError), and
+// returns the typed success body on 200. Slice 1's success path is
+// the close-the-loop demo — the recommendation card collapses into a
+// PR-opened success state once this promise resolves.
+//
+// Why not reuse apiPost: apiPost flattens 4xx bodies into a plain
+// Error whose .message is the envelope message but whose `code` field
+// is gone. The Recommendations tab needs the code to choose the right
+// recovery link (NoPlacementMapping → wizard, RepoNotFound →
+// reconnect, AuthFailed → reconnect, DefaultBranchWriteRefused →
+// critical error). Re-implement the small bit of fetch wrapping here
+// rather than restructure base.ts.
+export async function openIaCGitHubPullRequest(
+  connectionID: string,
+  req: IaCGitHubOpenPRRequest,
+): Promise<IaCGitHubOpenPRResponse> {
+  const url = `${apiBaseUrl}/iac/github/connections/${encodeURIComponent(
+    connectionID,
+  )}/open-pr`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const token = getAuthToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(req),
+  });
+
+  if (response.status === 401) {
+    // Don't swallow into onAuthChallenge unconditionally — the
+    // Open-PR 401 is "GitHub rejected the stored token" (an
+    // operator-recoverable IaC-connection state), not "Squadron auth
+    // expired" (which onAuthChallenge handles). The handler returns
+    // 401 with code=AuthFailed in the former case; for the latter
+    // shape (envelope missing code) fall through to the global path.
+    let envelope: IaCHumanizedError | undefined;
+    try {
+      const body = await response.json();
+      if (body?.error && typeof body.error === "object") {
+        envelope = body.error as IaCHumanizedError;
+      }
+    } catch {
+      // ignore
+    }
+    if (!envelope) {
+      onAuthChallenge();
+    }
+    throw new IaCGitHubOpenPRError(
+      401,
+      envelope,
+      "Authentication failed. Re-run the IaC connect wizard.",
+    );
+  }
+
+  if (!response.ok) {
+    let envelope: IaCHumanizedError | undefined;
+    try {
+      const body = await response.json();
+      if (body?.error && typeof body.error === "object") {
+        envelope = body.error as IaCHumanizedError;
+      }
+    } catch {
+      // ignore — fall back to generic message
+    }
+    throw new IaCGitHubOpenPRError(
+      response.status,
+      envelope,
+      `Open-PR request failed: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  return response.json();
 }
 
 // Delete endpoint ----------------------------------------------------
