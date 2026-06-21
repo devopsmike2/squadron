@@ -40,6 +40,7 @@ package handlers
 import (
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -242,6 +243,23 @@ func (h *TimelineHandlers) merge(c *gin.Context, q TimelineQuery) []TimelineEven
 // ----------------------------------------------------------------
 
 func auditToEvent(e *services.AuditEvent) TimelineEvent {
+	// v0.89.4 [#612] — payload-aware humanizer for the Stream 19
+	// IaC + recommendation.pr_* family. When a payload-aware entry
+	// is registered AND every required payload field is present, we
+	// use the payload-derived (Summary, Detail) pair. Otherwise we
+	// fall through to the v0.81.4 path so a malformed payload never
+	// renders empty placeholders like "Opened PR # in github.com/".
+	if title, sub, ok := humanizeIaCAuditEvent(e); ok {
+		return TimelineEvent{
+			ID:       e.ID,
+			Source:   TimelineSourceAudit,
+			Time:     e.Timestamp,
+			Title:    title,
+			Subtitle: sub,
+			Severity: "info",
+			Href:     "/audit",
+		}
+	}
 	title := humanizeEventType(e.EventType, e.Action)
 	sub := strings.TrimSpace(e.Actor)
 	if e.TargetType != "" {
@@ -397,6 +415,204 @@ func parseTimelineQuery(c *gin.Context) TimelineQuery {
 		}
 	}
 	return q
+}
+
+// humanizeIaCAuditEvent — v0.89.4 [#612] — payload-aware humanizer
+// for the Stream 19 (Connect IaC repo) event family. Phase 2 added 4
+// audit event types plus #610 added a 5th; none of them had
+// humanizer entries, so the Timeline page was rendering raw
+// event_type strings — same regression class as #545 from v0.76.
+//
+// Unlike the v0.81.4 humanizeEventType table (event_type → title
+// only), these entries pull both the Summary (Title) and Detail
+// (Subtitle) from the audit Payload so the operator sees the repo,
+// PR number, and affected-row counts at a glance.
+//
+// Defensive: if any required payload field is missing or malformed
+// (wrong type from a hand-edited audit row, schema drift on a
+// rolling deploy), the function returns ok=false and the caller
+// falls through to the v0.81.4 path. We NEVER render empty
+// placeholders like "Opened PR # in github.com/ for ".
+//
+// Payload values arrive via json.Unmarshal into map[string]any so
+// slices come back as []any (length is what we need for counts) and
+// numbers come back as float64 (json's default numeric type).
+func humanizeIaCAuditEvent(e *services.AuditEvent) (string, string, bool) {
+	if e == nil || e.Payload == nil {
+		return "", "", false
+	}
+	switch e.EventType {
+	case services.AuditEventIaCGitHubConnectionCreated:
+		repo, ok := payloadString(e.Payload, "repo_full_name")
+		if !ok {
+			return "", "", false
+		}
+		authKind, ok := payloadString(e.Payload, "auth_kind")
+		if !ok {
+			return "", "", false
+		}
+		placement, ok := payloadSlice(e.Payload, "placement_map")
+		if !ok {
+			return "", "", false
+		}
+		title := "Connected github.com/" + repo + " to Squadron"
+		sub := strconv.Itoa(len(placement)) + " placement rows configured (" + authKind + ")"
+		return title, sub, true
+
+	case services.AuditEventIaCGitHubConnectionValidated:
+		repo, ok := payloadString(e.Payload, "repo_full_name")
+		if !ok {
+			return "", "", false
+		}
+		branch, ok := payloadString(e.Payload, "default_branch")
+		if !ok {
+			return "", "", false
+		}
+		rows, ok := payloadSlice(e.Payload, "preflight_results")
+		if !ok {
+			return "", "", false
+		}
+		reachable := 0
+		for _, r := range rows {
+			row, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			if exists, _ := row["exists"].(bool); exists {
+				reachable++
+			}
+		}
+		title := "Validated IaC connection to github.com/" + repo
+		sub := strconv.Itoa(reachable) + " of " + strconv.Itoa(len(rows)) +
+			" placement files reachable on " + branch
+		return title, sub, true
+
+	case services.AuditEventIaCGitHubPlacementMapUpdated:
+		repo, ok := payloadString(e.Payload, "repo_full_name")
+		if !ok {
+			return "", "", false
+		}
+		placement, ok := payloadSlice(e.Payload, "placement_map")
+		if !ok {
+			return "", "", false
+		}
+		title := "Updated placement map for github.com/" + repo
+		sub := strconv.Itoa(len(placement)) + " placement rows now configured"
+		return title, sub, true
+
+	case services.AuditEventRecommendationPROpened:
+		repo, ok := payloadString(e.Payload, "repo_full_name")
+		if !ok {
+			return "", "", false
+		}
+		kind, ok := payloadString(e.Payload, "resource_kind")
+		if !ok {
+			return "", "", false
+		}
+		prNum, ok := payloadInt(e.Payload, "pr_number")
+		if !ok {
+			return "", "", false
+		}
+		branch, ok := payloadString(e.Payload, "branch")
+		if !ok {
+			return "", "", false
+		}
+		filePath, ok := payloadString(e.Payload, "file_path")
+		if !ok {
+			return "", "", false
+		}
+		// commit_sha intentionally omitted — noisy and the PR link
+		// already pins the diff.
+		title := "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
+			" for " + kind
+		sub := "Branch " + branch + ", file " + filePath
+		return title, sub, true
+
+	case services.AuditEventRecommendationPROpenFailed:
+		repo, ok := payloadString(e.Payload, "repo_full_name")
+		if !ok {
+			return "", "", false
+		}
+		kind, ok := payloadString(e.Payload, "resource_kind")
+		if !ok {
+			return "", "", false
+		}
+		// humanized_message was already humanized by the Phase 2
+		// handler — we surface it verbatim.
+		msg, ok := payloadString(e.Payload, "humanized_message")
+		if !ok {
+			return "", "", false
+		}
+		title := "Could not open PR in github.com/" + repo + " for " + kind
+		return title, msg, true
+	}
+	return "", "", false
+}
+
+// payloadString returns the string at key when it is present AND
+// non-empty after TrimSpace. A missing key, wrong type, or
+// empty-string value all return ok=false so the caller can fall
+// through to the safe path.
+func payloadString(p map[string]any, key string) (string, bool) {
+	v, present := p[key]
+	if !present {
+		return "", false
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// payloadSlice returns the []any at key. JSON-unmarshalled payloads
+// always shape slices as []any regardless of the original element
+// type; the humanizer only cares about length so it doesn't reach
+// into the elements.
+func payloadSlice(p map[string]any, key string) ([]any, bool) {
+	v, present := p[key]
+	if !present {
+		return nil, false
+	}
+	s, ok := v.([]any)
+	if !ok {
+		return nil, false
+	}
+	return s, true
+}
+
+// payloadInt returns the int at key. json.Unmarshal into
+// map[string]any decodes every number as float64, so accept that
+// shape AND a plain int (for in-process emitted events that haven't
+// round-tripped through JSON). Positive values only — pr_number 0
+// is "no PR yet".
+func payloadInt(p map[string]any, key string) (int, bool) {
+	v, present := p[key]
+	if !present {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		if n <= 0 {
+			return 0, false
+		}
+		return int(n), true
+	case int:
+		if n <= 0 {
+			return 0, false
+		}
+		return n, true
+	case int64:
+		if n <= 0 {
+			return 0, false
+		}
+		return int(n), true
+	}
+	return 0, false
 }
 
 // humanizeEventType turns a machine event type ("plan.created",
