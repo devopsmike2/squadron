@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -161,6 +162,44 @@ type DynamoDBClient interface {
 	ListTagsOfResource(ctx context.Context, params *dynamodb.ListTagsOfResourceInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ListTagsOfResourceOutput, error)
 }
 
+// ECSClient is the narrow ECS surface the scanner depends on. Slice
+// 5 (v0.89.10) of the universal-observation arc walks per-region
+// clusters in two passes:
+//
+//   - Pass 1: ListClusters returns the region's cluster ARN list
+//     (paginated via NextToken).
+//   - Pass 2: per batch of up to 100 ARNs, DescribeClusters returns
+//     each cluster's settings (CloudWatch Container Insights status
+//     lives behind settings[name=containerInsights].value), task /
+//     service counts, registered-container-instance count, and tags.
+//     ListTagsForResource is the defensive fallback when the
+//     DescribeClusters call did not surface tags (the Include=TAGS
+//     hint is honored by AWS but a per-cluster fallback keeps the
+//     scanner robust to API quirks).
+//
+// Why two passes (matching EKS rather than the single-pass S3 /
+// RDS / ALB shape): ECS's ListClusters returns ARNs only — the
+// observability state lives behind DescribeClusters with the
+// SETTINGS include hint. There's no "DescribeAllClusters" batch
+// endpoint that combines list + describe. Same narrow-interface
+// rationale as the other service clients.
+//
+// HONEST TASK-DEFINITION-LEVEL LIMITATION (re-stated honestly):
+// Squadron detects cluster-level CloudWatch Container Insights.
+// Squadron does not detect task-definition-level instrumentation —
+// X-Ray daemon sidecars, ADOT collector sidecars, or FireLens log
+// routing in your task definitions. If your task defs include
+// those sidecars but the cluster does not have Container Insights
+// enabled, Squadron will report the cluster as uninstrumented —
+// this is a known limitation of cluster-level scanning. A future
+// slice can extend the rule to inspect task definitions if
+// operators request it.
+type ECSClient interface {
+	ListClusters(ctx context.Context, params *ecs.ListClustersInput, optFns ...func(*ecs.Options)) (*ecs.ListClustersOutput, error)
+	DescribeClusters(ctx context.Context, params *ecs.DescribeClustersInput, optFns ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error)
+	ListTagsForResource(ctx context.Context, params *ecs.ListTagsForResourceInput, optFns ...func(*ecs.Options)) (*ecs.ListTagsForResourceOutput, error)
+}
+
 // STSClient is the narrow STS surface used by Validate to confirm the
 // AssumeRole chain is functional. The real *sts.Client satisfies it.
 type STSClient interface {
@@ -222,6 +261,14 @@ type ClientFactory interface {
 	// DynamoDB is a per-region API — the supplied region is where
 	// ListTables walks.
 	DynamoDB(ctx context.Context, region string) (DynamoDBClient, error)
+
+	// ECS returns an ECS client for the supplied region. Added in
+	// slice 5 of the universal-observation arc (v0.89.10). ECS is a
+	// per-region API — the supplied region is where ListClusters
+	// walks. Covers both Fargate and EC2 launch types because
+	// Container Insights is a per-cluster setting, not a
+	// per-launch-type one.
+	ECS(ctx context.Context, region string) (ECSClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -371,6 +418,13 @@ func (f *sdkClientFactory) EKS(_ context.Context, region string) (EKSClient, err
 
 func (f *sdkClientFactory) DynamoDB(_ context.Context, region string) (DynamoDBClient, error) {
 	return dynamodb.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) ECS(_ context.Context, region string) (ECSClient, error) {
+	return ecs.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil

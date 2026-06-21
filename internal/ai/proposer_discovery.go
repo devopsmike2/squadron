@@ -89,6 +89,25 @@ type DiscoveryScanContext struct {
 	// read-only invariant.
 	DynamoDBTables []DynamoDBTableCandidate
 
+	// ECSClusters joins the inventory list in slice 5 (v0.89.10).
+	// ECS today; Cloud Run / AKS container-orchestration surfaces
+	// slot into the same field in later slices. The proposer's
+	// instrumented rule for ECS is SINGLE-axis:
+	// ContainerInsightsStatus must be "enabled" (case-insensitive,
+	// against the cluster's settings[name=containerInsights].value).
+	// Same posture as the DynamoDB slice 4 downgrade — cluster-level
+	// Container Insights is the one strong cloud-API-visible
+	// observability signal for ECS. Squadron does NOT detect
+	// task-definition-level instrumentation (X-Ray daemon sidecars,
+	// ADOT collector sidecars, FireLens log routing); clusters
+	// whose task defs ship those sidecars but whose cluster does
+	// NOT have Container Insights enabled are reported as
+	// uninstrumented (cluster-level scanning limitation). Both
+	// Fargate and EC2 launch types covered by the same rule.
+	// Squadron NEVER executes ecs:UpdateClusterSettings — read-only
+	// invariant.
+	ECSClusters []ECSClusterCandidate
+
 	// Coverage assessment, denormalized so the prompt body can
 	// reference the totals without recounting. Match the scanner
 	// Result fields one-to-one.
@@ -240,6 +259,50 @@ type DynamoDBTableCandidate struct {
 	Region                    string `json:"region"`
 }
 
+// ECSClusterCandidate is one ECS-shaped row from the scan. Mirrors
+// scanner.ECSClusterSnapshot for the same import-boundary reason as
+// the other candidates.
+//
+// The proposer's single ECS lever is cluster-level CloudWatch
+// Container Insights enablement. ContainerInsightsStatus carries
+// the three AWS-side values ("enabled" / "disabled" / "enhanced")
+// plus the scanner's "UNKNOWN" sentinel surfaced when the
+// DescribeClusters response did not return the containerInsights
+// setting. The instrumented rule is "enabled" only
+// (case-insensitive) — every other value (including UNKNOWN and
+// "enhanced") counts as uninstrumented.
+//
+// Task-definition-level limitation (honest restatement at the
+// import boundary): Squadron detects cluster-level Container
+// Insights via the DescribeClusters API. Squadron does not detect
+// task-definition-level instrumentation — X-Ray daemon sidecars,
+// ADOT collector sidecars, or FireLens log routing in your task
+// definitions. If your task defs include those sidecars but the
+// cluster does not have Container Insights enabled, Squadron will
+// report the cluster as uninstrumented — this is a known
+// limitation of cluster-level scanning. A future slice can extend
+// the rule to inspect task definitions if operators request it.
+//
+// Both Fargate and EC2 launch types are covered by the same
+// per-cluster rule.
+//
+// The task / service counts are surfaced so the prompt body's
+// per-cluster reasoning can highlight high-traffic clusters when
+// surfacing the recommendation (a high RunningTasksCount with
+// disabled Container Insights is the cluster the proposer flags
+// first).
+type ECSClusterCandidate struct {
+	ARN                               string `json:"arn"`
+	Name                              string `json:"name"`
+	Status                            string `json:"status"`
+	ContainerInsightsStatus           string `json:"container_insights_status"`
+	RegisteredContainerInstancesCount int    `json:"registered_container_instances_count,omitempty"`
+	RunningTasksCount                 int    `json:"running_tasks_count,omitempty"`
+	PendingTasksCount                 int    `json:"pending_tasks_count,omitempty"`
+	ActiveServicesCount               int    `json:"active_services_count,omitempty"`
+	Region                            string `json:"region"`
+}
+
 // ProposeFromDiscoveryScan is the v0.85 sibling of
 // ProposeFromCostSpike. Same proposer engine, different entry point.
 // The model receives a Squadron-discovered AWS inventory snapshot and
@@ -284,6 +347,9 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 	if err := validateDynamoDBTableCandidates(in.DynamoDBTables); err != nil {
+		return nil, fmt.Errorf("discovery scan context: %w", err)
+	}
+	if err := validateECSClusterCandidates(in.ECSClusters); err != nil {
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 
@@ -460,6 +526,24 @@ func validateDynamoDBTableCandidates(ts []DynamoDBTableCandidate) error {
 		}
 		if strings.TrimSpace(t.Name) == "" {
 			return fmt.Errorf("dynamodb_tables[%d]: name is required", i)
+		}
+	}
+	return nil
+}
+
+// validateECSClusterCandidates mirrors validateDynamoDBTableCandidates
+// for the slice 5 (v0.89.10) ECS cluster candidate type. Each row
+// must carry a non-empty ARN and Name. The ContainerInsightsStatus
+// field is NOT enforced because the "uncovered" signal IS an
+// empty-or-non-"enabled" status; the validator only enforces
+// identifier fields.
+func validateECSClusterCandidates(cs []ECSClusterCandidate) error {
+	for i, c := range cs {
+		if strings.TrimSpace(c.ARN) == "" {
+			return fmt.Errorf("ecs_clusters[%d]: arn is required", i)
+		}
+		if strings.TrimSpace(c.Name) == "" {
+			return fmt.Errorf("ecs_clusters[%d]: name is required", i)
 		}
 	}
 	return nil

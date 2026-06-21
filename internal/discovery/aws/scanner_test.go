@@ -14,6 +14,8 @@ import (
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
@@ -447,6 +449,7 @@ type fakeFactory struct {
 	elbv2    ELBv2Client
 	eks      EKSClient
 	dynamodb DynamoDBClient
+	ecs      ECSClient
 	sts      STSClient
 }
 
@@ -501,6 +504,15 @@ func (f *fakeFactory) DynamoDB(_ context.Context, _ string) (DynamoDBClient, err
 		return &fakeDynamoDB{}, nil
 	}
 	return f.dynamodb, nil
+}
+
+// ECS returns the configured fake ECS client. Same zero-output
+// fallback as the other services. Slice 5 (v0.89.10).
+func (f *fakeFactory) ECS(_ context.Context, _ string) (ECSClient, error) {
+	if f.ecs == nil {
+		return &fakeECS{}, nil
+	}
+	return f.ecs, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake
@@ -750,12 +762,14 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 	}
 	// Slice 3a (v0.88.0) added s3 + alb as the 4th and 5th preflight
 	// rows; slice 3b (v0.89.0) added eks as the 6th; slice 4
-	// (v0.89.6) adds dynamodb as the 7th — assert all seven services
-	// land in the validation panel. Slice 1 shipped ec2+lambda;
-	// slice 2 (v0.87) added rds; slice 3a (v0.88.0) added s3+alb;
-	// slice 3b (v0.89.0) added eks; slice 4 (v0.89.6) added dynamodb.
-	if len(vr.Preflight) != 7 {
-		t.Fatalf("Preflight rows = %d, want 7 (ec2 + lambda + rds + s3 + alb + eks + dynamodb)", len(vr.Preflight))
+	// (v0.89.6) added dynamodb as the 7th; slice 5 (v0.89.10) adds
+	// ecs as the 8th — assert all eight services land in the
+	// validation panel. Slice 1 shipped ec2+lambda; slice 2 (v0.87)
+	// added rds; slice 3a (v0.88.0) added s3+alb; slice 3b (v0.89.0)
+	// added eks; slice 4 (v0.89.6) added dynamodb; slice 5 (v0.89.10)
+	// added ecs.
+	if len(vr.Preflight) != 8 {
+		t.Fatalf("Preflight rows = %d, want 8 (ec2 + lambda + rds + s3 + alb + eks + dynamodb + ecs)", len(vr.Preflight))
 	}
 	services := map[string]bool{}
 	for _, p := range vr.Preflight {
@@ -764,7 +778,7 @@ func TestScanner_ValidateHappyPath(t *testing.T) {
 			t.Errorf("Preflight %q OK=false, err=%+v", p.Service, p.Err)
 		}
 	}
-	for _, want := range []string{"ec2", "lambda", "rds", "s3", "alb", "eks", "dynamodb"} {
+	for _, want := range []string{"ec2", "lambda", "rds", "s3", "alb", "eks", "dynamodb", "ecs"} {
 		if !services[want] {
 			t.Errorf("Validate did not produce a %q preflight row", want)
 		}
@@ -2006,5 +2020,461 @@ func TestScanner_DynamoDBPreflightAccessDenied(t *testing.T) {
 	}
 	if got.Err == nil || got.Err.SuggestedStep != "trust-policy" {
 		t.Errorf("dynamodb preflight Err = %+v, want SuggestedStep=trust-policy", got.Err)
+	}
+}
+
+// --- ECS tests (slice 5, v0.89.10) ---------------------------------
+
+// fakeECS is the slice 5 (v0.89.10) ECS double. Services the three
+// methods the ECSClient interface requires. Pagination follows the
+// NextToken shape the SDK uses. DescribeClusters responses are keyed
+// by the batch of ARNs so each test scenario can wire its own
+// per-cluster behavior; the failures[] slice on the response is
+// surfaced through describeFailures.
+type fakeECS struct {
+	listClustersPages []*ecs.ListClustersOutput
+	listClustersIdx   int
+	listClustersErr   error
+
+	// describeClustersOut keys on the joined-ARN string of the
+	// requested batch so tests can wire a single response that
+	// covers all the ARNs in one call. Absent entries return an
+	// empty DescribeClustersOutput.
+	describeClustersOut    map[string]*ecs.DescribeClustersOutput
+	describeClustersErr    error
+	describeClustersErrFor map[string]error
+
+	// tagsByARN keys on the cluster ARN supplied to
+	// ListTagsForResource. Absent entries return an empty tag list.
+	tagsByARN    map[string][]ecstypes.Tag
+	tagsErr      error
+	tagsErrByARN map[string]error
+}
+
+func (f *fakeECS) ListClusters(_ context.Context, _ *ecs.ListClustersInput, _ ...func(*ecs.Options)) (*ecs.ListClustersOutput, error) {
+	if f.listClustersErr != nil {
+		return nil, f.listClustersErr
+	}
+	if f.listClustersIdx >= len(f.listClustersPages) {
+		return &ecs.ListClustersOutput{}, nil
+	}
+	out := f.listClustersPages[f.listClustersIdx]
+	f.listClustersIdx++
+	return out, nil
+}
+
+func (f *fakeECS) DescribeClusters(_ context.Context, in *ecs.DescribeClustersInput, _ ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error) {
+	if f.describeClustersErr != nil {
+		return nil, f.describeClustersErr
+	}
+	if in == nil {
+		return &ecs.DescribeClustersOutput{}, nil
+	}
+	key := strings.Join(in.Clusters, ",")
+	if err, ok := f.describeClustersErrFor[key]; ok && err != nil {
+		return nil, err
+	}
+	if out, ok := f.describeClustersOut[key]; ok && out != nil {
+		return out, nil
+	}
+	return &ecs.DescribeClustersOutput{}, nil
+}
+
+func (f *fakeECS) ListTagsForResource(_ context.Context, in *ecs.ListTagsForResourceInput, _ ...func(*ecs.Options)) (*ecs.ListTagsForResourceOutput, error) {
+	if f.tagsErr != nil {
+		return nil, f.tagsErr
+	}
+	out := &ecs.ListTagsForResourceOutput{}
+	if in == nil || in.ResourceArn == nil {
+		return out, nil
+	}
+	if err, ok := f.tagsErrByARN[*in.ResourceArn]; ok && err != nil {
+		return nil, err
+	}
+	if tags, ok := f.tagsByARN[*in.ResourceArn]; ok {
+		out.Tags = tags
+	}
+	return out, nil
+}
+
+// TestScanRegionECS_HappyPath_TwoClusters_OneInstrumented_OneNot
+// drives the mapping happy path: two clusters surface through
+// ListClusters; DescribeClusters populates the cluster's settings,
+// status, and task / service counts for each. The one whose
+// settings[name=containerInsights].value == "enabled" counts as
+// instrumented; the one with "disabled" counts as uninstrumented.
+// The shared IsInstrumented predicate evaluates per the single-axis
+// rule.
+func TestScanRegionECS_HappyPath_TwoClusters_OneInstrumented_OneNot(t *testing.T) {
+	const (
+		nameOn  = "prod-cluster"
+		nameOff = "staging-cluster"
+		arnOn   = "arn:aws:ecs:us-east-1:123456789012:cluster/prod-cluster"
+		arnOff  = "arn:aws:ecs:us-east-1:123456789012:cluster/staging-cluster"
+	)
+	fakeClient := &fakeECS{
+		listClustersPages: []*ecs.ListClustersOutput{
+			{ClusterArns: []string{arnOn, arnOff}},
+		},
+		describeClustersOut: map[string]*ecs.DescribeClustersOutput{
+			arnOn + "," + arnOff: {
+				Clusters: []ecstypes.Cluster{
+					{
+						ClusterArn:                        awssdk.String(arnOn),
+						ClusterName:                       awssdk.String(nameOn),
+						Status:                            awssdk.String("ACTIVE"),
+						RegisteredContainerInstancesCount: 4,
+						RunningTasksCount:                 20,
+						PendingTasksCount:                 1,
+						ActiveServicesCount:               5,
+						Settings: []ecstypes.ClusterSetting{
+							{Name: ecstypes.ClusterSettingNameContainerInsights, Value: awssdk.String("enabled")},
+						},
+						Tags: []ecstypes.Tag{
+							{Key: awssdk.String("Env"), Value: awssdk.String("prod")},
+						},
+					},
+					{
+						ClusterArn:          awssdk.String(arnOff),
+						ClusterName:         awssdk.String(nameOff),
+						Status:              awssdk.String("ACTIVE"),
+						RunningTasksCount:   3,
+						ActiveServicesCount: 1,
+						Settings: []ecstypes.ClusterSetting{
+							{Name: ecstypes.ClusterSettingNameContainerInsights, Value: awssdk.String("disabled")},
+						},
+					},
+				},
+			},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	r, err := s.Scan(context.Background(), conn, []string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.ECSClusters) != 2 {
+		t.Fatalf("ECSClusters len = %d, want 2", len(r.ECSClusters))
+	}
+	byName := map[string]scanner.ECSClusterSnapshot{}
+	for _, c := range r.ECSClusters {
+		byName[c.Name] = c
+	}
+	on, ok := byName[nameOn]
+	if !ok {
+		t.Fatalf("missing %q snapshot", nameOn)
+	}
+	if on.ARN != arnOn {
+		t.Errorf("on.ARN = %q, want %q", on.ARN, arnOn)
+	}
+	if on.Status != "ACTIVE" {
+		t.Errorf("on.Status = %q, want ACTIVE", on.Status)
+	}
+	if on.ContainerInsightsStatus != "enabled" {
+		t.Errorf("on.ContainerInsightsStatus = %q, want enabled", on.ContainerInsightsStatus)
+	}
+	if !on.IsInstrumented() {
+		t.Errorf("on.IsInstrumented() = false, want true (Container Insights enabled)")
+	}
+	if on.RunningTasksCount != 20 {
+		t.Errorf("on.RunningTasksCount = %d, want 20", on.RunningTasksCount)
+	}
+	if on.ActiveServicesCount != 5 {
+		t.Errorf("on.ActiveServicesCount = %d, want 5", on.ActiveServicesCount)
+	}
+	if on.Tags["Env"] != "prod" {
+		t.Errorf("on.Tags[Env] = %q, want prod", on.Tags["Env"])
+	}
+	off, ok := byName[nameOff]
+	if !ok {
+		t.Fatalf("missing %q snapshot", nameOff)
+	}
+	if off.ContainerInsightsStatus != "disabled" {
+		t.Errorf("off.ContainerInsightsStatus = %q, want disabled", off.ContainerInsightsStatus)
+	}
+	if off.IsInstrumented() {
+		t.Errorf("off.IsInstrumented() = true, want false (Container Insights disabled)")
+	}
+	if r.InstrumentedCount != 1 || r.UninstrumentedCount != 1 {
+		t.Errorf("counts = (instrumented=%d, uninstrumented=%d), want (1, 1)",
+			r.InstrumentedCount, r.UninstrumentedCount)
+	}
+}
+
+// TestScanRegionECS_EmptyAccount_ReturnsEmptyList confirms an
+// account with zero clusters produces zero ECSClusters snapshots
+// and no per-region failure — the empty-inventory shape every
+// category exposes.
+func TestScanRegionECS_EmptyAccount_ReturnsEmptyList(t *testing.T) {
+	fakeClient := &fakeECS{
+		listClustersPages: []*ecs.ListClustersOutput{{ClusterArns: nil}},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.ECSClusters) != 0 {
+		t.Errorf("ECSClusters = %d, want 0", len(r.ECSClusters))
+	}
+	if r.Partial {
+		t.Errorf("Partial = true on empty account; should be false")
+	}
+}
+
+// TestScanRegionECS_PaginationHandled drives the scan past the first
+// page of ListClusters. Two pages of one cluster each must both
+// surface in ECSClusters.
+func TestScanRegionECS_PaginationHandled(t *testing.T) {
+	const arn1 = "arn:aws:ecs:us-east-1:123:cluster/p1"
+	const arn2 = "arn:aws:ecs:us-east-1:123:cluster/p2"
+	fakeClient := &fakeECS{
+		listClustersPages: []*ecs.ListClustersOutput{
+			{ClusterArns: []string{arn1}, NextToken: awssdk.String("page2")},
+			{ClusterArns: []string{arn2}},
+		},
+		describeClustersOut: map[string]*ecs.DescribeClustersOutput{
+			// After paginated ListClusters, the scanner batches all
+			// ARNs into a single DescribeClusters call (up to 100
+			// ARNs per batch). With two paginated pages of one ARN
+			// each, both ARNs land in the same batch — keyed by the
+			// joined-ARN string.
+			arn1 + "," + arn2: {
+				Clusters: []ecstypes.Cluster{
+					{
+						ClusterArn:  awssdk.String(arn1),
+						ClusterName: awssdk.String("p1"),
+						Status:      awssdk.String("ACTIVE"),
+					},
+					{
+						ClusterArn:  awssdk.String(arn2),
+						ClusterName: awssdk.String("p2"),
+						Status:      awssdk.String("ACTIVE"),
+					},
+				},
+			},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.ECSClusters) != 2 {
+		t.Fatalf("ECSClusters = %d, want 2 (both pages should land)", len(r.ECSClusters))
+	}
+}
+
+// TestExpandECSCluster_ClusterMissingFromFailures_SkipsCluster pins
+// the race-against-deletion fallback: between ListClusters and
+// DescribeClusters, AWS deletes the cluster. AWS surfaces the race
+// via failures[] entry with reason="MISSING" on the same
+// DescribeClusters response. The scan skips that ARN silently and
+// continues to the next one. Result.Partial stays false because the
+// race is a normal cloud-API condition, not a failed walk.
+func TestExpandECSCluster_ClusterMissingFromFailures_SkipsCluster(t *testing.T) {
+	const gone = "arn:aws:ecs:us-east-1:123:cluster/deleted-mid-scan"
+	const survives = "arn:aws:ecs:us-east-1:123:cluster/still-here"
+	fakeClient := &fakeECS{
+		listClustersPages: []*ecs.ListClustersOutput{{ClusterArns: []string{gone, survives}}},
+		describeClustersOut: map[string]*ecs.DescribeClustersOutput{
+			gone + "," + survives: {
+				Clusters: []ecstypes.Cluster{
+					{
+						ClusterArn:  awssdk.String(gone),
+						ClusterName: awssdk.String("deleted-mid-scan"),
+					},
+					{
+						ClusterArn:  awssdk.String(survives),
+						ClusterName: awssdk.String("still-here"),
+						Status:      awssdk.String("ACTIVE"),
+						Settings: []ecstypes.ClusterSetting{
+							{Name: ecstypes.ClusterSettingNameContainerInsights, Value: awssdk.String("enabled")},
+						},
+					},
+				},
+				Failures: []ecstypes.Failure{
+					{Arn: awssdk.String(gone), Reason: awssdk.String("MISSING")},
+				},
+			},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v (per-cluster MISSING failure should not break the walk)", err)
+	}
+	if r.Partial {
+		t.Errorf("Partial = true; per-cluster MISSING is a race, not a walk failure")
+	}
+	if len(r.ECSClusters) != 1 {
+		t.Fatalf("ECSClusters = %d, want 1 (the deleted cluster is skipped)", len(r.ECSClusters))
+	}
+	if r.ECSClusters[0].Name != "still-here" {
+		t.Errorf("survivor name = %q, want still-here", r.ECSClusters[0].Name)
+	}
+}
+
+// TestExpandECSCluster_ListTagsForResourceAccessDenied_FallsBackToInlineTags
+// pins the defensive fallback path: when DescribeClusters returned
+// tags inline, the scanner uses those tags directly and does NOT
+// fall through to ListTagsForResource — so an AccessDenied on
+// ecs:ListTagsForResource never matters. The test wires
+// DescribeClusters to return tags + wires ListTagsForResource to
+// fail with AccessDenied; the cluster row still surfaces with the
+// inline tags intact, proving the tag-fallback is truly defensive.
+func TestExpandECSCluster_ListTagsForResourceAccessDenied_FallsBackToInlineTags(t *testing.T) {
+	const name = "prod"
+	const arn = "arn:aws:ecs:us-east-1:123:cluster/prod"
+	fakeClient := &fakeECS{
+		listClustersPages: []*ecs.ListClustersOutput{{ClusterArns: []string{arn}}},
+		describeClustersOut: map[string]*ecs.DescribeClustersOutput{
+			arn: {
+				Clusters: []ecstypes.Cluster{
+					{
+						ClusterArn:  awssdk.String(arn),
+						ClusterName: awssdk.String(name),
+						Status:      awssdk.String("ACTIVE"),
+						Settings: []ecstypes.ClusterSetting{
+							{Name: ecstypes.ClusterSettingNameContainerInsights, Value: awssdk.String("enabled")},
+						},
+						Tags: []ecstypes.Tag{
+							{Key: awssdk.String("Owner"), Value: awssdk.String("platform")},
+						},
+					},
+				},
+			},
+		},
+		// Defensive: even though DescribeClusters surfaces tags
+		// directly, wire ListTagsForResource to AccessDenied so a
+		// regression (the scanner re-calling LT4R unnecessarily)
+		// would surface as a failure here.
+		tagsErr: &apiErr{code: "AccessDeniedException", msg: "ecs:ListTagsForResource denied"},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v (inline tags should remove the need for ListTagsForResource)", err)
+	}
+	if r.Partial {
+		t.Errorf("Partial = true; inline tags + AccessDenied on the unused fallback should NOT mark the scan partial")
+	}
+	if len(r.ECSClusters) != 1 {
+		t.Fatalf("ECSClusters = %d, want 1", len(r.ECSClusters))
+	}
+	if got := r.ECSClusters[0].Tags["Owner"]; got != "platform" {
+		t.Errorf("Tags[Owner] = %q, want platform (inline tags should survive)", got)
+	}
+}
+
+// TestExpandECSCluster_NoContainerInsightsSetting_EmitsUnknownSentinel
+// pins the documented fallback path: when DescribeClusters returns
+// a cluster with no containerInsights setting at all, the scan does
+// NOT fail. The cluster is still returned; its
+// ContainerInsightsStatus is the sentinel "UNKNOWN" and
+// IsInstrumented() returns false (Squadron cannot prove coverage).
+func TestExpandECSCluster_NoContainerInsightsSetting_EmitsUnknownSentinel(t *testing.T) {
+	const name = "legacy-cluster"
+	const arn = "arn:aws:ecs:us-east-1:123:cluster/legacy-cluster"
+	fakeClient := &fakeECS{
+		listClustersPages: []*ecs.ListClustersOutput{{ClusterArns: []string{arn}}},
+		describeClustersOut: map[string]*ecs.DescribeClustersOutput{
+			arn: {
+				Clusters: []ecstypes.Cluster{
+					{
+						ClusterArn:  awssdk.String(arn),
+						ClusterName: awssdk.String(name),
+						Status:      awssdk.String("ACTIVE"),
+						// No Settings — clusters created before
+						// containerInsights existed surface without
+						// it, and policies that don't honor the
+						// SETTINGS include hint do the same.
+					},
+				},
+			},
+		},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(r.ECSClusters) != 1 {
+		t.Fatalf("ECSClusters = %d, want 1", len(r.ECSClusters))
+	}
+	got := r.ECSClusters[0]
+	if got.ContainerInsightsStatus != "UNKNOWN" {
+		t.Errorf("ContainerInsightsStatus = %q, want UNKNOWN", got.ContainerInsightsStatus)
+	}
+	if got.IsInstrumented() {
+		t.Errorf("IsInstrumented() = true, want false (UNKNOWN must not count as covered)")
+	}
+}
+
+// TestScanRegionECS_ListClustersAccessDenied_SetsPartialAndFailedServices
+// pins the failure path: when ecs:ListClusters itself is missing from
+// the policy, the per-region walk fails the way every other service
+// does — Result.Partial=true, FailedServices contains "ecs",
+// PartialReason carries the formatted explanation.
+func TestScanRegionECS_ListClustersAccessDenied_SetsPartialAndFailedServices(t *testing.T) {
+	fakeClient := &fakeECS{
+		listClustersErr: &apiErr{code: "AccessDeniedException", msg: "User cannot perform ecs:ListClusters"},
+	}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	r, err := s.Scan(context.Background(),
+		&credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}},
+		[]string{"us-east-1"})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !r.Partial {
+		t.Error("Partial = false, want true")
+	}
+	if !containsString(r.FailedServices, "ecs") {
+		t.Errorf("FailedServices = %v, want it to contain \"ecs\"", r.FailedServices)
+	}
+	if !strings.Contains(r.PartialReason, "ecs scan failed") {
+		t.Errorf("PartialReason = %q, want it to mention ecs scan failed", r.PartialReason)
+	}
+}
+
+// TestScanner_ECSPreflightAccessDenied mirrors the EKS / DynamoDB
+// preflight tests: when ListClusters returns AccessDenied, the
+// preflight row for "ecs" lands on the ValidationResult with
+// OK=false and the trust-policy step suggestion.
+func TestScanner_ECSPreflightAccessDenied(t *testing.T) {
+	fakeClient := &fakeECS{listClustersErr: &apiErr{code: "AccessDenied", msg: "User cannot perform ecs:ListClusters"}}
+	s := newTestScanner(t, &fakeFactory{ec2: &fakeEC2{}, lambda: &fakeLambda{}, ecs: fakeClient, sts: &fakeSTS{}})
+	conn := &credstore.CloudConnection{Provider: credstore.ProviderAWS, Regions: []string{"us-east-1"}}
+	vr, err := s.Validate(context.Background(), conn)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	var got *scanner.PreflightCheck
+	for i := range vr.Preflight {
+		if vr.Preflight[i].Service == "ecs" {
+			got = &vr.Preflight[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("Preflight missing \"ecs\" entry: %+v", vr.Preflight)
+	}
+	if got.OK {
+		t.Errorf("ecs preflight OK = true, want false")
+	}
+	if got.Err == nil || got.Err.SuggestedStep != "trust-policy" {
+		t.Errorf("ecs preflight Err = %+v, want SuggestedStep=trust-policy", got.Err)
 	}
 }

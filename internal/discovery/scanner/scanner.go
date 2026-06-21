@@ -23,6 +23,7 @@ package scanner
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -144,8 +145,36 @@ type Result struct {
 	// dynamodb:UpdateContributorInsights.
 	DynamoDBTables []DynamoDBTableSnapshot `json:"dynamodb_tables"`
 
+	// ECSClusters is the ECS (and future Cloud Run / AKS-style
+	// container-orchestration) cluster inventory. Added in slice 5
+	// of the universal-observation arc (v0.89.10). The proposer's
+	// recommendation surface for ECS reasons about a SINGLE-axis
+	// rule: cluster settings[name=containerInsights].value must be
+	// "enabled". Same posture as the DynamoDB slice 4 single-axis
+	// downgrade — cluster-level Container Insights is the one
+	// strong cloud-API-visible observability signal for ECS, so
+	// the rule is honest single-axis rather than inventing fake
+	// axes from task-definition sidecars or FireLens routing.
+	// Squadron emits enablement recommendations as plan steps;
+	// never executes ecs:UpdateClusterSettings.
+	//
+	// Honest task-definition-level limitation: Squadron detects
+	// cluster-level CloudWatch Container Insights. Squadron does
+	// not detect task-definition-level instrumentation — X-Ray
+	// daemon sidecars, ADOT collector sidecars, or FireLens log
+	// routing in your task definitions. If your task defs include
+	// those sidecars but the cluster does not have Container
+	// Insights enabled, Squadron will report the cluster as
+	// uninstrumented — this is a known limitation of cluster-level
+	// scanning. A future slice can extend the rule to inspect task
+	// definitions if operators request it.
+	//
+	// Both Fargate and EC2 launch types are covered by the same
+	// per-cluster rule.
+	ECSClusters []ECSClusterSnapshot `json:"ecs_clusters"`
+
 	// InstrumentedCount sums Compute+Functions+Databases+ObjectStores+
-	// LoadBalancers+Clusters+DynamoDBTables entries where
+	// LoadBalancers+Clusters+DynamoDBTables+ECSClusters entries where
 	// observability presence was detected.
 	// UninstrumentedCount is the complement. Both are denormalized so
 	// consumers don't need to recount.
@@ -175,6 +204,17 @@ type Result struct {
 	//     code. If your DynamoDB SDK is OTel-wrapped on the client
 	//     side, Squadron will report the table as uninstrumented —
 	//     this is a known limitation of cloud-API-only scanning.)
+	//   - ECSClusters: ContainerInsightsStatus == "enabled". (Slice
+	//     5 single-axis rule on cluster-level CloudWatch Container
+	//     Insights. Squadron does not detect task-definition-level
+	//     instrumentation — X-Ray daemon sidecars, ADOT collector
+	//     sidecars, or FireLens log routing in your task
+	//     definitions. If your task defs include those sidecars but
+	//     the cluster does not have Container Insights enabled,
+	//     Squadron will report the cluster as uninstrumented — this
+	//     is a known limitation of cluster-level scanning. A future
+	//     slice can extend the rule to inspect task definitions if
+	//     operators request it.)
 	InstrumentedCount   int `json:"instrumented_count"`
 	UninstrumentedCount int `json:"uninstrumented_count"`
 
@@ -629,6 +669,131 @@ func (t DynamoDBTableSnapshot) IsInstrumented() bool {
 	return t.ContributorInsightsStatus == "ENABLED"
 }
 
+// ECSClusterSnapshot is the category-typed view of an ECS cluster.
+// Provider-specific scanners populate this from ECS ListClusters +
+// DescribeClusters / Cloud Run services list / AKS clusters list.
+// The proposer reasons about cluster-level container observability
+// (CloudWatch Container Insights on AWS, the equivalent surfaces on
+// the other clouds) rather than provider-specific feature names.
+//
+// Slice 5's "instrumented" rule for ECS clusters is single-axis:
+// settings[name=containerInsights].value == "enabled". This matches
+// the DynamoDB slice 4 honest single-axis posture — cluster-level
+// Container Insights is the one strong cloud-API-visible
+// observability signal for ECS, so the rule is honest single-axis
+// rather than inventing fake axes from task-definition sidecars or
+// FireLens routing.
+//
+// Honest task-definition-level limitation (re-stated honestly):
+// Squadron detects cluster-level CloudWatch Container Insights.
+// Squadron does not detect task-definition-level instrumentation —
+// X-Ray daemon sidecars, ADOT collector sidecars, or FireLens log
+// routing in your task definitions. If your task defs include
+// those sidecars but the cluster does not have Container Insights
+// enabled, Squadron will report the cluster as uninstrumented —
+// this is a known limitation of cluster-level scanning. A future
+// slice can extend the rule to inspect task definitions if
+// operators request it.
+//
+// Both Fargate and EC2 launch types are covered by the same
+// per-cluster rule — Container Insights is per-cluster, not
+// per-launch-type.
+//
+// The ContainerInsightsStatus field carries the four AWS API
+// enum-style values plus the scanner's "UNKNOWN" sentinel: AWS
+// returns "enabled" / "disabled" / "enhanced" (the
+// enhanced-observability tier added in ECS 2024) at the cluster
+// settings layer; the scanner emits "UNKNOWN" when the
+// DescribeClusters response did not surface the
+// containerInsights setting for the cluster (typical when the
+// operator's policy granted ecs:DescribeClusters but not the
+// SETTINGS include hint at the call layer). The "instrumented"
+// rule treats only "enabled" (case-insensitive) as covered;
+// every other value (including UNKNOWN) counts as uninstrumented.
+//
+// Squadron does NOT execute ecs:UpdateClusterSettings — discovery
+// is strictly read-only; the operator runs the enablement
+// Terraform through their own IaC pipeline. Same posture as
+// RDS's PI / EM and EKS's logging / addon levers, and DynamoDB's
+// Contributor Insights lever.
+type ECSClusterSnapshot struct {
+	// Name is the operator-readable cluster name (the trailing
+	// component of the ARN). Kept separate so the UI doesn't have
+	// to parse ARNs.
+	Name string `json:"name"`
+
+	// ARN is the full Amazon Resource Name. The scanner populates
+	// the canonical identifier so the proposer's evidence list and
+	// the recommendation envelope's AffectedResources field both
+	// reference it.
+	ARN string `json:"arn"`
+
+	// Status is the provider-typed cluster status string:
+	// "ACTIVE" / "PROVISIONING" / "DEPROVISIONING" / "FAILED" /
+	// "INACTIVE". Surfaced raw so the Inventory tab can dim
+	// non-ACTIVE rows and the proposer can decline to recommend
+	// against a non-ACTIVE cluster.
+	Status string `json:"status"`
+
+	// ContainerInsightsStatus is the single observability-rule
+	// axis. AWS-style values: "enabled" / "disabled" / "enhanced".
+	// The scanner also emits the sentinel "UNKNOWN" when the
+	// DescribeClusters response did not surface the
+	// containerInsights setting for the cluster (see type godoc).
+	// The "instrumented" rule treats only "enabled"
+	// (case-insensitive) as covered; every other value (including
+	// UNKNOWN) counts as uninstrumented.
+	ContainerInsightsStatus string `json:"container_insights_status"`
+
+	// RegisteredContainerInstancesCount is the operator-visible
+	// count of EC2 container instances registered to the cluster.
+	// Surfaced informationally so the Inventory tab can hint at the
+	// launch-type mix — high counts here signal an EC2-heavy
+	// posture; zero suggests Fargate-only. The proposer's rule
+	// does not gate on it; the count is purely informational.
+	RegisteredContainerInstancesCount int `json:"registered_container_instances_count"`
+
+	// RunningTasksCount is the cluster's running-task tally
+	// (Fargate + EC2 launch types combined). Informational.
+	RunningTasksCount int `json:"running_tasks_count"`
+
+	// PendingTasksCount is the cluster's pending-task tally.
+	// Informational — a high pending count flagged alongside a
+	// disabled Container Insights status is a cluster the
+	// proposer is likely to surface first.
+	PendingTasksCount int `json:"pending_tasks_count"`
+
+	// ActiveServicesCount is the cluster's active-service tally.
+	// Informational.
+	ActiveServicesCount int `json:"active_services_count"`
+
+	// Region is where the cluster lives.
+	Region string `json:"region"`
+
+	// Tags follows the same flattened shape as the other category
+	// snapshots.
+	Tags map[string]string `json:"tags,omitempty"`
+}
+
+// IsInstrumented implements the slice 5 single-axis rule for ECS
+// clusters: a cluster counts as instrumented iff
+// ContainerInsightsStatus == "enabled" (case-insensitive — the AWS
+// SDK returns lowercase, defense-in-depth costs nothing). Every
+// other value ("disabled" / "enhanced" / UNKNOWN / empty) counts as
+// uninstrumented per the slice 5 honest rule. Note: "enhanced" is
+// the new ECS enhanced-observability tier; the slice 5 rule treats
+// it as uninstrumented because Squadron cannot prove parity with
+// the standard Container Insights signal surface from the
+// cloud-API response alone. A future slice can broaden the rule
+// to count "enhanced" as covered if operators request it.
+//
+// Kept as a method on the snapshot so the scanner-side tally, the
+// proposer-side reasoning, and the Inventory tab can all reference
+// the same predicate.
+func (c ECSClusterSnapshot) IsInstrumented() bool {
+	return strings.EqualFold(c.ContainerInsightsStatus, "enabled")
+}
+
 // FunctionRuntimeSnapshot is the category-typed view of a serverless
 // function. Provider-specific scanners populate this from Lambda
 // ListFunctions / Cloud Functions list / Azure Functions list.
@@ -683,10 +848,10 @@ type ValidationResult struct {
 // permissions.
 type PreflightCheck struct {
 	// Service is the per-service identifier: "ec2", "lambda", "rds",
-	// "s3", "alb", "eks", "dynamodb". Slice 2 added "rds"; slice 3a
-	// (v0.88.0) added "s3" and "alb"; slice 3b (v0.89.0) added
-	// "eks"; slice 4 (v0.89.6) added "dynamodb"; future slices add
-	// more.
+	// "s3", "alb", "eks", "dynamodb", "ecs". Slice 2 added "rds";
+	// slice 3a (v0.88.0) added "s3" and "alb"; slice 3b (v0.89.0)
+	// added "eks"; slice 4 (v0.89.6) added "dynamodb"; slice 5
+	// (v0.89.10) added "ecs"; future slices add more.
 	Service string `json:"service"`
 
 	// OK is true when the preflight call returned without an error.

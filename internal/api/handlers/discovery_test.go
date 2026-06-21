@@ -1016,8 +1016,9 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 	// database_count; slice 3a (v0.88.0) added object_store_count +
 	// load_balancer_count; slice 3b (v0.89.0) added cluster_count;
 	// slice 4 (v0.89.6) added dynamodb_count +
-	// instrumented_dynamodb_count. All count fields are mandatory
-	// and always present on the wire — they do NOT drop out via
+	// instrumented_dynamodb_count; slice 5 (v0.89.10) adds ecs_count
+	// + instrumented_ecs_count. All count fields are mandatory and
+	// always present on the wire — they do NOT drop out via
 	// omitempty even when the inventory is empty.
 	payloadJSON, _ := json.Marshal(completed.Payload)
 	for _, want := range []string{
@@ -1031,6 +1032,8 @@ func TestHandleAWSRunScan_HappyPath(t *testing.T) {
 		"cluster_count",
 		"dynamodb_count",
 		"instrumented_dynamodb_count",
+		"ecs_count",
+		"instrumented_ecs_count",
 		"instrumented_count",
 		"uninstrumented_count",
 		"partial",
@@ -1481,6 +1484,142 @@ func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_DynamoDB(t *t
 	}
 	if len(gotSlice) != 1 || gotSlice[0] != "dynamodb" {
 		t.Errorf("failed_services = %v, want [\"dynamodb\"]", gotSlice)
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsECSCounts pins the slice 5
+// (v0.89.10) audit-shape extension — the scan_completed event
+// payload now carries ecs_count AND instrumented_ecs_count as
+// MANDATORY fields. Both always emit (even when the inventory is
+// empty) so an operator skimming the audit log sees ECS coverage
+// alongside the other per-service counts. The two fields move
+// together — dropping either into the conditional-insert path
+// would lose the operator-visible coverage signal on happy-path
+// scans.
+func TestHandleAWSRunScan_AuditEmitsECSCounts(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+	// Three clusters: 1 enabled, 1 disabled, 1 UNKNOWN — total of
+	// 3, instrumented count of 1 (only "enabled" counts).
+	scanResult := &scanner.Result{
+		ScanID:          "test-scan-ecs-counts",
+		ScanStartedAt:   now,
+		ScanCompletedAt: now.Add(2 * time.Second),
+		Provider:        credstore.ProviderAWS,
+		AccountID:       "123456789012",
+		Regions:         []string{"us-east-1"},
+		ECSClusters: []scanner.ECSClusterSnapshot{
+			{ARN: "arn:aws:ecs:us-east-1:123:cluster/a", Name: "a", Status: "ACTIVE", ContainerInsightsStatus: "enabled", Region: "us-east-1"},
+			{ARN: "arn:aws:ecs:us-east-1:123:cluster/b", Name: "b", Status: "ACTIVE", ContainerInsightsStatus: "disabled", Region: "us-east-1"},
+			{ARN: "arn:aws:ecs:us-east-1:123:cluster/c", Name: "c", Status: "ACTIVE", ContainerInsightsStatus: "UNKNOWN", Region: "us-east-1"},
+		},
+		InstrumentedCount:   1,
+		UninstrumentedCount: 2,
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	completed := audit.entries[1]
+	if completed.EventType != "discovery.aws.scan_completed" {
+		t.Fatalf("entry[1].event_type = %q", completed.EventType)
+	}
+	gotEC, ok := completed.Payload["ecs_count"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing ecs_count key: %+v", completed.Payload)
+	}
+	if got, _ := gotEC.(int); got != 3 {
+		t.Errorf("ecs_count = %v, want 3", gotEC)
+	}
+	gotIEC, ok := completed.Payload["instrumented_ecs_count"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing instrumented_ecs_count key: %+v", completed.Payload)
+	}
+	if got, _ := gotIEC.(int); got != 1 {
+		t.Errorf("instrumented_ecs_count = %v, want 1 (only \"enabled\" counts)", gotIEC)
+	}
+}
+
+// TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_ECS
+// is the slice 5 (v0.89.10) ECS failure parallel to the slice 4
+// DynamoDB test. When the ecs walk fails, FailedServices carries
+// ["ecs"] and PartialReason carries the formatted explanation.
+func TestHandleAWSRunScan_AuditEmitsPartialReasonAndFailedServices_ECS(t *testing.T) {
+	now := time.Now().UTC()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		DisplayName:    "Prod AWS",
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      now,
+	}
+	store := &spyStore{getResult: conn}
+
+	scanResult := &scanner.Result{
+		ScanID:              "test-scan-partial-ecs",
+		ScanStartedAt:       now,
+		ScanCompletedAt:     now.Add(2 * time.Second),
+		Provider:            credstore.ProviderAWS,
+		AccountID:           "123456789012",
+		Regions:             []string{"us-east-1"},
+		InstrumentedCount:   0,
+		UninstrumentedCount: 0,
+		Partial:             true,
+		PartialReason:       "ecs scan failed in us-east-1: AccessDenied",
+		FailedServices:      []string{"ecs"},
+	}
+	ms := &mockScanner{result: scanResult}
+	audit := &discoveryRecordingAudit{}
+
+	h := NewDiscoveryHandlers(store, zap.NewNop())
+	h.WithAWSScannerFactory(func(c *credstore.CloudConnection) (DiscoveryScanner, error) {
+		ms.buildArgs = c
+		return ms, nil
+	})
+	h.WithAuditService(audit)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	completed := audit.entries[1]
+	gotReason, ok := completed.Payload["partial_reason"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing partial_reason key: %+v", completed.Payload)
+	}
+	if got, want := gotReason, "ecs scan failed in us-east-1: AccessDenied"; got != want {
+		t.Errorf("partial_reason = %v, want %q", got, want)
+	}
+	gotServices, ok := completed.Payload["failed_services"]
+	if !ok {
+		t.Fatalf("scan_completed payload missing failed_services key: %+v", completed.Payload)
+	}
+	gotSlice, ok := gotServices.([]string)
+	if !ok {
+		t.Fatalf("failed_services = %T (%v), want []string", gotServices, gotServices)
+	}
+	if len(gotSlice) != 1 || gotSlice[0] != "ecs" {
+		t.Errorf("failed_services = %v, want [\"ecs\"]", gotSlice)
 	}
 }
 

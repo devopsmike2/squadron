@@ -1,10 +1,11 @@
 // Static data for the v0.89.3 #603 Stream 19 Connect-IaC-repo wizard.
 //
-// The eight canonical resource_kind rows match docs/proposals/603-
+// The nine canonical resource_kind rows match docs/proposals/603-
 // connect-iac-repo.md §6 and the canonical kinds used by the proposer
 // in internal/ai/proposer_discovery.go. Slice 4 (v0.89.6) added the
-// eighth row (dynamodb-contributor-insights). The wizard pre-populates
-// the placement map with these rows; operators set per-row file paths
+// eighth row (dynamodb-contributor-insights); slice 5 (v0.89.10) added
+// the ninth (ecs-container-insights). The wizard pre-populates the
+// placement map with these rows; operators set per-row file paths
 // (or flip per-row Skip toggles for kinds they don't manage in this
 // repo).
 //
@@ -86,6 +87,25 @@ export const IAC_GITHUB_PLACEMENT_KINDS: PlacementKindRow[] = [
     display_name: "DynamoDB Contributor Insights",
     description:
       "Enables CloudWatch Contributor Insights on DynamoDB tables to surface top-accessed keys and most-throttled keys.",
+  },
+  {
+    // Slice 5 (v0.89.10) — ECS / Fargate Container Insights.
+    // Single-axis observability rule per the proposer prompt: a
+    // cluster is covered iff container_insights_status == "enabled"
+    // (case-insensitive against the cluster's
+    // settings[name=containerInsights].value). Both Fargate and EC2
+    // launch types covered by the same per-cluster rule — Container
+    // Insights is per-cluster, not per-launch-type. The proposer's
+    // Terraform shape per uncovered cluster is
+    // resource "aws_ecs_cluster" "<cluster_name>" {
+    //   name = "<cluster_name>"
+    //   setting { name = "containerInsights" value = "enabled" }
+    // } — placement lands in the operator-declared file path.
+    provider: "aws",
+    resource_kind: "ecs-container-insights",
+    display_name: "ECS / Fargate Container Insights",
+    description:
+      "Enables CloudWatch Container Insights on ECS clusters to surface task and service metrics.",
   },
 ];
 

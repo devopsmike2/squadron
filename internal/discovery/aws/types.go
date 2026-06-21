@@ -6,6 +6,7 @@ package aws
 import (
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -49,3 +50,16 @@ type eksAddon = ekstypes.Addon
 // DescribeTable response carries a *TableDescription field), so
 // the alias mirrors what the scanner mapper actually receives.
 type dynamoDBTable = dynamodbtypes.TableDescription
+
+// ecsCluster + ecsClusterFailure are the slice 5 (v0.89.10)
+// additions. Same alias rationale: keep mapper signatures readable
+// without leaking the SDK's nested package paths. AWS exposes the
+// per-cluster describe response behind types.Cluster (the
+// DescribeClusters response carries a []Cluster slice) and the
+// race-against-deletion failure shape behind types.Failure (the
+// DescribeClusters response carries a []Failure slice — entries
+// here flag clusters that disappeared between ListClusters and
+// DescribeClusters).
+type ecsCluster = ecstypes.Cluster
+
+type ecsClusterFailure = ecstypes.Failure

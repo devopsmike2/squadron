@@ -179,7 +179,41 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`(dynamodb:ListTables + dynamodb:DescribeTable + ` +
 	`dynamodb:DescribeContributorInsights + dynamodb:ListTagsOfResource). Each ` +
 	`DynamoDB plan step's inline_config_snippet is Terraform the operator runs ` +
-	`through their own IaC pipeline.` + "\n\n" +
+	`through their own IaC pipeline.` + "\n" +
+	`  - ECS clusters: the single observability lever is CLUSTER-LEVEL CONTAINER ` +
+	`INSIGHTS — CloudWatch Container Insights surfaces per-cluster task and ` +
+	`service metrics. A cluster is covered when container_insights_status == ` +
+	`"enabled" (case-insensitive against the cluster's ` +
+	`settings[name=containerInsights].value); every other value ("disabled", ` +
+	`"enhanced", and the scanner's "UNKNOWN" sentinel) counts as uncovered. This ` +
+	`is a SINGLE-axis rule — matching the DynamoDB slice 4 honest single-axis ` +
+	`posture rather than inventing fake axes from task-definition sidecars or ` +
+	`FireLens routing. Both Fargate and EC2 launch types are covered by the same ` +
+	`per-cluster rule — Container Insights is per-cluster, not per-launch-type. ` +
+	`When uncovered, recommend enabling — group multiple uncovered clusters INTO ` +
+	`ONE plan step (each cluster is its own Terraform target, but the snippet ` +
+	`emits one aws_ecs_cluster resource block per cluster with the ` +
+	`containerInsights setting inside the same step so the operator's PR review ` +
+	`covers the whole batch). A typical recommendation reads: "Enable Container ` +
+	`Insights on {cluster-list}". The Terraform shape per cluster is: ` +
+	`resource "aws_ecs_cluster" "<cluster_name>" { name = "<cluster_name>" ` +
+	`setting { name = "containerInsights" value = "enabled" } }. ` +
+	`Task-definition-level limitation (state this in the reasoning when ` +
+	`relevant): Squadron detects cluster-level CloudWatch Container Insights. ` +
+	`Squadron does NOT detect task-definition-level instrumentation — X-Ray ` +
+	`daemon sidecars, ADOT collector sidecars, or FireLens log routing in your ` +
+	`task definitions. If the operator's task defs include those sidecars but ` +
+	`the cluster does NOT have Container Insights enabled, Squadron reports the ` +
+	`cluster as uninstrumented — this is a known limitation of cluster-level ` +
+	`scanning, and the operator can decline an enablement recommendation when ` +
+	`their task-def sidecars cover the same surface. A future slice can extend ` +
+	`the rule to inspect task definitions if operators request it. When a ` +
+	`cluster's status is "UNKNOWN" (the scanner's fallback sentinel), hedge: ` +
+	`recommend the operator apply the enablement snippet and let the next scan ` +
+	`confirm. SQUADRON DOES NOT EXECUTE ecs:UpdateClusterSettings. The discovery ` +
+	`IAM policy is read-only (ecs:ListClusters + ecs:DescribeClusters + ` +
+	`ecs:ListTagsForResource). Each ECS plan step's inline_config_snippet is ` +
+	`Terraform the operator runs through their own IaC pipeline.` + "\n\n" +
 
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
@@ -502,6 +536,37 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	if len(in.DynamoDBTables) > len(dbsample) {
 		fmt.Fprintf(&b, "  ... and %d more\n", len(in.DynamoDBTables)-len(dbsample))
+	}
+	b.WriteString("\n")
+
+	// ECS clusters. Slice 5 (v0.89.10) — same sampling rule. Render
+	// the single instrumented-rule axis (container_insights_status)
+	// explicitly because the proposer's per-row reasoning keys off
+	// the three AWS-side values ("enabled" / "disabled" / "enhanced")
+	// plus the scanner's "UNKNOWN" sentinel. The "covered" /
+	// "uncovered" / "unknown" shorthand matches the prompt body's
+	// instructions. Task / service counts surface alongside so the
+	// prompt body's hedging language ("high-throughput cluster" /
+	// "disabled with non-trivial RunningTasksCount") has the signal
+	// to bind to.
+	fmt.Fprintf(&b, "ECS clusters (%d total):\n", len(in.ECSClusters))
+	ecssample := in.ECSClusters
+	if len(ecssample) > 20 {
+		ecssample = ecssample[:20]
+	}
+	for _, c := range ecssample {
+		coverage := "uncovered"
+		if strings.EqualFold(c.ContainerInsightsStatus, "enabled") {
+			coverage = "covered"
+		} else if strings.EqualFold(c.ContainerInsightsStatus, "UNKNOWN") {
+			coverage = "unknown"
+		}
+		fmt.Fprintf(&b, "  - %s (name=%s, region=%s, status=%s, ci=%s, running_tasks=%d, services=%d, %s)\n",
+			c.ARN, c.Name, c.Region, c.Status, c.ContainerInsightsStatus,
+			c.RunningTasksCount, c.ActiveServicesCount, coverage)
+	}
+	if len(in.ECSClusters) > len(ecssample) {
+		fmt.Fprintf(&b, "  ... and %d more\n", len(in.ECSClusters)-len(ecssample))
 	}
 	b.WriteString("\n")
 

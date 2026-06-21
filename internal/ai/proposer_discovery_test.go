@@ -687,6 +687,116 @@ func TestProposeFromDiscoveryScanSystemPrompt_TeachesDynamoDBRule(t *testing.T) 
 	}
 }
 
+// TestProposeFromDiscoveryScan_ECSValidation pins the slice 5
+// (v0.89.10) pre-call validator on ECSClusterCandidate rows. A row
+// missing arn or name is a converter bug; the proposer cites them
+// back via the evidence array. ContainerInsightsStatus is NOT
+// enforced because the "uncovered" signal IS an
+// empty-or-non-"enabled" status; the validator only enforces
+// identifier fields. Mirrors the slice 4 DynamoDB validator.
+func TestProposeFromDiscoveryScan_ECSValidation(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	t.Run("missing arn is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.ECSClusters = []ECSClusterCandidate{{Name: "x"}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "arn")
+	})
+	t.Run("missing name is rejected", func(t *testing.T) {
+		ctx := discoveryContextForTest()
+		ctx.ECSClusters = []ECSClusterCandidate{{
+			ARN: "arn:aws:ecs:us-east-1:123:cluster/x",
+		}}
+		_, err := svc.ProposeFromDiscoveryScan(context.Background(), ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "name")
+	})
+}
+
+// TestBuildDiscoveryUserMessage_ECSClusters verifies the slice 5
+// user-prompt builder threads each ECSClusterCandidate field into
+// the rendered message body and emits the three-state coverage
+// shorthand the prompt body teaches (covered / uncovered / unknown
+// — UNKNOWN for the scanner's fallback). Pins the rule rendering so
+// a future prompt edit can't silently regress the framing.
+func TestBuildDiscoveryUserMessage_ECSClusters(t *testing.T) {
+	ctx := discoveryContextForTest()
+	ctx.ECSClusters = []ECSClusterCandidate{
+		{
+			ARN:                     "arn:aws:ecs:us-east-1:123:cluster/prod",
+			Name:                    "prod",
+			Status:                  "ACTIVE",
+			ContainerInsightsStatus: "enabled",
+			RunningTasksCount:       42,
+			ActiveServicesCount:     7,
+			Region:                  "us-east-1",
+		},
+		{
+			ARN:                     "arn:aws:ecs:us-east-1:123:cluster/staging",
+			Name:                    "staging",
+			Status:                  "ACTIVE",
+			ContainerInsightsStatus: "disabled",
+			RunningTasksCount:       4,
+			ActiveServicesCount:     1,
+			Region:                  "us-east-1",
+		},
+		{
+			ARN:                     "arn:aws:ecs:us-east-1:123:cluster/legacy",
+			Name:                    "legacy",
+			Status:                  "ACTIVE",
+			ContainerInsightsStatus: "UNKNOWN",
+			Region:                  "us-east-1",
+		},
+	}
+	got := buildDiscoveryUserMessage(*ctx)
+	assert.Contains(t, got, "ECS clusters (3 total):")
+	assert.Contains(t, got, "prod")
+	assert.Contains(t, got, "staging")
+	assert.Contains(t, got, "legacy")
+	assert.Contains(t, got, "ci=enabled")
+	assert.Contains(t, got, "ci=disabled")
+	assert.Contains(t, got, "ci=UNKNOWN")
+	assert.Contains(t, got, "covered")
+	assert.Contains(t, got, "uncovered")
+	assert.Contains(t, got, "unknown")
+}
+
+// TestProposeFromDiscoveryScanSystemPrompt_TeachesECSRule pins the
+// slice 5 (v0.89.10) prompt extension: the system message must
+// teach the model the single-axis rule on cluster-level Container
+// Insights AND the resource_kind name AND the canonical Terraform
+// shape AND the task-definition-level limitation. A regression
+// that drops any of these is silently an "ECS recommendations
+// don't ship" failure mode in production.
+func TestProposeFromDiscoveryScanSystemPrompt_TeachesECSRule(t *testing.T) {
+	for _, want := range []string{
+		"CLUSTER-LEVEL CONTAINER",
+		"container_insights_status",
+		`"enabled"`,
+		"aws_ecs_cluster",
+		"containerInsights",
+		// Task-definition-level limitation must appear so the
+		// model can hedge in its reasoning.
+		"task-definition-level",
+		"X-Ray daemon",
+		"FireLens",
+		"cluster-level scanning",
+		// Both launch types covered by the same per-cluster rule.
+		"Fargate and EC2 launch types",
+		// The three-action IAM list is named so the model knows
+		// what's read-only.
+		"ecs:ListClusters",
+		"ecs:DescribeClusters",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt should teach ECS rule: %q", want)
+	}
+}
+
 // TestBuildDiscoveryUserMessage_Clusters verifies the slice 3b
 // user-prompt builder threads each ClusterCandidate field into the
 // rendered message body and emits the four-corner coverage
