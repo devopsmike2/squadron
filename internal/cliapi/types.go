@@ -272,3 +272,148 @@ type CreateTokenResponse struct {
 	Token     APIToken `json:"token"`
 	Plaintext string   `json:"plaintext"`
 }
+
+// --- IaC GitHub connection wire shapes ----------------------------
+//
+// v0.89.8 (#617, Stream 22) — backfill of the CLI side for the
+// connect-IaC-repo surface that shipped in v0.89.3 → v0.89.5.
+// Field names and json tags mirror the snake_case wire used by
+// internal/api/handlers/iac_github.go; the shape mirrors the
+// TypeScript surface in ui/src/api/iacGithub.ts row-for-row.
+
+// IaCGitHubPlacementEntry is one (provider, resource_kind) →
+// file_path row of the placement map. The eight canonical kinds
+// (see ui/src/data/iacGithubWizard.ts) are the source of truth;
+// the CLI wizard pre-populates the same eight and lets operators
+// fill or skip per row.
+type IaCGitHubPlacementEntry struct {
+	Provider     string `json:"provider"`
+	ResourceKind string `json:"resource_kind"`
+	FilePath     string `json:"file_path"`
+}
+
+// IaCGitHubConnection is one row of GET /api/v1/iac/github/connections.
+// Mirrors the handler's iacGitHubConnectionRow shape.
+type IaCGitHubConnection struct {
+	ConnectionID       string                    `json:"connection_id"`
+	Provider           string                    `json:"provider"`
+	AuthKind           string                    `json:"auth_kind"`
+	RepoFullName       string                    `json:"repo_full_name"`
+	DefaultBranch      string                    `json:"default_branch"`
+	RepoLayout         string                    `json:"repo_layout"`
+	BranchPrefix       string                    `json:"branch_prefix,omitempty"`
+	ReviewerTeamHandle string                    `json:"reviewer_team_handle,omitempty"`
+	PlacementMap       []IaCGitHubPlacementEntry `json:"placement_map"`
+	CreatedAt          time.Time                 `json:"created_at"`
+}
+
+// ListIaCGitHubConnectionsResponse is the wire shape for
+// GET /api/v1/iac/github/connections.
+type ListIaCGitHubConnectionsResponse struct {
+	Connections []IaCGitHubConnection `json:"connections"`
+}
+
+// IaCGitHubValidateRequest is POST /api/v1/iac/github/validate body.
+// Token is the GitHub PAT; the server never persists it on this call
+// — validate is dry-run for the same wire shape SaveConnection uses.
+type IaCGitHubValidateRequest struct {
+	Token         string                    `json:"token"`
+	RepoFullName  string                    `json:"repo_full_name"`
+	DefaultBranch string                    `json:"default_branch,omitempty"`
+	PlacementMap  []IaCGitHubPlacementEntry `json:"placement_map"`
+}
+
+// IaCGitHubPreflightResult is one row of the validate response. Err
+// is non-nil iff the per-row check failed (path not reachable, file
+// missing on a non-default branch, etc); zero value means OK.
+type IaCGitHubPreflightResult struct {
+	Provider     string             `json:"provider"`
+	ResourceKind string             `json:"resource_kind"`
+	FilePath     string             `json:"file_path"`
+	Exists       bool               `json:"exists"`
+	ShaShort     string             `json:"sha_short,omitempty"`
+	Err          *IaCHumanizedError `json:"err,omitempty"`
+}
+
+// IaCGitHubValidateResponse is POST /api/v1/iac/github/validate body.
+// RepoErr is set when the validate failed at the repo-level (auth,
+// 404, rate limit) before any per-row preflight ran.
+type IaCGitHubValidateResponse struct {
+	RepoFullName     string                     `json:"repo_full_name"`
+	DefaultBranch    string                     `json:"default_branch"`
+	RepoErr          *IaCHumanizedError         `json:"repo_err,omitempty"`
+	PreflightResults []IaCGitHubPreflightResult `json:"preflight_results"`
+	Errors           []IaCHumanizedError        `json:"errors,omitempty"`
+}
+
+// IaCGitHubSaveConnectionRequest is POST /api/v1/iac/github/connections
+// body. Same Token + PlacementMap shape as validate, plus the
+// persistence-only fields (RepoLayout, BranchPrefix, ReviewerTeamHandle).
+type IaCGitHubSaveConnectionRequest struct {
+	Token              string                    `json:"token"`
+	RepoFullName       string                    `json:"repo_full_name"`
+	DefaultBranch      string                    `json:"default_branch,omitempty"`
+	RepoLayout         string                    `json:"repo_layout"`
+	BranchPrefix       string                    `json:"branch_prefix,omitempty"`
+	ReviewerTeamHandle string                    `json:"reviewer_team_handle,omitempty"`
+	PlacementMap       []IaCGitHubPlacementEntry `json:"placement_map"`
+}
+
+// IaCGitHubSaveConnectionResponse is the success body of
+// POST /api/v1/iac/github/connections.
+type IaCGitHubSaveConnectionResponse struct {
+	ConnectionID string `json:"connection_id"`
+	RepoFullName string `json:"repo_full_name"`
+	Status       string `json:"status"`
+}
+
+// IaCHumanizedError mirrors scanner.HumanizedError on the wire. The
+// IaC handlers wrap it in gin.H{"error": HumanizedError}; the cliapi
+// Client recognises that envelope on non-2xx and surfaces the
+// message + suggested_step + doc_link to the operator.
+type IaCHumanizedError struct {
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+	SuggestedStep string `json:"suggested_step,omitempty"`
+	DocLink       string `json:"doc_link,omitempty"`
+}
+
+// --- AWS scan-all wire shapes -------------------------------------
+//
+// v0.89.7a (#616, Stream 21) added the multi-account scan-all
+// endpoint. v0.89.8 surfaces it on the CLI as
+// `squadronctl discovery aws scan-all`. Fields mirror
+// internal/api/handlers/discovery.go's awsScanAllResponse row-for-row.
+
+// AWSScanAllAccountRow is one succeeded-account row of the
+// scan-all response.
+type AWSScanAllAccountRow struct {
+	AccountID           string `json:"account_id"`
+	ScanID              string `json:"scan_id"`
+	ResourceCount       int    `json:"resource_count"`
+	InstrumentedCount   int    `json:"instrumented_count"`
+	UninstrumentedCount int    `json:"uninstrumented_count"`
+}
+
+// AWSScanAllFailureRow is one failed-account row. ErrorCode is the
+// stable identifier callers can branch on; HumanizedMessage is the
+// operator-facing prose. Neither field ever carries credential bytes.
+type AWSScanAllFailureRow struct {
+	AccountID        string `json:"account_id"`
+	ErrorCode        string `json:"error_code"`
+	HumanizedMessage string `json:"humanized_message"`
+}
+
+// AWSScanAllResponse is the wire shape returned by
+// POST /api/v1/discovery/aws/scan-all.
+type AWSScanAllResponse struct {
+	ScanAllID           string                 `json:"scan_all_id"`
+	TotalAccounts       int                    `json:"total_accounts"`
+	SucceededAccounts   []AWSScanAllAccountRow `json:"succeeded_accounts"`
+	FailedAccounts      []AWSScanAllFailureRow `json:"failed_accounts"`
+	TotalResources      int                    `json:"total_resources"`
+	TotalInstrumented   int                    `json:"total_instrumented"`
+	TotalUninstrumented int                    `json:"total_uninstrumented"`
+	Partial             bool                   `json:"partial"`
+	Concurrency         int                    `json:"concurrency"`
+}

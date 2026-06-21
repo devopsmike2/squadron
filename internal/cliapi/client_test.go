@@ -218,3 +218,27 @@ func TestClient_204NoBody(t *testing.T) {
 	err := c.Do(context.Background(), http.MethodPost, "/api/v1/auth/tokens/x/revoke", nil, nil, &out)
 	assert.NoError(t, err)
 }
+
+func TestClient_HumanizedErrorEnvelopeDecodesIntoAPIError(t *testing.T) {
+	// v0.89.8 — the IaC GitHub handlers (v0.89.3+) and the AWS
+	// scan-all handler (v0.89.7a) return the humanized envelope
+	// {"error": {"code","message","suggested_step","doc_link"}}.
+	// Decode it into the same APIError type the legacy handlers
+	// use so command-layer callers only handle one error type.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"NoConnections","message":"no AWS connections registered","suggested_step":"connect an AWS account first","doc_link":"https://docs/aws"}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	err := c.Do(context.Background(), http.MethodPost, "/api/v1/discovery/aws/scan-all", nil, nil, nil)
+	require.Error(t, err)
+	apiErr, ok := err.(*APIError)
+	require.True(t, ok, "expected *APIError; got %T", err)
+	assert.Equal(t, http.StatusBadRequest, apiErr.Status)
+	assert.Equal(t, "NoConnections", apiErr.Code)
+	assert.Equal(t, "no AWS connections registered", apiErr.Detail)
+	assert.Equal(t, "connect an AWS account first", apiErr.SuggestedStep)
+	assert.Equal(t, "https://docs/aws", apiErr.DocLink)
+}

@@ -72,10 +72,30 @@ func New(baseURL, token string) *Client {
 // APIError is the structured error returned by Squadron handlers. The
 // HTTP status is preserved on Status so callers can map specific codes
 // to specific exit codes (e.g. 401 → "set SQUADRON_TOKEN").
+//
+// Squadron currently uses two error envelope shapes on the wire:
+//
+//  1. {"error": "<code>", "detail": "<prose>"} — legacy shape used
+//     by the pre-v0.89 handlers (rollouts, configs, audit, auth).
+//     Code → APIError.Code, Detail → APIError.Detail.
+//
+//  2. {"error": {"code": "...", "message": "...", "suggested_step":
+//     "...", "doc_link": "..."}} — the humanized shape used by the
+//     IaC GitHub handlers (v0.89.3+) and the AWS discovery handlers.
+//     Decoded into the same APIError fields: Code → code, Detail →
+//     message; the SuggestedStep and DocLink hints are preserved so
+//     the command layer can render them on a follow-up line.
+//
+// Both shapes funnel into the same APIError so callers only have
+// to handle one error type. The command layer reads SuggestedStep /
+// DocLink when they're set and renders the extra lines; older
+// callers just see Code + Detail and behave unchanged.
 type APIError struct {
-	Status int    `json:"-"`
-	Code   string `json:"error"`
-	Detail string `json:"detail,omitempty"`
+	Status        int    `json:"-"`
+	Code          string `json:"error"`
+	Detail        string `json:"detail,omitempty"`
+	SuggestedStep string `json:"-"`
+	DocLink       string `json:"-"`
 }
 
 func (e *APIError) Error() string {
@@ -83,6 +103,45 @@ func (e *APIError) Error() string {
 		return fmt.Sprintf("%s: %s", e.Code, e.Detail)
 	}
 	return e.Code
+}
+
+// humanizedErrorEnvelope is the v0.89.3+ wire shape used by the IaC
+// and discovery handlers. Kept as a package-private type so the
+// command layer never sees it directly — it's funneled into APIError
+// on decode.
+type humanizedErrorEnvelope struct {
+	Error struct {
+		Code          string `json:"code"`
+		Message       string `json:"message"`
+		SuggestedStep string `json:"suggested_step,omitempty"`
+		DocLink       string `json:"doc_link,omitempty"`
+	} `json:"error"`
+}
+
+// decodeErrorBody tries the legacy {"error":"code","detail":"prose"}
+// shape first; on failure (the IaC handlers wrap the error in an
+// object, which can't decode into a string field), tries the
+// humanized envelope. The first decode to populate a non-empty Code
+// wins; if both miss, the caller's fallback path (raw body as
+// Detail) kicks in.
+func decodeErrorBody(status int, body []byte) *APIError {
+	apiErr := &APIError{Status: status}
+	if err := json.Unmarshal(body, apiErr); err == nil && apiErr.Code != "" {
+		return apiErr
+	}
+	// Reset Code/Detail in case the legacy unmarshal half-filled
+	// the struct before failing.
+	apiErr.Code = ""
+	apiErr.Detail = ""
+	var humanized humanizedErrorEnvelope
+	if err := json.Unmarshal(body, &humanized); err == nil && humanized.Error.Code != "" {
+		apiErr.Code = humanized.Error.Code
+		apiErr.Detail = humanized.Error.Message
+		apiErr.SuggestedStep = humanized.Error.SuggestedStep
+		apiErr.DocLink = humanized.Error.DocLink
+		return apiErr
+	}
+	return apiErr
 }
 
 // Is401 reports whether an error is a 401 Unauthorized. Used by the
@@ -146,11 +205,12 @@ func (c *Client) Do(ctx context.Context, method, path string, query url.Values, 
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 400 {
-		apiErr := &APIError{Status: resp.StatusCode}
-		// Try to parse the structured error body; fall back to the
-		// raw payload as Detail if the server returned something
-		// non-JSON (e.g. a panic recovery page).
-		if jsonErr := json.Unmarshal(respBody, apiErr); jsonErr != nil || apiErr.Code == "" {
+		// decodeErrorBody tries both the legacy and humanized
+		// envelopes before giving up. Fall back to the raw payload
+		// as Detail if both shapes miss (the server returned
+		// something non-JSON — proxy 502, panic recovery page, etc).
+		apiErr := decodeErrorBody(resp.StatusCode, respBody)
+		if apiErr.Code == "" {
 			apiErr.Code = http.StatusText(resp.StatusCode)
 			if len(respBody) > 0 && len(respBody) < 500 {
 				apiErr.Detail = strings.TrimSpace(string(respBody))
