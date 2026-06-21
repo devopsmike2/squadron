@@ -35,6 +35,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
@@ -689,6 +690,21 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 				apiServer.SetDiscoveryCredKey(credKey)
 				logger.Info("discovery credstore wired", zap.String("path", credDBPath))
 			}
+		}
+
+		// v0.89.3 Stream 19 (#603) — Connect IaC repo substrate.
+		// Shares the same SQUADRON_SECRETS_KEY as the credstore
+		// above (the GitHub PAT is sealed by the same Key the AWS
+		// credentials use). The data lives in a separate SQLite DB
+		// (iacconnstore.db) so an operator wiping IaC connections
+		// does not touch the credstore.
+		iacDBPath := filepath.Join(filepath.Dir(config.Storage.App.Path), "iacconnstore.db")
+		iacStore, ierr := iacconnstore.NewSQLiteStore(iacconnstore.Config{DBPath: iacDBPath, Logger: logger})
+		if ierr != nil {
+			logger.Warn("iac connection substrate: NewSQLiteStore failed; IaC connect disabled", zap.Error(ierr))
+		} else {
+			apiServer.SetIaCConnStore(iacStore)
+			logger.Info("iac connection substrate wired", zap.String("path", iacDBPath))
 		}
 	}
 

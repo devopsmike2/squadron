@@ -94,16 +94,16 @@ const (
 // that makes sense — but having stable constants for the common ones makes
 // search and UI filtering reliable.
 const (
-	AuditEventAgentRegistered    = "agent.registered"
-	AuditEventAgentDriftSynced   = "agent.drift.synced"
-	AuditEventAgentDriftDrifted  = "agent.drift.drifted"
-	AuditEventConfigStored       = "config.stored"
-	AuditEventConfigApplied      = "config.applied"
-	AuditEventAlertRuleCreated   = "alert_rule.created"
-	AuditEventAlertRuleUpdated   = "alert_rule.updated"
-	AuditEventAlertRuleDeleted   = "alert_rule.deleted"
-	AuditEventAlertFired         = "alert.fired"
-	AuditEventAlertResolved      = "alert.resolved"
+	AuditEventAgentRegistered   = "agent.registered"
+	AuditEventAgentDriftSynced  = "agent.drift.synced"
+	AuditEventAgentDriftDrifted = "agent.drift.drifted"
+	AuditEventConfigStored      = "config.stored"
+	AuditEventConfigApplied     = "config.applied"
+	AuditEventAlertRuleCreated  = "alert_rule.created"
+	AuditEventAlertRuleUpdated  = "alert_rule.updated"
+	AuditEventAlertRuleDeleted  = "alert_rule.deleted"
+	AuditEventAlertFired        = "alert.fired"
+	AuditEventAlertResolved     = "alert.resolved"
 
 	// Action runner lifecycle. action.dispatched fires when Squadron
 	// signs a request and writes it as pending. action.executed and
@@ -121,8 +121,8 @@ const (
 	// fires when the model returned declined=true so the timeline
 	// shows Squadron looked at the action even when no ticket was
 	// produced.
-	AuditEventIncidentDrafted        = "incident.drafted"
-	AuditEventIncidentDraftDeclined  = "incident.draft_declined"
+	AuditEventIncidentDrafted       = "incident.drafted"
+	AuditEventIncidentDraftDeclined = "incident.draft_declined"
 
 	// AI proposer lifecycle. proposal.created and proposal.declined
 	// fire from the bridge when the LLM actually produced a verdict.
@@ -135,4 +135,30 @@ const (
 	AuditEventProposalCreated  = "proposal.created"
 	AuditEventProposalDeclined = "proposal.declined"
 	AuditEventProposalSkipped  = "proposal.skipped"
+
+	// v0.89.3 — Connect IaC repo (Stream 19, #603) audit events.
+	// Slice 1 ships four; the webhook-driven pr_merged / pr_closed
+	// events the design doc §8 enumerates land with slice 1.5.
+	// Payload contracts (per design doc §8) — token bytes are NEVER
+	// in any payload, snippet content is NEVER in any payload:
+	//   - iac.github.connection_created: connection_id,
+	//     repo_full_name, default_branch, auth_kind, placement_map.
+	//   - iac.github.connection_validated: repo_full_name,
+	//     default_branch, preflight_results[].
+	//   - recommendation.pr_opened: scan_id, step_idx, account_id,
+	//     repo_full_name, pr_number, pr_url, branch, commit_sha,
+	//     file_path, actor.
+	//   - recommendation.pr_open_failed: as above with error_code +
+	//     humanized_message; pr_number omitted when no PR opened.
+	AuditEventIaCGitHubConnectionCreated   = "iac.github.connection_created"
+	AuditEventIaCGitHubConnectionValidated = "iac.github.connection_validated"
+	AuditEventRecommendationPROpened       = "recommendation.pr_opened"
+	AuditEventRecommendationPROpenFailed   = "recommendation.pr_open_failed"
+
+	// Target type strings for the v0.89.3 IaC events. Used by the
+	// timeline humanizer to group connection-lifecycle events
+	// (iac.github.connection_*) separately from per-recommendation
+	// PR-lifecycle events (recommendation.pr_*).
+	AuditTargetIaCConnection     = "iac_connection"
+	AuditTargetIaCRecommendation = "iac_recommendation"
 )

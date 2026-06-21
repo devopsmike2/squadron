@@ -23,6 +23,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
@@ -109,6 +110,14 @@ type Server struct {
 	// configured" message; the rest of the discovery surface stays
 	// reachable. Wired by main.go right beside the credstore block.
 	discoveryAIService *ai.Service
+	// v0.89.3 Stream 19 — Connect IaC repo substrate. Sibling to
+	// discoveryCredStore: the IaC-connection rows live in a separate
+	// SQLite database (iacconnstore.db) but reuse the same
+	// credstore.Key for sealing the PAT. Optional at construction —
+	// when nil, the /api/v1/iac/github/* routes 503 with a clear
+	// "IaC connect not configured" message; the rest of the discovery
+	// surface stays unaffected.
+	iacConnStore iacconnstore.Store
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -401,6 +410,48 @@ func (s *Server) SetDiscoveryCredKey(key *credstore.Key) {
 // the credstore follow-up commit doesn't recur for AI.
 func (s *Server) SetDiscoveryAIService(svc *ai.Service) {
 	s.discoveryAIService = svc
+}
+
+// SetIaCConnStore wires the Stream 19 IaC-connection substrate onto
+// the API server. Optional in the same posture as SetDiscoveryCredStore:
+// a nil store leaves /api/v1/iac/github/* routes 503ing with a clear
+// message; the rest of the discovery surface stays reachable.
+//
+// The IaC connect flow reuses the credstore.Key wired by
+// SetDiscoveryCredKey to seal the GitHub PAT — Phase 2 of #609 does
+// not introduce a second secrets key. Calling SetIaCConnStore
+// without also calling SetDiscoveryCredKey leaves Save / Open-PR
+// 500ing with a "key not wired" humanized error.
+func (s *Server) SetIaCConnStore(store iacconnstore.Store) {
+	s.iacConnStore = store
+}
+
+// iacGitHubTrampoline late-binds an IaC-GitHub handler call. Mirrors
+// discoveryTrampoline: 503s when the substrate is unwired so the
+// test_server.go path stays unaffected.
+//
+// The handler is built per-request because the auditService is
+// supplied via WithAuditService and the credstore Key via
+// WithCredstoreKey — both are set on Server post-construction and the
+// trampoline picks up whatever's there at request time.
+func (s *Server) iacGitHubTrampoline(fn func(*handlers.IaCGitHubHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.iacConnStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "IaC connect is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewIaCGitHubHandlers(s.iacConnStore, s.logger)
+		if s.auditService != nil {
+			h.WithAuditService(s.auditService)
+		}
+		if s.discoveryCredKey != nil {
+			h.WithCredstoreKey(s.discoveryCredKey)
+		}
+		fn(h, c)
+	}
 }
 
 // discoveryTrampoline late-binds a discovery handler call so the
@@ -1143,6 +1194,46 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/aws/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAITrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGenerateRecommendations(c) }))
+
+		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
+		// (GitHub PAT). Validate is a test-before-commit preflight
+		// that reads the repo + each placement-map file; it emits
+		// iac.github.connection_validated for the audit timeline but
+		// creates ZERO records on the substrate side. Save persists
+		// the connection (with the PAT sealed via the credstore
+		// Key) and emits iac.github.connection_created. List returns
+		// the redacted display rows. Delete is idempotent and
+		// un-audited in slice 1 (design doc §8 enumerates four
+		// events; delete is not among them — webhook-driven
+		// pr_merged / pr_closed land in slice 1.5).
+		//
+		// Open-PR is the recommendation-tab integration point: it
+		// loads the connection, resolves the placement-map row,
+		// appends the snippet (one trailing newline, no parse) to
+		// the declared file on a new branch, opens the PR with
+		// labels per design doc §7, and emits
+		// recommendation.pr_opened / pr_open_failed. Squadron NEVER
+		// pushes the default branch — invariant enforced at both
+		// wrapper and handler layers.
+		//
+		// agents:read on Validate (same as AWS validate); agents:write
+		// on save / delete / open-pr because those mutate substrate
+		// state or write to the operator's GitHub.
+		v1.POST("/iac/github/validate",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubValidate(c) }))
+		v1.POST("/iac/github/connections",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubSaveConnection(c) }))
+		v1.GET("/iac/github/connections",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleListIaCGitHubConnections(c) }))
+		v1.DELETE("/iac/github/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleDeleteIaCGitHubConnection(c) }))
+		v1.POST("/iac/github/connections/:id/open-pr",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubOpenPR(c) }))
 
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
