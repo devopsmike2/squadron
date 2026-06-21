@@ -118,13 +118,32 @@ func TestAuditService_SinceFilter(t *testing.T) {
 	svc := NewAuditService(memory.NewStore(), nil, zap.NewNop())
 	ctx := context.Background()
 
-	// Record an event, capture a cut-off time, then record another. The
-	// since filter should return only the second one.
+	// Record event A, derive the cutoff from A's actual stored
+	// timestamp, then record event B. The Since filter should return
+	// only event B.
+	//
+	// Earlier the test captured the cutoff via time.Now() between the
+	// two Record() calls, which is racy: on low-resolution clocks
+	// (Windows is ~15ms) two consecutive time.Now() readings can
+	// return identical values, and on fast machines the two Record()
+	// timestamps and the cutoff capture can collide within a single
+	// monotonic tick. The Since filter is `>=` (inclusive), so a
+	// collision pulls A into the result and the Len==1 assertion
+	// flakes. Fixed in #583 by deriving the cutoff from A's actual
+	// stored timestamp + 1ns, which is strictly greater than A by
+	// construction. Then a 50ms sleep guarantees B's recorded
+	// timestamp is comfortably greater than the cutoff on any
+	// platform's clock granularity.
 	require.NoError(t, svc.Record(ctx, AuditEntry{
 		Actor: AuditActorSystem, EventType: "test.event", TargetType: "x", Action: "a",
 	}))
-	cutoff := time.Now().UTC()
-	time.Sleep(10 * time.Millisecond)
+
+	prior, err := svc.List(ctx, AuditEventFilter{})
+	require.NoError(t, err)
+	require.Len(t, prior, 1)
+	cutoff := prior[0].Timestamp.Add(1 * time.Nanosecond)
+
+	time.Sleep(50 * time.Millisecond)
 	require.NoError(t, svc.Record(ctx, AuditEntry{
 		Actor: AuditActorSystem, EventType: "test.event", TargetType: "x", Action: "b",
 	}))
