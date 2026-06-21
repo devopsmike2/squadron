@@ -197,6 +197,17 @@ export interface IaCGitHubOpenPRResponse {
   commit_sha: string;
   file_path: string;
   repo_full_name: string;
+  /** v0.89.11 #626 Stream 27 — slice 1.5 disposition: "new_file"
+   * when the handler wrote a sibling file (clean drop-in),
+   * "patch_existing" when the handler appended to the placement
+   * file (manual merge required). Absent on pre-v0.89.11 server
+   * responses. */
+  disposition?: "new_file" | "patch_existing" | string;
+  /** v0.89.11 #626 Stream 27 — true on patch_existing dispositions;
+   * the UI's success card mirrors this with a "Needs manual merge"
+   * marker so the operator's recall is anchored to the same
+   * language the PR title carries. */
+  manual_merge_required?: boolean;
 }
 
 // IaCGitHubOpenPRError is a typed Error subclass that preserves the

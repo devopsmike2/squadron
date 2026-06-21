@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/iac"
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -795,13 +797,24 @@ type iacGitHubOpenPRRequest struct {
 }
 
 // iacGitHubOpenPRResponse is the success-path body.
+//
+// v0.89.11 (#626 Stream 27) — slice 1.5 — extends the response with
+// the per-PR disposition. For "new_file" PRs, FilePath is the newly
+// CREATED sibling file (squadron_<resource_kind>.tf in the placement
+// file's directory) and ManualMergeRequired is false. For
+// "patch_existing" PRs, FilePath is the placement file Squadron
+// appended to and ManualMergeRequired is true — the UI's success
+// card surfaces the same "[needs manual merge]" badge the PR title
+// carries.
 type iacGitHubOpenPRResponse struct {
-	PRNumber     int    `json:"pr_number"`
-	PRURL        string `json:"pr_url"`
-	Branch       string `json:"branch"`
-	CommitSHA    string `json:"commit_sha"`
-	FilePath     string `json:"file_path"`
-	RepoFullName string `json:"repo_full_name"`
+	PRNumber            int    `json:"pr_number"`
+	PRURL               string `json:"pr_url"`
+	Branch              string `json:"branch"`
+	CommitSHA           string `json:"commit_sha"`
+	FilePath            string `json:"file_path"`
+	RepoFullName        string `json:"repo_full_name"`
+	Disposition         string `json:"disposition"`
+	ManualMergeRequired bool   `json:"manual_merge_required"`
 }
 
 // HandleIaCGitHubOpenPR — POST
@@ -1009,22 +1022,84 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 		return
 	}
 
-	// Read current file content (empty bytes on ErrFileNotFound — the
-	// file may not exist yet; PutFileContent will create it).
+	// v0.89.11 #626 Stream 27 — slice 1.5 hybrid PR disposition.
+	// The disposition for the resource_kind is a STRUCTURAL fact
+	// (per internal/iac.KindDispositions); the handler ALWAYS
+	// overrides whatever the proposer emitted. Trust-but-verify:
+	// the prompt teaches the model, the handler enforces.
+	disposition := iac.DispositionFor(req.ResourceKind)
+
+	// targetFilePath is what the PUT writes to and what shows up
+	// in the audit payload + the success response. For new_file,
+	// it's a sibling file in the placement file's directory; for
+	// patch_existing, it's the placement file itself.
+	var targetFilePath string
 	var existingContent []byte
 	var existingFileSHA string
-	fc, ferr := client.GetFileContent(ctx, owner, repo, placement.FilePath, defaultBranch)
-	switch {
-	case ferr == nil:
-		existingContent = fc.DecodedContent
-		existingFileSHA = fc.SHA
-	case errors.Is(ferr, iacgithub.ErrFileNotFound):
-		// new file — leave both empty
-	default:
-		he := humanizeGitHubErrorForOpenPR(ferr, conn.RepoFullName)
-		h.emitPROpenFailed(c.Request.Context(), conn, &req, he, "", 0)
-		c.JSON(statusForGitHubError(ferr), gin.H{"error": he})
-		return
+
+	switch disposition {
+	case iac.DispositionNewFile:
+		// new_file path: write a sibling file
+		// squadron_<resource_kind>.tf in the placement file's
+		// directory. The file MUST NOT already exist — if a prior
+		// Squadron PR for the same kind already created it (and was
+		// merged), the next Open-PR for the same kind would
+		// collide. Slice 2 will replace this with HCL-aware merge;
+		// slice 1.5 surfaces the collision as
+		// SquadronFileAlreadyExists.
+		placementDir := path.Dir(placement.FilePath)
+		if placementDir == "." {
+			placementDir = ""
+		}
+		targetFilePath = path.Join(placementDir, "squadron_"+req.ResourceKind+".tf")
+
+		// Pre-flight collision check against the default branch.
+		// GetFileContent returns ErrFileNotFound → expected (good);
+		// nil → file exists → SquadronFileAlreadyExists; other →
+		// pass through.
+		existingFC, ferr := client.GetFileContent(ctx, owner, repo, targetFilePath, defaultBranch)
+		switch {
+		case errors.Is(ferr, iacgithub.ErrFileNotFound):
+			// Good — no collision.
+		case ferr == nil && existingFC != nil:
+			he := &scanner.HumanizedError{
+				Code: "SquadronFileAlreadyExists",
+				Message: fmt.Sprintf(
+					"A previous Squadron PR already created %s in this repo. The proposer's snippet for this scan would conflict. Close the existing file's last open PR or merge it, then re-scan.",
+					targetFilePath,
+				),
+				SuggestedStep: "open-pr",
+			}
+			h.emitPROpenFailed(c.Request.Context(), conn, &req, he, "", 0)
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": he})
+			return
+		default:
+			he := humanizeGitHubErrorForOpenPR(ferr, conn.RepoFullName)
+			h.emitPROpenFailed(c.Request.Context(), conn, &req, he, "", 0)
+			c.JSON(statusForGitHubError(ferr), gin.H{"error": he})
+			return
+		}
+		// Leave existingContent / existingFileSHA empty — PUT is a
+		// create.
+
+	case iac.DispositionPatchExisting:
+		// patch_existing path: append to the placement file
+		// (slice-1 behavior). The placement file may or may not
+		// exist today.
+		targetFilePath = placement.FilePath
+		fc, ferr := client.GetFileContent(ctx, owner, repo, placement.FilePath, defaultBranch)
+		switch {
+		case ferr == nil:
+			existingContent = fc.DecodedContent
+			existingFileSHA = fc.SHA
+		case errors.Is(ferr, iacgithub.ErrFileNotFound):
+			// new file — leave both empty
+		default:
+			he := humanizeGitHubErrorForOpenPR(ferr, conn.RepoFullName)
+			h.emitPROpenFailed(c.Request.Context(), conn, &req, he, "", 0)
+			c.JSON(statusForGitHubError(ferr), gin.H{"error": he})
+			return
+		}
 	}
 
 	// Step 4: create branch off default. A typed
@@ -1039,33 +1114,67 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 		return
 	}
 
-	// Step 5: append snippet with exactly one trailing newline. The
-	// invariant: the snippet block ends in EXACTLY one '\n'. If the
-	// snippet already carries its own trailing newline we strip
-	// duplicates; if it carries none we add one.
-	finalContent := appendSnippetWithTrailingNewline(existingContent, []byte(req.Snippet))
+	// Step 5: build the file content. For patch_existing, append
+	// the snippet to existing bytes with exactly one trailing
+	// newline (slice-1 invariant). For new_file, the snippet is
+	// the entire file body — wrap it in a one-line header comment
+	// so a reviewer who opens the file alone immediately sees
+	// what produced it, and normalize to a single trailing
+	// newline.
+	var finalContent []byte
+	switch disposition {
+	case iac.DispositionNewFile:
+		finalContent = buildNewFileContent(req.ResourceKind, scanIDShort, []byte(req.Snippet))
+	case iac.DispositionPatchExisting:
+		finalContent = appendSnippetWithTrailingNewline(existingContent, []byte(req.Snippet))
+	}
 
 	// Step 6: PUT file content to new branch.
 	commitMsg := fmt.Sprintf("Squadron: instrument %s for scan %s step %d", req.ResourceKind, scanIDShort, req.StepIdx)
 	putRes, err := client.PutFileContent(ctx, iacgithub.PutFileOptions{
 		Owner:   owner,
 		Repo:    repo,
-		Path:    placement.FilePath,
+		Path:    targetFilePath,
 		Branch:  branchName,
 		Content: finalContent,
 		Message: commitMsg,
 		FileSHA: existingFileSHA,
 	})
 	if err != nil {
+		// ErrFileAlreadyExists on the new_file path is a TOCTOU
+		// surfacing of the same collision the pre-flight check
+		// would have caught — surface as SquadronFileAlreadyExists.
+		// On patch_existing the sentinel is unreachable (FileSHA
+		// is set, so the create-branch decoder doesn't fire it),
+		// but the fallback statusForGitHubError handles it.
+		if errors.Is(err, iacgithub.ErrFileAlreadyExists) && disposition == iac.DispositionNewFile {
+			he := &scanner.HumanizedError{
+				Code: "SquadronFileAlreadyExists",
+				Message: fmt.Sprintf(
+					"A previous Squadron PR already created %s in this repo. The proposer's snippet for this scan would conflict. Close the existing file's last open PR or merge it, then re-scan.",
+					targetFilePath,
+				),
+				SuggestedStep: "open-pr",
+			}
+			h.emitPROpenFailed(c.Request.Context(), conn, &req, he, branchName, 0)
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": he})
+			return
+		}
 		he := humanizeGitHubErrorForOpenPR(err, conn.RepoFullName)
 		h.emitPROpenFailed(c.Request.Context(), conn, &req, he, branchName, 0)
 		c.JSON(statusForGitHubError(err), gin.H{"error": he})
 		return
 	}
 
-	// Step 7: open PR.
+	// Step 7: open PR. patch_existing PRs carry a "[needs manual
+	// merge]" title prefix + a loud merge-warning section in the
+	// body so the operator knows the slice-1.5 disposition before
+	// they click into the PR.
 	prTitle := buildPRTitle(req.ResourceKind, len(req.AffectedResources), scanIDShort)
-	prBody := buildPRBody(req.ProposerReasoning, req.Snippet, req.AffectedResources)
+	if disposition == iac.DispositionPatchExisting {
+		prTitle = "[needs manual merge] " + prTitle
+	}
+	prBody := buildPRBody(req.ProposerReasoning, req.Snippet, req.AffectedResources, disposition, targetFilePath)
 	pr, err := client.OpenPR(ctx, iacgithub.OpenPROptions{
 		Owner: owner, Repo: repo,
 		Title: prTitle,
@@ -1080,8 +1189,14 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 		return
 	}
 
-	// Step 8: labels per design doc §7.
+	// Step 8: labels per design doc §7, plus
+	// "squadron/needs-manual-merge" for patch_existing kinds so
+	// operator's auto-merge tools (Mergify, etc.) can exclude the
+	// label.
 	labels := []string{"squadron", "squadron/" + req.ResourceKind}
+	if disposition == iac.DispositionPatchExisting {
+		labels = append(labels, "squadron/needs-manual-merge")
+	}
 	if err := client.AddLabels(ctx, owner, repo, pr.Number, labels); err != nil {
 		// Labels failing isn't a hard failure — the PR is open and
 		// the operator can label by hand. Log but don't fail the
@@ -1105,19 +1220,33 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	}
 
 	// Success audit. The snippet content is NEVER in the payload.
+	//
+	// v0.89.11 (#626 Stream 27): payload gains `disposition` and
+	// `manual_merge_required`. For new_file the `created_file_path`
+	// names the sibling file Squadron wrote; `file_path` always
+	// names the file the PR commit touches (same value as
+	// created_file_path on new_file, the placement file on
+	// patch_existing) so existing humanizers and SIEM forwarders
+	// that key off `file_path` keep working.
+	manualMergeRequired := disposition == iac.DispositionPatchExisting
 	if h.auditService != nil {
 		payload := map[string]any{
-			"scan_id":        req.ScanID,
-			"step_idx":       req.StepIdx,
-			"resource_kind":  req.ResourceKind,
-			"repo_full_name": conn.RepoFullName,
-			"pr_number":      pr.Number,
-			"pr_url":         pr.HTMLURL,
-			"branch":         branchName,
-			"commit_sha":     putRes.CommitSHA,
-			"file_path":      placement.FilePath,
-			"actor":          services.AuditActorSystem,
-			"recorded_at":    time.Now().UTC(),
+			"scan_id":               req.ScanID,
+			"step_idx":              req.StepIdx,
+			"resource_kind":         req.ResourceKind,
+			"repo_full_name":        conn.RepoFullName,
+			"pr_number":             pr.Number,
+			"pr_url":                pr.HTMLURL,
+			"branch":                branchName,
+			"commit_sha":            putRes.CommitSHA,
+			"file_path":             targetFilePath,
+			"disposition":           disposition,
+			"manual_merge_required": manualMergeRequired,
+			"actor":                 services.AuditActorSystem,
+			"recorded_at":           time.Now().UTC(),
+		}
+		if disposition == iac.DispositionNewFile {
+			payload["created_file_path"] = targetFilePath
 		}
 		if strings.TrimSpace(req.AccountID) != "" {
 			payload["account_id"] = req.AccountID
@@ -1133,12 +1262,14 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, iacGitHubOpenPRResponse{
-		PRNumber:     pr.Number,
-		PRURL:        pr.HTMLURL,
-		Branch:       branchName,
-		CommitSHA:    putRes.CommitSHA,
-		FilePath:     placement.FilePath,
-		RepoFullName: conn.RepoFullName,
+		PRNumber:            pr.Number,
+		PRURL:               pr.HTMLURL,
+		Branch:              branchName,
+		CommitSHA:           putRes.CommitSHA,
+		FilePath:            targetFilePath,
+		RepoFullName:        conn.RepoFullName,
+		Disposition:         disposition,
+		ManualMergeRequired: manualMergeRequired,
 	})
 }
 
@@ -1164,6 +1295,14 @@ func (h *IaCGitHubHandlers) emitPROpenFailed(
 		"humanized_message": he.Message,
 		"actor":             services.AuditActorSystem,
 		"recorded_at":       time.Now().UTC(),
+	}
+	// v0.89.11 #626 Stream 27: stamp the disposition Squadron WOULD
+	// HAVE used so an auditor reading a failed event can correlate
+	// against the success-event payload schema. Empty resource_kind
+	// → empty disposition (the failure pre-dates the structural
+	// lookup).
+	if req.ResourceKind != "" {
+		payload["disposition"] = iac.DispositionFor(req.ResourceKind)
 	}
 	if branch != "" {
 		payload["branch"] = branch
@@ -1284,6 +1423,8 @@ func statusForGitHubError(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, iacgithub.ErrDefaultBranchWriteRefused):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, iacgithub.ErrFileAlreadyExists):
+		return http.StatusUnprocessableEntity
 	default:
 		return http.StatusInternalServerError
 	}
@@ -1388,10 +1529,44 @@ func buildPRTitle(resourceKind string, count int, scanIDShort string) string {
 }
 
 // buildPRBody assembles the design-doc §7 PR body: proposer
-// reasoning, affected resources, the snippet in a fenced block, and
-// the orchestrator-not-executor footer.
-func buildPRBody(reasoning, snippet string, affected []string) string {
+// reasoning, affected resources, the snippet in a fenced block, the
+// disposition-aware merge-posture note, and the orchestrator-not-
+// executor footer.
+//
+// v0.89.11 (#626 Stream 27) — slice 1.5 — the disposition argument
+// drives a section above the proposed-change block:
+//
+//   - new_file: a one-line note that Squadron created the named
+//     sibling file (clean drop-in, merge-clean).
+//   - patch_existing: a loud merge-warning section calling out that
+//     terraform plan in CI will surface a duplicate-resource error
+//     until the operator hand-integrates the snippet into the
+//     existing block. Slice 2 (HCL-aware merging) will obviate this.
+func buildPRBody(reasoning, snippet string, affected []string, disposition, targetFilePath string) string {
 	var b strings.Builder
+
+	// Slice 1.5 disposition banner — runs ABOVE Why so the
+	// operator sees the merge posture before they read the
+	// rationale. For new_file, a single sentence is plenty.
+	switch disposition {
+	case "patch_existing":
+		b.WriteString("> [!WARNING]\n")
+		b.WriteString("> **Manual merge required.** Squadron appended this snippet to ")
+		b.WriteString("`" + targetFilePath + "` because it modifies an existing Terraform ")
+		b.WriteString("resource block (slice 1.5 disposition: `patch_existing`). ")
+		b.WriteString("Merging this PR as-is will cause `terraform plan` to fail with a ")
+		b.WriteString("duplicate-resource error. Hand-integrate the highlighted attributes ")
+		b.WriteString("into the existing resource block, then merge. Slice 2 (HCL-aware merging) ")
+		b.WriteString("will close out this manual step — see ")
+		b.WriteString("`docs/proposals/603-slice-2-hcl-aware-merging.md`.\n\n")
+	case "new_file":
+		b.WriteString("> [!NOTE]\n")
+		b.WriteString("> **Clean drop-in.** Squadron created a new sibling file ")
+		b.WriteString("`" + targetFilePath + "` because this snippet defines a net-new top-level ")
+		b.WriteString("Terraform resource (slice 1.5 disposition: `new_file`). No manual ")
+		b.WriteString("integration is needed — review the file and merge.\n\n")
+	}
+
 	if strings.TrimSpace(reasoning) != "" {
 		b.WriteString("## Why\n\n")
 		b.WriteString(strings.TrimSpace(reasoning))
@@ -1416,4 +1591,23 @@ func buildPRBody(reasoning, snippet string, affected []string) string {
 	b.WriteString("`terraform plan` / `apply` on merge; Squadron does not run Terraform. ")
 	b.WriteString("Squadron will not push to this branch again.\n")
 	return b.String()
+}
+
+// buildNewFileContent assembles the body of a new sibling-file write
+// for the v0.89.11 (#626 Stream 27) new_file disposition. The file
+// opens with a two-line provenance header comment so a reviewer
+// opening the file alone (outside the PR view) sees which Squadron
+// scan + resource_kind produced it. Below the header, the snippet
+// is written verbatim with exactly one trailing newline.
+func buildNewFileContent(resourceKind, scanIDShort string, snippet []byte) []byte {
+	header := fmt.Sprintf(
+		"# Authored by Squadron (resource_kind=%s, scan=%s).\n# This file is a net-new Terraform module Squadron created; merge-clean.\n\n",
+		resourceKind, scanIDShort,
+	)
+	out := make([]byte, 0, len(header)+len(snippet)+1)
+	out = append(out, header...)
+	trimmed := bytesTrimRightNewlines(snippet)
+	out = append(out, trimmed...)
+	out = append(out, '\n')
+	return out
 }

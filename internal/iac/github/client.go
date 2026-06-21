@@ -43,7 +43,7 @@ import (
 // on the operator's repo identifies Squadron's writes. The version
 // suffix tracks Squadron's release tag; bumping the suffix when a
 // slice ships is harmless — GitHub does not parse the string.
-const UserAgent = "Squadron/0.89.3 (Connect-IaC-Repo)"
+const UserAgent = "Squadron/0.89.11 (Connect-IaC-Repo)"
 
 // defaultBaseURL is the public GitHub.com API root. PATClient lets a
 // caller override it for tests (httptest.NewServer) and, in a future
@@ -86,6 +86,17 @@ var (
 	// point at a not-yet-created file, in which case PutFileContent
 	// will create it.
 	ErrFileNotFound = errors.New("github: file not found at ref")
+
+	// ErrFileAlreadyExists is returned by PutFileContent (and by
+	// the slice-1.5 CreateFile variant in the handler) when the
+	// caller asked to CREATE a file (FileSHA empty) but GitHub
+	// returned 422 because a file already exists at that path on
+	// the branch's base. v0.89.11 (#626 Stream 27) slice-1.5
+	// disposition: the handler maps this to SquadronFileAlreadyExists
+	// — the operator must close the prior open Squadron PR for the
+	// same resource_kind before re-running Open PR. Slice 2 will
+	// replace this with an HCL-aware merge.
+	ErrFileAlreadyExists = errors.New("github: file already exists at path")
 )
 
 // Repo is the projected GetRepo response the rest of this package
@@ -478,6 +489,18 @@ func (c *PATClient) PutFileContent(ctx context.Context, opts PutFileOptions) (*C
 		return nil, ErrAuthFailed
 	case http.StatusNotFound:
 		return nil, ErrRepoNotFound
+	case http.StatusUnprocessableEntity:
+		// 422 on create (FileSHA empty) almost always means a file
+		// already exists at the path. v0.89.11 (#626 Stream 27)
+		// surfaces this as a typed sentinel so the handler can
+		// map it to the slice-1.5 SquadronFileAlreadyExists humanized
+		// error. On UPDATE (FileSHA non-empty) a 422 is the
+		// "sha mismatch" / "branch protection" class — leave the
+		// generic statusError path.
+		if opts.FileSHA == "" {
+			return nil, ErrFileAlreadyExists
+		}
+		return nil, statusError("PutFileContent", resp.StatusCode)
 	default:
 		return nil, statusError("PutFileContent", resp.StatusCode)
 	}

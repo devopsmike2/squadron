@@ -123,6 +123,18 @@ export interface Recommendation {
    * NOT rendered to the operator in the recommendation card —
    * metadata for PR-text construction only. */
   affected_resources?: string[];
+  /** v0.89.11 #626 Stream 27 — slice 1.5 hybrid PR disposition.
+   * Two values:
+   *  - "new_file": the snippet defines a NET-NEW top-level
+   *    Terraform resource; the Open-PR handler writes a sibling
+   *    file (merge-clean).
+   *  - "patch_existing": the snippet modifies an EXISTING
+   *    top-level resource block; the handler appends to the
+   *    placement file and labels the PR "[needs manual merge]".
+   * The UI reads this field to render a "Needs manual merge"
+   * badge next to the Open PR button on patch_existing kinds.
+   * Empty for non-IaC recommendations. */
+  disposition?: "new_file" | "patch_existing" | string;
 }
 
 export interface RecommendationsResponse {

@@ -1008,6 +1008,32 @@ thesis-validating arc only when slice 6 ships ("no blind spots
 anywhere"). Each prior slice must work on its own merits because
 adopters will arrive at every stage.
 
+### IaC sub-arc: connect-repo + PR disposition
+
+Orthogonal to the per-cloud slicing above, the IaC handoff (how
+Squadron lands the proposer's Terraform on the operator's repo) is
+its own arc. Three slices:
+
+- **Slice 1** (#603, v0.89.3): connect a GitHub repo with PAT auth,
+  define a placement map per resource_kind, and emit append-only
+  PRs. Scope, threat model, and audit contract live in
+  [proposals/603-connect-iac-repo.md](proposals/603-connect-iac-repo.md).
+- **Slice 1.5** (#626 Stream 27, v0.89.11): per-kind structural
+  DISPOSITION routes each Open PR through either `new_file`
+  (sibling-file write, clean drop-in) or `patch_existing`
+  (append-only with a `[needs manual merge]` label). Mitigates
+  the duplicate-resource problem for 4 of 9 kinds without waiting
+  for HCL-aware merging; the remaining 5 kinds carry an explicit
+  manual-merge marker so the operator sees the friction BEFORE
+  clicking. See the per-kind table in
+  [discovery-iac-first-time-setup.md §"PR disposition"](discovery-iac-first-time-setup.md#pr-disposition--new_file-vs-patch_existing).
+- **Slice 2** (Stream 28, design landing in parallel as
+  [proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md)):
+  HCL-aware merging for the patch_existing kinds. Squadron will
+  parse the placement file, locate the existing resource block,
+  and produce a clean merge that `terraform plan` accepts on first
+  try. Slice 2 closes out the manual-merge label entirely.
+
 ## Decision points
 
 These need answers before code lands. The design surfaces them;

@@ -18,6 +18,7 @@ import (
 	awsorch "github.com/devopsmike2/squadron/internal/discovery/aws"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/iac"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -1939,6 +1940,16 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			// when the model didn't emit it — the backend's title
 			// falls back to "for 0 resources" rather than erroring.
 			AffectedResources: append([]string(nil), step.AffectedResources...),
+		}
+		// v0.89.11 #626 Stream 27 (slice 1.5): stamp the canonical
+		// disposition keyed off the classifier result. The proposer
+		// may emit step.Disposition but the handler-side
+		// classification is the authoritative one (structural fact,
+		// not a model judgment). Empty ResourceKind → empty
+		// Disposition so non-Open-PR-eligible recommendations don't
+		// carry a confusing badge.
+		if rec.ResourceKind != "" {
+			rec.Disposition = iac.DispositionFor(rec.ResourceKind)
 		}
 		recs = append(recs, rec)
 	}
