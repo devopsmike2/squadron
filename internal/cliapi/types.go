@@ -167,6 +167,15 @@ type CreatePlanResponse struct {
 	Count  int       `json:"count"`
 }
 
+// ListPlansResponse mirrors the v0.89.2 GET /api/v1/rollouts/plans
+// wire shape. Count is the length of Plans, included so CI scripts
+// can pick it off without recounting. v0.89.2 (#554, backfill of
+// the v0.77 squadronctl plans subcommand).
+type ListPlansResponse struct {
+	Plans []Plan `json:"plans"`
+	Count int    `json:"count"`
+}
+
 // RolloutTemplate mirrors the /rollout-recipes/templates response.
 type RolloutTemplate struct {
 	ID            string               `json:"id"`

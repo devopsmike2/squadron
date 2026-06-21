@@ -185,6 +185,115 @@ func TestHandleListRollouts_FiltersByPlanID(t *testing.T) {
 	}
 }
 
+// v0.89.2 — HandleListPlans (#554, backfill of the v0.77 squadronctl
+// plans subcommand). Happy path returns the {plans, count} envelope
+// shape; bad RFC3339 `since` returns 400.
+
+func TestHandleListPlans_HappyPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, gid, cfgID := setupPlanHandler(t)
+
+	svc, ok := h.rolloutService.(services.RolloutService)
+	require.True(t, ok)
+	// Two plans, both in the same group so the default list sees both.
+	_, planA, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
+		{Name: "A0", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+		{Name: "A1", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+	_, planB, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
+		{Name: "B0", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/", nil)
+
+	h.HandleListPlans(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp ListPlansResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 2, resp.Count)
+	require.Len(t, resp.Plans, 2)
+
+	ids := []string{resp.Plans[0].PlanID, resp.Plans[1].PlanID}
+	assert.Contains(t, ids, planA)
+	assert.Contains(t, ids, planB)
+	for _, p := range resp.Plans {
+		assert.NotEmpty(t, p.State, "envelope state must be derived")
+		assert.Equal(t, gid, p.GroupID)
+	}
+}
+
+func TestHandleListPlans_BadSinceReturns400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, _, _ := setupPlanHandler(t)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/?since=not-a-timestamp", nil)
+
+	h.HandleListPlans(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "since")
+}
+
+func TestHandleListPlans_GroupIDFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, store, gid, cfgID := setupPlanHandler(t)
+
+	// Add a second group + config so we can prove the filter narrows.
+	gid2 := "other-group"
+	require.NoError(t, store.CreateGroup(t.Context(), &types.Group{ID: gid2, Name: "Other"}))
+	cfg2 := &types.Config{ID: "cfg2", Name: "C2", Content: "x", GroupID: &gid2, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(t.Context(), cfg2))
+
+	svc, ok := h.rolloutService.(services.RolloutService)
+	require.True(t, ok)
+	_, planMain, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
+		{Name: "M", GroupID: gid, TargetConfigID: cfgID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+	_, _, err = svc.CreatePlan(t.Context(), []services.RolloutInput{
+		{Name: "O", GroupID: gid2, TargetConfigID: cfg2.ID,
+			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/?group_id="+gid, nil)
+
+	h.HandleListPlans(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp ListPlansResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 1, resp.Count)
+	require.Len(t, resp.Plans, 1)
+	assert.Equal(t, planMain, resp.Plans[0].PlanID)
+	assert.Equal(t, gid, resp.Plans[0].GroupID)
+}
+
+func TestHandleListPlans_BadLimitReturns400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, _, _, _ := setupPlanHandler(t)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/?limit=0", nil)
+
+	h.HandleListPlans(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "limit")
+}
+
 func TestHandleCreatePlan_RejectsMismatchedGroups(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, store, gid, cfgID := setupPlanHandler(t)

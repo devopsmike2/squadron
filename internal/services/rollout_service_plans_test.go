@@ -738,6 +738,213 @@ func TestRollout_CreatePlanRejectsBadSnippetYAML(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed lint")
 }
 
+// v0.89.2 — ListPlans backfill (#554) returns the same envelopes
+// GetPlan emits, filtered by PlanFilter and sorted newest-first.
+
+// ListPlans against an empty store returns an empty (non-nil) slice.
+func TestRollout_ListPlansEmpty(t *testing.T) {
+	svc := &RolloutServiceImpl{appStore: memory.NewStore(), logger: zap.NewNop()}
+	plans, err := svc.ListPlans(context.Background(), PlanFilter{})
+	require.NoError(t, err)
+	require.NotNil(t, plans)
+	assert.Empty(t, plans)
+}
+
+// Basic create-then-list: two plans created, ListPlans returns two
+// envelopes with the right PlanID + GroupID + step counts. Standalone
+// (non-plan) rollouts in the same store are ignored.
+func TestRollout_ListPlansBasic(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "web-prod"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "Web Prod"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+
+	step := RolloutStage{Mode: RolloutStageModePercent, Percentage: 100}
+	_, planA, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "A0", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+		{Name: "A1", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+	_, planB, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "B0", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+	// A standalone rollout in the same store must not show up as a
+	// plan entry — empty PlanID means it isn't part of any plan.
+	_, err = svc.Create(ctx, RolloutInput{
+		Name: "standalone", GroupID: gid, TargetConfigID: cfg.ID,
+		Stages: []RolloutStage{step},
+	})
+	require.NoError(t, err)
+
+	plans, err := svc.ListPlans(ctx, PlanFilter{})
+	require.NoError(t, err)
+	require.Len(t, plans, 2)
+
+	ids := []string{plans[0].PlanID, plans[1].PlanID}
+	assert.Contains(t, ids, planA)
+	assert.Contains(t, ids, planB)
+	for _, p := range plans {
+		assert.Equal(t, gid, p.GroupID)
+		assert.NotEmpty(t, p.State, "envelope state must be derived")
+	}
+}
+
+// State filter: only plans whose derived State matches are returned.
+// Step 0 with RequireApproval=true lands in pending_approval, which
+// derivePlanState surfaces as the plan's State.
+func TestRollout_ListPlansStateFilter(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+	step := RolloutStage{Mode: RolloutStageModePercent, Percentage: 100}
+
+	// Plan A: step 0 RequireApproval=true → derives to pending_approval.
+	_, planA, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "A0", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}, RequireApproval: true},
+		{Name: "A1", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+
+	// Plan B: no approval gate → derives to in_progress.
+	_, planB, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "B0", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+
+	pending, err := svc.ListPlans(ctx, PlanFilter{State: "pending_approval"})
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, planA, pending[0].PlanID)
+
+	inProgress, err := svc.ListPlans(ctx, PlanFilter{State: "in_progress"})
+	require.NoError(t, err)
+	require.Len(t, inProgress, 1)
+	assert.Equal(t, planB, inProgress[0].PlanID)
+}
+
+// GroupID filter: only plans whose step 0 group matches are returned.
+func TestRollout_ListPlansGroupIDFilter(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid1, gid2 := "g-one", "g-two"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid1, Name: "1"}))
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid2, Name: "2"}))
+	cfg1 := &types.Config{ID: "c1", Name: "C1", Content: "x", GroupID: &gid1, CreatedAt: time.Now()}
+	cfg2 := &types.Config{ID: "c2", Name: "C2", Content: "x", GroupID: &gid2, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg1))
+	require.NoError(t, store.CreateConfig(ctx, cfg2))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+	step := RolloutStage{Mode: RolloutStageModePercent, Percentage: 100}
+
+	_, planG1, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "G1", GroupID: gid1, TargetConfigID: cfg1.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+	_, _, err = svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "G2", GroupID: gid2, TargetConfigID: cfg2.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+
+	plans, err := svc.ListPlans(ctx, PlanFilter{GroupID: gid1})
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	assert.Equal(t, planG1, plans[0].PlanID)
+	assert.Equal(t, gid1, plans[0].GroupID)
+}
+
+// Since filter mirrors the AuditService pattern fixed in #583: derive
+// the cutoff from the first plan's CreatedAt + 1ns so a low-resolution
+// clock can't pull the earlier plan into the result. Plan.CreatedAt
+// is step 0's CreatedAt, which is what the filter compares.
+func TestRollout_ListPlansSinceFilter(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+	step := RolloutStage{Mode: RolloutStageModePercent, Percentage: 100}
+
+	_, planA, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "A", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+
+	// Derive cutoff from plan A's actual CreatedAt + 1ns. Strictly
+	// greater than A by construction so the `>=` Since filter can
+	// never include A regardless of clock resolution. See
+	// audit_service_test.go's TestAuditService_SinceFilter for the
+	// #583 background.
+	prior, err := svc.ListPlans(ctx, PlanFilter{})
+	require.NoError(t, err)
+	require.Len(t, prior, 1)
+	cutoff := prior[0].CreatedAt.Add(1 * time.Nanosecond)
+
+	time.Sleep(50 * time.Millisecond)
+	_, planB, err := svc.CreatePlan(ctx, []RolloutInput{
+		{Name: "B", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+	})
+	require.NoError(t, err)
+
+	out, err := svc.ListPlans(ctx, PlanFilter{Since: cutoff})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, planB, out[0].PlanID)
+	// Sanity: planA still listable with the zero-value Since.
+	all, err := svc.ListPlans(ctx, PlanFilter{})
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	// Newest-first ordering: B should sort before A.
+	assert.Equal(t, planB, all[0].PlanID)
+	assert.Equal(t, planA, all[1].PlanID)
+}
+
+// Limit caps the result count and is clamped to 1000 just like the
+// storage-layer rollout / audit lists. Default (zero) is 100.
+func TestRollout_ListPlansLimitCap(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	cfg := &types.Config{ID: "c", Name: "C", Content: "x", GroupID: &gid, CreatedAt: time.Now()}
+	require.NoError(t, store.CreateConfig(ctx, cfg))
+
+	svc := &RolloutServiceImpl{appStore: store, logger: zap.NewNop()}
+	step := RolloutStage{Mode: RolloutStageModePercent, Percentage: 100}
+
+	// Create five plans; the storage layer's 1000 cap on the
+	// underlying ListRollouts comfortably contains them.
+	for i := 0; i < 5; i++ {
+		_, _, err := svc.CreatePlan(ctx, []RolloutInput{
+			{Name: "p", GroupID: gid, TargetConfigID: cfg.ID, Stages: []RolloutStage{step}},
+		})
+		require.NoError(t, err)
+	}
+
+	out, err := svc.ListPlans(ctx, PlanFilter{Limit: 2})
+	require.NoError(t, err)
+	assert.Len(t, out, 2, "limit should cap the result count")
+
+	// Limit above 1000 is clamped silently — the same posture the
+	// storage layer takes for audit / rollout lists.
+	out, err = svc.ListPlans(ctx, PlanFilter{Limit: 10_000})
+	require.NoError(t, err)
+	assert.Len(t, out, 5, "clamped limit still returns everything when N < cap")
+}
+
 // A standalone rollout has empty PlanID and step 0 — the v0.4 through
 // v0.68 default. The new fields must not change that behavior.
 func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {

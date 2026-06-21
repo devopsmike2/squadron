@@ -116,6 +116,17 @@ type RolloutService interface {
 	// rollouts exist with this PlanID, so the handler can map to a
 	// 404 without ambiguity. See docs/multi-step-plans-design.md.
 	GetPlan(ctx context.Context, planID string) (*Plan, error)
+
+	// v0.89.2 — plan list entry point (#554, the v0.77 squadronctl
+	// plans backfill). Lists plan envelopes — same shape as GetPlan
+	// returns — filtered by the PlanFilter and sorted newest-first
+	// by Plan.CreatedAt (which is step 0's CreatedAt). Implemented
+	// as a List + group-by-PlanID + derive walk: plans are not a
+	// first class storage entity, so the bucketing happens at read
+	// time the same way GetPlan derives one envelope from the
+	// matching rollouts. Returns an empty slice (never nil) when no
+	// plans match so handlers can JSON-encode without a nil check.
+	ListPlans(ctx context.Context, filter PlanFilter) ([]*Plan, error)
 }
 
 // Plan is the envelope shape returned by GetPlan. v0.74.
@@ -438,6 +449,26 @@ type RolloutFilter struct {
 	// PlanStepIndex) share the same PlanID, so a filtered query
 	// returns the full forward + backward arc.
 	PlanID string
+}
+
+// PlanFilter narrows ListPlans queries. All fields are optional;
+// the zero value lists every plan in the system (subject to Limit).
+// v0.89.2 (#554, backfill of the v0.77 squadronctl plans subcommand).
+//
+// State matches against the envelope's derived State word (the same
+// value GetPlan emits — "pending_approval", "in_progress",
+// "succeeded", "rejected", "cancelled", "aborted", "rolled_back").
+// GroupID matches Plan.GroupID, which is step 0's group; every step
+// in a plan shares the same group by construction so the filter is
+// unambiguous. Since matches Plan.CreatedAt (step 0's CreatedAt) on
+// the inclusive `>=` semantics AuditEventFilter uses — see
+// audit_service_test.go TestAuditService_SinceFilter for the
+// derivation pattern that avoids the wall-clock race fixed in #583.
+type PlanFilter struct {
+	State   string
+	GroupID string
+	Since   time.Time
+	Limit   int
 }
 
 // IsTerminal reports whether a rollout has reached an end state and the

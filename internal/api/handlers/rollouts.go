@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -432,6 +433,78 @@ func (h *RolloutHandlers) HandleGetPlan(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, envelope)
+}
+
+// ListPlansResponse is the wire shape for GET /api/v1/rollouts/plans.
+// Each entry is the same envelope GetPlan returns; Count is included
+// for symmetry with CreatePlanResponse and so CI scripts can pick the
+// length off without recounting the slice. v0.89.2 (#554, backfill of
+// the v0.77 squadronctl plans subcommand).
+type ListPlansResponse struct {
+	Plans []*services.Plan `json:"plans"`
+	Count int              `json:"count"`
+}
+
+// HandleListPlans serves GET /api/v1/rollouts/plans.
+//
+// Lists plan envelopes — same shape per entry as HandleGetPlan
+// returns — newest first by the plan's CreatedAt (step 0's
+// CreatedAt). Query params (all optional):
+//
+//   - state=<pending_approval|in_progress|succeeded|rejected|cancelled|aborted|rolled_back>
+//   - group_id=<group id>
+//   - since=<RFC3339 timestamp>
+//   - limit=<int, default 100, max 1000>
+//
+// Mirrors HandleListAuditEvents' validation exactly: 400 on a
+// non-RFC3339 `since`, 400 on a non-positive `limit`. The 1000 cap
+// is applied by the service layer; values above 1000 are clamped
+// silently the same way the storage layer clamps audit lists.
+//
+// Auth: rollouts:read scope. Same as GET /api/v1/rollouts/plans/:id
+// since the data is a view over rollouts the same token could read
+// directly.
+//
+// Added in v0.89.2 (#554).
+func (h *RolloutHandlers) HandleListPlans(c *gin.Context) {
+	filter := services.PlanFilter{
+		State:   c.Query("state"),
+		GroupID: c.Query("group_id"),
+	}
+
+	if raw := c.Query("since"); raw != "" {
+		ts, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":  "invalid `since` — expected RFC3339",
+				"detail": err.Error(),
+			})
+			return
+		}
+		filter.Since = ts
+	}
+
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid `limit` — expected positive integer",
+			})
+			return
+		}
+		filter.Limit = n
+	}
+
+	plans, err := h.rolloutService.ListPlans(c.Request.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list plans", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list plans"})
+		return
+	}
+	if plans == nil {
+		plans = []*services.Plan{}
+	}
+	c.JSON(http.StatusOK, ListPlansResponse{Plans: plans, Count: len(plans)})
 }
 
 // HandleCreatePlan serves POST /api/v1/rollouts/plans.
