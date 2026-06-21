@@ -475,3 +475,17 @@ The role does **not** include any write or modify permission. The
 proposer surfaces recommendations as Terraform snippets or plan
 steps; the operator executes the modifications in their own
 tooling.
+
+## Next: connect a Terraform repo
+
+Once your AWS connection is working and you've generated your first
+recommendations, the next step is connecting a GitHub-hosted
+Terraform repository so the "Open PR" button on each recommendation
+card lights up and Squadron can author the PR for you instead of
+you copying snippets by hand.
+
+See [discovery-iac-first-time-setup.md](discovery-iac-first-time-setup.md)
+for the GitHub PAT bootstrap and the IaC wizard walk. The IaC
+setup is independent of the AWS setup — you can keep scanning
+without it — but the close-the-loop demo Squadron is built around
+needs both halves wired.
