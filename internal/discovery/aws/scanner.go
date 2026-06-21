@@ -14,6 +14,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
@@ -217,6 +219,11 @@ func (s *Scanner) Validate(ctx context.Context, conn *credstore.CloudConnection)
 	if check := s.preflightDynamoDB(ctx, factory, primaryRegion); check != nil {
 		result.Preflight = append(result.Preflight, *check)
 	}
+	// Slice 5 (v0.89.10) — ECS joins the preflight battery via a
+	// single low-cost ListClusters call with MaxResults=1.
+	if check := s.preflightECS(ctx, factory, primaryRegion); check != nil {
+		result.Preflight = append(result.Preflight, *check)
+	}
 
 	return result, nil
 }
@@ -417,6 +424,36 @@ func (s *Scanner) preflightDynamoDB(ctx context.Context, factory ClientFactory, 
 	return &scanner.PreflightCheck{Service: "dynamodb", OK: true, SampleCount: sample}
 }
 
+// preflightECS runs a single ListClusters call with MaxResults=1
+// against the supplied region. Mirrors preflightEKS / preflightDynamoDB
+// — a misconfigured role fails fast, and a properly configured one
+// returns at most one row. The per-cluster fan-out (DescribeClusters +
+// ListTagsForResource) only fires at scan time, so the preflight
+// intentionally stops at ListClusters: the cheap signal is enough
+// to deep-link the operator back to the trust-policy step on
+// AccessDenied.
+//
+// Slice 5 (v0.89.10). Both Fargate and EC2 launch types are covered
+// by the per-cluster Container Insights rule — the preflight is
+// launch-type agnostic.
+func (s *Scanner) preflightECS(ctx context.Context, factory ClientFactory, region string) *scanner.PreflightCheck {
+	client, err := factory.ECS(ctx, region)
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "ecs", OK: false, Err: HumanizeError(err)}
+	}
+	out, err := client.ListClusters(ctx, &ecs.ListClustersInput{
+		MaxResults: awssdk.Int32(1),
+	})
+	if err != nil {
+		return &scanner.PreflightCheck{Service: "ecs", OK: false, Err: HumanizeError(err)}
+	}
+	sample := len(out.ClusterArns)
+	if sample > 5 {
+		sample = 5
+	}
+	return &scanner.PreflightCheck{Service: "ecs", OK: true, SampleCount: sample}
+}
+
 // Scan satisfies scanner.Scanner. Walks each region in turn,
 // paginating DescribeInstances, ListFunctions, and DescribeDBInstances
 // with exponential backoff on throttling. On unrecoverable errors
@@ -487,6 +524,10 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 		if err := s.scanRegionDynamoDB(ctx, factory, region, result); err != nil {
 			recordPartialFailure(result, "dynamodb", fmt.Sprintf("dynamodb scan failed in %s: %s", region, err.Error()))
 		}
+		// Slice 5 (v0.89.10) — ECS joins the per-region walk.
+		if err := s.scanRegionECS(ctx, factory, region, result); err != nil {
+			recordPartialFailure(result, "ecs", fmt.Sprintf("ecs scan failed in %s: %s", region, err.Error()))
+		}
 	}
 
 	for _, c := range result.Compute {
@@ -555,6 +596,19 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 	// proposer-side reasoning, and the Inventory tab use.
 	for _, t := range result.DynamoDBTables {
 		if t.IsInstrumented() {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Slice 5 (v0.89.10) — ECS clusters count as instrumented when
+	// the cluster's containerInsights setting value is "enabled"
+	// (case-insensitive; the single-axis rule documented on
+	// scanner.ECSClusterSnapshot). Same shared-predicate pattern as
+	// DynamoDB — the scanner-side tally, the proposer-side
+	// reasoning, and the Inventory tab all reference IsInstrumented.
+	for _, c := range result.ECSClusters {
+		if c.IsInstrumented() {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++
@@ -1499,6 +1553,308 @@ func isAccessDenied(err error) bool {
 	return false
 }
 
+// scanRegionECS walks the region's ECS clusters in two passes and
+// appends mapped snapshots to result.ECSClusters. Unlike the
+// single-pass S3 / RDS / ALB services, ECS requires a per-cluster
+// fan-out: ListClusters returns ARNs only, and the observability
+// state lives behind DescribeClusters with the SETTINGS + STATISTICS
+// + TAGS include hints. Mirrors the EKS / DynamoDB two-pass shape.
+//
+// IAM permissions required: ecs:ListClusters + ecs:DescribeClusters
+// + ecs:ListTagsForResource. The permissions policy snippet in
+// docs/universal-discovery-design.md adds all three when slice 5
+// ships. Squadron does NOT execute ecs:UpdateClusterSettings —
+// discovery is strictly read-only.
+//
+// Honest task-definition-level limitation (re-stated from the type
+// godoc): Squadron detects cluster-level CloudWatch Container
+// Insights via the DescribeClusters API. Squadron does not detect
+// task-definition-level instrumentation — X-Ray daemon sidecars,
+// ADOT collector sidecars, or FireLens log routing in your task
+// definitions. If your task defs include those sidecars but the
+// cluster does not have Container Insights enabled, Squadron will
+// report the cluster as uninstrumented — this is a known
+// limitation of cluster-level scanning. A future slice can extend
+// the rule to inspect task definitions if operators request it.
+//
+// Both Fargate and EC2 launch types are covered by the same
+// per-cluster rule — Container Insights is per-cluster, not
+// per-launch-type.
+//
+// Cluster batches are described 100 ARNs at a time (the AWS API
+// cap on DescribeClusters.Clusters). Per-batch fan-out runs
+// SEQUENTIALLY in v0.89.10 (same posture as EKS slice 3b and
+// DynamoDB slice 4). Real operators at hundreds of clusters per
+// region will hit a wall; deferring concurrency to a follow-up
+// keeps this ship small.
+//
+// On any per-batch API failure the function returns the error so
+// the caller records "ecs" on FailedServices via
+// recordPartialFailure. Two surgical exceptions live inside
+// expandECSCluster: (a) the cluster appears in the
+// DescribeClusters response's failures[] slice with
+// reason="MISSING" (race against deletion between ListClusters
+// and DescribeClusters) silently skips the cluster; (b) the
+// containerInsights setting is absent from the response — the
+// scanner emits the "UNKNOWN" sentinel rather than failing,
+// matching DynamoDB's AccessDenied fallback posture.
+func (s *Scanner) scanRegionECS(ctx context.Context, factory ClientFactory, region string, result *scanner.Result) error {
+	client, err := factory.ECS(ctx, region)
+	if err != nil {
+		return err
+	}
+	// Pass 1: ListClusters, paginated via NextToken. The AWS API
+	// returns up to 100 ARNs per call.
+	var arns []string
+	var nextToken *string
+	for {
+		in := &ecs.ListClustersInput{}
+		if nextToken != nil {
+			in.NextToken = nextToken
+		}
+		var out *ecs.ListClustersOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			out, e = client.ListClusters(ctx, in)
+			return e
+		})
+		if callErr != nil {
+			return callErr
+		}
+		arns = append(arns, out.ClusterArns...)
+		if out.NextToken == nil || *out.NextToken == "" {
+			break
+		}
+		nextToken = out.NextToken
+	}
+	if len(arns) == 0 {
+		return nil
+	}
+	// Pass 2: DescribeClusters in batches of up to 100 ARNs (the
+	// AWS API cap on the Clusters input field). Each batch returns
+	// a clusters[] slice and a failures[] slice — the latter
+	// flags any ARNs that disappeared between ListClusters and
+	// DescribeClusters (the race-against-deletion window). Per
+	// surviving cluster, expandECSCluster fills in the cluster's
+	// settings, statistics, and tag fallback.
+	const batchSize = 100
+	for start := 0; start < len(arns); start += batchSize {
+		end := start + batchSize
+		if end > len(arns) {
+			end = len(arns)
+		}
+		batch := arns[start:end]
+		var descOut *ecs.DescribeClustersOutput
+		callErr := retryWithBackoff(ctx, func() error {
+			var e error
+			descOut, e = client.DescribeClusters(ctx, &ecs.DescribeClustersInput{
+				Clusters: batch,
+				Include: []ecstypes.ClusterField{
+					ecstypes.ClusterFieldSettings,
+					ecstypes.ClusterFieldStatistics,
+					ecstypes.ClusterFieldTags,
+				},
+			})
+			return e
+		})
+		if callErr != nil {
+			return callErr
+		}
+		// Build the set of MISSING ARNs from the failures[] slice
+		// so we can silently skip clusters that raced deletion.
+		missing := make(map[string]bool, len(descOut.Failures))
+		for _, f := range descOut.Failures {
+			if f.Arn != nil && isECSMissingFailure(f) {
+				missing[*f.Arn] = true
+			}
+		}
+		// Track which ARNs we received described data for, so we
+		// can skip the missing ones explicitly.
+		for _, c := range descOut.Clusters {
+			if c.ClusterArn != nil && missing[*c.ClusterArn] {
+				continue
+			}
+			snap, skip, err := s.expandECSCluster(ctx, client, c, region)
+			if err != nil {
+				return err
+			}
+			if skip {
+				continue
+			}
+			result.ECSClusters = append(result.ECSClusters, snap)
+		}
+	}
+	return nil
+}
+
+// expandECSCluster runs the per-cluster mapping from an SDK
+// types.Cluster value into the ECSClusterSnapshot shape, and (when
+// the DescribeClusters response did not surface tags) falls back to
+// a defensive ListTagsForResource call against the cluster ARN.
+// Returns the populated ECSClusterSnapshot, a "skip this cluster"
+// flag, and the first non-recoverable error encountered.
+//
+// Surgical fallbacks live here:
+//
+//   - The containerInsights setting is absent from the
+//     DescribeClusters response (the cluster never had any
+//     settings configured, or the operator's policy granted
+//     DescribeClusters but the SETTINGS include hint was not
+//     honored). Emit the "UNKNOWN" sentinel rather than failing
+//     the walk — matches DynamoDB's AccessDenied-fallback posture.
+//
+//   - The DescribeClusters tags field is empty but the cluster
+//     name suggests tagging is likely (defense-in-depth against
+//     the SDK's TAGS include hint quirks). Fall back to a
+//     ListTagsForResource call. AccessDenied here is silently
+//     tolerated — the inventory row is still useful without tags;
+//     the proposer just won't be able to group by tag.
+//
+//   - The DescribeClusters response surfaced a per-cluster
+//     failure with reason="MISSING" — the cluster was deleted
+//     between ListClusters and DescribeClusters. Skip silently.
+//     This is the race-against-deletion fallback the slice 4
+//     pattern documented; for ECS the signal arrives via the
+//     failures[] slice on the same response rather than a
+//     separate exception, but the semantic is identical. (The
+//     caller filters MISSING failures before calling
+//     expandECSCluster, so this path is defensive only.)
+//
+// Every other API failure (Throttling already gets retried;
+// AccessDenied on ListTagsForResource is tolerated as noted
+// above; any other error on the tags fallback is returned)
+// surfaces to the caller as "ecs" on FailedServices.
+func (s *Scanner) expandECSCluster(ctx context.Context, client ECSClient, c ecsCluster, region string) (scanner.ECSClusterSnapshot, bool, error) {
+	snap := scanner.ECSClusterSnapshot{
+		Region: region,
+	}
+	if c.ClusterArn != nil {
+		snap.ARN = *c.ClusterArn
+	}
+	if c.ClusterName != nil {
+		snap.Name = *c.ClusterName
+	}
+	if c.Status != nil {
+		snap.Status = *c.Status
+	}
+	snap.RegisteredContainerInstancesCount = int(c.RegisteredContainerInstancesCount)
+	snap.RunningTasksCount = int(c.RunningTasksCount)
+	snap.PendingTasksCount = int(c.PendingTasksCount)
+	snap.ActiveServicesCount = int(c.ActiveServicesCount)
+	// Walk settings[] looking for the single observability axis —
+	// settings[name=containerInsights].value. Cluster settings is
+	// flat (no nesting), so a single pass suffices. The AWS SDK
+	// returns lowercase "enabled" / "disabled" / "enhanced"; we
+	// preserve casing through to the snapshot so the Inventory tab
+	// can render verbatim. The "UNKNOWN" sentinel fires only when
+	// no containerInsights setting is present at all.
+	snap.ContainerInsightsStatus = "UNKNOWN"
+	for _, setting := range c.Settings {
+		if setting.Name != ecstypes.ClusterSettingNameContainerInsights {
+			continue
+		}
+		if setting.Value != nil {
+			snap.ContainerInsightsStatus = *setting.Value
+		}
+		break
+	}
+	// Tags first try: surface what DescribeClusters returned via the
+	// TAGS include hint. If the slice is non-empty we trust it; if
+	// it's empty, we fall back to ListTagsForResource for
+	// defense-in-depth.
+	if len(c.Tags) > 0 {
+		snap.Tags = make(map[string]string, len(c.Tags))
+		for _, t := range c.Tags {
+			if t.Key == nil {
+				continue
+			}
+			key := *t.Key
+			val := ""
+			if t.Value != nil {
+				val = *t.Value
+			}
+			snap.Tags[key] = val
+		}
+	} else if snap.ARN != "" {
+		// Tags fallback. ListTagsForResource is paginated only on
+		// other resource types (tasks, services); for cluster ARNs
+		// the response is a single page. AccessDenied here is
+		// silently tolerated — the inventory row is still useful
+		// without tags.
+		var tagsOut *ecs.ListTagsForResourceOutput
+		err := retryWithBackoff(ctx, func() error {
+			var e error
+			tagsOut, e = client.ListTagsForResource(ctx, &ecs.ListTagsForResourceInput{
+				ResourceArn: awssdk.String(snap.ARN),
+			})
+			return e
+		})
+		if err != nil {
+			if isAccessDenied(err) {
+				// Tags-fallback AccessDenied is silently
+				// tolerated per the type godoc; the cluster row
+				// still surfaces without tags.
+			} else if isECSClusterNotFound(err) {
+				// Race-against-deletion late binding — the
+				// cluster disappeared between DescribeClusters
+				// and ListTagsForResource. Skip silently.
+				return snap, true, nil
+			} else {
+				return snap, false, err
+			}
+		} else if tagsOut != nil && len(tagsOut.Tags) > 0 {
+			snap.Tags = make(map[string]string, len(tagsOut.Tags))
+			for _, t := range tagsOut.Tags {
+				if t.Key == nil {
+					continue
+				}
+				key := *t.Key
+				val := ""
+				if t.Value != nil {
+					val = *t.Value
+				}
+				snap.Tags[key] = val
+			}
+		}
+	}
+	return snap, false, nil
+}
+
+// isECSMissingFailure pattern-matches the failures[] entry shape
+// AWS returns when an ARN passed to DescribeClusters was deleted
+// between the ListClusters call and the DescribeClusters call. AWS
+// surfaces the race via reason="MISSING" on the per-ARN failure
+// row (not via a top-level exception), so the scanner filters
+// MISSING entries explicitly before constructing the snapshot list.
+//
+// Defense-in-depth: the AWS SDK historically returns the reason
+// string as-is, but we case-insensitive-compare to tolerate any
+// future capitalization change.
+func isECSMissingFailure(f ecsClusterFailure) bool {
+	if f.Reason == nil {
+		return false
+	}
+	return strings.EqualFold(*f.Reason, "MISSING")
+}
+
+// isECSClusterNotFound pattern-matches the smithy.APIError shape
+// against the ECS ClusterNotFoundException code. Used by
+// expandECSCluster's tags-fallback path to handle the late-binding
+// race window where a cluster disappears between the
+// DescribeClusters batch and the per-cluster
+// ListTagsForResource call.
+func isECSClusterNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode() {
+	case "ClusterNotFoundException", "ResourceNotFoundException":
+		return true
+	}
+	return false
+}
+
 // mapALBBase turns an SDK LoadBalancer into the base snapshot — name,
 // type, scheme, region, ARN — without the per-LB attributes that
 // require a follow-up call. applyALBAttributes fills in the
@@ -1766,7 +2122,8 @@ func isThrottlingError(err error) bool {
 //
 // Service identifiers shipping today: "assume_role" (sentinel for
 // credentials-layer failures), "ec2", "lambda", "rds", "s3", "alb",
-// "eks" (slice 3b — v0.89.0), "dynamodb" (slice 4 — v0.89.6).
+// "eks" (slice 3b — v0.89.0), "dynamodb" (slice 4 — v0.89.6),
+// "ecs" (slice 5 — v0.89.10).
 func recordPartialFailure(result *scanner.Result, service, reason string) {
 	result.Partial = true
 	if result.PartialReason == "" {

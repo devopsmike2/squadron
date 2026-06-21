@@ -678,11 +678,14 @@ type awsScanResponse struct {
 	Clusters []awsClusterRow `json:"clusters"`
 	// DynamoDBTables joins the wire shape in slice 4 (v0.89.6).
 	// Same non-null posture as the other category arrays.
-	DynamoDBTables      []awsDynamoDBTableRow `json:"dynamodb_tables"`
-	InstrumentedCount   int                   `json:"instrumented_count"`
-	UninstrumentedCount int                   `json:"uninstrumented_count"`
-	Partial             bool                  `json:"partial"`
-	PartialReason       string                `json:"partial_reason,omitempty"`
+	DynamoDBTables []awsDynamoDBTableRow `json:"dynamodb_tables"`
+	// ECSClusters joins the wire shape in slice 5 (v0.89.10). Same
+	// non-null posture as the other category arrays.
+	ECSClusters         []awsECSClusterRow `json:"ecs_clusters"`
+	InstrumentedCount   int                `json:"instrumented_count"`
+	UninstrumentedCount int                `json:"uninstrumented_count"`
+	Partial             bool               `json:"partial"`
+	PartialReason       string             `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -798,6 +801,36 @@ type awsDynamoDBTableRow struct {
 	Tags                      map[string]string `json:"tags"`
 }
 
+// awsECSClusterRow is the snake_case wire shape for one ECS cluster
+// row. Slice 5 (v0.89.10). Mirrors scanner.ECSClusterSnapshot — the
+// single instrumented-rule axis (container_insights_status)
+// surfaces as a string so the Inventory tab can render the three
+// AWS-side enum values ("enabled" / "disabled" / "enhanced") plus
+// the scanner's "UNKNOWN" fallback sentinel in a single badge
+// column. Both Fargate and EC2 launch types are covered by the
+// same per-cluster rule — the inventory row does not differentiate.
+//
+// Task-definition-level limitation (re-stated honestly): Squadron
+// detects cluster-level CloudWatch Container Insights here.
+// Squadron does not detect task-definition-level instrumentation
+// — X-Ray daemon sidecars, ADOT collector sidecars, or FireLens
+// log routing in your task definitions. If your task defs include
+// those sidecars but the cluster does not have Container Insights
+// enabled, Squadron will report the cluster as uninstrumented —
+// this is a known limitation of cluster-level scanning.
+type awsECSClusterRow struct {
+	Name                              string            `json:"name"`
+	ARN                               string            `json:"arn"`
+	Status                            string            `json:"status"`
+	ContainerInsightsStatus           string            `json:"container_insights_status"`
+	RegisteredContainerInstancesCount int               `json:"registered_container_instances_count"`
+	RunningTasksCount                 int               `json:"running_tasks_count"`
+	PendingTasksCount                 int               `json:"pending_tasks_count"`
+	ActiveServicesCount               int               `json:"active_services_count"`
+	Region                            string            `json:"region"`
+	Tags                              map[string]string `json:"tags"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -816,6 +849,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		LoadBalancers:       make([]awsLoadBalancerRow, 0, len(r.LoadBalancers)),
 		Clusters:            make([]awsClusterRow, 0, len(r.Clusters)),
 		DynamoDBTables:      make([]awsDynamoDBTableRow, 0, len(r.DynamoDBTables)),
+		ECSClusters:         make([]awsECSClusterRow, 0, len(r.ECSClusters)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -906,6 +940,24 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			Tags:                      t.Tags,
 		})
 	}
+	// Slice 5 (v0.89.10) — ECS clusters surface alongside the other
+	// category arrays. Same non-null posture; the single
+	// instrumented-rule axis (container_insights_status) is the
+	// string passed verbatim through to the UI.
+	for _, c := range r.ECSClusters {
+		out.ECSClusters = append(out.ECSClusters, awsECSClusterRow{
+			Name:                              c.Name,
+			ARN:                               c.ARN,
+			Status:                            c.Status,
+			ContainerInsightsStatus:           c.ContainerInsightsStatus,
+			RegisteredContainerInstancesCount: c.RegisteredContainerInstancesCount,
+			RunningTasksCount:                 c.RunningTasksCount,
+			PendingTasksCount:                 c.PendingTasksCount,
+			ActiveServicesCount:               c.ActiveServicesCount,
+			Region:                            c.Region,
+			Tags:                              c.Tags,
+		})
+	}
 	return out
 }
 
@@ -931,11 +983,12 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 //     object_store_count (slice 3a / v0.88.0), load_balancer_count
 //     (slice 3a / v0.88.0), cluster_count (slice 3b / v0.89.0),
 //     dynamodb_count + instrumented_dynamodb_count (slice 4 /
-//     v0.89.6), instrumented_count, uninstrumented_count, the
+//     v0.89.6), ecs_count + instrumented_ecs_count (slice 5 /
+//     v0.89.10), instrumented_count, uninstrumented_count, the
 //     partial flag, partial_reason (the operator-visible explanation
 //     when partial is true), and failed_services (structured list
 //     of service identifiers —
-//     "ec2"/"lambda"/"rds"/"s3"/"alb"/"eks"/"dynamodb"/"assume_role"
+//     "ec2"/"lambda"/"rds"/"s3"/"alb"/"eks"/"dynamodb"/"ecs"/"assume_role"
 //     — for SIEM forwarders and the proposer's future scan-history
 //     loop to pattern-match against) in the payload
 //   - both events carry the account_id and (for scan_completed) the
@@ -1164,10 +1217,22 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 			// happy-path scans.
 			"dynamodb_count":              len(result.DynamoDBTables),
 			"instrumented_dynamodb_count": countInstrumentedDynamoDB(result.DynamoDBTables),
-			"instrumented_count":          result.InstrumentedCount,
-			"uninstrumented_count":        result.UninstrumentedCount,
-			"partial":                     result.Partial,
-			"recorded_at":                 time.Now().UTC(),
+			// Slice 5 (v0.89.10) — ecs_count joins the audit payload
+			// as a MANDATORY field (always present, never omitempty).
+			// instrumented_ecs_count surfaces the per-category
+			// instrumented tally alongside it so an operator skimming
+			// the audit timeline can see ECS coverage without
+			// recomputing from the overall instrumented_count. The
+			// two fields move together — dropping either into the
+			// conditional-insert path would lose the operator-visible
+			// coverage signal on happy-path scans. Same posture as
+			// the slice 4 DynamoDB pair.
+			"ecs_count":              len(result.ECSClusters),
+			"instrumented_ecs_count": countInstrumentedECS(result.ECSClusters),
+			"instrumented_count":     result.InstrumentedCount,
+			"uninstrumented_count":   result.UninstrumentedCount,
+			"partial":                result.Partial,
+			"recorded_at":            time.Now().UTC(),
 		}
 		if result.PartialReason != "" {
 			payload["partial_reason"] = result.PartialReason
@@ -1756,6 +1821,26 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			Region:                    t.Region,
 		})
 	}
+	// ECS clusters — slice 5 (v0.89.10). The proposer's single-axis
+	// instrumented rule keys off ContainerInsightsStatus. Task /
+	// service counts are passed through so the prompt body's
+	// per-cluster reasoning can highlight high-traffic clusters
+	// when surfacing the recommendation. The "UNKNOWN" sentinel
+	// from the scanner's fallback is passed through verbatim so
+	// the proposer can decline or hedge as appropriate.
+	for _, c := range req.ScanResult.ECSClusters {
+		aiCtx.ECSClusters = append(aiCtx.ECSClusters, ai.ECSClusterCandidate{
+			ARN:                               c.ARN,
+			Name:                              c.Name,
+			Status:                            c.Status,
+			ContainerInsightsStatus:           c.ContainerInsightsStatus,
+			RegisteredContainerInstancesCount: c.RegisteredContainerInstancesCount,
+			RunningTasksCount:                 c.RunningTasksCount,
+			PendingTasksCount:                 c.PendingTasksCount,
+			ActiveServicesCount:               c.ActiveServicesCount,
+			Region:                            c.Region,
+		})
+	}
 
 	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
 	if err != nil {
@@ -1929,6 +2014,8 @@ func classifyResourceKind(stepName, snippet string) string {
 		return "eks-cluster-logging"
 	case strings.Contains(lower, "aws_dynamodb_contributor_insights"):
 		return "dynamodb-contributor-insights"
+	case strings.Contains(lower, "aws_ecs_cluster"):
+		return "ecs-container-insights"
 	case strings.Contains(lower, "aws_lambda_function"),
 		strings.Contains(lower, "aws_lambda_layer_version"):
 		return "lambda-otel-layer"
@@ -1971,6 +2058,9 @@ func classifyResourceKind(stepName, snippet string) string {
 	case strings.Contains(nameLower, "dynamodb"),
 		strings.Contains(nameLower, "contributor insights"):
 		return "dynamodb-contributor-insights"
+	case strings.Contains(nameLower, "ecs"),
+		strings.Contains(nameLower, "container insights"):
+		return "ecs-container-insights"
 	}
 
 	return ""
@@ -1986,6 +2076,23 @@ func countInstrumentedDynamoDB(tables []scanner.DynamoDBTableSnapshot) int {
 	n := 0
 	for _, t := range tables {
 		if t.IsInstrumented() {
+			n++
+		}
+	}
+	return n
+}
+
+// countInstrumentedECS tallies the slice 5 (v0.89.10) ECS clusters
+// in the scan result whose containerInsights setting value is
+// "enabled" (case-insensitive — see scanner.ECSClusterSnapshot's
+// IsInstrumented predicate). The single-axis instrumented rule.
+// Used by the scan_completed audit payload's instrumented_ecs_count
+// field so SIEM forwarders and the proposer's future scan-history
+// loop don't have to recompute from the row list.
+func countInstrumentedECS(clusters []scanner.ECSClusterSnapshot) int {
+	n := 0
+	for _, c := range clusters {
+		if c.IsInstrumented() {
 			n++
 		}
 	}

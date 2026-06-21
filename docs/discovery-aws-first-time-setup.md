@@ -165,7 +165,7 @@ permissions** → **Create inline policy**. Switch to the JSON editor
 and paste the policy from the Squadron wizard's step 3 (the new
 permissions-policy step added in v0.87.1).
 
-For reference, the v0.89.6 wizard's permissions policy is:
+For reference, the v0.89.10 wizard's permissions policy is:
 
 ```json
 {
@@ -200,7 +200,10 @@ For reference, the v0.89.6 wizard's permissions policy is:
         "dynamodb:ListTables",
         "dynamodb:DescribeTable",
         "dynamodb:DescribeContributorInsights",
-        "dynamodb:ListTagsOfResource"
+        "dynamodb:ListTagsOfResource",
+        "ecs:ListClusters",
+        "ecs:DescribeClusters",
+        "ecs:ListTagsForResource"
       ],
       "Resource": "*"
     }
@@ -208,7 +211,7 @@ For reference, the v0.89.6 wizard's permissions policy is:
 }
 ```
 
-27 actions total: 4 EC2 + 4 Lambda + 1 RDS + 5 S3 + 3 ELBv2 + 6 EKS + 4 DynamoDB.
+30 actions total: 4 EC2 + 4 Lambda + 1 RDS + 5 S3 + 3 ELBv2 + 6 EKS + 4 DynamoDB + 3 ECS.
 All Describe/List/Get; no write actions. Click **Next**. Policy name:
 `SquadronDiscoveryReadOnly`. Click **Create policy**.
 
@@ -317,7 +320,7 @@ Return to the Squadron wizard tab. Click through:
   `arn:aws:iam::<ACCOUNT_ID>:role/SquadronDiscovery`. Next.
 - Step 5 (validate) — click **Validate connection**.
 
-The "What just happened" panel should show seven green checks:
+The "What just happened" panel should show eight green checks:
 
 - ✓ `sts:AssumeRole`
 - ✓ `ec2 probe` (with a sample count — 0 if you have no EC2
@@ -333,6 +336,8 @@ The "What just happened" panel should show seven green checks:
   call with MaxResults=1)
 - ✓ `dynamodb probe` (slice 4, v0.89.6 — single
   `dynamodb:ListTables` call with Limit=1)
+- ✓ `ecs probe` (slice 5, v0.89.10 — single `ecs:ListClusters`
+  call with MaxResults=1)
 
 If any check fails, the panel renders a humanized error with a
 `SuggestedStep` jump-back button — click it, fix the IAM
@@ -347,9 +352,10 @@ Common failure modes:
   policy on `SquadronDiscovery` references a different ExternalId
   than the wizard's current state. Update one to match the other.
 - **`ec2 probe` / `lambda probe` / `rds probe` / `s3 probe` /
-  `alb probe` / `eks probe` / `dynamodb probe` fails with
-  AccessDenied** — the `SquadronDiscoveryReadOnly` inline policy
-  on the role is missing or scoped wrong. Re-check step 3d above.
+  `alb probe` / `eks probe` / `dynamodb probe` / `ecs probe` fails
+  with AccessDenied** — the `SquadronDiscoveryReadOnly` inline
+  policy on the role is missing or scoped wrong. Re-check step 3d
+  above.
 - **`sts:AssumeRole` hangs for 30+ seconds then fails with "no
   credentials"** — Squadron didn't see `~/.aws/credentials`. Check
   that `AWS_PROFILE=squadron-bot` is in the process environment
@@ -375,12 +381,12 @@ accounts" list on `/discovery/aws`.
 
 The Inventory tab on `/discovery/aws` triggers a scan against the
 connection. If your account has EC2 / Lambda / RDS / S3 / ALB / EKS
-/ DynamoDB resources, they populate the Compute / Functions /
+/ DynamoDB / ECS resources, they populate the Compute / Functions /
 Databases / Object stores / Load balancers / Clusters / DynamoDB
-tables sections. The Recommendations tab populates from the
-proposer's analysis of the inventory.
+tables / ECS clusters sections. The Recommendations tab populates
+from the proposer's analysis of the inventory.
 
-If your account is empty (fresh test account), all seven sections
+If your account is empty (fresh test account), all eight sections
 will show "no resources found" — that's expected and confirms the
 scanner walked the API successfully with no items to return. Spin
 up a free-tier t2.micro EC2 instance — or an empty S3 bucket — to
@@ -413,7 +419,7 @@ If you connected your AWS account on an earlier Squadron release and
 have since upgraded, your inline `SquadronDiscoveryReadOnly` policy
 may be missing actions that newer releases need. The symptom is a
 partial scan: the audit event `discovery.aws.scan_completed` carries
-`partial: true` and `failed_services: ["s3", "alb", "eks", "dynamodb", ...]`
+`partial: true` and `failed_services: ["s3", "alb", "eks", "dynamodb", "ecs", ...]`
 naming the service walks that hit `AccessDenied`. (v0.88.3 surfaces every
 failed service in `partial_reason`, joined by `; ` — earlier releases
 only showed the last one.)
@@ -433,6 +439,7 @@ Squadron's discovery role explicitly does not have permission to do.
 | v0.89.0 (slice 3b — EKS) | `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups`, `eks:ListFargateProfiles` | 23 |
 | v0.89.1 (hotfix — see #605) | (correction) v0.89.0 was published with 5 eks:* actions but the scanner also calls `eks:ListFargateProfiles`. Add the 6th action if you set up against the v0.89.0 template; no other change. | 23 |
 | v0.89.6 (slice 4 — DynamoDB) | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:DescribeContributorInsights`, `dynamodb:ListTagsOfResource` | 27 |
+| v0.89.10 (slice 5 — ECS/Fargate) | `ecs:ListClusters`, `ecs:DescribeClusters`, `ecs:ListTagsForResource` | 30 |
 
 ### How to update
 
@@ -457,7 +464,7 @@ A quick health check after the update:
 
 ```bash
 # Compares the action count in your live role to the expected
-# v0.89.6+ count (27 actions). Run as the squadron-terraform or
+# v0.89.10+ count (30 actions). Run as the squadron-terraform or
 # any IAM-read-capable profile (not squadron-bot — that profile
 # only has sts:AssumeRole, not iam:GetRolePolicy).
 AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
@@ -466,20 +473,20 @@ AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
   --query 'PolicyDocument.Statement[0].Action | length(@)'
 ```
 
-Expected output: `27` for v0.89.6+ (v0.89.0–v0.89.5 expected
-`23`; v0.85.0–v0.87.x ranged from 8 to 17). Anything less than
-the expected value means you're missing actions for one of the
-shipped slices.
+Expected output: `30` for v0.89.10+ (v0.89.6–v0.89.9 expected
+`27`; v0.89.0–v0.89.5 expected `23`; v0.85.0–v0.87.x ranged from
+8 to 17). Anything less than the expected value means you're
+missing actions for one of the shipped slices.
 
 ## What this does NOT cover
 
 The IAM permissions Squadron asks for cover slice 1 (EC2 + Lambda,
 v0.85.0), slice 2 (+ RDS, v0.87.0), slice 3a (+ S3 + ALB,
-v0.88.0), slice 3b (+ EKS, v0.89.0), and slice 4 (+ DynamoDB,
-v0.89.6). DynamoDB landed in v0.89.6 as slice 4. ECS / Fargate
-remains a major service category candidate parked for a later
-slice. Each future slice expands the permissions-policy template
-in the same place — the policy you copied in step 3d.
+v0.88.0), slice 3b (+ EKS, v0.89.0), slice 4 (+ DynamoDB, v0.89.6),
+and slice 5 (+ ECS / Fargate, v0.89.10). ECS/Fargate landed in
+v0.89.10 as slice 5. Each future slice expands the
+permissions-policy template in the same place — the policy you
+copied in step 3d.
 
 **Honest scope limitation for DynamoDB (slice 4):** Squadron's
 DynamoDB rule reads the resource-side Contributor Insights
@@ -492,6 +499,19 @@ scanning. Operators in that posture can decline the
 recommendation; the rule is the right one for the cloud-API
 surface Squadron has access to, even when the operator's
 application code is doing more.
+
+**Honest scope limitation for ECS / Fargate (slice 5):** Squadron
+detects cluster-level CloudWatch Container Insights. Squadron
+does not detect task-definition-level instrumentation — X-Ray
+daemon sidecars, ADOT collector sidecars, or FireLens log routing
+in your task definitions. If your task defs include those
+sidecars but the cluster does not have Container Insights
+enabled, Squadron will report the cluster as uninstrumented —
+this is a known limitation of cluster-level scanning. A future
+slice can extend the rule to inspect task definitions if
+operators request it. Both Fargate and EC2 launch types are
+covered by the same per-cluster rule — Container Insights is
+per-cluster, not per-launch-type.
 
 The role does **not** include any write or modify permission. The
 proposer surfaces recommendations as Terraform snippets or plan

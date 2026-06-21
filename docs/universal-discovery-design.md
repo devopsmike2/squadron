@@ -170,16 +170,17 @@ role if they discovered the role ARN. The `ExternalId` is the
 shared secret that proves the assume-role request originated from
 the specific Squadron deployment the customer authorized.
 
-### Permissions policy (slice 1 + slice 2 + slice 3a + slice 3b + slice 4)
+### Permissions policy (slice 1 + slice 2 + slice 3a + slice 3b + slice 4 + slice 5)
 
 The role's permissions policy is strictly read-only. Slice 1 covered
 EC2 + Lambda (8 actions); slice 2 (v0.87) added RDS as the third
 service Squadron walks (1 action); slice 3a (v0.88.0) added S3 (5
 actions) and ELBv2 / ALB / NLB (3 actions); slice 3b (v0.89.0) added
 EKS (5 actions, hotfixed to 6 in v0.89.1 when the scanner's
-`eks:ListFargateProfiles` call surfaced); slice 4 (v0.89.6) adds
-DynamoDB (4 actions), bringing the total to 27 read-only actions.
-The slice 4 policy:
+`eks:ListFargateProfiles` call surfaced); slice 4 (v0.89.6) added
+DynamoDB (4 actions); slice 5 (v0.89.10) adds ECS / Fargate (3
+actions), bringing the total to 30 read-only actions. The slice 5
+policy:
 
 ```json
 {
@@ -214,7 +215,10 @@ The slice 4 policy:
         "dynamodb:ListTables",
         "dynamodb:DescribeTable",
         "dynamodb:DescribeContributorInsights",
-        "dynamodb:ListTagsOfResource"
+        "dynamodb:ListTagsOfResource",
+        "ecs:ListClusters",
+        "ecs:DescribeClusters",
+        "ecs:ListTagsForResource"
       ],
       "Resource": "*"
     }
@@ -272,6 +276,7 @@ the following AWS write APIs:
 - `elasticloadbalancing:ModifyLoadBalancerAttributes`
 - `eks:UpdateCluster` / `eks:CreateAddon` / `eks:DeleteCluster` / `eks:Update*`
 - `dynamodb:UpdateContributorInsights` / `dynamodb:UpdateTable` / `dynamodb:DeleteTable` / `dynamodb:PutItem` / `dynamodb:UpdateItem` / `dynamodb:DeleteItem`
+- `ecs:UpdateClusterSettings` / `ecs:UpdateCluster` / `ecs:CreateCluster` / `ecs:DeleteCluster` / `ecs:RegisterTaskDefinition` / `ecs:RunTask` / `ecs:StartTask` / `ecs:StopTask` / `ecs:UpdateService`
 - `ec2:RunInstances` / `ec2:Terminate*` / `ec2:Modify*`
 - `lambda:UpdateFunctionConfiguration` / `lambda:Update*`
 - any `iam:*` action
@@ -343,6 +348,71 @@ NOT `dynamodb:DescribeContributorInsights`. The row is surfaced
 so the operator sees the inventory and can fix the policy; the
 instrumented rule treats `UNKNOWN` as uninstrumented because
 Squadron cannot prove coverage.
+
+Slice 5's ECS actions return per-cluster metadata only:
+`ecs:ListClusters` returns cluster ARNs (one identifier per
+cluster, no contents); `ecs:DescribeClusters` returns each
+cluster's settings (the cluster-level CloudWatch Container
+Insights state lives in
+`settings[name=containerInsights].value`), task / service
+counts, registered-container-instance count, status, ARN, and
+tags (when the SETTINGS / STATISTICS / TAGS include hints are
+honored — Squadron passes all three on every DescribeClusters
+call); `ecs:ListTagsForResource` is the defensive fallback when
+DescribeClusters did not surface tags. No action in the slice 5
+policy returns task-definition contents, container image
+identities, environment-variable values, secret references,
+running-task standard output, container log lines, or any
+in-task application data. Squadron never reads CloudWatch Logs
+groups, never calls `ecs:DescribeTaskDefinition`, and never
+calls `ecs:DescribeTasks` / `ecs:DescribeServices`. The threat
+surface is strictly the AWS-side cluster metadata. The proposer
+surfaces enablement recommendations as plan steps — Terraform
+that calls `aws_ecs_cluster` with the `setting` block setting
+`containerInsights = "enabled"`. **Squadron does NOT execute
+`ecs:UpdateClusterSettings`**.
+
+The slice 5 instrumented rule for ECS clusters is SINGLE-axis:
+the cluster's `settings[name=containerInsights].value` must be
+`"enabled"` (case-insensitive). Same posture as the slice 4
+DynamoDB single-axis downgrade — cluster-level Container
+Insights is the one strong cloud-API-visible observability
+signal for ECS, so the rule is honest single-axis rather than
+inventing fake axes from task-definition sidecars or FireLens
+routing.
+
+Both Fargate and EC2 launch types are covered by the same
+per-cluster rule — Container Insights is a per-cluster setting,
+not a per-launch-type one.
+
+**Task-definition-level limitation (honestly stated): Squadron
+detects cluster-level CloudWatch Container Insights. Squadron
+does not detect task-definition-level instrumentation — X-Ray
+daemon sidecars, ADOT collector sidecars, or FireLens log
+routing in your task definitions. If your task defs include
+those sidecars but the cluster does not have Container Insights
+enabled, Squadron will report the cluster as uninstrumented —
+this is a known limitation of cluster-level scanning. A future
+slice can extend the rule to inspect task definitions if
+operators request it.** This is the same honest-tradeoff posture
+the design doc takes for the slice 1 EC2 / Lambda OTel detection
+(also resource-side only — Squadron sees Lambda layers and EC2
+tags but not in-application SDK instrumentation) and for the
+slice 4 DynamoDB SDK-side limitation. An operator whose task
+defs already include those sidecars can decline the
+recommendation and re-tag the cluster as out of scope.
+
+The scanner emits the sentinel value `"UNKNOWN"` for
+`ContainerInsightsStatus` when the DescribeClusters response did
+not surface the containerInsights setting for the cluster (the
+SETTINGS include hint was not honored at the call layer). The
+row is surfaced so the operator sees the inventory; the
+instrumented rule treats `"UNKNOWN"` as uninstrumented because
+Squadron cannot prove coverage. The scanner also handles the
+race-against-deletion window via the AWS API's failures[] slice
+on the DescribeClusters response: an ARN that appears with
+`reason="MISSING"` is silently skipped (the cluster was deleted
+between ListClusters and DescribeClusters).
 
 Each future slice expands this policy by additional
 Describe/List/Get actions only. The "no write actions" invariant
@@ -422,7 +492,7 @@ What's the blast radius at each posture? This section is the
 honest answer to the security review question "what happens if
 Squadron is compromised."
 
-### Posture: Discovery role only (slice 1 + slice 2 + slice 3a + slice 3b + slice 4)
+### Posture: Discovery role only (slice 1 + slice 2 + slice 3a + slice 3b + slice 4 + slice 5)
 
 If an attacker compromises a Squadron deployment and the only IAM
 role connected is the discovery role:
