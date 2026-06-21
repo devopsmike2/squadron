@@ -20,6 +20,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/iac"
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
+	"github.com/devopsmike2/squadron/internal/iac/hclpatch"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -794,6 +795,20 @@ type iacGitHubOpenPRRequest struct {
 	ProposerReasoning string   `json:"proposer_reasoning"`
 	AffectedResources []string `json:"affected_resources"`
 	AccountID         string   `json:"account_id"`
+
+	// HCLPatch — v0.89.12 #628 Stream 29 (slice 2) — structured
+	// per-attribute edit description for patch_existing kinds. When
+	// present AND the file parses AND the target resource address
+	// resolves cleanly, the handler routes to the HCL-aware merge
+	// path (clean drop-in PR; no manual-merge label). When nil OR
+	// the merge fails for any reason, the handler falls back to the
+	// slice-1.5 append-only path with the manual-merge label — the
+	// recommendation is never lost.
+	//
+	// Empty / nil on new_file kinds (the disposition path doesn't
+	// take a patch input) and on patch_existing recommendations
+	// produced by a pre-v0.89.12 proposer prompt.
+	HCLPatch *hclpatch.Patch `json:"hcl_patch,omitempty"`
 }
 
 // iacGitHubOpenPRResponse is the success-path body.
@@ -815,6 +830,35 @@ type iacGitHubOpenPRResponse struct {
 	RepoFullName        string `json:"repo_full_name"`
 	Disposition         string `json:"disposition"`
 	ManualMergeRequired bool   `json:"manual_merge_required"`
+
+	// DispositionActual — v0.89.12 #628 Stream 29 (slice 2) —
+	// refines Disposition with the path the handler actually took:
+	//
+	//   - "new_file" — slice-1.5 sibling-file write (unchanged).
+	//   - "patch_existing_hcl_merged" — slice-2 HCL-aware merge
+	//     completed cleanly; PR has no manual-merge label.
+	//   - "patch_existing_fell_back_to_append" — slice-2 fallback
+	//     to slice-1.5 append-only behavior after the HCL merge
+	//     refused (parse error, resource not found, etc).
+	//
+	// The UI reads this to render the green "HCL-merged" checkmark
+	// vs the amber "Needs manual merge" badge on the success card.
+	// Empty on pre-v0.89.12 server responses.
+	DispositionActual string `json:"disposition_actual,omitempty"`
+
+	// LifecycleIgnored — v0.89.12 — true when the HCL merger
+	// detected lifecycle.ignore_changes on the target resource
+	// referencing a patched attribute. Surfaces as a PR-body
+	// warning. Always false on the new_file and fallback paths.
+	LifecycleIgnored bool `json:"lifecycle_ignored,omitempty"`
+
+	// HCLPatchFailureReason — v0.89.12 — set only when
+	// DispositionActual = "patch_existing_fell_back_to_append".
+	// One of: "parse_error", "resource_not_found",
+	// "ambiguous_resource", "unknown_op", "invalid_value_type",
+	// "other". The UI's success card surfaces this so the operator
+	// understands WHY the manual-merge banner is back.
+	HCLPatchFailureReason string `json:"hcl_patch_failure_reason,omitempty"`
 }
 
 // HandleIaCGitHubOpenPR — POST
@@ -1083,9 +1127,13 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 		// create.
 
 	case iac.DispositionPatchExisting:
-		// patch_existing path: append to the placement file
-		// (slice-1 behavior). The placement file may or may not
-		// exist today.
+		// patch_existing path: by slice 2 the handler attempts
+		// HCL-aware merging when the proposer emitted a structured
+		// hcl_patch payload AND the file parses cleanly. The
+		// fallback in every error path is the slice-1.5 append-
+		// only behavior — the operator never loses a recommendation.
+		// The actual path taken is captured in dispositionActual
+		// and threaded into the audit payload + the PR body banner.
 		targetFilePath = placement.FilePath
 		fc, ferr := client.GetFileContent(ctx, owner, repo, placement.FilePath, defaultBranch)
 		switch {
@@ -1114,19 +1162,58 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 		return
 	}
 
-	// Step 5: build the file content. For patch_existing, append
-	// the snippet to existing bytes with exactly one trailing
-	// newline (slice-1 invariant). For new_file, the snippet is
-	// the entire file body — wrap it in a one-line header comment
-	// so a reviewer who opens the file alone immediately sees
-	// what produced it, and normalize to a single trailing
-	// newline.
+	// Step 5: build the file content + decide on the actual
+	// disposition path. v0.89.12 #628 Stream 29 (slice 2) tracks
+	// the actual path taken with the dispositionActual /
+	// hclPatchFailureReason / lifecycleIgnored / ignoredAttrPath
+	// locals so they can be threaded into the audit payload, the
+	// PR body banner, and the response envelope below.
 	var finalContent []byte
+	dispositionActual := disposition // refined for patch_existing below
+	var hclPatchFailureReason string
+	var lifecycleIgnored bool
+	var ignoredAttrPath string
 	switch disposition {
 	case iac.DispositionNewFile:
 		finalContent = buildNewFileContent(req.ResourceKind, scanIDShort, []byte(req.Snippet))
 	case iac.DispositionPatchExisting:
-		finalContent = appendSnippetWithTrailingNewline(existingContent, []byte(req.Snippet))
+		// Slice 2: try HCL-aware merge first when the proposer
+		// emitted a structured patch. Any failure → fall back to
+		// the slice-1.5 append-only behavior. The fallback
+		// preserves the v0.89.11 invariant: a recommendation is
+		// never dropped because the parser refused.
+		if req.HCLPatch != nil {
+			merged, applyResult, mergeErr := hclpatch.ApplyPatch(existingContent, req.HCLPatch)
+			if mergeErr == nil {
+				finalContent = merged
+				dispositionActual = dispositionPatchExistingHCLMerged
+				if applyResult != nil && applyResult.LifecycleIgnoresPatchedAttr {
+					lifecycleIgnored = true
+					ignoredAttrPath = applyResult.IgnoredAttrPath
+				}
+			} else {
+				// Slice-2 fallback. Stamp the failure reason for
+				// the audit payload + the operator-visible banner.
+				dispositionActual = dispositionPatchExistingFellBackToAppend
+				hclPatchFailureReason = hclPatchFailureReasonOf(mergeErr)
+				if h.logger != nil {
+					h.logger.Warn("iac github open-pr: HCL merge fell back to append",
+						zap.String("resource_kind", req.ResourceKind),
+						zap.String("reason", hclPatchFailureReason),
+						zap.Error(mergeErr),
+					)
+				}
+				finalContent = appendSnippetWithTrailingNewline(existingContent, []byte(req.Snippet))
+			}
+		} else {
+			// No structured patch — slice-1.5 era recommendation
+			// (or a proposer prompt that didn't emit one). Same
+			// fallback path as a merge failure, with a distinct
+			// audit reason so an auditor can tell them apart.
+			dispositionActual = dispositionPatchExistingFellBackToAppend
+			hclPatchFailureReason = "no_patch_emitted"
+			finalContent = appendSnippetWithTrailingNewline(existingContent, []byte(req.Snippet))
+		}
 	}
 
 	// Step 6: PUT file content to new branch.
@@ -1166,15 +1253,26 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 		return
 	}
 
-	// Step 7: open PR. patch_existing PRs carry a "[needs manual
-	// merge]" title prefix + a loud merge-warning section in the
-	// body so the operator knows the slice-1.5 disposition before
-	// they click into the PR.
+	// Step 7: open PR. patch_existing PRs that fell back to
+	// append-only carry a "[needs manual merge]" title prefix + a
+	// loud merge-warning section. patch_existing PRs that the HCL
+	// merger handled cleanly carry NEITHER — the absence of the
+	// banner IS the slice-2 signal that the PR is merge-clean.
 	prTitle := buildPRTitle(req.ResourceKind, len(req.AffectedResources), scanIDShort)
-	if disposition == iac.DispositionPatchExisting {
+	if dispositionActual == dispositionPatchExistingFellBackToAppend {
 		prTitle = "[needs manual merge] " + prTitle
 	}
-	prBody := buildPRBody(req.ProposerReasoning, req.Snippet, req.AffectedResources, disposition, targetFilePath)
+	prBody := buildPRBody(buildPRBodyOptions{
+		Reasoning:             req.ProposerReasoning,
+		Snippet:               req.Snippet,
+		Affected:              req.AffectedResources,
+		Disposition:           disposition,
+		DispositionActual:     dispositionActual,
+		TargetFilePath:        targetFilePath,
+		LifecycleIgnored:      lifecycleIgnored,
+		IgnoredAttrPath:       ignoredAttrPath,
+		HCLPatchFailureReason: hclPatchFailureReason,
+	})
 	pr, err := client.OpenPR(ctx, iacgithub.OpenPROptions{
 		Owner: owner, Repo: repo,
 		Title: prTitle,
@@ -1190,11 +1288,12 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	}
 
 	// Step 8: labels per design doc §7, plus
-	// "squadron/needs-manual-merge" for patch_existing kinds so
-	// operator's auto-merge tools (Mergify, etc.) can exclude the
-	// label.
+	// "squadron/needs-manual-merge" only when the actual path was
+	// the slice-1.5 append-only fallback. Successful slice-2 HCL
+	// merges drop the label entirely so operator's auto-merge
+	// tools see the PR as the same shape as a new_file PR.
 	labels := []string{"squadron", "squadron/" + req.ResourceKind}
-	if disposition == iac.DispositionPatchExisting {
+	if dispositionActual == dispositionPatchExistingFellBackToAppend {
 		labels = append(labels, "squadron/needs-manual-merge")
 	}
 	if err := client.AddLabels(ctx, owner, repo, pr.Number, labels); err != nil {
@@ -1228,7 +1327,12 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	// created_file_path on new_file, the placement file on
 	// patch_existing) so existing humanizers and SIEM forwarders
 	// that key off `file_path` keep working.
-	manualMergeRequired := disposition == iac.DispositionPatchExisting
+	// v0.89.12 #628 Stream 29: manualMergeRequired tracks the
+	// ACTUAL path the handler took, not the structural disposition.
+	// A successful slice-2 HCL merge drops the marker; a fallback
+	// keeps it. The UI's success card uses this signal to render
+	// either the green checkmark or the amber banner.
+	manualMergeRequired := dispositionActual == dispositionPatchExistingFellBackToAppend
 	if h.auditService != nil {
 		payload := map[string]any{
 			"scan_id":               req.ScanID,
@@ -1241,9 +1345,19 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 			"commit_sha":            putRes.CommitSHA,
 			"file_path":             targetFilePath,
 			"disposition":           disposition,
+			"disposition_actual":    dispositionActual,
 			"manual_merge_required": manualMergeRequired,
 			"actor":                 services.AuditActorSystem,
 			"recorded_at":           time.Now().UTC(),
+		}
+		if lifecycleIgnored {
+			payload["lifecycle_ignored"] = true
+			if ignoredAttrPath != "" {
+				payload["lifecycle_ignored_attr"] = ignoredAttrPath
+			}
+		}
+		if hclPatchFailureReason != "" {
+			payload["hcl_patch_failure_reason"] = hclPatchFailureReason
 		}
 		if disposition == iac.DispositionNewFile {
 			payload["created_file_path"] = targetFilePath
@@ -1262,14 +1376,17 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, iacGitHubOpenPRResponse{
-		PRNumber:            pr.Number,
-		PRURL:               pr.HTMLURL,
-		Branch:              branchName,
-		CommitSHA:           putRes.CommitSHA,
-		FilePath:            targetFilePath,
-		RepoFullName:        conn.RepoFullName,
-		Disposition:         disposition,
-		ManualMergeRequired: manualMergeRequired,
+		PRNumber:              pr.Number,
+		PRURL:                 pr.HTMLURL,
+		Branch:                branchName,
+		CommitSHA:             putRes.CommitSHA,
+		FilePath:              targetFilePath,
+		RepoFullName:          conn.RepoFullName,
+		Disposition:           disposition,
+		ManualMergeRequired:   manualMergeRequired,
+		DispositionActual:     dispositionActual,
+		LifecycleIgnored:      lifecycleIgnored,
+		HCLPatchFailureReason: hclPatchFailureReason,
 	})
 }
 
@@ -1528,53 +1645,131 @@ func buildPRTitle(resourceKind string, count int, scanIDShort string) string {
 		resourceKind, count, plural, scanIDShort)
 }
 
+// Disposition-actual constants for v0.89.12 #628 Stream 29 (slice 2).
+// These refine the structural Disposition with the path the handler
+// actually took at PR open time:
+//
+//   - dispositionPatchExistingHCLMerged — slice-2 HCL-aware merge
+//     completed cleanly. PR body has no manual-merge banner; PR
+//     labels do not include squadron/needs-manual-merge.
+//   - dispositionPatchExistingFellBackToAppend — slice-2 fallback
+//     to the slice-1.5 append-only path after the HCL merger
+//     refused (parse error, resource not found, unknown op,
+//     invalid value type, or no patch emitted by the proposer).
+//     PR body carries the slice-1.5 manual-merge banner; the
+//     manual-merge label is applied.
+const (
+	dispositionPatchExistingHCLMerged          = "patch_existing_hcl_merged"
+	dispositionPatchExistingFellBackToAppend   = "patch_existing_fell_back_to_append"
+)
+
+// hclPatchFailureReasonOf maps the hclpatch sentinel errors to a
+// stable audit string. The handler keys off these in the
+// recommendation.pr_opened payload's `hcl_patch_failure_reason`
+// field so an auditor can correlate the fallback against the
+// hclpatch error class without parsing the wrapped error text.
+func hclPatchFailureReasonOf(err error) string {
+	switch {
+	case errors.Is(err, hclpatch.ErrParseFailed):
+		return "parse_error"
+	case errors.Is(err, hclpatch.ErrResourceNotFound):
+		return "resource_not_found"
+	case errors.Is(err, hclpatch.ErrAmbiguousResource):
+		return "ambiguous_resource"
+	case errors.Is(err, hclpatch.ErrUnknownOp):
+		return "unknown_op"
+	case errors.Is(err, hclpatch.ErrInvalidValueType):
+		return "invalid_value_type"
+	default:
+		return "other"
+	}
+}
+
+// buildPRBodyOptions bundles the v0.89.12 (#628 Stream 29) inputs
+// to buildPRBody. The struct was promoted from positional args
+// when slice 2 added the lifecycle-warning + fallback-reason
+// surfaces; further additions land here without churning every
+// caller.
+type buildPRBodyOptions struct {
+	Reasoning             string
+	Snippet               string
+	Affected              []string
+	Disposition           string // structural: "new_file" | "patch_existing"
+	DispositionActual     string // refined: see the disposition_actual constants above
+	TargetFilePath        string
+	LifecycleIgnored      bool
+	IgnoredAttrPath       string
+	HCLPatchFailureReason string
+}
+
 // buildPRBody assembles the design-doc §7 PR body: proposer
 // reasoning, affected resources, the snippet in a fenced block, the
 // disposition-aware merge-posture note, and the orchestrator-not-
 // executor footer.
 //
-// v0.89.11 (#626 Stream 27) — slice 1.5 — the disposition argument
-// drives a section above the proposed-change block:
+// v0.89.12 (#628 Stream 29) — slice 2 — the banner choice now
+// depends on DispositionActual rather than the structural
+// Disposition:
 //
-//   - new_file: a one-line note that Squadron created the named
-//     sibling file (clean drop-in, merge-clean).
-//   - patch_existing: a loud merge-warning section calling out that
-//     terraform plan in CI will surface a duplicate-resource error
-//     until the operator hand-integrates the snippet into the
-//     existing block. Slice 2 (HCL-aware merging) will obviate this.
-func buildPRBody(reasoning, snippet string, affected []string, disposition, targetFilePath string) string {
+//   - new_file — clean drop-in note (unchanged from slice 1.5).
+//   - patch_existing_hcl_merged — green "Clean HCL merge" note;
+//     no duplicate-resource warning. When LifecycleIgnored is true
+//     a SECOND note warns the operator that terraform apply will
+//     no-op the patched attribute because of an existing
+//     lifecycle.ignore_changes entry.
+//   - patch_existing_fell_back_to_append — the slice-1.5 loud
+//     "manual merge required" warning, plus an extra line naming
+//     the HCLPatchFailureReason so the operator understands why
+//     the slice-2 path didn't run.
+func buildPRBody(opts buildPRBodyOptions) string {
 	var b strings.Builder
 
-	// Slice 1.5 disposition banner — runs ABOVE Why so the
-	// operator sees the merge posture before they read the
-	// rationale. For new_file, a single sentence is plenty.
-	switch disposition {
-	case "patch_existing":
+	switch opts.DispositionActual {
+	case dispositionPatchExistingFellBackToAppend:
 		b.WriteString("> [!WARNING]\n")
 		b.WriteString("> **Manual merge required.** Squadron appended this snippet to ")
-		b.WriteString("`" + targetFilePath + "` because it modifies an existing Terraform ")
-		b.WriteString("resource block (slice 1.5 disposition: `patch_existing`). ")
+		b.WriteString("`" + opts.TargetFilePath + "` because it modifies an existing Terraform ")
+		b.WriteString("resource block AND the slice-2 HCL-aware merge could not run ")
+		b.WriteString("(reason: `" + opts.HCLPatchFailureReason + "`). ")
 		b.WriteString("Merging this PR as-is will cause `terraform plan` to fail with a ")
 		b.WriteString("duplicate-resource error. Hand-integrate the highlighted attributes ")
-		b.WriteString("into the existing resource block, then merge. Slice 2 (HCL-aware merging) ")
-		b.WriteString("will close out this manual step — see ")
-		b.WriteString("`docs/proposals/603-slice-2-hcl-aware-merging.md`.\n\n")
-	case "new_file":
+		b.WriteString("into the existing resource block, then merge. See ")
+		b.WriteString("`docs/proposals/603-slice-2-hcl-aware-merging.md` §9 for the ")
+		b.WriteString("fallback-reason catalog.\n\n")
+	case dispositionPatchExistingHCLMerged:
+		b.WriteString("> [!NOTE]\n")
+		b.WriteString("> **Clean HCL merge.** Squadron parsed `" + opts.TargetFilePath + "` ")
+		b.WriteString("and applied the proposer's structured patch to the existing ")
+		b.WriteString("resource block in place (slice 2 disposition: ")
+		b.WriteString("`patch_existing_hcl_merged`). No duplicate-resource conflict; ")
+		b.WriteString("review the diff and merge.\n\n")
+		if opts.LifecycleIgnored {
+			b.WriteString("> [!WARNING]\n")
+			b.WriteString("> **`lifecycle.ignore_changes` affects this patch.** The target resource ")
+			b.WriteString("carries `lifecycle { ignore_changes = [...] }` referencing the ")
+			b.WriteString("`" + opts.IgnoredAttrPath + "` attribute. The file change Squadron wrote ")
+			b.WriteString("is real, but `terraform apply` will no-op the corresponding update ")
+			b.WriteString("until the operator removes that entry from `ignore_changes`. If the ")
+			b.WriteString("ignore entry was a staging step for a prior change, this is ")
+			b.WriteString("expected; otherwise consider editing the resource's lifecycle block ")
+			b.WriteString("alongside this merge.\n\n")
+		}
+	case iac.DispositionNewFile:
 		b.WriteString("> [!NOTE]\n")
 		b.WriteString("> **Clean drop-in.** Squadron created a new sibling file ")
-		b.WriteString("`" + targetFilePath + "` because this snippet defines a net-new top-level ")
-		b.WriteString("Terraform resource (slice 1.5 disposition: `new_file`). No manual ")
+		b.WriteString("`" + opts.TargetFilePath + "` because this snippet defines a net-new top-level ")
+		b.WriteString("Terraform resource (disposition: `new_file`). No manual ")
 		b.WriteString("integration is needed — review the file and merge.\n\n")
 	}
 
-	if strings.TrimSpace(reasoning) != "" {
+	if strings.TrimSpace(opts.Reasoning) != "" {
 		b.WriteString("## Why\n\n")
-		b.WriteString(strings.TrimSpace(reasoning))
+		b.WriteString(strings.TrimSpace(opts.Reasoning))
 		b.WriteString("\n\n")
 	}
-	if len(affected) > 0 {
+	if len(opts.Affected) > 0 {
 		b.WriteString("## Affected resources\n\n")
-		for _, r := range affected {
+		for _, r := range opts.Affected {
 			b.WriteString("- ")
 			b.WriteString(r)
 			b.WriteString("\n")
@@ -1583,7 +1778,7 @@ func buildPRBody(reasoning, snippet string, affected []string, disposition, targ
 	}
 	b.WriteString("## Proposed change\n\n")
 	b.WriteString("```hcl\n")
-	b.WriteString(strings.TrimRight(snippet, "\n"))
+	b.WriteString(strings.TrimRight(opts.Snippet, "\n"))
 	b.WriteString("\n```\n\n")
 	b.WriteString("---\n")
 	b.WriteString("Authored by Squadron as orchestrator, not executor: this PR awaits ")

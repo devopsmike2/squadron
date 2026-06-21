@@ -188,6 +188,15 @@ export interface IaCGitHubOpenPRRequest {
   proposer_reasoning: string;
   affected_resources: string[];
   account_id?: string;
+  /** v0.89.12 #628 Stream 29 (slice 2) — structured HCL patch for
+   * patch_existing kinds. When present, the backend's HCL-aware
+   * merger applies the per-attribute edits in place and the PR
+   * ships as a clean drop-in (no manual-merge label). When
+   * absent or the merger refuses, the backend falls back to the
+   * slice-1.5 append-only behavior. The UI forwards verbatim
+   * whatever the discovery handler placed on
+   * `Recommendation.hcl_patch`; no client-side schema parsing. */
+  hcl_patch?: unknown;
 }
 
 export interface IaCGitHubOpenPRResponse {
@@ -206,8 +215,42 @@ export interface IaCGitHubOpenPRResponse {
   /** v0.89.11 #626 Stream 27 — true on patch_existing dispositions;
    * the UI's success card mirrors this with a "Needs manual merge"
    * marker so the operator's recall is anchored to the same
-   * language the PR title carries. */
+   * language the PR title carries.
+   *
+   * v0.89.12 (#628 Stream 29) — slice 2 — this is now driven by
+   * `disposition_actual`: false on patch_existing_hcl_merged, true
+   * on patch_existing_fell_back_to_append. Existing
+   * patch_existing-aware UI code that keys off this boolean keeps
+   * working unchanged. */
   manual_merge_required?: boolean;
+  /** v0.89.12 #628 Stream 29 (slice 2) — the actual disposition
+   * path the handler took:
+   *  - "new_file" — slice-1.5 sibling-file write.
+   *  - "patch_existing_hcl_merged" — slice-2 HCL-aware merge
+   *    completed cleanly. PR is merge-clean.
+   *  - "patch_existing_fell_back_to_append" — slice-2 fell back to
+   *    slice-1.5 append-only behavior; PR carries the
+   *    manual-merge label. The UI's success card uses this to
+   *    render either the green "HCL-merged" checkmark or the
+   *    amber "Needs manual merge" banner. Absent on pre-v0.89.12
+   *    server responses. */
+  disposition_actual?:
+    | "new_file"
+    | "patch_existing_hcl_merged"
+    | "patch_existing_fell_back_to_append"
+    | string;
+  /** v0.89.12 — true when the HCL merger detected
+   * lifecycle.ignore_changes on the target resource referencing a
+   * patched attribute. The UI's success card surfaces this as a
+   * note. */
+  lifecycle_ignored?: boolean;
+  /** v0.89.12 — populated only on disposition_actual =
+   * patch_existing_fell_back_to_append. One of:
+   * "parse_error" | "resource_not_found" | "ambiguous_resource"
+   * | "unknown_op" | "invalid_value_type" | "no_patch_emitted"
+   * | "other". The UI's success card surfaces this so the
+   * operator understands WHY the manual-merge banner is back. */
+  hcl_patch_failure_reason?: string;
 }
 
 // IaCGitHubOpenPRError is a typed Error subclass that preserves the

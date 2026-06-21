@@ -43,7 +43,7 @@ import (
 // on the operator's repo identifies Squadron's writes. The version
 // suffix tracks Squadron's release tag; bumping the suffix when a
 // slice ships is harmless — GitHub does not parse the string.
-const UserAgent = "Squadron/0.89.11 (Connect-IaC-Repo)"
+const UserAgent = "Squadron/0.89.12 (Connect-IaC-Repo)"
 
 // defaultBaseURL is the public GitHub.com API root. PATClient lets a
 // caller override it for tests (httptest.NewServer) and, in a future

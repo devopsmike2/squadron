@@ -1190,6 +1190,94 @@ describe("DiscoveryAWSPage", () => {
     ).toBeInTheDocument();
   });
 
+  // v0.89.12 (#628 Stream 29) — slice 2 — when the recommendation
+  // carries an `hcl_patch` field, the backend's HCL merger will
+  // produce a clean drop-in PR. The amber "Needs manual merge"
+  // badge is replaced by a green "HCL-merged" checkmark so the
+  // operator sees the clean experience BEFORE clicking Open PR.
+  it("RecommendationCard_renders_HCLMerged_checkmark_on_patch_existing_with_hcl_patch", async () => {
+    const lambdaRecWithPatch: Recommendation = {
+      ...lambdaRec,
+      // Opaque shape from the UI's perspective — the backend
+      // schema-validates and applies.
+      hcl_patch: {
+        kind: "lambda-otel-layer",
+        disposition: "patch_existing",
+        target_resource_address: "aws_lambda_function.hello",
+        patches: [
+          {
+            attribute_path: ["layers"],
+            op: "list_append_dedupe",
+            value: ["arn:aws:lambda:us-east-1:999:layer:otel:1"],
+          },
+        ],
+      },
+    };
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    const user = userEvent.setup();
+    await driveToRecsTab(user, makeRecsResp([lambdaRecWithPatch]));
+
+    // Open PR button still rendered; the slice-2 badge is the
+    // green checkmark, NOT the amber "Needs manual merge".
+    expect(
+      screen.getByRole("button", { name: /^Open PR for/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/HCL-merged/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Needs manual merge/i),
+    ).not.toBeInTheDocument();
+  });
+
+  // v0.89.12 — fallback case: patch_existing kind with NO
+  // hcl_patch (slice-1.5-era recommendation, or a proposer prompt
+  // that didn't emit one). The amber "Needs manual merge" badge
+  // is preserved — backend will fall back to slice-1.5 append.
+  it("RecommendationCard_renders_NeedsManualMerge_badge_when_patch_existing_has_no_hcl_patch", async () => {
+    // lambdaRec already has disposition=patch_existing and NO
+    // hcl_patch. Reuse it directly.
+    const conn: IaCGitHubConnection = {
+      connection_id: "conn-1",
+      provider: "github",
+      auth_kind: "pat",
+      repo_full_name: "octo/infra",
+      default_branch: "main",
+      repo_layout: "multi",
+      placement_map: [
+        {
+          provider: "aws",
+          resource_kind: "lambda-otel-layer",
+          file_path: "modules/lambda/main.tf",
+        },
+      ],
+      created_at: new Date().toISOString(),
+    };
+    mockedListIaCConnections.mockResolvedValue({ connections: [conn] });
+    const user = userEvent.setup();
+    await driveToRecsTab(user);
+
+    expect(
+      screen.getByRole("button", { name: /^Open PR for/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Needs manual merge/i)).toBeInTheDocument();
+    expect(screen.queryByText(/HCL-merged/i)).not.toBeInTheDocument();
+  });
+
   it("RecommendationCard_does_NOT_render_NeedsManualMerge_badge_on_new_file", async () => {
     // s3-access-logging is a new_file disposition. Card renders
     // Open PR cleanly without the manual-merge badge.

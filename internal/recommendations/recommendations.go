@@ -218,6 +218,25 @@ type Recommendation struct {
 	// cost-spike outputs) and for discovery recommendations whose
 	// ResourceKind is empty.
 	Disposition string `json:"disposition,omitempty"`
+
+	// HCLPatch — v0.89.12 #628 Stream 29 (slice 2) — structured
+	// per-attribute edit description for patch_existing kinds.
+	// Sourced from the discovery proposer's step.HCLPatch when the
+	// model emits it. The Recommendations tab forwards this
+	// verbatim on the Open-PR request; the backend's HCL merger
+	// consumes it to produce a clean drop-in PR (no manual-merge
+	// label). Held as json.RawMessage so the recommendations
+	// package doesn't import internal/iac/hclpatch — the wire
+	// shape is the contract; the handler layer unmarshals to the
+	// typed struct.
+	//
+	// Empty on new_file kinds (no patch needed), on
+	// patch_existing kinds from pre-v0.89.12 proposer prompts,
+	// and on all non-discovery recommendations. The UI keys off
+	// presence/absence: present → render green "HCL-merged"
+	// checkmark; absent → render amber "Needs manual merge"
+	// badge.
+	HCLPatch json.RawMessage `json:"hcl_patch,omitempty"`
 }
 
 // SourceKind is the typed enum carried on RecommendationSource.

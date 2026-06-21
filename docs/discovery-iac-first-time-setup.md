@@ -88,10 +88,23 @@ limitations.
   container insights), the append-only behavior is preserved but
   the PR is clearly labeled `[needs manual merge]` so you know
   hand integration is required before clicking. See §"PR
-  disposition" below for the full table. Slice 2 (HCL-aware
-  merging — see
-  [proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md))
-  will close out the patch kinds.
+  disposition" below for the full table.
+- **Slice 2 (v0.89.12) closes the gap entirely.** The five
+  patch_existing kinds now get HCL-aware merging: Squadron parses
+  the placement file as Terraform, locates the existing resource
+  block, applies the proposer's structured per-attribute edits
+  in place, and ships a clean drop-in PR. The
+  `[needs manual merge]` title prefix and the
+  `squadron/needs-manual-merge` label drop away on the merged
+  path. If the placement file fails to parse, the target resource
+  address resolves to nothing, or any other slice-2 precondition
+  is violated, the handler falls back cleanly to the slice-1.5
+  append-only behavior — the operator never loses a
+  recommendation; the PR just opens with the slice-1.5 marker
+  plus a one-line note in the body naming the fallback reason.
+  See
+  [proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md)
+  for the full design.
 - **Squadron does not auto-merge.** Every PR is reviewable in the
   normal GitHub workflow. Auto-merge tools (Mergify, Auto-merge
   apps) on your side will treat Squadron PRs the same as any other
@@ -384,19 +397,37 @@ Terraform shape:
   labels and no manual-merge marker.
 - **`patch_existing`** — the snippet modifies an EXISTING top-level
   resource block (e.g. adding `layers = [...]` to an
-  `aws_lambda_function` your module already declares). Squadron
-  appends to the placement file (slice-1 behavior) and labels the
-  PR `[needs manual merge]` — the title carries that prefix, an
-  extra `squadron/needs-manual-merge` label is added, and the PR
-  body opens with a loud "Manual merge required" callout. You
-  hand-integrate the highlighted attributes into your existing
-  resource block, then merge.
+  `aws_lambda_function` your module already declares).
+  - **Slice 2 path (v0.89.12, the default).** Squadron parses the
+    placement file as HCL, locates the existing resource block by
+    `<resource_type>.<name>`, applies the proposer's structured
+    patch in place (e.g. `list_append_dedupe` on `layers`,
+    `map_merge` on `environment.variables`), and ships the result
+    as a clean drop-in PR. No `[needs manual merge]` title prefix;
+    no `squadron/needs-manual-merge` label. If the target resource
+    carries `lifecycle { ignore_changes = [...] }` referencing a
+    patched attribute, the PR body adds a one-line note — the
+    file change still lands but `terraform apply` will no-op the
+    corresponding attribute until you edit the ignore_changes
+    entry.
+  - **Slice 1.5 fallback.** When the placement file fails to parse,
+    the target resource address doesn't resolve to anything, the
+    proposer didn't emit a structured patch (older prompts), or
+    any other slice-2 precondition is violated, Squadron falls
+    back to the slice-1.5 append-only behavior: appends to the
+    placement file, prefixes the title with `[needs manual merge]`,
+    applies the `squadron/needs-manual-merge` label, and renders
+    the "Manual merge required" callout in the PR body. The PR
+    body's callout names the fallback reason (parse_error,
+    resource_not_found, etc.) so you can act on it.
 
 The disposition is STRUCTURAL — Squadron's server applies the same
 mapping on every request, independent of the proposer's output.
 The Recommendations card surfaces the disposition BEFORE you click:
-patch_existing kinds get a small amber "Needs manual merge" badge
-next to the Open PR button.
+patch_existing kinds with a slice-2 structured patch get a small
+green "HCL-merged" checkmark next to Open PR; patch_existing kinds
+without a structured patch get a small amber "Needs manual merge"
+badge.
 
 Per-kind table:
 
@@ -412,9 +443,28 @@ Per-kind table:
 | `dynamodb-contributor-insights` | `new_file`        | `aws_dynamodb_contributor_insights` is its own resource|
 | `ecs-container-insights`        | `patch_existing`  | modifies `aws_ecs_cluster.setting` nested block        |
 
-Slice 2 will land HCL-aware merging so patch_existing kinds also
-produce merge-clean PRs. The design is being written in parallel
-at [proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md).
+Slice 2 (v0.89.12) ships the HCL-aware merger. The five
+patch_existing kinds above each have a locked patch shape the
+proposer emits; see
+[proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md)
+for the full design and per-kind schema.
+
+### HCL merge fallback reasons
+
+When Squadron's slice-2 HCL merger refuses, the PR opens via the
+slice-1.5 append-only path and the body callout names the reason.
+The codes the audit payload's `hcl_patch_failure_reason` field
+carries:
+
+| Reason                | Meaning                                                                |
+|-----------------------|------------------------------------------------------------------------|
+| `parse_error`         | Existing placement file is not valid HCL today. Fix it and re-scan.    |
+| `resource_not_found`  | The target resource address (`<type>.<name>`) doesn't exist in the file. The operator may have renamed the resource since the scan. |
+| `ambiguous_resource`  | Multiple resource blocks match the same address (shouldn't happen — Terraform itself rejects this — but the check is defensive). |
+| `unknown_op`          | The proposer emitted an HCL patch op outside the 5-op vocabulary. Re-running the proposer (newer prompt) usually fixes it. |
+| `invalid_value_type`  | The proposer emitted a value whose Go-side type doesn't match the op (e.g. `scalar_set` with a list). Same fix as `unknown_op`. |
+| `no_patch_emitted`    | The proposer is on a pre-v0.89.12 prompt and didn't emit a structured patch at all. Re-run the scan after upgrading. |
+| `other`               | Unclassified merge error. Open an issue with the audit payload.        |
 
 ## Trust thesis — what Squadron does and does not do
 

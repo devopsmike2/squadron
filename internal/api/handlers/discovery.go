@@ -1951,6 +1951,16 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		if rec.ResourceKind != "" {
 			rec.Disposition = iac.DispositionFor(rec.ResourceKind)
 		}
+		// v0.89.12 #628 Stream 29 (slice 2): plumb the proposer-
+		// emitted HCL patch through to the recommendation
+		// envelope. Only meaningful on patch_existing kinds; the
+		// Open-PR backend's HCL merger reads it from the request
+		// body. Absent (nil) on slice-1.5-era recommendations and
+		// on new_file kinds; the absence flows through cleanly
+		// and the handler treats it as a fall-back signal.
+		if len(step.HCLPatch) > 0 {
+			rec.HCLPatch = append([]byte(nil), step.HCLPatch...)
+		}
 		recs = append(recs, rec)
 	}
 
