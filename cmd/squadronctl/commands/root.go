@@ -87,6 +87,10 @@ squadronctl's span nests under that. See docs/squadronctl.md
 		newPlansCommand(),
 		newAuditCommand(),
 		newIncidentsCommand(),
+		// v0.89.8 (#617, Stream 22) — IaC repo connection surface
+		// + multi-account discovery scan surfaced on the CLI.
+		newIaCCommand(),
+		newDiscoveryCommand(),
 	)
 	return root
 }
