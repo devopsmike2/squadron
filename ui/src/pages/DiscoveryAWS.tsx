@@ -1980,6 +1980,13 @@ export function DiscoveryRecommendationCard({
         // posture, just lit up for newer proposer outputs.
         affected_resources: rec.affected_resources ?? [],
         account_id: accountID || undefined,
+        // v0.89.12 (#628 Stream 29) — slice 2 — forward the
+        // proposer-emitted structured patch verbatim. When undefined
+        // (slice-1.5-era recommendation, or new_file step), the
+        // backend's HCL merger doesn't run and the slice-1.5
+        // append-only path stays in effect — no UI-side branching
+        // needed.
+        hcl_patch: rec.hcl_patch,
       });
       setOpenPRResult(res);
     } catch (e) {
@@ -2017,6 +2024,7 @@ export function DiscoveryRecommendationCard({
     connection,
     rec.resource_kind,
     rec.affected_resources,
+    rec.hcl_patch,
     snippetSource,
     scanID,
     stepIdx,
@@ -2115,7 +2123,34 @@ export function DiscoveryRecommendationCard({
                 {/* v0.89.11 (#626 Stream 27) — slice-1.5 manual-merge
                     marker on the success card. Anchors the operator's
                     recall to the same "[needs manual merge]" prefix
-                    the PR title carries on GitHub. */}
+                    the PR title carries on GitHub.
+
+                    v0.89.12 (#628 Stream 29) — slice 2 — when the
+                    backend's HCL merge ran cleanly (disposition_actual
+                    = patch_existing_hcl_merged), surface a green
+                    affirmative; when it fell back, surface the failure
+                    reason so the operator knows WHY the manual-merge
+                    banner is back. */}
+                {openPRResult.disposition_actual ===
+                  "patch_existing_hcl_merged" && (
+                  <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                    <Check className="mr-1 inline h-3 w-3" aria-hidden />
+                    HCL-merged — Squadron parsed the placement file and
+                    applied the patch in place. terraform plan accepts
+                    the result; no manual integration needed.
+                  </p>
+                )}
+                {openPRResult.lifecycle_ignored && (
+                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                    <AlertTriangle
+                      className="mr-1 inline h-3 w-3"
+                      aria-hidden
+                    />
+                    lifecycle.ignore_changes covers one of the patched
+                    attributes — terraform apply will no-op that
+                    attribute until you edit the ignore_changes entry.
+                  </p>
+                )}
                 {openPRResult.manual_merge_required && (
                   <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
                     <AlertTriangle
@@ -2125,6 +2160,16 @@ export function DiscoveryRecommendationCard({
                     Manual merge required — Squadron appended the
                     snippet to your placement file. Hand-integrate
                     before merging.
+                    {openPRResult.hcl_patch_failure_reason ? (
+                      <>
+                        {" "}
+                        (slice-2 HCL merge fell back: reason{" "}
+                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                          {openPRResult.hcl_patch_failure_reason}
+                        </code>
+                        )
+                      </>
+                    ) : null}
                   </p>
                 )}
                 <p className="mt-2 text-xs text-muted-foreground">
@@ -2189,12 +2234,36 @@ export function DiscoveryRecommendationCard({
                       clicks Open PR so they know the slice-1 append-
                       only behavior will require hand integration. For
                       new_file kinds the badge is suppressed — the
-                      implicit "clean" experience. */}
+                      implicit "clean" experience.
+
+                      v0.89.12 (#628 Stream 29) — slice 2 — when the
+                      recommendation carries an `hcl_patch` field the
+                      backend's HCL-aware merger will produce a clean
+                      drop-in PR; we swap the amber "Needs manual
+                      merge" badge for a green "HCL-merged" checkmark
+                      so the operator sees the clean experience BEFORE
+                      clicking Open PR. The fallback (proposer didn't
+                      emit a patch — slice 1.5 era recommendation)
+                      keeps the amber badge. */}
                   {openPREligible &&
-                    rec.disposition === "patch_existing" && (
+                    rec.disposition === "patch_existing" &&
+                    rec.hcl_patch != null && (
                       <Badge
                         variant="outline"
-                        title="Squadron appends the snippet to the placement file. terraform plan will fail with a duplicate-resource error until you hand-integrate the change. Slice 2 (HCL-aware merging) will close this out."
+                        title="Squadron will parse the placement file and apply the proposer's structured patch in place. terraform plan accepts the result; no manual integration needed."
+                        aria-label="HCL-merged — clean apply"
+                        className="border-emerald-500/40 text-xs text-emerald-700 dark:text-emerald-300"
+                      >
+                        <Check className="mr-1 h-3 w-3" aria-hidden />
+                        HCL-merged
+                      </Badge>
+                    )}
+                  {openPREligible &&
+                    rec.disposition === "patch_existing" &&
+                    rec.hcl_patch == null && (
+                      <Badge
+                        variant="outline"
+                        title="Squadron appends the snippet to the placement file. terraform plan will fail with a duplicate-resource error until you hand-integrate the change. The proposer didn't emit a structured patch for this recommendation; the slice-2 HCL-aware merge could not run."
                         aria-label="Needs manual merge — patch_existing disposition"
                         className="border-amber-500/40 text-xs text-amber-700 dark:text-amber-300"
                       >

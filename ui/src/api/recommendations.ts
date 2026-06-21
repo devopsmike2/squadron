@@ -135,6 +135,15 @@ export interface Recommendation {
    * badge next to the Open PR button on patch_existing kinds.
    * Empty for non-IaC recommendations. */
   disposition?: "new_file" | "patch_existing" | string;
+  /** v0.89.12 #628 Stream 29 (slice 2) — structured HCL patch for
+   * patch_existing kinds. When PRESENT the UI knows the backend's
+   * HCL-aware merger will produce a clean drop-in PR and renders
+   * a green "HCL-merged — clean apply" indicator instead of the
+   * amber "Needs manual merge" badge. The shape is opaque to the
+   * client — the UI forwards it verbatim on the Open-PR request.
+   * Absent on new_file kinds, on slice-1.5-era recommendations,
+   * and on all non-IaC recommendations. */
+  hcl_patch?: unknown;
 }
 
 export interface RecommendationsResponse {

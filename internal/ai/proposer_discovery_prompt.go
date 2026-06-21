@@ -260,6 +260,51 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`      eks-observability-addon       → new_file       (aws_eks_addon is new top-level)` + "\n" +
 	`      dynamodb-contributor-insights → new_file       (aws_dynamodb_contributor_insights is new top-level)` + "\n" +
 	`      ecs-container-insights        → patch_existing (aws_ecs_cluster.setting nested block on existing)` + "\n" +
+	`  - For EVERY patch_existing step, ALSO emit an "hcl_patch" field carrying a STRUCTURED ` +
+		`description of the per-attribute / per-nested-block edits the Open-PR handler should apply ` +
+		`to the existing Terraform resource block. The handler's HCL-aware merger (v0.89.12 slice 2) ` +
+		`consumes this to produce a clean drop-in PR; absence falls back to slice-1.5 append-only ` +
+		`with a manual-merge label. The patch lives alongside the inline_config_snippet — emit BOTH ` +
+		`so the slice-1.5 fallback also has the verbatim HCL to append.` + "\n" +
+		`    hcl_patch SCHEMA (locked):` + "\n" +
+		`      {` + "\n" +
+		`        "kind": "<one of the 5 patch_existing kinds>",` + "\n" +
+		`        "disposition": "patch_existing",` + "\n" +
+		`        "target_resource_address": "<aws_resource_type>.<resource_name>",` + "\n" +
+		`        "patches": [ { "attribute_path": [...], "op": "...", "value": ..., "block_key": "", "block_key_value": "" } ]` + "\n" +
+		`      }` + "\n" +
+		`    The "op" enum is LOCKED — do not invent new values:` + "\n" +
+		`      scalar_set                  — overwrite a scalar (string/bool/int)` + "\n" +
+		`      list_append_dedupe          — append to a list, case-sensitive dedupe, original order first` + "\n" +
+		`      nested_block_set            — set attrs on a singleton nested block; create if absent` + "\n" +
+		`      nested_block_find_or_create — find a repeated nested block by key, update OR append` + "\n" +
+		`      map_merge                   — set named keys on a map attribute without disturbing siblings` + "\n" +
+		`    PER-KIND patch shape (locked — do not improvise op choices):` + "\n" +
+		`      lambda-otel-layer:` + "\n" +
+		`        patches: [` + "\n" +
+		`          {attribute_path:["layers"], op:"list_append_dedupe", value:["<the OTel layer ARN>"]},` + "\n" +
+		`          {attribute_path:["environment","variables"], op:"map_merge", value:{"AWS_LAMBDA_EXEC_WRAPPER":"/opt/otel-handler"}}` + "\n" +
+		`        ]` + "\n" +
+		`      rds-pi-em (bundle of scalar_sets — emit only the levers your snippet enables):` + "\n" +
+		`        patches: [` + "\n" +
+		`          {attribute_path:["performance_insights_enabled"], op:"scalar_set", value:true},` + "\n" +
+		`          {attribute_path:["performance_insights_retention_period"], op:"scalar_set", value:7},` + "\n" +
+		`          {attribute_path:["monitoring_interval"], op:"scalar_set", value:30},` + "\n" +
+		`          {attribute_path:["monitoring_role_arn"], op:"scalar_set", value:"<the EM role ARN>"}` + "\n" +
+		`        ]` + "\n" +
+		`      alb-access-logs (singleton nested block):` + "\n" +
+		`        patches: [` + "\n" +
+		`          {attribute_path:["access_logs"], op:"nested_block_set", value:{"bucket":"<bucket>","enabled":true,"prefix":"<prefix>"}}` + "\n" +
+		`        ]` + "\n" +
+		`      eks-cluster-logging (list append-dedupe):` + "\n" +
+		`        patches: [` + "\n" +
+		`          {attribute_path:["enabled_cluster_log_types"], op:"list_append_dedupe", value:["api","audit","authenticator","controllerManager","scheduler"]}` + "\n" +
+		`        ]` + "\n" +
+		`      ecs-container-insights (repeated nested block, find or create by name=containerInsights):` + "\n" +
+		`        patches: [` + "\n" +
+		`          {attribute_path:["setting"], op:"nested_block_find_or_create", block_key:"name", block_key_value:"containerInsights", value:{"set":{"value":"enabled"}}}` + "\n" +
+		`        ]` + "\n" +
+		`    Omit hcl_patch entirely on new_file steps (the handler doesn't read it for them).` + "\n" +
 	`  - You may decline (declined: true) if the scan returned zero uninstrumented ` +
 	`resources, or if every resource is so heterogeneous that no batch shares an ` +
 	`instrumentation strategy. State the reason briefly.` + "\n\n" +
@@ -297,6 +342,15 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`        "inline_config_snippet": "<complete Terraform HCL for step 0>",` + "\n" +
 	`        "affected_resources": ["arn:aws:lambda:us-east-1:123:function:hello","arn:aws:lambda:us-east-1:123:function:goodbye"],` + "\n" +
 	`        "disposition": "patch_existing",` + "\n" +
+	`        "hcl_patch": {` + "\n" +
+	`          "kind": "lambda-otel-layer",` + "\n" +
+	`          "disposition": "patch_existing",` + "\n" +
+	`          "target_resource_address": "aws_lambda_function.hello",` + "\n" +
+	`          "patches": [` + "\n" +
+	`            {"attribute_path":["layers"],"op":"list_append_dedupe","value":["arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-nodejs-amd64-ver-1-18-1:4"]},` + "\n" +
+	`            {"attribute_path":["environment","variables"],"op":"map_merge","value":{"AWS_LAMBDA_EXEC_WRAPPER":"/opt/otel-handler"}}` + "\n" +
+	`          ]` + "\n" +
+	`        },` + "\n" +
 	`        "require_approval": true,` + "\n" +
 	`        "stages": [` + "\n" +
 	`          {"mode":"percent","percentage":100,"dwell_seconds":0}` + "\n" +

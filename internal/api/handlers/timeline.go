@@ -529,14 +529,29 @@ func humanizeIaCAuditEvent(e *services.AuditEvent) (string, string, bool) {
 		// timeline sees the merge posture without clicking through.
 		// `disposition` is empty on pre-v0.89.11 payloads — fall
 		// back to the slice-1 phrasing for back-compat.
+		//
+		// v0.89.12 (#628 Stream 29) — slice 2 — disposition_actual
+		// refines the title further:
+		//   - patch_existing_hcl_merged → "with HCL-aware merge"
+		//   - patch_existing_fell_back_to_append → "HCL merge
+		//     failed; manual integration required"
+		// Pre-v0.89.12 payloads have no disposition_actual; fall
+		// back to the slice-1.5 phrasing keyed on `disposition`.
 		title := "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
 			" for " + kind
+		dispActual, _ := payloadString(e.Payload, "disposition_actual")
 		disp, _ := payloadString(e.Payload, "disposition")
-		switch disp {
-		case "new_file":
+		switch {
+		case dispActual == "patch_existing_hcl_merged":
+			title = "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
+				" with HCL-aware merge for " + kind
+		case dispActual == "patch_existing_fell_back_to_append":
+			title = "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
+				" for " + kind + " — HCL merge failed; manual integration required"
+		case dispActual == "new_file" || disp == "new_file":
 			title = "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
 				" creating " + filePath
-		case "patch_existing":
+		case disp == "patch_existing":
 			title = "Opened PR #" + strconv.Itoa(prNum) + " in github.com/" + repo +
 				" — manual merge required for " + kind
 		}

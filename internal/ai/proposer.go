@@ -195,6 +195,23 @@ type PlanStepCandidate struct {
 	// disposition concept) and on discovery outputs from older
 	// proposer prompts.
 	Disposition string `json:"disposition,omitempty"`
+
+	// HCLPatch — v0.89.12 #628 Stream 29 (slice 2) — structured
+	// per-attribute edit description the proposer emits for
+	// patch_existing kinds. When present AND the Open-PR handler's
+	// HCL merger accepts both the placement file's existing bytes
+	// and the patch, the PR ships as a clean drop-in (no
+	// manual-merge label). When absent OR the merger refuses, the
+	// handler falls back to slice-1.5 append-only behavior. Held
+	// as json.RawMessage so the ai package doesn't depend on
+	// internal/iac/hclpatch (which would invert the dependency
+	// arrow); the handler layer unmarshals into the typed struct.
+	//
+	// Empty on cost-spike outputs, on new_file discovery steps,
+	// and on patch_existing discovery steps from pre-v0.89.12
+	// proposer prompts (backward-compatible — the handler treats
+	// missing HCLPatch as "fall through to slice 1.5").
+	HCLPatch json.RawMessage `json:"hcl_patch,omitempty"`
 }
 
 // ProposalResult is what ProposeFromCostSpike returns. The proposer

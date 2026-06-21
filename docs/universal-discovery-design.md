@@ -1027,12 +1027,24 @@ its own arc. Three slices:
   manual-merge marker so the operator sees the friction BEFORE
   clicking. See the per-kind table in
   [discovery-iac-first-time-setup.md §"PR disposition"](discovery-iac-first-time-setup.md#pr-disposition--new_file-vs-patch_existing).
-- **Slice 2** (Stream 28, design landing in parallel as
+- **Slice 2** (#628 Stream 29, v0.89.12,
   [proposals/603-slice-2-hcl-aware-merging.md](proposals/603-slice-2-hcl-aware-merging.md)):
-  HCL-aware merging for the patch_existing kinds. Squadron will
-  parse the placement file, locate the existing resource block,
-  and produce a clean merge that `terraform plan` accepts on first
-  try. Slice 2 closes out the manual-merge label entirely.
+  HCL-aware merging for the patch_existing kinds. The proposer
+  emits a structured per-attribute patch alongside the verbatim
+  HCL snippet; the Open-PR handler parses the placement file via
+  `hashicorp/hcl/v2/hclwrite`, locates the existing resource block
+  by `<resource_type>.<name>`, applies the patch (one of five
+  locked ops: `scalar_set` / `list_append_dedupe` /
+  `nested_block_set` / `nested_block_find_or_create` /
+  `map_merge`), and ships a clean drop-in PR — no
+  `[needs manual merge]` title prefix, no
+  `squadron/needs-manual-merge` label. Any merge precondition
+  failure (parse error, unknown resource address, etc.) falls
+  back cleanly to the slice-1.5 append-only behavior so the
+  operator never loses a recommendation. The detection of
+  `lifecycle.ignore_changes` on a patched attribute is a
+  warn-only signal in the PR body — the file change is real but
+  `terraform apply` no-ops the corresponding attribute.
 
 ## Decision points
 
