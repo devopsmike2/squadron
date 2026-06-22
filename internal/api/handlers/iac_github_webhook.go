@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -41,29 +42,85 @@ const defaultSquadronBranchPrefix = "squadron/rec/"
 // log sees exactly which knob to turn.
 const gitHubWebhookSecretEnvVar = "SQUADRON_GITHUB_WEBHOOK_SECRET"
 
+// webhookDedupeRetention is the GC window for the
+// webhook_delivery_dedupe table. Rows older than this are deleted by
+// the background sweeper StartWebhookDedupeGC launches. 7 days is the
+// slice-2 default — long enough to make a meaningful replay attack
+// window costly, short enough that the table stays bounded across the
+// deployment lifetime. v0.89.30 (#649). Slice 3 may make this
+// configurable per deployment; slice 2 ships one value.
+const webhookDedupeRetention = 7 * 24 * time.Hour
+
+// webhookDedupeGCInterval is how often the background sweeper runs.
+// Daily is the right cadence — the receiver tolerates the dedupe
+// table growing for up to a day between sweeps, and the sweep itself
+// is a single ranged DELETE backed by idx_webhook_delivery_dedupe_received_at.
+// v0.89.30 (#649).
+const webhookDedupeGCInterval = 24 * time.Hour
+
+// WebhookDedupeStore is the narrow storage interface the webhook
+// receiver consumes for replay protection. Both methods come from the
+// v0.89.30 (#649) extension on applicationstore.ApplicationStore;
+// declaring a local interface keeps this handler off the full store
+// interface so test wire-ups don't have to stub the rest.
+type WebhookDedupeStore interface {
+	// RecordWebhookDelivery records an inbound delivery_id + event_type.
+	// Returns firstTime=true on a fresh insert, firstTime=false +
+	// the original receivedAt on a collision (replay).
+	RecordWebhookDelivery(ctx context.Context, deliveryID, eventType string) (firstTime bool, receivedAt time.Time, err error)
+	// GCWebhookDeliveries deletes rows with received_at < before;
+	// returns the count deleted.
+	GCWebhookDeliveries(ctx context.Context, before time.Time) (int, error)
+}
+
 // IaCGitHubWebhookHandler serves POST /api/v1/webhooks/github — the
 // GitHub-side delivery target the operator wires into their repo's
 // webhook settings. Receives pull_request events, validates the
-// X-Hub-Signature-256 HMAC against the deployment-wide secret, and
-// records a recommendation.pr_merged audit event when the action is
-// "closed" + merged == true. The handler is intentionally lenient
-// about everything else — unknown event types, malformed branches,
-// no matching connection — because GitHub's redelivery system
-// punishes 5xx by retrying and 4xx is reserved for "the operator
-// will see this in their webhook delivery log and recognize it as
-// configuration drift Squadron can't recover from on its own".
+// X-Hub-Signature-256 HMAC against the deployment-wide secret, dedupes
+// against the X-GitHub-Delivery UUID, and records a
+// recommendation.pr_merged audit event when the action is "closed" +
+// merged == true. The handler is intentionally lenient about
+// everything else — unknown event types, malformed branches, no
+// matching connection — because GitHub's redelivery system punishes
+// 5xx by retrying and 4xx is reserved for "the operator will see this
+// in their webhook delivery log and recognize it as configuration
+// drift Squadron can't recover from on its own".
 //
-// Slice 1 trade-offs (per the v0.89.23 plan):
+// Pipeline order (v0.89.30):
+//  1. 503 if no secret was configured.
+//  2. Read body + verify X-Hub-Signature-256.   ← auth gate FIRST
+//  3. Dedupe against X-GitHub-Delivery.         ← replay gate SECOND
+//  4. Filter on event type (pull_request only).
+//  5. Parse payload + filter on action + merged.
+//  6. Connection lookup + audit emit.
+//
+// Dedupe sits BETWEEN signature verification and event-type filtering
+// for two reasons: (a) an attacker who replays a signed delivery has
+// already passed the HMAC gate, so the dedupe check has to land after
+// verification, not before; (b) deduping before the event-type filter
+// means a replayed ping or push delivery is honestly recorded as a
+// replay rather than honestly recorded as "ignored event type" — the
+// audit signal is cleaner that way.
+//
+// Slice 2 trade-offs (per v0.89.30 plan):
 //   - one shared deployment-wide secret via env var, not per-
-//     connection rotation
-//   - no X-GitHub-Delivery dedupe (replay protection is slice 2)
-//   - no GitHub Checks API back-signal (Squadron only listens; it
-//     doesn't talk back at the PR level)
-//   - no UI for entering the secret (env var only)
+//     connection rotation (slice 3)
+//   - dedupe retention is a hardcoded 7 days, not configurable
+//     (slice 3)
+//   - no UI surface for inspecting the dedupe table or the replay
+//     audit events (slice 3)
+//   - no GitHub Checks API back-signal (still slice 3+)
 //   - no backfill of pre-existing merges
 type IaCGitHubWebhookHandler struct {
 	auditService services.AuditService
 	store        iacconnstore.Store
+	// dedupeStore — v0.89.30 (#649) — the application store's
+	// webhook_delivery_dedupe surface. Nil-safe: when not wired,
+	// the handler logs a warning and proceeds without dedupe so
+	// legitimate flows keep working through a partial deployment
+	// (e.g. a test environment that doesn't wire the app store at
+	// all). Production callers always wire it.
+	dedupeStore WebhookDedupeStore
 	// secret is the raw HMAC key bytes, cached at construct time so
 	// HandleWebhook doesn't read the environment on every request.
 	// An empty (nil or zero-length) secret means the handler is
@@ -109,6 +166,56 @@ func NewIaCGitHubWebhookHandler(
 		logger:       logger,
 		branchPrefix: defaultSquadronBranchPrefix,
 	}
+}
+
+// WithDedupeStore wires the v0.89.30 (#649) replay-protection store.
+// Nil-safe — when the store isn't wired (e.g. a test that doesn't
+// care about replay protection), the handler logs a warning on every
+// inbound delivery and skips the dedupe insert. Production callers
+// always wire it via Server.SetIaCGitHubWebhookStore at startup.
+func (h *IaCGitHubWebhookHandler) WithDedupeStore(s WebhookDedupeStore) *IaCGitHubWebhookHandler {
+	h.dedupeStore = s
+	return h
+}
+
+// StartWebhookDedupeGC launches the v0.89.30 (#649) background sweep
+// loop. Returns immediately; the goroutine exits when ctx cancels.
+// Sweeps every webhookDedupeGCInterval (24h) deleting dedupe rows
+// older than webhookDedupeRetention (7 days). A nil store is a no-op
+// — the caller's startup wiring decides whether to start the loop.
+// Logs at Info on a non-zero delete count; logs at Warn on storage
+// errors but keeps the loop running so a transient DB failure doesn't
+// silently disable the sweep.
+func StartWebhookDedupeGC(ctx context.Context, store WebhookDedupeStore, logger *zap.Logger) {
+	if store == nil {
+		return
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	go func() {
+		ticker := time.NewTicker(webhookDedupeGCInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cutoff := time.Now().UTC().Add(-webhookDedupeRetention)
+				n, err := store.GCWebhookDeliveries(ctx, cutoff)
+				if err != nil {
+					logger.Warn("webhook dedupe GC failed", zap.Error(err))
+					continue
+				}
+				if n > 0 {
+					logger.Info("webhook dedupe GC ran",
+						zap.Int("deleted", n),
+						zap.Duration("retention", webhookDedupeRetention),
+					)
+				}
+			}
+		}
+	}()
 }
 
 // gitHubPullRequestEvent is the slice-1 subset of GitHub's
@@ -219,6 +326,75 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	}
 
 	eventType := c.GetHeader("X-GitHub-Event")
+
+	// v0.89.30 (#649) — replay protection. The dedupe check sits
+	// AFTER signature verification (so an unsigned replay never
+	// touches the dedupe table) and BEFORE the event-type filter
+	// (so a replayed ping / push delivery is honestly recorded as a
+	// replay rather than honestly recorded as "ignored event type").
+	//
+	// Three conditions short-circuit dedupe to a clean no-op:
+	//   - h.dedupeStore is nil (production callers always wire it;
+	//     test wire-ups can skip it without breaking legitimate
+	//     flows).
+	//   - X-GitHub-Delivery header is empty. GitHub stamps every
+	//     delivery with this UUID; an empty value means we either
+	//     received a hand-crafted request or GitHub broke the
+	//     contract. Either way, we log a warning and proceed —
+	//     legitimate flows must not break on a missing-header
+	//     edge case.
+	//   - The store call itself errors. We log and proceed — a
+	//     transient DB failure shouldn't drop the legitimate
+	//     delivery. The replay-protection guarantee is best-effort
+	//     under DB outage; the audit + dispatch path is the
+	//     authoritative record.
+	//
+	// On a successful firstTime=false return, we emit the
+	// webhook.delivery_replayed audit event with the prior
+	// receivedAt as original_received_at, return 200 with the
+	// replayed-shape body, and DO NOT proceed to the event-type
+	// filter or audit-emit path.
+	deliveryID := c.GetHeader("X-GitHub-Delivery")
+	if h.dedupeStore != nil && deliveryID != "" {
+		firstTime, originalReceivedAt, err := h.dedupeStore.RecordWebhookDelivery(c.Request.Context(), deliveryID, eventType)
+		switch {
+		case err != nil:
+			h.logger.Warn("iac github webhook: dedupe insert failed; proceeding without replay check",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+			)
+		case !firstTime:
+			// Replay: signature passed, but we've already seen this
+			// delivery_id. Emit the dedicated audit row and return
+			// 200 (GitHub redelivery contract: 2xx = delivered).
+			if h.auditService != nil {
+				_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+					Actor:      "github_webhook",
+					EventType:  services.AuditEventWebhookDeliveryReplayed,
+					TargetType: services.AuditTargetIaCRecommendation,
+					Action:     "delivery_replayed",
+					Payload: map[string]any{
+						"delivery_id":          deliveryID,
+						"event_type":           eventType,
+						"original_received_at": originalReceivedAt.UTC().Format(time.RFC3339),
+					},
+				})
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"ok":          true,
+				"ignored":     true,
+				"reason":      "replayed",
+				"delivery_id": deliveryID,
+			})
+			return
+		}
+		// firstTime=true falls through to the normal dispatch path.
+	} else if deliveryID == "" {
+		h.logger.Warn("iac github webhook: X-GitHub-Delivery header missing; replay protection skipped for this delivery",
+			zap.String("x_github_event", eventType),
+		)
+	}
+
 	if eventType != "pull_request" {
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,

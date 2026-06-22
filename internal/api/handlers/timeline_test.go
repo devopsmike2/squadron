@@ -79,6 +79,12 @@ func TestHumanizeEventType(t *testing.T) {
 		// renders the simple title when handleIaCAuditEvent returned
 		// ok=false (e.g. payload absent entirely).
 		{"discovery_proposal.created", "discovery_proposal.created", "discovery_proposal_created", "Discovery recommendations generated"},
+		// v0.89.30 (#649) — webhook replay protection. Emitted when an
+		// inbound GitHub webhook delivery passed HMAC verification but
+		// collided with the dedupe table on the X-GitHub-Delivery UUID.
+		// Pins the cold-path text so a future humanizer regression on
+		// this event family is caught here.
+		{"webhook.delivery_replayed", "webhook.delivery_replayed", "delivery_replayed", "Webhook delivery replayed"},
 		// Fallback — unknown event_type returns the raw string so we
 		// never lose information by humanizing. Pick a truly unknown
 		// type that's NOT in any of the v0.89.25 cleanup additions.

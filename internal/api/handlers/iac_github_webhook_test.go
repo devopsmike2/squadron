@@ -13,12 +13,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 )
 
 // webhookTestSecret is the slice-1 deployment-wide HMAC secret used
@@ -73,6 +75,16 @@ func seedConnection(t *testing.T, store iacconnstore.Store, repoFullName string)
 // recorder so tests can assert status + body shape.
 func doWebhookRequest(t *testing.T, h *IaCGitHubWebhookHandler, body []byte, sig string, eventType string) *httptest.ResponseRecorder {
 	t.Helper()
+	return doWebhookRequestWithDelivery(t, h, body, sig, eventType, "")
+}
+
+// doWebhookRequestWithDelivery — v0.89.30 (#649) — extension of
+// doWebhookRequest that also sets the X-GitHub-Delivery header used
+// by the replay-protection path. Empty deliveryID omits the header
+// (same shape as the legacy doWebhookRequest); a non-empty value
+// flows into the dedupe insert path.
+func doWebhookRequestWithDelivery(t *testing.T, h *IaCGitHubWebhookHandler, body []byte, sig string, eventType string, deliveryID string) *httptest.ResponseRecorder {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.POST("/api/v1/webhooks/github", h.HandleWebhook)
@@ -84,9 +96,26 @@ func doWebhookRequest(t *testing.T, h *IaCGitHubWebhookHandler, body []byte, sig
 	if eventType != "" {
 		req.Header.Set("X-GitHub-Event", eventType)
 	}
+	if deliveryID != "" {
+		req.Header.Set("X-GitHub-Delivery", deliveryID)
+	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
+}
+
+// newTestWebhookHandlerWithDedupe — v0.89.30 (#649) — builds a
+// webhook handler whose dedupe store is the in-memory
+// applicationstore.Store. Returned alongside the handler + the iac
+// connection store so a test can seed connections (for the audit
+// row's connection_id) and inspect the dedupe store directly (for
+// the GC test).
+func newTestWebhookHandlerWithDedupe(t *testing.T, audit services.AuditService, secret []byte) (*IaCGitHubWebhookHandler, iacconnstore.Store, *memory.Store) {
+	t.Helper()
+	connStore := iacconnstore.NewMemoryStore()
+	dedupeStore := memory.NewStore()
+	h := NewIaCGitHubWebhookHandler(audit, connStore, secret, zap.NewNop()).WithDedupeStore(dedupeStore)
+	return h, connStore, dedupeStore
 }
 
 // makePREventBody builds a minimal pull_request webhook JSON payload
@@ -456,5 +485,262 @@ func TestGitHubWebhook_BranchScopeParse(t *testing.T) {
 					tc.wantKind, tc.wantAcct, tc.wantRegion, tc.wantOK)
 			}
 		})
+	}
+}
+
+// --- v0.89.30 (#649) webhook replay protection -----------------------
+//
+// The five tests below pin the slice-2 replay-protection contract:
+// fresh deliveries pass through, repeated delivery_id values return
+// 200 + ignored without emitting pr_merged audits, the replayed
+// audit row carries the documented payload shape, and the GC sweep
+// honors the supplied cutoff. Together they close the
+// compromised-TLS-terminator and intermediary-proxy replay threat
+// the slice-1 receiver explicitly left on the table.
+
+// TestWebhookReplay_FreshDelivery_FirstTimeAccepted — a signed
+// pull_request webhook with a fresh X-GitHub-Delivery UUID lands
+// the audit and returns 200 with the normal "audit_event_emitted"
+// shape (NOT the replayed-shape body).
+func TestWebhookReplay_FreshDelivery_FirstTimeAccepted(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, connStore, _ := newTestWebhookHandlerWithDedupe(t, audit, webhookTestSecret)
+	seedConnection(t, connStore, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 101,
+		"squadron/rec/eks-observability-addon/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	deliveryID := "fresh-delivery-uuid-101"
+
+	w := doWebhookRequestWithDelivery(t, h, body, sig, "pull_request", deliveryID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	if audit.entries[0].EventType != services.AuditEventRecommendationPRMerged {
+		t.Errorf("event_type = %q, want %q", audit.entries[0].EventType, services.AuditEventRecommendationPRMerged)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	// Fresh delivery must NOT be reported as replayed.
+	if resp["reason"] == "replayed" {
+		t.Errorf("response.reason = replayed on first delivery; should be the audit_event_emitted shape")
+	}
+	if resp["audit_event_emitted"] != true {
+		t.Errorf("response.audit_event_emitted = %v, want true", resp["audit_event_emitted"])
+	}
+}
+
+// TestWebhookReplay_DuplicateDelivery_Returns200Ignored — POST the
+// same signed payload + same X-GitHub-Delivery UUID twice. The
+// second POST returns 200 (NOT 4xx/5xx — GitHub redelivery contract)
+// with body {ok, ignored, reason: "replayed", delivery_id}.
+func TestWebhookReplay_DuplicateDelivery_Returns200Ignored(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, connStore, _ := newTestWebhookHandlerWithDedupe(t, audit, webhookTestSecret)
+	seedConnection(t, connStore, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 202,
+		"squadron/rec/rds-pi-em/dup-uuid-202",
+		"2026-06-22T12:34:56Z", "bob")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	deliveryID := "replayed-delivery-uuid-202"
+
+	// First POST — the legitimate delivery. Lands the audit.
+	w1 := doWebhookRequestWithDelivery(t, h, body, sig, "pull_request", deliveryID)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first POST status = %d, want 200; body=%s", w1.Code, w1.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("after first POST: audit entries = %d, want 1", len(audit.entries))
+	}
+
+	// Second POST — same signed body, same delivery_id. Replay.
+	w2 := doWebhookRequestWithDelivery(t, h, body, sig, "pull_request", deliveryID)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second POST status = %d, want 200 (GitHub redelivery contract); body=%s",
+			w2.Code, w2.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if resp["ok"] != true {
+		t.Errorf("response.ok = %v, want true", resp["ok"])
+	}
+	if resp["ignored"] != true {
+		t.Errorf("response.ignored = %v, want true", resp["ignored"])
+	}
+	if resp["reason"] != "replayed" {
+		t.Errorf("response.reason = %v, want \"replayed\"", resp["reason"])
+	}
+	if resp["delivery_id"] != deliveryID {
+		t.Errorf("response.delivery_id = %v, want %q", resp["delivery_id"], deliveryID)
+	}
+}
+
+// TestWebhookReplay_DuplicateDelivery_DoesNotEmitPRMergedAudit —
+// the audit row count for the recommendation.pr_merged event MUST
+// stay at exactly 1 across the two POSTs. The slice-1 design's
+// contract is that an attacker replaying a captured signed delivery
+// can't double-emit the pr_merged event.
+func TestWebhookReplay_DuplicateDelivery_DoesNotEmitPRMergedAudit(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, connStore, _ := newTestWebhookHandlerWithDedupe(t, audit, webhookTestSecret)
+	seedConnection(t, connStore, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 303,
+		"squadron/rec/s3-access-logging/xyz303",
+		"2026-06-22T12:34:56Z", "carol")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	deliveryID := "no-double-pr-merged-303"
+
+	// First POST — legitimate merge. One pr_merged audit row.
+	if w := doWebhookRequestWithDelivery(t, h, body, sig, "pull_request", deliveryID); w.Code != http.StatusOK {
+		t.Fatalf("first POST status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	// Second POST — replay. MUST NOT emit a second pr_merged audit row.
+	if w := doWebhookRequestWithDelivery(t, h, body, sig, "pull_request", deliveryID); w.Code != http.StatusOK {
+		t.Fatalf("second POST status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	prMergedCount := 0
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventRecommendationPRMerged {
+			prMergedCount++
+		}
+	}
+	if prMergedCount != 1 {
+		t.Errorf("recommendation.pr_merged count = %d, want exactly 1 (replay must not double-emit)", prMergedCount)
+	}
+}
+
+// TestWebhookReplay_DuplicateDelivery_EmitsReplayedAudit — the
+// replay path emits exactly ONE webhook.delivery_replayed audit
+// event with the documented payload shape (delivery_id, event_type,
+// original_received_at). Actor "github_webhook"; TargetType
+// AuditTargetIaCRecommendation so the timeline humanizer groups it
+// with the pr_opened / pr_merged arc.
+func TestWebhookReplay_DuplicateDelivery_EmitsReplayedAudit(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, connStore, _ := newTestWebhookHandlerWithDedupe(t, audit, webhookTestSecret)
+	seedConnection(t, connStore, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 404,
+		"squadron/rec/lambda-otel-layer/abc404",
+		"2026-06-22T12:34:56Z", "dana")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	deliveryID := "replayed-audit-uuid-404"
+
+	// First POST — legitimate delivery; lands pr_merged.
+	if w := doWebhookRequestWithDelivery(t, h, body, sig, "pull_request", deliveryID); w.Code != http.StatusOK {
+		t.Fatalf("first POST status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	// Second POST — replay; lands webhook.delivery_replayed.
+	if w := doWebhookRequestWithDelivery(t, h, body, sig, "pull_request", deliveryID); w.Code != http.StatusOK {
+		t.Fatalf("second POST status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// Walk the audit log and collect every replayed row.
+	var replayed []services.AuditEntry
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventWebhookDeliveryReplayed {
+			replayed = append(replayed, e)
+		}
+	}
+	if len(replayed) != 1 {
+		t.Fatalf("webhook.delivery_replayed count = %d, want exactly 1", len(replayed))
+	}
+	e := replayed[0]
+	if e.Actor != "github_webhook" {
+		t.Errorf("actor = %q, want %q", e.Actor, "github_webhook")
+	}
+	if e.TargetType != services.AuditTargetIaCRecommendation {
+		t.Errorf("target_type = %q, want %q", e.TargetType, services.AuditTargetIaCRecommendation)
+	}
+	if e.Action != "delivery_replayed" {
+		t.Errorf("action = %q, want %q", e.Action, "delivery_replayed")
+	}
+	// Documented payload shape: delivery_id, event_type, original_received_at.
+	if e.Payload["delivery_id"] != deliveryID {
+		t.Errorf("payload.delivery_id = %v, want %q", e.Payload["delivery_id"], deliveryID)
+	}
+	if e.Payload["event_type"] != "pull_request" {
+		t.Errorf("payload.event_type = %v, want %q", e.Payload["event_type"], "pull_request")
+	}
+	orig, ok := e.Payload["original_received_at"].(string)
+	if !ok || orig == "" {
+		t.Errorf("payload.original_received_at = %v, want non-empty RFC3339 string", e.Payload["original_received_at"])
+	}
+	// Round-trip parse so a future change to the format string is
+	// caught here rather than silently passing through SIEM consumers.
+	if _, err := time.Parse(time.RFC3339, orig); err != nil {
+		t.Errorf("payload.original_received_at = %q is not RFC3339: %v", orig, err)
+	}
+}
+
+// TestWebhookReplay_GCRemovesOldEntries — seeds three dedupe rows
+// (10 days, 5 days, now) and verifies that
+// GCWebhookDeliveries(now - 7 days) deletes exactly one row (the
+// 10-day-old one) and leaves the 5-day and now rows in place. A
+// subsequent record call against a brand-new delivery_id should
+// return firstTime=true, confirming the table remains healthy.
+func TestWebhookReplay_GCRemovesOldEntries(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Seed three rows by recording fresh, then back-dating the
+	// receivedAt on two of them. The memory store doesn't expose
+	// back-dating directly, so we reach in via a second record
+	// call on the same id — that's a replay that returns the prior
+	// receivedAt; instead we run three separate ids, then GC.
+	if first, _, err := store.RecordWebhookDelivery(ctx, "old-uuid", "pull_request"); err != nil || !first {
+		t.Fatalf("seed old: first=%v err=%v", first, err)
+	}
+	if first, _, err := store.RecordWebhookDelivery(ctx, "mid-uuid", "pull_request"); err != nil || !first {
+		t.Fatalf("seed mid: first=%v err=%v", first, err)
+	}
+	if first, _, err := store.RecordWebhookDelivery(ctx, "fresh-uuid", "pull_request"); err != nil || !first {
+		t.Fatalf("seed fresh: first=%v err=%v", first, err)
+	}
+	// Back-date the first two rows so the GC cutoff has something
+	// to delete. Access the unexported map directly so the test
+	// can simulate the time gap without sleeping. v0.89.30 (#649).
+	store.SetWebhookDeliveryReceivedAtForTest("old-uuid", now.Add(-10*24*time.Hour))
+	store.SetWebhookDeliveryReceivedAtForTest("mid-uuid", now.Add(-5*24*time.Hour))
+
+	cutoff := now.Add(-7 * 24 * time.Hour)
+	deleted, err := store.GCWebhookDeliveries(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("GCWebhookDeliveries: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1 (only the 10-day-old row should fall outside the 7-day window)", deleted)
+	}
+
+	// The 5-day row must still be present — calling Record with its
+	// id returns firstTime=false (replay path).
+	if first, _, err := store.RecordWebhookDelivery(ctx, "mid-uuid", "pull_request"); err != nil || first {
+		t.Errorf("after GC, mid-uuid: first=%v err=%v; want first=false (row should still exist)", first, err)
+	}
+	// The now row must still be present.
+	if first, _, err := store.RecordWebhookDelivery(ctx, "fresh-uuid", "pull_request"); err != nil || first {
+		t.Errorf("after GC, fresh-uuid: first=%v err=%v; want first=false (row should still exist)", first, err)
+	}
+	// A brand-new delivery_id must come back firstTime=true — the
+	// table is healthy and accepting writes after the sweep.
+	if first, _, err := store.RecordWebhookDelivery(ctx, "post-gc-uuid", "pull_request"); err != nil || !first {
+		t.Errorf("post-GC fresh record: first=%v err=%v; want first=true", first, err)
+	}
+	// The old row must NOT be present — calling Record with its id
+	// should return firstTime=true (clean re-insert).
+	if first, _, err := store.RecordWebhookDelivery(ctx, "old-uuid", "pull_request"); err != nil || !first {
+		t.Errorf("after GC, old-uuid: first=%v err=%v; want first=true (row should have been deleted)", first, err)
 	}
 }

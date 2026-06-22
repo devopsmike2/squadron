@@ -49,6 +49,21 @@ type Store struct {
 	// SQ-3 incident drafts, keyed by id. Move 3 (engineer copilot
 	// auto-drafted ticket).
 	incidentDrafts map[string]*types.IncidentDraft
+	// v0.89.30 (#649) — webhook delivery dedupe. One entry per
+	// X-GitHub-Delivery UUID the receiver has observed. The
+	// store-wide mu mutex guards check + insert atomicity so two
+	// concurrent replays of the same delivery_id can't both observe
+	// firstTime=true.
+	webhookDeliveries map[string]webhookDeliveryRecord
+}
+
+// webhookDeliveryRecord is the memory-store payload for one
+// X-GitHub-Delivery UUID. Mirrors the SQLite webhook_delivery_dedupe
+// row shape — receivedAt + eventType, keyed externally by delivery_id.
+// v0.89.30 (#649).
+type webhookDeliveryRecord struct {
+	receivedAt time.Time
+	eventType  string
 }
 
 // NewStore creates a new in-memory store
@@ -72,7 +87,63 @@ func NewStore() *Store {
 		actionRunners:    make(map[string]*types.ActionRunnerRegistration),
 		actionRequests:   make(map[string]*types.ActionRequest),
 		incidentDrafts:   make(map[string]*types.IncidentDraft),
+		// v0.89.30 (#649).
+		webhookDeliveries: make(map[string]webhookDeliveryRecord),
 	}
+}
+
+// RecordWebhookDelivery — v0.89.30 (#649). Memory-store mirror of the
+// SQLite same-named method. Check + insert under the store-wide mutex
+// so concurrent replays of the same delivery_id can't both observe
+// firstTime=true.
+func (s *Store) RecordWebhookDelivery(_ context.Context, deliveryID, eventType string) (bool, time.Time, error) {
+	if deliveryID == "" {
+		return false, time.Time{}, fmt.Errorf("delivery_id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.webhookDeliveries[deliveryID]; ok {
+		return false, existing.receivedAt, nil
+	}
+	now := time.Now().UTC()
+	s.webhookDeliveries[deliveryID] = webhookDeliveryRecord{
+		receivedAt: now,
+		eventType:  eventType,
+	}
+	return true, now, nil
+}
+
+// GCWebhookDeliveries — v0.89.30 (#649). Memory-store mirror of the
+// SQLite same-named method. Linear sweep over the dedupe map deleting
+// entries whose receivedAt < before; returns the count deleted.
+func (s *Store) GCWebhookDeliveries(_ context.Context, before time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deleted := 0
+	for id, rec := range s.webhookDeliveries {
+		if rec.receivedAt.Before(before) {
+			delete(s.webhookDeliveries, id)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+// SetWebhookDeliveryReceivedAtForTest is a v0.89.30 (#649) test
+// affordance: back-dates the receivedAt on an existing dedupe row so
+// the GC sweep can be exercised without sleeping past the retention
+// window. Production code never calls this; the SQLite store has no
+// equivalent (tests there can INSERT with an explicit timestamp).
+// No-op when the id isn't present.
+func (s *Store) SetWebhookDeliveryReceivedAtForTest(deliveryID string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.webhookDeliveries[deliveryID]
+	if !ok {
+		return
+	}
+	rec.receivedAt = at
+	s.webhookDeliveries[deliveryID] = rec
 }
 
 // Agent management

@@ -332,6 +332,23 @@ func (s *Storage) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_configs_group_id ON configs(group_id);
 		CREATE INDEX IF NOT EXISTS idx_configs_config_hash ON configs(config_hash);
 
+		-- v0.89.30 (#649) — webhook delivery dedupe. The GitHub webhook
+		-- receiver inserts one row per inbound delivery keyed on the
+		-- X-GitHub-Delivery UUID; INSERT OR IGNORE + RowsAffected
+		-- distinguishes a fresh delivery (firstTime=true, RowsAffected==1)
+		-- from a replay (firstTime=false, RowsAffected==0). The
+		-- idx_webhook_delivery_dedupe_received_at index backs the daily
+		-- GC sweep that deletes rows older than the configured retention
+		-- window (7 days, per webhookDedupeRetention in the handler).
+		-- See docs/webhook-listener.md §"Slice 2 roadmap" for the threat
+		-- model this closes.
+		CREATE TABLE IF NOT EXISTS webhook_delivery_dedupe (
+			delivery_id TEXT PRIMARY KEY,
+			received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			event_type TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_webhook_delivery_dedupe_received_at ON webhook_delivery_dedupe(received_at);
+
 		-- SIEM destinations (v0.50). secret holds nonce(24)||ciphertext;
 		-- the siem package owns encryption. event_type_prefixes_json is
 		-- a JSON array of string prefixes; empty/null means forward all.
@@ -1923,6 +1940,65 @@ func (s *Storage) ListAcceptedDiscoveryRecommendations(
 		out = append(out, rec)
 	}
 	return out, nil
+}
+
+// RecordWebhookDelivery — v0.89.30 (#649). INSERT OR IGNORE on the
+// webhook_delivery_dedupe table, with RowsAffected as the
+// fresh-vs-replay signal:
+//   - RowsAffected == 1 → fresh delivery; the row was inserted with
+//     CURRENT_TIMESTAMP and the caller sees firstTime=true with
+//     receivedAt = the just-stamped time.
+//   - RowsAffected == 0 → replay; the delivery_id was already present
+//     and the caller sees firstTime=false with receivedAt = the
+//     original delivery's received_at (looked up after the no-op
+//     INSERT so the audit payload's original_received_at field
+//     carries the prior timestamp).
+//
+// The lookup-after-insert is the cleanest way to satisfy the receiver's
+// "I need the prior timestamp on replay" contract without a second
+// API surface; the cost is one extra SELECT on the replay path, which
+// is the off-the-happy-path branch by design.
+func (s *Storage) RecordWebhookDelivery(ctx context.Context, deliveryID, eventType string) (bool, time.Time, error) {
+	if deliveryID == "" {
+		return false, time.Time{}, fmt.Errorf("delivery_id required")
+	}
+	const insertStmt = `INSERT OR IGNORE INTO webhook_delivery_dedupe (delivery_id, event_type) VALUES (?, ?)`
+	res, err := s.db.ExecContext(ctx, insertStmt, deliveryID, eventType)
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("failed to record webhook delivery: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	// Always read back the received_at so both branches return an
+	// honest timestamp. On the fresh path it's the row we just wrote;
+	// on the replay path it's the original delivery's timestamp.
+	const selectStmt = `SELECT received_at FROM webhook_delivery_dedupe WHERE delivery_id = ?`
+	var receivedAt time.Time
+	if err := s.db.QueryRowContext(ctx, selectStmt, deliveryID).Scan(&receivedAt); err != nil {
+		return false, time.Time{}, fmt.Errorf("failed to read received_at: %w", err)
+	}
+	return rows == 1, receivedAt, nil
+}
+
+// GCWebhookDeliveries — v0.89.30 (#649). Deletes dedupe rows older
+// than the supplied cutoff and returns the count deleted. The
+// idx_webhook_delivery_dedupe_received_at index backs the predicate so
+// the sweep is a ranged read rather than a full-table scan. The
+// background goroutine in the API server calls this on a 24h ticker
+// with cutoff = now - webhookDedupeRetention (7 days).
+func (s *Storage) GCWebhookDeliveries(ctx context.Context, before time.Time) (int, error) {
+	const stmt = `DELETE FROM webhook_delivery_dedupe WHERE received_at < ?`
+	res, err := s.db.ExecContext(ctx, stmt, before)
+	if err != nil {
+		return 0, fmt.Errorf("failed to gc webhook deliveries: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	return int(n), nil
 }
 
 func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {

@@ -203,6 +203,40 @@ const (
 	AuditEventRecommendationPROpenFailed     = "recommendation.pr_open_failed"
 	AuditEventRecommendationPRMerged         = "recommendation.pr_merged"
 
+	// AuditEventWebhookDeliveryReplayed — v0.89.30 (#649) — records
+	// inbound webhook deliveries that passed HMAC verification but
+	// whose X-GitHub-Delivery UUID was already present in the dedupe
+	// table. Closes the replay-attack threat the slice-1 webhook
+	// receiver explicitly left on the table (compromised TLS
+	// terminator or intermediary proxy captures + replays a
+	// legitimate signed delivery).
+	//
+	// Emitted by the IaCGitHubWebhookHandler AFTER signature
+	// verification + AFTER the dedupe insert returns firstTime=false.
+	// The receiver then returns 200 with body
+	//   {"ok": true, "ignored": true, "reason": "replayed",
+	//    "delivery_id": <id>}
+	// and does NOT proceed to the event-type filter or audit-emit
+	// path. 200 (not 4xx/5xx) so GitHub's redelivery system reads
+	// the response as "delivered" and doesn't keep retrying.
+	//
+	// Payload fields:
+	//   - delivery_id (string): the X-GitHub-Delivery UUID that
+	//     collided.
+	//   - event_type (string): the X-GitHub-Event header value the
+	//     replay attempt carried.
+	//   - original_received_at (RFC3339 string): the timestamp the
+	//     legitimate delivery was originally recorded at, fetched
+	//     from the dedupe row. Lets SIEM consumers see how long
+	//     elapsed between the original delivery and the replay.
+	//
+	// Actor: "github_webhook". TargetType:
+	// AuditTargetIaCRecommendation (groups with the pr_opened /
+	// pr_merged family on the timeline humanizer). TargetID empty —
+	// replays aren't tied to a specific connection because the
+	// receiver short-circuits before the connection lookup.
+	AuditEventWebhookDeliveryReplayed = "webhook.delivery_replayed"
+
 	// v0.89.28 (#643 slice 1) — Discovery proposer learns from accepted
 	// recommendations. Emitted by the discovery recommendations handler
 	// (POST /api/v1/discovery/aws/connections/:id/recommendations) AFTER

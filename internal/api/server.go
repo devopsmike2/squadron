@@ -128,6 +128,14 @@ type Server struct {
 	// by design — the HMAC signature IS the authentication; GitHub
 	// does not carry a bearer token Squadron could validate.
 	iacGitHubWebhookSecret []byte
+	// v0.89.30 (#649) — webhook delivery dedupe store. Wired post-
+	// construction via SetIaCGitHubWebhookStore. Nil-safe — the
+	// handler logs a warning on every inbound delivery when the
+	// store isn't wired, but legitimate flows keep working. Production
+	// callers always wire it with the same applicationstore the
+	// rest of the server uses; the cmd/all-in-one wiring also starts
+	// the background GC sweep via handlers.StartWebhookDedupeGC.
+	iacGitHubWebhookStore handlers.WebhookDedupeStore
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -457,6 +465,23 @@ func (s *Server) SetIaCGitHubWebhookSecret(secret []byte) {
 	buf := make([]byte, len(secret))
 	copy(buf, secret)
 	s.iacGitHubWebhookSecret = buf
+}
+
+// SetIaCGitHubWebhookStore wires the v0.89.30 (#649) webhook delivery
+// dedupe store onto the API server. The /api/v1/webhooks/github
+// route consults it to short-circuit replays (captured-and-replayed
+// signed deliveries) into a 200 + audit-replayed response without
+// proceeding to the audit-emit path. Optional in the same posture as
+// SetIaCGitHubWebhookSecret: a nil store leaves the route running
+// without replay protection — the handler logs a warning on every
+// inbound delivery so an operator can see the protection is unwired,
+// but legitimate flows still work.
+//
+// In production, main.go wires this with the same applicationstore
+// the rest of the server uses; the test_server.go path can leave it
+// nil because the dedupe insert is best-effort.
+func (s *Server) SetIaCGitHubWebhookStore(store handlers.WebhookDedupeStore) {
+	s.iacGitHubWebhookStore = store
 }
 
 // iacGitHubTrampoline late-binds an IaC-GitHub handler call. Mirrors
@@ -885,6 +910,12 @@ func (s *Server) registerRoutes() {
 			s.iacGitHubWebhookSecret,
 			s.logger,
 		)
+		// v0.89.30 (#649) — wire the dedupe store onto the per-
+		// request handler so the replay-protection check is live.
+		// Nil-safe; the handler logs and proceeds when unwired.
+		if s.iacGitHubWebhookStore != nil {
+			h = h.WithDedupeStore(s.iacGitHubWebhookStore)
+		}
 		h.HandleWebhook(c)
 	})
 

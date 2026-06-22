@@ -874,6 +874,14 @@ func humanizeEventType(eventType, action string) string {
 	// proposalCreatedTitle surfaces verdict counts.
 	case "rollout.excluded_from_learning":
 		return "AI proposal excluded from future learning"
+	// v0.89.30 (#649) — webhook replay protection. Emitted when an
+	// inbound GitHub webhook delivery passed HMAC verification but
+	// collided with a previously-recorded X-GitHub-Delivery UUID.
+	// Operators reading the timeline see this on the same humanizer
+	// row as the pr_opened / pr_merged family so the replay context
+	// is co-located with the rest of the IaC recommendation arc.
+	case "webhook.delivery_replayed":
+		return "Webhook delivery replayed"
 	}
 	// Fallback for event types not in the cleanup-grade table.
 	// Preserves backwards compatibility with whatever the operator

@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -217,6 +217,40 @@ CREATE INDEX IF NOT EXISTS idx_ai_verdicts_exclude ON rollouts(
 INSERT OR IGNORE INTO schema_version (version) VALUES (5);
 `
 
+// WebhookDeliveryDedupeSchema bumps the database to schema v6.
+// Adds the webhook_delivery_dedupe table that the v0.89.30 (#649)
+// GitHub webhook receiver consults to reject captured-and-replayed
+// deliveries before they reach the audit-emit path.
+//
+//   - delivery_id (TEXT PRIMARY KEY) is the X-GitHub-Delivery UUID
+//     GitHub stamps on every webhook delivery. Same UUID across
+//     redeliveries of the same payload, so the PK guarantees the
+//     row inserts exactly once per legitimate delivery.
+//   - received_at (DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) is
+//     the timestamp the receiver first saw the delivery. The
+//     idx_webhook_delivery_dedupe_received_at index keeps the GC
+//     loop's `received_at < ?` sweep off a full-table scan.
+//   - event_type (TEXT NOT NULL) is the X-GitHub-Event header value.
+//     Captured at insert time so the audit payload's
+//     original_received_at sidecar carries it without a second
+//     header parse on replay.
+//
+// Threat closed: a compromised TLS terminator or intermediary proxy
+// captures a legitimate signed delivery and replays it later. HMAC
+// verification still passes (the body + secret produce the same
+// signature) but the delivery_id row collision makes the receiver
+// short-circuit to a replayed-audit + 200 ignored response. See
+// docs/webhook-listener.md §"Slice 2 roadmap" for the design.
+const WebhookDeliveryDedupeSchema = `
+CREATE TABLE IF NOT EXISTS webhook_delivery_dedupe (
+  delivery_id TEXT PRIMARY KEY,
+  received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  event_type TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_delivery_dedupe_received_at ON webhook_delivery_dedupe(received_at);
+INSERT OR IGNORE INTO schema_version (version) VALUES (6);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -224,4 +258,5 @@ var Migrations = []string{
 	RecommendationDismissalsSchema,
 	AIVerdictsSchema,
 	ExcludeFromLearningSchema,
+	WebhookDeliveryDedupeSchema,
 }
