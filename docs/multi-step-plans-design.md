@@ -305,6 +305,88 @@ proposer schema + bridge). The v0.79 design philosophy carries
 forward — sequence small slices, fail honestly when something
 doesn't fit.
 
+## v0.89.14 (#630) — action steps in plans, slice 1
+
+Plan steps gained a third kind alongside the v0.69 default `rollout`
+and the v0.79 nested `plan`: `action`. An action step dispatches a
+signed action-runner verb mid-plan, lets the runner complete, and
+feeds the runner's reported result back into the plan's lifecycle.
+
+### Step kind
+
+```
+"kind": "rollout" | "action"
+```
+
+Empty kind decodes as `rollout` for backwards compatibility. The
+storage layer (`rollouts.step_kind`, default `rollout`) round-trips
+the field through every pre-v0.89.14 row unchanged.
+
+### Action-step shape
+
+```json
+{
+  "kind": "action",
+  "name": "Step 1: restart otelcol after config rotation",
+  "group_id": "web-prod",
+  "action": {
+    "runner_id": "ed25519:abc…",
+    "action_type": "restart-systemd-service",
+    "parameters": { "unit_name": "otelcol.service" },
+    "timeout_seconds": 300
+  }
+}
+```
+
+Rules: action steps MUST NOT set `target_config_id`,
+`inline_config_snippet`, `stages`, or `abort_criteria`. `runner_id`
+and `action_type` are required. `timeout_seconds` defaults to 300
+and is clamped to 3600. The plan create handler validates the shape
+and emits a precise 400 naming the offending step index.
+
+### Plan-engine state transitions for action steps
+
+| Trigger | Engine action |
+| --- | --- |
+| Predecessor succeeded → engine promotes the action step Queued → Pending | the same `advancePlan` path rollout steps follow |
+| Action step in Pending | dispatch via `services.ActionDispatcher`; sign + persist the action_request with status=pending; set step state = `in_progress` |
+| Runner posts `success` | step → `succeeded`; emit `action.executed`; promote next step |
+| Runner posts `failure` | step → `aborted` with reason `action_runtime_failure`; trigger backwards walk |
+| Runner posts `denied` | step → `aborted` with reason `action_denied`; trigger backwards walk |
+| `ExpiresAt` elapses with no terminal result | step → `aborted` with reason `action_timeout`; trigger backwards walk |
+| Operator aborts the plan in flight | engine marks the action_request expired via `Cancel`; step → `aborted` on next tick |
+
+### Backwards rollback walk
+
+Action steps in the succeeded prefix are SKIPPED by the walk.
+Actions are "did a thing", not "set state X"; reversal is an action-
+type property, not a plan property, and Squadron has no automatic
+action undo today. The skipped action steps still appear in the
+`plan.rolled_back` audit payload's step list so SIEM consumers see
+the full arc.
+
+### Audit payload extensions
+
+The existing `action.dispatched` / `action.executed` / `action.failed`
+/ `action.denied` event types are reused. Plan-embedded payloads
+gain three fields:
+
+- `plan_id` — the plan the dispatched action belongs to.
+- `plan_step_index` — the action's position within the plan.
+- `plan_step_origin` — `"plan_embedded"` for plan-embedded
+  requests, `"standalone"` for the existing v0.53 dispatch path.
+
+No new event types; no new audit targets. Filtering on
+`plan_step_origin` lets SIEM consumers distinguish the two paths
+without joining tables.
+
+### Cross-references
+
+- [#530 — Action runner steps in plans](./proposals/530-action-runner-steps-in-plans.md)
+  — the locked design this section promotes.
+- [Action runner design](./action-runner-design.md) — the signed-
+  action protocol the plan engine reuses.
+
 ## See also
 
 - [Rollouts](./rollouts.md) — the single rollout protocol plans build

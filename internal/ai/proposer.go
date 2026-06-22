@@ -143,17 +143,35 @@ type PlanCandidate struct {
 	Steps []PlanStepCandidate `json:"steps"`
 }
 
-// PlanStepCandidate is one rollout intent inside a plan. Each step
-// supplies an InlineConfigSnippet (YAML the v0.78 server materializes
-// into a Config row) and the same stages/abort_criteria shape as a
-// standalone rollout. PlanID + PlanStepIndex are assigned by the
-// server at CreatePlan time — the model doesn't set them.
+// PlanStepCandidate is one rollout-or-action intent inside a plan.
+// kind=rollout (the v0.69-v0.89.13 default) supplies an
+// InlineConfigSnippet (YAML the v0.78 server materializes into a
+// Config row) and the same stages/abort_criteria shape as a
+// standalone rollout. kind=action (v0.89.14 #630) supplies an
+// Action block with the runner id + action type + parameters;
+// rollout-only fields must be empty on action steps. PlanID +
+// PlanStepIndex are assigned by the server at CreatePlan time —
+// the model doesn't set them.
 type PlanStepCandidate struct {
+	// Kind discriminates between "rollout" (default — back-compat
+	// with v0.69-v0.89.13 outputs that don't emit the field) and
+	// "action" (a signed action-runner verb dispatched mid-plan).
+	// The plan create handler validates the per-kind shape; the
+	// proposer prompt teaches the model when to emit each kind.
+	// v0.89.14 (#630).
+	Kind string `json:"kind,omitempty"`
+
 	Name                string                  `json:"name"`
 	GroupID             string                  `json:"group_id"`
-	InlineConfigSnippet string                  `json:"inline_config_snippet"`
-	Stages              []RolloutStageCandidate `json:"stages"`
+	InlineConfigSnippet string                  `json:"inline_config_snippet,omitempty"`
+	Stages              []RolloutStageCandidate `json:"stages,omitempty"`
 	AbortCriteria       AbortCriteriaCandidate  `json:"abort_criteria"`
+
+	// Action is the per-step shape kind=action steps carry. Empty
+	// on rollout steps. The plan create handler validates the
+	// runner id + action type against the registered catalog and
+	// rejects unknown types at request time. v0.89.14 (#630).
+	Action *ActionStepCandidate `json:"action,omitempty"`
 	// RequireApproval is honored on step 0 only — steps 1..N are
 	// forced to false server side per the v0.69 design (plans
 	// approve as a unit at step 0). The model may set it on step 0
@@ -213,6 +231,31 @@ type PlanStepCandidate struct {
 	// missing HCLPatch as "fall through to slice 1.5").
 	HCLPatch json.RawMessage `json:"hcl_patch,omitempty"`
 }
+
+// ActionStepCandidate is the per-step shape kind=action plan
+// steps carry. Mirrors services.ActionStepSpec — the bridge
+// converts ai.ActionStepCandidate → services.ActionStepSpec at
+// CreatePlan time. v0.89.14 (#630).
+//
+// RunnerID, ActionType, and Parameters are passed through to the
+// signer; TimeoutSeconds controls how long the engine waits for
+// the runner's reported result before declaring the step a
+// failure (default 300, max 3600 per spec §4 + service-layer
+// validator).
+type ActionStepCandidate struct {
+	RunnerID       string          `json:"runner_id"`
+	ActionType     string          `json:"action_type"`
+	Parameters     json.RawMessage `json:"parameters,omitempty"`
+	TimeoutSeconds int             `json:"timeout_seconds,omitempty"`
+}
+
+// Step-kind constants for the proposer. Mirror the storage-layer
+// constants so callers reaching the proposer side don't have to
+// import internal/storage just to compare against the string.
+const (
+	PlanStepKindRollout = "rollout"
+	PlanStepKindAction  = "action"
+)
 
 // ProposalResult is what ProposeFromCostSpike returns. The proposer
 // either returns a Proposal (which the bridge daemon converts +
@@ -392,11 +435,44 @@ func validatePlan(p PlanCandidate, expectedGroupID string) error {
 			return fmt.Errorf("plan step %d group_id %q does not match context group_id %q",
 				i, step.GroupID, expectedGroupID)
 		}
-		if strings.TrimSpace(step.InlineConfigSnippet) == "" {
-			return fmt.Errorf("plan step %d missing inline_config_snippet", i)
+		// v0.89.14 (#630) — branch on step kind. Action steps
+		// follow a separate validator: rollout-only fields must
+		// be empty, the Action block must carry a runner id +
+		// action type. Empty kind decodes as "rollout" for
+		// backwards compatibility with v0.79-v0.89.13 outputs.
+		kind := step.Kind
+		if kind == "" {
+			kind = PlanStepKindRollout
 		}
-		if len(step.Stages) == 0 {
-			return fmt.Errorf("plan step %d has no stages", i)
+		switch kind {
+		case PlanStepKindRollout:
+			if step.Action != nil {
+				return fmt.Errorf("plan step %d kind=rollout must not set action", i)
+			}
+			if strings.TrimSpace(step.InlineConfigSnippet) == "" {
+				return fmt.Errorf("plan step %d missing inline_config_snippet", i)
+			}
+			if len(step.Stages) == 0 {
+				return fmt.Errorf("plan step %d has no stages", i)
+			}
+		case PlanStepKindAction:
+			if step.Action == nil {
+				return fmt.Errorf("plan step %d kind=action requires an action block", i)
+			}
+			if strings.TrimSpace(step.InlineConfigSnippet) != "" {
+				return fmt.Errorf("plan step %d kind=action must not set inline_config_snippet", i)
+			}
+			if len(step.Stages) > 0 {
+				return fmt.Errorf("plan step %d kind=action must not set stages", i)
+			}
+			if strings.TrimSpace(step.Action.RunnerID) == "" {
+				return fmt.Errorf("plan step %d action.runner_id is required", i)
+			}
+			if strings.TrimSpace(step.Action.ActionType) == "" {
+				return fmt.Errorf("plan step %d action.action_type is required", i)
+			}
+		default:
+			return fmt.Errorf("plan step %d unknown kind %q (expected rollout or action)", i, kind)
 		}
 	}
 	return nil

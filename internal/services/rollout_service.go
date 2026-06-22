@@ -5,6 +5,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/configdiff"
@@ -353,9 +354,56 @@ type Rollout struct {
 	PlanID        string `json:"plan_id,omitempty"`
 	PlanStepIndex int    `json:"plan_step_index"`
 
+	// v0.89.14 (#630) — action runner steps in plans, slice 1.
+	// StepKind distinguishes "rollout" (default — staged config
+	// push) from "action" (a signed action-runner verb dispatched
+	// mid-plan). Empty StepKind decodes as "rollout" for
+	// backwards compatibility with every pre-v0.89.14 rollout.
+	// ActionRequestID is set by the plan engine on the action
+	// step's transition from Pending → InProgress and links to
+	// the dispatched action_requests row. Both fields are empty
+	// on rollout steps and on action steps that haven't dispatched
+	// yet. See docs/proposals/530-action-runner-steps-in-plans.md.
+	StepKind        string `json:"step_kind,omitempty"`
+	ActionRequestID string `json:"action_request_id,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+// Rollout step kinds. v0.89.14 (#630). Mirrors the storage-layer
+// constants so callers in services/ don't need to import
+// applicationstore/types just to compare against the string. Empty
+// string and StepKindRollout are equivalent on the wire — the
+// storage scan normalizes pre-v0.89.14 rows to "rollout" before they
+// reach service callers.
+const (
+	StepKindRollout = "rollout"
+	StepKindAction  = "action"
+)
+
+// ActionStepSpec is the per-step shape a kind=action plan step
+// carries. v0.89.14 (#630). The plan engine dispatches one
+// action_request_id per step from this spec on the predecessor's
+// succeeded transition; the runner's reported result feeds back
+// into the step's lifecycle (success → advance, failure / denied /
+// timeout → abort + backwards rollback walk). See spec §4 + §5.
+//
+// ActionType must be one of the registered actions in the
+// internal/actions registry; the plan create handler validates it
+// against actions.Default and rejects unknown types at request
+// time. RunnerID is the runner that will execute the verb;
+// Parameters is opaque action-type-specific JSON the runner
+// validates against the type's parameter schema. TimeoutSeconds
+// defaults to 300 (5 minutes) and is clamped to 3600 (1 hour) per
+// spec §4; the plan engine writes an action_timeout abort when the
+// runner has not posted a result by IssuedAt + TimeoutSeconds.
+type ActionStepSpec struct {
+	RunnerID       string          `json:"runner_id"`
+	ActionType     string          `json:"action_type"`
+	Parameters     json.RawMessage `json:"parameters,omitempty"`
+	TimeoutSeconds int             `json:"timeout_seconds,omitempty"`
 }
 
 // EvidenceRef is one piece of evidence attached to a proposal. v0.53.
@@ -437,6 +485,21 @@ type RolloutInput struct {
 	// unblocks v0.79 proposer plan output — the model emits YAML
 	// and the server materializes.
 	InlineConfigSnippet string `json:"inline_config_snippet,omitempty"`
+
+	// v0.89.14 (#630) — action runner steps in plans, slice 1.
+	// Kind discriminates between "rollout" (default — staged
+	// config push, every field above applies) and "action" (a
+	// signed action-runner verb, Action must be set and the
+	// rollout-only fields must be empty). Empty Kind defaults to
+	// "rollout" for backwards compatibility with every pre-
+	// v0.89.14 RolloutInput. CreatePlan rejects ambiguous shapes
+	// (e.g. kind=action with inline_config_snippet set, or
+	// kind=action with a nil Action block) at the validation
+	// pass before any storage write fires. See spec §4 + the
+	// plan create handler acceptance test in
+	// rollout_service_action_steps_test.go.
+	Kind   string          `json:"kind,omitempty"`
+	Action *ActionStepSpec `json:"action,omitempty"`
 }
 
 // RolloutFilter narrows List queries.

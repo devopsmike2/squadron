@@ -912,6 +912,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// (currently the change-window provider). OSS installs NoOp;
 	// Compliance Pack installs a store-backed provider.
 	wireEngineExtensions(rolloutEngine)
+	// v0.89.14 (#630) — wire the plan-engine boundary to the
+	// action runner substrate. Pure rollout plans run identically
+	// whether the dispatcher is wired or not; the boundary only
+	// engages when a plan step has step_kind=action. When the
+	// signer is nil (SQUADRON_ACTION_SIGNING_KEY unset and
+	// SQUADRON_ACTION_SIGNER_AUTOGEN_ALLOW unset in production),
+	// dispatcher construction is skipped — action-step plans
+	// will fail dispatch at engine time with a clean log line and
+	// abort the step.
+	if actionSigner != nil {
+		planActionDispatcher := services.NewPlanActionDispatcher(
+			appStore, actionSigner, nil /* registry: actions.Default */, auditService, logger)
+		rolloutEngine.SetActionDispatcher(planActionDispatcher)
+		logger.Info("plan engine action dispatcher wired",
+			zap.String("signer_fingerprint", actionSigner.Fingerprint()))
+	}
 	rolloutEngine.Start()
 	defer func() {
 		if err := rolloutEngine.Stop(10 * time.Second); err != nil {

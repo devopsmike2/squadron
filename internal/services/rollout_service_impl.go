@@ -392,14 +392,39 @@ func (s *RolloutServiceImpl) CreatePlan(ctx context.Context, steps []RolloutInpu
 	// storage write fires. Failing fast here is better than
 	// materializing step 0's config, then discovering step 1 is
 	// ambiguous and having to roll back.
+	//
+	// v0.89.14 (#630) — kind=action steps follow a separate
+	// validation path: the rollout-only fields (target_config_id,
+	// inline_config_snippet, stages, abort_criteria) MUST be empty
+	// and the Action block MUST be set with a runner id, a known
+	// action type, and a non-pathological timeout. The two shapes
+	// are mutually exclusive so a model that emits both a snippet
+	// and an action block on the same step gets rejected here
+	// rather than dispatching a half-formed plan to the engine.
 	for i, step := range steps {
-		snippet := strings.TrimSpace(step.InlineConfigSnippet)
-		target := strings.TrimSpace(step.TargetConfigID)
-		switch {
-		case snippet != "" && target != "":
-			return nil, "", fmt.Errorf("plan step %d sets both inline_config_snippet and target_config_id (ambiguous)", i)
-		case snippet == "" && target == "":
-			return nil, "", fmt.Errorf("plan step %d sets neither inline_config_snippet nor target_config_id", i)
+		kind := step.Kind
+		if kind == "" {
+			kind = StepKindRollout
+		}
+		switch kind {
+		case StepKindRollout:
+			if step.Action != nil {
+				return nil, "", fmt.Errorf("plan step %d kind=rollout must not set action", i)
+			}
+			snippet := strings.TrimSpace(step.InlineConfigSnippet)
+			target := strings.TrimSpace(step.TargetConfigID)
+			switch {
+			case snippet != "" && target != "":
+				return nil, "", fmt.Errorf("plan step %d sets both inline_config_snippet and target_config_id (ambiguous)", i)
+			case snippet == "" && target == "":
+				return nil, "", fmt.Errorf("plan step %d sets neither inline_config_snippet nor target_config_id", i)
+			}
+		case StepKindAction:
+			if err := validateActionStepInput(i, step); err != nil {
+				return nil, "", err
+			}
+		default:
+			return nil, "", fmt.Errorf("plan step %d unknown kind %q (expected rollout or action)", i, kind)
 		}
 	}
 
@@ -416,6 +441,40 @@ func (s *RolloutServiceImpl) CreatePlan(ctx context.Context, steps []RolloutInpu
 		// whatever the caller set, which is the plan's approval gate.
 		if i > 0 {
 			step.RequireApproval = false
+		}
+
+		// v0.89.14 (#630) — kind=action steps follow a separate
+		// create path: no config materialization, no
+		// validateRolloutInput pass, no PreviousConfigID snapshot.
+		// The engine's forward walk dispatches the action_request
+		// on the predecessor's succeeded transition; CreatePlan
+		// just persists the step shell with StepKind="action" and
+		// the spec serialized into AbortReason (slice 1 reuses the
+		// existing TEXT column as the spec carrier so the storage
+		// schema stays unchanged — see #630 spec §11 Q3 resolution
+		// below). RequireApproval is honored on step 0 only, same
+		// as rollout steps, so a plan that opens with an action
+		// can still gate behind operator approval.
+		kind := step.Kind
+		if kind == "" {
+			kind = StepKindRollout
+		}
+		if kind == StepKindAction {
+			r, err := s.createActionStep(ctx, step, planID, i)
+			if err != nil {
+				if len(created) > 0 {
+					_, cancelErr := s.CancelPlanFollowers(ctx, planID, -1)
+					if cancelErr != nil {
+						s.logger.Warn("create plan: cleanup after action step create failure also failed",
+							zap.String("plan_id", planID),
+							zap.Int("created_so_far", len(created)),
+							zap.Error(cancelErr))
+					}
+				}
+				return nil, "", fmt.Errorf("plan step %d create failed: %w", i, err)
+			}
+			created = append(created, r)
+			continue
 		}
 
 		// v0.78 — materialize inline config snippet into a real
@@ -879,6 +938,19 @@ func (s *RolloutServiceImpl) RollBackPlanPredecessors(ctx context.Context, planI
 			// else (failed/cancelled/queued/paused) either has no
 			// effect to undo or is already terminal in a non
 			// succeeded way.
+			continue
+		}
+		// v0.89.14 (#630) — action steps in the succeeded prefix
+		// are skipped by the backwards walk. Actions are "did a
+		// thing", not "set state X"; reversal is an action-type
+		// property, not a plan property. Squadron has no
+		// automatic action undo, so the rollback walk leaves
+		// action steps in place. The plan.rolled_back audit
+		// payload still names the failed step's index so SIEM
+		// consumers see the full arc; the skipped action steps
+		// just don't get a corresponding rollback rollout. See
+		// spec §5 ("Rollback") for the rationale.
+		if r.StepKind == applicationstore.StepKindAction {
 			continue
 		}
 		succeeded = append(succeeded, stepRef{id: r.ID, index: r.PlanStepIndex})
@@ -1595,9 +1667,12 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		// v0.69 plan grouping.
 		PlanID:        r.PlanID,
 		PlanStepIndex: r.PlanStepIndex,
-		CreatedAt:     r.CreatedAt,
-		UpdatedAt:     r.UpdatedAt,
-		CompletedAt:   r.CompletedAt,
+		// v0.89.14 action steps.
+		StepKind:        r.StepKind,
+		ActionRequestID: r.ActionRequestID,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
+		CompletedAt:     r.CompletedAt,
 	}
 }
 
@@ -1685,8 +1760,11 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		// v0.69 plan grouping.
 		PlanID:        r.PlanID,
 		PlanStepIndex: r.PlanStepIndex,
-		CreatedAt:     r.CreatedAt,
-		UpdatedAt:     r.UpdatedAt,
-		CompletedAt:   r.CompletedAt,
+		// v0.89.14 action steps.
+		StepKind:        r.StepKind,
+		ActionRequestID: r.ActionRequestID,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
+		CompletedAt:     r.CompletedAt,
 	}
 }

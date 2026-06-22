@@ -22,6 +22,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -426,6 +427,16 @@ func (h *ActionsHandlers) HandlePostActionResult(c *gin.Context) {
 	// failure path, denial path. Splitting beats one "completed"
 	// event with a buried status field, because alerting and search
 	// query patterns work cleanly on event_type alone.
+	//
+	// v0.89.14 (#630) — when the request was dispatched as a plan-
+	// embedded action step (the engine attached request.ID to a
+	// rollout row with StepKind="action"), enrich the payload with
+	// plan_id + plan_step_index + plan_step_origin="plan_embedded".
+	// Standalone requests carry "standalone" so SIEM consumers can
+	// filter on plan_step_origin without joining tables. The
+	// rollout lookup is a single in-memory scan via ListRollouts;
+	// SQLite has plan_id indexed but the scan helper below works
+	// against the same filter so the contract stays stable.
 	if h.audit != nil {
 		eventType, action := actionResultEventType(body.Status)
 		payload := map[string]any{
@@ -440,6 +451,18 @@ func (h *ActionsHandlers) HandlePostActionResult(c *gin.Context) {
 		if existing.StartedAt != nil && existing.CompletedAt != nil {
 			payload["duration_ms"] = existing.CompletedAt.Sub(*existing.StartedAt).Milliseconds()
 		}
+		// Plan-embedded provenance — find the rollout step that
+		// owns this action_request (if any) and attach plan_id +
+		// plan_step_index. Empty planID means standalone; the
+		// origin tag flips accordingly.
+		planID, stepIndex := lookupPlanForActionRequest(c.Request.Context(), h.store, existing.ID)
+		if planID != "" {
+			payload["plan_id"] = planID
+			payload["plan_step_index"] = stepIndex
+			payload["plan_step_origin"] = services.PlanActionOriginPlanEmbedded
+		} else {
+			payload["plan_step_origin"] = "standalone"
+		}
 		_ = h.audit.Record(c.Request.Context(), services.AuditEntry{
 			EventType:  eventType,
 			TargetType: services.AuditTargetActionRequest,
@@ -450,6 +473,38 @@ func (h *ActionsHandlers) HandlePostActionResult(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, existing)
+}
+
+// lookupPlanForActionRequest finds the plan-step rollout (if any)
+// whose ActionRequestID matches actionRequestID. Returns the plan
+// id and step index when a matching kind=action rollout exists;
+// empty planID otherwise. v0.89.14 (#630). Used by the result
+// handler to attach plan-embedded provenance to action.* audit
+// events.
+//
+// Implementation: filter ListRollouts on State + scan for the
+// ActionRequestID. The scan is bounded by the number of
+// in-progress action steps which is small in practice (rarely
+// more than a handful at once). When discovery shows this becomes
+// hot the storage layer can grow a dedicated lookup index; for
+// slice 1 the linear scan is correct and cheap.
+func lookupPlanForActionRequest(ctx context.Context, store applicationstore.ApplicationStore, actionRequestID string) (string, int) {
+	if actionRequestID == "" {
+		return "", 0
+	}
+	rows, err := store.ListRollouts(ctx, types.RolloutFilter{Limit: 1000})
+	if err != nil {
+		return "", 0
+	}
+	for _, r := range rows {
+		if r == nil {
+			continue
+		}
+		if r.ActionRequestID == actionRequestID && r.PlanID != "" {
+			return r.PlanID, r.PlanStepIndex
+		}
+	}
+	return "", 0
 }
 
 // actionResultEventType maps the runner-reported status onto the

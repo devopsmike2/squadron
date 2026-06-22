@@ -103,6 +103,13 @@ type Rollout struct {
 	// is the absence signal.
 	PlanID        string `json:"plan_id,omitempty"`
 	PlanStepIndex int    `json:"plan_step_index"`
+	// v0.89.14 (#630) — action runner steps in plans, slice 1.
+	// StepKind distinguishes "rollout" (default) from "action".
+	// ActionRequestID links an action step to the dispatched
+	// action_request row so squadronctl can fetch the underlying
+	// runner-side details via /api/v1/actions/:id when present.
+	StepKind        string `json:"step_kind,omitempty"`
+	ActionRequestID string `json:"action_request_id,omitempty"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 	CompletedAt      *time.Time     `json:"completed_at,omitempty"`

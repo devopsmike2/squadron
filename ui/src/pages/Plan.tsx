@@ -158,6 +158,21 @@ function RollbackSteps({ plan }: { plan: Plan }) {
 
 function StepRow({ step, rollback }: { step: Rollout; rollback?: boolean }) {
   const idx = step.plan_step_index ?? 0;
+  // v0.89.14 (#630) — action runner steps in plans, slice 1.
+  // Render a distinct badge for kind=action steps so the
+  // operator can scan a mixed plan and spot the runner verbs at
+  // a glance. The detail view is intentionally minimal in slice
+  // 1; clicking the row still routes to the existing rollout
+  // detail panel which surfaces the action_request_id for any
+  // deeper investigation.
+  const isAction = step.step_kind === "action";
+  const targetLabel = isAction
+    ? step.action_request_id
+      ? `request ${step.action_request_id.slice(0, 8)}…`
+      : "no request yet"
+    : step.target_config_id
+    ? `target ${step.target_config_id.slice(0, 8)}…`
+    : "no target";
   return (
     <Link
       to={`/rollouts?rollout=${encodeURIComponent(step.id)}`}
@@ -175,11 +190,18 @@ function StepRow({ step, rollback }: { step: Rollout; rollback?: boolean }) {
             >
               {rollback ? "rb" : "step"} {idx}
             </span>
+            {isAction && (
+              <span
+                className="inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/10 text-sky-700"
+                title="Action runner step (#630)"
+              >
+                action
+              </span>
+            )}
             <div className="text-sm font-medium truncate">{step.name}</div>
           </div>
           <div className="text-[11px] text-muted-foreground">
-            id {step.id.slice(0, 8)}… · target{" "}
-            {step.target_config_id.slice(0, 8)}…
+            id {step.id.slice(0, 8)}… · {targetLabel}
           </div>
         </div>
         <StepStateBadge state={step.state} />

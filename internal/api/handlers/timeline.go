@@ -38,6 +38,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -261,6 +262,15 @@ func auditToEvent(e *services.AuditEvent) TimelineEvent {
 		}
 	}
 	title := humanizeEventType(e.EventType, e.Action)
+	// v0.89.14 (#630) — when an action.* event was plan-embedded,
+	// enrich the title so the operator sees the plan context
+	// inline ("Action restart-systemd-service dispatched for plan
+	// abc1… step 1") rather than the generic "Action dispatched".
+	// Standalone action events (no plan_id in payload) keep the
+	// existing wording.
+	if planTitle := planEmbeddedActionTitle(e.EventType, e.Payload); planTitle != "" {
+		title = planTitle
+	}
 	sub := strings.TrimSpace(e.Actor)
 	if e.TargetType != "" {
 		if sub != "" {
@@ -704,6 +714,14 @@ func humanizeEventType(eventType, action string) string {
 		return "AI proposal skipped"
 	case "proposal.evidence_linked":
 		return "AI evidence linked"
+	case "action.dispatched":
+		return "Action dispatched"
+	case "action.executed":
+		return "Action succeeded"
+	case "action.failed":
+		return "Action failed"
+	case "action.denied":
+		return "Action denied"
 	}
 	// Fallback for event types not in the cleanup-grade table.
 	// Preserves backwards compatibility with whatever the operator
@@ -713,4 +731,89 @@ func humanizeEventType(eventType, action string) string {
 		title = strings.TrimSpace(action)
 	}
 	return title
+}
+
+// planEmbeddedActionTitle returns a payload-aware title for an
+// action.* event that the plan engine dispatched (plan_id +
+// plan_step_index in the payload). Returns empty string for
+// standalone action events so the caller falls back to the base
+// humanizer entry. v0.89.14 (#630).
+//
+// Wording mirrors the spec's "Action <type> dispatched as part of
+// plan <id_short> step <idx>" example with one normalization: the
+// short plan id is the first 8 chars of the uuid, matching the
+// same truncation rolloutsctl uses elsewhere.
+func planEmbeddedActionTitle(eventType string, payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	switch eventType {
+	case "action.dispatched", "action.executed", "action.failed", "action.denied":
+		// fall through
+	default:
+		return ""
+	}
+	planID, ok := payloadString(payload, "plan_id")
+	if !ok {
+		return ""
+	}
+	stepIdx, hasIdx := payloadAnyInt(payload, "plan_step_index")
+	actionType, _ := payloadString(payload, "action_type")
+	shortPlan := planID
+	if len(shortPlan) > 8 {
+		shortPlan = shortPlan[:8]
+	}
+	verb := ""
+	switch eventType {
+	case "action.dispatched":
+		verb = "dispatched"
+	case "action.executed":
+		verb = "succeeded"
+	case "action.failed":
+		verb = "failed"
+	case "action.denied":
+		verb = "denied"
+	}
+	prefix := "Action"
+	if actionType != "" {
+		prefix = "Action " + actionType
+	}
+	stepSuffix := ""
+	if hasIdx {
+		stepSuffix = fmt.Sprintf(" step %d", stepIdx)
+	}
+	switch verb {
+	case "dispatched":
+		return fmt.Sprintf("%s dispatched for plan %s%s", prefix, shortPlan, stepSuffix)
+	case "succeeded":
+		return fmt.Sprintf("%s succeeded for plan %s%s", prefix, shortPlan, stepSuffix)
+	case "failed":
+		if reason, ok := payloadString(payload, "denied_for"); ok {
+			return fmt.Sprintf("%s failed for plan %s%s: %s", prefix, shortPlan, stepSuffix, reason)
+		}
+		return fmt.Sprintf("%s failed for plan %s%s", prefix, shortPlan, stepSuffix)
+	case "denied":
+		return fmt.Sprintf("%s denied by runner for plan %s%s", prefix, shortPlan, stepSuffix)
+	}
+	return ""
+}
+
+// payloadAnyInt extracts an int from a payload field that may be a
+// float64 (JSON-decoded), an int, or an int64. Unlike payloadInt
+// above it accepts 0 as a valid value — plan_step_index=0 is the
+// first step. v0.89.14 (#630).
+func payloadAnyInt(p map[string]any, key string) (int, bool) {
+	v, present := p[key]
+	if !present {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	}
+	return 0, false
 }

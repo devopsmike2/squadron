@@ -88,10 +88,27 @@ type Engine struct {
 	// in its own implementation without changing the OSS NewEngine
 	// signature. Added in v0.52 as part of the open-core split.
 	changeWindowProvider changewindow.Provider
-	logger               *zap.Logger
+	// v0.89.14 (#630) — action runner steps in plans, slice 1.
+	// actionDispatcher is the boundary the engine uses to sign +
+	// persist action_requests for kind=action plan steps and to
+	// poll the runner's reported result back into the plan
+	// lifecycle. nil disables action-step support — pure rollout
+	// plans run unchanged. Wired via SetActionDispatcher post-
+	// construction so the OSS NewEngine signature stays stable
+	// (mirrors the changeWindowProvider pattern).
+	actionDispatcher services.ActionDispatcher
+	logger           *zap.Logger
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
+}
+
+// SetActionDispatcher wires the plan-engine boundary to the action
+// runner substrate. nil is a valid value and disables action-step
+// dispatch — the engine's forward walk for action steps becomes a
+// no-op (the step sits in pending without ever progressing). v0.89.14.
+func (e *Engine) SetActionDispatcher(d services.ActionDispatcher) {
+	e.actionDispatcher = d
 }
 
 // SetChangeWindowProvider wires the Compliance Pack's blackout
@@ -339,6 +356,15 @@ func (e *Engine) process(ctx context.Context, r *services.Rollout) {
 		if e.applyBlackoutCheck(ctx, r) {
 			return
 		}
+	}
+	// v0.89.14 (#630) — action steps follow a separate lifecycle:
+	// pending → dispatched (in_progress) → succeeded / aborted via
+	// runner result or engine-side timeout. Branch on StepKind
+	// before falling through to the v0.4–v0.89.13 rollout path so
+	// the existing state-machine for kind=rollout stays unchanged.
+	if r.StepKind == services.StepKindAction {
+		e.processActionStep(ctx, r)
+		return
 	}
 	switch r.State {
 	case services.RolloutStatePending:

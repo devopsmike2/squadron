@@ -171,11 +171,15 @@ func newPlansGetCommand() *cobra.Command {
 				rows = append(rows, []string{
 					fmt.Sprintf("%d", s.PlanStepIndex),
 					truncate(s.ID, 8),
+					stepKindLabel(s.StepKind),
 					s.State,
 					truncate(s.Name, 60),
 				})
 			}
-			table(w, []string{"#", "ID", "STATE", "NAME"}, rows)
+			// v0.89.14 (#630) — added KIND column so action steps
+			// are immediately distinguishable from rollout steps
+			// in the human-readable table.
+			table(w, []string{"#", "ID", "KIND", "STATE", "NAME"}, rows)
 
 			// Rollback steps (only if the v0.72 backwards walk fired).
 			if len(p.RollbackSteps) > 0 {
@@ -186,16 +190,31 @@ func newPlansGetCommand() *cobra.Command {
 					rows = append(rows, []string{
 						fmt.Sprintf("%d", s.PlanStepIndex),
 						truncate(s.ID, 8),
+						stepKindLabel(s.StepKind),
 						s.State,
 						truncate(s.Name, 60),
 					})
 				}
-				table(w, []string{"#", "ID", "STATE", "NAME"}, rows)
+				table(w, []string{"#", "ID", "KIND", "STATE", "NAME"}, rows)
 			}
 			return nil
 		},
 	}
 	return cmd
+}
+
+// stepKindLabel returns a short human-readable label for a plan
+// step's kind column. Empty kind on a pre-v0.89.14 server reads as
+// "rollout" so legacy CLI output stays informative. v0.89.14 (#630).
+func stepKindLabel(kind string) string {
+	switch kind {
+	case "", "rollout":
+		return "rollout"
+	case "action":
+		return "action"
+	default:
+		return kind
+	}
 }
 
 func newPlansCreateCommand() *cobra.Command {

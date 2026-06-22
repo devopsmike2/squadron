@@ -514,6 +514,19 @@ func (s *Storage) migrate() error {
 		// and the engine treats it exactly as before.
 		`ALTER TABLE rollouts ADD COLUMN plan_id TEXT`,
 		`ALTER TABLE rollouts ADD COLUMN plan_step_index INTEGER NOT NULL DEFAULT 0`,
+
+		// v0.89.14 (#630) — action runner steps in plans, slice 1.
+		// step_kind distinguishes "rollout" (default, all existing
+		// rows) from "action" (a signed action-runner verb
+		// dispatched mid-plan). action_request_id links an action
+		// step to the action_requests row the engine dispatched.
+		// Both NULL on every existing row preserves backwards
+		// compatibility — the storage scan treats empty step_kind
+		// as "rollout" and the engine's existing forward walk runs
+		// unchanged for that case. See docs/proposals/530-action-
+		// runner-steps-in-plans.md §4.
+		`ALTER TABLE rollouts ADD COLUMN step_kind TEXT`,
+		`ALTER TABLE rollouts ADD COLUMN action_request_id TEXT`,
 	}
 
 	for _, migration := range migrations {
@@ -1596,8 +1609,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		evidenceJSON = string(buf)
 	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -1628,6 +1641,11 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		// v0.69 plan grouping.
 		nullableString(r.PlanID),
 		r.PlanStepIndex,
+		// v0.89.14 action steps. Empty step_kind reads back as
+		// "rollout" via scanRollout's NULL coalescing so existing
+		// rows round trip cleanly.
+		nullableString(r.StepKind),
+		nullableString(r.ActionRequestID),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -1639,7 +1657,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1656,7 +1674,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1724,7 +1742,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    rejected_by = ?, rejected_at = ?, approval_notes = ?,
 		    last_blackout_reason = ?, last_blackout_at = ?,
 		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?,
-		    rolled_back_from_id = ?, plan_id = ?, plan_step_index = ?
+		    rolled_back_from_id = ?, plan_id = ?, plan_step_index = ?,
+		    step_kind = ?, action_request_id = ?
 		WHERE id = ?
 	`
 	res, err := s.db.ExecContext(ctx, stmt,
@@ -1754,6 +1773,9 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		// v0.69 plan grouping.
 		nullableString(r.PlanID),
 		r.PlanStepIndex,
+		// v0.89.14 action steps.
+		nullableString(r.StepKind),
+		nullableString(r.ActionRequestID),
 		r.ID,
 	)
 	if err != nil {
@@ -1803,6 +1825,11 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		// v0.69 plan grouping.
 		planID        sql.NullString
 		planStepIndex int
+		// v0.89.14 action steps. Both NULL on every pre-v0.89.14 row.
+		// Empty stepKind decodes as the "rollout" sentinel below so
+		// engine code doesn't have to special-case the missing case.
+		stepKind        sql.NullString
+		actionRequestID sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -1816,6 +1843,7 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&proposedBy, &proposalReasoning, &evidenceRefsJSON,
 		&rolledBackFromID,
 		&planID, &planStepIndex,
+		&stepKind, &actionRequestID,
 	); err != nil {
 		return nil, err
 	}
@@ -1826,6 +1854,17 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		r.PlanID = planID.String
 	}
 	r.PlanStepIndex = planStepIndex
+	// v0.89.14 — action step decoding. Empty stepKind on pre-v0.89.14
+	// rows decodes to the "rollout" sentinel so engine code can treat
+	// the field as authoritative without a per-call default.
+	if stepKind.Valid && stepKind.String != "" {
+		r.StepKind = stepKind.String
+	} else {
+		r.StepKind = types.StepKindRollout
+	}
+	if actionRequestID.Valid {
+		r.ActionRequestID = actionRequestID.String
+	}
 	// v0.53 — proposal provenance decoding.
 	if proposedBy.Valid && proposedBy.String != "" {
 		r.ProposedBy = proposedBy.String
