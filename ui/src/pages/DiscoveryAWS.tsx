@@ -19,6 +19,7 @@
 
 import {
   AlertTriangle,
+  Ban,
   Check,
   ChevronDown,
   ChevronRight,
@@ -29,10 +30,18 @@ import {
   Layers,
   Loader2,
   Play,
+  RotateCcw,
   Sparkles,
   X,
 } from "lucide-react";
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import useSWR from "swr";
 
@@ -42,6 +51,7 @@ import {
   runAWSScan,
   saveAWSConnection,
   scanAllAWS,
+  setRecommendationExclusion,
   validateAWSConnection,
   type AWSScanAllResponse,
   type CloudConnection,
@@ -157,6 +167,13 @@ export default function DiscoveryAWSPage() {
   // a new recommendations response.
   const [recsAccountID, setRecsAccountID] = useState<string>("");
   const [recsScanID, setRecsScanID] = useState<string>("");
+  // v0.89.38 #658 Stream 56 (#531 slice 2 chunk 5) — region of the
+  // scan the proposer just generated against. Threaded down to the
+  // per-card exclude affordance so the POST carries the right scope
+  // tuple. Single-region per chunk-5 v1 — multi-region scans use the
+  // first region in the result's list. Empty until Inventory hands us
+  // a recommendations response.
+  const [recsRegion, setRecsRegion] = useState<string>("");
 
   // v0.89.7b (#619 Stream 23) — last scan-all result kept at page
   // level so the Inventory tab's aggregate summary card and the
@@ -272,10 +289,11 @@ export default function DiscoveryAWSPage() {
               // state which would be stale across an account swap.
               key={selectedAccountID}
               initialAccountID={selectedAccountID}
-              onRecommendations={(r, accountID, scanID) => {
+              onRecommendations={(r, accountID, scanID, region) => {
                 setRecs(r);
                 setRecsAccountID(accountID);
                 setRecsScanID(scanID);
+                setRecsRegion(region);
                 setActiveTab(RECS_TAB);
               }}
             />
@@ -292,6 +310,7 @@ export default function DiscoveryAWSPage() {
               recs={recs}
               accountID={recsAccountID}
               scanID={recsScanID}
+              region={recsRegion}
             />
           )}
         </TabsContent>
@@ -966,10 +985,16 @@ function InventoryTab({
   // accountID and scanID are threaded alongside the response so the
   // Recommendations tab's Open-PR button can address its per-step
   // requests correctly. v0.89.3 #603 Stream 19 Phase 4.
+  // v0.89.38 #658 Stream 56 — added `region` parameter so the
+  // Recommendations tab's exclude affordance can address its POST.
+  // Empty string when the scan ran against zero regions (degenerate
+  // — the scanner enforces non-empty); first region of result.regions
+  // otherwise, matching the chunk-5 v1 single-region posture.
   onRecommendations: (
     r: GenerateRecommendationsResponse,
     accountID: string,
     scanID: string,
+    region: string,
   ) => void;
   // v0.89.7b (#619 Stream 23) — preselect the account from the
   // page-level URL state so the operator who landed via
@@ -1019,7 +1044,12 @@ function InventoryTab({
     setGenError(null);
     try {
       const r = await generateAWSRecommendations(result.account_id, result);
-      onRecommendations(r, result.account_id, result.scan_id);
+      // v0.89.38 — first region of the scan covers the chunk-5 v1
+      // single-region posture. Multi-region scans surface only the
+      // first region for the exclude affordance; v2 may scope per
+      // recommendation row if/when proposers emit per-region rows.
+      const region = result.regions[0] ?? "";
+      onRecommendations(r, result.account_id, result.scan_id, region);
     } catch (e) {
       setGenError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1762,10 +1792,14 @@ function TagPills({ tags }: { tags: Record<string, string> }) {
 
 // --- Recommendations tab -------------------------------------------
 
-function RecommendationsTab({
+// Exported in v0.89.38 (#658 Stream 56) so the slice-2-chunk-5
+// exclude-affordance tests can render the tab directly without
+// driving the full page state machine.
+export function RecommendationsTab({
   recs,
   accountID,
   scanID,
+  region,
 }: {
   recs: GenerateRecommendationsResponse | null;
   // v0.89.3 #603 Stream 19 Phase 4: scan + account context threaded
@@ -1773,7 +1807,61 @@ function RecommendationsTab({
   // Both empty before the first generate; populated after.
   accountID: string;
   scanID: string;
+  // v0.89.38 #658 Stream 56 (#531 slice 2 chunk 5) — region the
+  // recommendations were scanned against. Empty before the first
+  // generate; populated after. Threaded into the exclude affordance's
+  // POST body.
+  region: string;
 }) {
+  // v0.89.38 #658 Stream 56 (#531 slice 2 chunk 5) — operator-set
+  // exclusion state. Session-scoped Set keyed by recommendation_id.
+  //
+  // TODO(slice 2 follow-on): persistent exclusion state requires a
+  // GET endpoint for listing existing iac_recommendation_verdicts
+  // rows (matching the backend SetRecommendationExclusion +
+  // ListExcludedRecommendations pair). Chunk 5 ships without
+  // pre-loading. Operators who refresh the page see the toggle reset
+  // until the GET endpoint lands; the backend still respects the
+  // exclusion on the next scan (chunk 4 confirmed working). The
+  // success toast reminds them where to recover the state. The
+  // audit timeline is the source of truth for "was this excluded?"
+  // questions in the interim.
+  const [excludedSet, setExcludedSet] = useState<Set<string>>(
+    () => new Set(),
+  );
+  // toast holds the most-recent success / error notification rendered
+  // above the recommendations list. Self-clears after 4 seconds.
+  // Modelled inline (no toast lib in slice-2 UI) — matches the
+  // existing aria-live success card pattern.
+  const [toast, setToast] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+  // Track the auto-clear timer so we cancel on unmount or on rapid
+  // re-toast — prevents a stale clear firing into an unmounted
+  // component (and the "update outside act()" test-side warning that
+  // such timers throw).
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+  const showToast = useCallback(
+    (kind: "success" | "error", message: string) => {
+      if (toastTimerRef.current !== null) {
+        clearTimeout(toastTimerRef.current);
+      }
+      setToast({ kind, message });
+      toastTimerRef.current = setTimeout(() => {
+        setToast(null);
+        toastTimerRef.current = null;
+      }, 4000);
+    },
+    [],
+  );
   // Three states: never generated (empty), declined by the proposer
   // (informational), recommendations present (full list). Kept inline
   // rather than reusing the v0.25 RecommendationsPanel because that
@@ -1792,6 +1880,76 @@ function RecommendationsTab({
     () => listIaCGitHubConnections(),
   );
   const iacConnections = iacData?.connections ?? [];
+
+  // handleToggleExclusion drives the per-card "Don't propose this
+  // again" / "Restore" affordance. Optimistic update + rollback on
+  // error:
+  //   1. compute the inverse desired state from the current Set
+  //   2. update the Set immediately (optimistic)
+  //   3. POST setRecommendationExclusion
+  //   4. on error: rollback the Set, surface the err message as a
+  //      toast
+  //   5. on success: show the success toast (with the "session-only"
+  //      caveat — see the TODO above on persistent state)
+  //
+  // v1 (chunk 5) scoping decision (§11 Q4): if the recommendation
+  // names affected resources, exclude resource-level (passing the
+  // first as resource_id); otherwise kind-level. v2 may surface a
+  // dropdown letting the operator pick explicitly.
+  const handleToggleExclusion = useCallback(
+    async (rec: Recommendation) => {
+      const wasExcluded = excludedSet.has(rec.id);
+      const nextExcluded = !wasExcluded;
+      const resourceID =
+        rec.affected_resources && rec.affected_resources.length > 0
+          ? rec.affected_resources[0]
+          : "";
+      // Optimistic Set update.
+      setExcludedSet((prev) => {
+        const next = new Set(prev);
+        if (nextExcluded) {
+          next.add(rec.id);
+        } else {
+          next.delete(rec.id);
+        }
+        return next;
+      });
+      try {
+        await setRecommendationExclusion({
+          recommendation_id: rec.id,
+          connection_id: accountID,
+          account_id: accountID,
+          region,
+          recommendation_kind: rec.resource_kind ?? "",
+          resource_id: resourceID || undefined,
+          excluded: nextExcluded,
+        });
+        showToast(
+          "success",
+          nextExcluded
+            ? "Excluded — Squadron won't propose this on future scans. Exclusion saved; restore from the Timeline or by clicking Restore on the same recommendation in this session."
+            : "Restored — Squadron will propose this again on future scans.",
+        );
+      } catch (e) {
+        // Rollback the optimistic Set change.
+        setExcludedSet((prev) => {
+          const next = new Set(prev);
+          if (nextExcluded) {
+            next.delete(rec.id);
+          } else {
+            next.add(rec.id);
+          }
+          return next;
+        });
+        const message =
+          e instanceof Error
+            ? e.message
+            : "Squadron could not save the exclusion. Retry in a moment.";
+        showToast("error", message);
+      }
+    },
+    [accountID, region, excludedSet, showToast],
+  );
 
   if (!recs) {
     return (
@@ -1835,6 +1993,20 @@ function RecommendationsTab({
 
   return (
     <div className="space-y-4">
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="exclusion-toast"
+          className={
+            toast.kind === "success"
+              ? "rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm"
+              : "rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+          }
+        >
+          {toast.message}
+        </div>
+      )}
       {recs.reasoning && (
         <Card>
           <CardContent className="p-4 text-sm">
@@ -1857,6 +2029,10 @@ function RecommendationsTab({
               accountID={accountID}
               proposerReasoning={recs.reasoning ?? ""}
               iacConnections={iacConnections}
+              excluded={excludedSet.has(rec.id)}
+              onToggleExclusion={
+                region ? () => handleToggleExclusion(rec) : undefined
+              }
             />
           </li>
         ))}
@@ -1895,6 +2071,8 @@ export function DiscoveryRecommendationCard({
   iacConnections,
   inAggregateView = false,
   onPickAccount,
+  excluded = false,
+  onToggleExclusion,
 }: {
   rec: Recommendation;
   stepIdx: number;
@@ -1911,6 +2089,18 @@ export function DiscoveryRecommendationCard({
   // onPickAccount drives the badge-click navigation. Required when
   // inAggregateView is true; otherwise unused.
   onPickAccount?: (accountID: string) => void;
+  // v0.89.38 #658 Stream 56 (#531 slice 2 chunk 5) — operator-set
+  // exclusion state for this recommendation. When true, the card
+  // dims, gains an "Excluded" badge, and the exclude button flips
+  // its label to "Restore as recommendation". Driven by the
+  // parent's session-scoped Set so the page-level toast / rollback
+  // logic stays in one place. Defaults to false.
+  excluded?: boolean;
+  // onToggleExclusion drives the button click. The parent computes
+  // the next state and routes through setRecommendationExclusion;
+  // the card just calls back. Undefined disables the affordance —
+  // useful in test renders that don't exercise the exclude path.
+  onToggleExclusion?: () => void;
 }) {
   const [iacOpen, setIacOpen] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -2041,10 +2231,29 @@ export function DiscoveryRecommendationCard({
   const showAccountBadge = inAggregateView && !!accountID;
 
   return (
-    <Card>
+    <Card
+      className={
+        excluded
+          ? "border-muted-foreground/30 opacity-60 grayscale"
+          : undefined
+      }
+      data-testid="discovery-recommendation-card"
+      data-excluded={excluded ? "true" : "false"}
+    >
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <CardTitle className="text-base">{rec.title}</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle className="text-base">{rec.title}</CardTitle>
+            {excluded && (
+              <Badge
+                variant="outline"
+                aria-label="Excluded from future recommendations"
+                className="border-muted-foreground/40 text-xs uppercase tracking-wider text-muted-foreground"
+              >
+                Excluded
+              </Badge>
+            )}
+          </div>
           {showAccountBadge && (
             <button
               type="button"
@@ -2288,6 +2497,38 @@ export function DiscoveryRecommendationCard({
                     )}
                     {copied ? "Copied" : "Copy snippet"}
                   </Button>
+                  {/* v0.89.38 #658 Stream 56 (#531 slice 2 chunk 5) —
+                      operator-set exclusion affordance. Button label
+                      flips on the excluded state. Suppressed when the
+                      parent didn't wire onToggleExclusion (e.g. tests
+                      that don't exercise the path, or aggregate
+                      view). */}
+                  {onToggleExclusion && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={onToggleExclusion}
+                      aria-label={
+                        excluded
+                          ? `Restore ${rec.title} as a recommendation`
+                          : `Don't propose ${rec.title} again`
+                      }
+                      className="text-xs"
+                    >
+                      {excluded ? (
+                        <RotateCcw
+                          className="mr-1 h-3 w-3"
+                          aria-hidden
+                        />
+                      ) : (
+                        <Ban className="mr-1 h-3 w-3" aria-hidden />
+                      )}
+                      {excluded
+                        ? "Restore as recommendation"
+                        : "Don't propose this again"}
+                    </Button>
+                  )}
                 </div>
 
                 {/* State B — connection exists, no placement row for
