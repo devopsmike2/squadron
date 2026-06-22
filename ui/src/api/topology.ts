@@ -27,8 +27,14 @@ export interface NodeMetrics {
   metric_count: number;
   log_count: number;
   trace_count: number;
-  error_rate: number;
-  latency: number;
+  // v0.89.25 (#641) — error_rate + latency are computed by a
+  // log/trace pipeline that isn't built yet. The backend now omits
+  // these fields from the JSON envelope when nil rather than
+  // emitting a misleading 0. Optional here so existing renderers
+  // get undefined and can branch on absence, not on === 0 (which
+  // collides with legitimately-zero metric counts).
+  error_rate?: number;
+  latency?: number;
   throughput_rps: number;
 }
 

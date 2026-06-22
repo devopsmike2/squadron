@@ -50,14 +50,31 @@ type TopologyEdge struct {
 	Label  string `json:"label,omitempty"`
 }
 
-// NodeMetrics represents metrics for a topology node
+// NodeMetrics represents metrics for a topology node.
+//
+// v0.89.25 (#641) — ErrorRate and Latency were previously emitted
+// as plain float64 fields containing literal 0 values because the
+// log/trace pipeline that would compute them is on the roadmap but
+// not built. The wire shape silently lied: clients saw
+// "error_rate": 0 alongside legitimately-zero metric_count and
+// could not tell the two cases apart. Switched to *float64 +
+// omitempty so the fields are absent from the JSON envelope until
+// real values exist, and added the design-gap comment below.
+// Computing them honestly is a separate release tracked as a
+// (c)-class item in the v0.89.25 cleanup inventory.
 type NodeMetrics struct {
-	MetricCount   int64   `json:"metric_count"`
-	LogCount      int64   `json:"log_count"`
-	TraceCount    int64   `json:"trace_count"`
-	ErrorRate     float64 `json:"error_rate"`
-	Latency       float64 `json:"latency"`
-	ThroughputRPS float64 `json:"throughput_rps"`
+	MetricCount int64 `json:"metric_count"`
+	LogCount    int64 `json:"log_count"`
+	TraceCount  int64 `json:"trace_count"`
+	// ErrorRate, if set, is the fraction of error-level signals in
+	// the window (0.0-1.0). nil means "not computed in this
+	// release" — see the type doc above. JSON: omitted when nil.
+	ErrorRate *float64 `json:"error_rate,omitempty"`
+	// Latency, if set, is the median observed latency in
+	// milliseconds. nil means "not computed in this release". JSON:
+	// omitted when nil.
+	Latency       *float64 `json:"latency,omitempty"`
+	ThroughputRPS float64  `json:"throughput_rps"`
 }
 
 // TopologyResponse represents the complete topology graph
@@ -368,11 +385,15 @@ func (h *TopologyHandlers) getAgentMetrics(ctx context.Context, agentID uuid.UUI
 	}
 
 	return &NodeMetrics{
-		MetricCount:   metricCount,
-		LogCount:      logCount,
-		TraceCount:    traceCount,
-		ErrorRate:     0,                            // TODO: Calculate from logs/traces
-		Latency:       0,                            // TODO: Calculate from traces
+		MetricCount: metricCount,
+		LogCount:    logCount,
+		TraceCount:  traceCount,
+		// v0.89.25 (#641) — ErrorRate + Latency left as nil rather
+		// than 0 until the log/trace computation pipeline lands. The
+		// wire shape uses omitempty so clients see the absence of
+		// the field instead of a misleading literal 0.
+		ErrorRate:     nil,
+		Latency:       nil,
 		ThroughputRPS: float64(metricCount) / 300.0, // rough estimate over 5 minutes
 	}
 }
