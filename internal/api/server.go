@@ -683,12 +683,30 @@ func (a *discoveryAcceptedAssemblerAdapter) AssembleForDiscoveryScope(
 func (a *discoveryAcceptedAssemblerAdapter) AssembleVerdictBlock(
 	ctx context.Context, accountID, region string,
 ) (string, []string, error) {
+	block, urls, _, err := a.AssembleVerdictBlockWithByState(ctx, accountID, region)
+	return block, urls, err
+}
+
+// AssembleVerdictBlockWithByState is the v0.89.37 (#657 Stream 55,
+// #531 slice 2 chunk 6) extension. Mirrors AssembleVerdictBlock but
+// also returns the per-state PR URL bucket map for the audit
+// payload's verdict_examples_used_by_state field. The bucket map
+// projects each selected verdict's State to a discovery-surface
+// bucket key (merged → "merged"; closed_not_merged →
+// "closed_not_merged"; operator_excluded → "operator_excluded";
+// other states defensively skipped). On cold start / opt-out /
+// recency-window empty the bucket map is nil so the caller's
+// hasAnyDiscoveryByState gate omits the field from the audit row.
+func (a *discoveryAcceptedAssemblerAdapter) AssembleVerdictBlockWithByState(
+	ctx context.Context, accountID, region string,
+) (string, []string, map[string][]string, error) {
 	conns, err := a.connections.List(ctx)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	var allApproved, allRejected []verdictsel.Verdict
 	var urls []string
+	urlsByState := map[string][]string{}
 	var lastBridge *proposer.DiscoveryBridge
 	for _, conn := range conns {
 		if conn == nil {
@@ -703,11 +721,29 @@ func (a *discoveryAcceptedAssemblerAdapter) AssembleVerdictBlock(
 		allApproved = append(allApproved, approved...)
 		allRejected = append(allRejected, rejected...)
 		urls = append(urls, prURLs...)
+		// Walk the rejected + approved slices to populate the by-state
+		// map. The bucket keys are the discovery-surface state
+		// strings; the order within each bucket mirrors the
+		// per-connection AssembleDiscoveryVerdicts walk, which already
+		// orders by selection (rejected first, then approved).
+		for _, v := range rejected {
+			switch v.State {
+			case verdictsel.StateClosedNotMerged:
+				urlsByState["closed_not_merged"] = append(urlsByState["closed_not_merged"], v.ID)
+			case verdictsel.StateOperatorExcluded:
+				urlsByState["operator_excluded"] = append(urlsByState["operator_excluded"], v.ID)
+			}
+		}
+		for _, v := range approved {
+			if v.State == verdictsel.StateMerged {
+				urlsByState["merged"] = append(urlsByState["merged"], v.ID)
+			}
+		}
 	}
 	if lastBridge == nil || (len(allApproved) == 0 && len(allRejected) == 0) {
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
-	return lastBridge.RenderDiscoveryVerdictBlock(allApproved, allRejected), urls, nil
+	return lastBridge.RenderDiscoveryVerdictBlock(allApproved, allRejected), urls, urlsByState, nil
 }
 
 // aiTrampoline late-binds an AI handler call. Same shape as the

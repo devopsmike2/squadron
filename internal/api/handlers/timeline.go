@@ -648,13 +648,20 @@ func humanizeIaCAuditEvent(e *services.AuditEvent) (string, string, bool) {
 		return title, sub, true
 
 	// v0.89.28 (#643 slice 1) — discovery_proposal.created humanizer.
-	// When verdict_examples_used is non-empty (the proposer was
-	// informed by N prior accepted PRs) the title surfaces the count;
-	// when empty or missing, the title falls through to the simple
-	// form. The cold-start fallback also lands in the humanizeEventType
-	// table below so the simple-title path renders consistently when
-	// the payload is missing entirely.
+	// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6) extension:
+	// when verdict_examples_used_by_state is present AND has any
+	// non-empty bucket, the title surfaces the per-state mix
+	// ("informed by N accepted + M closed + P excluded") so an
+	// operator scanning the timeline can read the signal
+	// composition without expanding the payload. Falls back to the
+	// v0.89.28 flat-count phrasing when by-state is absent (legacy
+	// fixtures + SIEM consumers that haven't ingested the slice 2
+	// shape yet); falls back further to the cold-start phrasing
+	// when no examples cited at all.
 	case services.AuditEventDiscoveryProposalCreated:
+		if title := discoveryProposalByStateTitle(e.Payload); title != "" {
+			return title, "", true
+		}
 		n := 0
 		if raw, ok := e.Payload["verdict_examples_used"]; ok {
 			switch v := raw.(type) {
@@ -977,6 +984,15 @@ func proposalCreatedTitle(eventType string, payload map[string]any) string {
 	if payload == nil || eventType != "proposal.created" {
 		return ""
 	}
+	// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6) — when the
+	// audit row carries the per-state bucket map, prefer the
+	// state-mix wording. The proposalCreatedByStateTitle helper
+	// returns "" on empty/missing buckets so the fall-through to
+	// the v0.89.22 flat-count phrasing is preserved for legacy
+	// fixtures + cold-start rows (no by-state field at all).
+	if t := proposalCreatedByStateTitle(payload); t != "" {
+		return t
+	}
 	raw, ok := payload["verdict_examples_used"]
 	if !ok {
 		return ""
@@ -1003,6 +1019,136 @@ func proposalCreatedTitle(eventType string, payload map[string]any) string {
 		plural = "verdict"
 	}
 	return fmt.Sprintf("AI proposal created (cited %d prior %s)", n, plural)
+}
+
+// proposalCreatedByStateTitle returns the v0.89.37 (#657 Stream 55,
+// #531 slice 2 chunk 6) state-mix title for a proposal.created event
+// whose payload carries verdict_examples_used_by_state. The output
+// drops zero buckets and uses the cost-spike-surface state vocabulary
+// ("approved" + "rejected"). Returns "" when:
+//   - the by-state field is absent or the wrong shape (caller falls
+//     back to the v0.89.22 flat-count phrasing),
+//   - all buckets are empty (caller falls back to the cold-start
+//     phrasing via the same flat-count path),
+//   - only unknown-state buckets are populated (defensive — preserves
+//     the flat-count fallback for forward-compat payloads).
+//
+// The bucket walk is in fixed approved-then-rejected order so the
+// rendered title is deterministic regardless of map iteration.
+func proposalCreatedByStateTitle(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload["verdict_examples_used_by_state"]
+	if !ok {
+		return ""
+	}
+	byState := payloadByStateMap(raw)
+	if byState == nil {
+		return ""
+	}
+	parts := []string{}
+	if n := byState["approved"]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d approved", n))
+	}
+	if n := byState["rejected"]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d rejected", n))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("AI proposal created (informed by %s verdicts)", joinPlus(parts))
+}
+
+// discoveryProposalByStateTitle is the discovery-surface sibling of
+// proposalCreatedByStateTitle. State vocabulary is per spec §8 (c):
+// "merged" → "accepted PRs", "closed_not_merged" → "closed",
+// "operator_excluded" → "excluded". Zero buckets are dropped; the
+// "PRs" suffix attaches to the merged count only when it's the only
+// non-zero bucket so multi-bucket lines stay readable ("informed by
+// 1 accepted + 1 closed + 1 excluded"). Returns "" on the same
+// fall-through conditions as proposalCreatedByStateTitle.
+//
+// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6).
+func discoveryProposalByStateTitle(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload["verdict_examples_used_by_state"]
+	if !ok {
+		return ""
+	}
+	byState := payloadByStateMap(raw)
+	if byState == nil {
+		return ""
+	}
+	merged := byState["merged"]
+	closed := byState["closed_not_merged"]
+	excluded := byState["operator_excluded"]
+	if merged == 0 && closed == 0 && excluded == 0 {
+		return ""
+	}
+	parts := []string{}
+	if merged > 0 {
+		parts = append(parts, fmt.Sprintf("%d accepted", merged))
+	}
+	if closed > 0 {
+		parts = append(parts, fmt.Sprintf("%d closed", closed))
+	}
+	if excluded > 0 {
+		parts = append(parts, fmt.Sprintf("%d excluded", excluded))
+	}
+	// Single-bucket merged-only matches the v0.89.28 phrasing
+	// ("informed by N accepted PRs") to keep the slice 1 humanizer
+	// invariant when the by-state field is populated but only carries
+	// the merged bucket — e.g. operators who haven't yet seen any
+	// closed-without-merge or operator-excluded signal.
+	if len(parts) == 1 && merged > 0 {
+		plural := "PRs"
+		if merged == 1 {
+			plural = "PR"
+		}
+		return fmt.Sprintf("Discovery recommendations generated (informed by %d accepted %s)", merged, plural)
+	}
+	return fmt.Sprintf("Discovery recommendations generated (informed by %s)", joinPlus(parts))
+}
+
+// payloadByStateMap projects the raw audit payload value at
+// verdict_examples_used_by_state into a map[state]count. Accepts the
+// two shapes the audit pipeline produces:
+//   - map[string]any with []any (JSON-round-tripped payloads),
+//   - map[string][]string (in-process emits that bypass JSON).
+// Returns nil for anything else so the humanizer falls through
+// gracefully on malformed rows.
+func payloadByStateMap(raw any) map[string]int {
+	out := map[string]int{}
+	switch m := raw.(type) {
+	case map[string]any:
+		for k, v := range m {
+			switch arr := v.(type) {
+			case []any:
+				out[k] = len(arr)
+			case []string:
+				out[k] = len(arr)
+			}
+		}
+	case map[string][]string:
+		for k, v := range m {
+			out[k] = len(v)
+		}
+	default:
+		return nil
+	}
+	return out
+}
+
+// joinPlus joins parts with " + " so multi-bucket humanizer titles
+// read as "1 approved + 2 rejected" rather than "1 approved, 2
+// rejected". Pulled out of the call sites so the cost-spike and
+// discovery branches share the same delimiter. v0.89.37 (#657
+// Stream 55, #531 slice 2 chunk 6).
+func joinPlus(parts []string) string {
+	return strings.Join(parts, " + ")
 }
 
 // excludeFromLearningTitle returns a payload-aware title for a
