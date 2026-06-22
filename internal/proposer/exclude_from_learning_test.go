@@ -75,7 +75,7 @@ func TestExcludeFromLearning_ExcludedRolloutNotInVerdictExamples(t *testing.T) {
 	store.verdicts = map[string][]*types.Rollout{gid: {excluded, included}}
 
 	b := newBridgeForVerdictsTest(store)
-	approved, rejected, ids, err := b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, _, err := b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
 
 	// Only the included rollout makes it through. After the
@@ -115,7 +115,7 @@ func TestExcludeFromLearning_ChangedAfterCreation_AffectsNextProposal(t *testing
 	b := newBridgeForVerdictsTest(store)
 
 	// First call: rollout is included.
-	approved, rejected, ids, err := b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, _, err := b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
 	assert.Empty(t, rejected, "no rejected seeded")
 	require.Len(t, approved, 1, "first call: rollout must surface")
@@ -130,7 +130,7 @@ func TestExcludeFromLearning_ChangedAfterCreation_AffectsNextProposal(t *testing
 	// Second call: rollout is excluded. The bridge must re-read the
 	// store; if there's a stale cache between calls the test sees a
 	// non-empty result and fails.
-	approved, rejected, ids, err = b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, _, err = b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
 	assert.Empty(t, approved,
 		"second call: rollout must be filtered out — proves no stale cache")
@@ -172,7 +172,7 @@ func TestExcludeFromLearning_GroupOptOutStillRespected(t *testing.T) {
 	store.verdicts = map[string][]*types.Rollout{gid: {r}}
 
 	b := newBridgeForVerdictsTest(store)
-	approved, rejected, ids, err := b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, _, err := b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
 	assert.Empty(t, approved,
 		"group-level opt-out must short-circuit before the per-rollout filter — "+

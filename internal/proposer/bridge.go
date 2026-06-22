@@ -241,7 +241,7 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 	// recency-window empty — those cases all short-circuit inside
 	// assembleVerdicts (returning four zero values) or inside
 	// verdictprompt.Render (empty pool → empty string).
-	approved, rejected, verdictIDs, vErr := b.assembleVerdicts(ctx, cs.GroupID)
+	approved, rejected, verdictIDs, verdictIDsByState, vErr := b.assembleVerdicts(ctx, cs.GroupID)
 	if vErr != nil {
 		// Non-fatal: a verdicts query failure shouldn't sink the
 		// whole spike. Log and proceed with empty examples — the
@@ -252,6 +252,7 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		approved = nil
 		rejected = nil
 		verdictIDs = nil
+		verdictIDsByState = nil
 	}
 	cs.VerdictBlock = verdictprompt.Render(approved, rejected, verdictprompt.RenderOpts{
 		Surface:         verdictprompt.SurfaceCostSpike,
@@ -280,9 +281,9 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 	// snippets per step.
 	switch result.Kind {
 	case ai.ProposalKindPlan:
-		b.handlePlanSpike(ctx, spike, result, cs, verdictIDs)
+		b.handlePlanSpike(ctx, spike, result, cs, verdictIDs, verdictIDsByState)
 	case ai.ProposalKindRollout, "":
-		b.handleRolloutSpike(ctx, spike, result, cs, verdictIDs)
+		b.handleRolloutSpike(ctx, spike, result, cs, verdictIDs, verdictIDsByState)
 	default:
 		b.logger.Warn("AI proposer bridge: unknown proposal kind; skipping spike",
 			zap.String("spike_id", spike.ID),
@@ -296,7 +297,7 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 // dispatch branch reads cleanly. verdictIDs flows from
 // assembleVerdicts up at handleSpike and is stamped onto the
 // proposal.created audit payload (v0.89.17 #633).
-func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string) {
+func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string, verdictIDsByState map[string][]string) {
 	input := candidateToInput(result, cs.GroupID)
 	rollout, err := b.rollouts.Create(ctx, input)
 	if err != nil {
@@ -310,7 +311,7 @@ func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeE
 		zap.String("group_id", cs.GroupID),
 		zap.Int("tokens_in", result.TokensIn),
 		zap.Int("tokens_out", result.TokensOut))
-	b.emitCreated(ctx, spike, rollout, result, cs, verdictIDs)
+	b.emitCreated(ctx, spike, rollout, result, cs, verdictIDs, verdictIDsByState)
 	b.emitEvidenceLinked(ctx, spike, rollout, result)
 }
 
@@ -325,7 +326,7 @@ func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeE
 //     audit event records the decline reason via emitDeclined.
 //   - On success, audit events fire against the first step's
 //     rollout id so the timeline anchors the plan to a concrete row.
-func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string) {
+func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string, verdictIDsByState map[string][]string) {
 	steps := candidateToPlanInputs(result, cs.GroupID)
 	createdSteps, planID, err := b.rollouts.CreatePlan(ctx, steps)
 	if err != nil {
@@ -349,7 +350,7 @@ func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEven
 	// step's rollout. proposal.created + evidence.linked events
 	// anchor on step 0; the plan.created event already fires from
 	// services.CreatePlan itself with the plan_id payload.
-	b.emitCreated(ctx, spike, createdSteps[0], result, cs, verdictIDs)
+	b.emitCreated(ctx, spike, createdSteps[0], result, cs, verdictIDs, verdictIDsByState)
 	b.emitEvidenceLinked(ctx, spike, createdSteps[0], result)
 }
 
@@ -358,7 +359,7 @@ func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEven
 // operator reviewing the spike sees the AI's reasoning, the model,
 // and the resulting rollout in one place. Compliance evidence
 // trail for NIST AI RMF MAP 4.1 and SOC 2 CC8.1.
-func (b *Bridge) emitCreated(ctx context.Context, spike *types.CostSpikeEvent, rollout *services.Rollout, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string) {
+func (b *Bridge) emitCreated(ctx context.Context, spike *types.CostSpikeEvent, rollout *services.Rollout, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string, verdictIDsByState map[string][]string) {
 	if b.audit == nil {
 		return
 	}
@@ -371,29 +372,56 @@ func (b *Bridge) emitCreated(ctx context.Context, spike *types.CostSpikeEvent, r
 	if examplesUsed == nil {
 		examplesUsed = []string{}
 	}
+	payload := map[string]any{
+		"origin":                "ai",
+		"rollout_id":            rollout.ID,
+		"group_id":              cs.GroupID,
+		"target_config_id":      rollout.TargetConfigID,
+		"reasoning_summary":     summarize(result.Reasoning, 240),
+		"evidence_count":        len(result.Evidence),
+		"model":                 result.Model,
+		"tokens_in":             result.TokensIn,
+		"tokens_out":            result.TokensOut,
+		"require_approval":      true,
+		"verdict_examples_used": examplesUsed,
+	}
+	// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6) — extended
+	// audit payload with verdict_examples_used_by_state. The new
+	// field partitions the verdict_examples_used array into per-
+	// state buckets so SIEM consumers + the humanizer can read the
+	// approved/rejected mix without an N+1 lookup against the
+	// rollouts table at humanize time. Spec §8 (c). Omitted entirely
+	// when both buckets are empty so cold-start audit rows stay byte-
+	// for-byte identical to the v0.89.17 shape (the existing
+	// verdict_examples_used: [] field is the cold-start signal).
+	if hasAnyByState(verdictIDsByState) {
+		payload["verdict_examples_used_by_state"] = verdictIDsByState
+	}
 	if err := b.audit.Record(ctx, services.AuditEntry{
 		Actor:      "ai-proposer",
 		EventType:  "proposal.created",
 		TargetType: "cost_spike",
 		TargetID:   spike.ID,
 		Action:     "created",
-		Payload: map[string]any{
-			"origin":                "ai",
-			"rollout_id":            rollout.ID,
-			"group_id":              cs.GroupID,
-			"target_config_id":      rollout.TargetConfigID,
-			"reasoning_summary":     summarize(result.Reasoning, 240),
-			"evidence_count":        len(result.Evidence),
-			"model":                 result.Model,
-			"tokens_in":             result.TokensIn,
-			"tokens_out":            result.TokensOut,
-			"require_approval":      true,
-			"verdict_examples_used": examplesUsed,
-		},
+		Payload:    payload,
 	}); err != nil {
 		b.logger.Warn("AI proposer bridge: proposal.created audit emit failed",
 			zap.String("spike_id", spike.ID), zap.Error(err))
 	}
+}
+
+// hasAnyByState returns true when the supplied by-state map has any
+// non-empty bucket. Used by emitCreated to gate emission of the
+// verdict_examples_used_by_state field — cold-start audit rows
+// (every bucket empty / nil map) omit the field so the v0.89.17
+// payload shape is preserved byte-for-byte for SIEM consumers.
+func hasAnyByState(m map[string][]string) bool {
+	for _, ids := range m {
+		if len(ids) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // emitEvidenceLinked records proposal.evidence_linked with the
@@ -827,10 +855,18 @@ var _ = applicationstore.Group{}
 // rollout's StagesJSON or TargetConfigID — inline config bodies
 // stay out of the prompt block by construction.
 //
-// v0.89.17 (#633), refactored v0.89.35 (#654).
-func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) (approved, rejected []verdictsel.Verdict, exampleIDs []string, err error) {
+// v0.89.17 (#633), refactored v0.89.35 (#654), extended v0.89.37
+// (#657 Stream 55, #531 slice 2 chunk 6) to also return the per-
+// state ID bucket map that feeds the audit payload's
+// verdict_examples_used_by_state field. The map is keyed by the
+// cost-spike-surface state strings ("approved", "rejected"); other
+// state strings are intentionally skipped (defensive — the cost-
+// spike storage layer only writes those two states today, but the
+// switch keeps a future StateMerged/StateClosedNotMerged row out of
+// the cost-spike payload).
+func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) (approved, rejected []verdictsel.Verdict, exampleIDs []string, exampleIDsByState map[string][]string, err error) {
 	if groupID == "" {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	// Per-group opt-out check. GetGroup may return (nil, nil) when
 	// the group has been deleted but a cost-spike row still
@@ -843,10 +879,10 @@ func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) (approved
 	// LearnFromVerdicts=false.
 	group, err := b.store.GetGroup(ctx, groupID)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("get group for verdicts: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("get group for verdicts: %w", err)
 	}
 	if group == nil || !group.LearnFromVerdicts {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	// Pull a small superset and let verdictsel.Select cap. The
@@ -859,10 +895,10 @@ func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) (approved
 	since := now.Add(-verdictsel.DefaultWindow)
 	rows, err := b.store.ListAIVerdictsForGroup(ctx, groupID, since, verdictsel.DefaultMaxTotal*4)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("list ai verdicts: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("list ai verdicts: %w", err)
 	}
 	if len(rows) == 0 {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	// Project rollouts into verdictsel.Verdict. State maps from the
@@ -918,21 +954,40 @@ func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) (approved
 		PreferNeg:  true,
 	})
 	if len(selected) == 0 {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	// Split selected into approved + rejected slices for
 	// verdictprompt.Render. Walk in order to build exampleIDs so the
 	// audit payload preserves Select's documented ordering
-	// (rejected first, then approved).
+	// (rejected first, then approved). v0.89.37 (#657 Stream 55,
+	// #531 slice 2 chunk 6) also builds the per-state ID bucket
+	// map for the new verdict_examples_used_by_state field. The
+	// cost-spike surface only emits StateApproved + StateRejected
+	// in practice; the switch's other-state branches are defensive
+	// no-ops so a future cross-surface row (impossible today —
+	// ListAIVerdictsForGroup only returns rollouts) wouldn't pollute
+	// the cost-spike audit payload.
+	exampleIDsByState = map[string][]string{}
 	for _, v := range selected {
 		exampleIDs = append(exampleIDs, v.ID)
 		switch v.State {
-		case verdictsel.StateApproved, verdictsel.StateMerged:
+		case verdictsel.StateApproved:
 			approved = append(approved, v)
-		case verdictsel.StateRejected, verdictsel.StateClosedNotMerged, verdictsel.StateOperatorExcluded:
+			exampleIDsByState["approved"] = append(exampleIDsByState["approved"], v.ID)
+		case verdictsel.StateMerged:
+			approved = append(approved, v)
+			// merged isn't a cost-spike state; skip from the by-state
+			// map so the cost-spike audit payload only carries the
+			// approved/rejected keys it documents.
+		case verdictsel.StateRejected:
 			rejected = append(rejected, v)
+			exampleIDsByState["rejected"] = append(exampleIDsByState["rejected"], v.ID)
+		case verdictsel.StateClosedNotMerged, verdictsel.StateOperatorExcluded:
+			rejected = append(rejected, v)
+			// Likewise: closed_not_merged / operator_excluded belong
+			// to the discovery surface; skip from cost-spike by-state.
 		}
 	}
-	return approved, rejected, exampleIDs, nil
+	return approved, rejected, exampleIDs, exampleIDsByState, nil
 }
