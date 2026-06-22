@@ -228,6 +228,47 @@ func (c *Client) Do(ctx context.Context, method, path string, query url.Values, 
 	return nil
 }
 
+// OpenIaCGitHubPullRequest wraps POST
+// /api/v1/iac/github/connections/:id/open-pr. v0.89.15 (#631,
+// Stream 32) — surface for `squadronctl iac open-pr`.
+//
+// The connection ID is path-escaped before insertion. The PAT bytes
+// are NEVER carried in req — the server unseals the stored PAT
+// keyed off connectionID. Errors are funneled through the same
+// APIError envelope as the other IaC endpoints.
+func (c *Client) OpenIaCGitHubPullRequest(
+	ctx context.Context,
+	connectionID string,
+	req IaCGitHubOpenPRRequest,
+) (*IaCGitHubOpenPRResponse, error) {
+	path := "/api/v1/iac/github/connections/" + url.PathEscape(connectionID) + "/open-pr"
+	var resp IaCGitHubOpenPRResponse
+	if err := c.Do(ctx, http.MethodPost, path, nil, req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// UpdateIaCGitHubPlacementMap wraps PATCH
+// /api/v1/iac/github/connections/:id/placement-map. v0.89.15 (#631,
+// Stream 32) — surface for `squadronctl iac update-placement`.
+//
+// Only the placement_map is mutated server-side; token / repo /
+// branch_prefix / reviewer_team_handle are owned by the connect
+// wizard's create path (#610 design doc invariant).
+func (c *Client) UpdateIaCGitHubPlacementMap(
+	ctx context.Context,
+	connectionID string,
+	req IaCGitHubUpdatePlacementMapRequest,
+) (*IaCGitHubUpdatePlacementMapResponse, error) {
+	path := "/api/v1/iac/github/connections/" + url.PathEscape(connectionID) + "/placement-map"
+	var resp IaCGitHubUpdatePlacementMapResponse
+	if err := c.Do(ctx, http.MethodPatch, path, nil, req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func snippet(b []byte) string {
 	const max = 200
 	if len(b) > max {
