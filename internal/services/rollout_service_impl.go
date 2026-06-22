@@ -1428,6 +1428,81 @@ func (s *RolloutServiceImpl) Reject(ctx context.Context, id, rejecter, notes str
 	return toServiceRollout(stored), nil
 }
 
+// SetExcludeFromLearning flips the per-rollout opt-out flag for the
+// proposer-learns-from-verdicts loop (#531 slice 2 §10 Q3 — v0.89.26
+// #642 Stream 43). The two-line contract is:
+//
+//  1. Load the rollout by id; (nil, nil) on not-found so the handler
+//     can render 404 cleanly without inspecting an error string.
+//  2. Capture previous state, set the new value, persist, emit the
+//     rollout.excluded_from_learning audit event with the documented
+//     payload contract (rollout_id, previous_state, new_state, and
+//     reason when non-empty).
+//
+// We do NOT short-circuit the audit emit when previous_state ==
+// new_state. A no-op toggle is still a meaningful operator gesture
+// (e.g. "verify the flag is off") and SIEM consumers parse the
+// transition off the row regardless. The handler is the user-facing
+// boundary and decides whether to expose an explicit "no change"
+// status; the service stays mechanical.
+//
+// Permissive on row eligibility (see interface doc). The
+// `proposed_by='ai'` filter at the bridge layer makes the per-rollout
+// flag a no-op for operator-originated rollouts; the eligibility
+// check is the bridge filter, not this service method.
+func (s *RolloutServiceImpl) SetExcludeFromLearning(ctx context.Context, id, actor, reason string, excluded bool) (*Rollout, error) {
+	stored, err := s.appStore.GetRollout(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if stored == nil {
+		// Mirror the (nil, nil) contract Approve/Reject's handler
+		// callers map onto 404. The handler converts to
+		// HTTP 404 directly without a string-match.
+		return nil, nil
+	}
+	previousState := stored.ExcludeFromLearning
+	stored.ExcludeFromLearning = excluded
+	if err := s.appStore.UpdateRollout(ctx, stored); err != nil {
+		return nil, fmt.Errorf("failed to persist exclude-from-learning toggle: %w", err)
+	}
+	s.logger.Info("rollout exclude-from-learning toggled",
+		zap.String("rollout_id", id),
+		zap.String("actor", actor),
+		zap.Bool("previous_state", previousState),
+		zap.Bool("new_state", excluded))
+	if s.auditService != nil {
+		// Payload contract per audit_service.go's
+		// AuditEventRolloutExcludedFromLearning doc comment. SIEM
+		// rules parse on these fields; do not rename or reshape
+		// without bumping the contract.
+		payload := map[string]any{
+			"rollout_id":     id,
+			"previous_state": previousState,
+			"new_state":      excluded,
+		}
+		if reason != "" {
+			payload["reason"] = reason
+		}
+		// Action distinguishes direction so a SIEM rule can fan
+		// out without cracking the payload. Matches the
+		// approve/reject pattern's per-direction action verbs.
+		action := "exclude_from_learning"
+		if !excluded {
+			action = "include_in_learning"
+		}
+		_ = s.auditService.Record(ctx, AuditEntry{
+			Actor:      actor,
+			EventType:  AuditEventRolloutExcludedFromLearning,
+			TargetType: "rollout",
+			TargetID:   id,
+			Action:     action,
+			Payload:    payload,
+		})
+	}
+	return toServiceRollout(stored), nil
+}
+
 // Preview returns a side-by-side view of what creating a rollout against
 // (groupID, targetConfigID) would do: the group's current effective
 // config, the target, a line-level diff, and lint findings against the
@@ -1670,9 +1745,14 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		// v0.89.14 action steps.
 		StepKind:        r.StepKind,
 		ActionRequestID: r.ActionRequestID,
-		CreatedAt:       r.CreatedAt,
-		UpdatedAt:       r.UpdatedAt,
-		CompletedAt:     r.CompletedAt,
+		// v0.89.26 (#642) — per-rollout exclude-from-learning flag.
+		// Round-trips straight through; the projection is value-copy
+		// so memory stays consistent across UpdateRollout cycles
+		// driven by the exclude-from-learning handler.
+		ExcludeFromLearning: r.ExcludeFromLearning,
+		CreatedAt:           r.CreatedAt,
+		UpdatedAt:           r.UpdatedAt,
+		CompletedAt:         r.CompletedAt,
 	}
 }
 
@@ -1763,8 +1843,13 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		// v0.89.14 action steps.
 		StepKind:        r.StepKind,
 		ActionRequestID: r.ActionRequestID,
-		CreatedAt:       r.CreatedAt,
-		UpdatedAt:       r.UpdatedAt,
-		CompletedAt:     r.CompletedAt,
+		// v0.89.26 (#642) — per-rollout exclude-from-learning flag.
+		// Round-trips straight through; the projection is value-copy
+		// so memory stays consistent across UpdateRollout cycles
+		// driven by the exclude-from-learning handler.
+		ExcludeFromLearning: r.ExcludeFromLearning,
+		CreatedAt:           r.CreatedAt,
+		UpdatedAt:           r.UpdatedAt,
+		CompletedAt:         r.CompletedAt,
 	}
 }

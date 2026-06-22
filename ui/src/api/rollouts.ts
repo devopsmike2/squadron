@@ -190,3 +190,29 @@ export const rejectRollout = async (
     body: JSON.stringify({ notes: notes ?? "" }),
   });
 };
+
+// excludeFromLearningRollout — v0.89.26 (#642 Stream 43). Flips the
+// per-rollout opt-out for the proposer-learns-from-verdicts loop
+// (#531 slice 2 §10 Q3). When excluded=true, the next AI proposal
+// for the rollout's group skips this rollout's reasoning + notes
+// when assembling the few-shot examples block. The v1 UI passes the
+// flag only; scripted callers may pass an optional reason that flows
+// onto the rollout.excluded_from_learning audit payload as the
+// reason field (omitted from payload when empty).
+//
+// Auth: rollouts:write scope. Same scope as approve/reject is NOT
+// shared — this is a metadata toggle, not a state-changing approve.
+export const excludeFromLearningRollout = async (
+  id: string,
+  excluded: boolean,
+  reason?: string,
+): Promise<Rollout> => {
+  const body: { excluded: boolean; reason?: string } = { excluded };
+  if (reason && reason !== "") {
+    body.reason = reason;
+  }
+  return simpleRequest<Rollout>(`/rollouts/${id}/exclude-from-learning`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+};

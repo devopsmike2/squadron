@@ -280,6 +280,16 @@ func auditToEvent(e *services.AuditEvent) TimelineEvent {
 	if proposalTitle := proposalCreatedTitle(e.EventType, e.Payload); proposalTitle != "" {
 		title = proposalTitle
 	}
+	// v0.89.26 (#642 Stream 43) — payload-aware enrichment for the
+	// per-rollout exclude-from-learning toggle (#531 slice 2 §10 Q3).
+	// new_state=false means the operator re-included the rollout;
+	// surface different wording so the timeline reads honestly. When
+	// the payload is missing the field (defensively impossible — the
+	// service always emits it — but the humanizer treats absence as
+	// "fall back to the default") we keep the default table title.
+	if exTitle := excludeFromLearningTitle(e.EventType, e.Payload); exTitle != "" {
+		title = exTitle
+	}
 	sub := strings.TrimSpace(e.Actor)
 	if e.TargetType != "" {
 		if sub != "" {
@@ -821,6 +831,15 @@ func humanizeEventType(eventType, action string) string {
 		return "AWS scan completed"
 	case "discovery.aws.scan_all_completed":
 		return "Multi-account AWS scan completed"
+	// v0.89.26 (#642 Stream 43) — per-rollout exclude-from-learning
+	// toggle for the #531 slice 2 feedback loop (§10 Q3). This is
+	// the cold-path default the timeline renders when no payload-
+	// aware enrichment fired. excludeFromLearningTitle below
+	// inspects new_state to surface direction-aware wording
+	// ("excluded" vs "re-included") the same way v0.89.22's
+	// proposalCreatedTitle surfaces verdict counts.
+	case "rollout.excluded_from_learning":
+		return "AI proposal excluded from future learning"
 	}
 	// Fallback for event types not in the cleanup-grade table.
 	// Preserves backwards compatibility with whatever the operator
@@ -942,6 +961,46 @@ func proposalCreatedTitle(eventType string, payload map[string]any) string {
 		plural = "verdict"
 	}
 	return fmt.Sprintf("AI proposal created (cited %d prior %s)", n, plural)
+}
+
+// excludeFromLearningTitle returns a payload-aware title for a
+// rollout.excluded_from_learning event. v0.89.26 (#642 Stream 43).
+//
+// The audit payload always carries `new_state` (per the documented
+// contract — see services.AuditEventRolloutExcludedFromLearning).
+// new_state=true → "AI proposal excluded from future learning"
+// (matches the default table entry; we still return it so the
+// dispatch chain stays consistent — the table entry is a fallback
+// for the rare case where the payload is missing).
+// new_state=false → "AI proposal re-included in future learning"
+// so an operator scanning the timeline can tell at a glance which
+// direction the toggle moved without cracking the payload row.
+//
+// Returns empty string for unrelated event types or when the
+// payload is nil / missing new_state, so the caller falls back to
+// the default humanizer entry.
+func excludeFromLearningTitle(eventType string, payload map[string]any) string {
+	if payload == nil || eventType != "rollout.excluded_from_learning" {
+		return ""
+	}
+	raw, ok := payload["new_state"]
+	if !ok {
+		return ""
+	}
+	// JSON deserializes bools as bool directly. The case where the
+	// bridge / service hands the humanizer a typed payload is
+	// covered by the bool type assertion below. Anything else
+	// (string "true", numeric 1) is intentionally unsupported —
+	// the audit row is a public contract and we don't want lax
+	// parsing to mask a producer-side regression.
+	newState, ok := raw.(bool)
+	if !ok {
+		return ""
+	}
+	if newState {
+		return "AI proposal excluded from future learning"
+	}
+	return "AI proposal re-included in future learning"
 }
 
 // payloadAnyInt extracts an int from a payload field that may be a

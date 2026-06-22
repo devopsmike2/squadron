@@ -400,6 +400,62 @@ If you decide to re-enable, the row's chip flips back to
 There is no warmup period and no cached state — the
 selection runs fresh on every call.
 
+## Per-rollout suppression
+
+The group flag is a coarse lever — it disables the whole
+loop for an entire fleet. v0.89.26 (#642, slice 2 of #531
+§10 Q3) adds a finer-grained per-rollout lever:
+`Rollout.ExcludeFromLearning`. Use it when ONE AI proposal's
+reasoning or rejection note contains material that should
+not flow into the next proposal — a customer name typed
+into an approval comment, an internal incident identifier,
+a PII fragment — but the rest of the group's history is
+still safe to learn from.
+
+The two filters compose: the group-level
+`LearnFromVerdicts=false` short-circuits BEFORE the
+per-rollout filter, so flipping `ExcludeFromLearning` on
+a single row is irrelevant when the group is already
+opted out. Use the group flag for "this whole fleet's
+history is off limits"; use the per-rollout flag for
+"this one specific rollout's notes are off limits."
+
+**UI.** Open the rollout drawer. AI-originated rollouts
+(those with `proposed_by === "ai"`) show a green
+`Included in learning` chip next to the AI reasoning
+panel. Click it once — it flips to a muted
+`Excluded from learning` chip and the next AI proposal
+for the same group will not cite this rollout in its
+few-shot block. Click again to re-include it. The chip
+does not appear on operator-originated rollouts; the
+bridge's `proposed_by='ai'` filter already makes the
+flag a no-op there, so the surface stays focused.
+
+**API.** `POST /api/v1/rollouts/:id/exclude-from-learning`
+takes `{"excluded": true|false, "reason": "optional"}`.
+The `reason` is omitted by the UI but available to
+scripted callers (squadronctl, automation) for forensic
+context — when non-empty it lands verbatim on the
+audit payload's `reason` field. Auth: `rollouts:write`
+scope (same as approve/reject).
+
+**Audit.** Each toggle emits one
+`rollout.excluded_from_learning` row. Payload contract:
+`{rollout_id, previous_state, new_state, reason?}`. SIEM
+consumers can fan out on the row's `action` verb —
+`"exclude_from_learning"` when `new_state=true`,
+`"include_in_learning"` when `new_state=false` — without
+cracking the payload.
+
+**Spec reference.** This closes
+[`docs/proposals/531-proposer-learns-from-accepted-rejected.md`
+§10 Q3](proposals/531-proposer-learns-from-accepted-rejected.md).
+Slice 1's `verdict_examples_used` wire shape on
+`proposal.created` is preserved — the new filter changes
+which IDs land in the array, not the array's shape, so
+external SIEM rules parsing slice 1's contract keep
+working unchanged.
+
 ## Privacy and operator-note hygiene
 
 The §7 design picks per-group flag deliberately over per-

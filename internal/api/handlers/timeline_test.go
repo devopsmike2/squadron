@@ -65,6 +65,13 @@ func TestHumanizeEventType(t *testing.T) {
 		{"discovery.aws.connection_created", "discovery.aws.connection_created", "create", "AWS connection created"},
 		{"discovery.aws.scan_completed", "discovery.aws.scan_completed", "scan", "AWS scan completed"},
 		{"discovery.aws.scan_all_completed", "discovery.aws.scan_all_completed", "scan", "Multi-account AWS scan completed"},
+		// v0.89.26 (#642 Stream 43) — per-rollout exclude-from-
+		// learning toggle. Table-test entry pins the default
+		// (cold-path / payload-missing) text. The payload-aware
+		// direction-sensitive wording lives in
+		// TestExcludeFromLearningTitle below, which exercises
+		// auditToEvent so the dispatch chain is in scope.
+		{"rollout.excluded_from_learning", "rollout.excluded_from_learning", "exclude_from_learning", "AI proposal excluded from future learning"},
 		// Fallback — unknown event_type returns the raw string so we
 		// never lose information by humanizing. Pick a truly unknown
 		// type that's NOT in any of the v0.89.25 cleanup additions.
@@ -548,6 +555,76 @@ func TestProposalCreatedTitle(t *testing.T) {
 		got := auditToEvent(ev)
 		if got.Title != "AI proposal declined" {
 			t.Errorf("declined title = %q, want %q", got.Title, "AI proposal declined")
+		}
+	})
+}
+
+// TestExcludeFromLearningTitle pins the v0.89.26 (#642 Stream 43)
+// payload-aware humanizer for the per-rollout exclude-from-learning
+// toggle (#531 slice 2 §10 Q3). Two cases, both exercised through
+// auditToEvent so the dispatch chain is part of the contract:
+//
+//  1. new_state=true → "AI proposal excluded from future learning"
+//     (matches the default table entry; we exercise it through the
+//     payload-aware path so a regression in the dispatch wiring is
+//     caught here, not just in TestHumanizeEventType).
+//  2. new_state=false → "AI proposal re-included in future learning"
+//     so the timeline reads honestly when the operator toggles
+//     back on.
+//
+// Defensive third case: when the payload is missing entirely (a
+// shape the service should never emit but the dispatch chain has
+// to handle gracefully) we fall back to the default table text.
+func TestExcludeFromLearningTitle(t *testing.T) {
+	t.Run("new_state=true — excluded wording", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "rollout.excluded_from_learning",
+			Actor:     "operator:alice@example.com",
+			Payload: map[string]any{
+				"rollout_id":     "rlt_8ax9",
+				"previous_state": false,
+				"new_state":      true,
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal excluded from future learning"
+		if got.Title != want {
+			t.Errorf("excluded title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("new_state=false — re-included wording", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "rollout.excluded_from_learning",
+			Actor:     "operator:alice@example.com",
+			Payload: map[string]any{
+				"rollout_id":     "rlt_8ax9",
+				"previous_state": true,
+				"new_state":      false,
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal re-included in future learning"
+		if got.Title != want {
+			t.Errorf("re-included title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("payload missing — falls back to default table text", func(t *testing.T) {
+		// Defensive — the service contract emits new_state on every
+		// row, so this should never happen in practice. But the
+		// humanizer falls through to the v0.81.4 table when the
+		// field is missing so a corrupt or backfilled-without-the-
+		// field row still renders something meaningful.
+		ev := &services.AuditEvent{
+			EventType: "rollout.excluded_from_learning",
+			Actor:     "operator:alice@example.com",
+			Payload:   map[string]any{},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal excluded from future learning"
+		if got.Title != want {
+			t.Errorf("payload-missing title = %q, want %q", got.Title, want)
 		}
 	})
 }

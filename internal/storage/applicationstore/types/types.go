@@ -526,6 +526,24 @@ type Rollout struct {
 	StepKind        string `json:"step_kind,omitempty"`
 	ActionRequestID string `json:"action_request_id,omitempty"`
 
+	// v0.89.26 (#642) — per-rollout opt-out for the proposer-learns-
+	// from-verdicts loop (#531 slice 2 §10 Q3). When true,
+	// Bridge.assembleVerdicts skips this rollout when assembling the
+	// few-shot examples block on the next AI proposal for the same
+	// group. The group-level Group.LearnFromVerdicts flag (v0.89.17)
+	// still short-circuits before this filter — group off ⇒ no
+	// examples regardless of any per-rollout flag.
+	//
+	// Threat model this closes: an operator's typed rejection note
+	// (ApprovalNotes) on an AI proposal containing PII, customer
+	// names, or internal incident context would otherwise flow into
+	// the next AI proposal's prompt verbatim. Setting this flag
+	// suppresses the row entirely from the few-shot block without
+	// flipping the whole group's loop off. Default false at the
+	// storage layer; the schema v5 migration backfills every
+	// existing row to 0 so post-upgrade behavior matches the design.
+	ExcludeFromLearning bool `json:"exclude_from_learning,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // set on terminal state

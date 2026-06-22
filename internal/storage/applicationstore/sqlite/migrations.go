@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -185,10 +185,43 @@ CREATE INDEX IF NOT EXISTS idx_ai_verdicts ON rollouts(
 INSERT OR IGNORE INTO schema_version (version) VALUES (4);
 `
 
+// ExcludeFromLearningSchema bumps the database to schema v5. Adds:
+//
+//   - rollouts.exclude_from_learning (INTEGER NOT NULL DEFAULT 0):
+//     per-rollout opt-out flag for the proposer's prior-verdicts
+//     few-shot loop. Default 0 (included) so post-upgrade behavior
+//     matches the v0.89.17 design — operators flip individual rows
+//     to 1 to suppress that rollout's reasoning + notes from future
+//     proposals without disabling the whole group's learning loop.
+//   - idx_ai_verdicts_exclude: a regular companion index over
+//     (group_id, proposed_by, exclude_from_learning,
+//     COALESCE(approved_at, rejected_at) DESC). The v4 partial
+//     idx_ai_verdicts does not cover the exclude_from_learning=0
+//     predicate; this regular index keeps ListAIVerdictsForGroup
+//     off a table scan on deployments with many excluded AI
+//     rollouts. Slim because excluded rows are expected to be a
+//     small minority of the AI-rollout population.
+//
+// See docs/proposals/531-proposer-learns-from-accepted-rejected.md
+// §10 Q3 (slice 2).
+const ExcludeFromLearningSchema = `
+ALTER TABLE rollouts ADD COLUMN exclude_from_learning INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_ai_verdicts_exclude ON rollouts(
+	group_id,
+	proposed_by,
+	exclude_from_learning,
+	COALESCE(approved_at, rejected_at) DESC
+) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL);
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
 	AlertRulesSchema,
 	RecommendationDismissalsSchema,
 	AIVerdictsSchema,
+	ExcludeFromLearningSchema,
 }

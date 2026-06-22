@@ -1039,6 +1039,14 @@ func (s *Server) registerRoutes() {
 			// scopes.
 			rollouts.POST("/:id/approve", middleware.RequireScope(services.ScopeRolloutsApprove), rolloutHandlers.HandleApproveRollout)
 			rollouts.POST("/:id/reject", middleware.RequireScope(services.ScopeRolloutsApprove), rolloutHandlers.HandleRejectRollout)
+			// v0.89.26 (#642 Stream 43) — per-rollout
+			// exclude-from-learning toggle for the #531 slice 2
+			// feedback loop (§10 Q3). Routed under rollouts:write
+			// because the operator is mutating a single rollout's
+			// metadata (the flag), not approving or creating one.
+			// The rollouts:approve scope is reserved for the
+			// state-changing approve/reject pair.
+			rollouts.POST("/:id/exclude-from-learning", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleExcludeFromLearning)
 		}
 
 		// Rollout recipe cookbook. Sibling of /rollouts (not nested)

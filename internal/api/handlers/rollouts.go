@@ -375,6 +375,98 @@ func (h *RolloutHandlers) HandleRejectRollout(c *gin.Context) {
 	c.JSON(http.StatusOK, r)
 }
 
+// ExcludeFromLearningRequest is the wire shape for
+// POST /api/v1/rollouts/:id/exclude-from-learning. v0.89.26 (#642
+// Stream 43).
+//
+// Excluded is a *bool so we can distinguish "field omitted" (which
+// is a 400) from "explicit false" (which is a valid include
+// gesture). Mirrors v0.89.18's group-level LearnFromVerdicts
+// pointer convention so SIEM consumers and squadronctl scripts see
+// the same contract across the per-group and per-rollout flags.
+//
+// Reason is optional. The v1 UI does NOT collect a reason — the
+// drawer toggle just calls with {"excluded": <next>}. Scripted
+// callers (squadronctl, automation) can pass a reason to capture
+// forensic context; when present the string flows verbatim onto
+// the rollout.excluded_from_learning audit payload as the reason
+// field. Empty reason is omitted from the payload (not stored as
+// an empty string) to keep cold-path audit rows lean.
+type ExcludeFromLearningRequest struct {
+	Excluded *bool  `json:"excluded"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// HandleExcludeFromLearning serves
+// POST /api/v1/rollouts/:id/exclude-from-learning. v0.89.26 (#642
+// Stream 43).
+//
+// Body: ExcludeFromLearningRequest. Validation:
+//   - Excluded MUST be present and a real boolean (the
+//     *bool ↔ JSON-omitted distinction is the contract; an absent
+//     field is a 400 not a tacit false).
+//
+// Behavior:
+//  1. Load the rollout. 404 if not found.
+//  2. Capture previousState := rollout.ExcludeFromLearning.
+//  3. Call the service-layer SetExcludeFromLearning which persists
+//     the new value and emits the rollout.excluded_from_learning
+//     audit event with the documented payload contract.
+//  4. Return 200 with the updated rollout.
+//
+// Auth: rollouts:write scope. Same as Approve/Reject in spirit
+// (this is a mutation on a single rollout's metadata); the operator
+// who can flip the flag also conceptually controls the rollout's
+// participation in future AI proposals. We deliberately do NOT
+// route this under rollouts:approve — the flag is a privacy /
+// learning gesture, not an approval gate.
+//
+// Permissive on row eligibility: operator-originated rollouts can
+// have the flag flipped via this endpoint but the bridge's
+// `proposed_by='ai'` filter at the ListAIVerdictsForGroup layer
+// already makes the flag a no-op for those rows. The UI restricts
+// the toggle to proposed_by=="ai" rollouts; the API stays
+// permissive so scripted callers don't have to special-case the
+// (rare) operator-originated rollout that an automation might still
+// want to mark for whatever reason.
+func (h *RolloutHandlers) HandleExcludeFromLearning(c *gin.Context) {
+	id := c.Param("id")
+	var req ExcludeFromLearningRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body", "detail": err.Error()})
+		return
+	}
+	if req.Excluded == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "`excluded` is required (true or false)",
+		})
+		return
+	}
+	actor := actorFromContext(c)
+	r, err := h.rolloutService.SetExcludeFromLearning(
+		c.Request.Context(),
+		id,
+		actor,
+		req.Reason,
+		*req.Excluded,
+	)
+	if err != nil {
+		h.logger.Error("failed to set exclude-from-learning",
+			zap.String("id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to set exclude-from-learning",
+		})
+		return
+	}
+	if r == nil {
+		// (nil, nil) from the service is the not-found contract.
+		// Maps cleanly to 404 without an error-string match.
+		c.JSON(http.StatusNotFound, gin.H{"error": "rollout not found"})
+		return
+	}
+	c.JSON(http.StatusOK, r)
+}
+
 // isRolloutValidationError reports whether an error from the service is a
 // user-input problem (vs. an internal failure).
 func isRolloutValidationError(err error) bool {
