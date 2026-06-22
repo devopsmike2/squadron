@@ -334,3 +334,129 @@ func TestAuditToEventUsesIaCHumanizer(t *testing.T) {
 		}
 	})
 }
+
+// TestProposalCreatedTitle pins the v0.89.22 (#638) payload-aware
+// humanizer for the v0.89.17 (#633) #531 slice 1 feedback loop. The
+// guarantee is two-sided: cold-start proposals MUST keep the v0.81.4
+// hardcoded title byte-for-byte (the v0.79 humanizer table test
+// already asserts this — we don't want to regress it through the
+// payload-aware enrichment path), and proposals that cited prior
+// verdicts MUST surface the count in the title so an operator
+// scanning the timeline can see at a glance which proposals were
+// shaped by past operator decisions.
+//
+// What we do NOT surface in the title (intentional, per the
+// proposalCreatedTitle comment): the per-entry rejected/approved
+// state. v0.89.17's audit payload carries just the rollout IDs;
+// looking up the state per entry would require an N+1 query
+// against the rollouts table at humanize time. The expanded
+// payload row still shows the IDs so an operator who needs to
+// know the split can click in and look them up.
+func TestProposalCreatedTitle(t *testing.T) {
+	t.Run("cold start parity — empty verdict_examples_used falls through", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"group_id":              "web-staging",
+				"spike_attribute":       "k8s.pod.uid",
+				"verdict_examples_used": []any{},
+			},
+		}
+		got := auditToEvent(ev)
+		// MUST match the v0.81.4 hardcoded title byte-for-byte. If
+		// this breaks, an operator who's used to seeing "AI proposal
+		// created" in their timeline will see "AI proposal created
+		// (cited 0 prior verdicts)" — confusing, and wrong: an
+		// empty array IS the cold-start signal.
+		if got.Title != "AI proposal created" {
+			t.Errorf("cold-start title = %q, want %q", got.Title, "AI proposal created")
+		}
+	})
+
+	t.Run("verdict_examples_used absent — falls through", func(t *testing.T) {
+		// The v0.79 audit shape predates v0.89.17 — old events in the
+		// database don't have the field. Must still render as cold
+		// start so backfilled timelines don't regress.
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"group_id": "web-staging",
+			},
+		}
+		got := auditToEvent(ev)
+		if got.Title != "AI proposal created" {
+			t.Errorf("absent-field title = %q, want %q", got.Title, "AI proposal created")
+		}
+	})
+
+	t.Run("single citation — singular form", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{"rlt_6m08"},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (cited 1 prior verdict)"
+		if got.Title != want {
+			t.Errorf("single-citation title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("multiple citations — plural form", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{
+					"rlt_6m08", "rlt_8ax9", "rlt_7q12",
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (cited 3 prior verdicts)"
+		if got.Title != want {
+			t.Errorf("multi-citation title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("typed []string array also handled", func(t *testing.T) {
+		// The audit payload usually deserializes through JSON to []any,
+		// but the bridge can also hand the humanizer a typed []string
+		// when called in-process (e.g. tests that bypass JSON). Both
+		// shapes MUST count consistently.
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []string{"rlt_6m08", "rlt_8ax9"},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (cited 2 prior verdicts)"
+		if got.Title != want {
+			t.Errorf("typed-slice title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("non-proposal.created event_type never enriches", func(t *testing.T) {
+		// Defensive: the dispatch must NOT mis-apply the proposal
+		// humanizer to a different event type even if that event
+		// happens to carry a verdict_examples_used key (unlikely but
+		// possible in a downstream extension).
+		ev := &services.AuditEvent{
+			EventType: "proposal.declined",
+			Actor:     "operator",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{"rlt_6m08"},
+			},
+		}
+		got := auditToEvent(ev)
+		if got.Title != "AI proposal declined" {
+			t.Errorf("declined title = %q, want %q", got.Title, "AI proposal declined")
+		}
+	})
+}

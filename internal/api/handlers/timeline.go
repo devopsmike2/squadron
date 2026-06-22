@@ -271,6 +271,15 @@ func auditToEvent(e *services.AuditEvent) TimelineEvent {
 	if planTitle := planEmbeddedActionTitle(e.EventType, e.Payload); planTitle != "" {
 		title = planTitle
 	}
+	// v0.89.22 (#638) — when a proposal.created event cited prior
+	// verdicts (#531 / v0.89.17 feedback loop), enrich the title
+	// so operators can tell at a glance which proposals were
+	// shaped by past operator decisions. Cold-start proposals
+	// (verdict_examples_used absent or empty) keep the existing
+	// "AI proposal created" wording.
+	if proposalTitle := proposalCreatedTitle(e.EventType, e.Payload); proposalTitle != "" {
+		title = proposalTitle
+	}
 	sub := strings.TrimSpace(e.Actor)
 	if e.TargetType != "" {
 		if sub != "" {
@@ -796,6 +805,53 @@ func planEmbeddedActionTitle(eventType string, payload map[string]any) string {
 		return fmt.Sprintf("%s denied by runner for plan %s%s", prefix, shortPlan, stepSuffix)
 	}
 	return ""
+}
+
+// proposalCreatedTitle returns a payload-aware title for a
+// proposal.created event when the v0.89.17 (#633) feedback loop
+// cited prior verdicts. Returns empty string for cold-start
+// proposals (verdict_examples_used absent or empty) so the
+// caller falls back to the base humanizer entry "AI proposal
+// created". v0.89.22 (#638).
+//
+// The honest constraint: verdict_examples_used carries just the
+// rollout IDs the proposer cited; v0.89.17 does NOT stamp the
+// per-entry rejected/approved state on the audit payload.
+// Surfacing the count is what we can honestly say without an
+// N+1 lookup against the rollouts table at humanize time. The
+// expanded payload row still shows the rollout IDs so an
+// operator who wants to know which were rejections vs approvals
+// can click into them.
+func proposalCreatedTitle(eventType string, payload map[string]any) string {
+	if payload == nil || eventType != "proposal.created" {
+		return ""
+	}
+	raw, ok := payload["verdict_examples_used"]
+	if !ok {
+		return ""
+	}
+	// The bridge writes an empty []string on cold start (not
+	// omitted, per spec §8). The JSON round-trip lands as []any.
+	// Treat empty slice the same as omitted — both mean "cold
+	// start, no verdicts cited" and both should fall back to the
+	// base "AI proposal created" title.
+	n := 0
+	switch v := raw.(type) {
+	case []any:
+		n = len(v)
+	case []string:
+		n = len(v)
+	default:
+		return ""
+	}
+	if n == 0 {
+		return ""
+	}
+	plural := "verdicts"
+	if n == 1 {
+		plural = "verdict"
+	}
+	return fmt.Sprintf("AI proposal created (cited %d prior %s)", n, plural)
 }
 
 // payloadAnyInt extracts an int from a payload field that may be a
