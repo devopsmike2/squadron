@@ -5,7 +5,8 @@ v0.89.29. Design doc landed v0.89.27. This page remains the
 locked design the implementation promotes; operators read
 [discovery-proposer-learning.md](../discovery-proposer-learning.md)
 for the day-to-day flow. Slice 2+ candidates are open at §10.
-**See also:** [#531 (cost-spike side)](./531-proposer-learns-from-accepted-rejected.md),
+**See also:** [#531 slice 1 (cost-spike side)](./531-proposer-learns-from-accepted-rejected.md),
+[#531 slice 2 (unified verdict learning + discovery negative signal)](./531-proposer-learning-slice2.md),
 [ai-features.md](../ai-features.md),
 [proposer-learning-loop.md](../proposer-learning-loop.md),
 [discovery-proposer-learning.md](../discovery-proposer-learning.md),

@@ -436,41 +436,54 @@ fire-and-forget once the per-connection flag is on.
 
 ## Slice 2 roadmap
 
-The slice-1 deferrals most likely to shift in later releases,
-in rough priority order:
+Slice 2 is now a locked design doc:
+[#531 slice 2](./proposals/531-proposer-learning-slice2.md)
+(v0.89.33). It covers the items below in priority order, plus
+the architectural decision to share a `verdictsel` +
+`verdictprompt` layer across the cost-spike and discovery
+surfaces while keeping storage surface-local. The items
+actually shipping in slice 2 implementation:
 
-- **Per-recommendation suppression.** Mirrors v0.89.26's
-  per-rollout flag. Would require storing recommendations
-  themselves rather than computing on-demand — bigger storage
-  change. The right operator-visible shape is a "Don't use as
-  example" toggle on the Recommendations card.
-- **Wizard UI for the per-connection flag.** A toggle on the
-  Connect IaC repo wizard alongside the existing PAT and
-  placement-map steps. Surfaces the flag during initial
-  connection setup instead of requiring an API call.
-- **Rejected-signal definition.** What counts as a rejection?
-  PR closed-without-merge? PR sat open for 14 days? An explicit
-  decline button in the UI? Slice 2 picks one and pins it.
-- **Cross-scope learning with namespace mode.** A namespace-
-  style rule that says "connections sharing labels {team:
-  platform} can share accepted-recommendation signal across
-  accounts," gated by a deployment flag. Helps teams with N
-  near-identical accounts.
-- **Configurable recency window.** Replace the 30-day constant
-  with a per-deployment setting on the AI service block.
-  Useful for teams with slow-changing conventions who want
-  longer memory.
-- **Backfill of pre-v0.89.28 PRs.** A
-  `POST /api/v1/iac/github/connections/:id/backfill-merges`
-  endpoint that walks the GitHub repo's recent PRs and
-  populates `account_id` + `region` on legacy 4-segment
-  branches via the proposer's original scan context. Useful
-  for retroactive analytics; not blocking anyone.
+- **Rejected-signal definition — answered.** Slice 2 promotes
+  two negative signals: a new
+  `recommendation.pr_closed_not_merged` audit event (the
+  webhook receiver already no-ops on this case; slice 2 turns
+  the no-op into a proper audit emit) plus an operator-set
+  exclusion via a new `iac_recommendation_verdicts` table.
+- **Per-recommendation suppression — partially answered.**
+  The new `iac_recommendation_verdicts` table is the storage
+  scope 1 of #643 deferred. It holds the exclusion flag (and
+  optional `resource_id` for resource-level vs kind-level
+  exclusion). Discovery recommendations are still computed
+  on-demand; only the exclusion verdict persists.
+- **Don't propose this again affordance.** A button on the
+  Recommendations tab that POSTs to a new exclusion endpoint,
+  emits a `discovery_recommendation.excluded` audit event, and
+  filters out future proposals of that kind (or kind +
+  resource).
+- **Hot/cold tier window.** The 30d cliff becomes a 7d hot tier
+  + 7-30d cold tier; hot examples are emitted before cold.
+- **Kind diversity cap.** Within the N=4 example slot, at most
+  2 examples of any one kind. Prevents an operator with 50
+  accepted `rds-pi-em` PRs from getting a prompt that teaches
+  only that one pattern.
+- **Wizard UI for the per-connection flag.** Still deferred to
+  a later slice — settings JSON works; the wizard step is
+  lower priority than the affordances above.
+- **Cross-scope learning with namespace mode.** Deferred to
+  slice 3. No real operator ask yet.
+- **Configurable recency window.** Deferred to slice 3. Slice
+  2 ships hard-coded 7d / 30d / N=4 / MaxPerKind=2 constants
+  in `internal/proposer/verdictsel/consts.go`.
+- **Backfill of pre-v0.89.28 PRs.** Deferred. Not blocking
+  anyone; useful only for retroactive analytics.
 
-These candidates live in
-[#643 §10 + §11](./proposals/643-discovery-proposer-verdict-learning.md).
-None ship in v0.89.28; everything in this runbook describes
-behavior you can rely on today.
+Read [#531 slice 2](./proposals/531-proposer-learning-slice2.md)
+for the locked spec — the architectural decision in §3, the
+selection policy in §6, the prompt format in §7, the 10
+acceptance tests in §12. None of slice 2 ships in v0.89.28;
+everything in this runbook describes slice 1 behavior you can
+rely on today.
 
 ## Cross-references
 
