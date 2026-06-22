@@ -203,6 +203,19 @@ const (
 	AuditEventRecommendationPROpenFailed     = "recommendation.pr_open_failed"
 	AuditEventRecommendationPRMerged         = "recommendation.pr_merged"
 
+	// AuditEventRecommendationPRClosedNotMerged — v0.89.36 (#655
+	// Stream 53, #531 slice 2 chunk 3) — recorded by the
+	// IaCGitHubWebhookHandler when a pull_request.closed delivery
+	// arrives with pull_request.merged=false. Payload mirrors
+	// recommendation.pr_merged exactly with `closed_at` and
+	// `closed_by` replacing `merged_at` and `merged_by`. The
+	// discovery proposer's ListDiscoveryVerdicts query unions this
+	// event type with recommendation.pr_merged and projects rows
+	// into the rejected bucket via verdictsel.StateClosedNotMerged,
+	// surfacing the prompt block's `[CLOSED_NOT_MERGED]` stanza per
+	// docs/proposals/531-proposer-learning-slice2.md §7.2.
+	AuditEventRecommendationPRClosedNotMerged = "recommendation.pr_closed_not_merged"
+
 	// AuditEventWebhookDeliveryReplayed — v0.89.30 (#649) — records
 	// inbound webhook deliveries that passed HMAC verification but
 	// whose X-GitHub-Delivery UUID was already present in the dedupe

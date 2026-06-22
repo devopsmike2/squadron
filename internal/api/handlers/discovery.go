@@ -118,18 +118,39 @@ type DiscoveryHandlers struct {
 }
 
 // DiscoveryAcceptedRecommendationsAssembler is the slim contract
-// HandleAWSGenerateRecommendations calls to populate the
-// AcceptedRecommendations few-shot block. The wiring-layer adapter
-// resolves the (account_id, region) scope to a per-connection lookup
-// internally — the handler doesn't need to know how the connection
-// maps to the AWS scope. Production wires an adapter that delegates
-// to *proposer.DiscoveryBridge; tests substitute a stub. v0.89.28
-// (#643 slice 1).
+// HandleAWSGenerateRecommendations calls to populate the verdict
+// few-shot block. The wiring-layer adapter resolves the
+// (account_id, region) scope to a per-connection lookup internally —
+// the handler doesn't need to know how the connection maps to the
+// AWS scope. Production wires an adapter that delegates to
+// *proposer.DiscoveryBridge; tests substitute a stub.
+//
+// v0.89.28 (#643 slice 1) → v0.89.36 (#655 Stream 53, #531 slice 2
+// chunk 3): AssembleForDiscoveryScope still returns the v0.89.28
+// accepted-only examples + URL list for backward compat with stubs
+// and SIEM expectations. New surface AssembleVerdictBlock returns
+// the fully-rendered verdict prompt stanza (including the
+// [CLOSED_NOT_MERGED] negative-signal lines) plus the unioned URL
+// list across both states. Both methods short-circuit identically on
+// cold start / opt-out / recency-window empty.
 type DiscoveryAcceptedRecommendationsAssembler interface {
 	AssembleForDiscoveryScope(
 		ctx context.Context,
 		accountID, region string,
 	) ([]ai.AcceptedRecommendationExample, []string, error)
+
+	// AssembleVerdictBlock is the v0.89.36 (#655 Stream 53) entry
+	// point. Returns:
+	//   - verdictBlock: the fully-rendered prompt stanza produced by
+	//     verdictprompt.Render, or "" on cold start / opt-out /
+	//     recency-window empty.
+	//   - urls: the unioned PR URL list across BOTH the merged and
+	//     closed_not_merged buckets, in selection order (rejected
+	//     first, then approved). Empty on cold start.
+	AssembleVerdictBlock(
+		ctx context.Context,
+		accountID, region string,
+	) (verdictBlock string, urls []string, err error)
 }
 
 // AWSCredMarshaller turns the wizard-supplied AWSCredentials into the
@@ -1874,12 +1895,16 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		})
 	}
 
-	// v0.89.28 (#643 slice 1) — populate the accepted-recommendations
-	// few-shot block before the proposer call. The bridge returns
-	// (nil, nil, nil) on cold start / opt-out / recency-window empty;
-	// in that case the prompt is byte-for-byte unchanged from
-	// pre-v0.89.28. A bridge-side error is non-fatal: log and proceed
-	// with empty examples so the proposer still produces output.
+	// v0.89.28 (#643 slice 1) → v0.89.36 (#655 Stream 53, #531 slice
+	// 2 chunk 3) — populate the verdict few-shot block before the
+	// proposer call. AssembleVerdictBlock returns ("", nil, nil) on
+	// cold start / opt-out / recency-window empty; in that case the
+	// prompt is byte-for-byte unchanged from pre-v0.89.28. A bridge-
+	// side error is non-fatal: log and proceed with no block so the
+	// proposer still produces output. The unioned `acceptedURLs`
+	// flow into the audit payload's verdict_examples_used field
+	// (chunk 4 will fan them out into per-state buckets via
+	// verdict_examples_used_by_state).
 	var acceptedURLs []string
 	if h.acceptedAssembler != nil {
 		// Single-region scope tuple. Slice 1 ships single-region
@@ -1889,16 +1914,16 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		if len(req.ScanResult.Regions) > 0 {
 			region = req.ScanResult.Regions[0]
 		}
-		exs, urls, aErr := h.acceptedAssembler.AssembleForDiscoveryScope(
+		block, urls, aErr := h.acceptedAssembler.AssembleVerdictBlock(
 			c.Request.Context(), req.ScanResult.AccountID, region,
 		)
 		if aErr != nil {
 			if h.logger != nil {
-				h.logger.Warn("aws generate recommendations: assemble accepted failed; cold-start",
+				h.logger.Warn("aws generate recommendations: assemble verdict block failed; cold-start",
 					zap.Error(aErr), zap.String("account_id", accountID))
 			}
 		} else {
-			aiCtx.AcceptedRecommendations = exs
+			aiCtx.VerdictBlock = block
 			acceptedURLs = urls
 		}
 	}

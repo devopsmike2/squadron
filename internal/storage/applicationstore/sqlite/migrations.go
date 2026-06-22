@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -251,6 +251,30 @@ CREATE INDEX IF NOT EXISTS idx_webhook_delivery_dedupe_received_at ON webhook_de
 INSERT OR IGNORE INTO schema_version (version) VALUES (6);
 `
 
+// DiscoveryVerdictScopeIndexSchema bumps the database to schema v7.
+// v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3) — the discovery
+// proposer's ListDiscoveryVerdicts query unions
+// recommendation.pr_merged AND recommendation.pr_closed_not_merged
+// audit rows. The v6 idx_audit_pr_merged_scope partial index was
+// scoped to pr_merged only; we drop it and recreate it as a wider
+// partial index covering both event types so the new SQL stays a
+// single ranged scan.
+//
+// Forward-only migration: the drop+create is safe because the index
+// is partial and small. Existing rows for pr_merged remain indexed
+// under the new name; the new pr_closed_not_merged rows join the
+// same index.
+//
+// See docs/proposals/531-proposer-learning-slice2.md §5.2.
+const DiscoveryVerdictScopeIndexSchema = `
+DROP INDEX IF EXISTS idx_audit_pr_merged_scope;
+CREATE INDEX IF NOT EXISTS idx_audit_recommendation_verdict_scope
+    ON audit_events(event_type, timestamp DESC)
+    WHERE event_type IN ('recommendation.pr_merged',
+                         'recommendation.pr_closed_not_merged');
+INSERT OR IGNORE INTO schema_version (version) VALUES (7);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -259,4 +283,5 @@ var Migrations = []string{
 	AIVerdictsSchema,
 	ExcludeFromLearningSchema,
 	WebhookDeliveryDedupeSchema,
+	DiscoveryVerdictScopeIndexSchema,
 }

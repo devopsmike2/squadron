@@ -11,6 +11,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
+	"github.com/devopsmike2/squadron/internal/proposer/verdictsel"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -18,8 +19,9 @@ import (
 
 // discoveryBridgeFixture wires the DiscoveryBridge with a real memory
 // store + a real in-memory iacconnstore. The acceptance tests seed
-// pr_merged audit events on the store and a connection row on the
-// iacconnstore, then call the bridge method and assert on the result.
+// pr_merged + pr_closed_not_merged audit events on the store and a
+// connection row on the iacconnstore, then call the bridge method and
+// assert on the result.
 type discoveryBridgeFixture struct {
 	store        applicationstore.ApplicationStore
 	conns        iacconnstore.Store
@@ -63,8 +65,7 @@ func newDiscoveryBridgeFixture(t *testing.T, learnFlag bool) *discoveryBridgeFix
 }
 
 // seedPRMerged inserts a recommendation.pr_merged audit row with the
-// supplied scope tuple and timestamp. Helper for the acceptance
-// tests so the per-test setup stays focused on the scope assertion.
+// supplied scope tuple and timestamp.
 func (f *discoveryBridgeFixture) seedPRMerged(t *testing.T, connID, accountID, region, kind, prURL string, mergedAt time.Time) {
 	t.Helper()
 	ev := &types.AuditEvent{
@@ -93,72 +94,119 @@ func (f *discoveryBridgeFixture) seedPRMerged(t *testing.T, connID, accountID, r
 	}
 }
 
-// TestDiscoveryProposerLearning_ColdStartParity — §11.1. With zero
-// pr_merged events on the connection, the bridge returns empty
-// slices and the prompt is byte-for-byte identical to one built
-// without the new field set.
+// seedPRClosedNotMerged inserts a recommendation.pr_closed_not_merged
+// audit row — v0.89.36 (#655 Stream 53) — at the supplied scope tuple
+// and timestamp. Mirrors seedPRMerged exactly with closed_at/closed_by
+// replacing merged_at/merged_by, matching the webhook handler's emit
+// shape.
+func (f *discoveryBridgeFixture) seedPRClosedNotMerged(t *testing.T, connID, accountID, region, kind, prURL string, closedAt time.Time) {
+	t.Helper()
+	ev := &types.AuditEvent{
+		ID:         "audit-" + prURL,
+		Timestamp:  closedAt,
+		Actor:      "github_webhook",
+		EventType:  "recommendation.pr_closed_not_merged",
+		TargetType: "iac_recommendation",
+		TargetID:   connID,
+		Action:     "pr_closed_not_merged",
+		Payload: map[string]any{
+			"repo_full_name":      "octo/widgets",
+			"pr_number":           99,
+			"pr_url":              prURL,
+			"branch":              "squadron/rec/" + kind + "/" + accountID + "/" + region + "/closed-0",
+			"closed_at":           closedAt.UTC().Format(time.RFC3339),
+			"closed_by":           "bob",
+			"recommendation_kind": kind,
+			"connection_id":       connID,
+			"account_id":          accountID,
+			"region":              region,
+		},
+	}
+	if err := f.store.CreateAuditEvent(context.Background(), ev); err != nil {
+		t.Fatalf("seed pr_closed_not_merged: %v", err)
+	}
+}
+
+// TestDiscoveryProposerLearning_ColdStartParity — §12 acceptance test 2.
+// With zero pr_merged + zero pr_closed_not_merged events on the
+// connection, the bridge returns four zero values and the prompt is
+// byte-for-byte identical to a context built without any verdict
+// fields set.
 func TestDiscoveryProposerLearning_ColdStartParity(t *testing.T) {
 	f := newDiscoveryBridgeFixture(t, true)
-	exs, urls, err := f.bridge.AssembleAcceptedRecommendations(
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
 		context.Background(), f.connectionID, f.accountID, f.region,
 	)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	if len(exs) != 0 || len(urls) != 0 {
-		t.Fatalf("cold-start expected empty; got %d examples, %d urls", len(exs), len(urls))
+	if len(approved) != 0 || len(rejected) != 0 || len(urls) != 0 {
+		t.Fatalf("cold-start expected all empty; got approved=%d rejected=%d urls=%d",
+			len(approved), len(rejected), len(urls))
 	}
 	// Byte-identity assertion: build the user message twice — once
-	// with the AcceptedRecommendations field unset, once with it
-	// explicitly set to nil. They must be identical.
+	// with VerdictBlock unset, once with it explicitly set to "" —
+	// they must be identical.
 	base := ai.DiscoveryScanContext{
 		ScanID:    "scan-abc",
 		AccountID: f.accountID,
 		Regions:   []string{f.region},
 	}
 	withField := base
+	withField.VerdictBlock = ""
 	withField.AcceptedRecommendations = nil
 	if got, want := ai.BuildDiscoveryUserMessageForTest(withField), ai.BuildDiscoveryUserMessageForTest(base); got != want {
 		t.Fatalf("cold-start prompt differs:\n--- want ---\n%s\n--- got ---\n%s", want, got)
 	}
 }
 
-// TestDiscoveryProposerLearning_AcceptedExampleSurfaces — §11.2. One
-// pr_merged event in scope, 5 days old, surfaces as one example
-// whose kind matches; the prompt body contains "[ACCEPTED] kind=..."
-// and the URL appears in the audit-side url list.
+// TestDiscoveryProposerLearning_AcceptedExampleSurfaces — §12 acceptance
+// test 4-ish. One pr_merged event in scope, 5 days old, surfaces as
+// one approved verdict whose kind matches; the rendered prompt block
+// contains "[ACCEPTED] kind=..." and the URL appears in the URL list.
 func TestDiscoveryProposerLearning_AcceptedExampleSurfaces(t *testing.T) {
 	f := newDiscoveryBridgeFixture(t, true)
 	mergedAt := time.Now().UTC().Add(-5 * 24 * time.Hour)
 	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
 		"https://github.com/octo/widgets/pull/142", mergedAt)
 
-	exs, urls, err := f.bridge.AssembleAcceptedRecommendations(
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
 		context.Background(), f.connectionID, f.accountID, f.region,
 	)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	if len(exs) != 1 {
-		t.Fatalf("expected 1 example, got %d", len(exs))
+	if len(approved) != 1 {
+		t.Fatalf("expected 1 approved verdict, got %d", len(approved))
 	}
-	if exs[0].RecommendationKind != "rds-pi-em" {
-		t.Errorf("kind = %q, want rds-pi-em", exs[0].RecommendationKind)
+	if len(rejected) != 0 {
+		t.Errorf("expected 0 rejected verdicts, got %d", len(rejected))
 	}
-	if exs[0].PRURL != "https://github.com/octo/widgets/pull/142" {
-		t.Errorf("pr_url = %q", exs[0].PRURL)
+	if approved[0].Kind != "rds-pi-em" {
+		t.Errorf("kind = %q, want rds-pi-em", approved[0].Kind)
+	}
+	if approved[0].ID != "https://github.com/octo/widgets/pull/142" {
+		t.Errorf("verdict ID = %q", approved[0].ID)
+	}
+	if approved[0].State != verdictsel.StateMerged {
+		t.Errorf("state = %q, want %q", approved[0].State, verdictsel.StateMerged)
 	}
 	if len(urls) != 1 || urls[0] != "https://github.com/octo/widgets/pull/142" {
 		t.Errorf("urls = %v", urls)
 	}
 
-	// Render the prompt with this example and assert the
-	// "[ACCEPTED] kind=rds-pi-em" line is present.
+	block := f.bridge.RenderDiscoveryVerdictBlock(approved, rejected)
+	if !strings.Contains(block, "[ACCEPTED] kind=rds-pi-em") {
+		t.Errorf("rendered block missing accepted line:\n%s", block)
+	}
+
+	// Render the prompt with the block threaded through VerdictBlock
+	// and assert that line shows up downstream too.
 	ctx := ai.DiscoveryScanContext{
-		ScanID:                  "scan-abc",
-		AccountID:               f.accountID,
-		Regions:                 []string{f.region},
-		AcceptedRecommendations: exs,
+		ScanID:       "scan-abc",
+		AccountID:    f.accountID,
+		Regions:      []string{f.region},
+		VerdictBlock: block,
 	}
 	prompt := ai.BuildDiscoveryUserMessageForTest(ctx)
 	if !strings.Contains(prompt, "[ACCEPTED] kind=rds-pi-em") {
@@ -166,16 +214,15 @@ func TestDiscoveryProposerLearning_AcceptedExampleSurfaces(t *testing.T) {
 	}
 }
 
-// TestDiscoveryProposerLearning_ScopeFilter — §11.3. With five
-// pr_merged events distributed across (C,A,R), (C,A,R'),
-// (C,A',R) plus (C',A,R), only the one matching the full scope
-// tuple surfaces. The other four do not leak.
+// TestDiscoveryProposerLearning_ScopeFilter — connection_id +
+// account_id + region tuple narrows the bridge to exactly the
+// matching audit row. The four cross-scope rows are seeded to verify
+// they do NOT leak into the result. Preserved from v0.89.28.
 func TestDiscoveryProposerLearning_ScopeFilter(t *testing.T) {
 	f := newDiscoveryBridgeFixture(t, true)
-	otherConnID := "other-conn-id"
-	// Seed a second connection in the store so the cross-connection
-	// row is in-scope of the iacconnstore lookup but out-of-scope
-	// of the bridge call's scope tuple.
+	// Seed a second connection so the cross-connection row is in-
+	// scope of the iacconnstore lookup but out-of-scope of the bridge
+	// call's scope tuple.
 	otherConn := &iacconnstore.IaCConnection{
 		Provider: iacconnstore.ProviderGitHub, AuthKind: iacconnstore.AuthKindPAT,
 		RepoFullName: "octo/other", DefaultBranch: "main",
@@ -184,93 +231,154 @@ func TestDiscoveryProposerLearning_ScopeFilter(t *testing.T) {
 	if err := f.conns.Create(context.Background(), otherConn); err != nil {
 		t.Fatalf("seed other connection: %v", err)
 	}
-	otherConnID = otherConn.ConnectionID
+	otherConnID := otherConn.ConnectionID
 
 	now := time.Now().UTC().Add(-3 * 24 * time.Hour)
-	// (C, A, R) — the only row that should match.
 	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
 		"https://github.com/octo/widgets/pull/1", now)
-	// (C, A, R') — different region.
 	f.seedPRMerged(t, f.connectionID, f.accountID, "us-west-2", "rds-pi-em",
 		"https://github.com/octo/widgets/pull/2", now)
 	f.seedPRMerged(t, f.connectionID, f.accountID, "eu-west-1", "rds-pi-em",
 		"https://github.com/octo/widgets/pull/3", now)
-	// (C, A', R) — different account.
 	f.seedPRMerged(t, f.connectionID, "999999999999", f.region, "rds-pi-em",
 		"https://github.com/octo/widgets/pull/4", now)
-	// (C', A, R) — different connection.
 	f.seedPRMerged(t, otherConnID, f.accountID, f.region, "rds-pi-em",
 		"https://github.com/octo/widgets/pull/5", now)
 
-	exs, urls, err := f.bridge.AssembleAcceptedRecommendations(
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
 		context.Background(), f.connectionID, f.accountID, f.region,
 	)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	if len(exs) != 1 {
-		t.Fatalf("expected exactly 1 example (scope-matched), got %d", len(exs))
+	if len(approved) != 1 || len(rejected) != 0 {
+		t.Fatalf("expected exactly 1 approved + 0 rejected; got %d / %d",
+			len(approved), len(rejected))
 	}
 	if urls[0] != "https://github.com/octo/widgets/pull/1" {
 		t.Errorf("leaked the wrong row: %v", urls)
 	}
 }
 
-// TestDiscoveryProposerLearning_OptOutFlagRespected — §11.4. With
-// LearnFromAcceptedRecommendations=false on the connection, even 3
-// matching pr_merged events return empty.
+// TestDiscoveryProposerLearning_OptOutFlagRespected — §12 acceptance
+// test 8. With LearnFromAcceptedRecommendations=false on the
+// connection, even matching pr_merged + pr_closed_not_merged events
+// return four zero values. The opt-out short-circuits BEFORE the
+// storage query.
 func TestDiscoveryProposerLearning_OptOutFlagRespected(t *testing.T) {
 	f := newDiscoveryBridgeFixture(t, false)
 	now := time.Now().UTC().Add(-3 * 24 * time.Hour)
 	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
 		"https://github.com/octo/widgets/pull/1", now)
-	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "eks-observability-addon",
+	f.seedPRClosedNotMerged(t, f.connectionID, f.accountID, f.region, "eks-observability-addon",
 		"https://github.com/octo/widgets/pull/2", now.Add(-time.Hour))
-	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "lambda-otel-layer",
-		"https://github.com/octo/widgets/pull/3", now.Add(-2*time.Hour))
 
-	exs, urls, err := f.bridge.AssembleAcceptedRecommendations(
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
 		context.Background(), f.connectionID, f.accountID, f.region,
 	)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	if len(exs) != 0 {
-		t.Errorf("opt-out: expected empty slice, got %d examples", len(exs))
+	if len(approved) != 0 || len(rejected) != 0 || len(urls) != 0 {
+		t.Errorf("opt-out: expected all empty; got approved=%d rejected=%d urls=%d",
+			len(approved), len(rejected), len(urls))
 	}
-	if urls != nil && len(urls) != 0 {
-		t.Errorf("opt-out: expected empty URL slice, got %v", urls)
-	}
-	// Prompt must NOT contain the accepted block.
-	ctx := ai.DiscoveryScanContext{
-		ScanID: "scan-abc", AccountID: f.accountID, Regions: []string{f.region},
-		AcceptedRecommendations: exs,
-	}
-	prompt := ai.BuildDiscoveryUserMessageForTest(ctx)
-	if strings.Contains(prompt, "[ACCEPTED]") {
-		t.Errorf("opt-out prompt contains accepted block:\n%s", prompt)
+	block := f.bridge.RenderDiscoveryVerdictBlock(approved, rejected)
+	if block != "" {
+		t.Errorf("opt-out: expected empty block, got:\n%s", block)
 	}
 }
 
-// TestDiscoveryProposerLearning_RecencyWindow — §11.5. A pr_merged
-// event 31 days old falls outside the 30d window. The bridge returns
-// empty.
+// TestDiscoveryProposerLearning_RecencyWindow — §12 acceptance test 9.
+// A pr_merged event 31 days old falls outside the 30d window. The
+// bridge returns four zero values.
 func TestDiscoveryProposerLearning_RecencyWindow(t *testing.T) {
 	f := newDiscoveryBridgeFixture(t, true)
 	old := time.Now().UTC().Add(-31 * 24 * time.Hour)
 	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
 		"https://github.com/octo/widgets/pull/old", old)
 
-	exs, urls, err := f.bridge.AssembleAcceptedRecommendations(
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
 		context.Background(), f.connectionID, f.accountID, f.region,
 	)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	if len(exs) != 0 {
-		t.Errorf("31d-old row should be filtered; got %d examples", len(exs))
+	if len(approved) != 0 || len(rejected) != 0 || len(urls) != 0 {
+		t.Errorf("31d-old row should be filtered; got approved=%d rejected=%d urls=%d",
+			len(approved), len(rejected), len(urls))
 	}
-	if len(urls) != 0 {
-		t.Errorf("31d-old row should be filtered; got urls %v", urls)
+}
+
+// TestAssembleDiscoveryVerdicts_ClosedNotMergedSurfacesAsRejected —
+// v0.89.36 (#655 Stream 53) §12 acceptance test 5. One
+// pr_closed_not_merged event in scope, 1 day old, surfaces as a
+// single rejected-bucket verdict carrying StateClosedNotMerged.
+func TestAssembleDiscoveryVerdicts_ClosedNotMergedSurfacesAsRejected(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	closedAt := time.Now().UTC().Add(-24 * time.Hour)
+	f.seedPRClosedNotMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
+		"https://github.com/octo/widgets/pull/145", closedAt)
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, f.accountID, f.region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 0 {
+		t.Errorf("approved bucket should be empty; got %d", len(approved))
+	}
+	if len(rejected) != 1 {
+		t.Fatalf("rejected bucket should have 1 verdict, got %d", len(rejected))
+	}
+	if rejected[0].State != verdictsel.StateClosedNotMerged {
+		t.Errorf("state = %q, want %q", rejected[0].State, verdictsel.StateClosedNotMerged)
+	}
+	if rejected[0].Kind != "rds-pi-em" {
+		t.Errorf("kind = %q, want rds-pi-em", rejected[0].Kind)
+	}
+	if rejected[0].ID != "https://github.com/octo/widgets/pull/145" {
+		t.Errorf("verdict ID = %q", rejected[0].ID)
+	}
+	if len(urls) != 1 || urls[0] != "https://github.com/octo/widgets/pull/145" {
+		t.Errorf("urls = %v", urls)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_RenderedBlockContainsClosedNotMerged —
+// v0.89.36 (#655 Stream 53) §12 acceptance test 5 (prompt-side
+// pin). Verifies the [CLOSED_NOT_MERGED] line shape from §7.2 with
+// `reference: pr_closed=<URL>` lands in the rendered block.
+func TestAssembleDiscoveryVerdicts_RenderedBlockContainsClosedNotMerged(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	closedAt := time.Now().UTC().Add(-24 * time.Hour)
+	f.seedPRClosedNotMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
+		"https://github.com/octo/widgets/pull/145", closedAt)
+
+	approved, rejected, _, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, f.accountID, f.region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	block := f.bridge.RenderDiscoveryVerdictBlock(approved, rejected)
+	if !strings.Contains(block, "[CLOSED_NOT_MERGED] kind=rds-pi-em") {
+		t.Errorf("rendered block missing closed_not_merged line:\n%s", block)
+	}
+	if !strings.Contains(block, "pr_closed=https://github.com/octo/widgets/pull/145") {
+		t.Errorf("rendered block missing pr_closed reference line:\n%s", block)
+	}
+	// Block must also flow through DiscoveryScanContext.VerdictBlock
+	// to surface in the prompt body.
+	scanCtx := ai.DiscoveryScanContext{
+		ScanID:       "scan-xyz",
+		AccountID:    f.accountID,
+		Regions:      []string{f.region},
+		VerdictBlock: block,
+	}
+	prompt := ai.BuildDiscoveryUserMessageForTest(scanCtx)
+	if !strings.Contains(prompt, "[CLOSED_NOT_MERGED] kind=rds-pi-em") {
+		t.Errorf("prompt missing closed_not_merged line:\n%s", prompt)
 	}
 }

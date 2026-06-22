@@ -598,14 +598,15 @@ func (s *Storage) migrate() error {
 			COALESCE(approved_at, rejected_at) DESC
 		) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)`,
 
-		// v0.89.28 (#643 slice 1) — discovery proposer learns from
-		// accepted recommendations. Partial index on the
-		// recommendation.pr_merged audit_events rows the
-		// ListAcceptedDiscoveryRecommendations query reads. Keeps the
-		// index lean by filtering on the event_type predicate;
-		// timestamp DESC matches the query's ORDER BY so the scan is
-		// a simple ranged read with no sort step.
-		`CREATE INDEX IF NOT EXISTS idx_audit_pr_merged_scope ON audit_events(event_type, timestamp DESC) WHERE event_type = 'recommendation.pr_merged'`,
+		// v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3) — discovery
+		// proposer's ListDiscoveryVerdicts query unions
+		// recommendation.pr_merged AND
+		// recommendation.pr_closed_not_merged. Partial index covers
+		// both event types so the scan stays a single ranged read
+		// with no sort step. Replaces the v0.89.28
+		// idx_audit_pr_merged_scope (dropped in the v7 migration).
+		`DROP INDEX IF EXISTS idx_audit_pr_merged_scope`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_recommendation_verdict_scope ON audit_events(event_type, timestamp DESC) WHERE event_type IN ('recommendation.pr_merged', 'recommendation.pr_closed_not_merged')`,
 	}
 
 	for _, migration := range migrations {
@@ -1860,22 +1861,32 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 	return out, nil
 }
 
-// ListAcceptedDiscoveryRecommendations — v0.89.28 (#643 slice 1).
-// Sweeps audit_events for recommendation.pr_merged rows whose
-// payload's (connection_id, account_id, region) matches the supplied
-// scope tuple AND whose timestamp falls within the (since, now]
-// window. Returns the minimal AcceptedRecommendation projection per
-// row, newest-first.
+// ListDiscoveryVerdicts — v0.89.36 (#655 Stream 53, #531 slice 2
+// chunk 3). Sweeps audit_events for recommendation.pr_merged AND
+// recommendation.pr_closed_not_merged rows whose payload's
+// (connection_id, account_id, region) matches the supplied scope
+// tuple AND whose timestamp falls within the (since, now] window.
+// Returns the unioned DiscoveryVerdict projection per row, newest-
+// first. State is derived from the event_type column:
+// recommendation.pr_merged → "merged" (verdictsel.StateMerged);
+// recommendation.pr_closed_not_merged → "closed_not_merged"
+// (verdictsel.StateClosedNotMerged). For "merged" rows the
+// projection reads merged_at + merged_by from the payload; for
+// "closed_not_merged" rows it reads closed_at + closed_by. The
+// PRMergedAt / MergedBy struct fields carry the per-state values
+// (the names are kept stable across the v0.89.28→v0.89.36 rename;
+// the State field disambiguates downstream).
 //
-// The discovery proposer's accepted-examples lookup uses json_extract
-// to filter on the payload's nested fields. SQLite's JSON1 extension
-// (compiled in by default in modern builds) makes this a single
-// indexed scan thanks to the partial index in the migration below.
-func (s *Storage) ListAcceptedDiscoveryRecommendations(
+// Renamed from ListAcceptedDiscoveryRecommendations (v0.89.28).
+// SQLite's JSON1 extension makes the scope match a single indexed
+// scan thanks to the v7 partial index
+// idx_audit_recommendation_verdict_scope that covers BOTH event
+// types.
+func (s *Storage) ListDiscoveryVerdicts(
 	ctx context.Context,
 	connectionID, accountID, region string,
 	since time.Time, limit int,
-) ([]*types.AcceptedRecommendation, error) {
+) ([]*types.DiscoveryVerdict, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -1888,8 +1899,8 @@ func (s *Storage) ListAcceptedDiscoveryRecommendations(
 		// slice as the byte-identity signal.
 		return nil, nil
 	}
-	const stmt = `SELECT timestamp, payload FROM audit_events
-		WHERE event_type = ?
+	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
+		WHERE event_type IN (?, ?)
 		  AND timestamp >= ?
 		  AND json_extract(payload, '$.connection_id') = ?
 		  AND json_extract(payload, '$.account_id') = ?
@@ -1898,22 +1909,37 @@ func (s *Storage) ListAcceptedDiscoveryRecommendations(
 		LIMIT ?`
 	rows, err := s.db.QueryContext(ctx, stmt,
 		"recommendation.pr_merged",
+		"recommendation.pr_closed_not_merged",
 		since,
 		connectionID, accountID, region,
 		limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list accepted discovery recommendations: %w", err)
+		return nil, fmt.Errorf("failed to list discovery verdicts: %w", err)
 	}
 	defer rows.Close()
-	var out []*types.AcceptedRecommendation
+	var out []*types.DiscoveryVerdict
 	for rows.Next() {
 		var ts time.Time
+		var eventType string
 		var payloadStr sql.NullString
-		if err := rows.Scan(&ts, &payloadStr); err != nil {
-			return nil, fmt.Errorf("failed to scan accepted discovery recommendation: %w", err)
+		if err := rows.Scan(&ts, &eventType, &payloadStr); err != nil {
+			return nil, fmt.Errorf("failed to scan discovery verdict: %w", err)
 		}
-		rec := &types.AcceptedRecommendation{PRMergedAt: ts}
+		rec := &types.DiscoveryVerdict{PRMergedAt: ts}
+		var state string
+		var actorKey, tsKey string
+		switch eventType {
+		case "recommendation.pr_merged":
+			state = "merged"
+			actorKey, tsKey = "merged_by", "merged_at"
+		case "recommendation.pr_closed_not_merged":
+			state = "closed_not_merged"
+			actorKey, tsKey = "closed_by", "closed_at"
+		default:
+			continue
+		}
+		rec.State = state
 		if payloadStr.Valid && payloadStr.String != "" {
 			var p map[string]any
 			if err := json.Unmarshal([]byte(payloadStr.String), &p); err == nil {
@@ -1923,17 +1949,25 @@ func (s *Storage) ListAcceptedDiscoveryRecommendations(
 				if v, ok := p["branch"].(string); ok {
 					rec.Branch = v
 				}
-				if v, ok := p["merged_by"].(string); ok {
+				if v, ok := p[actorKey].(string); ok {
 					rec.MergedBy = v
 				}
 				if v, ok := p["recommendation_kind"].(string); ok {
 					rec.RecommendationKind = v
 				}
+				// Prefer the payload's explicit timestamp string
+				// (merged_at / closed_at) when present and parsable —
+				// keeps the projection aligned with the GitHub-side
+				// truth rather than the audit row's recorded_at.
+				if v, ok := p[tsKey].(string); ok && v != "" {
+					if parsed, perr := time.Parse(time.RFC3339, v); perr == nil {
+						rec.PRMergedAt = parsed
+					}
+				}
 			}
 		}
 		// Skip rows whose branch didn't parse a kind cleanly — per
-		// §10 Q2 those don't carry meaningful accepted-recommendation
-		// signal.
+		// §10 Q2 those don't carry meaningful verdict signal.
 		if rec.RecommendationKind == "" {
 			continue
 		}

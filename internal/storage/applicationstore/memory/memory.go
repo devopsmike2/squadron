@@ -911,17 +911,20 @@ func (s *Store) ListAIVerdictsForGroup(ctx context.Context, groupID string, sinc
 	return matches, nil
 }
 
-// ListAcceptedDiscoveryRecommendations — v0.89.28 (#643 slice 1).
-// Memory-store mirror of the SQLite same-named method. Linear scan
-// over s.auditEvents with the same predicate logic the SQL query
-// applies: event_type==recommendation.pr_merged AND timestamp>=since
-// AND the payload's (connection_id, account_id, region) tuple
-// matches.
-func (s *Store) ListAcceptedDiscoveryRecommendations(
+// ListDiscoveryVerdicts — v0.89.36 (#655 Stream 53, #531 slice 2
+// chunk 3). Memory-store mirror of the SQLite same-named method.
+// Renamed from ListAcceptedDiscoveryRecommendations (v0.89.28) and
+// widened to UNION both recommendation.pr_merged AND
+// recommendation.pr_closed_not_merged rows under a State
+// discriminator. Linear scan over s.auditEvents with the same
+// predicate logic the SQL query applies: event_type in the two-event
+// set AND timestamp>=since AND the payload's (connection_id,
+// account_id, region) tuple matches.
+func (s *Store) ListDiscoveryVerdicts(
 	ctx context.Context,
 	connectionID, accountID, region string,
 	since time.Time, limit int,
-) ([]*types.AcceptedRecommendation, error) {
+) ([]*types.DiscoveryVerdict, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -935,10 +938,18 @@ func (s *Store) ListAcceptedDiscoveryRecommendations(
 	defer s.mu.RUnlock()
 	// Walk in reverse so the natural order is newest-first (the
 	// append-only store grows oldest-first).
-	var out []*types.AcceptedRecommendation
+	var out []*types.DiscoveryVerdict
 	for i := len(s.auditEvents) - 1; i >= 0; i-- {
 		e := s.auditEvents[i]
-		if e.EventType != "recommendation.pr_merged" {
+		var state, actorKey, tsKey string
+		switch e.EventType {
+		case "recommendation.pr_merged":
+			state = "merged"
+			actorKey, tsKey = "merged_by", "merged_at"
+		case "recommendation.pr_closed_not_merged":
+			state = "closed_not_merged"
+			actorKey, tsKey = "closed_by", "closed_at"
+		default:
 			continue
 		}
 		if e.Timestamp.Before(since) {
@@ -962,7 +973,8 @@ func (s *Store) ListAcceptedDiscoveryRecommendations(
 			// §10 Q2 — skip rows whose branch didn't carry a kind.
 			continue
 		}
-		rec := &types.AcceptedRecommendation{
+		rec := &types.DiscoveryVerdict{
+			State:              state,
 			PRMergedAt:         e.Timestamp,
 			RecommendationKind: kind,
 		}
@@ -972,8 +984,19 @@ func (s *Store) ListAcceptedDiscoveryRecommendations(
 		if v, ok := e.Payload["branch"].(string); ok {
 			rec.Branch = v
 		}
-		if v, ok := e.Payload["merged_by"].(string); ok {
+		if v, ok := e.Payload[actorKey].(string); ok {
 			rec.MergedBy = v
+		}
+		// Prefer the payload's explicit timestamp string when
+		// present and parsable — keeps the projection aligned with
+		// the GitHub-side truth rather than the audit row's
+		// timestamp column. The seed helpers in tests round-trip
+		// matching values; this branch is a no-op for cold-start
+		// fixtures.
+		if v, ok := e.Payload[tsKey].(string); ok && v != "" {
+			if parsed, perr := time.Parse(time.RFC3339, v); perr == nil {
+				rec.PRMergedAt = parsed
+			}
 		}
 		out = append(out, rec)
 		if len(out) >= limit {

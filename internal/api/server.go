@@ -32,6 +32,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/proposer"
+	"github.com/devopsmike2/squadron/internal/proposer/verdictsel"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
@@ -622,6 +623,11 @@ type discoveryAcceptedAssemblerAdapter struct {
 // accepted-PR examples and URLs. Errors on any single connection are
 // logged via the higher-level Warn in the handler and skipped — one
 // bad connection shouldn't sink the proposer call.
+//
+// v0.89.36 (#655 Stream 53): retained as the v0.89.28 compat surface;
+// HandleAWSGenerateRecommendations now calls AssembleVerdictBlock
+// below instead. Kept so existing stubs and SIEM-facing helpers
+// continue to compile.
 func (a *discoveryAcceptedAssemblerAdapter) AssembleForDiscoveryScope(
 	ctx context.Context, accountID, region string,
 ) ([]ai.AcceptedRecommendationExample, []string, error) {
@@ -644,6 +650,47 @@ func (a *discoveryAcceptedAssemblerAdapter) AssembleForDiscoveryScope(
 		urls = append(urls, prURLs...)
 	}
 	return examples, urls, nil
+}
+
+// AssembleVerdictBlock is the v0.89.36 (#655 Stream 53, #531 slice 2
+// chunk 3) wiring path. Walks every IaC connection, builds a
+// DiscoveryBridge per connection, calls AssembleDiscoveryVerdicts,
+// unions the per-connection approved + rejected slices, and renders
+// the combined pool through verdictprompt with the discovery-surface
+// copy. Returns ("", nil, nil) on the cold-start path so the prompt
+// stays byte-for-byte identical to the slice 1 (v0.89.28) output.
+//
+// Per-connection errors are skipped (matching AssembleForDiscoveryScope).
+// A connection-list error surfaces to the caller, which logs and
+// proceeds with cold-start.
+func (a *discoveryAcceptedAssemblerAdapter) AssembleVerdictBlock(
+	ctx context.Context, accountID, region string,
+) (string, []string, error) {
+	conns, err := a.connections.List(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	var allApproved, allRejected []verdictsel.Verdict
+	var urls []string
+	var lastBridge *proposer.DiscoveryBridge
+	for _, conn := range conns {
+		if conn == nil {
+			continue
+		}
+		b := proposer.NewDiscoveryBridge(a.appStore, a.connections)
+		lastBridge = b
+		approved, rejected, prURLs, err := b.AssembleDiscoveryVerdicts(ctx, conn.ConnectionID, accountID, region)
+		if err != nil {
+			continue
+		}
+		allApproved = append(allApproved, approved...)
+		allRejected = append(allRejected, rejected...)
+		urls = append(urls, prURLs...)
+	}
+	if lastBridge == nil || (len(allApproved) == 0 && len(allRejected) == 0) {
+		return "", nil, nil
+	}
+	return lastBridge.RenderDiscoveryVerdictBlock(allApproved, allRejected), urls, nil
 }
 
 // aiTrampoline late-binds an AI handler call. Same shape as the

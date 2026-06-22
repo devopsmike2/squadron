@@ -23,7 +23,12 @@ type AlertSeverity = types.AlertSeverity
 type ThresholdOperator = types.ThresholdOperator
 type AuditEvent = types.AuditEvent
 type AuditEventFilter = types.AuditEventFilter
-type AcceptedRecommendation = types.AcceptedRecommendation
+// DiscoveryVerdict — v0.89.36 (#655 Stream 53). Renamed from
+// AcceptedRecommendation (v0.89.28). Widened with State so the
+// discovery bridge can project both pr_merged and
+// pr_closed_not_merged audit-event rows through the shared
+// verdictsel/verdictprompt pipeline.
+type DiscoveryVerdict = types.DiscoveryVerdict
 type Rollout = types.Rollout
 type RolloutStage = types.RolloutStage
 type RolloutStageMode = types.RolloutStageMode
