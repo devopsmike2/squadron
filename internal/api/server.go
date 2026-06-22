@@ -549,6 +549,15 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		if s.discoveryAIService != nil {
 			h.WithAIProposer(s.discoveryAIService)
 		}
+		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — wire the
+		// operator-set exclusion store. The application store satisfies
+		// the slim DiscoveryExclusionStore interface directly so the
+		// HandleAWSRecommendationExclude route lands with a real
+		// upsert path when wiring is complete; otherwise the route
+		// 503s with a clear "not wired" message.
+		if s.appStore != nil {
+			h.WithExclusionStore(s.appStore)
+		}
 		fn(h, c)
 	}
 }
@@ -599,6 +608,14 @@ func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin
 				connections: s.iacConnStore,
 			}
 			h.WithAcceptedRecommendationsAssembler(adapter)
+		}
+		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — wire the
+		// operator-set exclusion store on this trampoline too. The
+		// recommendations route doesn't consult it, but a per-handler
+		// builder shares one struct so the exclude route registered
+		// under discoveryTrampoline also picks it up consistently.
+		if s.appStore != nil {
+			h.WithExclusionStore(s.appStore)
 		}
 		fn(h, c)
 	}
@@ -1424,6 +1441,23 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/aws/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAITrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGenerateRecommendations(c) }))
+
+		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-
+		// set exclusion endpoint. The Recommendations tab POSTs here
+		// when the operator clicks the "Don't propose this again"
+		// button. Persists the verdict in iac_recommendation_verdicts
+		// and emits a discovery_recommendation.excluded / .exclude_
+		// cleared audit event on state transitions (no-op toggles
+		// produce no audit row).
+		//
+		// agents:write because the route mutates substrate state. The
+		// affordance is per-recommendation; the next discovery proposal
+		// in the same scope will see the row via the discovery
+		// bridge's ListExcludedRecommendations sweep and drop the
+		// kind from its prompt block.
+		v1.POST("/discovery/aws/recommendations/exclude",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRecommendationExclude(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight

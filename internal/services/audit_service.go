@@ -279,6 +279,35 @@ const (
 	//     empty slice to find cold-start cases.
 	AuditEventDiscoveryProposalCreated = "discovery_proposal.created"
 
+	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
+	// exclusion for discovery recommendations. Emitted by the
+	// POST /api/v1/discovery/aws/recommendations/exclude handler on
+	// state transitions only — clicking Don't propose this again on a
+	// recommendation that was already excluded is a no-op and emits
+	// nothing. The Action verb distinguishes the two transitions
+	// ("excluded" vs "exclude_cleared") so SIEM consumers can filter
+	// without cracking the payload.
+	//
+	// Payload contract (SIEM consumers parse on this):
+	//   - recommendation_id (string): the deterministic ID the
+	//     discovery proposer assigned to the recommendation.
+	//   - connection_id (string): the IaC connection scope.
+	//   - account_id (string): the AWS account scope.
+	//   - region (string): the AWS region scope.
+	//   - recommendation_kind (string): the kind the proposer emitted.
+	//   - resource_id (string, omitempty): optional resource-level
+	//     scope. Empty means kind-level exclusion.
+	//   - excluded_by (string): the operator on AuditEventDiscovery-
+	//     RecommendationExcluded.
+	//   - cleared_by (string): the operator on AuditEventDiscovery-
+	//     RecommendationExcludeCleared. Symmetric replacement so the
+	//     two events round-trip with the same shape.
+	//
+	// See docs/proposals/531-proposer-learning-slice2.md §9 (b) and
+	// §10 contract item 8.
+	AuditEventDiscoveryRecommendationExcluded      = "discovery_recommendation.excluded"
+	AuditEventDiscoveryRecommendationExcludeCleared = "discovery_recommendation.exclude_cleared"
+
 	// Target type strings for the v0.89.3 IaC events. Used by the
 	// timeline humanizer to group connection-lifecycle events
 	// (iac.github.connection_*) separately from per-recommendation

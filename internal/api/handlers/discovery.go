@@ -21,6 +21,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/iac"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
 // DiscoveryAIProposer is the slim contract HandleAWSGenerateRecommendations
@@ -114,7 +115,27 @@ type DiscoveryHandlers struct {
 	// it via WithAcceptedRecommendationsAssembler, tests substitute
 	// a stub that returns pre-canned examples.
 	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
-	logger            *zap.Logger
+	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
+	// exclusion store. Optional: nil means the
+	// HandleAWSRecommendationExclude handler 503s with a clear "not
+	// wired" message. Production wires the application store directly
+	// (which satisfies the slim DiscoveryExclusionStore interface);
+	// tests substitute a fake.
+	exclusionStore DiscoveryExclusionStore
+	logger         *zap.Logger
+}
+
+// DiscoveryExclusionStore — v0.89.37 (#656 Stream 54, #531 slice 2
+// chunk 4) — slim slice of ApplicationStore the
+// HandleAWSRecommendationExclude handler reads + writes for the new
+// iac_recommendation_verdicts table. Stated as a small interface so
+// tests can substitute a fake without spinning up the SQLite layer.
+type DiscoveryExclusionStore interface {
+	SetRecommendationExclusion(
+		ctx context.Context,
+		rec types.ExcludedRecommendation,
+		excluded bool,
+	) (prevExcluded bool, err error)
 }
 
 // DiscoveryAcceptedRecommendationsAssembler is the slim contract
@@ -247,6 +268,17 @@ func (h *DiscoveryHandlers) WithAIProposer(p DiscoveryAIProposer) *DiscoveryHand
 // HandleAWSGenerateRecommendations path treats it as cold-start.
 func (h *DiscoveryHandlers) WithAcceptedRecommendationsAssembler(a DiscoveryAcceptedRecommendationsAssembler) *DiscoveryHandlers {
 	h.acceptedAssembler = a
+	return h
+}
+
+// WithExclusionStore — v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4)
+// — wires the operator-set exclusion store the
+// HandleAWSRecommendationExclude handler consults. Production wires
+// the application store directly (which satisfies the interface);
+// tests substitute a fake. A nil store leaves the exclude route
+// returning 503 with a clear "not wired" message.
+func (h *DiscoveryHandlers) WithExclusionStore(s DiscoveryExclusionStore) *DiscoveryHandlers {
+	h.exclusionStore = s
 	return h
 }
 
@@ -2234,4 +2266,192 @@ func countInstrumentedECS(clusters []scanner.ECSClusterSnapshot) int {
 		}
 	}
 	return n
+}
+
+// --- HandleAWSRecommendationExclude (v0.89.37 #656 Stream 54) -------
+//
+// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
+// exclusion endpoint for discovery recommendations. POSTed by the
+// Recommendations tab's "Don't propose this again" button. Inserts
+// or updates a row in iac_recommendation_verdicts and emits an audit
+// event on state transitions.
+
+// awsRecommendationExcludeRequest is the JSON wire shape the
+// Recommendations tab POSTs when the operator clicks the "Don't
+// propose this again" affordance. ResourceID is optional — empty
+// scopes the exclusion to the entire kind at scope; non-empty scopes
+// it to a single resource (the §11 Q4 distinction the prompt
+// renderer surfaces with different instruction text).
+//
+// Excluded is the desired final state. true on click; false on
+// un-click (the operator changed their mind). The handler treats the
+// boolean as authoritative and routes through
+// SetRecommendationExclusion to upsert.
+type awsRecommendationExcludeRequest struct {
+	RecommendationID   string `json:"recommendation_id"`
+	ConnectionID       string `json:"connection_id"`
+	AccountID          string `json:"account_id"`
+	Region             string `json:"region"`
+	RecommendationKind string `json:"recommendation_kind"`
+	ResourceID         string `json:"resource_id,omitempty"`
+	Excluded           bool   `json:"excluded"`
+}
+
+// awsRecommendationExcludeResponse echoes the persisted state back so
+// the UI can confirm the toggle landed. Excluded is the canonical
+// (post-upsert) value; ExcludedAt + ExcludedBy carry the stamp the
+// store recorded on a transition to excluded=true. On excluded=false
+// the response omits the timestamp and actor (the row stays around
+// with cleared stamps).
+type awsRecommendationExcludeResponse struct {
+	RecommendationID string    `json:"recommendation_id"`
+	Excluded         bool      `json:"excluded"`
+	ExcludedAt       time.Time `json:"excluded_at,omitempty"`
+	ExcludedBy       string    `json:"excluded_by,omitempty"`
+}
+
+// HandleAWSRecommendationExclude — POST
+// /api/v1/discovery/aws/recommendations/exclude.
+//
+// Flow:
+//  1. Parse + validate request body. 400 on malformed JSON or missing
+//     required fields (recommendation_id, connection_id, account_id,
+//     region, recommendation_kind). The excluded field is required to
+//     be present; the JSON binder defaults missing booleans to false,
+//     so the explicit `excluded` field is the authoritative signal.
+//  2. Build the ExcludedRecommendation projection with ExcludedAt=now
+//     and ExcludedBy=authenticated actor. The store overrides these on
+//     transition direction (clear on true→false; preserve on no-op).
+//  3. Call SetRecommendationExclusion → get prevExcluded.
+//  4. Emit the audit event on transitions only (excluded on
+//     false→true; exclude_cleared on true→false). No-op toggles
+//     produce no audit row.
+//  5. Return 200 with the post-upsert state.
+//
+// The handler returns 503 when no exclusion store is wired and 500
+// when SetRecommendationExclusion errors — both surfaced as
+// HumanizedError so the UI renders a clear "retry" affordance.
+func (h *DiscoveryHandlers) HandleAWSRecommendationExclude(c *gin.Context) {
+	if h.exclusionStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ExclusionStoreNotWired",
+			Message: "Squadron's exclusion store is not configured. The application backend must be wired before this affordance is available.",
+		}})
+		return
+	}
+	var req awsRecommendationExcludeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message: "Request body could not be parsed as JSON.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.RecommendationID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingRecommendationID",
+			Message: "recommendation_id is required.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.ConnectionID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "connection_id is required.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.AccountID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingAccountID",
+			Message: "account_id is required.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.Region) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingRegion",
+			Message: "region is required.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.RecommendationKind) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingRecommendationKind",
+			Message: "recommendation_kind is required.",
+		}})
+		return
+	}
+
+	actor := actorFromContext(c)
+	now := time.Now().UTC()
+	rec := types.ExcludedRecommendation{
+		RecommendationID:   req.RecommendationID,
+		ConnectionID:       req.ConnectionID,
+		AccountID:          req.AccountID,
+		Region:             req.Region,
+		RecommendationKind: req.RecommendationKind,
+		ResourceID:         req.ResourceID,
+		ExcludedAt:         now,
+		ExcludedBy:         actor,
+	}
+	prevExcluded, err := h.exclusionStore.SetRecommendationExclusion(
+		c.Request.Context(), rec, req.Excluded,
+	)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws recommendation exclude: store write failed",
+				zap.Error(err),
+				zap.String("recommendation_id", req.RecommendationID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ExclusionStoreWriteFailed",
+			Message: "Squadron could not persist the exclusion. The error has been logged; retry in a moment.",
+		}})
+		return
+	}
+
+	// Audit emit on transitions only. The handler is authoritative on
+	// the transition signal — the store's prevExcluded carries the
+	// canonical pre-call value, including the false-on-insert case.
+	if h.auditService != nil && prevExcluded != req.Excluded {
+		payload := map[string]any{
+			"recommendation_id":   req.RecommendationID,
+			"connection_id":       req.ConnectionID,
+			"account_id":          req.AccountID,
+			"region":              req.Region,
+			"recommendation_kind": req.RecommendationKind,
+		}
+		if req.ResourceID != "" {
+			payload["resource_id"] = req.ResourceID
+		}
+		var eventType, action, actorKey string
+		if req.Excluded {
+			eventType = services.AuditEventDiscoveryRecommendationExcluded
+			action = "excluded"
+			actorKey = "excluded_by"
+		} else {
+			eventType = services.AuditEventDiscoveryRecommendationExcludeCleared
+			action = "exclude_cleared"
+			actorKey = "cleared_by"
+		}
+		payload[actorKey] = actor
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      actor,
+			EventType:  eventType,
+			TargetType: services.AuditTargetIaCRecommendation,
+			TargetID:   req.RecommendationID,
+			Action:     action,
+			Payload:    payload,
+		})
+	}
+
+	resp := awsRecommendationExcludeResponse{
+		RecommendationID: req.RecommendationID,
+		Excluded:         req.Excluded,
+	}
+	if req.Excluded {
+		resp.ExcludedAt = now
+		resp.ExcludedBy = actor
+	}
+	c.JSON(http.StatusOK, resp)
 }

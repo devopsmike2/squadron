@@ -382,3 +382,164 @@ func TestAssembleDiscoveryVerdicts_RenderedBlockContainsClosedNotMerged(t *testi
 		t.Errorf("prompt missing closed_not_merged line:\n%s", prompt)
 	}
 }
+
+// seedExcludedRecommendation upserts a row in the new
+// iac_recommendation_verdicts table for the supplied scope tuple
+// with exclude_from_learning=true.
+func (f *discoveryBridgeFixture) seedExcludedRecommendation(
+	t *testing.T,
+	recID, connID, accountID, region, kind, resourceID string,
+	excludedAt time.Time,
+) {
+	t.Helper()
+	rec := types.ExcludedRecommendation{
+		RecommendationID:   recID,
+		ConnectionID:       connID,
+		AccountID:          accountID,
+		Region:             region,
+		RecommendationKind: kind,
+		ResourceID:         resourceID,
+		ExcludedAt:         excludedAt,
+		ExcludedBy:         "alice",
+	}
+	if _, err := f.store.SetRecommendationExclusion(context.Background(), rec, true); err != nil {
+		t.Fatalf("seed excluded recommendation: %v", err)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_OperatorExcludedSurfacesInPrompt —
+// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) §12 acceptance test 6.
+// One merged PR + one operator-excluded recommendation in scope —
+// the merged row lands in the approved bucket and the excluded row
+// lands in the rejected bucket; the rendered prompt contains both
+// stanzas and the rejected lines appear first per
+// verdictsel.Select's documented ordering.
+func TestAssembleDiscoveryVerdicts_OperatorExcludedSurfacesInPrompt(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	mergedAt := time.Now().UTC().Add(-3 * 24 * time.Hour)
+	excludedAt := time.Now().UTC().Add(-2 * 24 * time.Hour)
+	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
+		"https://github.com/octo/widgets/pull/142", mergedAt)
+	f.seedExcludedRecommendation(t,
+		"rec_eks_addon_abc", f.connectionID, f.accountID, f.region,
+		"eks-observability-addon", "", excludedAt)
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, f.accountID, f.region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 1 {
+		t.Fatalf("approved bucket should have 1 verdict, got %d", len(approved))
+	}
+	if approved[0].State != verdictsel.StateMerged {
+		t.Errorf("approved[0].State = %q, want %q", approved[0].State, verdictsel.StateMerged)
+	}
+	if len(rejected) != 1 {
+		t.Fatalf("rejected bucket should have 1 verdict, got %d", len(rejected))
+	}
+	if rejected[0].State != verdictsel.StateOperatorExcluded {
+		t.Errorf("rejected[0].State = %q, want %q", rejected[0].State, verdictsel.StateOperatorExcluded)
+	}
+	if rejected[0].Kind != "eks-observability-addon" {
+		t.Errorf("rejected[0].Kind = %q, want eks-observability-addon", rejected[0].Kind)
+	}
+	if rejected[0].ID != "rec_eks_addon_abc" {
+		t.Errorf("rejected[0].ID = %q, want rec_eks_addon_abc", rejected[0].ID)
+	}
+	// urls list must contain BOTH identifiers; rejected first per
+	// verdictsel.Select's documented ordering.
+	if len(urls) != 2 {
+		t.Fatalf("urls = %v, want 2 entries", urls)
+	}
+	if urls[0] != "rec_eks_addon_abc" {
+		t.Errorf("urls[0] = %q, want rejected first", urls[0])
+	}
+	if urls[1] != "https://github.com/octo/widgets/pull/142" {
+		t.Errorf("urls[1] = %q, want approved second", urls[1])
+	}
+
+	block := f.bridge.RenderDiscoveryVerdictBlock(approved, rejected)
+	if !strings.Contains(block, "[OPERATOR_EXCLUDED] kind=eks-observability-addon") {
+		t.Errorf("rendered block missing operator_excluded line:\n%s", block)
+	}
+	if !strings.Contains(block, "[ACCEPTED] kind=rds-pi-em") {
+		t.Errorf("rendered block missing accepted line:\n%s", block)
+	}
+	// Verify the prompt body picks up the operator_excluded stanza.
+	scanCtx := ai.DiscoveryScanContext{
+		ScanID:       "scan-excluded",
+		AccountID:    f.accountID,
+		Regions:      []string{f.region},
+		VerdictBlock: block,
+	}
+	prompt := ai.BuildDiscoveryUserMessageForTest(scanCtx)
+	if !strings.Contains(prompt, "[OPERATOR_EXCLUDED] kind=eks-observability-addon") {
+		t.Errorf("prompt missing operator_excluded line:\n%s", prompt)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_ExcludedRecommendationRespectsScope —
+// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4). Three excluded
+// rows across (C, A, R), (C, A, R-different), (C, A-different, R).
+// Assemble on (C, A, R). Assert exactly one surfaces.
+func TestAssembleDiscoveryVerdicts_ExcludedRecommendationRespectsScope(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	now := time.Now().UTC()
+	// In-scope row.
+	f.seedExcludedRecommendation(t, "rec_in_scope",
+		f.connectionID, f.accountID, f.region,
+		"eks-observability-addon", "", now.Add(-time.Hour))
+	// Different region.
+	f.seedExcludedRecommendation(t, "rec_other_region",
+		f.connectionID, f.accountID, "us-west-2",
+		"eks-observability-addon", "", now.Add(-2*time.Hour))
+	// Different account.
+	f.seedExcludedRecommendation(t, "rec_other_account",
+		f.connectionID, "999999999999", f.region,
+		"eks-observability-addon", "", now.Add(-3*time.Hour))
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, f.accountID, f.region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 0 {
+		t.Errorf("approved should be empty; got %d", len(approved))
+	}
+	if len(rejected) != 1 {
+		t.Fatalf("rejected should have exactly 1 verdict; got %d", len(rejected))
+	}
+	if rejected[0].ID != "rec_in_scope" {
+		t.Errorf("rejected[0].ID = %q, want rec_in_scope (leaked the wrong row)", rejected[0].ID)
+	}
+	if len(urls) != 1 || urls[0] != "rec_in_scope" {
+		t.Errorf("urls = %v, want [rec_in_scope]", urls)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_ExcludedRecommendationOptOutShortCircuits
+// — v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4). The
+// LearnFromAcceptedRecommendations=false opt-out short-circuits
+// BEFORE the storage queries for BOTH the audit-rows pool and the
+// new exclusion table, so an excluded row in scope yields an empty
+// pool.
+func TestAssembleDiscoveryVerdicts_ExcludedRecommendationOptOutShortCircuits(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, false)
+	f.seedExcludedRecommendation(t, "rec_in_scope",
+		f.connectionID, f.accountID, f.region,
+		"eks-observability-addon", "", time.Now().UTC().Add(-time.Hour))
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, f.accountID, f.region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 0 || len(rejected) != 0 || len(urls) != 0 {
+		t.Errorf("opt-out should empty the pool; got approved=%d rejected=%d urls=%d",
+			len(approved), len(rejected), len(urls))
+	}
+}

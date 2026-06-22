@@ -20,13 +20,22 @@ import (
 // as an interface so tests can substitute a fake without spinning up
 // the SQLite layer. v0.89.36 (#655 Stream 53) renames the v0.89.28
 // DiscoveryAcceptedStore + widens the method to UNION pr_merged AND
-// pr_closed_not_merged audit rows.
+// pr_closed_not_merged audit rows. v0.89.37 (#656 Stream 54, #531
+// slice 2 chunk 4) adds ListExcludedRecommendations so the bridge can
+// fold the new iac_recommendation_verdicts table's operator-set
+// exclusions into the verdictsel pool as StateOperatorExcluded rows.
 type DiscoveryVerdictStore interface {
 	ListDiscoveryVerdicts(
 		ctx context.Context,
 		connectionID, accountID, region string,
 		since time.Time, limit int,
 	) ([]*applicationstore.DiscoveryVerdict, error)
+
+	ListExcludedRecommendations(
+		ctx context.Context,
+		connectionID, accountID, region string,
+		limit int,
+	) ([]applicationstore.ExcludedRecommendation, error)
 }
 
 // DiscoveryConnectionStore is the slice of iacconnstore.Store the
@@ -135,7 +144,21 @@ func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("discovery bridge: list verdicts: %w", err)
 	}
-	if len(rows) == 0 {
+
+	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — fold operator-
+	// set exclusions into the verdict pool as StateOperatorExcluded
+	// rows. The cold-start path now consults BOTH the audit-derived
+	// PR signal AND the new iac_recommendation_verdicts table; either
+	// source being non-empty produces a non-empty pool. The exclusion
+	// rows feed the prompt's `[OPERATOR_EXCLUDED]` stanza per §7.2.
+	excluded, err := b.store.ListExcludedRecommendations(
+		ctx, connectionID, accountID, region, verdictsel.DefaultMaxTotal*4,
+	)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("discovery bridge: list excluded recommendations: %w", err)
+	}
+
+	if len(rows) == 0 && len(excluded) == 0 {
 		return nil, nil, nil, nil
 	}
 
@@ -144,7 +167,7 @@ func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 	// closed_not_merged (pr_closed=) stanzas points at the canonical
 	// PR handle. Body carries the human-readable actor for the
 	// reason field after redaction in verdictprompt.
-	verdicts := make([]verdictsel.Verdict, 0, len(rows))
+	verdicts := make([]verdictsel.Verdict, 0, len(rows)+len(excluded))
 	for _, r := range rows {
 		if r == nil {
 			continue
@@ -174,7 +197,36 @@ func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 			State:     state,
 			Timestamp: r.PRMergedAt,
 			Body:      body,
-			Excluded:  false, // chunk 4 will wire iac_recommendation_verdicts exclusions
+			Excluded:  false,
+		})
+	}
+
+	// Project operator-set exclusion rows. The ID carries the
+	// recommendation_id so verdictprompt's `reference:` line lands
+	// `operator_excluded=<date>` from the Verdict.Timestamp (the
+	// renderer formats the date from the Verdict.Timestamp itself; the
+	// recommendation_id flows through the audit payload list as the
+	// stable identifier per §10 contract item 10's per-state bucket).
+	// Body carries the actor + optional resource_id so verdictprompt's
+	// reason: line surfaces both after redaction. Excluded=false on
+	// the Verdict — this row IS signal (just negative); the Excluded
+	// bit on Verdict is the secondary opt-out used by the cost-spike
+	// side's per-rollout suppression.
+	for _, ex := range excluded {
+		if ex.RecommendationKind == "" {
+			continue
+		}
+		body := "excluded by " + ex.ExcludedBy
+		if ex.ResourceID != "" {
+			body = body + "; resource=" + ex.ResourceID
+		}
+		verdicts = append(verdicts, verdictsel.Verdict{
+			ID:        ex.RecommendationID,
+			Kind:      ex.RecommendationKind,
+			State:     verdictsel.StateOperatorExcluded,
+			Timestamp: ex.ExcludedAt,
+			Body:      body,
+			Excluded:  false,
 		})
 	}
 

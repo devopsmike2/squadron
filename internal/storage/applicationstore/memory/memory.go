@@ -55,6 +55,17 @@ type Store struct {
 	// concurrent replays of the same delivery_id can't both observe
 	// firstTime=true.
 	webhookDeliveries map[string]webhookDeliveryRecord
+	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
+	// exclusion table for discovery recommendations. Keyed on
+	// recommendation_id (PK), mirroring the SQLite
+	// iac_recommendation_verdicts table.
+	excludedRecommendations map[string]types.ExcludedRecommendation
+	// excludedRecommendationFlags stores the exclude_from_learning
+	// bit per row. The bridge's ListExcludedRecommendations only
+	// surfaces rows with the bit set, but the row stays around with
+	// the bit clear so a future re-toggle can return prevExcluded
+	// honestly.
+	excludedRecommendationFlags map[string]bool
 }
 
 // webhookDeliveryRecord is the memory-store payload for one
@@ -89,6 +100,9 @@ func NewStore() *Store {
 		incidentDrafts:   make(map[string]*types.IncidentDraft),
 		// v0.89.30 (#649).
 		webhookDeliveries: make(map[string]webhookDeliveryRecord),
+		// v0.89.37 (#656 Stream 54).
+		excludedRecommendations:     make(map[string]types.ExcludedRecommendation),
+		excludedRecommendationFlags: make(map[string]bool),
 	}
 }
 
@@ -1002,6 +1016,108 @@ func (s *Store) ListDiscoveryVerdicts(
 		if len(out) >= limit {
 			break
 		}
+	}
+	return out, nil
+}
+
+// SetRecommendationExclusion — v0.89.37 (#656 Stream 54, #531 slice 2
+// chunk 4). Memory-store mirror of the SQLite same-named method.
+// Performs the same prevExcluded-read + upsert under the store-wide
+// mutex so concurrent toggles on the same recommendation_id can't both
+// observe prevExcluded=false.
+//
+// Transition rules match the SQLite impl exactly: ExcludedAt +
+// ExcludedBy are stamped on a transition to excluded=true (defaulting
+// ExcludedAt to now if the caller's value is zero), cleared on the
+// transition to excluded=false, and preserved on a no-op toggle.
+func (s *Store) SetRecommendationExclusion(
+	_ context.Context,
+	rec types.ExcludedRecommendation,
+	excluded bool,
+) (bool, error) {
+	if rec.RecommendationID == "" {
+		return false, fmt.Errorf("recommendation_id required")
+	}
+	if rec.ConnectionID == "" || rec.AccountID == "" || rec.Region == "" {
+		return false, fmt.Errorf("scope tuple (connection_id, account_id, region) required")
+	}
+	if rec.RecommendationKind == "" {
+		return false, fmt.Errorf("recommendation_kind required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, hadRow := s.excludedRecommendations[rec.RecommendationID]
+	prevExcluded := s.excludedRecommendationFlags[rec.RecommendationID]
+
+	now := time.Now().UTC()
+	out := types.ExcludedRecommendation{
+		RecommendationID:   rec.RecommendationID,
+		ConnectionID:       rec.ConnectionID,
+		AccountID:          rec.AccountID,
+		Region:             rec.Region,
+		RecommendationKind: rec.RecommendationKind,
+		ResourceID:         rec.ResourceID,
+	}
+	switch {
+	case excluded && !prevExcluded:
+		// Transition to excluded=true. Stamp.
+		if !rec.ExcludedAt.IsZero() {
+			out.ExcludedAt = rec.ExcludedAt.UTC()
+		} else {
+			out.ExcludedAt = now
+		}
+		out.ExcludedBy = rec.ExcludedBy
+	case !excluded && prevExcluded:
+		// Transition to excluded=false. Clear stamps.
+		// Leave ExcludedAt + ExcludedBy at zero / "".
+	case hadRow:
+		// No-op toggle on an existing row: preserve stamps.
+		out.ExcludedAt = existing.ExcludedAt
+		out.ExcludedBy = existing.ExcludedBy
+	case !excluded && !hadRow:
+		// Fresh row with excluded=false. No stamp.
+	}
+	s.excludedRecommendations[rec.RecommendationID] = out
+	s.excludedRecommendationFlags[rec.RecommendationID] = excluded
+	return prevExcluded, nil
+}
+
+// ListExcludedRecommendations — v0.89.37 (#656 Stream 54, #531 slice
+// 2 chunk 4). Memory-store mirror of the SQLite same-named method.
+// Linear scan over s.excludedRecommendations filtered by the scope
+// tuple AND exclude_from_learning=1, sorted ExcludedAt DESC, capped
+// at limit.
+func (s *Store) ListExcludedRecommendations(
+	_ context.Context,
+	connectionID, accountID, region string,
+	limit int,
+) ([]types.ExcludedRecommendation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if connectionID == "" || accountID == "" || region == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []types.ExcludedRecommendation
+	for id, rec := range s.excludedRecommendations {
+		if !s.excludedRecommendationFlags[id] {
+			continue
+		}
+		if rec.ConnectionID != connectionID || rec.AccountID != accountID || rec.Region != region {
+			continue
+		}
+		out = append(out, rec)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ExcludedAt.After(out[j].ExcludedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
