@@ -38,6 +38,18 @@ type CreateGroupRequest struct {
 	// follow-up PUT. The v0.48 work added the storage + service
 	// support but the create handler was never extended.
 	RequireApproval bool `json:"require_approval,omitempty"`
+	// v0.89.18 (#634) — accept learn_from_verdicts at create time.
+	// The v0.89.17 (#633) #531 slice 1 work added the column + the
+	// proposer side of the feedback loop but never extended the API
+	// request handlers, so operators couldn't toggle the policy
+	// through any path other than direct SQL.
+	//
+	// Pointer to distinguish "operator omitted this field" (nil →
+	// default to true, matching the column default of 1) from
+	// "operator explicitly opted out" (non-nil false). Without the
+	// pointer the zero value is false, which would silently flip
+	// every group created through this handler to opted-out.
+	LearnFromVerdicts *bool `json:"learn_from_verdicts,omitempty"`
 }
 
 // handleGetGroups handles GET /api/v1/groups
@@ -95,14 +107,23 @@ func (h *GroupHandlers) HandleCreateGroup(c *gin.Context) {
 	// Generate UUID for the group
 	groupID := uuid.New().String()
 
+	// v0.89.18 (#634) — LearnFromVerdicts defaults to true to match
+	// the storage column default (NOT NULL DEFAULT 1). Explicit
+	// false stays honored.
+	learnFromVerdicts := true
+	if req.LearnFromVerdicts != nil {
+		learnFromVerdicts = *req.LearnFromVerdicts
+	}
+
 	// Create group
 	group := &services.Group{
-		ID:              groupID,
-		Name:            req.Name,
-		Labels:          req.Labels,
-		RequireApproval: req.RequireApproval,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		ID:                groupID,
+		Name:              req.Name,
+		Labels:            req.Labels,
+		RequireApproval:   req.RequireApproval,
+		LearnFromVerdicts: learnFromVerdicts,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
 	}
 
 	// Save group to storage
@@ -160,6 +181,13 @@ type UpdateGroupRequest struct {
 	// windows". Validated at the handler boundary before it
 	// reaches the service.
 	ChangeWindows *[]changewindow.Window `json:"change_windows"`
+	// v0.89.18 (#634) — flip the #531 slice 1 verdict-learning
+	// policy. Same pointer convention as RequireApproval: nil
+	// means "leave untouched", non-nil false explicitly opts the
+	// group out, non-nil true opts it back in. The proposer reads
+	// this on every cost-spike call via Group.LearnFromVerdicts;
+	// flipping the flag takes effect on the next proposal.
+	LearnFromVerdicts *bool `json:"learn_from_verdicts"`
 }
 
 // HandleUpdateGroup serves PUT /api/v1/groups/:id.
@@ -192,6 +220,9 @@ func (h *GroupHandlers) HandleUpdateGroup(c *gin.Context) {
 	}
 	if req.RequireApproval != nil {
 		existing.RequireApproval = *req.RequireApproval
+	}
+	if req.LearnFromVerdicts != nil {
+		existing.LearnFromVerdicts = *req.LearnFromVerdicts
 	}
 	if req.ChangeWindows != nil {
 		// Validate at the boundary — a bad window must never reach

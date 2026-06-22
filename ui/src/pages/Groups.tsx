@@ -1,4 +1,5 @@
 import {
+  Brain,
   CalendarClock,
   Plus,
   RefreshCw,
@@ -52,6 +53,12 @@ export default function GroupsPage() {
     labels: {},
     require_approval: false,
     require_approval_for_rollback: false,
+    // v0.89.18 (#634) — default ON so new groups start in the
+    // v0.89.17 (#633) feedback loop. Matches the storage column
+    // default (NOT NULL DEFAULT 1). Operators who don't want the
+    // proposer reading prior verdicts on a new group can untick
+    // this before submitting.
+    learn_from_verdicts: true,
   });
 
   const {
@@ -75,6 +82,7 @@ export default function GroupsPage() {
         labels: {},
         require_approval: false,
         require_approval_for_rollback: false,
+        learn_from_verdicts: true,
       });
       await mutateGroups();
     } catch (error) {
@@ -102,6 +110,32 @@ export default function GroupsPage() {
         error instanceof Error
           ? error.message
           : "Failed to update approval policy",
+      );
+    }
+  };
+
+  // v0.89.18 (#634) — toggle the verdict-learning policy on an
+  // existing group. Mirrors handleToggleApprovalPolicy. Treats
+  // `undefined` as `true` to match the server-side default, so
+  // operators looking at pre-existing groups (whose column may
+  // not be present in the older JSON cache) see the on state.
+  const handleToggleVerdictLearning = async (
+    group: Group,
+    e: React.MouseEvent,
+  ) => {
+    e.stopPropagation();
+    const current = group.learn_from_verdicts ?? true;
+    try {
+      await updateGroup(group.id, {
+        learn_from_verdicts: !current,
+      });
+      await mutateGroups();
+    } catch (error) {
+      console.error("Failed to update verdict-learning policy:", error);
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Failed to update verdict-learning policy",
       );
     }
   };
@@ -248,6 +282,30 @@ export default function GroupsPage() {
                   <CalendarClock className="h-3 w-3" />
                   {group.change_windows?.length ?? 0}
                 </button>
+                {/* v0.89.18 (#634) — verdict-learning row toggle.
+                    Same pattern as the approval-policy chip: one
+                    click flips the v0.89.17 (#633) flag without
+                    opening any drawer. The default-on coalesce
+                    matches the server-side default so older list
+                    payloads that predate this field still render
+                    as Learning. */}
+                <button
+                  type="button"
+                  onClick={(e) => handleToggleVerdictLearning(group, e)}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    (group.learn_from_verdicts ?? true)
+                      ? "border-green-500/30 bg-green-500/10 text-green-700 hover:bg-green-500/20"
+                      : "border-border bg-muted/40 text-muted-foreground hover:bg-muted"
+                  }`}
+                  title={
+                    (group.learn_from_verdicts ?? true)
+                      ? "Proposer learns from prior verdicts on this group — click to disable"
+                      : "Verdict learning disabled — click to enable"
+                  }
+                >
+                  <Brain className="h-3 w-3" />
+                  {(group.learn_from_verdicts ?? true) ? "Learning" : "Off"}
+                </button>
               </div>
             </TableCell>
             <TableCell>
@@ -378,6 +436,43 @@ export default function GroupsPage() {
                     require approval. Treats undo as a more sensitive
                     operation. Independent of the rollout-approval policy
                     above.
+                  </p>
+                </div>
+              </label>
+            </div>
+            {/* v0.89.18 (#634) — verdict-learning policy. Surfaces
+                the v0.89.17 (#633) #531 slice 1 flag that controls
+                whether the cost-spike proposer reads prior accepted
+                /rejected AI rollouts for this group as in-context
+                examples on the next call. Green accent because this
+                is a positive/learn signal, not a guard. Default ON
+                matches the column default. */}
+            <div className="rounded-md border border-green-500/20 bg-green-500/5 p-3">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  checked={createForm.learn_from_verdicts ?? true}
+                  onChange={(e) =>
+                    setCreateForm({
+                      ...createForm,
+                      learn_from_verdicts: e.target.checked,
+                    })
+                  }
+                />
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium">
+                    Learn from prior accepted/rejected AI proposals
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Use prior accepted and rejected AI proposals for
+                    this group as context for new ones. Approvals signal
+                    &ldquo;good shape, ship it&rdquo;; rejections weight the
+                    model away from repeating rejected shapes. Up to four
+                    recent verdicts from the past 30 days are included.
+                    Turn off if proposer reasoning may contain
+                    operator notes you don&apos;t want sent on the next
+                    call.
                   </p>
                 </div>
               </label>

@@ -344,6 +344,9 @@ func (s *AgentServiceImpl) CreateGroup(ctx context.Context, group *Group) error 
 		Labels:            group.Labels,
 		RequireApproval:            group.RequireApproval,
 		RequireApprovalForRollback: group.RequireApprovalForRollback,
+		// v0.89.18 (#634) — round-trip the verdict-learning policy
+		// through the service layer so handlers can flip it.
+		LearnFromVerdicts: group.LearnFromVerdicts,
 		ChangeWindowsJSON:          cwJSON,
 		CreatedAt:         group.CreatedAt,
 		UpdatedAt:         group.UpdatedAt,
@@ -416,6 +419,10 @@ func (s *AgentServiceImpl) UpdateGroup(ctx context.Context, group *Group) error 
 		Labels:            group.Labels,
 		RequireApproval:            group.RequireApproval,
 		RequireApprovalForRollback: group.RequireApprovalForRollback,
+		// v0.89.18 (#634) — round-trip the verdict-learning policy
+		// on update too. Without this, the v0.89.17 (#633) flag was
+		// settable through SQL only.
+		LearnFromVerdicts: group.LearnFromVerdicts,
 		ChangeWindowsJSON:          cwJSON,
 		CreatedAt:         group.CreatedAt,
 		UpdatedAt:         group.UpdatedAt,
@@ -440,6 +447,10 @@ func groupToService(g *applicationstore.Group) *Group {
 		Labels:                     g.Labels,
 		RequireApproval:            g.RequireApproval,
 		RequireApprovalForRollback: g.RequireApprovalForRollback,
+		// v0.89.18 (#634) — surface the v0.89.17 (#633) flag on the
+		// service-layer Group so handlers and the JSON wire shape
+		// see it.
+		LearnFromVerdicts: g.LearnFromVerdicts,
 		CreatedAt:                  g.CreatedAt,
 		UpdatedAt:                  g.UpdatedAt,
 	}

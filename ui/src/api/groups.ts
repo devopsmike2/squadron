@@ -34,6 +34,14 @@ export interface Group {
   // dangerous operation without requiring approval on every fresh
   // rollout.
   require_approval_for_rollback?: boolean;
+  // v0.89.17 (#633) #531 slice 1 — when true, the cost-spike
+  // proposer reads prior accepted/rejected AI rollouts for this
+  // group and includes them as in-context few-shot examples on
+  // the next proposal. When false, the proposer's prompt is
+  // byte-for-byte identical to v0.79's. Default true (the column
+  // default is 1); operators flip it via the toggle on the
+  // Groups page. Plumbed through the API in v0.89.18 (#634).
+  learn_from_verdicts?: boolean;
   // v0.49 — recurring blackout windows. Empty/missing means no
   // change-window restrictions. The engine refuses to advance
   // rollouts while any window is active.
@@ -47,6 +55,11 @@ export interface CreateGroupRequest {
   labels?: Record<string, string>;
   require_approval?: boolean;
   require_approval_for_rollback?: boolean;
+  // v0.89.18 (#634) — accept the verdict-learning policy at create
+  // time so the operator doesn't need a follow-up PUT. Omit (or
+  // undefined) → server defaults to true; explicit false opts the
+  // new group out of the feedback loop immediately.
+  learn_from_verdicts?: boolean;
 }
 
 // UpdateGroupRequest — partial update. Send only the fields you want
@@ -65,6 +78,11 @@ export interface UpdateGroupRequest {
   // delta. Omit to leave existing windows untouched; pass [] to
   // clear all blackouts.
   change_windows?: ChangeWindow[];
+  // v0.89.18 (#634) — toggle the verdict-learning policy. Same
+  // partial-update semantics as require_approval: send false to
+  // explicitly turn it off, true to turn it on, omit to leave
+  // unchanged.
+  learn_from_verdicts?: boolean;
 }
 
 export interface AssignConfigRequest {
