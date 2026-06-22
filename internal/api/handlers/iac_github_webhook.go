@@ -263,6 +263,12 @@ type gitHubPullRequestEvent struct {
 		Number   int    `json:"number"`
 		Merged   bool   `json:"merged"`
 		MergedAt string `json:"merged_at"`
+		// ClosedAt — v0.89.36 (#655 Stream 53) — surfaces the
+		// pull_request.closed_at timestamp GitHub sends on
+		// action=closed events regardless of whether the close
+		// merged. Drives the closed_at field on the new
+		// recommendation.pr_closed_not_merged audit event.
+		ClosedAt string `json:"closed_at"`
 		HTMLURL  string `json:"html_url"`
 		Head     struct {
 			Ref string `json:"ref"`
@@ -275,7 +281,25 @@ type gitHubPullRequestEvent struct {
 		MergedBy *struct {
 			Login string `json:"login"`
 		} `json:"merged_by"`
+		// User is the operator that opened the PR. For close-without-
+		// merge events the closer is the actor in the top-level
+		// `sender` field (different identity); for slice 2 chunk 3 we
+		// follow the brief and surface user.login as `closed_by` since
+		// the typical Squadron close-without-merge case is the
+		// operator closing their own PR after deciding the
+		// recommendation was wrong — opener == closer in the common
+		// path. A separate sender-vs-user breakdown is a slice 3
+		// candidate per spec §11.
+		User *struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"pull_request"`
+	// Sender is the actor that triggered the webhook delivery. For
+	// pull_request.closed events sender.login is who clicked Close on
+	// the PR. Captured as a fallback when pull_request.user is nil.
+	Sender *struct {
+		Login string `json:"login"`
+	} `json:"sender"`
 }
 
 // webhookRepoSniff is the v0.89.31 (#650) MINIMAL parse shape — only
@@ -519,28 +543,6 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 		})
 		return
 	}
-	if !ev.PullRequest.Merged {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"ignored": true,
-			"reason":  "pr_closed_not_merged",
-		})
-		return
-	}
-
-	// Connection lookup was already done at the pre-HMAC stage so we
-	// could pick the per-connection secret. We reuse the resulting
-	// connectionID here; an empty value still produces an audit row
-	// with an empty connection_id, matching v0.89.23's
-	// TestGitHubWebhook_SignatureValid_NoMatchingConnection_StillEmitsAudit
-	// contract. Emit the v0.89.30 warning line so the SIEM trail
-	// still shows the "merged-but-no-connection" signal.
-	if connectionID == "" && repoFullName != "" {
-		h.logger.Warn("iac github webhook: pr_merged received but no IaC connection matches repo",
-			zap.String("repo_full_name", repoFullName),
-			zap.Int("pr_number", ev.PullRequest.Number),
-		)
-	}
 
 	// Parse the recommendation kind off the branch suffix. Empty
 	// string when the branch isn't a Squadron-shaped one is the
@@ -552,6 +554,70 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	// the kind cleanly and produce empty account_id / region.
 	branch := ev.PullRequest.Head.Ref
 	kind, accountID, region, _ := parseRecommendationScopeFromBranch(branch, h.branchPrefix)
+
+	// Connection lookup was already done at the pre-HMAC stage so we
+	// could pick the per-connection secret. We reuse the resulting
+	// connectionID here; an empty value still produces an audit row
+	// with an empty connection_id, matching v0.89.23's
+	// TestGitHubWebhook_SignatureValid_NoMatchingConnection_StillEmitsAudit
+	// contract. Emit the v0.89.30 warning line so the SIEM trail
+	// still shows the "PR-event-but-no-connection" signal.
+	if connectionID == "" && repoFullName != "" {
+		h.logger.Warn("iac github webhook: pr close/merge received but no IaC connection matches repo",
+			zap.String("repo_full_name", repoFullName),
+			zap.Int("pr_number", ev.PullRequest.Number),
+		)
+	}
+
+	if !ev.PullRequest.Merged {
+		// v0.89.36 (#655 Stream 53) — emit the
+		// recommendation.pr_closed_not_merged audit event. Payload
+		// mirrors recommendation.pr_merged exactly with closed_at /
+		// closed_by in place of merged_at / merged_by. Drives the
+		// discovery proposer's rejected-signal bucket via the
+		// unioned ListDiscoveryVerdicts query.
+		var closedBy string
+		switch {
+		case ev.PullRequest.User != nil && ev.PullRequest.User.Login != "":
+			closedBy = ev.PullRequest.User.Login
+		case ev.Sender != nil && ev.Sender.Login != "":
+			closedBy = ev.Sender.Login
+		}
+		if h.auditService != nil {
+			payload := map[string]any{
+				"repo_full_name":      ev.PullRequest.Base.Repo.FullName,
+				"pr_number":           ev.PullRequest.Number,
+				"pr_url":              ev.PullRequest.HTMLURL,
+				"branch":              branch,
+				"closed_at":           ev.PullRequest.ClosedAt,
+				"closed_by":           closedBy,
+				"recommendation_kind": kind,
+				"connection_id":       connectionID,
+				"recorded_at":         time.Now().UTC(),
+			}
+			if accountID != "" {
+				payload["account_id"] = accountID
+			}
+			if region != "" {
+				payload["region"] = region
+			}
+			_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+				Actor:      "github_webhook",
+				EventType:  services.AuditEventRecommendationPRClosedNotMerged,
+				TargetType: services.AuditTargetIaCRecommendation,
+				TargetID:   connectionID,
+				Action:     "pr_closed_not_merged",
+				Payload:    payload,
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":                  true,
+			"ignored":             true,
+			"reason":              "pr_closed_not_merged",
+			"audit_event_emitted": h.auditService != nil,
+		})
+		return
+	}
 
 	var mergedBy string
 	if ev.PullRequest.MergedBy != nil {

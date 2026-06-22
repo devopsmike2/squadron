@@ -649,12 +649,27 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	b.WriteString("\n")
 
-	// v0.89.28 (#643 slice 1) — accepted-recommendations block. Append
-	// when the wiring layer supplied a non-empty AcceptedRecommendations
-	// slice. Cold-start path (empty slice) MUST produce a prompt
-	// byte-for-byte identical to the pre-v0.89.28 message; the §11
-	// acceptance test pins this invariant.
-	if len(in.AcceptedRecommendations) > 0 {
+	// v0.89.28 (#643 slice 1) → v0.89.36 (#655 Stream 53, #531 slice
+	// 2 chunk 3) — verdict prompt block. Two insertion paths:
+	//
+	//  - VerdictBlock (preferred, slice 2): the wiring layer has
+	//    already run verdictsel.Select + verdictprompt.Render and
+	//    threaded the rendered stanza through. We append it
+	//    verbatim with a trailing blank line so the spacing
+	//    matches the slice 1 block shape. This is the path that
+	//    surfaces the new [CLOSED_NOT_MERGED] negative-signal
+	//    stanza.
+	//  - AcceptedRecommendations (slice 1 compat): the legacy
+	//    builder is preserved for callers that haven't migrated
+	//    to the wiring-layer VerdictBlock path. Cold-start path
+	//    (both empty) MUST produce a prompt byte-for-byte
+	//    identical to the pre-v0.89.28 message; the §12 acceptance
+	//    test 2 pins this invariant.
+	switch {
+	case in.VerdictBlock != "":
+		b.WriteString(in.VerdictBlock)
+		b.WriteString("\n\n")
+	case len(in.AcceptedRecommendations) > 0:
 		writeAcceptedRecommendationsBlock(&b, in.AcceptedRecommendations)
 	}
 

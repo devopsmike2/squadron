@@ -124,16 +124,24 @@ func newTestWebhookHandlerWithDedupe(t *testing.T, audit services.AuditService, 
 // for the supplied fields. Tests vary the inputs to exercise each
 // branch of the merge-detection logic; the helper keeps the per-test
 // JSON noise out of the test bodies.
-func makePREventBody(t *testing.T, action string, merged bool, repo string, prNumber int, branch, mergedAt, mergedByLogin string) []byte {
+//
+// When merged=true the supplied timestamp is set as `merged_at` and
+// the login flows into `merged_by`. When merged=false (close-without-
+// merge, v0.89.36 audit-emit path) the timestamp is set as
+// `closed_at` and the login flows into the top-level `sender.login`
+// + `pull_request.user.login` so the handler's closed_by fallback
+// chain has data to resolve.
+func makePREventBody(t *testing.T, action string, merged bool, repo string, prNumber int, branch, ts, login string) []byte {
 	t.Helper()
-	type mergedByT struct {
+	type loginT struct {
 		Login string `json:"login"`
 	}
 	type prT struct {
-		Number   int        `json:"number"`
-		Merged   bool       `json:"merged"`
-		MergedAt string     `json:"merged_at"`
-		HTMLURL  string     `json:"html_url"`
+		Number   int     `json:"number"`
+		Merged   bool    `json:"merged"`
+		MergedAt string  `json:"merged_at,omitempty"`
+		ClosedAt string  `json:"closed_at,omitempty"`
+		HTMLURL  string  `json:"html_url"`
 		Head     struct {
 			Ref string `json:"ref"`
 		} `json:"head"`
@@ -142,23 +150,35 @@ func makePREventBody(t *testing.T, action string, merged bool, repo string, prNu
 				FullName string `json:"full_name"`
 			} `json:"repo"`
 		} `json:"base"`
-		MergedBy *mergedByT `json:"merged_by"`
+		MergedBy *loginT `json:"merged_by,omitempty"`
+		User     *loginT `json:"user,omitempty"`
 	}
 	type ev struct {
-		Action      string `json:"action"`
-		PullRequest prT    `json:"pull_request"`
+		Action      string  `json:"action"`
+		PullRequest prT     `json:"pull_request"`
+		Sender      *loginT `json:"sender,omitempty"`
 	}
-	pr := prT{Number: prNumber, Merged: merged, MergedAt: mergedAt, HTMLURL: "https://github.com/" + repo + "/pull/0"}
+	pr := prT{Number: prNumber, Merged: merged, HTMLURL: "https://github.com/" + repo + "/pull/0"}
 	pr.Head.Ref = branch
 	pr.Base.Repo.FullName = repo
-	if mergedByLogin != "" {
-		pr.MergedBy = &mergedByT{Login: mergedByLogin}
+	body := ev{Action: action, PullRequest: pr}
+	if merged {
+		body.PullRequest.MergedAt = ts
+		if login != "" {
+			body.PullRequest.MergedBy = &loginT{Login: login}
+		}
+	} else if action == "closed" {
+		body.PullRequest.ClosedAt = ts
+		if login != "" {
+			body.PullRequest.User = &loginT{Login: login}
+			body.Sender = &loginT{Login: login}
+		}
 	}
-	body, err := json.Marshal(ev{Action: action, PullRequest: pr})
+	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal pr event: %v", err)
 	}
-	return body
+	return raw
 }
 
 // --- tests ---------------------------------------------------------
@@ -222,21 +242,82 @@ func TestGitHubWebhook_SignatureValid_PRMerged_EmitsAudit(t *testing.T) {
 	}
 }
 
-func TestGitHubWebhook_SignatureValid_PRClosedWithoutMerge_NoAudit(t *testing.T) {
+// TestWebhook_PRClosedNotMerged_EmitsAudit — v0.89.36 (#655 Stream 53,
+// #531 slice 2 chunk 3). Replaces the v0.89.28
+// TestGitHubWebhook_SignatureValid_PRClosedWithoutMerge_NoAudit which
+// pinned the prior "no audit on close-without-merge" contract. Slice
+// 2 chunk 3 promotes this case to a proper audit emit so the
+// discovery proposer's verdict pool gets the negative signal. The
+// response body still carries ignored=true + reason=pr_closed_not_merged
+// for the GitHub redelivery contract.
+func TestWebhook_PRClosedNotMerged_EmitsAudit(t *testing.T) {
 	audit := &discoveryRecordingAudit{}
-	h, _ := newTestWebhookHandler(t, audit, webhookTestSecret)
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
 	// action=closed, merged=false → operator closed without merging.
 	body := makePREventBody(t, "closed", false, "octo/widgets", 7,
-		"squadron/rec/lambda-otel-layer/xyz", "", "")
+		"squadron/rec/lambda-otel-layer/123456789012/us-east-1/xyz",
+		"2026-06-22T01:02:03Z", "alice")
 	sig := signGitHubWebhook(t, body, webhookTestSecret)
 
 	w := doWebhookRequest(t, h, body, sig, "pull_request")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if len(audit.entries) != 0 {
-		t.Fatalf("audit entries = %d, want 0", len(audit.entries))
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
 	}
+	e := audit.entries[0]
+	if e.EventType != services.AuditEventRecommendationPRClosedNotMerged {
+		t.Errorf("event_type = %q, want %q", e.EventType, services.AuditEventRecommendationPRClosedNotMerged)
+	}
+	if e.TargetType != services.AuditTargetIaCRecommendation {
+		t.Errorf("target_type = %q, want %q", e.TargetType, services.AuditTargetIaCRecommendation)
+	}
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	if e.Actor != "github_webhook" {
+		t.Errorf("actor = %q, want %q", e.Actor, "github_webhook")
+	}
+	if e.Action != "pr_closed_not_merged" {
+		t.Errorf("action = %q, want %q", e.Action, "pr_closed_not_merged")
+	}
+	pay := e.Payload
+	if pay["repo_full_name"] != "octo/widgets" {
+		t.Errorf("payload.repo_full_name = %v, want octo/widgets", pay["repo_full_name"])
+	}
+	if pay["pr_number"] != 7 {
+		t.Errorf("payload.pr_number = %v, want 7", pay["pr_number"])
+	}
+	if pay["closed_at"] != "2026-06-22T01:02:03Z" {
+		t.Errorf("payload.closed_at = %v, unexpected", pay["closed_at"])
+	}
+	if pay["closed_by"] != "alice" {
+		t.Errorf("payload.closed_by = %v, want alice", pay["closed_by"])
+	}
+	if pay["recommendation_kind"] != "lambda-otel-layer" {
+		t.Errorf("payload.recommendation_kind = %v, want lambda-otel-layer", pay["recommendation_kind"])
+	}
+	if pay["account_id"] != "123456789012" {
+		t.Errorf("payload.account_id = %v, want 123456789012", pay["account_id"])
+	}
+	if pay["region"] != "us-east-1" {
+		t.Errorf("payload.region = %v, want us-east-1", pay["region"])
+	}
+	if pay["connection_id"] != connectionID {
+		t.Errorf("payload.connection_id = %v, want %q", pay["connection_id"], connectionID)
+	}
+	// The merged-side keys MUST NOT appear on the closed_not_merged
+	// payload (and vice versa) — keeps SIEM consumers from
+	// conflating the two states.
+	if _, ok := pay["merged_at"]; ok {
+		t.Errorf("payload.merged_at should be absent on pr_closed_not_merged event; got %v", pay["merged_at"])
+	}
+	if _, ok := pay["merged_by"]; ok {
+		t.Errorf("payload.merged_by should be absent on pr_closed_not_merged event; got %v", pay["merged_by"])
+	}
+	// Response body still uses the ignored/reason shape for GitHub.
 	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode body: %v", err)

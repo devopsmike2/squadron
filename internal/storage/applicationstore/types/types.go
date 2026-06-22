@@ -68,22 +68,23 @@ type ApplicationStore interface {
 	ListAIVerdictsForGroup(ctx context.Context, groupID string, since time.Time, limit int) ([]*Rollout, error)
 
 	// v0.89.28 (#643 slice 1) — discovery proposer learns from accepted
-	// recommendations. ListAcceptedDiscoveryRecommendations sweeps the
-	// audit_events table for recommendation.pr_merged rows whose
-	// payload's (connection_id, account_id, region) tuple matches the
-	// supplied scope AND whose timestamp falls within the
-	// (since, now] window. Newest-first, capped at `limit`. The
-	// discovery proposer's Bridge.assembleAcceptedRecommendations
-	// calls this to stitch the §6 prompt block.
+	// recommendations. v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3)
+	// renames + widens this to ListDiscoveryVerdicts: the same scope-
+	// filtered sweep now UNIONS both recommendation.pr_merged AND the
+	// new recommendation.pr_closed_not_merged audit_events rows,
+	// returning the shared DiscoveryVerdict projection with State set
+	// per row. The discovery proposer's
+	// Bridge.assembleDiscoveryVerdicts calls this to stitch the §6/§7
+	// prompt block through verdictsel.Select + verdictprompt.Render.
 	//
 	// Empty result on cold start (zero matching rows) is honest —
 	// the caller produces a byte-for-byte-unchanged prompt in that
-	// case. See docs/proposals/643-discovery-proposer-verdict-learning.md §4.
-	ListAcceptedDiscoveryRecommendations(
+	// case. See docs/proposals/531-proposer-learning-slice2.md §5.2.
+	ListDiscoveryVerdicts(
 		ctx context.Context,
 		connectionID, accountID, region string,
 		since time.Time, limit int,
-	) ([]*AcceptedRecommendation, error)
+	) ([]*DiscoveryVerdict, error)
 
 	// Action runners + requests (v0.53 Move 2). An action runner is
 	// an installed squadron-action-runner daemon registered with
@@ -681,18 +682,34 @@ type AuditEventFilter struct {
 	Limit      int       // default 100 if zero; capped at 1000 by the storage layer
 }
 
-// AcceptedRecommendation — v0.89.28 (#643 slice 1) — minimal
-// projection over the recommendation.pr_merged audit_events rows
-// that ListAcceptedDiscoveryRecommendations returns. The discovery
-// proposer's bridge stitches a §6 prompt block from these fields;
-// no other audit-payload field surfaces in the prompt body so the
-// projection stays tight (PR URL + branch + merged_by +
-// recommendation_kind + the merge timestamp).
-type AcceptedRecommendation struct {
-	PRMergedAt         time.Time
+// DiscoveryVerdict — v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3)
+// — minimal projection over the recommendation.pr_merged AND
+// recommendation.pr_closed_not_merged audit_events rows that
+// ListDiscoveryVerdicts returns. Renamed from AcceptedRecommendation
+// (v0.89.28 #643 slice 1) and widened with a State discriminator so
+// the discovery bridge can project both PR-outcome event types into
+// the shared verdictsel.Verdict shape.
+//
+// Field-name discrepancy across States — documented intentionally:
+//
+//   - State="merged" rows (recommendation.pr_merged): PRMergedAt
+//     carries the PR's merged_at timestamp; MergedBy carries the
+//     login of whoever merged the PR.
+//   - State="closed_not_merged" rows
+//     (recommendation.pr_closed_not_merged): PRMergedAt carries the
+//     PR's closed_at timestamp; MergedBy carries the login of
+//     whoever closed the PR. The struct field names are kept
+//     stable to avoid a v0.89.28 callsite churn that has zero
+//     functional benefit at this layer — verdictprompt.Render
+//     reads them only as Verdict.Timestamp and Verdict.Body and
+//     surfaces them with state-correct wording ("merged 3 days
+//     ago" vs "closed yesterday").
+type DiscoveryVerdict struct {
+	State              string    // "merged" or "closed_not_merged"; verdictsel State* constants
+	PRMergedAt         time.Time // merged_at OR closed_at depending on State
 	PRURL              string
 	Branch             string
-	MergedBy           string
+	MergedBy           string // merged_by OR closed_by depending on State
 	RecommendationKind string
 }
 

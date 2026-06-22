@@ -122,14 +122,29 @@ type DiscoveryScanContext struct {
 	// grows a backend picker.
 	PreferredBackend string
 
-	// AcceptedRecommendations — v0.89.28 (#643 slice 1) — the
-	// shortlist of accepted prior PRs the proposer should treat as a
-	// preference signal. Empty (nil or zero-length) on cold start /
-	// opt-out / recency-window empty — the prompt block omits
-	// entirely in that case, producing a byte-for-byte unchanged
-	// user message. Populated by the wiring layer via the bridge's
-	// assembleAcceptedRecommendations method.
+	// AcceptedRecommendations — v0.89.28 (#643 slice 1) — kept on the
+	// struct for slice 1 callsite parity, but as of v0.89.36 (#655
+	// Stream 53, #531 slice 2 chunk 3) the discovery bridge no
+	// longer populates this field directly. The wiring layer now
+	// passes the fully-rendered prompt stanza through VerdictBlock
+	// below. AcceptedRecommendations remains supported as a
+	// fallback: when VerdictBlock is empty AND
+	// AcceptedRecommendations is non-empty the prompt builder
+	// renders the legacy slice 1 stanza so callers that haven't
+	// migrated still produce the v0.89.28 prompt body byte-for-byte.
 	AcceptedRecommendations []AcceptedRecommendationExample
+
+	// VerdictBlock — v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3)
+	// — the fully-rendered verdict prompt block the wiring layer
+	// produced via verdictprompt.Render. Includes both the
+	// accepted-PR (StateMerged) and the new negative signal
+	// (StateClosedNotMerged / StateOperatorExcluded) stanzas in
+	// rejection-first order per docs/proposals/
+	// 531-proposer-learning-slice2.md §7.2. Empty string on cold
+	// start / opt-out / recency-window empty — the prompt builder
+	// drops the block entirely so the cold-start prompt remains
+	// byte-for-byte identical to the slice 1 (v0.89.28) output.
+	VerdictBlock string
 }
 
 // AcceptedRecommendationExample is the minimal projection over a
