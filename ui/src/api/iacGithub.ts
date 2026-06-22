@@ -143,6 +143,51 @@ export function updateIaCGitHubPlacementMap(
   );
 }
 
+// Update connection endpoint ----------------------------------------
+//
+// v0.89.31 (#650) — partial-update PATCH for non-credential,
+// non-placement fields. v0.89.32 (#651 Stream 49) wires the wizard's
+// post-create "store per-connection webhook secret" call here.
+//
+// Field semantics on the wire (mirrors the Go handler in
+// internal/api/handlers/iac_github.go):
+//   - webhook_secret omitted → leave column untouched.
+//   - webhook_secret = ""    → clear the column (fall back to the
+//     env-var global SQUADRON_GITHUB_WEBHOOK_SECRET at HMAC-verify time).
+//   - webhook_secret = "..." → seal + store. The server NEVER echoes
+//     the plaintext (or sealed bytes) back; the response carries only
+//     {connection_id, status}.
+//
+// Token discipline: the webhook secret is sent over the wire ONCE
+// here. It lives in component state for the wizard's lifetime and is
+// dropped on unmount. The wizard never writes it to localStorage /
+// sessionStorage / URL params / SWR cache — same posture as the PAT.
+
+export interface IaCGitHubUpdateConnectionRequest {
+  /** v0.89.28 #643 — per-connection opt-in for the proposer feedback
+   * loop. Pointer-bool semantics on the wire: omit to no-op, send
+   * explicit true/false to flip. */
+  learn_from_accepted_recommendations?: boolean;
+  /** v0.89.31 #650 — per-connection HMAC secret for inbound GitHub
+   * webhook deliveries. See semantics above. */
+  webhook_secret?: string;
+}
+
+export interface IaCGitHubUpdateConnectionResponse {
+  connection_id: string;
+  status: string;
+}
+
+export function updateIaCGitHubConnection(
+  connectionID: string,
+  req: IaCGitHubUpdateConnectionRequest,
+): Promise<IaCGitHubUpdateConnectionResponse> {
+  return apiPatch<IaCGitHubUpdateConnectionResponse>(
+    `/iac/github/connections/${encodeURIComponent(connectionID)}`,
+    req,
+  );
+}
+
 // List endpoint ------------------------------------------------------
 
 // IaCGitHubConnection mirrors iacGitHubConnectionRow — the server's

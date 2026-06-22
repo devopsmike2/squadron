@@ -126,3 +126,40 @@ export const REPO_FULL_NAME_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 // — we re-declare it here rather than fetch from the server because
 // the wizard renders it before any round-trip.
 export const DEFAULT_BRANCH_PREFIX = "squadron/rec";
+
+// v0.89.32 #651 Stream 49 — Connect IaC repo wizard now surfaces the
+// webhook-secret + GitHub-webhook-config flow that used to be runbook-
+// only. The constants below seed the new step bodies. The full
+// operator runbook still lives at docs/webhook-listener.md and remains
+// the source of truth for the contract.
+
+// WEBHOOK_LISTENER_DOC_LINK is the relative docs path the wizard's
+// "learn more" links point at. Co-located with the wizard rather than
+// hardcoded inline so a future docs reshuffle is one-edit.
+export const WEBHOOK_LISTENER_DOC_LINK = "/docs/webhook-listener.md";
+
+// WEBHOOK_LISTENER_PATH is the path component the GitHub webhook
+// "Payload URL" field needs. The wizard's "Configure the webhook on
+// GitHub" step joins this with window.location.origin to surface a
+// best-effort default; operators on multi-host deployments edit the
+// host portion by hand. Matches the route registered in
+// internal/api/server.go.
+export const WEBHOOK_LISTENER_PATH = "/api/v1/webhooks/github";
+
+// WEBHOOK_SECRET_BYTE_LEN matches the runbook's "32 random bytes" guidance
+// (docs/webhook-listener.md §"Step 1 — Generate the webhook secret").
+// crypto.getRandomValues(new Uint8Array(WEBHOOK_SECRET_BYTE_LEN)) →
+// 64-character hex string, matching what `openssl rand -hex 32` emits.
+export const WEBHOOK_SECRET_BYTE_LEN = 32;
+
+// WebhookSecretSource is the operator's choice in the new "Set up the
+// webhook secret" wizard step.
+//
+//   - "generate"   — client-side crypto.getRandomValues; PATCHed onto
+//                    the connection after createConnection succeeds.
+//   - "use_global" — operator relies on the env-var
+//                    SQUADRON_GITHUB_WEBHOOK_SECRET fallback. No PATCH.
+//   - "skip"       — operator defers webhook setup; wizard skips the
+//                    "Configure the webhook on GitHub" walkthrough and
+//                    surfaces a reminder on the success card.
+export type WebhookSecretSource = "generate" | "use_global" | "skip";

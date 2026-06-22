@@ -56,11 +56,13 @@ import {
   type IaCHumanizedError,
   type IaCPlacementEntry,
   saveIaCGitHubConnection,
+  updateIaCGitHubConnection,
   updateIaCGitHubPlacementMap,
   validateIaCGitHub,
 } from "@/api/iacGithub";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -69,6 +71,10 @@ import {
   GITHUB_CREATE_PAT_URL,
   IAC_GITHUB_PLACEMENT_KINDS,
   REPO_FULL_NAME_RE,
+  WEBHOOK_LISTENER_DOC_LINK,
+  WEBHOOK_LISTENER_PATH,
+  WEBHOOK_SECRET_BYTE_LEN,
+  type WebhookSecretSource,
 } from "@/data/iacGithubWizard";
 import { cn } from "@/lib/utils";
 
@@ -79,28 +85,64 @@ import { cn } from "@/lib/utils";
 // same identifiers so the jump-back is one-hop.
 const STEP_PROVIDER = "provider";
 const STEP_PAT = "pat";
+// v0.89.32 #651 Stream 49 — webhook-secret step inserts between
+// authentication and repository so the operator declares their secret
+// source mode before the wizard does any GitHub I/O. Putting it here
+// (rather than next to Save) keeps the secret in a coherent
+// "credentials and trust" cluster with the PAT step.
+const STEP_WEBHOOK_SECRET = "webhook-secret";
 const STEP_PICK_REPO = "pick-repo";
 const STEP_REPO_LAYOUT = "repo-layout";
 const STEP_PLACEMENT_MAP = "placement-map";
+// v0.89.32 — configure-github-webhook step inserts before validate
+// (i.e. right after placement-map). Renders only when the operator
+// chose "generate" or "use_global" on STEP_WEBHOOK_SECRET; the "skip"
+// path elides it entirely (the navigation logic below detects this).
+const STEP_CONFIGURE_WEBHOOK = "configure-github-webhook";
 const STEP_VALIDATE = "validate";
 
 const STEP_IDS = [
   STEP_PROVIDER,
   STEP_PAT,
+  STEP_WEBHOOK_SECRET,
   STEP_PICK_REPO,
   STEP_REPO_LAYOUT,
   STEP_PLACEMENT_MAP,
+  STEP_CONFIGURE_WEBHOOK,
   STEP_VALIDATE,
 ] as const;
 
 const STEP_TITLES: Record<string, string> = {
   [STEP_PROVIDER]: "Pick an IaC provider",
   [STEP_PAT]: "Authenticate with GitHub",
+  [STEP_WEBHOOK_SECRET]: "Set up the webhook secret",
   [STEP_PICK_REPO]: "Choose the repository",
   [STEP_REPO_LAYOUT]: "Describe the repository",
   [STEP_PLACEMENT_MAP]: "Map resource kinds to files",
+  [STEP_CONFIGURE_WEBHOOK]: "Configure the webhook on GitHub",
   [STEP_VALIDATE]: "Validate and save",
 };
+
+// generateWebhookSecretHex returns a 64-character hex string sourced
+// from crypto.getRandomValues. Inline (no helper file) because this is
+// the only caller in the codebase; the byte length matches the
+// runbook's "32 random bytes" guidance — see
+// docs/webhook-listener.md §"Step 1 — Generate the webhook secret".
+//
+// The plaintext NEVER leaves this function for any persistent surface
+// — the caller stores the result in component state only and ships it
+// to the server via the v0.89.31 PATCH endpoint when the wizard
+// finishes. No localStorage, no sessionStorage, no URL params, no SWR
+// cache — same posture as the PAT.
+function generateWebhookSecretHex(): string {
+  const bytes = new Uint8Array(WEBHOOK_SECRET_BYTE_LEN);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, "0");
+  }
+  return out;
+}
 
 // PlacementRowState carries the per-row state the placement-map step
 // edits. We keep file_path and skipped separate so a toggle off does
@@ -217,6 +259,20 @@ function IaCGitHubWizardCreate({
   // sessionStorage. Cleared when the dialog unmounts.
   const [token, setToken] = useState("");
 
+  // v0.89.32 #651 — webhook-secret form state. Source mode null until
+  // the operator picks one (the Next button on STEP_WEBHOOK_SECRET
+  // stays disabled until then). The plaintext is generated on-demand
+  // when the operator picks "generate"; same component-state-only
+  // discipline as the PAT.
+  const [webhookSecretSource, setWebhookSecretSource] =
+    useState<WebhookSecretSource | null>(null);
+  const [webhookSecretPlaintext, setWebhookSecretPlaintext] = useState("");
+  // Acknowledgment checkbox — operators must tick "I have saved this
+  // secret securely" before Next enables on the generate path. The
+  // wizard cannot show the secret again after Save, so this is the
+  // one and only enforcement point for the save-it-now invariant.
+  const [secretAcknowledged, setSecretAcknowledged] = useState(false);
+
   // Repo + layout fields.
   const [repoFullName, setRepoFullName] = useState("");
   const [repoLayout, setRepoLayout] = useState<"mono" | "multi">("multi");
@@ -246,6 +302,18 @@ function IaCGitHubWizardCreate({
     connection_id: string;
     repo_full_name: string;
   } | null>(null);
+  // v0.89.32 #651 — post-create PATCH outcome. The two-stage submit
+  // (createConnection → updateConnection for webhook_secret) reports
+  // these on the success card:
+  //   - secretPatchFailed: the PATCH errored; the operator needs the
+  //     recovery hint (curl command + the still-visible secret).
+  //   - secretWasStored: true on a successful generate-path PATCH.
+  //   - secretWasDeferred: true on the skip path; success card
+  //     surfaces the openssl + curl follow-up.
+  const [secretPatchFailed, setSecretPatchFailed] = useState(false);
+  const [secretPatchError, setSecretPatchError] = useState<string | null>(null);
+  const [secretWasStored, setSecretWasStored] = useState(false);
+  const [secretWasDeferred, setSecretWasDeferred] = useState(false);
 
   const stepCount = STEP_IDS.length;
   const currentStepId = STEP_IDS[stepIndex];
@@ -262,6 +330,12 @@ function IaCGitHubWizardCreate({
   // step requires a non-empty default_branch (defaults to "main");
   // placement step is always advanceable (skipping every row is allowed
   // per spec §6 — operator can configure per-kind later).
+  //
+  // v0.89.32 #651 — the webhook-secret step requires a source mode to
+  // be picked AND, on the generate path, the "I have saved this
+  // secret" checkbox to be ticked. The configure-github-webhook step
+  // uses Next as a "Done — I configured it" confirmation, so it's
+  // always enabled.
   let nextEnabled = false;
   switch (currentStepId) {
     case STEP_PROVIDER:
@@ -269,6 +343,18 @@ function IaCGitHubWizardCreate({
       break;
     case STEP_PAT:
       nextEnabled = token.trim() !== "";
+      break;
+    case STEP_WEBHOOK_SECRET:
+      if (webhookSecretSource === "generate") {
+        nextEnabled = webhookSecretPlaintext !== "" && secretAcknowledged;
+      } else if (
+        webhookSecretSource === "use_global" ||
+        webhookSecretSource === "skip"
+      ) {
+        nextEnabled = true;
+      } else {
+        nextEnabled = false;
+      }
       break;
     case STEP_PICK_REPO:
       nextEnabled = repoFormatValid;
@@ -279,6 +365,12 @@ function IaCGitHubWizardCreate({
     case STEP_PLACEMENT_MAP:
       nextEnabled = true;
       break;
+    case STEP_CONFIGURE_WEBHOOK:
+      // Next acts as "I configured the webhook in GitHub" — there's no
+      // server-side check we can do here, so trust the operator. The
+      // skip path elides this step entirely via handleNext/handleBack.
+      nextEnabled = true;
+      break;
     case STEP_VALIDATE:
       // The validate step uses its own primary actions (Validate,
       // Save) rather than the global Next button.
@@ -286,18 +378,48 @@ function IaCGitHubWizardCreate({
       break;
   }
 
+  // shouldSkipStep returns true for steps that don't apply given the
+  // current form state. The skip-webhook path elides STEP_CONFIGURE_WEBHOOK
+  // entirely (the operator has deferred webhook setup, so we don't
+  // walk them through it now — the success card surfaces a reminder
+  // instead). Implemented as a tiny predicate so both handleNext and
+  // handleBack can use it symmetrically.
+  const shouldSkipStep = useCallback(
+    (id: string): boolean => {
+      if (id === STEP_CONFIGURE_WEBHOOK && webhookSecretSource === "skip") {
+        return true;
+      }
+      return false;
+    },
+    [webhookSecretSource],
+  );
+
   const handleNext = useCallback(() => {
     if (!nextEnabled) return;
-    setStepIndex((i) => Math.min(stepCount - 1, i + 1));
-  }, [nextEnabled, stepCount]);
+    setStepIndex((i) => {
+      let next = Math.min(stepCount - 1, i + 1);
+      // Jump over any step shouldSkipStep flags. Loop bounded by
+      // stepCount; in practice it skips at most one step today.
+      while (next < stepCount - 1 && shouldSkipStep(STEP_IDS[next])) {
+        next += 1;
+      }
+      return next;
+    });
+  }, [nextEnabled, stepCount, shouldSkipStep]);
 
   const handleBack = useCallback(() => {
-    setStepIndex((i) => Math.max(0, i - 1));
+    setStepIndex((i) => {
+      let prev = Math.max(0, i - 1);
+      while (prev > 0 && shouldSkipStep(STEP_IDS[prev])) {
+        prev -= 1;
+      }
+      return prev;
+    });
     // Any back-navigation invalidates the prior preflight — the
     // operator must re-run validate before saving.
     setValidateResult(null);
     setValidateError(null);
-  }, []);
+  }, [shouldSkipStep]);
 
   const jumpToStepId = useCallback((id: string) => {
     const idx = STEP_IDS.indexOf(id as (typeof STEP_IDS)[number]);
@@ -311,6 +433,25 @@ function IaCGitHubWizardCreate({
   const handleCopy = useCallback((value: string) => {
     if (navigator.clipboard?.writeText) {
       void navigator.clipboard.writeText(value);
+    }
+  }, []);
+
+  // v0.89.32 #651 — webhook-secret-step handlers ---------------------
+
+  // pickWebhookSecretSource flips the source mode. The "generate"
+  // branch lazily creates the plaintext on first selection; switching
+  // off "generate" clears the plaintext + ack so the form state stays
+  // honest. Picking "generate" a second time after switching away
+  // mints a fresh secret — operators who navigated away "lose" the
+  // earlier one, which matches the one-time-display contract.
+  const pickWebhookSecretSource = useCallback((src: WebhookSecretSource) => {
+    setWebhookSecretSource(src);
+    if (src === "generate") {
+      setWebhookSecretPlaintext(generateWebhookSecretHex());
+      setSecretAcknowledged(false);
+    } else {
+      setWebhookSecretPlaintext("");
+      setSecretAcknowledged(false);
     }
   }, []);
 
@@ -377,9 +518,35 @@ function IaCGitHubWizardCreate({
     }
   }, [token, repoFullName, defaultBranch, placementEntries]);
 
+  // v0.89.32 #651 Stream 49 — two-stage submit.
+  //
+  // Stage 1: saveIaCGitHubConnection (POST /iac/github/connections).
+  //   On failure: surface the save error; do not advance.
+  //
+  // Stage 2 (only on stage-1 success):
+  //   - source = "generate"   → updateIaCGitHubConnection PATCH with
+  //     webhook_secret. On PATCH failure the connection still exists;
+  //     report partial success on the ConnectedCard so the operator
+  //     has the recovery hint (curl command + the secret displayed one
+  //     more time). Do NOT delete the connection — partial setup beats
+  //     no setup.
+  //   - source = "use_global" → no PATCH; rely on env-var fallback.
+  //   - source = "skip"       → no PATCH; success card reminds the
+  //     operator to follow up with openssl + curl.
+  //
+  // onComplete fires once at the end so the page closes the dialog +
+  // mutates the SWR list cache regardless of which secret path the
+  // operator took. The card itself stays mounted long enough to show
+  // recovery text before the page tears it down.
   const handleSave = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
+    setSecretPatchFailed(false);
+    setSecretPatchError(null);
+    setSecretWasStored(false);
+    setSecretWasDeferred(false);
+    let createRes: { connection_id: string; repo_full_name: string } | null =
+      null;
     try {
       const res = await saveIaCGitHubConnection({
         token,
@@ -390,19 +557,39 @@ function IaCGitHubWizardCreate({
         reviewer_team_handle: reviewerTeamHandle.trim() || undefined,
         placement_map: placementEntries,
       });
-      setSavedConnection({
+      createRes = {
         connection_id: res.connection_id,
         repo_full_name: res.repo_full_name,
-      });
-      onComplete({
-        connection_id: res.connection_id,
-        repo_full_name: res.repo_full_name,
-      });
+      };
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
-    } finally {
       setSaving(false);
+      return;
     }
+
+    // Stage 2 — webhook-secret PATCH, gated on source mode.
+    if (webhookSecretSource === "generate" && webhookSecretPlaintext !== "") {
+      try {
+        await updateIaCGitHubConnection(createRes.connection_id, {
+          webhook_secret: webhookSecretPlaintext,
+        });
+        setSecretWasStored(true);
+      } catch (e) {
+        // Partial-success path. The connection IS persisted; only the
+        // per-connection secret column wasn't written. Operators
+        // recover via the curl hint on the success card.
+        setSecretPatchFailed(true);
+        setSecretPatchError(e instanceof Error ? e.message : String(e));
+      }
+    } else if (webhookSecretSource === "skip") {
+      setSecretWasDeferred(true);
+    }
+    // source = "use_global" → no PATCH, no flags; success card renders
+    // the env-var-fallback note.
+
+    setSavedConnection(createRes);
+    onComplete(createRes);
+    setSaving(false);
   }, [
     token,
     repoFullName,
@@ -411,6 +598,8 @@ function IaCGitHubWizardCreate({
     branchPrefix,
     reviewerTeamHandle,
     placementEntries,
+    webhookSecretSource,
+    webhookSecretPlaintext,
     onComplete,
   ]);
 
@@ -422,6 +611,18 @@ function IaCGitHubWizardCreate({
         connectionID={savedConnection.connection_id}
         repoFullName={savedConnection.repo_full_name}
         placementCount={placementEntries.length}
+        webhookSecretSource={webhookSecretSource}
+        secretWasStored={secretWasStored}
+        secretWasDeferred={secretWasDeferred}
+        secretPatchFailed={secretPatchFailed}
+        secretPatchError={secretPatchError}
+        // Only handed to the card on the partial-success recovery path
+        // so the operator can re-copy the secret one final time. The
+        // happy generate path does NOT re-display.
+        secretRecoveryPlaintext={
+          secretPatchFailed ? webhookSecretPlaintext : ""
+        }
+        onCopy={handleCopy}
       />
     );
   }
@@ -445,6 +646,17 @@ function IaCGitHubWizardCreate({
               token={token}
               onTokenChange={setToken}
               onCopyURL={() => handleCopy(GITHUB_CREATE_PAT_URL)}
+            />
+          )}
+
+          {currentStepId === STEP_WEBHOOK_SECRET && (
+            <WebhookSecretStep
+              source={webhookSecretSource}
+              onPickSource={pickWebhookSecretSource}
+              plaintext={webhookSecretPlaintext}
+              acknowledged={secretAcknowledged}
+              onAcknowledgeChange={setSecretAcknowledged}
+              onCopySecret={() => handleCopy(webhookSecretPlaintext)}
             />
           )}
 
@@ -482,6 +694,14 @@ function IaCGitHubWizardCreate({
               onToggleRowSkipped={toggleRowSkipped}
               onSkipAll={skipAll}
               onUnskipAll={unskipAll}
+            />
+          )}
+
+          {currentStepId === STEP_CONFIGURE_WEBHOOK && (
+            <ConfigureWebhookStep
+              source={webhookSecretSource}
+              secretPlaintext={webhookSecretPlaintext}
+              onCopy={handleCopy}
             />
           )}
 
@@ -756,6 +976,192 @@ function AuthTile({
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{description}</p>
     </div>
+  );
+}
+
+// --- Step 2.5: Webhook secret (v0.89.32 #651 Stream 49) -----------
+//
+// Three radio-style cards. The "generate" path mints a 64-character
+// hex secret via crypto.getRandomValues, displays it once in a
+// monospace block with a copy button, and requires the operator to
+// tick a "I have saved this secret securely" acknowledgment before
+// Next enables on the parent. The "use_global" and "skip" paths just
+// set the source mode — no display, no acknowledgment.
+//
+// The plaintext is plumbed in from the parent via props (it lives in
+// the parent's component state); rendering this step a second time
+// after navigation does not re-generate the secret. Switching the
+// source mode away from "generate" clears the plaintext + ack on the
+// parent — picking "generate" again mints a fresh one. That is the
+// one-time-display contract: operators who lose the displayed secret
+// have to generate a new one and PATCH the connection later.
+function WebhookSecretStep({
+  source,
+  onPickSource,
+  plaintext,
+  acknowledged,
+  onAcknowledgeChange,
+  onCopySecret,
+}: {
+  source: WebhookSecretSource | null;
+  onPickSource: (src: WebhookSecretSource) => void;
+  plaintext: string;
+  acknowledged: boolean;
+  onAcknowledgeChange: (v: boolean) => void;
+  onCopySecret: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Squadron&apos;s webhook listener needs an HMAC secret to verify
+        inbound GitHub deliveries. You can generate a per-connection
+        secret now (recommended for multi-team deployments), use the
+        global env-var secret your Squadron deployment already has
+        configured, or skip this step and configure later via the API.
+      </p>
+
+      <div
+        role="radiogroup"
+        aria-label="Webhook secret source"
+        className="space-y-2"
+      >
+        <SourceCard
+          name="Generate a new secret"
+          recommended
+          selected={source === "generate"}
+          onSelect={() => onPickSource("generate")}
+          description="Squadron generates a 64-character hex secret in your browser and stores it sealed against this connection only. Best for multi-team deployments where each repo has its own owner."
+        />
+        <SourceCard
+          name="Use the global env-var secret"
+          selected={source === "use_global"}
+          onSelect={() => onPickSource("use_global")}
+          description="Rely on your existing SQUADRON_GITHUB_WEBHOOK_SECRET env var. Inbound deliveries fall back to it when no per-connection secret is set."
+        />
+        <SourceCard
+          name="Skip and configure later"
+          selected={source === "skip"}
+          onSelect={() => onPickSource("skip")}
+          description="Defer webhook setup. Inbound deliveries will 503 until you either set the env var or PATCH a secret onto this connection."
+        />
+      </div>
+
+      {source === "generate" && plaintext !== "" && (
+        <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+          <div>
+            <Label className="text-xs font-semibold">
+              Your new webhook secret
+            </Label>
+            <div className="mt-1 flex items-center gap-2">
+              <code
+                data-testid="iac-github-webhook-secret-display"
+                className="block w-full break-all rounded bg-muted px-2 py-2 font-mono text-xs"
+              >
+                {plaintext}
+              </code>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onCopySecret}
+                aria-label="Copy webhook secret"
+              >
+                <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
+                Copy
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/5 p-3 text-xs">
+            <AlertCircle
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-yellow-600 dark:text-yellow-400"
+              aria-hidden
+            />
+            <p className="text-muted-foreground">
+              Save this secret somewhere safe. Squadron won&apos;t show it
+              again after you complete the wizard. If you lose it,
+              generate a new one and PATCH the connection.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="iac-github-webhook-secret-ack"
+              checked={acknowledged}
+              onCheckedChange={(v) => onAcknowledgeChange(v === true)}
+              aria-label="I have saved this secret securely"
+            />
+            <Label
+              htmlFor="iac-github-webhook-secret-ack"
+              className="text-xs"
+            >
+              I have saved this secret securely
+            </Label>
+          </div>
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        See{" "}
+        <a
+          href={WEBHOOK_LISTENER_DOC_LINK}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline"
+        >
+          webhook-listener.md
+        </a>{" "}
+        for the runbook this step automates.
+      </p>
+    </div>
+  );
+}
+
+// SourceCard renders one of the three webhook-secret source choices
+// as a radio-style clickable tile. Mirrors LayoutTile's posture so
+// keyboard navigation + selected-state styling stays consistent
+// across the wizard.
+function SourceCard({
+  name,
+  description,
+  selected,
+  recommended,
+  onSelect,
+}: {
+  name: string;
+  description: string;
+  selected: boolean;
+  recommended?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={cn(
+        "w-full rounded-md border p-3 text-left transition-colors",
+        selected
+          ? "border-primary bg-primary/5"
+          : "hover:border-foreground/30",
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium">
+          {name}
+          {recommended && (
+            <span className="ml-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+              (recommended)
+            </span>
+          )}
+        </span>
+        {selected && (
+          <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden />
+        )}
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+    </button>
   );
 }
 
@@ -1162,6 +1568,222 @@ function PlacementMapStep({
   );
 }
 
+// --- Step 5.5: Configure the webhook on GitHub (v0.89.32 #651) ----
+//
+// Pure read-only walkthrough — no inputs, no validation, no server
+// round-trip. The renderer surfaces the exact field values the
+// operator should paste into GitHub's Settings → Webhooks → Add
+// webhook form. Next acts as a "Done — I configured it" confirmation;
+// there's no way for the wizard to verify the operator actually did
+// the GitHub-side setup, so this is honor system. (The runbook at
+// docs/webhook-listener.md §"Step 4 — Verify the loop end-to-end"
+// walks the operator through a real-delivery sanity check after
+// Save.)
+//
+// The "skip" path elides this step entirely — see shouldSkipStep in
+// the parent. We render nothing meaningful when source === "skip"
+// because the parent's navigation jumps over us.
+function ConfigureWebhookStep({
+  source,
+  secretPlaintext,
+  onCopy,
+}: {
+  source: WebhookSecretSource | null;
+  secretPlaintext: string;
+  onCopy: (value: string) => void;
+}) {
+  // Best-effort origin — operators on multi-host deployments edit
+  // this by hand; same posture as the runbook's instruction to
+  // substitute "your-squadron-host". window.location is always
+  // defined in the browser; the optional chain is paranoia for the
+  // SSR-render case some future page entrypoint might trigger.
+  const origin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "https://your-squadron-host";
+  const payloadURL = `${origin}${WEBHOOK_LISTENER_PATH}`;
+  const contentType = "application/json";
+
+  // Secret-field display depends on the source mode. On generate we
+  // surface the plaintext; on use_global we render a placeholder
+  // pointing at the env var so the operator pastes their existing
+  // value. The skip path doesn't reach this component.
+  const secretFieldValue =
+    source === "generate"
+      ? secretPlaintext
+      : "your env-var SQUADRON_GITHUB_WEBHOOK_SECRET value";
+  const secretFieldCopyable = source === "generate";
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        On the GitHub repo you connected above, add a webhook that
+        Squadron&apos;s listener can receive.{" "}
+        <strong>Settings → Webhooks → Add webhook.</strong> Copy the
+        values from below.
+      </p>
+
+      <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+        <SettingRow
+          label="Payload URL"
+          value={payloadURL}
+          onCopy={() => onCopy(payloadURL)}
+          ariaLabel="Copy webhook payload URL"
+        />
+        <SettingRow
+          label="Content type"
+          value={contentType}
+          onCopy={() => onCopy(contentType)}
+          ariaLabel="Copy webhook content type"
+        />
+        <SettingRow
+          label="Secret"
+          value={secretFieldValue}
+          onCopy={
+            secretFieldCopyable ? () => onCopy(secretPlaintext) : undefined
+          }
+          ariaLabel="Copy webhook secret"
+          monospace={source === "generate"}
+        />
+
+        <div className="space-y-1">
+          <Label className="text-xs font-semibold">
+            Which events would you like to trigger this webhook?
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Pick <strong>&quot;Let me select individual events&quot;</strong>,
+            then check ONLY the events below.
+          </p>
+          <ul className="ml-1 space-y-1 text-xs">
+            <EventBox label="Pull requests" checked />
+            <EventBox label="Pushes" />
+            <EventBox label="Issues" />
+          </ul>
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs font-semibold">Active</Label>
+          <ul className="ml-1 text-xs">
+            <EventBox label="Active (leave checked)" checked />
+          </ul>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-2 rounded-md border border-yellow-500/40 bg-yellow-500/5 p-3 text-xs">
+        <AlertCircle
+          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-yellow-600 dark:text-yellow-400"
+          aria-hidden
+        />
+        <p className="text-muted-foreground">
+          If GitHub&apos;s test delivery shows red after Save, check that
+          the Payload URL matches your Squadron host, Content type is{" "}
+          <code>application/json</code>, and only the{" "}
+          <code>pull_request</code> event is checked. See{" "}
+          <a
+            href={WEBHOOK_LISTENER_DOC_LINK}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+          >
+            webhook-listener.md Step 3
+          </a>{" "}
+          for the full troubleshooting matrix.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// SettingRow renders one label/value/copy triple for the GitHub
+// webhook form walkthrough. The optional onCopy controls whether the
+// copy button is rendered at all — the use_global path's Secret row
+// has no real value to copy, so we hide the button there rather than
+// silently copy the placeholder string.
+function SettingRow({
+  label,
+  value,
+  onCopy,
+  ariaLabel,
+  monospace,
+}: {
+  label: string;
+  value: string;
+  onCopy?: () => void;
+  ariaLabel: string;
+  monospace?: boolean;
+}) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs font-semibold">{label}</Label>
+      <div className="flex items-center gap-2">
+        <code
+          className={cn(
+            "block w-full break-all rounded bg-muted px-2 py-1.5 text-xs",
+            monospace && "font-mono",
+          )}
+        >
+          {value}
+        </code>
+        {onCopy && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onCopy}
+            aria-label={ariaLabel}
+          >
+            <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
+            Copy
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// EventBox renders a checkbox-shaped visualization for the "Which
+// events" walkthrough — it visually matches GitHub's settings UI so
+// the operator can copy state row-by-row without re-reading labels.
+// Not interactive: pure presentation. Marked aria-hidden on the
+// indicator so screen readers read the label text only.
+function EventBox({ label, checked }: { label: string; checked?: boolean }) {
+  return (
+    <li className="flex items-center gap-2">
+      <span
+        aria-hidden
+        className={cn(
+          "inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border",
+          checked
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-muted-foreground/30",
+        )}
+      >
+        {checked && <Check3 />}
+      </span>
+      <span>{label}</span>
+    </li>
+  );
+}
+
+// Check3 is a 3-stroke check rendered inline so EventBox can be drawn
+// without pulling another lucide icon into the bundle. The size + viewBox
+// matches lucide's Check at scale=0.625 for visual parity with the
+// rest of the wizard's checkmarks.
+function Check3() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" aria-hidden>
+      <path
+        d="M5 12l4 4L19 8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 // --- Step 6: Validate + Save --------------------------------------
 
 function ValidateStep({
@@ -1410,11 +2032,46 @@ function ConnectedCard({
   connectionID,
   repoFullName,
   placementCount,
+  webhookSecretSource,
+  secretWasStored,
+  secretWasDeferred,
+  secretPatchFailed,
+  secretPatchError,
+  secretRecoveryPlaintext,
+  onCopy,
 }: {
   connectionID: string;
   repoFullName: string;
   placementCount: number;
+  // v0.89.32 #651 — the four flags below drive the webhook-secret
+  // section of the success card. They're independent of each other:
+  // an operator who picked use_global gets neither stored nor
+  // deferred nor failed, just the env-var-fallback note.
+  webhookSecretSource: WebhookSecretSource | null;
+  secretWasStored: boolean;
+  secretWasDeferred: boolean;
+  secretPatchFailed: boolean;
+  secretPatchError: string | null;
+  // Plaintext is handed in only on the partial-success recovery path
+  // (secretPatchFailed === true). The happy generate path does NOT
+  // re-display the secret — that would defeat the one-time-display
+  // contract. Empty string when not in recovery mode.
+  secretRecoveryPlaintext: string;
+  onCopy: (value: string) => void;
 }) {
+  // Build the curl command operators on the partial-success and skip
+  // paths can copy-paste. The skip path uses a placeholder; the
+  // partial-success path interpolates the actual secret so the
+  // command works as-is.
+  const recoveryCurlSecretValue =
+    secretPatchFailed && secretRecoveryPlaintext !== ""
+      ? secretRecoveryPlaintext
+      : "<your-secret>";
+  const recoveryCurl =
+    `curl -X PATCH .../iac/github/connections/${connectionID} ` +
+    `-H 'Content-Type: application/json' ` +
+    `-d '{"webhook_secret": "${recoveryCurlSecretValue}"}'`;
+
   return (
     <div className="rounded-lg border bg-card p-6">
       <div className="flex items-center gap-3">
@@ -1436,6 +2093,99 @@ function ConnectedCard({
           {connectionID}
         </code>
       </p>
+
+      {/* Happy generate path — terse confirmation, no re-display. */}
+      {secretWasStored && (
+        <div
+          className="mt-4 rounded-md border bg-muted/30 p-3 text-xs"
+          data-testid="iac-github-webhook-secret-stored"
+        >
+          <p className="font-semibold">Webhook secret stored.</p>
+          <p className="text-muted-foreground">
+            Inbound deliveries from GitHub will be HMAC-verified against
+            the per-connection secret you generated.
+          </p>
+        </div>
+      )}
+
+      {/* use_global path — env-var-fallback note. */}
+      {webhookSecretSource === "use_global" && !secretPatchFailed && (
+        <div
+          className="mt-4 rounded-md border bg-muted/30 p-3 text-xs"
+          data-testid="iac-github-webhook-use-global"
+        >
+          <p className="font-semibold">Using the global webhook secret.</p>
+          <p className="text-muted-foreground">
+            Inbound deliveries from GitHub will be HMAC-verified against
+            your <code>SQUADRON_GITHUB_WEBHOOK_SECRET</code> env var.
+            Verify it is set on the Squadron process or deliveries will
+            503.
+          </p>
+        </div>
+      )}
+
+      {/* skip path — deferred reminder + the follow-up commands. */}
+      {secretWasDeferred && (
+        <div
+          className="mt-4 space-y-2 rounded-md border border-yellow-500/40 bg-yellow-500/5 p-3 text-xs"
+          data-testid="iac-github-webhook-deferred"
+        >
+          <p className="font-semibold">
+            Webhook setup deferred. Configure later.
+          </p>
+          <p className="text-muted-foreground">
+            Run <code>openssl rand -hex 32</code> and PATCH the
+            connection when ready:
+          </p>
+          <code className="block break-all rounded bg-muted px-2 py-1.5 font-mono text-[10px]">
+            {recoveryCurl}
+          </code>
+        </div>
+      )}
+
+      {/* Partial-success path — connection created but PATCH failed. */}
+      {secretPatchFailed && (
+        <div
+          className="mt-4 space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs"
+          data-testid="iac-github-webhook-patch-failed"
+        >
+          <p className="font-semibold text-destructive">
+            Connection created, but per-connection secret could not be
+            stored.
+          </p>
+          {secretPatchError && (
+            <p className="text-destructive">{secretPatchError}</p>
+          )}
+          <p className="text-muted-foreground">
+            Set it manually:
+          </p>
+          <code className="block break-all rounded bg-muted px-2 py-1.5 font-mono text-[10px]">
+            {recoveryCurl}
+          </code>
+          {secretRecoveryPlaintext !== "" && (
+            <div>
+              <p className="mt-1 font-semibold">
+                Your secret (shown one more time so you can recover):
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="block w-full break-all rounded bg-muted px-2 py-1.5 font-mono text-[10px]">
+                  {secretRecoveryPlaintext}
+                </code>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onCopy(secretRecoveryPlaintext)}
+                  aria-label="Copy recovery webhook secret"
+                >
+                  <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
+                  Copy
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
