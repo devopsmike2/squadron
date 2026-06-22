@@ -308,6 +308,31 @@ export default function RolloutsPage() {
     () => configsResp?.configs ?? [],
     [configsResp],
   );
+
+  // v0.89.21 (#637) — read-side mirror of #636. The rollout list
+  // renders 'target config <uuid_prefix>…' for each row; replace
+  // the UUID prefix with the config's human name + version. Fetch
+  // all configs (no group filter) so the lookup works across the
+  // whole rollout list regardless of which groups the rows
+  // reference. Map<id, Config> keeps the per-row lookup O(1).
+  // Falls back to the UUID prefix when a row's target_config_id
+  // isn't in the map — covers configs that were deleted after
+  // the rollout was created (the rollout row keeps its id; the
+  // config row can be gone).
+  const { data: allConfigsResp } = useSWR("configs-all", () => getConfigs());
+  const configsByID: Map<string, Config> = useMemo(() => {
+    const m = new Map<string, Config>();
+    for (const c of allConfigsResp?.configs ?? []) {
+      m.set(c.id, c);
+    }
+    return m;
+  }, [allConfigsResp]);
+  const configLabel = (id: string): string => {
+    const c = configsByID.get(id);
+    if (!c) return `${id.slice(0, 8)}…`;
+    const name = c.name || "(unnamed)";
+    return c.version ? `${name} v${c.version}` : name;
+  };
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -1039,6 +1064,7 @@ export default function RolloutsPage() {
             key={r.id}
             rollout={r}
             groupName={groupName(r.group_id)}
+            configLabel={configLabel}
             onAbort={handleAbort}
             onPauseResume={handlePauseResume}
             onApprove={handleApprove}
@@ -1354,6 +1380,12 @@ function StageEditor({
 interface RolloutCardProps {
   rollout: Rollout;
   groupName: string;
+  // v0.89.21 (#637) — translate a target_config_id UUID into a
+  // human-readable label (config name + version) for the row
+  // header. Falls back to the UUID prefix when the config has
+  // been deleted. Passed in by RolloutsPage so the page-level
+  // SWR fetch of all configs is reused across every card.
+  configLabel: (id: string) => string;
   onAbort: (r: Rollout) => void;
   onPauseResume: (r: Rollout) => void;
   // v0.47 — approval workflow. Only used when rollout.state ===
@@ -1369,6 +1401,7 @@ interface RolloutCardProps {
 function RolloutCard({
   rollout: r,
   groupName,
+  configLabel,
   onAbort,
   onPauseResume,
   onApprove,
@@ -1498,9 +1531,20 @@ function RolloutCard({
             </div>
             <div className="text-xs text-muted-foreground">
               Group <span className="font-mono">{groupName}</span>
+              {/* v0.89.21 (#637) — show the config's human name +
+                  version instead of a UUID prefix. The lookup falls
+                  back to the prefix when the config row has been
+                  deleted after the rollout was created (rollouts
+                  keep their id; configs can be hard-deleted). The
+                  title attr surfaces the full UUID for the
+                  occasional operator who wants the canonical
+                  identifier. */}
               {" · "}target config{" "}
-              <span className="font-mono">
-                {r.target_config_id.slice(0, 8)}…
+              <span
+                className="font-mono"
+                title={r.target_config_id}
+              >
+                {configLabel(r.target_config_id)}
               </span>
               {" · "}stage {r.current_stage + 1} of {totalStages}
               {r.abort_reason && (
