@@ -679,3 +679,272 @@ func TestExcludeFromLearningTitle(t *testing.T) {
 		}
 	})
 }
+
+// TestProposalCreatedByStateTitle pins the v0.89.37 (#657 Stream 55,
+// #531 slice 2 chunk 6) extension to the proposal.created humanizer.
+// When the audit payload carries verdict_examples_used_by_state with
+// at least one non-empty bucket, the title surfaces the per-state mix
+// ("informed by N approved + M rejected verdicts") instead of the
+// v0.89.22 flat-count phrasing. Single-bucket → "informed by N
+// approved verdicts" or "informed by N rejected verdicts"; zero
+// buckets are dropped.
+//
+// Backward compat: when by-state is absent or all buckets are empty
+// the humanizer falls back to the v0.89.22 flat-count phrasing on the
+// existing verdict_examples_used field, so the slice 1
+// TestProposalCreatedTitle table above continues to pin the legacy
+// shape.
+func TestProposalCreatedByStateTitle(t *testing.T) {
+	t.Run("all approved — single-bucket plural", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{"rlt_a0", "rlt_a1"},
+				"verdict_examples_used_by_state": map[string]any{
+					"approved": []any{"rlt_a0", "rlt_a1"},
+					"rejected": []any{},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (informed by 2 approved verdicts)"
+		if got.Title != want {
+			t.Errorf("all-approved title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("all rejected — single-bucket plural", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{"rlt_r0", "rlt_r1"},
+				"verdict_examples_used_by_state": map[string]any{
+					"approved": []any{},
+					"rejected": []any{"rlt_r0", "rlt_r1"},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (informed by 2 rejected verdicts)"
+		if got.Title != want {
+			t.Errorf("all-rejected title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("mixed approved + rejected — multi-bucket plus-join", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{"rlt_a0", "rlt_r0", "rlt_r1"},
+				"verdict_examples_used_by_state": map[string]any{
+					"approved": []any{"rlt_a0"},
+					"rejected": []any{"rlt_r0", "rlt_r1"},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (informed by 1 approved + 2 rejected verdicts)"
+		if got.Title != want {
+			t.Errorf("mixed title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("by-state absent but verdict_examples_used populated — falls back to v0.89.22 flat-count", func(t *testing.T) {
+		// Legacy fixture shape: slice 1 audit rows + SIEM consumers
+		// that haven't ingested the slice 2 extension yet. The
+		// humanizer MUST surface the v0.89.22 phrasing so backfilled
+		// timelines render consistently.
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{"rlt_6m08", "rlt_8ax9"},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (cited 2 prior verdicts)"
+		if got.Title != want {
+			t.Errorf("fallback title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("by-state present but all buckets empty — falls back via flat-count cold-start path", func(t *testing.T) {
+		// Defensive: the audit emit omits the by-state field when every
+		// bucket is empty, but a forward-compat payload that emitted it
+		// anyway must still fall through to the cold-start title via
+		// the v0.89.22 path so we don't render "informed by  verdicts".
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []any{},
+				"verdict_examples_used_by_state": map[string]any{
+					"approved": []any{},
+					"rejected": []any{},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created"
+		if got.Title != want {
+			t.Errorf("empty-buckets title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("typed map[string][]string also handled", func(t *testing.T) {
+		// In-process emits (bridge → audit fake in tests) hand the
+		// humanizer a typed shape that bypasses the JSON round-trip.
+		// Both shapes MUST surface the same mix.
+		ev := &services.AuditEvent{
+			EventType: "proposal.created",
+			Actor:     "ai",
+			Payload: map[string]any{
+				"verdict_examples_used": []string{"rlt_a0", "rlt_r0"},
+				"verdict_examples_used_by_state": map[string][]string{
+					"approved": {"rlt_a0"},
+					"rejected": {"rlt_r0"},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "AI proposal created (informed by 1 approved + 1 rejected verdicts)"
+		if got.Title != want {
+			t.Errorf("typed-map title = %q, want %q", got.Title, want)
+		}
+	})
+}
+
+// TestDiscoveryProposalCreatedByStateTitle pins the v0.89.37 (#657
+// Stream 55, #531 slice 2 chunk 6) extension to the
+// discovery_proposal.created humanizer. Mirrors
+// TestProposalCreatedByStateTitle but with the discovery-surface
+// vocabulary ("accepted" / "closed" / "excluded"). Single-bucket
+// merged-only intentionally renders the v0.89.28 phrasing
+// ("informed by N accepted PRs") so the slice 1 humanizer
+// invariant holds when an operator's pool happens to be merged-only.
+func TestDiscoveryProposalCreatedByStateTitle(t *testing.T) {
+	t.Run("all merged — single-bucket matches v0.89.28 phrasing", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: services.AuditEventDiscoveryProposalCreated,
+			Payload: map[string]any{
+				"scan_id":              "scan-1",
+				"account_id":           "111111111111",
+				"region":               "us-east-1",
+				"recommendation_count": float64(3),
+				"verdict_examples_used": []any{
+					"https://github.com/octo/widgets/pull/142",
+					"https://github.com/octo/widgets/pull/138",
+				},
+				"verdict_examples_used_by_state": map[string]any{
+					"merged": []any{
+						"https://github.com/octo/widgets/pull/142",
+						"https://github.com/octo/widgets/pull/138",
+					},
+					"closed_not_merged": []any{},
+					"operator_excluded": []any{},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "Discovery recommendations generated (informed by 2 accepted PRs)"
+		if got.Title != want {
+			t.Errorf("all-merged title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("mixed merged + closed + excluded — multi-bucket plus-join", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: services.AuditEventDiscoveryProposalCreated,
+			Payload: map[string]any{
+				"scan_id":              "scan-1",
+				"account_id":           "111111111111",
+				"region":               "us-east-1",
+				"recommendation_count": float64(2),
+				"verdict_examples_used": []any{
+					"https://github.com/octo/widgets/pull/145",
+					"rec_id_abc",
+					"https://github.com/octo/widgets/pull/142",
+				},
+				"verdict_examples_used_by_state": map[string]any{
+					"merged":            []any{"https://github.com/octo/widgets/pull/142"},
+					"closed_not_merged": []any{"https://github.com/octo/widgets/pull/145"},
+					"operator_excluded": []any{"rec_id_abc"},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "Discovery recommendations generated (informed by 1 accepted + 1 closed + 1 excluded)"
+		if got.Title != want {
+			t.Errorf("mixed title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("by-state absent — falls back to v0.89.28 flat-count phrasing", func(t *testing.T) {
+		// Legacy slice 1 audit rows + cold-start rows that omit the
+		// by-state field per the v0.89.37 emit gate must keep the
+		// v0.89.28 humanizer output exactly.
+		ev := &services.AuditEvent{
+			EventType: services.AuditEventDiscoveryProposalCreated,
+			Payload: map[string]any{
+				"scan_id":              "scan-1",
+				"account_id":           "111111111111",
+				"region":               "us-east-1",
+				"recommendation_count": float64(3),
+				"verdict_examples_used": []any{
+					"https://github.com/octo/widgets/pull/142",
+					"https://github.com/octo/widgets/pull/138",
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "Discovery recommendations generated (informed by 2 prior accepted PRs)"
+		if got.Title != want {
+			t.Errorf("fallback title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("by-state present but all buckets empty — falls back to cold-start phrasing", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: services.AuditEventDiscoveryProposalCreated,
+			Payload: map[string]any{
+				"scan_id":               "scan-1",
+				"verdict_examples_used": []any{},
+				"verdict_examples_used_by_state": map[string]any{
+					"merged":            []any{},
+					"closed_not_merged": []any{},
+					"operator_excluded": []any{},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "Discovery recommendations generated"
+		if got.Title != want {
+			t.Errorf("empty-buckets title = %q, want %q", got.Title, want)
+		}
+	})
+
+	t.Run("typed map[string][]string also handled", func(t *testing.T) {
+		ev := &services.AuditEvent{
+			EventType: services.AuditEventDiscoveryProposalCreated,
+			Payload: map[string]any{
+				"scan_id": "scan-1",
+				"verdict_examples_used": []string{
+					"https://github.com/octo/widgets/pull/145",
+					"https://github.com/octo/widgets/pull/142",
+				},
+				"verdict_examples_used_by_state": map[string][]string{
+					"merged":            {"https://github.com/octo/widgets/pull/142"},
+					"closed_not_merged": {"https://github.com/octo/widgets/pull/145"},
+				},
+			},
+		}
+		got := auditToEvent(ev)
+		want := "Discovery recommendations generated (informed by 1 accepted + 1 closed)"
+		if got.Title != want {
+			t.Errorf("typed-map title = %q, want %q", got.Title, want)
+		}
+	})
+}
