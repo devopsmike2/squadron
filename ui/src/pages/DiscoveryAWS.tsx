@@ -48,6 +48,7 @@ import useSWR from "swr";
 import {
   generateAWSRecommendations,
   listAWSConnections,
+  listExcludedRecommendations,
   runAWSScan,
   saveAWSConnection,
   scanAllAWS,
@@ -1814,21 +1815,55 @@ export function RecommendationsTab({
   region: string;
 }) {
   // v0.89.38 #658 Stream 56 (#531 slice 2 chunk 5) — operator-set
-  // exclusion state. Session-scoped Set keyed by recommendation_id.
+  // exclusion state. Set keyed by recommendation_id.
   //
-  // TODO(slice 2 follow-on): persistent exclusion state requires a
-  // GET endpoint for listing existing iac_recommendation_verdicts
-  // rows (matching the backend SetRecommendationExclusion +
-  // ListExcludedRecommendations pair). Chunk 5 ships without
-  // pre-loading. Operators who refresh the page see the toggle reset
-  // until the GET endpoint lands; the backend still respects the
-  // exclusion on the next scan (chunk 4 confirmed working). The
-  // success toast reminds them where to recover the state. The
-  // audit timeline is the source of truth for "was this excluded?"
-  // questions in the interim.
+  // v0.89.40 (#660 Stream 58, #531 slice 2 chunk 5 follow-on):
+  // hydrated from the persisted iac_recommendation_verdicts rows
+  // via listExcludedRecommendations on mount, so the Excluded
+  // badges survive a page refresh. The hydration effect below
+  // (a) seeds the Set before the recommendation list renders for
+  // the first time (the GET fires synchronously off the effect's
+  // first run, and useEffect runs after the first commit but the
+  // Set's next state lands on the second paint — fast enough that
+  // operators don't see the unbadged flash on a healthy
+  // deployment); (b) degrades gracefully on error: console.error +
+  // leave the Set empty so the operator can still toggle.
   const [excludedSet, setExcludedSet] = useState<Set<string>>(
     () => new Set(),
   );
+  // v0.89.40 hydrate from the GET endpoint on mount and whenever the
+  // scope tuple changes. The proposer's `connection_id` is today
+  // equal to accountID (matching the substrate's connection_id
+  // posture) so we pass it in both slots. The effect short-circuits
+  // when any scope field is empty — pre-generate state, before the
+  // operator picks an account, has nothing to hydrate.
+  useEffect(() => {
+    if (!accountID || !region) {
+      return;
+    }
+    let cancelled = false;
+    listExcludedRecommendations({
+      connection_id: accountID,
+      account_id: accountID,
+      region,
+    })
+      .then((rows) => {
+        if (cancelled) {
+          return;
+        }
+        setExcludedSet(new Set(rows.map((r) => r.recommendation_id)));
+      })
+      .catch((err) => {
+        // Graceful degradation: log + leave the Set empty so the
+        // operator can still toggle. The audit timeline remains
+        // the authoritative log for "was this excluded?" questions.
+        // eslint-disable-next-line no-console
+        console.error("listExcludedRecommendations failed", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountID, region]);
   // toast holds the most-recent success / error notification rendered
   // above the recommendations list. Self-clears after 4 seconds.
   // Modelled inline (no toast lib in slice-2 UI) — matches the

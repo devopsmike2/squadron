@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -24,6 +25,12 @@ import (
 // the last upsert call and returns the prevExcluded value supplied at
 // construction so the handler tests can exercise both the
 // transition and no-op paths.
+//
+// v0.89.40 (#660 Stream 58): adds an in-memory list backing the new
+// ListExcludedRecommendations surface. Tests seed rows via the
+// `seeded` slice (matched per call by the scope tuple), so the same
+// fake covers both the POST handler tests (chunk 4 + 5) and the new
+// GET handler tests below.
 type fakeExclusionStore struct {
 	mu           sync.Mutex
 	called       bool
@@ -31,6 +38,16 @@ type fakeExclusionStore struct {
 	gotExcluded  bool
 	prevExcluded bool
 	returnErr    error
+	// seeded is the in-memory backing store for the list endpoint.
+	// Per-row matching against (connection_id, account_id, region) is
+	// done in ListExcludedRecommendations below.
+	seeded []types.ExcludedRecommendation
+	// listErr, when non-nil, makes ListExcludedRecommendations return
+	// the canned error so the 500 path can be exercised.
+	listErr error
+	// gotListLimit captures the last limit value the handler passed
+	// through. Asserted by the limit-default tests.
+	gotListLimit int
 }
 
 func (f *fakeExclusionStore) SetRecommendationExclusion(
@@ -47,6 +64,30 @@ func (f *fakeExclusionStore) SetRecommendationExclusion(
 		return false, f.returnErr
 	}
 	return f.prevExcluded, nil
+}
+
+func (f *fakeExclusionStore) ListExcludedRecommendations(
+	_ context.Context,
+	connectionID, accountID, region string,
+	limit int,
+) ([]types.ExcludedRecommendation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gotListLimit = limit
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []types.ExcludedRecommendation
+	for _, r := range f.seeded {
+		if r.ConnectionID != connectionID || r.AccountID != accountID || r.Region != region {
+			continue
+		}
+		out = append(out, r)
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // newExcludeHandlers wires DiscoveryHandlers with an exclusion store
@@ -286,5 +327,182 @@ func TestExcludeRecommendation_StoreNotWired_Returns503(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "ExclusionStoreNotWired") && !strings.Contains(w.Body.String(), "not configured") {
 		t.Errorf("body should explain the wiring miss: %s", w.Body.String())
+	}
+}
+
+// --- v0.89.40 #660 Stream 58 (slice 2 chunk 5 follow-on) -----------
+//
+// Tests for HandleAWSRecommendationListExcluded. The GET endpoint
+// surfaces the persisted iac_recommendation_verdicts rows for a
+// given scope tuple so the UI can hydrate its excludedSet on tab
+// mount. Three tests:
+//   - empty scope → empty list returned (no 404, no special-case).
+//   - mixed scopes → only the queried (C,A,R) tuple's rows surface.
+//   - missing required query params → 400 with no store call.
+
+// doListExcludedRequest issues a GET against the list endpoint. The
+// scope params are required; the helper also accepts an optional
+// limit so the default-limit assertion can be exercised.
+func doListExcludedRequest(h *DiscoveryHandlers, qs string) *httptest.ResponseRecorder {
+	r := gin.New()
+	r.GET("/api/v1/discovery/aws/recommendations/excluded", h.HandleAWSRecommendationListExcluded)
+	url := "/api/v1/discovery/aws/recommendations/excluded"
+	if qs != "" {
+		url += "?" + qs
+	}
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// TestListExcludedRecommendations_ReturnsEmptyOnEmptyScope: 0
+// exclusions seeded → empty list returned. The wire shape MUST
+// always emit an array (never null) so the UI's empty-state branch
+// is a single .length check.
+func TestListExcludedRecommendations_ReturnsEmptyOnEmptyScope(t *testing.T) {
+	store := &fakeExclusionStore{}
+	h := newExcludeHandlers(t, store, nil)
+	w := doListExcludedRequest(h, "connection_id=c&account_id=a&region=r")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp awsRecommendationListExcludedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v; body=%s", err, w.Body.String())
+	}
+	if resp.Excluded == nil {
+		t.Fatalf("excluded array should be non-nil even when empty; body=%s", w.Body.String())
+	}
+	if len(resp.Excluded) != 0 {
+		t.Errorf("excluded length = %d, want 0", len(resp.Excluded))
+	}
+	// Default limit (100) must have flowed through to the store.
+	if store.gotListLimit != 100 {
+		t.Errorf("store call limit = %d, want default 100", store.gotListLimit)
+	}
+}
+
+// TestListExcludedRecommendations_ReturnsScopedExclusions: seed 3
+// exclusions across (C,A,R), (C,A,R-different), (C,A-different,R).
+// Query (C,A,R). Assert: only 1 returned and it's the right one.
+func TestListExcludedRecommendations_ReturnsScopedExclusions(t *testing.T) {
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	store := &fakeExclusionStore{seeded: []types.ExcludedRecommendation{
+		{
+			RecommendationID:   "rec-in-scope",
+			ConnectionID:       "C",
+			AccountID:          "A",
+			Region:             "R",
+			RecommendationKind: "rds-pi-em",
+			ResourceID:         "db-1",
+			ExcludedAt:         now,
+			ExcludedBy:         "alice",
+		},
+		{
+			RecommendationID:   "rec-wrong-region",
+			ConnectionID:       "C",
+			AccountID:          "A",
+			Region:             "R-different",
+			RecommendationKind: "eks-observability-addon",
+			ExcludedAt:         now,
+			ExcludedBy:         "alice",
+		},
+		{
+			RecommendationID:   "rec-wrong-account",
+			ConnectionID:       "C",
+			AccountID:          "A-different",
+			Region:             "R",
+			RecommendationKind: "lambda-otel-layer",
+			ExcludedAt:         now,
+			ExcludedBy:         "alice",
+		},
+	}}
+	h := newExcludeHandlers(t, store, nil)
+	w := doListExcludedRequest(h, "connection_id=C&account_id=A&region=R")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp awsRecommendationListExcludedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v; body=%s", err, w.Body.String())
+	}
+	if len(resp.Excluded) != 1 {
+		t.Fatalf("excluded length = %d, want 1; got=%+v", len(resp.Excluded), resp.Excluded)
+	}
+	got := resp.Excluded[0]
+	if got.RecommendationID != "rec-in-scope" {
+		t.Errorf("recommendation_id = %q, want rec-in-scope", got.RecommendationID)
+	}
+	if got.RecommendationKind != "rds-pi-em" {
+		t.Errorf("recommendation_kind = %q, want rds-pi-em", got.RecommendationKind)
+	}
+	if got.ResourceID != "db-1" {
+		t.Errorf("resource_id = %q, want db-1", got.ResourceID)
+	}
+	if got.ExcludedBy != "alice" {
+		t.Errorf("excluded_by = %q, want alice", got.ExcludedBy)
+	}
+	if got.ExcludedAt.IsZero() {
+		t.Errorf("excluded_at should be set; got zero")
+	}
+}
+
+// TestListExcludedRecommendations_MissingFields_Returns400 covers
+// the per-field validation rejections. The store must NOT be called
+// on any of these — the handler short-circuits at the 400.
+func TestListExcludedRecommendations_MissingFields_Returns400(t *testing.T) {
+	cases := []struct {
+		name string
+		qs   string
+		want string
+	}{
+		{
+			name: "missing connection_id",
+			qs:   "account_id=a&region=r",
+			want: "connection_id",
+		},
+		{
+			name: "missing account_id",
+			qs:   "connection_id=c&region=r",
+			want: "account_id",
+		},
+		{
+			name: "missing region",
+			qs:   "connection_id=c&account_id=a",
+			want: "region",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeExclusionStore{seeded: []types.ExcludedRecommendation{
+				{RecommendationID: "should-not-surface", ConnectionID: "c", AccountID: "a", Region: "r"},
+			}}
+			h := newExcludeHandlers(t, store, nil)
+			w := doListExcludedRequest(h, tc.qs)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Errorf("body should mention the missing field (%q): %s", tc.want, w.Body.String())
+			}
+			// gotListLimit stays at its zero value when the store was
+			// never called.
+			if store.gotListLimit != 0 {
+				t.Errorf("store should NOT have been called on validation failure; gotListLimit=%d", store.gotListLimit)
+			}
+		})
+	}
+}
+
+// TestListExcludedRecommendations_StoreNotWired_Returns503 covers the
+// graceful-503 path when the trampoline didn't wire the store. Same
+// posture as the POST sibling so AI-disabled deployments degrade
+// consistently.
+func TestListExcludedRecommendations_StoreNotWired_Returns503(t *testing.T) {
+	h := newExcludeHandlers(t, nil, nil)
+	w := doListExcludedRequest(h, "connection_id=c&account_id=a&region=r")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
 	}
 }

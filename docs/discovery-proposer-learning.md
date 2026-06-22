@@ -510,17 +510,19 @@ the same POST with `excluded: false` and emits
 `discovery_recommendation.exclude_cleared`. Both events surface
 in the audit timeline via the v0.89.37 humanizer.
 
-Persistent UI state for excluded recommendations is a follow-on
-to this slice. Chunk 5 ships without pre-loading existing
-exclusions on tab mount — operators who toggle a recommendation
-and then refresh the page see the UI badge reset, even though
-the backend persistence + audit event + future-scan filter all
-remain in effect. The success toast names this explicitly so
-operators can recover the state from the Timeline. A `GET`
-endpoint that lists existing exclusions for a scope (matching
-the existing `ListExcludedRecommendations` storage method) is
-the small follow-on that fills the gap; tracked as a slice 2
-boundary task.
+Exclusions survive page refresh as of v0.89.40. The
+Recommendations tab hydrates its `excludedSet` from a new
+`GET /api/v1/discovery/aws/recommendations/excluded` endpoint on
+mount (the same scope tuple — `connection_id × account_id ×
+region` — the bridge sweeps on its proposer-side reads). The GET
+surfaces the persisted `iac_recommendation_verdicts` rows whose
+`exclude_from_learning` bit is set; the UI seeds the Set from
+the returned `recommendation_id` values so the Excluded badges
+appear on first paint. On error the tab degrades gracefully:
+the failure is logged to the browser console and the Set stays
+empty so the operator can still toggle. No new schema, no new
+audit events — this is purely a read surface over the chunk 4
+storage method.
 
 Granularity (kind-level vs resource-level): v1 ships with the
 button picking the granularity from whether the recommendation

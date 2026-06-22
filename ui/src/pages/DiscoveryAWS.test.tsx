@@ -33,9 +33,11 @@ import DiscoveryAWSPage from "./DiscoveryAWS";
 import {
   generateAWSRecommendations,
   listAWSConnections,
+  listExcludedRecommendations,
   runAWSScan,
   setRecommendationExclusion,
   type CloudConnection,
+  type ExcludedRecommendation,
   type GenerateRecommendationsResponse,
   type ScanResult,
 } from "@/api/discovery";
@@ -94,6 +96,13 @@ vi.mock("@/api/discovery", async () => {
     // mockResolvedValueOnce / mockRejectedValueOnce drive the
     // happy + rollback paths.
     setRecommendationExclusion: vi.fn(),
+    // v0.89.40 (#660 Stream 58, #531 slice 2 chunk 5 follow-on) —
+    // hydration GET fires from RecommendationsTab on mount. Default
+    // mock resolves with an empty array so the existing chunk 5
+    // tests (which don't seed any exclusions) keep their pre-
+    // hydration UI shape; tests that exercise the hydration path
+    // override via mockResolvedValueOnce / mockRejectedValueOnce.
+    listExcludedRecommendations: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -118,6 +127,7 @@ const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
 const mockedListIaCConnections = vi.mocked(listIaCGitHubConnections);
 const mockedOpenPullRequest = vi.mocked(openIaCGitHubPullRequest);
 const mockedSetRecommendationExclusion = vi.mocked(setRecommendationExclusion);
+const mockedListExcludedRecommendations = vi.mocked(listExcludedRecommendations);
 
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Without this, the second test in the file would
@@ -292,6 +302,12 @@ describe("DiscoveryAWSPage", () => {
     // Default: no IaC connections. Each Phase 4 test overrides this
     // when it needs a connection + placement row to exist.
     mockedListIaCConnections.mockResolvedValue({ connections: [] });
+    // v0.89.40 (#660 Stream 58, #531 slice 2 chunk 5 follow-on):
+    // RecommendationsTab hydrates its excludedSet from this GET on
+    // mount. Default to an empty list so the existing chunk-5
+    // toggle tests keep their pre-hydration UI shape; the new
+    // hydration tests below override per-test.
+    mockedListExcludedRecommendations.mockResolvedValue([]);
   });
 
   it("renders all three tabs", async () => {
@@ -1884,5 +1900,129 @@ describe("DiscoveryAWSPage", () => {
     expect(
       screen.getAllByRole("button", { name: /Don't propose .* again/i }),
     ).toHaveLength(2);
+  });
+
+  // ----- v0.89.40 #660 Stream 58 (#531 slice 2 chunk 5 follow-on) ---
+  //
+  // Hydration on mount. Closes the chunk 5 TODO that the Excluded
+  // badges were lost on page refresh. Two tests:
+  //   - happy hydration: mocked list returns 2 exclusions; both
+  //     corresponding rows render Excluded immediately on first
+  //     paint. The third (non-excluded) row stays in the normal
+  //     "Don't propose this again" posture.
+  //   - error path: list throws; no badges, no error toast, all
+  //     rows show the regular button. Console error is logged
+  //     (acceptable graceful degradation).
+
+  function buildHydrationRecsResponse(): GenerateRecommendationsResponse {
+    // Three recs so the test can assert "2 excluded, 1 not".
+    const mk = (i: number): Recommendation => ({
+      id: `rec-${i}`,
+      category: "empty_signal",
+      severity: "warn",
+      title: `Instrument resource ${i}`,
+      detail: "lambda lacks otel",
+      est_savings_bytes: 0,
+      generated_at: new Date().toISOString(),
+      source: { kind: "discovery_scan", ref_id: "scan-x" },
+      action: { kind: "plan", payload: {} },
+      iac: { format: "terraform", source: "resource ..." },
+      resource_kind: "lambda-otel-layer",
+      affected_resources: [`arn:aws:lambda:us-east-1:123:function:fn-${i}`],
+    });
+    return {
+      declined: false,
+      reasoning: "",
+      recommendations: [mk(1), mk(2), mk(3)],
+    };
+  }
+
+  it("RecommendationsTab_HydratesExcludedSetOnMount", async () => {
+    const recs = buildHydrationRecsResponse();
+    const hydrated: ExcludedRecommendation[] = [
+      {
+        recommendation_id: "rec-1",
+        recommendation_kind: "lambda-otel-layer",
+        resource_id: "arn:aws:lambda:us-east-1:123:function:fn-1",
+        excluded_at: new Date().toISOString(),
+        excluded_by: "alice",
+      },
+      {
+        recommendation_id: "rec-2",
+        recommendation_kind: "lambda-otel-layer",
+        resource_id: "arn:aws:lambda:us-east-1:123:function:fn-2",
+        excluded_at: new Date().toISOString(),
+        excluded_by: "alice",
+      },
+    ];
+    mockedListExcludedRecommendations.mockResolvedValueOnce(hydrated);
+
+    await renderRecommendationsTabWith(recs);
+
+    // GET fired with the scope tuple the tab was rendered against.
+    await waitFor(() => {
+      expect(mockedListExcludedRecommendations).toHaveBeenCalledWith({
+        connection_id: "123456789012",
+        account_id: "123456789012",
+        region: "us-east-1",
+      });
+    });
+    // The two seeded recommendations render with Excluded badges.
+    await waitFor(() => {
+      expect(
+        screen.getAllByLabelText(/Excluded from future recommendations/i),
+      ).toHaveLength(2);
+    });
+    // The third (non-seeded) row keeps the normal "Don't propose
+    // this again" button.
+    expect(
+      screen.getAllByRole("button", { name: /Don't propose .* again/i }),
+    ).toHaveLength(1);
+    // And the two excluded rows surface Restore buttons.
+    expect(
+      screen.getAllByRole("button", { name: /Restore .* as a recommendation/i }),
+    ).toHaveLength(2);
+    // No toast on hydration — that's a side-effect of a user
+    // action, not a passive load.
+    expect(screen.queryByTestId("exclusion-toast")).not.toBeInTheDocument();
+  });
+
+  it("RecommendationsTab_HydrationErrorGraceful", async () => {
+    const recs = buildHydrationRecsResponse();
+    mockedListExcludedRecommendations.mockRejectedValueOnce(
+      new Error("hydration backend offline"),
+    );
+    // Silence the console.error the graceful-degradation path emits
+    // so the test output stays clean — the assertion is "no toast,
+    // all rows show the regular button", not "no console output".
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    await renderRecommendationsTabWith(recs);
+
+    // Wait for the hydration GET to have been attempted.
+    await waitFor(() => {
+      expect(mockedListExcludedRecommendations).toHaveBeenCalledTimes(1);
+    });
+
+    // No Excluded badges anywhere — the set stayed empty.
+    expect(
+      screen.queryByLabelText(/Excluded from future recommendations/i),
+    ).not.toBeInTheDocument();
+    // No toast — the failure is logged, not surfaced to the
+    // operator as a banner.
+    expect(screen.queryByTestId("exclusion-toast")).not.toBeInTheDocument();
+    // All three rows render the regular "Don't propose this again"
+    // button — the tab is fully usable despite the hydration miss.
+    expect(
+      screen.getAllByRole("button", { name: /Don't propose .* again/i }),
+    ).toHaveLength(3);
+    // Console.error was called with the failure (so an SRE looking
+    // at the browser console can diagnose) — but no other side
+    // effect surfaces to the UI.
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
   });
 });
