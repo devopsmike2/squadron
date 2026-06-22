@@ -11,7 +11,8 @@ implementation promoted; slice 2+ candidates are open at the end.
 **See also:** [ai-features.md](../ai-features.md),
 [multi-step-plans-design.md](../multi-step-plans-design.md),
 [audit-log.md](../audit-log.md),
-[proposer-learning-loop.md](../proposer-learning-loop.md).
+[proposer-learning-loop.md](../proposer-learning-loop.md),
+[#643 (discovery-side feedback loop, sibling design)](./643-discovery-proposer-verdict-learning.md).
 
 ## 1. Problem
 
