@@ -82,7 +82,7 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`  - Each step supplies an inline_config_snippet (the YAML the ` +
 	`server materializes as a new Config row). Do NOT set ` +
 	`target_config_id on plan steps.` + "\n" +
-	`  - Use 2 to 4 steps. More than 4 indicates the plan should ` +
+	`  - Use 2 to 8 steps. More than 8 indicates the plan should ` +
 	`probably be split or simplified.` + "\n" +
 	`  - Each step's stages should still canary at 10% for 600 ` +
 	`seconds. The plan engine sequences whole steps; canary inside ` +

@@ -377,8 +377,11 @@ func validatePlan(p PlanCandidate, expectedGroupID string) error {
 		// 10 step ceiling. A plan with more than this many steps
 		// is almost certainly a model that's lost the plot —
 		// CreatePlan accepts up to 1000 but a sane proposer
-		// should rarely emit more than 3-4. Cap loudly here so
-		// pathological outputs don't sneak through.
+		// should rarely emit more than 3-8 (v0.89.13 raised the
+		// prompt-side guidance from 4 to 8 so a scan surfacing 8
+		// distinct resource kinds gets one step per kind instead
+		// of bundled — #629). Cap loudly here so pathological
+		// outputs don't sneak through.
 		return fmt.Errorf("plan has %d steps (max 10)", len(p.Steps))
 	}
 	for i, step := range p.Steps {
