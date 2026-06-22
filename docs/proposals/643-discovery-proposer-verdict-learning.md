@@ -1,9 +1,14 @@
 # #643 — Discovery proposer learns from accepted recommendations
 
-**Status:** proposal, slice-1 scoping. v0.89.27 candidate.
+**Status:** slice 1 SHIPPED in v0.89.28; operator runbook in
+v0.89.29. Design doc landed v0.89.27. This page remains the
+locked design the implementation promotes; operators read
+[discovery-proposer-learning.md](../discovery-proposer-learning.md)
+for the day-to-day flow. Slice 2+ candidates are open at §10.
 **See also:** [#531 (cost-spike side)](./531-proposer-learns-from-accepted-rejected.md),
 [ai-features.md](../ai-features.md),
 [proposer-learning-loop.md](../proposer-learning-loop.md),
+[discovery-proposer-learning.md](../discovery-proposer-learning.md),
 [webhook-listener.md](../webhook-listener.md),
 [discovery-iac-first-time-setup.md](../discovery-iac-first-time-setup.md).
 

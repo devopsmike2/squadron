@@ -29,6 +29,14 @@ jump straight to that page.
   proposal as in-context few-shot examples. Covers the per-group
   toggle, the selection policy, the audit field, and the worked
   example.
+- [Discovery proposer feedback loop](./discovery-proposer-learning.md) —
+  v0.89.28 operator runbook for the discovery-side feedback loop
+  (#643 slice 1) that reads `recommendation.pr_merged` events and
+  stops the proposer from re-proposing recommendations the
+  operator has already merged. Covers the per-connection flag,
+  the connection × account × region scope tuple, the new
+  `discovery_proposal.created` audit event, the branch-name
+  backward-compat note, and the worked example.
 - [GitHub webhook listener](./webhook-listener.md) — v0.89.23 +
   v0.89.24 operator runbook for the PR-merged webhook that closes
   the recommendation lifecycle in audit. Covers generating the

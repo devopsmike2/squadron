@@ -62,6 +62,13 @@ the same arc. The PR lifecycle is now closed-loop in audit:
 - You want to wire downstream automation (Slack notification,
   metrics counter, MTTR dashboard) off a single audit event
   stream rather than polling the GitHub API.
+- You want Squadron's discovery proposer to read merged
+  recommendations as positive signal and stop re-proposing
+  them on the next scan. The
+  [discovery proposer feedback loop](./discovery-proposer-learning.md)
+  (v0.89.28, #643 slice 1) consumes
+  `recommendation.pr_merged` events directly. Without the
+  webhook live, that loop has no input.
 
 ## What this is NOT
 
