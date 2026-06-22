@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -383,9 +384,15 @@ func isRolloutValidationError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "is required") ||
 		strings.Contains(msg, "must be") ||
+		strings.Contains(msg, "must not") ||
 		strings.Contains(msg, "must reach") ||
 		strings.Contains(msg, "not found") ||
-		strings.Contains(msg, "stage")
+		strings.Contains(msg, "stage") ||
+		// v0.89.14 (#630) — action step validation surfaces these.
+		strings.Contains(msg, "kind=action requires") ||
+		strings.Contains(msg, "kind=rollout must") ||
+		strings.Contains(msg, "unknown kind") ||
+		strings.Contains(msg, "exceeds maximum")
 }
 
 // CreatePlanRequest is the wire shape for POST /api/v1/rollouts/plans.
@@ -534,6 +541,28 @@ func (h *RolloutHandlers) HandleCreatePlan(c *gin.Context) {
 	if len(req.Steps) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "plan requires at least one step"})
 		return
+	}
+	// v0.89.14 (#630) — when any plan step is kind=action, require
+	// the caller's token to carry BOTH rollouts:write (the route-
+	// level middleware already enforced this) AND actions:write
+	// (gated here on the payload). Pure rollout plans bypass this
+	// check, preserving the v0.73 contract that rollouts:write is
+	// sufficient to create a config-only plan. Acceptance test
+	// #5 exercises both branches via the real middleware chain.
+	if services.HasActionStep(req.Steps) {
+		actor := middleware.ActorFromGin(c)
+		// Auth-disabled deployments leave actor.IsZero() true and
+		// fall through — mirrors the RequireScope middleware
+		// posture for backwards compatibility with the
+		// SQUADRON_DISABLE_AUTH dev flag.
+		if !actor.IsZero() && !actor.HasScope(services.ScopeActionsWrite) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error":          "forbidden",
+				"detail":         "plan contains action steps; token requires both rollouts:write and actions:write",
+				"required_scope": services.ScopeActionsWrite,
+			})
+			return
+		}
 	}
 	// Stamp RequestedBy on every step. Steps 1..N have it set the
 	// same as step 0 so a SIEM consumer querying audit events by

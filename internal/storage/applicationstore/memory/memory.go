@@ -677,6 +677,12 @@ func (s *Store) CreateRollout(ctx context.Context, r *types.Rollout) error {
 	if rolloutCopy.ProposedBy == "" {
 		rolloutCopy.ProposedBy = types.RolloutProposedByOperator
 	}
+	// v0.89.14 — default step_kind to "rollout" so the in-memory
+	// store matches what the SQLite scan does for pre-v0.89.14 rows.
+	// Callers (engine, service) read StepKind authoritatively.
+	if rolloutCopy.StepKind == "" {
+		rolloutCopy.StepKind = types.StepKindRollout
+	}
 	s.rollouts[r.ID] = &rolloutCopy
 	return nil
 }
@@ -757,6 +763,12 @@ func (s *Store) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	// v0.53 — preserve proposed_by semantics on update too.
 	if rolloutCopy.ProposedBy == "" {
 		rolloutCopy.ProposedBy = types.RolloutProposedByOperator
+	}
+	// v0.89.14 — preserve the step_kind sentinel on update too so a
+	// Get after an Update that left StepKind empty still returns
+	// "rollout".
+	if rolloutCopy.StepKind == "" {
+		rolloutCopy.StepKind = types.StepKindRollout
 	}
 	s.rollouts[r.ID] = &rolloutCopy
 	return nil

@@ -54,4 +54,8 @@ const (
 
 	RolloutStageModePercent = types.RolloutStageModePercent
 	RolloutStageModeLabel   = types.RolloutStageModeLabel
+
+	// v0.89.14 (#630) — action runner steps in plans.
+	StepKindRollout = types.StepKindRollout
+	StepKindAction  = types.StepKindAction
 )

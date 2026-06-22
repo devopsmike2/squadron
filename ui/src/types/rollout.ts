@@ -78,6 +78,15 @@ export interface Rollout {
   // docs/multi-step-plans-design.md.
   plan_id?: string;
   plan_step_index?: number;
+  // v0.89.14 (#630) — action runner steps in plans, slice 1.
+  // step_kind distinguishes "rollout" (default, every existing
+  // step) from "action" (a signed action-runner verb dispatched
+  // mid-plan). action_request_id links an action step to the
+  // dispatched action_requests row so the UI can deep-link into
+  // /actions/:id when present. Both are optional for backwards
+  // compatibility with pre-v0.89.14 servers.
+  step_kind?: string;
+  action_request_id?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string;

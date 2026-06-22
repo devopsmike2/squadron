@@ -175,6 +175,30 @@ const proposeFromCostSpikeSystem = `You are a senior site reliability engineer r
 	`  ]` + "\n" +
 	`}` + "\n\n" +
 
+	`Action steps in plans (v0.89.14):` + "\n" +
+	`Mix kind=action steps in alongside kind=rollout when the fix requires` + "\n" +
+	`a runner verb (e.g. "restart-systemd-service" after a config rotation).` + "\n" +
+	`Action steps have NO inline_config_snippet, NO stages, and NO` + "\n" +
+	`abort_criteria — they execute as a single signed dispatch to a` + "\n" +
+	`registered runner. Example step:` + "\n" +
+	`{` + "\n" +
+	`  "kind": "action",` + "\n" +
+	`  "name": "Plan step 1: restart otel-collector after config rotation",` + "\n" +
+	`  "group_id": "<from user message>",` + "\n" +
+	`  "action": {` + "\n" +
+	`    "runner_id": "<runner id from registered fleet>",` + "\n" +
+	`    "action_type": "restart-systemd-service",` + "\n" +
+	`    "parameters": {"unit_name": "otelcol-contrib.service"},` + "\n" +
+	`    "timeout_seconds": 300` + "\n" +
+	`  }` + "\n" +
+	`}` + "\n" +
+	`MVP action catalog: restart-systemd-service, restart-docker-container,` + "\n" +
+	`run-shell-allowlist. (Other catalog entries land in follow-on slices.)` + "\n" +
+	`Slice-1 trade-off: plan-embedded actions skip the standalone dry-run/` + "\n" +
+	`execute two-phase pattern — the plan's step-0 approval covers operator` + "\n" +
+	`intent. Action steps in the succeeded prefix are NOT auto-reversed if a` + "\n" +
+	`later step fails; reversal is an action-type property, not a plan one.` + "\n\n" +
+
 	`When declining, omit "proposal", "plan", and "evidence" and set:` + "\n" +
 	`{ "declined": true, "reason": "Short sentence." }`
 

@@ -629,6 +629,41 @@ func candidateToPlanInputs(result *ai.ProposalResult, expectedGroupID string) []
 		}
 	}
 	for i, st := range steps {
+		// v0.89.14 (#630) — kind=action steps follow a separate
+		// shape: no stages, no inline snippet, no abort
+		// criteria; the Action block carries runner id +
+		// action type + parameters + timeout. CreatePlan
+		// recognizes kind=action and routes to the action-step
+		// create path. Empty kind decodes as rollout for back-
+		// compat with v0.79-v0.89.13 model outputs.
+		kind := st.Kind
+		if kind == "" {
+			kind = services.StepKindRollout
+		}
+		if kind == services.StepKindAction {
+			input := services.RolloutInput{
+				Name:            st.Name,
+				GroupID:         expectedGroupID,
+				Kind:            services.StepKindAction,
+				RequireApproval: i == 0 && st.RequireApproval,
+				ProposedBy:      services.RolloutProposedByAI,
+			}
+			if st.Action != nil {
+				input.Action = &services.ActionStepSpec{
+					RunnerID:       st.Action.RunnerID,
+					ActionType:     st.Action.ActionType,
+					Parameters:     st.Action.Parameters,
+					TimeoutSeconds: st.Action.TimeoutSeconds,
+				}
+			}
+			if i == 0 {
+				input.ProposalReasoning = result.Reasoning
+				input.EvidenceRefs = evidence
+				input.RequestedBy = "ai-proposer"
+			}
+			out = append(out, input)
+			continue
+		}
 		stages := make([]services.RolloutStage, len(st.Stages))
 		for j, s := range st.Stages {
 			stages[j] = services.RolloutStage{

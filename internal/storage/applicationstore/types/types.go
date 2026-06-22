@@ -503,10 +503,32 @@ type Rollout struct {
 	PlanID        string `json:"plan_id,omitempty"`
 	PlanStepIndex int    `json:"plan_step_index"`
 
+	// v0.89.14 (#630) — action runner steps in plans, slice 1.
+	// StepKind distinguishes "rollout" (the v0.4–v0.89.13 default,
+	// staged config push) from "action" (a signed action-runner
+	// verb dispatched mid-plan). Empty string decodes as "rollout"
+	// for backwards compatibility with every existing row. When
+	// StepKind=="action", ActionRequestID holds the ID of the
+	// action_requests row the plan engine dispatched on the
+	// predecessor's succeeded transition. ActionRequestID is empty
+	// on every rollout step and on action steps that haven't been
+	// dispatched yet (Queued). See docs/proposals/530-action-runner
+	// -steps-in-plans.md for the protocol.
+	StepKind        string `json:"step_kind,omitempty"`
+	ActionRequestID string `json:"action_request_id,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // set on terminal state
 }
+
+// Rollout step kinds. v0.89.14 (#630). Stored in Rollout.StepKind.
+// "" and StepKindRollout are equivalent on the wire so pre-v0.89.14
+// rows round trip cleanly.
+const (
+	StepKindRollout = "rollout"
+	StepKindAction  = "action"
+)
 
 // RolloutEvidenceRef is a single piece of evidence attached to a
 // proposal. v0.53. Used by AI proposers to point at the alerts,
