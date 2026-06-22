@@ -773,6 +773,54 @@ func humanizeEventType(eventType, action string) string {
 		return "Action failed"
 	case "action.denied":
 		return "Action denied"
+
+	// v0.89.25 (#641) — humanizer coverage cleanup. Pre-this release,
+	// 15 audit event types in the system fell through to the raw
+	// event_type display because they predated the v0.81.4 humanizer
+	// table (or were added later without the table being extended).
+	// Operators reading the Timeline page saw "discovery.aws.scan_
+	// completed" or "agent.drift.synced" verbatim alongside the
+	// humanized "Rollout succeeded" — same family but inconsistent
+	// presentation. This block closes the gap.
+	//
+	// Agent lifecycle (v0.4-ish — predates the table).
+	case "agent.registered":
+		return "Agent registered"
+	case "agent.drift.synced":
+		return "Agent config synced"
+	case "agent.drift.drifted":
+		return "Agent config drifted"
+	// Config lifecycle (v0.4-ish).
+	case "config.stored":
+		return "Config stored"
+	case "config.applied":
+		return "Config applied"
+	// Alert lifecycle (v0.3a alerts feature).
+	case "alert_rule.created":
+		return "Alert rule created"
+	case "alert_rule.updated":
+		return "Alert rule updated"
+	case "alert_rule.deleted":
+		return "Alert rule deleted"
+	case "alert.fired":
+		return "Alert fired"
+	case "alert.resolved":
+		return "Alert resolved"
+	// Incident drafter (v0.54 Move 3).
+	case "incident.drafted":
+		return "Incident draft created"
+	case "incident.draft_declined":
+		return "Incident draft declined"
+	// Discovery (v0.85+). The IaC + recommendation.pr_* events
+	// already have a payload-aware humanizer at handleIaCAuditEvent;
+	// the discovery.aws.* events are flat lifecycle events with no
+	// payload-aware enrichment — they belong in the table.
+	case "discovery.aws.connection_created":
+		return "AWS connection created"
+	case "discovery.aws.scan_completed":
+		return "AWS scan completed"
+	case "discovery.aws.scan_all_completed":
+		return "Multi-account AWS scan completed"
 	}
 	// Fallback for event types not in the cleanup-grade table.
 	// Preserves backwards compatibility with whatever the operator

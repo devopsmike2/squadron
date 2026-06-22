@@ -42,9 +42,33 @@ func TestHumanizeEventType(t *testing.T) {
 		{"proposal.declined", "proposal.declined", "decline", "AI proposal declined"},
 		{"proposal.skipped", "proposal.skipped", "skip", "AI proposal skipped"},
 		{"proposal.evidence_linked", "proposal.evidence_linked", "link", "AI evidence linked"},
+		// v0.89.25 (#641) — humanizer coverage cleanup. The next 15
+		// rows close the gap for event types that previously fell
+		// through to the raw event_type display.
+		// Agent lifecycle.
+		{"agent.registered", "agent.registered", "register", "Agent registered"},
+		{"agent.drift.synced", "agent.drift.synced", "sync", "Agent config synced"},
+		{"agent.drift.drifted", "agent.drift.drifted", "drift", "Agent config drifted"},
+		// Config lifecycle.
+		{"config.stored", "config.stored", "store", "Config stored"},
+		{"config.applied", "config.applied", "apply", "Config applied"},
+		// Alert lifecycle.
+		{"alert_rule.created", "alert_rule.created", "create", "Alert rule created"},
+		{"alert_rule.updated", "alert_rule.updated", "update", "Alert rule updated"},
+		{"alert_rule.deleted", "alert_rule.deleted", "delete", "Alert rule deleted"},
+		{"alert.fired", "alert.fired", "fire", "Alert fired"},
+		{"alert.resolved", "alert.resolved", "resolve", "Alert resolved"},
+		// Incident drafter.
+		{"incident.drafted", "incident.drafted", "draft", "Incident draft created"},
+		{"incident.draft_declined", "incident.draft_declined", "decline", "Incident draft declined"},
+		// Discovery flat-lifecycle events.
+		{"discovery.aws.connection_created", "discovery.aws.connection_created", "create", "AWS connection created"},
+		{"discovery.aws.scan_completed", "discovery.aws.scan_completed", "scan", "AWS scan completed"},
+		{"discovery.aws.scan_all_completed", "discovery.aws.scan_all_completed", "scan", "Multi-account AWS scan completed"},
 		// Fallback — unknown event_type returns the raw string so we
-		// never lose information by humanizing.
-		{"unknown event type falls through", "agent.heartbeat", "tick", "agent.heartbeat"},
+		// never lose information by humanizing. Pick a truly unknown
+		// type that's NOT in any of the v0.89.25 cleanup additions.
+		{"unknown event type falls through", "telemetry.flushed", "flush", "telemetry.flushed"},
 		// Fallback — empty event_type returns action.
 		{"empty event type uses action", "", "create", "create"},
 		// Fallback — both empty returns empty.

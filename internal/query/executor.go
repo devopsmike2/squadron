@@ -53,7 +53,10 @@ func (e *Executor) Execute(ctx context.Context, query Query, execCtx *ExecutionC
 		ExecutionTime: time.Since(startTime),
 		RowCount:      len(queryResults),
 		QueryType:     fmt.Sprintf("%T", query),
-		UsedRollups:   false, // TODO: detect rollup usage
+		// v0.89.25 (#641) — UsedRollups is a placeholder; see the
+		// QueryMeta type doc for the design-gap explanation. Always
+		// false in v0.89.x.
+		UsedRollups: false,
 	}
 
 	return queryResults, meta, nil

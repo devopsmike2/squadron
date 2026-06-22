@@ -21,6 +21,28 @@ Most fields can also be overridden by environment variables — viper maps
 nested keys to underscore-separated upper-case names (e.g.
 `server.http_port` ⇄ `SERVER_HTTP_PORT`).
 
+A few env vars sit outside the viper-mapped tree because they're
+standalone secrets, not config fields:
+
+- `SQUADRON_CONFIG` — path to the YAML config file (overrides
+  `--config`).
+- `SQUADRON_SECRETS_KEY` — 32-byte AES-GCM key Squadron uses to
+  seal cloud credentials and PATs at rest. Required when
+  discovery features are enabled; auto-generated to
+  `~/.squadron/secrets-key` if missing on a single-node
+  deployment.
+- `SQUADRON_GITHUB_WEBHOOK_SECRET` — HMAC secret for the
+  `POST /api/v1/webhooks/github` listener that records
+  `recommendation.pr_merged` audit events when Squadron-opened
+  PRs land. The handler reads this once at startup and caches
+  it. If empty, the route still mounts but responds with 503 +
+  a humanized "secret not configured" message rather than a
+  silent no-op. See
+  [webhook-listener.md](./webhook-listener.md) for the full
+  setup walkthrough.
+- `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
+  Bearer token enforcement. Do NOT set this in production.
+
 Sections in `squadron.yaml`:
 
 ```yaml
@@ -119,6 +141,15 @@ Before pointing real traffic at Squadron:
 - [ ] **Webhook URLs for alerts and rollouts.** Squadron's notifications
       fire-and-forget; pair them with a destination that's actually
       monitored (Slack, PagerDuty webhook, your incident bot).
+- [ ] **`SQUADRON_GITHUB_WEBHOOK_SECRET` set if you use the IaC
+      PR-merged listener.** v0.89.23 added an inbound webhook route
+      that records `recommendation.pr_merged` audit events when
+      Squadron-opened PRs land. Without the secret env var set, the
+      route mounts but returns 503 on every delivery — operators
+      see the failure in the GitHub repo's Recent Deliveries log
+      rather than a silent no-op. Generate with
+      `openssl rand -hex 32`. Full setup in
+      [webhook-listener.md](./webhook-listener.md).
 - [ ] **Scrape `/metrics`.** Squadron exposes its own Prometheus metrics.
       At minimum, watch `squadron_opamp_connected_agents`,
       `squadron_rollouts_in_progress`, and the worker pool queue depth.

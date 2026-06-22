@@ -1,6 +1,10 @@
 # #531 — Proposer learns from accepted/rejected proposals
 
-**Status:** slice 1 SHIPPED in v0.89.17 + v0.89.18. Operators read
+**Status:** slice 1 SHIPPED across v0.89.17 (engine + storage +
+prompt + audit), v0.89.18 (API + UI surface for the per-group
+flag), v0.89.19 (operator runbook), and v0.89.22 (audit-timeline
+humanizer that surfaces verdict citation counts on
+`proposal.created` events). Operators read
 [proposer-learning-loop.md](../proposer-learning-loop.md) for the
 runbook. This page remains the locked design that the
 implementation promoted; slice 2+ candidates are open at the end.
