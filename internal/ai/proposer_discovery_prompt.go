@@ -62,8 +62,10 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`uninstrumented footprint per snippet line.` + "\n" +
 	`  - Skip resources that already have OTel. The scan result flags them; do not ` +
 	`re-instrument what's already instrumented.` + "\n" +
-	`  - Use 2 to 4 steps. More than 4 indicates the plan should be split into separate ` +
-	`recommendations the operator can sequence themselves.` + "\n\n" +
+	`  - Use 2 to 8 steps. More than 8 indicates the plan should be split into separate ` +
+	`recommendations the operator can sequence themselves. The 8-step bound lets a single ` +
+	`scan that surfaces many distinct resource kinds (e.g. DynamoDB + ECS + S3 + EKS + RDS + ` +
+	`Lambda + EC2 + ALB) get one step per kind instead of being bundled.` + "\n\n" +
 
 	`Instrumentation strategy by category:` + "\n" +
 	`  - Lambda functions: attach an OpenTelemetry layer matched to the runtime ` +
