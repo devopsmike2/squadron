@@ -19,6 +19,10 @@ jump straight to that page.
 - [Concepts](./concepts.md) — agents, groups, configs, and the drift model.
 - [Rollouts](./rollouts.md) — safe staged deploys with canary selection,
   auto-abort criteria, preview/diff, and the recipe + template cookbook.
+- [Action runner steps in plans](./action-runner-steps-in-plans.md) —
+  v0.89.14 operator runbook for embedding signed runner verbs (restart
+  a service, rotate a secret, drain a pool member) as steps inside a
+  multi-step plan, with shared approval and audit.
 - [Alerts](./alerts.md) — rule-based alerts on telemetry, fleet state, and
   rollout health.
 - [Audit log](./audit-log.md) — every state change in Squadron is recorded.

@@ -386,6 +386,12 @@ without joining tables.
   — the locked design this section promotes.
 - [Action runner design](./action-runner-design.md) — the signed-
   action protocol the plan engine reuses.
+- [Action runner steps in plans — operator runbook](./action-runner-steps-in-plans.md)
+  — v0.89.16 operator-facing companion to this design section.
+  Covers prerequisites, the plan-author shape, the engine state
+  machine, the failure walks, audit interpretation, and a worked
+  example. Read this if you're the operator authoring a plan with
+  an action step today.
 
 ## See also
 

@@ -301,6 +301,19 @@ non-pilot customer install.
 - Security review: the doc the external reviewer reads before
   asking us hard questions.
 
+## See also
+
+- [Multi-step plans — design](./multi-step-plans-design.md) — the
+  plan protocol the v0.89.14 plan-embedded action path lives on
+  top of. The plan engine reuses this doc's signed-action protocol
+  verbatim; the only divergence is that plan-embedded actions skip
+  the standalone two-phase dry-run, since the plan-step-0 approval
+  covers operator intent.
+- [Action runner steps in plans — operator runbook](./action-runner-steps-in-plans.md) —
+  the v0.89.16 operator-facing companion. Read this if you want to
+  use the runner from inside a multi-step plan rather than as a
+  standalone action.
+
 ## Revision History
 
 - v0.1 (this draft): initial protocol + threat model + MVP scope
