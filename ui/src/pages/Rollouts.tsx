@@ -28,6 +28,7 @@ import { Link } from "react-router-dom";
 import useSWR, { mutate } from "swr";
 
 import { getAgents } from "@/api/agents";
+import { getConfigs, type Config } from "@/api/configs";
 import { getGroups, type Group } from "@/api/groups";
 import {
   abortRollout,
@@ -290,6 +291,23 @@ export default function RolloutsPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyInput());
+
+  // v0.89.20 (#636) — configs filtered by the selected group, fed into
+  // the Target config Select. Keyed on the group_id so picking a
+  // different group refetches the dropdown contents. When no group is
+  // selected the key is null, which short-circuits useSWR — keeps us
+  // from listing every config in the deployment unnecessarily.
+  // revalidateOnFocus stays default-on: configs can be created in
+  // another tab and the operator should see them on tab refocus.
+  const configsKey = form.group_id ? ["configs-for-group", form.group_id] : null;
+  const { data: configsResp, isLoading: configsLoading } = useSWR(
+    configsKey,
+    () => getConfigs({ group_id: form.group_id }),
+  );
+  const configsForGroup: Config[] = useMemo(
+    () => configsResp?.configs ?? [],
+    [configsResp],
+  );
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -587,7 +605,21 @@ export default function RolloutsPage() {
                 <Label htmlFor="group">Target group</Label>
                 <Select
                   value={form.group_id}
-                  onValueChange={(v) => setForm({ ...form, group_id: v })}
+                  onValueChange={(v) =>
+                    // v0.89.20 (#636) — clear target_config_id when
+                    // the group changes. A config picked for the old
+                    // group would resolve to a 400 at submit time
+                    // (group/config mismatch); clearing here forces
+                    // the operator to re-pick from the new group's
+                    // dropdown so the wrong-group footgun is closed
+                    // at the source.
+                    setForm({
+                      ...form,
+                      group_id: v,
+                      target_config_id:
+                        v === form.group_id ? form.target_config_id : "",
+                    })
+                  }
                 >
                   <SelectTrigger id="group">
                     <SelectValue placeholder="Pick a group..." />
@@ -603,24 +635,74 @@ export default function RolloutsPage() {
               </div>
             </div>
 
+            {/* v0.89.20 (#636) — Target config selector. Pre-this
+                release, this was a free-text Input that asked the
+                operator to paste a UUID — the placeholder literally
+                said "UUID of the config to roll out". The Target
+                group field one row up was already a Select keyed on
+                group name; #636 closes the inconsistency. The
+                dropdown filters by the selected group_id (configs
+                API already supports the query param) so operators
+                can't accidentally pick a staging config for a prod
+                rollout. The value submitted to the API stays the
+                canonical UUID — only the display changes. */}
             <div className="space-y-2">
-              <Label htmlFor="cfg">Target config ID</Label>
-              <Input
-                id="cfg"
-                value={form.target_config_id}
-                onChange={(e) =>
-                  setForm({ ...form, target_config_id: e.target.value })
-                }
-                placeholder="UUID of the config to roll out"
-                className="font-mono text-sm"
-              />
+              <Label htmlFor="cfg">Target config</Label>
+              {!form.group_id ? (
+                <div className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  Pick a target group above to see its available configs.
+                </div>
+              ) : configsLoading ? (
+                <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  Loading configs for this group&hellip;
+                </div>
+              ) : configsForGroup.length === 0 ? (
+                <div className="rounded-md border border-dashed border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+                  No configs created for this group yet.{" "}
+                  <Link
+                    to="/configs"
+                    className="font-medium text-amber-700 underline-offset-2 hover:underline"
+                  >
+                    Create one on the Configs page
+                  </Link>{" "}
+                  first.
+                </div>
+              ) : (
+                <Select
+                  value={form.target_config_id}
+                  onValueChange={(v) =>
+                    setForm({ ...form, target_config_id: v })
+                  }
+                >
+                  <SelectTrigger id="cfg">
+                    <SelectValue placeholder="Pick a config..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {configsForGroup.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="font-medium">
+                          {c.name || "(unnamed)"}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {" · v"}
+                          {c.version}
+                          {" · "}
+                          <span className="font-mono text-[11px]">
+                            {c.config_hash.slice(0, 8)}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <p className="text-xs text-muted-foreground">
                 Squadron snapshots the group's current config as the rollback
                 target when the rollout is created.
               </p>
               {/* Preview pane: shows the diff + lint findings between
                   the group's current effective config and the target
-                  the operator just typed in. Renders inline so the
+                  the operator just picked. Renders inline so the
                   diff lands in front of the operator at exactly the
                   decision point. */}
               <RolloutPreviewPane
