@@ -418,6 +418,9 @@ func (askRolloutListOnly) GetPlan(context.Context, string) (*services.Plan, erro
 func (askRolloutListOnly) ListPlans(context.Context, services.PlanFilter) ([]*services.Plan, error) {
 	panic("not used")
 }
+func (askRolloutListOnly) SetExcludeFromLearning(context.Context, string, string, string, bool) (*services.Rollout, error) {
+	panic("not used")
+}
 
 // askAuditListOnly is the audit counterpart.
 type askAuditListOnly struct {

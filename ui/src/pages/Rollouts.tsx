@@ -35,6 +35,7 @@ import {
   rollBackRollout,
   approveRollout,
   createRollout,
+  excludeFromLearningRollout,
   listAbortCriteriaRecipes,
   listRolloutTemplates,
   listRollouts,
@@ -1735,6 +1736,21 @@ function RolloutCard({
             </div>
           )}
 
+        {/* v0.89.26 (#642 Stream 43) — per-rollout exclude-from-
+            learning toggle (#531 slice 2 §10 Q3). Surfaced ONLY on
+            AI-originated rollouts: the bridge's `proposed_by='ai'`
+            filter at the ListAIVerdictsForGroup layer already makes
+            the flag a no-op for operator rows, so showing the toggle
+            there would mislead. Green accent matches v0.89.18's
+            LearnFromVerdicts chip (this is a learn/include positive
+            signal, not a guard). One click flips the flag — the
+            optional reason field is API-only for scripted callers. */}
+        {r.proposed_by === "ai" && (
+          <div className="border-t pt-2">
+            <ExcludeFromLearningToggle rollout={r} />
+          </div>
+        )}
+
         {/* History toggle — mounts an AuditTimeline filtered to this
             rollout. Includes the per-stage resolved agent IDs so a
             post-mortem can answer "who got pushed at each stage?". */}
@@ -1757,5 +1773,67 @@ function RolloutCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ExcludeFromLearningToggle is the v0.89.26 (#642 Stream 43) per-
+// rollout opt-out chip for the #531 slice 2 feedback loop (§10 Q3).
+// Rendered only when rollout.proposed_by === "ai" (RolloutCard
+// gates the mount). Mirrors v0.89.18's LearnFromVerdicts group chip
+// styling — green accent for the included/learning state, muted
+// border for the off/excluded state. One click flips the flag via
+// POST /api/v1/rollouts/:id/exclude-from-learning; the page-level
+// SWR cache is invalidated on success so the chip re-renders with
+// the post-toggle value.
+//
+// We do NOT collect the optional reason in the UI — the v1 surface
+// is the boolean. Scripted callers (squadronctl, automation) can
+// pass a reason that flows onto the rollout.excluded_from_learning
+// audit payload, but the operator pressing the chip in the drawer
+// has typed the natural reason elsewhere (Slack, incident timeline,
+// approval notes) and re-typing it here would be ceremony for no
+// gain.
+function ExcludeFromLearningToggle({ rollout }: { rollout: Rollout }) {
+  const [busy, setBusy] = useState(false);
+  // Treats `undefined` as `false` to match the storage column
+  // default. Older list payloads that predate the field render as
+  // "Learning" — the same default-coalesce convention the v0.89.18
+  // group chip uses.
+  const excluded = rollout.exclude_from_learning ?? false;
+  const handleClick = async () => {
+    setBusy(true);
+    try {
+      await excludeFromLearningRollout(rollout.id, !excluded);
+      await mutate(ROLLOUTS_KEY);
+    } catch (err) {
+      console.error("Failed to toggle exclude_from_learning:", err);
+      window.alert(
+        err instanceof Error
+          ? err.message
+          : "Failed to toggle exclude-from-learning",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={handleClick}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+        excluded
+          ? "border-border bg-muted/40 text-muted-foreground hover:bg-muted"
+          : "border-green-500/30 bg-green-500/10 text-green-700 hover:bg-green-500/20"
+      } ${busy ? "opacity-60 cursor-wait" : ""}`}
+      title={
+        excluded
+          ? "This rollout is suppressed from future AI proposals — click to re-include it"
+          : "This rollout informs future AI proposals on the same group — click to exclude it"
+      }
+    >
+      <Sparkles className="h-3 w-3" />
+      {excluded ? "Excluded from learning" : "Included in learning"}
+    </button>
   );
 }

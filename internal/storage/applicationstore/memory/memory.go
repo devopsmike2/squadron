@@ -816,6 +816,14 @@ func (s *Store) ListAIVerdictsForGroup(ctx context.Context, groupID string, sinc
 		if r.ApprovedAt == nil && r.RejectedAt == nil {
 			continue
 		}
+		// v0.89.26 (#642) — per-rollout opt-out filter, mirroring
+		// the SQLite store's `AND exclude_from_learning = 0`
+		// predicate. Skips rows the operator suppressed via the
+		// exclude-from-learning endpoint so they drop out of the
+		// few-shot block without disabling the whole group.
+		if r.ExcludeFromLearning {
+			continue
+		}
 		va := verdictAt(r)
 		if va.Before(since) {
 			continue

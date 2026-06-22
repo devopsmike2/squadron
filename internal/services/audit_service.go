@@ -136,6 +136,27 @@ const (
 	AuditEventProposalDeclined = "proposal.declined"
 	AuditEventProposalSkipped  = "proposal.skipped"
 
+	// v0.89.26 (#642 Stream 43) — per-rollout opt-out for the
+	// proposer-learns-from-verdicts loop (#531 slice 2 §10 Q3).
+	// Emitted by the POST /api/v1/rollouts/:id/exclude-from-learning
+	// handler whenever an operator toggles the per-rollout flag
+	// (either direction). The Action verb distinguishes the two
+	// directions ("exclude_from_learning" or "include_in_learning")
+	// so SIEM consumers can fan out without having to crack the
+	// payload. Payload contract (SIEM consumers parse on this):
+	//   - rollout_id (string): the affected rollout's id.
+	//   - previous_state (bool): the rollout's exclude_from_learning
+	//     value BEFORE the toggle. Always present so consumers can
+	//     reconstruct the transition without an extra Get.
+	//   - new_state (bool): the value AFTER the toggle. Equal to
+	//     previous_state on a no-op toggle (the handler still emits
+	//     so the audit row is unambiguous).
+	//   - reason (string, omitempty): the operator's optional human-
+	//     readable note. Omitted from the payload when empty so the
+	//     v1 UI's "no reason field" call lands a clean row. Scripted
+	//     callers can pass a reason for forensics.
+	AuditEventRolloutExcludedFromLearning = "rollout.excluded_from_learning"
+
 	// v0.89.3 — Connect IaC repo (Stream 19, #603) audit events.
 	// Slice 1 ships four; the webhook-driven pr_merged / pr_closed
 	// events the design doc §8 enumerates land with slice 1.5.

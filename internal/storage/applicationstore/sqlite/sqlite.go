@@ -174,7 +174,17 @@ func (s *Storage) migrate() error {
 		abort_reason TEXT,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		completed_at DATETIME
+		completed_at DATETIME,
+		-- v0.89.26 (#642) — per-rollout opt-out for the proposer's
+		-- prior-verdicts few-shot loop (#531 slice 2 §10 Q3).
+		-- Default 0 (included) so fresh databases match the v0.89.17
+		-- opt-in posture. Operators flip individual rows to 1 to
+		-- suppress that rollout's reasoning + notes from future AI
+		-- proposals without disabling the whole group's loop. The
+		-- ALTER TABLE in the migrations slice below covers existing
+		-- databases; this column is in the CREATE TABLE so fresh
+		-- deployments (which skip the ALTER) still get the column.
+		exclude_from_learning INTEGER NOT NULL DEFAULT 0
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_rollouts_state ON rollouts(state);
@@ -548,6 +558,26 @@ func (s *Storage) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_ai_verdicts ON rollouts(
 			group_id,
 			proposed_by,
+			COALESCE(approved_at, rejected_at) DESC
+		) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)`,
+
+		// v0.89.26 (#642) — proposer learns from accepted/rejected
+		// verdicts, slice 2 (#531 §10 Q3). Per-rollout opt-out flag
+		// plus a companion partial index keyed on the new column.
+		// Default 0 on exclude_from_learning so post-upgrade behavior
+		// matches the design — every existing AI rollout stays in the
+		// feedback loop until an operator explicitly suppresses it.
+		// The new index is partial-matched against the same predicate
+		// as idx_ai_verdicts but additionally orders the
+		// exclude_from_learning column ahead of the verdict timestamp
+		// so the v0.89.17 ListAIVerdictsForGroup query's extended
+		// AND exclude_from_learning = 0 predicate stays cheap on
+		// fleets with many excluded AI rollouts.
+		`ALTER TABLE rollouts ADD COLUMN exclude_from_learning INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_verdicts_exclude ON rollouts(
+			group_id,
+			proposed_by,
+			exclude_from_learning,
 			COALESCE(approved_at, rejected_at) DESC
 		) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)`,
 	}
@@ -1648,8 +1678,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		evidenceJSON = string(buf)
 	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -1685,6 +1715,11 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		// rows round trip cleanly.
 		nullableString(r.StepKind),
 		nullableString(r.ActionRequestID),
+		// v0.89.26 (#642) — per-rollout exclude-from-learning flag.
+		// Default false at create matches the schema column default;
+		// operators flip it later via the exclude-from-learning
+		// endpoint, which calls UpdateRollout.
+		boolToInt(r.ExcludeFromLearning),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -1696,7 +1731,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1713,7 +1748,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -1765,12 +1800,22 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 	if limit > 1000 {
 		limit = 1000
 	}
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id
+	// v0.89.26 (#642) — slice 2 of #531 adds the
+	// `exclude_from_learning = 0` predicate so individually
+	// suppressed rollouts drop out of the few-shot block without
+	// disabling the whole group. The schema v5 migration adds a
+	// companion index idx_ai_verdicts_exclude that lets SQLite cover
+	// this predicate without a table scan on fleets with many
+	// excluded AI rollouts; the original v4 partial idx_ai_verdicts
+	// is preserved for back-compat with deployments that haven't
+	// completed the migration yet.
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning
 		FROM rollouts
 		WHERE group_id = ?
 		  AND proposed_by = 'ai'
 		  AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)
 		  AND COALESCE(approved_at, rejected_at) >= ?
+		  AND exclude_from_learning = 0
 		ORDER BY COALESCE(approved_at, rejected_at) DESC
 		LIMIT ?`
 	rows, err := s.db.QueryContext(ctx, stmt, groupID, since, limit)
@@ -1823,7 +1868,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    last_blackout_reason = ?, last_blackout_at = ?,
 		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?,
 		    rolled_back_from_id = ?, plan_id = ?, plan_step_index = ?,
-		    step_kind = ?, action_request_id = ?
+		    step_kind = ?, action_request_id = ?,
+		    exclude_from_learning = ?
 		WHERE id = ?
 	`
 	res, err := s.db.ExecContext(ctx, stmt,
@@ -1856,6 +1902,11 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		// v0.89.14 action steps.
 		nullableString(r.StepKind),
 		nullableString(r.ActionRequestID),
+		// v0.89.26 (#642) — per-rollout exclude-from-learning flag.
+		// This is the column the exclude-from-learning endpoint
+		// flips; UpdateRollout is the only path that persists the
+		// post-create change.
+		boolToInt(r.ExcludeFromLearning),
 		r.ID,
 	)
 	if err != nil {
@@ -1910,6 +1961,10 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		// engine code doesn't have to special-case the missing case.
 		stepKind        sql.NullString
 		actionRequestID sql.NullString
+		// v0.89.26 (#642) — per-rollout exclude-from-learning flag.
+		// Stored as INTEGER NOT NULL DEFAULT 0 so this is a plain
+		// int — every row has a value after the schema v5 migration.
+		excludeFromLearningInt int
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -1924,9 +1979,11 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&rolledBackFromID,
 		&planID, &planStepIndex,
 		&stepKind, &actionRequestID,
+		&excludeFromLearningInt,
 	); err != nil {
 		return nil, err
 	}
+	r.ExcludeFromLearning = excludeFromLearningInt != 0
 	if rolledBackFromID.Valid {
 		r.RolledBackFromID = rolledBackFromID.String
 	}

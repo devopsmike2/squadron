@@ -46,6 +46,27 @@ type RolloutService interface {
 	// the rollout to retry.
 	Reject(ctx context.Context, id, rejecter, notes string) (*Rollout, error)
 
+	// v0.89.26 (#642 Stream 43) — per-rollout opt-out for the
+	// proposer-learns-from-verdicts loop (#531 slice 2 §10 Q3).
+	// SetExcludeFromLearning flips the Rollout.ExcludeFromLearning
+	// flag on an existing rollout. The supplied actor and (optional)
+	// reason flow into the rollout.excluded_from_learning audit
+	// event; the previous and new state are both captured on the
+	// payload so SIEM consumers can reconstruct the transition.
+	//
+	// Returns (nil, nil) when no rollout matches the id so the
+	// handler can map that to a 404 without inspecting the error
+	// string. Returns the updated *Rollout on success.
+	//
+	// Permissive on row eligibility: the method does not refuse
+	// operator-originated rollouts. The bridge's
+	// `proposed_by='ai'` filter on ListAIVerdictsForGroup already
+	// makes the flag a no-op for those rows, and pushing the
+	// eligibility check up here would break symmetry with the
+	// per-group flag (which can also be set on a group with zero
+	// AI rollouts).
+	SetExcludeFromLearning(ctx context.Context, id, actor, reason string, excluded bool) (*Rollout, error)
+
 	// v0.60 — operator initiated rollback. RollBack creates a new
 	// rollout that targets the source rollout's PreviousConfigID
 	// (the config the group was on before the source ran) and
@@ -366,6 +387,19 @@ type Rollout struct {
 	// yet. See docs/proposals/530-action-runner-steps-in-plans.md.
 	StepKind        string `json:"step_kind,omitempty"`
 	ActionRequestID string `json:"action_request_id,omitempty"`
+
+	// v0.89.26 (#642) — per-rollout opt-out for the proposer-learns-
+	// from-verdicts loop (#531 slice 2 §10 Q3). Mirrors the storage-
+	// layer Rollout.ExcludeFromLearning. UI surfaces a toggle on AI-
+	// originated rollout cards; the
+	// POST /api/v1/rollouts/:id/exclude-from-learning endpoint flips
+	// the flag. When true, Bridge.assembleVerdicts skips this rollout
+	// when assembling the few-shot examples block on the next
+	// AI proposal for the same group. Default false matches the
+	// storage column default; the v5 migration backfills existing
+	// rows to false so post-upgrade behavior matches the v0.89.17
+	// opt-in posture.
+	ExcludeFromLearning bool `json:"exclude_from_learning,omitempty"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`

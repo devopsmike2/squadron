@@ -115,6 +115,17 @@ func (f *fakeStore) ListAIVerdictsForGroup(_ context.Context, gid string, since 
 		if r.ApprovedAt == nil && r.RejectedAt == nil {
 			continue
 		}
+		// v0.89.26 (#642) — per-rollout opt-out filter, mirroring
+		// the SQLite store's `AND exclude_from_learning = 0`
+		// predicate. The fake has to apply the same filter so
+		// bridge tests that seed an excluded rollout see it drop
+		// out of the few-shot block — otherwise the
+		// TestExcludeFromLearning_* acceptance tests below would
+		// pass against a fake that's more permissive than the real
+		// store.
+		if r.ExcludeFromLearning {
+			continue
+		}
 		if verdictAt(r).Before(since) {
 			continue
 		}

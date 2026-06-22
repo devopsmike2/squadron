@@ -87,6 +87,15 @@ export interface Rollout {
   // compatibility with pre-v0.89.14 servers.
   step_kind?: string;
   action_request_id?: string;
+  // v0.89.26 (#642 Stream 43) — per-rollout opt-out for the proposer-
+  // learns-from-verdicts loop (#531 slice 2 §10 Q3). When true, the
+  // bridge skips this rollout when assembling the few-shot examples
+  // block on the next AI proposal. The UI exposes a toggle on the
+  // rollout drawer (only when proposed_by === "ai") that flips the
+  // flag via POST /api/v1/rollouts/:id/exclude-from-learning. Field is
+  // optional on the wire (the storage projection omits it when false
+  // for cold-path payload size).
+  exclude_from_learning?: boolean;
   created_at: string;
   updated_at: string;
   completed_at?: string;
