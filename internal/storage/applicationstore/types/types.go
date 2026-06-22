@@ -190,6 +190,34 @@ type ApplicationStore interface {
 	GetDeployRun(ctx context.Context, id string) (*DeployRun, error)
 	ListDeployRuns(ctx context.Context, filter DeployRunFilter) ([]*DeployRun, error)
 
+	// v0.89.30 (#649) — webhook replay protection.
+	//
+	// RecordWebhookDelivery records an inbound webhook delivery by its
+	// X-GitHub-Delivery UUID. Returns firstTime=true and receivedAt =
+	// the freshly-stamped CURRENT_TIMESTAMP when the row was new
+	// (legitimate delivery); firstTime=false and receivedAt = the
+	// timestamp the original delivery was recorded at when the
+	// delivery_id was already present (a replay). The receiver feeds
+	// the prior receivedAt into the AuditEventWebhookDeliveryReplayed
+	// payload's original_received_at field so SIEM consumers can see
+	// how long the gap was between the legitimate fire and the replay.
+	//
+	// Implementations MUST atomically insert-and-fetch (or check-and-
+	// insert under a lock) so a concurrent race between two replays of
+	// the same delivery_id can't both observe firstTime=true. The
+	// SQLite implementation relies on INSERT OR IGNORE + RowsAffected;
+	// the memory implementation holds the store-wide mutex across the
+	// check + insert.
+	RecordWebhookDelivery(ctx context.Context, deliveryID, eventType string) (firstTime bool, receivedAt time.Time, err error)
+
+	// GCWebhookDeliveries deletes dedupe rows older than the supplied
+	// cutoff. Returns the count of rows deleted. Called from a
+	// background loop (24h cadence; 7-day retention) so the dedupe
+	// table doesn't grow unbounded across the deployment lifetime.
+	// Re-running with a stale cutoff is a clean no-op (deleted=0).
+	// v0.89.30 (#649).
+	GCWebhookDeliveries(ctx context.Context, before time.Time) (deleted int, err error)
+
 	// SIEM destinations (v0.50 audit export). One row per configured
 	// downstream SIEM (Splunk HEC, signed webhook). Secret is the
 	// encrypted-at-rest credential — never returned to the API layer

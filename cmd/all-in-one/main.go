@@ -721,6 +721,24 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		} else {
 			logger.Info("iac github webhook listener: SQUADRON_GITHUB_WEBHOOK_SECRET not set; /api/v1/webhooks/github will 503 until configured")
 		}
+
+		// v0.89.30 (#649) — wire the webhook delivery dedupe store
+		// and start the background GC sweeper. The store is the same
+		// applicationstore the rest of the server uses; the dedupe
+		// table lives in app.db alongside audit_events. The GC
+		// goroutine runs on a 24h ticker and deletes rows older than
+		// 7 days (webhookDedupeRetention in the handler). Threat
+		// closed: a compromised TLS terminator or intermediary proxy
+		// captures + replays a legitimate signed delivery. See
+		// docs/webhook-listener.md §"Slice 2 roadmap".
+		apiServer.SetIaCGitHubWebhookStore(appStore)
+		webhookDedupeGCCtx, webhookDedupeGCCancel := context.WithCancel(context.Background())
+		handlers.StartWebhookDedupeGC(webhookDedupeGCCtx, appStore, logger)
+		defer webhookDedupeGCCancel()
+		logger.Info("iac github webhook listener: dedupe store wired and GC sweeper started",
+			zap.Duration("retention", 7*24*time.Hour),
+			zap.Duration("gc_interval", 24*time.Hour),
+		)
 	}
 
 	// v0.85 Stream 2F — wire the AI service onto the discovery
