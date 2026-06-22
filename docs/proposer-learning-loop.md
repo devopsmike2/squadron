@@ -507,13 +507,27 @@ The slice-1 trade-offs most likely to shift in later slices:
   for the locked design. The "accepted" question is answered:
   `recommendation.pr_merged` within 30 days of `pr_opened`
   on the same connection × account × region × kind is the
-  positive signal. Rejected signal and cross-scope learning
-  stay slice 2 questions there.
+  positive signal. Rejected signal on the discovery side is
+  now locked as slice 2 work in
+  [#531 slice 2](./proposals/531-proposer-learning-slice2.md).
+- **#531 slice 2 — unified verdict learning across surfaces**
+  (design DOC LOCKED in v0.89.33,
+  [./proposals/531-proposer-learning-slice2.md](./proposals/531-proposer-learning-slice2.md)).
+  Adds negative signal on the discovery side
+  (`recommendation.pr_closed_not_merged` audit event plus an
+  operator-set "Don't propose this again" exclusion table),
+  a two-tier hot/cold recency window (7d + 30d), a kind
+  diversity cap (max 2 examples per kind within the N=4
+  total), and a shared `verdictsel` + `verdictprompt`
+  selection and prompt-rendering layer that both proposer
+  surfaces call into. Storage stays surface-local; the shared
+  layer is functional and unit-tested in isolation.
 
 These slice candidates are tracked under
-[#531](./proposals/531-proposer-learns-from-accepted-rejected.md).
+[#531](./proposals/531-proposer-learns-from-accepted-rejected.md)
+and [#531 slice 2](./proposals/531-proposer-learning-slice2.md).
 None ship in v0.89.18; everything in this runbook
-describes behavior you can rely on today.
+describes slice 1 behavior you can rely on today.
 
 ## Cross-references
 

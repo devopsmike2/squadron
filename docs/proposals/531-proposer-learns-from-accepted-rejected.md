@@ -4,11 +4,20 @@
 prompt + audit), v0.89.18 (API + UI surface for the per-group
 flag), v0.89.19 (operator runbook), and v0.89.22 (audit-timeline
 humanizer that surfaces verdict citation counts on
-`proposal.created` events). Operators read
+`proposal.created` events). The §10 Q3 per-rollout suppression
+candidate SHIPPED in v0.89.26. Slice 2 of #531 (the unified
+verdict learning across cost-spike + discovery proposer
+surfaces, plus negative signal on the discovery side, plus
+operator-set exclusion on the discovery side, plus the
+hot/cold tier window, plus the kind diversity cap) is now
+locked as a separate design doc:
+[531-proposer-learning-slice2.md](./531-proposer-learning-slice2.md).
+Operators read
 [proposer-learning-loop.md](../proposer-learning-loop.md) for the
-runbook. This page remains the locked design that the
-implementation promoted; slice 2+ candidates are open at the end.
-**See also:** [ai-features.md](../ai-features.md),
+slice 1 runbook. This page remains the locked slice 1 design
+that the implementation promoted.
+**See also:** [#531 slice 2 (unified verdict learning, locked design)](./531-proposer-learning-slice2.md),
+[ai-features.md](../ai-features.md),
 [multi-step-plans-design.md](../multi-step-plans-design.md),
 [audit-log.md](../audit-log.md),
 [proposer-learning-loop.md](../proposer-learning-loop.md),
