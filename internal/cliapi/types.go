@@ -385,6 +385,81 @@ type IaCHumanizedError struct {
 	DocLink       string `json:"doc_link,omitempty"`
 }
 
+// --- IaC GitHub open-pr + update-placement wire shapes ------------
+//
+// v0.89.15 (#631, Stream 32) — backfills the two subcommands the
+// v0.89.8 (#617) Stream 22 slice deferred. The shapes mirror
+// internal/api/handlers/iac_github.go's iacGitHubOpenPRRequest /
+// iacGitHubOpenPRResponse (extended with the v0.89.12 #628 slice-2
+// disposition_actual + lifecycle_ignored + hcl_patch_failure_reason
+// fields) and iacGitHubUpdatePlacementMapRequest (the v0.89.4 #610
+// PATCH endpoint).
+//
+// HCL patch payload is intentionally decoded as a generic raw object
+// (json.RawMessage) on this side — the CLI relays whatever the
+// proposer emitted to the handler verbatim, and the handler owns the
+// structural parse via internal/iac/hclpatch.Patch. Keeping it
+// opaque on the CLI side means a future hclpatch.Patch field change
+// doesn't ripple into this package.
+
+// IaCGitHubOpenPRRequest is POST
+// /api/v1/iac/github/connections/:id/open-pr body. ScanID + StepIdx
+// pin down the recommendation; ResourceKind keys the connection's
+// placement_map row; Snippet is the proposer's Terraform; HCLPatch
+// is the optional v0.89.12 structured patch payload (opaque to the
+// CLI — the handler owns the parse).
+type IaCGitHubOpenPRRequest struct {
+	ScanID            string   `json:"scan_id"`
+	StepIdx           int      `json:"step_idx"`
+	ResourceKind      string   `json:"resource_kind"`
+	Snippet           string   `json:"snippet"`
+	ProposerReasoning string   `json:"proposer_reasoning,omitempty"`
+	AffectedResources []string `json:"affected_resources,omitempty"`
+	AccountID         string   `json:"account_id,omitempty"`
+	// HCLPatch is decoded as a generic any so the CLI can relay any
+	// shape the handler accepts without re-declaring hclpatch.Patch
+	// here. A nil/missing value triggers the slice-1.5 append-only
+	// fallback on the server side.
+	HCLPatch map[string]any `json:"hcl_patch,omitempty"`
+}
+
+// IaCGitHubOpenPRResponse is the success body of POST
+// /api/v1/iac/github/connections/:id/open-pr. DispositionActual +
+// LifecycleIgnored + HCLPatchFailureReason are the v0.89.12 #628
+// slice-2 additions; older servers leave them empty.
+type IaCGitHubOpenPRResponse struct {
+	PRNumber              int    `json:"pr_number"`
+	PRURL                 string `json:"pr_url"`
+	Branch                string `json:"branch"`
+	CommitSHA             string `json:"commit_sha"`
+	FilePath              string `json:"file_path"`
+	RepoFullName          string `json:"repo_full_name"`
+	Disposition           string `json:"disposition,omitempty"`
+	ManualMergeRequired   bool   `json:"manual_merge_required,omitempty"`
+	DispositionActual     string `json:"disposition_actual,omitempty"`
+	LifecycleIgnored      bool   `json:"lifecycle_ignored,omitempty"`
+	HCLPatchFailureReason string `json:"hcl_patch_failure_reason,omitempty"`
+}
+
+// IaCGitHubUpdatePlacementMapRequest is PATCH
+// /api/v1/iac/github/connections/:id/placement-map body. Only the
+// placement_map is mutable through this endpoint — token / repo /
+// branch_prefix / reviewer_team_handle stay owned by the connect
+// wizard's create path.
+type IaCGitHubUpdatePlacementMapRequest struct {
+	PlacementMap []IaCGitHubPlacementEntry `json:"placement_map"`
+}
+
+// IaCGitHubUpdatePlacementMapResponse is the success body of PATCH
+// /api/v1/iac/github/connections/:id/placement-map. Echoes back the
+// connection metadata + the persisted placement map so callers can
+// confirm the post-write shape without a follow-up GET.
+type IaCGitHubUpdatePlacementMapResponse struct {
+	ConnectionID string                    `json:"connection_id"`
+	RepoFullName string                    `json:"repo_full_name"`
+	PlacementMap []IaCGitHubPlacementEntry `json:"placement_map"`
+}
+
 // --- AWS scan-all wire shapes -------------------------------------
 //
 // v0.89.7a (#616, Stream 21) added the multi-account scan-all
