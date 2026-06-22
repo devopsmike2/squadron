@@ -143,6 +143,44 @@ limitations.
 
 ## Step 1 — Generate the webhook secret
 
+### Recommended: use the Connect IaC repo wizard
+
+As of v0.89.32, the **Connect IaC repo wizard** generates and stores
+the webhook secret for you as part of the connection setup flow.
+This is the recommended path for almost everyone — it closes the
+"operators have to read this runbook and PATCH the secret after the
+wizard completes" gap that earlier slices left open.
+
+When you reach the **"Set up the webhook secret"** step in the
+wizard, you'll see three choices:
+
+1. **Generate a new secret** — the wizard mints a 64-character hex
+   string in your browser (same byte-shape as `openssl rand -hex 32`),
+   shows it once with a Copy button, and PATCHes it onto the
+   connection sealed at rest. The secret is shown ONLY at generate
+   time; if you lose it later, you have to generate a new one and
+   PATCH the connection. This is the right choice for multi-team
+   deployments where each managed repo has a different owner.
+2. **Use the global env-var secret** — the wizard skips the PATCH;
+   inbound deliveries fall back to your existing
+   `SQUADRON_GITHUB_WEBHOOK_SECRET` at HMAC-verify time. The right
+   choice if you have one or two managed repos sharing the same
+   ownership story.
+3. **Skip and configure later** — the wizard defers the whole
+   webhook setup; the success card reminds you to run the
+   `openssl rand -hex 32` + curl PATCH flow documented below when
+   you're ready. The right choice for advanced or scripted
+   deployments where the secret comes from a secret-manager pipeline
+   rather than a human paste.
+
+If you used the wizard's **Generate** path, this section is
+informational only — you don't need to re-do the steps below.
+If you used **Use global** or **Skip**, follow the manual flow
+below to set the env var or PATCH the per-connection secret on
+your own.
+
+### Manual flow — alternative for advanced or scripted deployments
+
 Pick a strong 32-byte random secret. The shape we recommend:
 
 ```sh
@@ -168,6 +206,16 @@ compromised key is the same as a leaked secret. Treat it like
 a database password.
 
 ## Step 2 — Configure Squadron
+
+> **If you used the Connect IaC repo wizard's Generate path
+> (v0.89.32+),** this step happens automatically when you click
+> Finish — the wizard PATCHes the secret onto the connection sealed
+> at rest, and the inbound webhook handler picks the per-connection
+> secret over the env-var global. The manual steps below are for
+> the env-var-global path (when you picked "Use global" in the
+> wizard, or when you're configuring Squadron pre-v0.89.32), and
+> for re-setting an existing connection's secret via the API
+> without re-running the wizard.
 
 Set the secret on the Squadron process via the
 `SQUADRON_GITHUB_WEBHOOK_SECRET` env var:
@@ -369,11 +417,18 @@ in rough priority order:
   managed repo is owned by a different team get to scope secret
   rotation per-repo. The handler picks the secret based on the
   inbound `repo_full_name` rather than a single global env var.
-- **Wizard UI for entering the secret.** A step on the existing
-  Connect IaC repo wizard that generates the secret, shows it
-  with a Copy button, and walks the operator through pasting it
-  into the GitHub repo settings UI. Closes the "operators have
-  to read a runbook" gap.
+- **Wizard UI for entering the secret. SHIPPED in v0.89.32.** The
+  Connect IaC repo wizard now has two new steps: "Set up the
+  webhook secret" (where the operator picks generate / use-global /
+  skip and the wizard mints the secret client-side on the generate
+  path) and "Configure the webhook on GitHub" (a read-only
+  walkthrough of the GitHub Settings → Webhooks form values). On
+  Finish the wizard runs a two-stage submit: createConnection,
+  then updateConnection with `webhook_secret` on the generate
+  path. The recommended-path operator now goes from zero to a
+  fully wired listener without leaving the wizard. See the
+  "Recommended: use the Connect IaC repo wizard" subsection at
+  the top of Step 1 for the full operator flow.
 - **Replay protection via `X-GitHub-Delivery` dedupe.** A small
   table tracking the last N delivery UUIDs per connection.
   Inbound deliveries with a UUID already recorded return 200
