@@ -136,6 +136,21 @@ type DiscoveryExclusionStore interface {
 		rec types.ExcludedRecommendation,
 		excluded bool,
 	) (prevExcluded bool, err error)
+
+	// ListExcludedRecommendations — v0.89.40 (#660 Stream 58, #531
+	// slice 2 chunk 5 follow-on). Read surface the new
+	// HandleAWSRecommendationListExcluded route consults to hydrate the
+	// UI's excludedSet on tab mount. Matches the storage method's
+	// signature one-for-one (the application store satisfies this
+	// interface directly; tests substitute a fake).
+	//
+	// Empty (connectionID, accountID, region) tuples return no rows;
+	// limit<=0 falls through to a small default in the implementation.
+	ListExcludedRecommendations(
+		ctx context.Context,
+		connectionID, accountID, region string,
+		limit int,
+	) ([]types.ExcludedRecommendation, error)
 }
 
 // DiscoveryAcceptedRecommendationsAssembler is the slim contract
@@ -2506,4 +2521,144 @@ func (h *DiscoveryHandlers) HandleAWSRecommendationExclude(c *gin.Context) {
 		resp.ExcludedBy = actor
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// --- HandleAWSRecommendationListExcluded (v0.89.40 #660 Stream 58) ---
+//
+// v0.89.40 (#660 Stream 58, #531 slice 2 chunk 5 follow-on) — read
+// surface for the operator-set exclusion table. The discovery
+// Recommendations tab GETs this on mount to hydrate its excludedSet
+// from the persisted iac_recommendation_verdicts table so the
+// Excluded badges survive a page refresh. Chunk 5 shipped the POST
+// half of this loop and an explicit TODO acknowledging the UI lost
+// state on refresh; this closes that gap without changing chunk 4's
+// schema or chunk 5's toggle behavior.
+
+// awsRecommendationListExcludedRow is the per-row JSON shape the
+// list endpoint emits. Mirrors types.ExcludedRecommendation but only
+// surfaces fields the UI needs to identify a recommendation by ID +
+// kind + resource (the audit timeline is the authoritative log for
+// who-set-when across all rows). ExcludedAt is ISO-8601 string on
+// the wire so the UI can format it consistently with the other
+// timestamps it renders.
+type awsRecommendationListExcludedRow struct {
+	RecommendationID   string    `json:"recommendation_id"`
+	RecommendationKind string    `json:"recommendation_kind"`
+	ResourceID         string    `json:"resource_id,omitempty"`
+	ExcludedAt         time.Time `json:"excluded_at"`
+	ExcludedBy         string    `json:"excluded_by"`
+}
+
+// awsRecommendationListExcludedResponse wraps the rows under a
+// single `excluded` key. Always emits an array (never null) so the
+// UI's empty-state branch is a single `.length === 0` check —
+// matching the existing list-endpoint posture across discovery.
+type awsRecommendationListExcludedResponse struct {
+	Excluded []awsRecommendationListExcludedRow `json:"excluded"`
+}
+
+// defaultListExcludedLimit caps the result set when the operator
+// doesn't pass an explicit limit. 100 mirrors the storage method's
+// default and the discovery bridge's typical sweep size — large
+// enough to hydrate a normal Recommendations tab in a single
+// round trip, small enough that a runaway scope query can't return
+// the entire substrate table.
+const defaultListExcludedLimit = 100
+
+// maxListExcludedLimit is the hard ceiling regardless of operator
+// request. Matches the storage method's clamp so the handler's
+// behavior is identical to what the bridge sees.
+const maxListExcludedLimit = 1000
+
+// HandleAWSRecommendationListExcluded — GET
+// /api/v1/discovery/aws/recommendations/excluded.
+//
+// Flow:
+//  1. Parse query params: connection_id, account_id, region (all
+//     required → 400 on missing); optional limit (default 100).
+//  2. Call store.ListExcludedRecommendations(ctx, ...). 500 on
+//     storage error.
+//  3. Walk the rows into the wire shape and return 200 with an array
+//     (possibly empty) under the `excluded` key.
+//
+// No audit emission — this is a read endpoint. agents:read scope on
+// the route (set at registration in server.go).
+//
+// The handler returns 503 when no exclusion store is wired (matches
+// the POST sibling's posture so AI-disabled / no-substrate
+// deployments degrade consistently).
+func (h *DiscoveryHandlers) HandleAWSRecommendationListExcluded(c *gin.Context) {
+	if h.exclusionStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ExclusionStoreNotWired",
+			Message: "Squadron's exclusion store is not configured. The application backend must be wired before this affordance is available.",
+		}})
+		return
+	}
+	connectionID := strings.TrimSpace(c.Query("connection_id"))
+	accountID := strings.TrimSpace(c.Query("account_id"))
+	region := strings.TrimSpace(c.Query("region"))
+	if connectionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "connection_id query parameter is required.",
+		}})
+		return
+	}
+	if accountID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingAccountID",
+			Message: "account_id query parameter is required.",
+		}})
+		return
+	}
+	if region == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingRegion",
+			Message: "region query parameter is required.",
+		}})
+		return
+	}
+
+	limit := defaultListExcludedLimit
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if limit > maxListExcludedLimit {
+		limit = maxListExcludedLimit
+	}
+
+	rows, err := h.exclusionStore.ListExcludedRecommendations(
+		c.Request.Context(), connectionID, accountID, region, limit,
+	)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws recommendation list excluded: store read failed",
+				zap.Error(err),
+				zap.String("connection_id", connectionID),
+				zap.String("account_id", accountID),
+				zap.String("region", region))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ExclusionStoreReadFailed",
+			Message: "Squadron could not read the exclusion list. The error has been logged; retry in a moment.",
+		}})
+		return
+	}
+
+	// Always emit an array — never null — so the UI's empty-state
+	// branch is a single .length check.
+	out := make([]awsRecommendationListExcludedRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, awsRecommendationListExcludedRow{
+			RecommendationID:   r.RecommendationID,
+			RecommendationKind: r.RecommendationKind,
+			ResourceID:         r.ResourceID,
+			ExcludedAt:         r.ExcludedAt,
+			ExcludedBy:         r.ExcludedBy,
+		})
+	}
+	c.JSON(http.StatusOK, awsRecommendationListExcludedResponse{Excluded: out})
 }

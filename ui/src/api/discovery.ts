@@ -449,6 +449,73 @@ export function setRecommendationExclusion(
   );
 }
 
+// --- Recommendation-exclusion list endpoint (v0.89.40 #660 Stream 58)
+//
+// v0.89.40 (#660 Stream 58, #531 slice 2 chunk 5 follow-on) — read
+// surface for the operator-set exclusion table. The Go handler
+// HandleAWSRecommendationListExcluded (internal/api/handlers/
+// discovery.go) returns every persisted iac_recommendation_verdicts
+// row whose exclude_from_learning bit is set, scoped to the supplied
+// (connection_id × account_id × region) tuple. The Recommendations
+// tab calls this helper on mount and seeds its `excludedSet` from
+// the returned recommendation_id values, so the Excluded badges
+// survive a page refresh — closing the chunk 5 TODO.
+//
+// Errors propagate as Error objects (the base fetch wrapper builds
+// HumanizedError-aware messages). The caller in DiscoveryAWS.tsx
+// degrades gracefully on failure: console.error + leave the set
+// empty, so the page still renders the toggle.
+
+export interface ListExcludedRecommendationsRequest {
+  connection_id: string;
+  account_id: string;
+  region: string;
+  // Optional. When omitted the server uses its default (100) and
+  // clamps at the storage method's hard ceiling (1000). The UI
+  // doesn't paginate today — chunk 5 ships a small per-tab list, so
+  // the default is comfortably above any realistic Recommendations
+  // tab size.
+  limit?: number;
+}
+
+export interface ExcludedRecommendation {
+  recommendation_id: string;
+  recommendation_kind: string;
+  // Optional. Empty / undefined means the exclusion is kind-level
+  // (scoped to all resources of recommendation_kind in this scope);
+  // non-empty scopes to a specific resource ID. Mirrors the
+  // server-side projection over iac_recommendation_verdicts.
+  resource_id?: string;
+  // ISO timestamp stamped when the row's exclude_from_learning bit
+  // was last flipped from false → true. Cleared rows are filtered
+  // server-side, so non-empty here means the exclusion is currently
+  // active.
+  excluded_at: string;
+  excluded_by: string;
+}
+
+interface listExcludedRecommendationsResponse {
+  excluded: ExcludedRecommendation[];
+}
+
+export async function listExcludedRecommendations(
+  req: ListExcludedRecommendationsRequest,
+): Promise<ExcludedRecommendation[]> {
+  const params: Record<string, string> = {
+    connection_id: req.connection_id,
+    account_id: req.account_id,
+    region: req.region,
+  };
+  if (req.limit && req.limit > 0) {
+    params.limit = String(req.limit);
+  }
+  const resp = await apiGet<listExcludedRecommendationsResponse>(
+    "/discovery/aws/recommendations/excluded",
+    params,
+  );
+  return resp.excluded ?? [];
+}
+
 // --- Wizard shape (mirrors Go internal/discovery/wizard) ------------
 
 // ActionKind enumerates the slice-1 step renderers the React shell

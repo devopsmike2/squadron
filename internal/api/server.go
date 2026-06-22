@@ -1495,6 +1495,22 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRecommendationExclude(c) }))
 
+		// v0.89.40 (#660 Stream 58, #531 slice 2 chunk 5 follow-on) —
+		// read-side of the operator-set exclusion table. The
+		// Recommendations tab GETs this on mount to hydrate its
+		// excludedSet from the persisted iac_recommendation_verdicts
+		// rows, so the Excluded badges survive a page refresh. Chunk 5
+		// shipped the POST half with a TODO acknowledging the
+		// refresh-loses-state gap; this closes that gap without
+		// changing chunk 4's schema or chunk 5's toggle behavior.
+		//
+		// agents:read because this is a pure read endpoint — no
+		// substrate mutation, no audit emission. The same auth posture
+		// as the other list/scan endpoints on this surface.
+		v1.GET("/discovery/aws/recommendations/excluded",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRecommendationListExcluded(c) }))
+
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
 		// that reads the repo + each placement-map file; it emits
