@@ -259,7 +259,52 @@ func buildProposeUserMessage(in CostSpikeContext) string {
 		b.WriteString("\n")
 	}
 
+	// v0.89.17 (#633) — prior verdicts few-shot block. Empty
+	// PriorVerdicts (cold start, opt-out, or recency-window empty)
+	// renders NOTHING here so the message is byte-for-byte identical
+	// to v0.79 — the cold-start parity test exists precisely to pin
+	// this. Verbatim shape per docs/proposals/531-proposer-learns-
+	// from-accepted-rejected.md §6.
+	if len(in.PriorVerdicts) > 0 {
+		b.WriteString("Prior verdicts for this group (operator decisions on past AI proposals):\n\n")
+		for _, v := range in.PriorVerdicts {
+			fmt.Fprintf(&b, "[%s] rollout_id=%s\n", v.State, v.RolloutID)
+			if v.Reasoning != "" {
+				fmt.Fprintf(&b, "  reasoning: %s\n", v.Reasoning)
+			}
+			if v.Notes != "" {
+				// The §6 template uses approver_notes for approved
+				// examples and rejecter_notes for rejected ones —
+				// the label tracks the bracket state so a reader
+				// can tell whose comment they're reading at a glance.
+				label := "approver_notes"
+				if v.State == VerdictStateRejected {
+					label = "rejecter_notes"
+				}
+				fmt.Fprintf(&b, "  %s: %q\n", label, v.Notes)
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("Use these as preference signal. Match the shape of approved ")
+		b.WriteString("proposals; avoid the shape of rejected ones. Do NOT cite these ")
+		b.WriteString("rollout_ids in your evidence — they're operator history, not ")
+		b.WriteString("evidence for this spike.\n\n")
+	}
+
 	b.WriteString("Return your proposal as the JSON object described in the system prompt. ")
 	b.WriteString("group_id MUST equal the value above. Set require_approval to true.\n")
 	return b.String()
+}
+
+// RenderProposeUserMessageForTest is a test-only re-export of
+// buildProposeUserMessage. Tests in the proposer bridge package
+// (internal/proposer) need to assert the rendered prompt shape,
+// but buildProposeUserMessage is unexported. Exporting a test-only
+// alias keeps the production surface tight while letting cross-
+// package tests verify the §6 prompt block is materialized
+// correctly. v0.89.17 (#633). Do NOT call this from production
+// code paths; ProposeFromCostSpike is the only caller that should
+// reach the prompt builder.
+func RenderProposeUserMessageForTest(in CostSpikeContext) string {
+	return buildProposeUserMessage(in)
 }

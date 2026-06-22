@@ -27,6 +27,7 @@ package proposer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -56,6 +57,11 @@ type Store interface {
 	GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, error)
 	GetLatestConfigForGroup(ctx context.Context, groupID string) (*types.Config, error)
 	GetGroup(ctx context.Context, id string) (*types.Group, error)
+	// v0.89.17 (#633) — prior-verdicts few-shot loop. The bridge
+	// sweeps this on every cost-spike proposal to assemble §5's
+	// selection (≤2 approved + ≤2 rejected within 30 days, newest
+	// first). Cold-start (zero rows) is the empty-block path.
+	ListAIVerdictsForGroup(ctx context.Context, groupID string, since time.Time, limit int) ([]*types.Rollout, error)
 }
 
 // Rollouts is the subset of services.RolloutService the bridge
@@ -223,6 +229,26 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		return
 	}
 
+	// v0.89.17 (#633) — prior-verdicts few-shot loop. Pull the
+	// recent operator decisions on AI-originated rollouts for this
+	// group and stitch them into the proposer context. The IDs flow
+	// into the audit payload below; the formatted examples flow
+	// into the prompt block via cs.PriorVerdicts. Empty on cold
+	// start, opt-out, or recency-window empty — those cases all
+	// short-circuit inside assembleVerdicts.
+	verdicts, verdictIDs, vErr := b.assembleVerdicts(ctx, cs.GroupID)
+	if vErr != nil {
+		// Non-fatal: a verdicts query failure shouldn't sink the
+		// whole spike. Log and proceed with empty examples — the
+		// proposer still works, it just loses the learning signal
+		// for this one tick.
+		b.logger.Warn("AI proposer bridge: assembleVerdicts failed; proceeding without examples",
+			zap.String("group_id", cs.GroupID), zap.Error(vErr))
+		verdicts = nil
+		verdictIDs = nil
+	}
+	cs.PriorVerdicts = verdicts
+
 	result, err := b.proposer.ProposeFromCostSpike(ctx, cs)
 	if err != nil {
 		b.logger.Warn("AI proposer bridge: proposer failed; skipping spike",
@@ -243,9 +269,9 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 	// snippets per step.
 	switch result.Kind {
 	case ai.ProposalKindPlan:
-		b.handlePlanSpike(ctx, spike, result, cs)
+		b.handlePlanSpike(ctx, spike, result, cs, verdictIDs)
 	case ai.ProposalKindRollout, "":
-		b.handleRolloutSpike(ctx, spike, result, cs)
+		b.handleRolloutSpike(ctx, spike, result, cs, verdictIDs)
 	default:
 		b.logger.Warn("AI proposer bridge: unknown proposal kind; skipping spike",
 			zap.String("spike_id", spike.ID),
@@ -256,8 +282,10 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 
 // handleRolloutSpike is the v0.58 path — single rollout create.
 // Extracted from handleSpike during the v0.79 refactor so the
-// dispatch branch reads cleanly.
-func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext) {
+// dispatch branch reads cleanly. verdictIDs flows from
+// assembleVerdicts up at handleSpike and is stamped onto the
+// proposal.created audit payload (v0.89.17 #633).
+func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string) {
 	input := candidateToInput(result, cs.GroupID)
 	rollout, err := b.rollouts.Create(ctx, input)
 	if err != nil {
@@ -271,7 +299,7 @@ func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeE
 		zap.String("group_id", cs.GroupID),
 		zap.Int("tokens_in", result.TokensIn),
 		zap.Int("tokens_out", result.TokensOut))
-	b.emitCreated(ctx, spike, rollout, result, cs)
+	b.emitCreated(ctx, spike, rollout, result, cs, verdictIDs)
 	b.emitEvidenceLinked(ctx, spike, rollout, result)
 }
 
@@ -286,7 +314,7 @@ func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeE
 //     audit event records the decline reason via emitDeclined.
 //   - On success, audit events fire against the first step's
 //     rollout id so the timeline anchors the plan to a concrete row.
-func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext) {
+func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string) {
 	steps := candidateToPlanInputs(result, cs.GroupID)
 	createdSteps, planID, err := b.rollouts.CreatePlan(ctx, steps)
 	if err != nil {
@@ -310,7 +338,7 @@ func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEven
 	// step's rollout. proposal.created + evidence.linked events
 	// anchor on step 0; the plan.created event already fires from
 	// services.CreatePlan itself with the plan_id payload.
-	b.emitCreated(ctx, spike, createdSteps[0], result, cs)
+	b.emitCreated(ctx, spike, createdSteps[0], result, cs, verdictIDs)
 	b.emitEvidenceLinked(ctx, spike, createdSteps[0], result)
 }
 
@@ -319,9 +347,18 @@ func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEven
 // operator reviewing the spike sees the AI's reasoning, the model,
 // and the resulting rollout in one place. Compliance evidence
 // trail for NIST AI RMF MAP 4.1 and SOC 2 CC8.1.
-func (b *Bridge) emitCreated(ctx context.Context, spike *types.CostSpikeEvent, rollout *services.Rollout, result *ai.ProposalResult, cs ai.CostSpikeContext) {
+func (b *Bridge) emitCreated(ctx context.Context, spike *types.CostSpikeEvent, rollout *services.Rollout, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string) {
 	if b.audit == nil {
 		return
+	}
+	// v0.89.17 (#633) — verdict_examples_used carries the list of
+	// rollout IDs from prior operator verdicts that informed this
+	// proposal. ALWAYS present (never omitted) — empty array on
+	// cold start so SIEM consumers can filter on the empty slice
+	// to find cold-start cases. Spec §8.
+	examplesUsed := verdictIDs
+	if examplesUsed == nil {
+		examplesUsed = []string{}
 	}
 	if err := b.audit.Record(ctx, services.AuditEntry{
 		Actor:      "ai-proposer",
@@ -330,16 +367,17 @@ func (b *Bridge) emitCreated(ctx context.Context, spike *types.CostSpikeEvent, r
 		TargetID:   spike.ID,
 		Action:     "created",
 		Payload: map[string]any{
-			"origin":             "ai",
-			"rollout_id":         rollout.ID,
-			"group_id":           cs.GroupID,
-			"target_config_id":   rollout.TargetConfigID,
-			"reasoning_summary":  summarize(result.Reasoning, 240),
-			"evidence_count":     len(result.Evidence),
-			"model":              result.Model,
-			"tokens_in":          result.TokensIn,
-			"tokens_out":         result.TokensOut,
-			"require_approval":   true,
+			"origin":                "ai",
+			"rollout_id":            rollout.ID,
+			"group_id":              cs.GroupID,
+			"target_config_id":      rollout.TargetConfigID,
+			"reasoning_summary":     summarize(result.Reasoning, 240),
+			"evidence_count":        len(result.Evidence),
+			"model":                 result.Model,
+			"tokens_in":             result.TokensIn,
+			"tokens_out":            result.TokensOut,
+			"require_approval":      true,
+			"verdict_examples_used": examplesUsed,
 		},
 	}); err != nil {
 		b.logger.Warn("AI proposer bridge: proposal.created audit emit failed",
@@ -736,3 +774,143 @@ func copyMap(in map[string]string) map[string]string {
 // matters. We pin Group because we use it through the Store
 // interface.
 var _ = applicationstore.Group{}
+
+// verdictsWindow is the fixed look-back the proposer applies when
+// pulling prior operator verdicts. Per the design's resolved Q5,
+// 30 days is hard-coded in slice 1 — config-driven windows land in
+// a follow-on slice. v0.89.17 (#633).
+const verdictsWindow = 30 * 24 * time.Hour
+
+// verdictsMaxExamples is the §5 selection cap: at most 4 examples
+// total. v0.89.17 (#633) ships at N=4 per the design's resolved Q1.
+const verdictsMaxExamples = 4
+
+// verdictsMaxPerBucket bounds each verdict-state bucket independently
+// — at most 2 approved and at most 2 rejected. With the 4-total cap
+// this gives the model a balanced shape signal. v0.89.17 (#633).
+const verdictsMaxPerBucket = 2
+
+// assembleVerdicts pulls recent operator verdicts on AI-originated
+// rollouts for the supplied group and returns:
+//   - the formatted examples ready to drop into the prompt block (§6),
+//   - the list of rollout IDs actually used (for the audit field §8).
+//
+// Selection policy per §5:
+//   - same group only,
+//   - since = now - 30d (hard-coded slice 1, per resolved Q5),
+//   - ≤2 approved + ≤2 rejected, newest verdict first within each bucket,
+//   - rejections weighted higher: fill the rejection bucket first,
+//   - cold start (zero matching rows) yields empty slices — the
+//     prompt block omits entirely and the audit array is empty.
+//
+// Opt-out: when Group.LearnFromVerdicts==false the function short-
+// circuits and returns empty slices regardless of stored verdicts.
+// The prompt builder sees no examples block; the audit row carries
+// the empty array (not omitted) so SIEM consumers can still detect
+// the proposal happened.
+//
+// Redaction: each example's reasoning and notes flow through the
+// ai package's RedactSecrets helper before they land on the
+// VerdictExample. Inline config snippets are intentionally NOT
+// considered — only ProposalReasoning and ApprovalNotes ship. The
+// design (§7) deliberately excludes config bodies from the prompt
+// block; nothing in this function reads the rollout's StagesJSON
+// or TargetConfigID.
+//
+// v0.89.17 (#633).
+func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) ([]ai.VerdictExample, []string, error) {
+	if groupID == "" {
+		return nil, nil, nil
+	}
+	// Per-group opt-out check. GetGroup may return (nil, nil) when
+	// the group has been deleted but a cost-spike row still
+	// references it. Treat that the same as "no examples": there's
+	// nothing meaningful to read off a non-existent group.
+	group, err := b.store.GetGroup(ctx, groupID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get group for verdicts: %w", err)
+	}
+	if group == nil || !group.LearnFromVerdicts {
+		return nil, nil, nil
+	}
+
+	// Pull a small superset and bucket locally. The query is
+	// ordered newest-verdict-first by the SQL index (idx_ai_verdicts
+	// for SQLite; equivalent sort in the memory store). Asking for
+	// more than 2×bucket-cap gives us headroom in case the storage
+	// layer returns rows in a slightly different order (e.g. memory
+	// store ties resolved differently); we still apply the bucket
+	// caps deterministically here.
+	since := time.Now().UTC().Add(-verdictsWindow)
+	rows, err := b.store.ListAIVerdictsForGroup(ctx, groupID, since, verdictsMaxExamples*2)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list ai verdicts: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil, nil
+	}
+
+	// Bucket into rejected / approved, preserving the newest-first
+	// order the storage layer returned. The selection policy says
+	// "rejections weighted higher — fill rejection bucket first":
+	// concretely, we emit rejections before approvals in the output
+	// slice so the model reads them first, AND we bias the cap
+	// toward rejections by filling that bucket up to the per-bucket
+	// limit before adding any approveds.
+	var rejected, approved []ai.VerdictExample
+	for _, r := range rows {
+		state := ""
+		switch {
+		case r.RejectedAt != nil:
+			state = ai.VerdictStateRejected
+		case r.ApprovedAt != nil:
+			state = ai.VerdictStateApproved
+		default:
+			// shouldn't happen — the SQL predicate requires one of
+			// approved_at or rejected_at to be non-NULL — but defend
+			// against a future ListAIVerdictsForGroup that loosens
+			// the predicate.
+			continue
+		}
+		ex := ai.VerdictExample{
+			State:     state,
+			RolloutID: r.ID,
+			Reasoning: ai.RedactSecrets(summarize(r.ProposalReasoning, 240)),
+			Notes:     ai.RedactSecrets(r.ApprovalNotes),
+		}
+		switch state {
+		case ai.VerdictStateRejected:
+			if len(rejected) < verdictsMaxPerBucket {
+				rejected = append(rejected, ex)
+			}
+		case ai.VerdictStateApproved:
+			if len(approved) < verdictsMaxPerBucket {
+				approved = append(approved, ex)
+			}
+		}
+		if len(rejected)+len(approved) >= verdictsMaxExamples {
+			// We have a full payload. Continue scanning would only
+			// waste cycles; the per-bucket caps make any further
+			// rows redundant.
+			if len(rejected) >= verdictsMaxPerBucket && len(approved) >= verdictsMaxPerBucket {
+				break
+			}
+		}
+	}
+
+	// Output order: rejections first (denser "don't do this again"
+	// signal per §5), then approvals. Within each bucket the order
+	// is newest-first as inherited from the storage layer + the
+	// preserved iteration order above.
+	out := make([]ai.VerdictExample, 0, len(rejected)+len(approved))
+	out = append(out, rejected...)
+	out = append(out, approved...)
+	ids := make([]string, 0, len(out))
+	for _, ex := range out {
+		ids = append(ids, ex.RolloutID)
+	}
+	if len(out) == 0 {
+		return nil, nil, nil
+	}
+	return out, ids, nil
+}

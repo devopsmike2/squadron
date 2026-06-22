@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -158,9 +158,37 @@ CREATE INDEX IF NOT EXISTS idx_rec_dismissals_dismissed_at ON recommendation_dis
 INSERT OR IGNORE INTO schema_version (version) VALUES (3);
 `
 
+// AIVerdictsSchema bumps the database to schema v4. Adds:
+//
+//   - groups.learn_from_verdicts (INTEGER NOT NULL DEFAULT 1): per-
+//     group opt-out for the proposer's prior-verdicts few-shot
+//     loop. Default 1 (opt-in) so post-upgrade behavior matches the
+//     v0.89.17 design.
+//   - idx_ai_verdicts: a partial index on rollouts(group_id,
+//     proposed_by, COALESCE(approved_at, rejected_at) DESC) over
+//     just AI-originated rollouts that have a terminal verdict. The
+//     proposer bridge sweeps this on every cost-spike proposal;
+//     the partial predicate keeps the index lean on storage
+//     (operator-originated rollouts and pending AI proposals never
+//     contribute index rows).
+//
+// See docs/proposals/531-proposer-learns-from-accepted-rejected.md §4.
+const AIVerdictsSchema = `
+ALTER TABLE groups ADD COLUMN learn_from_verdicts INTEGER NOT NULL DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS idx_ai_verdicts ON rollouts(
+	group_id,
+	proposed_by,
+	COALESCE(approved_at, rejected_at) DESC
+) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL);
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (4);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
 	AlertRulesSchema,
 	RecommendationDismissalsSchema,
+	AIVerdictsSchema,
 }
