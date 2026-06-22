@@ -151,6 +151,22 @@ type DiscoveryAcceptedRecommendationsAssembler interface {
 		ctx context.Context,
 		accountID, region string,
 	) (verdictBlock string, urls []string, err error)
+
+	// AssembleVerdictBlockWithByState is the v0.89.37 (#657 Stream 55,
+	// #531 slice 2 chunk 6) extension. Same return as
+	// AssembleVerdictBlock for verdictBlock + urls, plus a per-state
+	// bucket map that powers the audit payload's new
+	// verdict_examples_used_by_state field. The map keys are the
+	// discovery-surface state strings ("merged", "closed_not_merged",
+	// "operator_excluded"); the union of bucket values equals urls
+	// (modulo selection ordering). On cold start every bucket is
+	// empty (nil map). Implementations may add new state keys without
+	// a contract break; humanizer + SIEM consumers tolerate unknown
+	// keys per spec §8 (c).
+	AssembleVerdictBlockWithByState(
+		ctx context.Context,
+		accountID, region string,
+	) (verdictBlock string, urls []string, urlsByState map[string][]string, err error)
 }
 
 // AWSCredMarshaller turns the wizard-supplied AWSCredentials into the
@@ -1906,6 +1922,7 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 	// (chunk 4 will fan them out into per-state buckets via
 	// verdict_examples_used_by_state).
 	var acceptedURLs []string
+	var acceptedURLsByState map[string][]string
 	if h.acceptedAssembler != nil {
 		// Single-region scope tuple. Slice 1 ships single-region
 		// scans (req.ScanResult.Regions[0]); multi-region scans are a
@@ -1914,7 +1931,13 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		if len(req.ScanResult.Regions) > 0 {
 			region = req.ScanResult.Regions[0]
 		}
-		block, urls, aErr := h.acceptedAssembler.AssembleVerdictBlock(
+		// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6) — call the
+		// by-state extension so the discovery_proposal.created audit
+		// row can carry verdict_examples_used_by_state alongside the
+		// flat verdict_examples_used array. On cold start
+		// urlsByState is empty (nil) and the audit emit omits the
+		// new field to preserve v0.89.28 byte shape.
+		block, urls, byState, aErr := h.acceptedAssembler.AssembleVerdictBlockWithByState(
 			c.Request.Context(), req.ScanResult.AccountID, region,
 		)
 		if aErr != nil {
@@ -1925,6 +1948,7 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		} else {
 			aiCtx.VerdictBlock = block
 			acceptedURLs = urls
+			acceptedURLsByState = byState
 		}
 	}
 
@@ -2086,20 +2110,31 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		if len(req.ScanResult.Regions) > 0 {
 			region = req.ScanResult.Regions[0]
 		}
+		discoveryPayload := map[string]any{
+			"scan_id":               req.ScanResult.ScanID,
+			"connection_id":         "", // slice 1: handler doesn't see IaC connection_id
+			"account_id":            accountID,
+			"region":                region,
+			"recommendation_count":  len(recs),
+			"verdict_examples_used": examplesUsed,
+		}
+		// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6) — extended
+		// payload with verdict_examples_used_by_state. Emitted only
+		// when at least one bucket is non-empty so cold-start /
+		// opt-out / recency-empty audit rows stay byte-for-byte
+		// identical to the v0.89.28 shape (the existing flat
+		// verdict_examples_used: [] field remains the cold-start
+		// signal SIEM consumers already filter on). Spec §8 (c).
+		if hasAnyDiscoveryByState(acceptedURLsByState) {
+			discoveryPayload["verdict_examples_used_by_state"] = acceptedURLsByState
+		}
 		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
 			Actor:      "ai-proposer",
 			EventType:  services.AuditEventDiscoveryProposalCreated,
 			TargetType: credstore.TargetTypeCloudConnection,
 			TargetID:   accountID,
 			Action:     "discovery_proposal_created",
-			Payload: map[string]any{
-				"scan_id":               req.ScanResult.ScanID,
-				"connection_id":         "", // slice 1: handler doesn't see IaC connection_id
-				"account_id":            accountID,
-				"region":                region,
-				"recommendation_count":  len(recs),
-				"verdict_examples_used": examplesUsed,
-			},
+			Payload:    discoveryPayload,
 		})
 	}
 
@@ -2108,6 +2143,23 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		Reasoning:       result.Reasoning,
 		Recommendations: recs,
 	})
+}
+
+// hasAnyDiscoveryByState returns true when the supplied per-state
+// URL bucket map has any non-empty bucket. Used to gate emission of
+// the verdict_examples_used_by_state field on
+// discovery_proposal.created — cold-start / opt-out / recency-empty
+// rows omit the field so the v0.89.28 audit payload shape is
+// preserved byte-for-byte for SIEM consumers that already filter on
+// the flat verdict_examples_used: [] cold-start signal. v0.89.37
+// (#657 Stream 55, #531 slice 2 chunk 6).
+func hasAnyDiscoveryByState(m map[string][]string) bool {
+	for _, urls := range m {
+		if len(urls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyResourceKind maps a discovery plan step to one of the
