@@ -29,6 +29,11 @@ type AuditEventFilter = types.AuditEventFilter
 // pr_closed_not_merged audit-event rows through the shared
 // verdictsel/verdictprompt pipeline.
 type DiscoveryVerdict = types.DiscoveryVerdict
+
+// ExcludedRecommendation — v0.89.37 (#656 Stream 54, #531 slice 2
+// chunk 4). Projection over the new iac_recommendation_verdicts
+// table for the discovery proposer's operator-set exclusion signal.
+type ExcludedRecommendation = types.ExcludedRecommendation
 type Rollout = types.Rollout
 type RolloutStage = types.RolloutStage
 type RolloutStageMode = types.RolloutStageMode
