@@ -1,9 +1,13 @@
 # #531 — Proposer learns from accepted/rejected proposals
 
-**Status:** proposal, slice-1 scoping. v0.80+ candidate.
+**Status:** slice 1 SHIPPED in v0.89.17 + v0.89.18. Operators read
+[proposer-learning-loop.md](../proposer-learning-loop.md) for the
+runbook. This page remains the locked design that the
+implementation promoted; slice 2+ candidates are open at the end.
 **See also:** [ai-features.md](../ai-features.md),
 [multi-step-plans-design.md](../multi-step-plans-design.md),
-[audit-log.md](../audit-log.md).
+[audit-log.md](../audit-log.md),
+[proposer-learning-loop.md](../proposer-learning-loop.md).
 
 ## 1. Problem
 

@@ -23,6 +23,12 @@ jump straight to that page.
   v0.89.14 operator runbook for embedding signed runner verbs (restart
   a service, rotate a secret, drain a pool member) as steps inside a
   multi-step plan, with shared approval and audit.
+- [Proposer learning loop](./proposer-learning-loop.md) — v0.89.17 +
+  v0.89.18 operator runbook for the per-group feedback loop that
+  feeds prior approved/rejected AI proposals back into the next
+  proposal as in-context few-shot examples. Covers the per-group
+  toggle, the selection policy, the audit field, and the worked
+  example.
 - [Alerts](./alerts.md) — rule-based alerts on telemetry, fleet state, and
   rollout health.
 - [Audit log](./audit-log.md) — every state change in Squadron is recorded.

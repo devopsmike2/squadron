@@ -204,6 +204,29 @@ wait for completion before advancing, and handle action failures.
 See [docs/multi-step-plans-design.md](./multi-step-plans-design.md)
 for the v0.80+ roadmap.
 
+### Proposer learning loop (v0.89.17 + v0.89.18)
+
+The cost-spike proposer now reads prior accepted/rejected AI
+rollouts for the same group as in-context few-shot examples on
+the next call. No fine-tuning, no embedding store — just a
+prompt-only feedback loop. Up to 4 examples (≤2 approved + ≤2
+rejected, newest-first within each bucket) from the past 30 days,
+redacted through the existing secrets pipeline. Per-group toggle
+via `Group.LearnFromVerdicts` (UI chip + API path + create-form
+toggle). When verdicts are present, the user message grows a
+"Prior verdicts" block; when absent (cold start, opt-out, or
+recency-window empty), the prompt is byte-for-byte identical to
+v0.79's. The `proposal.created` audit event grows a
+`verdict_examples_used` array of the rollout IDs actually cited
+so SIEM consumers can correlate.
+
+The operator runbook is
+[proposer-learning-loop.md](./proposer-learning-loop.md). The
+locked design is
+[#531](./proposals/531-proposer-learns-from-accepted-rejected.md).
+Slice 1 is cost-spike proposer only; discovery proposer
+integration is a follow-on slice.
+
 ### Incident drafter (v0.54 Move 3)
 
 `DraftIncidentFromAction` reads a completed action request plus the
