@@ -781,12 +781,119 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubUpdatePlacementMap(c *gin.Context) {
 	})
 }
 
+// iacGitHubUpdateConnectionRequest is the v0.89.28 (#643 slice 1)
+// PATCH /api/v1/iac/github/connections/:id payload. Slice 1 carries
+// exactly one mutable field: LearnFromAcceptedRecommendations, the
+// per-connection opt-in for the discovery proposer's accepted-
+// examples feedback loop. The shape mirrors v0.89.18's
+// LearnFromVerdicts pointer-bool pattern so partial-update semantics
+// match across both proposer surfaces:
+//
+//   - nil → leave the column untouched (no-op the PATCH).
+//   - explicit false → opt out (the proposer prompt block goes
+//     silent for this connection).
+//   - explicit true → opt back in (default for new connections).
+type iacGitHubUpdateConnectionRequest struct {
+	LearnFromAcceptedRecommendations *bool `json:"learn_from_accepted_recommendations,omitempty"`
+}
+
+// HandleIaCGitHubUpdateConnection — PATCH
+// /api/v1/iac/github/connections/:id. v0.89.28 (#643 slice 1).
+//
+// Mutates non-credential, non-placement-map fields on the connection.
+// Slice 1 limits the surface to LearnFromAcceptedRecommendations;
+// future slices append fields here without breaking the contract.
+// Returns 404 when no such connection exists. Does NOT emit an audit
+// event in slice 1 — the flag flip is operator-visible UI state, not
+// a state change that an SOC consumer needs to correlate against
+// (per spec §8 the audit events list does not include the toggle).
+func (h *IaCGitHubHandlers) HandleIaCGitHubUpdateConnection(c *gin.Context) {
+	connectionID := strings.TrimSpace(c.Param("id"))
+	if connectionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
+		}})
+		return
+	}
+
+	var req iacGitHubUpdateConnectionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message: "Request body could not be parsed as JSON.",
+		}})
+		return
+	}
+
+	if h.store == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "IaCStoreNotWired",
+			Message: "Squadron's IaC connection substrate isn't configured.",
+		}})
+		return
+	}
+
+	// Pre-check 404 cleanly when the row doesn't exist.
+	if _, err := h.store.Get(c.Request.Context(), connectionID); err != nil {
+		if errors.Is(err, iacconnstore.ErrConnectionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code:    "ConnectionNotFound",
+				Message: "No IaC connection exists with that ID.",
+			}})
+			return
+		}
+		if h.logger != nil {
+			h.logger.Error("iac github update connection: store get failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "IaCStoreReadFailed",
+			Message: "Squadron could not read the IaC connection. The error has been logged.",
+		}})
+		return
+	}
+
+	// Partial-update semantics: nil pointer → leave the column
+	// untouched. An explicit value (true or false) flips it.
+	if req.LearnFromAcceptedRecommendations != nil {
+		if err := h.store.UpdateLearnFromAcceptedRecommendations(
+			c.Request.Context(), connectionID, *req.LearnFromAcceptedRecommendations,
+		); err != nil {
+			if errors.Is(err, iacconnstore.ErrConnectionNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+					Code:    "ConnectionNotFound",
+					Message: "The IaC connection was deleted while the update was in flight.",
+				}})
+				return
+			}
+			if h.logger != nil {
+				h.logger.Error("iac github update connection: write failed", zap.Error(err))
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+				Code:    "IaCStoreWriteFailed",
+				Message: "Squadron could not persist the connection update.",
+			}})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"connection_id": connectionID,
+		"status":        "updated",
+	})
+}
+
 // iacGitHubOpenPRRequest is the Recommendations-tab Open-PR payload.
 // Mirrors the design doc §5: scan_id + step_idx pin down which
 // recommendation; resource_kind keys the placement-map lookup;
 // snippet is the proposer-emitted Terraform; proposer_reasoning is
 // the overall narrative; affected_resources is the list rendered in
 // the PR body.
+//
+// v0.89.28 (#643 slice 1) adds Region alongside AccountID so the branch
+// name can carry both segments — the discovery proposer's accepted-
+// recommendations lookup is scoped by (connection_id, account_id,
+// region) and the only way that scope round-trips from the original
+// recommendation through the PR merge is via the branch name.
 type iacGitHubOpenPRRequest struct {
 	ScanID            string   `json:"scan_id"`
 	StepIdx           int      `json:"step_idx"`
@@ -795,6 +902,7 @@ type iacGitHubOpenPRRequest struct {
 	ProposerReasoning string   `json:"proposer_reasoning"`
 	AffectedResources []string `json:"affected_resources"`
 	AccountID         string   `json:"account_id"`
+	Region            string   `json:"region"`
 
 	// HCLPatch — v0.89.12 #628 Stream 29 (slice 2) — structured
 	// per-attribute edit description for patch_existing kinds. When
@@ -1014,12 +1122,48 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	// Branch name. Handler-layer default-branch refusal — belt-and-
 	// braces with the wrapper's own refusal so a future regression
 	// at either layer is caught.
+	//
+	// v0.89.28 (#643 slice 1) — the branch shape now encodes the
+	// recommendation_kind + account_id + region so the v0.89.23
+	// webhook receiver can fill those fields onto the
+	// recommendation.pr_merged audit payload. The discovery proposer's
+	// accepted-examples lookup uses (connection_id, account_id, region)
+	// as the scope tuple; only the branch name can round-trip the
+	// scan-time context all the way through the merge.
+	//
+	// New shape: <prefix>/<kind>/<account_id>/<region>/<short_id>
+	// Old shape: <prefix>-<scan>-<step> (slice-1 webhook tests already
+	// use the slash variant; this release finishes the transition).
+	// When account_id OR region is missing the handler falls back to
+	// the kind-only shape <prefix>/<kind>/<short_id> so a caller that
+	// hasn't yet plumbed the scan context can still open a PR.
 	scanIDShort := shortScanID(req.ScanID)
 	prefix := conn.BranchPrefix
 	if prefix == "" {
 		prefix = iacconnstore.DefaultBranchPrefix
 	}
-	branchName := fmt.Sprintf("%s-%s-%d", prefix, scanIDShort, req.StepIdx)
+	// Normalize prefix to end in "/" so the resulting branch uses
+	// path-separator semantics consistent with the webhook parser.
+	prefixSlash := prefix
+	if !strings.HasSuffix(prefixSlash, "/") {
+		prefixSlash = prefix + "/"
+	}
+	shortID := fmt.Sprintf("%s-%d", scanIDShort, req.StepIdx)
+	branchKind := strings.TrimSpace(req.ResourceKind)
+	branchAccount := strings.TrimSpace(req.AccountID)
+	branchRegion := strings.TrimSpace(req.Region)
+	var branchName string
+	switch {
+	case branchKind != "" && branchAccount != "" && branchRegion != "":
+		branchName = fmt.Sprintf("%s%s/%s/%s/%s",
+			prefixSlash, branchKind, branchAccount, branchRegion, shortID)
+	case branchKind != "":
+		branchName = fmt.Sprintf("%s%s/%s", prefixSlash, branchKind, shortID)
+	default:
+		// No resource_kind in scope (pre-classify path). Fall back to
+		// a kind-less branch so we still emit a deterministic name.
+		branchName = fmt.Sprintf("%s%s", prefixSlash, shortID)
+	}
 	if branchEqualsDefault(branchName, conn.DefaultBranch) {
 		// This should never happen — the prefix is "squadron/rec",
 		// not "main" — but the handler-layer guard catches the

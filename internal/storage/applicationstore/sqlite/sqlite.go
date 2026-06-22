@@ -580,6 +580,15 @@ func (s *Storage) migrate() error {
 			exclude_from_learning,
 			COALESCE(approved_at, rejected_at) DESC
 		) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)`,
+
+		// v0.89.28 (#643 slice 1) — discovery proposer learns from
+		// accepted recommendations. Partial index on the
+		// recommendation.pr_merged audit_events rows the
+		// ListAcceptedDiscoveryRecommendations query reads. Keeps the
+		// index lean by filtering on the event_type predicate;
+		// timestamp DESC matches the query's ORDER BY so the scan is
+		// a simple ranged read with no sort step.
+		`CREATE INDEX IF NOT EXISTS idx_audit_pr_merged_scope ON audit_events(event_type, timestamp DESC) WHERE event_type = 'recommendation.pr_merged'`,
 	}
 
 	for _, migration := range migrations {
@@ -1830,6 +1839,88 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, nil
+}
+
+// ListAcceptedDiscoveryRecommendations — v0.89.28 (#643 slice 1).
+// Sweeps audit_events for recommendation.pr_merged rows whose
+// payload's (connection_id, account_id, region) matches the supplied
+// scope tuple AND whose timestamp falls within the (since, now]
+// window. Returns the minimal AcceptedRecommendation projection per
+// row, newest-first.
+//
+// The discovery proposer's accepted-examples lookup uses json_extract
+// to filter on the payload's nested fields. SQLite's JSON1 extension
+// (compiled in by default in modern builds) makes this a single
+// indexed scan thanks to the partial index in the migration below.
+func (s *Storage) ListAcceptedDiscoveryRecommendations(
+	ctx context.Context,
+	connectionID, accountID, region string,
+	since time.Time, limit int,
+) ([]*types.AcceptedRecommendation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if connectionID == "" || accountID == "" || region == "" {
+		// Empty scope tuple — return no rows rather than match the
+		// whole table. The caller's cold-start path treats an empty
+		// slice as the byte-identity signal.
+		return nil, nil
+	}
+	const stmt = `SELECT timestamp, payload FROM audit_events
+		WHERE event_type = ?
+		  AND timestamp >= ?
+		  AND json_extract(payload, '$.connection_id') = ?
+		  AND json_extract(payload, '$.account_id') = ?
+		  AND json_extract(payload, '$.region') = ?
+		ORDER BY timestamp DESC
+		LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, stmt,
+		"recommendation.pr_merged",
+		since,
+		connectionID, accountID, region,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list accepted discovery recommendations: %w", err)
+	}
+	defer rows.Close()
+	var out []*types.AcceptedRecommendation
+	for rows.Next() {
+		var ts time.Time
+		var payloadStr sql.NullString
+		if err := rows.Scan(&ts, &payloadStr); err != nil {
+			return nil, fmt.Errorf("failed to scan accepted discovery recommendation: %w", err)
+		}
+		rec := &types.AcceptedRecommendation{PRMergedAt: ts}
+		if payloadStr.Valid && payloadStr.String != "" {
+			var p map[string]any
+			if err := json.Unmarshal([]byte(payloadStr.String), &p); err == nil {
+				if v, ok := p["pr_url"].(string); ok {
+					rec.PRURL = v
+				}
+				if v, ok := p["branch"].(string); ok {
+					rec.Branch = v
+				}
+				if v, ok := p["merged_by"].(string); ok {
+					rec.MergedBy = v
+				}
+				if v, ok := p["recommendation_kind"].(string); ok {
+					rec.RecommendationKind = v
+				}
+			}
+		}
+		// Skip rows whose branch didn't parse a kind cleanly — per
+		// §10 Q2 those don't carry meaningful accepted-recommendation
+		// signal.
+		if rec.RecommendationKind == "" {
+			continue
+		}
+		out = append(out, rec)
 	}
 	return out, nil
 }

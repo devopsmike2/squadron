@@ -67,6 +67,24 @@ type ApplicationStore interface {
 	// docs/proposals/531-proposer-learns-from-accepted-rejected.md §4.
 	ListAIVerdictsForGroup(ctx context.Context, groupID string, since time.Time, limit int) ([]*Rollout, error)
 
+	// v0.89.28 (#643 slice 1) — discovery proposer learns from accepted
+	// recommendations. ListAcceptedDiscoveryRecommendations sweeps the
+	// audit_events table for recommendation.pr_merged rows whose
+	// payload's (connection_id, account_id, region) tuple matches the
+	// supplied scope AND whose timestamp falls within the
+	// (since, now] window. Newest-first, capped at `limit`. The
+	// discovery proposer's Bridge.assembleAcceptedRecommendations
+	// calls this to stitch the §6 prompt block.
+	//
+	// Empty result on cold start (zero matching rows) is honest —
+	// the caller produces a byte-for-byte-unchanged prompt in that
+	// case. See docs/proposals/643-discovery-proposer-verdict-learning.md §4.
+	ListAcceptedDiscoveryRecommendations(
+		ctx context.Context,
+		connectionID, accountID, region string,
+		since time.Time, limit int,
+	) ([]*AcceptedRecommendation, error)
+
 	// Action runners + requests (v0.53 Move 2). An action runner is
 	// an installed squadron-action-runner daemon registered with
 	// this Squadron instance. An action request is one signed action
@@ -633,6 +651,21 @@ type AuditEventFilter struct {
 	TargetID   string
 	Since      time.Time // events with Timestamp >= Since; zero value disables the filter
 	Limit      int       // default 100 if zero; capped at 1000 by the storage layer
+}
+
+// AcceptedRecommendation — v0.89.28 (#643 slice 1) — minimal
+// projection over the recommendation.pr_merged audit_events rows
+// that ListAcceptedDiscoveryRecommendations returns. The discovery
+// proposer's bridge stitches a §6 prompt block from these fields;
+// no other audit-payload field surfaces in the prompt body so the
+// projection stays tight (PR URL + branch + merged_by +
+// recommendation_kind + the merge timestamp).
+type AcceptedRecommendation struct {
+	PRMergedAt         time.Time
+	PRURL              string
+	Branch             string
+	MergedBy           string
+	RecommendationKind string
 }
 
 // AlertSeverity is the severity level attached to a firing alert.

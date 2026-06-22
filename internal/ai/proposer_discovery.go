@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // DiscoveryScanContext is the v0.85 Stream 2F input to
@@ -120,6 +121,29 @@ type DiscoveryScanContext struct {
 	// callers leave this empty until the connect-account wizard
 	// grows a backend picker.
 	PreferredBackend string
+
+	// AcceptedRecommendations — v0.89.28 (#643 slice 1) — the
+	// shortlist of accepted prior PRs the proposer should treat as a
+	// preference signal. Empty (nil or zero-length) on cold start /
+	// opt-out / recency-window empty — the prompt block omits
+	// entirely in that case, producing a byte-for-byte unchanged
+	// user message. Populated by the wiring layer via the bridge's
+	// assembleAcceptedRecommendations method.
+	AcceptedRecommendations []AcceptedRecommendationExample
+}
+
+// AcceptedRecommendationExample is the minimal projection over a
+// prior accepted PR that the discovery proposer threads into the §6
+// prompt block. Lives in the ai package (NOT in internal/proposer/)
+// to avoid the circular import that v0.89.17 hit: the proposer
+// package imports ai, so ai-package types can be consumed by the
+// proposer bridge but not vice versa. v0.89.28 (#643 slice 1).
+type AcceptedRecommendationExample struct {
+	RecommendationKind string
+	PRURL              string
+	Branch             string
+	MergedAt           time.Time
+	MergedBy           string
 }
 
 // ComputeResourceCandidate is one EC2-shaped row from the scan that

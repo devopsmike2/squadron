@@ -31,6 +31,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/pricing"
+	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
@@ -561,8 +562,63 @@ func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin
 			h.WithCredstoreKey(s.discoveryCredKey)
 		}
 		h.WithAIProposer(s.discoveryAIService)
+		// v0.89.28 (#643 slice 1) — wire the accepted-recommendations
+		// assembler. The adapter iterates IaC connections to pick the
+		// scope tuple per the spec's "same connection_id + account_id
+		// + region" rule; slice 1 ships one connection per repo at
+		// deployment scope so the iteration cost is trivial.
+		if s.appStore != nil && s.iacConnStore != nil {
+			adapter := &discoveryAcceptedAssemblerAdapter{
+				appStore:    s.appStore,
+				connections: s.iacConnStore,
+			}
+			h.WithAcceptedRecommendationsAssembler(adapter)
+		}
 		fn(h, c)
 	}
+}
+
+// discoveryAcceptedAssemblerAdapter — v0.89.28 (#643 slice 1) —
+// resolves the (account_id, region) scope to a per-connection lookup
+// by iterating the iacconnstore.Store. The discovery handler doesn't
+// see IaC connection IDs directly; the adapter walks every connection
+// the deployment has and unions accepted-PR rows from each
+// (connection_id, account_id, region) scope. Slice 1 ships one
+// connection per deployment so the union is degenerate; slice 2's
+// multi-tenant question (multiple connections to the same repo) lands
+// in the cross-connection-scope question from §10 Q4.
+type discoveryAcceptedAssemblerAdapter struct {
+	appStore    applicationstore.ApplicationStore
+	connections iacconnstore.Store
+}
+
+// AssembleForDiscoveryScope walks every IaC connection, builds a
+// DiscoveryBridge per connection, and returns the union of the
+// accepted-PR examples and URLs. Errors on any single connection are
+// logged via the higher-level Warn in the handler and skipped — one
+// bad connection shouldn't sink the proposer call.
+func (a *discoveryAcceptedAssemblerAdapter) AssembleForDiscoveryScope(
+	ctx context.Context, accountID, region string,
+) ([]ai.AcceptedRecommendationExample, []string, error) {
+	conns, err := a.connections.List(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var examples []ai.AcceptedRecommendationExample
+	var urls []string
+	for _, conn := range conns {
+		if conn == nil {
+			continue
+		}
+		b := proposer.NewDiscoveryBridge(a.appStore, a.connections)
+		exs, prURLs, err := b.AssembleAcceptedRecommendations(ctx, conn.ConnectionID, accountID, region)
+		if err != nil {
+			continue
+		}
+		examples = append(examples, exs...)
+		urls = append(urls, prURLs...)
+	}
+	return examples, urls, nil
 }
 
 // aiTrampoline late-binds an AI handler call. Same shape as the
@@ -1327,6 +1383,13 @@ func (s *Server) registerRoutes() {
 		v1.PATCH("/iac/github/connections/:id/placement-map",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubUpdatePlacementMap(c) }))
+		// v0.89.28 (#643 slice 1) — PATCH for non-placement-map
+		// connection fields. Slice 1 surfaces the discovery proposer's
+		// LearnFromAcceptedRecommendations opt-in flag; future slices
+		// append additional mutables without breaking the contract.
+		v1.PATCH("/iac/github/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubUpdateConnection(c) }))
 		v1.POST("/iac/github/connections/:id/open-pr",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubOpenPR(c) }))

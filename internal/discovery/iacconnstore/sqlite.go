@@ -111,14 +111,32 @@ func NewStore(ctx context.Context, db *sql.DB) (Store, error) {
 // migrate applies every entry in migrations in order. Each
 // migration's SQL is self-idempotent (CREATE TABLE IF NOT EXISTS,
 // INSERT OR IGNORE) so reapplying on an up-to-date database is a
-// no-op.
+// no-op — with one exception: ALTER TABLE ... ADD COLUMN cannot be
+// expressed idempotently in SQLite. The runner tolerates the
+// "duplicate column name" error on re-run so the v0.89.28 migration
+// can land on existing databases without breaking startup on the
+// second boot.
 func (s *sqliteStore) migrate(ctx context.Context) error {
 	for i, stmt := range migrations {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			if isDuplicateColumnErr(err) {
+				continue
+			}
 			return fmt.Errorf("apply migration %d: %w", i+1, err)
 		}
 	}
 	return nil
+}
+
+// isDuplicateColumnErr reports whether err is the SQLite-driver
+// surface of an ALTER TABLE ADD COLUMN against a column that already
+// exists. SQLite phrases it as "duplicate column name: <col>".
+func isDuplicateColumnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column name")
 }
 
 // timestampLayout is the on-disk timestamp format. RFC3339Nano gives
@@ -173,14 +191,26 @@ func (s *sqliteStore) Create(ctx context.Context, conn *IaCConnection) error {
 	conn.ConnectionID = s.newUUID()
 	conn.CreatedAt = now
 	conn.UpdatedAt = now
+	// Default the discovery feedback-loop flag to true (opt-in) on
+	// Create. Callers may override before passing the struct in;
+	// callers that leave the zero value (false) get the design
+	// default by way of this stamp. v0.89.28 (#643 slice 1).
+	if !conn.LearnFromAcceptedRecommendations {
+		conn.LearnFromAcceptedRecommendations = true
+	}
+	learnInt := 1
+	if !conn.LearnFromAcceptedRecommendations {
+		learnInt = 0
+	}
 
 	const stmt = `
 		INSERT INTO iac_connections (
 			connection_id, provider, auth_kind, repo_full_name, default_branch,
 			repo_layout, branch_prefix, reviewer_team_handle,
 			placement_map_json, cred_ciphertext,
+			learn_from_accepted_recommendations,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		conn.ConnectionID,
@@ -193,6 +223,7 @@ func (s *sqliteStore) Create(ctx context.Context, conn *IaCConnection) error {
 		nullableString(conn.ReviewerTeamHandle),
 		string(placementJSON),
 		conn.CredCiphertext,
+		learnInt,
 		now.Format(timestampLayout),
 		now.Format(timestampLayout),
 	); err != nil {
@@ -214,6 +245,7 @@ func (s *sqliteStore) Get(ctx context.Context, connectionID string) (*IaCConnect
 		SELECT connection_id, provider, auth_kind, repo_full_name, default_branch,
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
+		       learn_from_accepted_recommendations,
 		       created_at, updated_at
 		FROM iac_connections
 		WHERE connection_id = ?
@@ -243,6 +275,7 @@ func (s *sqliteStore) GetByRepoFullName(ctx context.Context, repoFullName string
 		SELECT connection_id, provider, auth_kind, repo_full_name, default_branch,
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
+		       learn_from_accepted_recommendations,
 		       created_at, updated_at
 		FROM iac_connections
 		WHERE repo_full_name = ?
@@ -266,6 +299,7 @@ func (s *sqliteStore) List(ctx context.Context) ([]*IaCConnection, error) {
 		SELECT connection_id, provider, auth_kind, repo_full_name, default_branch,
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
+		       learn_from_accepted_recommendations,
 		       created_at, updated_at
 		FROM iac_connections
 		ORDER BY created_at ASC, connection_id ASC
@@ -340,6 +374,37 @@ func (s *sqliteStore) UpdatePlacementMap(ctx context.Context, connectionID strin
 	return nil
 }
 
+// UpdateLearnFromAcceptedRecommendations sets the per-connection
+// discovery-feedback opt-in flag and stamps UpdatedAt. No other
+// column is touched. v0.89.28 (#643 slice 1).
+func (s *sqliteStore) UpdateLearnFromAcceptedRecommendations(ctx context.Context, connectionID string, learn bool) error {
+	if connectionID == "" {
+		return errors.New("iacconnstore: UpdateLearnFromAcceptedRecommendations: connectionID is required")
+	}
+	val := 0
+	if learn {
+		val = 1
+	}
+	now := s.timeNow()
+	const stmt = `
+		UPDATE iac_connections
+		SET learn_from_accepted_recommendations = ?, updated_at = ?
+		WHERE connection_id = ?
+	`
+	res, err := s.db.ExecContext(ctx, stmt, val, now.Format(timestampLayout), connectionID)
+	if err != nil {
+		return fmt.Errorf("iacconnstore: update learn_from_accepted_recommendations for %s: %w", connectionID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("iacconnstore: rows affected for %s: %w", connectionID, err)
+	}
+	if affected == 0 {
+		return ErrConnectionNotFound
+	}
+	return nil
+}
+
 // Close releases the underlying database handle.
 func (s *sqliteStore) Close() error {
 	if s.db == nil {
@@ -359,12 +424,13 @@ type rowScanner interface {
 // scanConnection is the row-scan helper shared by Get and List.
 func scanConnection(r rowScanner) (*IaCConnection, error) {
 	var (
-		conn               IaCConnection
-		branchPrefix       sql.NullString
-		reviewerTeamHandle sql.NullString
-		placementJSON      string
-		createdAt          string
-		updatedAt          string
+		conn                IaCConnection
+		branchPrefix        sql.NullString
+		reviewerTeamHandle  sql.NullString
+		placementJSON       string
+		learnFromAccepted   int
+		createdAt           string
+		updatedAt           string
 	)
 	if err := r.Scan(
 		&conn.ConnectionID,
@@ -377,11 +443,13 @@ func scanConnection(r rowScanner) (*IaCConnection, error) {
 		&reviewerTeamHandle,
 		&placementJSON,
 		&conn.CredCiphertext,
+		&learnFromAccepted,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
 		return nil, err
 	}
+	conn.LearnFromAcceptedRecommendations = learnFromAccepted != 0
 	if branchPrefix.Valid {
 		conn.BranchPrefix = branchPrefix.String
 	}

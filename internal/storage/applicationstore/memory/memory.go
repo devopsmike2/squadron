@@ -840,6 +840,78 @@ func (s *Store) ListAIVerdictsForGroup(ctx context.Context, groupID string, sinc
 	return matches, nil
 }
 
+// ListAcceptedDiscoveryRecommendations — v0.89.28 (#643 slice 1).
+// Memory-store mirror of the SQLite same-named method. Linear scan
+// over s.auditEvents with the same predicate logic the SQL query
+// applies: event_type==recommendation.pr_merged AND timestamp>=since
+// AND the payload's (connection_id, account_id, region) tuple
+// matches.
+func (s *Store) ListAcceptedDiscoveryRecommendations(
+	ctx context.Context,
+	connectionID, accountID, region string,
+	since time.Time, limit int,
+) ([]*types.AcceptedRecommendation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if connectionID == "" || accountID == "" || region == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// Walk in reverse so the natural order is newest-first (the
+	// append-only store grows oldest-first).
+	var out []*types.AcceptedRecommendation
+	for i := len(s.auditEvents) - 1; i >= 0; i-- {
+		e := s.auditEvents[i]
+		if e.EventType != "recommendation.pr_merged" {
+			continue
+		}
+		if e.Timestamp.Before(since) {
+			continue
+		}
+		if e.Payload == nil {
+			continue
+		}
+		// Predicate: connection_id + account_id + region all match.
+		if v, _ := e.Payload["connection_id"].(string); v != connectionID {
+			continue
+		}
+		if v, _ := e.Payload["account_id"].(string); v != accountID {
+			continue
+		}
+		if v, _ := e.Payload["region"].(string); v != region {
+			continue
+		}
+		kind, _ := e.Payload["recommendation_kind"].(string)
+		if kind == "" {
+			// §10 Q2 — skip rows whose branch didn't carry a kind.
+			continue
+		}
+		rec := &types.AcceptedRecommendation{
+			PRMergedAt:         e.Timestamp,
+			RecommendationKind: kind,
+		}
+		if v, ok := e.Payload["pr_url"].(string); ok {
+			rec.PRURL = v
+		}
+		if v, ok := e.Payload["branch"].(string); ok {
+			rec.Branch = v
+		}
+		if v, ok := e.Payload["merged_by"].(string); ok {
+			rec.MergedBy = v
+		}
+		out = append(out, rec)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // API token management
 //
 // The map is keyed by token ID. For hash-based lookup the in-memory
