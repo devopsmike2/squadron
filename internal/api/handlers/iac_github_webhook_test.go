@@ -12,12 +12,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
@@ -742,5 +744,307 @@ func TestWebhookReplay_GCRemovesOldEntries(t *testing.T) {
 	// should return firstTime=true (clean re-insert).
 	if first, _, err := store.RecordWebhookDelivery(ctx, "old-uuid", "pull_request"); err != nil || !first {
 		t.Errorf("after GC, old-uuid: first=%v err=%v; want first=true (row should have been deleted)", first, err)
+	}
+}
+
+// --- v0.89.31 (#650) per-connection webhook secrets ------------------
+//
+// The five tests below pin the slice-2 follow-on to v0.89.23 slice 2:
+// per-connection HMAC secrets stored sealed alongside the existing
+// PAT in iac_connections, looked up by repo_full_name on the inbound
+// delivery, and used to verify X-Hub-Signature-256 in preference to
+// the env-var global. Backward compatibility for connections without
+// a per-connection secret is exercised explicitly.
+//
+// All five tests use the credstore.Key wired into the webhook handler
+// to unseal stored secrets at HMAC-verify time. The PATCH handler is
+// exercised in test #1 + #4 to prove the end-to-end seal-on-write
+// path; tests #2 / #3 / #5 seal directly to keep the assertion focus
+// on the verification side.
+
+// newTestWebhookHandlerWithCredKey — v0.89.31 (#650) — builds a
+// webhook handler wired with a credstore Key (so per-connection
+// secrets can be unsealed at verify-time). The Key is the same
+// fixed test key the iac_github_test.go helpers use, so a secret
+// PATCH'd through the API handler can be unsealed by the webhook
+// handler in the same test process.
+func newTestWebhookHandlerWithCredKey(t *testing.T, audit services.AuditService, secret []byte) (*IaCGitHubWebhookHandler, iacconnstore.Store, *credstore.Key) {
+	t.Helper()
+	store := iacconnstore.NewMemoryStore()
+	key := newTestCredKey(t)
+	h := NewIaCGitHubWebhookHandler(audit, store, secret, zap.NewNop()).WithCredstoreKey(key)
+	return h, store, key
+}
+
+// sealAndStorePerConnSecret seals a plaintext webhook secret with
+// the supplied credstore Key and writes it into the store under
+// connectionID. Used by the verification-focused tests below so the
+// assertion stays on "the right secret was chosen" rather than the
+// PATCH-handler round-trip.
+func sealAndStorePerConnSecret(t *testing.T, store iacconnstore.Store, key *credstore.Key, connectionID, plaintext string) {
+	t.Helper()
+	sealed, err := credstore.SealWebhookSecret(key, []byte(plaintext))
+	if err != nil {
+		t.Fatalf("SealWebhookSecret: %v", err)
+	}
+	if err := store.SetWebhookSecret(context.Background(), connectionID, sealed); err != nil {
+		t.Fatalf("SetWebhookSecret: %v", err)
+	}
+}
+
+// TestPerConnectionWebhookSecret_StoredAndUsedForVerification —
+// v0.89.31 (#650) — the per-connection secret takes priority over
+// the env-var global. PATCH the secret onto the connection through
+// the production HandleIaCGitHubUpdateConnection path (proving the
+// seal-on-write round-trip), then POST a pull_request signed with
+// the per-connection key — assert 200 + recommendation.pr_merged
+// audit. POST the same payload signed with the env-var global —
+// assert 401 (the per-connection secret took priority).
+func TestPerConnectionWebhookSecret_StoredAndUsedForVerification(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newTestWebhookHandlerWithCredKey(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "acme/infra")
+
+	// Drive the PATCH through the production handler so the
+	// seal-on-write path is on the test trail. The PATCH handler
+	// does not consult the GitHub client, so the factory is
+	// intentionally unwired.
+	iacH := NewIaCGitHubHandlers(store, zap.NewNop()).
+		WithCredstoreKey(key)
+	register := func(r *gin.Engine) {
+		r.PATCH("/api/v1/iac/github/connections/:id", iacH.HandleIaCGitHubUpdateConnection)
+	}
+	patchBody := `{"webhook_secret":"per-connection-key-123"}`
+	patchW := doIaCRequest(t, http.MethodPatch,
+		"/api/v1/iac/github/connections/"+connectionID, register, patchBody)
+	if patchW.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200; body=%s", patchW.Code, patchW.Body.String())
+	}
+	// Sanity: the sealed blob actually landed on the row.
+	sealed, err := store.GetWebhookSecret(context.Background(), connectionID)
+	if err != nil {
+		t.Fatalf("GetWebhookSecret after PATCH: %v", err)
+	}
+	if len(sealed) == 0 {
+		t.Fatalf("GetWebhookSecret returned empty after PATCH; the seal-on-write path did not persist")
+	}
+
+	body := makePREventBody(t, "closed", true, "acme/infra", 7,
+		"squadron/rec/eks-observability-addon/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+
+	// Signed with the per-connection key: must succeed.
+	perConnSig := signGitHubWebhook(t, body, []byte("per-connection-key-123"))
+	w := doWebhookRequest(t, h, body, perConnSig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("per-connection-signed status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries after per-conn POST = %d, want 1", len(audit.entries))
+	}
+	if audit.entries[0].EventType != services.AuditEventRecommendationPRMerged {
+		t.Errorf("audit event_type = %q, want %q", audit.entries[0].EventType, services.AuditEventRecommendationPRMerged)
+	}
+	if audit.entries[0].TargetID != connectionID {
+		t.Errorf("audit target_id = %q, want %q", audit.entries[0].TargetID, connectionID)
+	}
+
+	// Signed with the env-var global: must FAIL with 401, proving
+	// the per-connection secret took priority (otherwise the global
+	// would still verify and we'd see another 200).
+	globalSig := signGitHubWebhook(t, body, webhookTestSecret)
+	w2 := doWebhookRequest(t, h, body, globalSig, "pull_request")
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("global-signed status = %d, want 401 (per-connection secret should reject global sig); body=%s",
+			w2.Code, w2.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Errorf("audit entries after global POST = %d, want still 1 (global sig must not pass)", len(audit.entries))
+	}
+}
+
+// TestPerConnectionWebhookSecret_DifferentSecretForDifferentConnection —
+// v0.89.31 (#650) — two connections with different per-connection
+// secrets must each verify against their own secret and reject the
+// other. Proves the lookup-by-repo path picks the right row.
+func TestPerConnectionWebhookSecret_DifferentSecretForDifferentConnection(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newTestWebhookHandlerWithCredKey(t, audit, webhookTestSecret)
+	connA := seedConnection(t, store, "acme/infra")
+	connB := seedConnection(t, store, "acme/platform")
+	sealAndStorePerConnSecret(t, store, key, connA, "key-A")
+	sealAndStorePerConnSecret(t, store, key, connB, "key-B")
+
+	// acme/infra payload, signed with key-A → 200.
+	bodyA := makePREventBody(t, "closed", true, "acme/infra", 1,
+		"squadron/rec/eks-cluster-logging/aaaA", "2026-06-22T00:00:00Z", "alice")
+	sigA := signGitHubWebhook(t, bodyA, []byte("key-A"))
+	wA := doWebhookRequest(t, h, bodyA, sigA, "pull_request")
+	if wA.Code != http.StatusOK {
+		t.Fatalf("acme/infra signed with key-A: status = %d, want 200; body=%s", wA.Code, wA.Body.String())
+	}
+	preCount := len(audit.entries)
+	if preCount != 1 {
+		t.Fatalf("audit entries after key-A POST = %d, want 1", preCount)
+	}
+	if audit.entries[0].TargetID != connA {
+		t.Errorf("audit target_id = %q, want %q (connA)", audit.entries[0].TargetID, connA)
+	}
+
+	// acme/infra payload, signed with key-B → 401 (wrong secret).
+	sigBOnA := signGitHubWebhook(t, bodyA, []byte("key-B"))
+	wBOnA := doWebhookRequest(t, h, bodyA, sigBOnA, "pull_request")
+	if wBOnA.Code != http.StatusUnauthorized {
+		t.Fatalf("acme/infra signed with key-B: status = %d, want 401; body=%s",
+			wBOnA.Code, wBOnA.Body.String())
+	}
+	if len(audit.entries) != preCount {
+		t.Errorf("audit entries grew on mismatched sig: was %d, now %d", preCount, len(audit.entries))
+	}
+
+	// acme/platform payload, signed with key-B → 200.
+	bodyB := makePREventBody(t, "closed", true, "acme/platform", 2,
+		"squadron/rec/s3-access-logging/bbbB", "2026-06-22T00:00:00Z", "bob")
+	sigB := signGitHubWebhook(t, bodyB, []byte("key-B"))
+	wB := doWebhookRequest(t, h, bodyB, sigB, "pull_request")
+	if wB.Code != http.StatusOK {
+		t.Fatalf("acme/platform signed with key-B: status = %d, want 200; body=%s",
+			wB.Code, wB.Body.String())
+	}
+	if len(audit.entries) != preCount+1 {
+		t.Fatalf("audit entries after key-B POST = %d, want %d", len(audit.entries), preCount+1)
+	}
+	if audit.entries[preCount].TargetID != connB {
+		t.Errorf("audit target_id = %q, want %q (connB)", audit.entries[preCount].TargetID, connB)
+	}
+}
+
+// TestPerConnectionWebhookSecret_FallsBackToGlobalWhenUnset —
+// v0.89.31 (#650) — a connection that does not have a per-connection
+// secret continues to verify against the env-var global. Backward
+// compatibility for pre-v0.89.31 deployments. The seed connection
+// has NO secret stored; the POST is signed with the env-var global.
+func TestPerConnectionWebhookSecret_FallsBackToGlobalWhenUnset(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, _ := newTestWebhookHandlerWithCredKey(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "acme/infra")
+	// Sanity: no per-connection secret on this connection.
+	sealed, err := store.GetWebhookSecret(context.Background(), connectionID)
+	if err != nil {
+		t.Fatalf("GetWebhookSecret: %v", err)
+	}
+	if len(sealed) != 0 {
+		t.Fatalf("connection seeded with no secret, but GetWebhookSecret returned %d bytes", len(sealed))
+	}
+
+	body := makePREventBody(t, "closed", true, "acme/infra", 9,
+		"squadron/rec/rds-pi-em/zzz", "2026-06-22T00:00:00Z", "carol")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (env-var global must verify); body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	if audit.entries[0].TargetID != connectionID {
+		t.Errorf("audit target_id = %q, want %q", audit.entries[0].TargetID, connectionID)
+	}
+}
+
+// TestPerConnectionWebhookSecret_NeverRevealedInResponse —
+// v0.89.31 (#650) — after PATCHing a per-connection secret, the
+// list connections endpoint MUST NOT echo the plaintext or the
+// sealed bytes in its response. The `json:"-"` tag on
+// IaCConnection.WebhookSecret combined with the redacted
+// iacGitHubConnectionRow projection is what enforces this; the test
+// is the wire-level guard against a future refactor leaking it.
+func TestPerConnectionWebhookSecret_NeverRevealedInResponse(t *testing.T) {
+	store := iacconnstore.NewMemoryStore()
+	key := newTestCredKey(t)
+	iacH := NewIaCGitHubHandlers(store, zap.NewNop()).
+		WithCredstoreKey(key)
+	connectionID := seedConnection(t, store, "acme/infra")
+
+	const plaintext = "supersecret"
+	patchBody := `{"webhook_secret":"` + plaintext + `"}`
+	patchRegister := func(r *gin.Engine) {
+		r.PATCH("/api/v1/iac/github/connections/:id", iacH.HandleIaCGitHubUpdateConnection)
+	}
+	patchW := doIaCRequest(t, http.MethodPatch,
+		"/api/v1/iac/github/connections/"+connectionID, patchRegister, patchBody)
+	if patchW.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200; body=%s", patchW.Code, patchW.Body.String())
+	}
+	// PATCH response must not echo the plaintext either.
+	if strings.Contains(patchW.Body.String(), plaintext) {
+		t.Errorf("PATCH response echoed plaintext: %s", patchW.Body.String())
+	}
+
+	// Now GET the list — confirm neither the plaintext nor the
+	// sealed bytes appear in the wire shape.
+	listRegister := func(r *gin.Engine) {
+		r.GET("/api/v1/iac/github/connections", iacH.HandleListIaCGitHubConnections)
+	}
+	listW := doIaCRequest(t, http.MethodGet, "/api/v1/iac/github/connections", listRegister, "")
+	if listW.Code != http.StatusOK {
+		t.Fatalf("LIST status = %d, want 200; body=%s", listW.Code, listW.Body.String())
+	}
+	listBody := listW.Body.String()
+	if strings.Contains(listBody, plaintext) {
+		t.Errorf("LIST response leaked plaintext %q in body: %s", plaintext, listBody)
+	}
+	// The sealed bytes are AES-GCM ciphertext + nonce — they
+	// shouldn't be JSON-encodable in a way that surfaces them
+	// cleanly, but if a future refactor JSON-encoded the byte
+	// slice it would land as a base64 string. The wire surface
+	// must not include the field name either.
+	if strings.Contains(listBody, "webhook_secret") {
+		t.Errorf("LIST response contains the field name `webhook_secret`: %s", listBody)
+	}
+	if strings.Contains(listBody, "webhook_secret_sealed") {
+		t.Errorf("LIST response contains the field name `webhook_secret_sealed`: %s", listBody)
+	}
+	// Sanity: the other connection fields ARE present — proves the
+	// row is being rendered, just without the secret.
+	if !strings.Contains(listBody, connectionID) {
+		t.Errorf("LIST response missing connection_id %q: %s", connectionID, listBody)
+	}
+	if !strings.Contains(listBody, "acme/infra") {
+		t.Errorf("LIST response missing repo_full_name acme/infra: %s", listBody)
+	}
+}
+
+// TestPerConnectionWebhookSecret_NoConnectionFound_UsesGlobal —
+// v0.89.31 (#650) — when the inbound delivery names a repo that
+// matches no connection, the receiver falls back to the env-var
+// global (same as the unset-per-connection-secret path). The audit
+// row goes out with an empty connection_id, mirroring v0.89.23's
+// TestGitHubWebhook_SignatureValid_NoMatchingConnection_StillEmitsAudit
+// contract. Proves the env-var fallback is reachable along both the
+// "no connection matched" and "connection matched but no secret"
+// paths.
+func TestPerConnectionWebhookSecret_NoConnectionFound_UsesGlobal(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, _, _ := newTestWebhookHandlerWithCredKey(t, audit, webhookTestSecret)
+	// Note: no connection seeded — the repo is a stranger.
+	body := makePREventBody(t, "closed", true, "some-randomperson/repo", 11,
+		"squadron/rec/alb-access-logs/qqq", "2026-06-22T00:00:00Z", "dana")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	if audit.entries[0].TargetID != "" {
+		t.Errorf("audit target_id = %q, want empty (no connection matched)", audit.entries[0].TargetID)
+	}
+	if audit.entries[0].Payload["connection_id"] != "" {
+		t.Errorf("audit payload.connection_id = %v, want empty", audit.entries[0].Payload["connection_id"])
+	}
+	if audit.entries[0].Payload["repo_full_name"] != "some-randomperson/repo" {
+		t.Errorf("audit payload.repo_full_name = %v, want some-randomperson/repo", audit.entries[0].Payload["repo_full_name"])
 	}
 }

@@ -162,6 +162,27 @@ type IaCConnection struct {
 	// never emitted in an audit payload.
 	CredCiphertext []byte `json:"-"`
 
+	// WebhookSecret is the per-connection HMAC secret for verifying
+	// inbound GitHub webhook deliveries. Sealed at rest with AES-GCM
+	// using the SQUADRON_SECRETS_KEY substrate. NULL means "use the
+	// env-var global SQUADRON_GITHUB_WEBHOOK_SECRET" — backward
+	// compatible with pre-v0.89.31 deployments. v0.89.31 (#650).
+	//
+	// The plaintext bytes are NEVER logged, NEVER in audit payloads,
+	// NEVER in API responses. Once set via PATCH, the secret can be
+	// replaced (PATCH again with a new value) or cleared (PATCH with
+	// empty string to fall back to the global), but never read back
+	// through the API.
+	//
+	// Defense-in-depth posture: Get(id) and List() return this field
+	// as nil even when the column is populated on disk. The only
+	// path that reads the sealed bytes is the dedicated
+	// GetWebhookSecret(connectionID) store method, which the webhook
+	// receiver calls AFTER it has decided to verify the signature
+	// against this specific connection. This keeps the sealed bytes
+	// off every caller that doesn't explicitly need them.
+	WebhookSecret []byte `json:"-"`
+
 	// LearnFromAcceptedRecommendations is the v0.89.28 (#643 slice 1)
 	// opt-in flag for the discovery proposer's accepted-examples
 	// feedback loop. Default true: every new connection participates
@@ -252,6 +273,30 @@ type Store interface {
 	// to now; no other column is touched. Returns
 	// ErrConnectionNotFound if no row matches.
 	UpdateLearnFromAcceptedRecommendations(ctx context.Context, connectionID string, learn bool) error
+
+	// SetWebhookSecret stores a sealed per-connection inbound-webhook
+	// HMAC secret. The caller seals plaintext via
+	// credstore.SealWebhookSecret before calling. Pass nil to clear
+	// the column — that falls back to the env-var global
+	// SQUADRON_GITHUB_WEBHOOK_SECRET at HMAC-verify time, which is
+	// the backward-compat default for pre-v0.89.31 connections.
+	// UpdatedAt is stamped to now; no other column is touched.
+	// Returns ErrConnectionNotFound if no row matches. v0.89.31 (#650).
+	SetWebhookSecret(ctx context.Context, connectionID string, sealed []byte) error
+
+	// GetWebhookSecret returns the sealed per-connection inbound-
+	// webhook HMAC secret blob, or nil if none is set (env-var
+	// fallback). The caller unseals via credstore.UnsealWebhookSecret
+	// to recover the plaintext key for HMAC verification. Returns
+	// ErrConnectionNotFound if no row matches the supplied
+	// connection_id. v0.89.31 (#650).
+	//
+	// Get(id) and List() intentionally DO NOT populate this field on
+	// the returned struct; this is the only path through which the
+	// sealed bytes reach a caller, which keeps the blob off every
+	// surface that doesn't explicitly opt in (defense in depth
+	// against accidental leak via marshal / log / audit).
+	GetWebhookSecret(ctx context.Context, connectionID string) (sealed []byte, err error)
 
 	// Close releases the underlying database handle. Subsequent
 	// calls to other methods return an error.
