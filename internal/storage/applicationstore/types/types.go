@@ -58,6 +58,15 @@ type ApplicationStore interface {
 	ListRollouts(ctx context.Context, filter RolloutFilter) ([]*Rollout, error)
 	UpdateRollout(ctx context.Context, rollout *Rollout) error
 
+	// v0.89.17 (#633) — proposer learns from accepted/rejected verdicts.
+	// ListAIVerdictsForGroup returns AI-originated rollouts on the
+	// supplied group that have a terminal approval verdict (approved
+	// or rejected) recorded after the `since` cutoff, newest verdict
+	// first. The proposer bridge uses this to assemble the prior-
+	// verdicts few-shot block on the next cost-spike proposal. See
+	// docs/proposals/531-proposer-learns-from-accepted-rejected.md §4.
+	ListAIVerdictsForGroup(ctx context.Context, groupID string, since time.Time, limit int) ([]*Rollout, error)
+
 	// Action runners + requests (v0.53 Move 2). An action runner is
 	// an installed squadron-action-runner daemon registered with
 	// this Squadron instance. An action request is one signed action
@@ -724,7 +733,19 @@ type Group struct {
 	// the list as one unit. Stored as []byte at this layer to keep
 	// types.Group cleanly serializable; the changewindow package
 	// owns the higher-level Window struct.
-	ChangeWindowsJSON string    `json:"change_windows,omitempty"`
+	ChangeWindowsJSON string `json:"change_windows,omitempty"`
+	// v0.89.17 (#633) — per-group opt-out for the proposer-learns-
+	// from-verdicts loop. When true (default), Bridge.assembleVerdicts
+	// pulls prior AI-originated approvals/rejections on this group
+	// and feeds them back as few-shot examples on the next cost-spike
+	// proposal. Flip to false to suppress every prior-verdict
+	// example for this group — the prompt block is omitted entirely
+	// and the proposal.created audit row carries an empty
+	// verdict_examples_used array so SIEM consumers can still see the
+	// proposal happened without learning context. Default true at
+	// the storage layer; the migration in schema v4 backfills every
+	// existing row to 1 so post-upgrade behavior matches the design.
+	LearnFromVerdicts bool      `json:"learn_from_verdicts"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }

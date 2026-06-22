@@ -286,7 +286,8 @@ func (s *Store) ListGroups(ctx context.Context) ([]*types.Group, error) {
 
 // UpdateGroup writes mutable fields onto the stored group. Added in
 // v0.48 for the approval-policy toggle; extended in v0.49 to
-// round-trip ChangeWindowsJSON.
+// round-trip ChangeWindowsJSON; v0.89.17 round-trips
+// LearnFromVerdicts.
 func (s *Store) UpdateGroup(ctx context.Context, group *types.Group) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -301,6 +302,7 @@ func (s *Store) UpdateGroup(ctx context.Context, group *types.Group) error {
 	existing.RequireApproval = group.RequireApproval
 	existing.RequireApprovalForRollback = group.RequireApprovalForRollback
 	existing.ChangeWindowsJSON = group.ChangeWindowsJSON
+	existing.LearnFromVerdicts = group.LearnFromVerdicts
 	existing.UpdatedAt = group.UpdatedAt
 	return nil
 }
@@ -772,6 +774,62 @@ func (s *Store) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	}
 	s.rollouts[r.ID] = &rolloutCopy
 	return nil
+}
+
+// ListAIVerdictsForGroup mirrors the SQLite store's same-named method:
+// AI-originated rollouts on the supplied group that have a terminal
+// verdict (approved_at or rejected_at) recorded after the `since`
+// cutoff, newest verdict first. Used by the proposer bridge to
+// assemble the prior-verdicts few-shot block on cost-spike proposals.
+// v0.89.17 (#633). See docs/proposals/531-proposer-learns-from-
+// accepted-rejected.md §4.
+func (s *Store) ListAIVerdictsForGroup(ctx context.Context, groupID string, since time.Time, limit int) ([]*types.Rollout, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	// verdictAt returns the COALESCE(approved_at, rejected_at) for a
+	// rollout, or the zero time if neither is set. Mirrors the SQL
+	// COALESCE used by the SQLite store so memory and SQLite return
+	// the same shape.
+	verdictAt := func(r *types.Rollout) time.Time {
+		if r.ApprovedAt != nil {
+			return *r.ApprovedAt
+		}
+		if r.RejectedAt != nil {
+			return *r.RejectedAt
+		}
+		return time.Time{}
+	}
+	var matches []*types.Rollout
+	for _, r := range s.rollouts {
+		if r.GroupID != groupID {
+			continue
+		}
+		if r.ProposedBy != types.RolloutProposedByAI {
+			continue
+		}
+		if r.ApprovedAt == nil && r.RejectedAt == nil {
+			continue
+		}
+		va := verdictAt(r)
+		if va.Before(since) {
+			continue
+		}
+		out := copyRollout(r)
+		matches = append(matches, &out)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return verdictAt(matches[i]).After(verdictAt(matches[j]))
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches, nil
 }
 
 // API token management

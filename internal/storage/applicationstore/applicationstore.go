@@ -5,6 +5,13 @@ import "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 
 // Type aliases for convenience
 type ApplicationStore = types.ApplicationStore
+
+// v0.89.17 (#633) — re-export so the proposer bridge can name the
+// method on the storage interface without dragging in the types
+// package explicitly. The bridge already depends on
+// applicationstore.Group; ApplicationStore is the surface that
+// carries ListAIVerdictsForGroup.
+
 type Agent = types.Agent
 type AgentStatus = types.AgentStatus
 type Group = types.Group

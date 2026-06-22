@@ -90,6 +90,13 @@ func (s *Storage) migrate() error {
 			-- refuses to advance rollouts to this group while
 			-- any window is active.
 			change_windows TEXT NOT NULL DEFAULT '[]',
+			-- v0.89.17 (#633): per-group opt-out for the proposer's
+			-- prior-verdicts few-shot loop. Default 1 (opt-in) so
+			-- post-upgrade behavior matches the v0.89.17 design.
+			-- Same default at fresh-deploy time as in the v4
+			-- migration so this column round trips identically on
+			-- both fresh and migrated databases.
+			learn_from_verdicts INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
@@ -527,6 +534,22 @@ func (s *Storage) migrate() error {
 		// runner-steps-in-plans.md §4.
 		`ALTER TABLE rollouts ADD COLUMN step_kind TEXT`,
 		`ALTER TABLE rollouts ADD COLUMN action_request_id TEXT`,
+
+		// v0.89.17 (#633) — proposer learns from accepted/rejected
+		// verdicts, slice 1. Per-group opt-out flag plus a partial
+		// index over AI-originated rollouts that have a terminal
+		// verdict. The proposer bridge sweeps this index on every
+		// cost-spike proposal to assemble the prior-verdicts few-
+		// shot block. Partial predicate keeps the index lean —
+		// operator-originated rollouts and pending AI proposals
+		// never contribute rows. Default 1 on learn_from_verdicts
+		// so post-upgrade behavior matches the design (opt-in).
+		`ALTER TABLE groups ADD COLUMN learn_from_verdicts INTEGER NOT NULL DEFAULT 1`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_verdicts ON rollouts(
+			group_id,
+			proposed_by,
+			COALESCE(approved_at, rejected_at) DESC
+		) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)`,
 	}
 
 	for _, migration := range migrations {
@@ -797,10 +820,18 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 	if cw == "" {
 		cw = "[]"
 	}
+	// v0.89.17 (#633) — LearnFromVerdicts persists faithfully into
+	// the new column. The Go bool's zero value is false, which would
+	// collide with the design's "default true" if a pre-v0.89.17
+	// caller hands us a partially-initialized Group. We resolve this
+	// at the source: every CreateGroup caller post-v0.89.17 sets the
+	// field to true explicitly (or false for explicit opt-out). The
+	// migration's DEFAULT 1 backfills every pre-existing row to opt-
+	// in; this INSERT path writes exactly what the caller intends.
 
 	query := `
-		INSERT INTO groups (id, name, labels, require_approval, require_approval_for_rollback, change_windows, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO groups (id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -810,6 +841,7 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 		boolToInt(group.RequireApproval),
 		boolToInt(group.RequireApprovalForRollback),
 		cw,
+		boolToInt(group.LearnFromVerdicts),
 		group.CreatedAt,
 		group.UpdatedAt,
 	)
@@ -823,12 +855,13 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 }
 
 func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error) {
-	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, created_at, updated_at FROM groups WHERE id = ?`
+	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at FROM groups WHERE id = ?`
 
 	var group types.Group
 	var labelsJSON string
 	var requireApproval int
 	var requireApprovalForRollback int
+	var learnFromVerdicts int
 
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&group.ID,
@@ -837,6 +870,7 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 		&requireApproval,
 		&requireApprovalForRollback,
 		&group.ChangeWindowsJSON,
+		&learnFromVerdicts,
 		&group.CreatedAt,
 		&group.UpdatedAt,
 	)
@@ -850,12 +884,13 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 
 	group.RequireApproval = requireApproval != 0
 	group.RequireApprovalForRollback = requireApprovalForRollback != 0
+	group.LearnFromVerdicts = learnFromVerdicts != 0
 	_ = json.Unmarshal([]byte(labelsJSON), &group.Labels)
 	return &group, nil
 }
 
 func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
-	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, created_at, updated_at FROM groups ORDER BY created_at DESC`
+	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at FROM groups ORDER BY created_at DESC`
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -869,6 +904,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 		var labelsJSON string
 		var requireApproval int
 		var requireApprovalForRollback int
+		var learnFromVerdicts int
 
 		err := rows.Scan(
 			&group.ID,
@@ -877,6 +913,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 			&requireApproval,
 			&requireApprovalForRollback,
 			&group.ChangeWindowsJSON,
+			&learnFromVerdicts,
 			&group.CreatedAt,
 			&group.UpdatedAt,
 		)
@@ -886,6 +923,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 
 		group.RequireApproval = requireApproval != 0
 		group.RequireApprovalForRollback = requireApprovalForRollback != 0
+		group.LearnFromVerdicts = learnFromVerdicts != 0
 		_ = json.Unmarshal([]byte(labelsJSON), &group.Labels)
 		groups = append(groups, &group)
 	}
@@ -905,7 +943,7 @@ func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 	}
 	query := `
 		UPDATE groups
-		SET name = ?, labels = ?, require_approval = ?, require_approval_for_rollback = ?, change_windows = ?, updated_at = ?
+		SET name = ?, labels = ?, require_approval = ?, require_approval_for_rollback = ?, change_windows = ?, learn_from_verdicts = ?, updated_at = ?
 		WHERE id = ?
 	`
 	result, err := s.db.ExecContext(ctx, query,
@@ -914,6 +952,7 @@ func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 		boolToInt(group.RequireApproval),
 		boolToInt(group.RequireApprovalForRollback),
 		cw,
+		boolToInt(group.LearnFromVerdicts),
 		group.UpdatedAt,
 		group.ID,
 	)
@@ -1698,6 +1737,47 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 	}
 	defer rows.Close()
 
+	var out []*types.Rollout
+	for rows.Next() {
+		r, err := s.scanRollout(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// ListAIVerdictsForGroup returns AI-originated rollouts on the
+// supplied group that have a terminal approval verdict (approved_at
+// or rejected_at) recorded after the `since` cutoff. Newest verdict
+// first; the partial index idx_ai_verdicts (schema v4) backs the
+// query. The proposer bridge sweeps this on every cost-spike
+// proposal to assemble the prior-verdicts few-shot block. See
+// docs/proposals/531-proposer-learns-from-accepted-rejected.md §4.
+//
+// limit <= 0 falls back to 100; > 1000 clamps to 1000. Tests almost
+// always pass a small limit (N=4 per the design's §5 selection cap).
+func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, since time.Time, limit int) ([]*types.Rollout, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id
+		FROM rollouts
+		WHERE group_id = ?
+		  AND proposed_by = 'ai'
+		  AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)
+		  AND COALESCE(approved_at, rejected_at) >= ?
+		ORDER BY COALESCE(approved_at, rejected_at) DESC
+		LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, stmt, groupID, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list AI verdicts for group: %w", err)
+	}
+	defer rows.Close()
 	var out []*types.Rollout
 	for rows.Next() {
 		r, err := s.scanRollout(rows)
