@@ -34,6 +34,7 @@ import {
   generateAWSRecommendations,
   listAWSConnections,
   runAWSScan,
+  setRecommendationExclusion,
   type CloudConnection,
   type GenerateRecommendationsResponse,
   type ScanResult,
@@ -87,6 +88,12 @@ vi.mock("@/api/discovery", async () => {
     // don't touch the scan-all path (they get a stub that throws if
     // accidentally called).
     scanAllAWS: vi.fn(),
+    // v0.89.38 (#658 Stream 56, #531 slice 2 chunk 5) — exclude
+    // affordance POSTs through this helper. Default mock resolves
+    // with the request body echoed back; per-test overrides via
+    // mockResolvedValueOnce / mockRejectedValueOnce drive the
+    // happy + rollback paths.
+    setRecommendationExclusion: vi.fn(),
   };
 });
 
@@ -110,6 +117,7 @@ const mockedRunAWSScan = vi.mocked(runAWSScan);
 const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
 const mockedListIaCConnections = vi.mocked(listIaCGitHubConnections);
 const mockedOpenPullRequest = vi.mocked(openIaCGitHubPullRequest);
+const mockedSetRecommendationExclusion = vi.mocked(setRecommendationExclusion);
 
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Without this, the second test in the file would
@@ -1677,5 +1685,204 @@ describe("DiscoveryAWSPage", () => {
       screen.getByRole("button", { name: /Filter to account 123456789012/i }),
     );
     expect(onPick).toHaveBeenCalledWith("123456789012");
+  });
+
+  // ----- v0.89.38 #658 Stream 56 (#531 slice 2 chunk 5) ---------
+  //
+  // Exclude affordance on the discovery Recommendations tab. Three
+  // tests cover the slice-2-chunk-5 surface:
+  //   - happy click-to-exclude posts the right body + flips the UI.
+  //   - restore (un-exclude) inverts the state + posts excluded=false.
+  //   - error rollback: failed POST surfaces a toast and clears the
+  //     optimistic Set.
+
+  function buildRecsResponse(
+    ...overrides: Partial<Recommendation>[]
+  ): GenerateRecommendationsResponse {
+    const base = (i: number): Recommendation => ({
+      id: `rec-${i}`,
+      category: "empty_signal",
+      severity: "warn",
+      title: `Instrument resource ${i}`,
+      detail: "lambda lacks otel",
+      est_savings_bytes: 0,
+      generated_at: new Date().toISOString(),
+      source: { kind: "discovery_scan", ref_id: "scan-x" },
+      action: { kind: "plan", payload: {} },
+      iac: { format: "terraform", source: "resource ..." },
+      resource_kind: "lambda-otel-layer",
+      affected_resources: [`arn:aws:lambda:us-east-1:123:function:fn-${i}`],
+    });
+    const items = overrides.length === 0
+      ? [base(1), base(2)]
+      : overrides.map((o, i) => ({ ...base(i + 1), ...o }));
+    return {
+      declined: false,
+      reasoning: "",
+      recommendations: items,
+    };
+  }
+
+  async function renderRecommendationsTabWith(
+    recs: GenerateRecommendationsResponse,
+    region = "us-east-1",
+  ) {
+    const { RecommendationsTab } = await import("./DiscoveryAWS");
+    return render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <MemoryRouter>
+          <RecommendationsTab
+            recs={recs}
+            accountID="123456789012"
+            scanID="scan-x"
+            region={region}
+          />
+        </MemoryRouter>
+      </SWRConfig>,
+    );
+  }
+
+  it("RecommendationsTab_ExcludeButton_ClickPostsExclusionAndUpdatesUI", async () => {
+    const recs = buildRecsResponse();
+    mockedSetRecommendationExclusion.mockResolvedValueOnce({
+      recommendation_id: "rec-1",
+      excluded: true,
+      excluded_at: new Date().toISOString(),
+      excluded_by: "operator",
+    });
+    await renderRecommendationsTabWith(recs);
+
+    const buttons = await screen.findAllByRole("button", {
+      name: /Don't propose .* again/i,
+    });
+    expect(buttons).toHaveLength(2);
+    const user = userEvent.setup();
+    await user.click(buttons[0]);
+
+    await waitFor(() => {
+      expect(mockedSetRecommendationExclusion).toHaveBeenCalledTimes(1);
+    });
+    expect(mockedSetRecommendationExclusion).toHaveBeenCalledWith({
+      recommendation_id: "rec-1",
+      connection_id: "123456789012",
+      account_id: "123456789012",
+      region: "us-east-1",
+      recommendation_kind: "lambda-otel-layer",
+      resource_id: "arn:aws:lambda:us-east-1:123:function:fn-1",
+      excluded: true,
+    });
+    // Excluded badge appears in the first card; the second card is
+    // unchanged.
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText(/Excluded from future recommendations/i),
+      ).toBeInTheDocument();
+    });
+    // Success toast names the persistence behavior.
+    expect(
+      screen.getByTestId("exclusion-toast"),
+    ).toHaveTextContent(/Excluded — Squadron won't propose this/i);
+    // The first card switches its button label to Restore; the
+    // second still reads "Don't propose this again".
+    expect(
+      screen.getByRole("button", { name: /Restore .* as a recommendation/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Don't propose .* again/i }),
+    ).toHaveLength(1);
+  });
+
+  it("RecommendationsTab_RestoreButton_ClickPostsRestoreAndClearsExclusion", async () => {
+    const recs = buildRecsResponse();
+    mockedSetRecommendationExclusion
+      .mockResolvedValueOnce({
+        recommendation_id: "rec-1",
+        excluded: true,
+        excluded_at: new Date().toISOString(),
+        excluded_by: "operator",
+      })
+      .mockResolvedValueOnce({
+        recommendation_id: "rec-1",
+        excluded: false,
+      });
+    await renderRecommendationsTabWith(recs);
+
+    const user = userEvent.setup();
+    // First click excludes.
+    const excludeButtons = await screen.findAllByRole("button", {
+      name: /Don't propose .* again/i,
+    });
+    await user.click(excludeButtons[0]);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: /Restore .* as a recommendation/i,
+        }),
+      ).toBeInTheDocument();
+    });
+
+    // Second click restores.
+    await user.click(
+      screen.getByRole("button", {
+        name: /Restore .* as a recommendation/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(mockedSetRecommendationExclusion).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedSetRecommendationExclusion).toHaveBeenNthCalledWith(2, {
+      recommendation_id: "rec-1",
+      connection_id: "123456789012",
+      account_id: "123456789012",
+      region: "us-east-1",
+      recommendation_kind: "lambda-otel-layer",
+      resource_id: "arn:aws:lambda:us-east-1:123:function:fn-1",
+      excluded: false,
+    });
+    // Excluded badge clears.
+    await waitFor(() => {
+      expect(
+        screen.queryByLabelText(/Excluded from future recommendations/i),
+      ).not.toBeInTheDocument();
+    });
+    // Success toast on restore names the inverse behavior.
+    expect(screen.getByTestId("exclusion-toast")).toHaveTextContent(
+      /Restored — Squadron will propose this again/i,
+    );
+  });
+
+  it("RecommendationsTab_OptimisticRollbackOnError", async () => {
+    const recs = buildRecsResponse();
+    mockedSetRecommendationExclusion.mockRejectedValueOnce(
+      new Error("storage offline"),
+    );
+    await renderRecommendationsTabWith(recs);
+
+    const user = userEvent.setup();
+    const excludeButtons = await screen.findAllByRole("button", {
+      name: /Don't propose .* again/i,
+    });
+    await user.click(excludeButtons[0]);
+
+    // The POST fires; the badge briefly appears via optimistic
+    // update, then disappears once the error rollback runs. The
+    // error toast surfaces the err message verbatim.
+    await waitFor(() => {
+      expect(mockedSetRecommendationExclusion).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("exclusion-toast")).toHaveTextContent(
+        /storage offline/,
+      );
+    });
+    // Rolled back: no Excluded badge on either card.
+    expect(
+      screen.queryByLabelText(/Excluded from future recommendations/i),
+    ).not.toBeInTheDocument();
+    // Both rows still read "Don't propose this again" — the
+    // optimistic update was undone.
+    expect(
+      screen.getAllByRole("button", { name: /Don't propose .* again/i }),
+    ).toHaveLength(2);
   });
 });

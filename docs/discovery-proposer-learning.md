@@ -485,6 +485,52 @@ acceptance tests in §12. None of slice 2 ships in v0.89.28;
 everything in this runbook describes slice 1 behavior you can
 rely on today.
 
+## Operator-set exclusion (v0.89.38)
+
+The slice-2 chunk-5 UI affordance shipped in v0.89.38 closes the
+loop on operator-set exclusion. Each row of the discovery
+Recommendations tab now carries a "Don't propose this again"
+button alongside the existing Copy / Open PR controls. Clicking
+it POSTs to
+`POST /api/v1/discovery/aws/recommendations/exclude` (the
+v0.89.37 handler from #531 slice 2 chunk 4). The handler upserts
+a row in the `iac_recommendation_verdicts` table and emits a
+`discovery_recommendation.excluded` audit event on the
+false → true transition (or `exclude_cleared` on the inverse
+restore click). The discovery proposer's next scan reads the
+exclusion via the bridge's verdict pool and drops the
+recommendation kind (or kind + resource_id, when scoped) from
+the prompt's example list — same selection-policy filter that
+honors the per-rollout exclude flag on the cost-spike side.
+
+The card visually dims (opacity + grayscale + an "Excluded"
+badge in the header) and the button label flips to "Restore as
+recommendation" while the exclusion is active. Restoring inverts
+the same POST with `excluded: false` and emits
+`discovery_recommendation.exclude_cleared`. Both events surface
+in the audit timeline via the v0.89.37 humanizer.
+
+Persistent UI state for excluded recommendations is a follow-on
+to this slice. Chunk 5 ships without pre-loading existing
+exclusions on tab mount — operators who toggle a recommendation
+and then refresh the page see the UI badge reset, even though
+the backend persistence + audit event + future-scan filter all
+remain in effect. The success toast names this explicitly so
+operators can recover the state from the Timeline. A `GET`
+endpoint that lists existing exclusions for a scope (matching
+the existing `ListExcludedRecommendations` storage method) is
+the small follow-on that fills the gap; tracked as a slice 2
+boundary task.
+
+Granularity (kind-level vs resource-level): v1 ships with the
+button picking the granularity from whether the recommendation
+row carries `affected_resources`. When it does, the exclusion
+posts the first affected resource ID as `resource_id` and the
+backend scopes accordingly. When it doesn't, the exclusion is
+kind-level. A v2 dropdown letting the operator pick "exclude
+this resource" vs "exclude this entire kind" is the next UX
+slice; chunk 5 ships the simpler default to stay bounded.
+
 ## Cross-references
 
 - [Proposer learning loop (cost-spike side)](./proposer-learning-loop.md) —

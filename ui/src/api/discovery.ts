@@ -393,6 +393,62 @@ export function generateAWSRecommendations(
   );
 }
 
+// --- Recommendation-exclusion endpoint (v0.89.38 #658 Stream 56) -----
+//
+// v0.89.38 (#658 Stream 56, #531 slice 2 chunk 5) — operator-set
+// exclusion affordance on the discovery Recommendations tab. The
+// "Don't propose this again" button on each recommendation row POSTs
+// the wire shape below; the Go handler
+// HandleAWSRecommendationExclude (internal/api/handlers/discovery.go)
+// upserts the iac_recommendation_verdicts row and emits the
+// discovery_recommendation.excluded /
+// discovery_recommendation.exclude_cleared audit event on transitions
+// only. See docs/proposals/531-proposer-learning-slice2.md §4.2 +
+// §10 contract item 9.
+//
+// ResourceID is optional. When absent / empty the exclusion is scoped
+// to the entire recommendation kind at (connection_id × account_id ×
+// region). When present, the exclusion targets a single resource
+// (the §11 Q4 distinction). v1 (chunk 5) picks the granularity from
+// whether the recommendation row carries affected_resources; v2 may
+// surface a dropdown letting the operator pick explicitly.
+//
+// Excluded is the desired final state. true on "Don't propose this
+// again"; false on the inverse "Restore as recommendation" click.
+
+export interface ExcludeRecommendationRequest {
+  recommendation_id: string;
+  connection_id: string;
+  account_id: string;
+  region: string;
+  recommendation_kind: string;
+  // Optional. Empty / undefined scopes the exclusion to the entire
+  // recommendation kind at the given scope; non-empty scopes it to a
+  // single resource. The proposer's prompt renderer surfaces the
+  // distinction with different instruction text (§11 Q4).
+  resource_id?: string;
+  excluded: boolean;
+}
+
+export interface ExcludeRecommendationResponse {
+  recommendation_id: string;
+  excluded: boolean;
+  // ISO timestamp stamped by the handler on a false -> true
+  // transition. Absent on excluded=false responses (the row stays
+  // around with cleared stamps).
+  excluded_at?: string;
+  excluded_by?: string;
+}
+
+export function setRecommendationExclusion(
+  req: ExcludeRecommendationRequest,
+): Promise<ExcludeRecommendationResponse> {
+  return apiPost<ExcludeRecommendationResponse>(
+    "/discovery/aws/recommendations/exclude",
+    req,
+  );
+}
+
 // --- Wizard shape (mirrors Go internal/discovery/wizard) ------------
 
 // ActionKind enumerates the slice-1 step renderers the React shell
