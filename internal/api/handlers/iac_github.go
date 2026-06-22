@@ -795,6 +795,21 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubUpdatePlacementMap(c *gin.Context) {
 //   - explicit true → opt back in (default for new connections).
 type iacGitHubUpdateConnectionRequest struct {
 	LearnFromAcceptedRecommendations *bool `json:"learn_from_accepted_recommendations,omitempty"`
+
+	// WebhookSecret is the v0.89.31 (#650) per-connection inbound
+	// webhook HMAC secret. Pointer semantics:
+	//   - nil               → leave the column untouched (no-op).
+	//   - "" (empty string) → clear the column (fall back to the
+	//                         env-var global SQUADRON_GITHUB_WEBHOOK_SECRET
+	//                         at HMAC-verify time).
+	//   - any other value   → sealed via credstore.SealWebhookSecret
+	//                         and stored. Replacing a previous secret
+	//                         simply overwrites; rotation is just a
+	//                         second PATCH with a new value.
+	//
+	// The response never echoes the plaintext (or the sealed bytes)
+	// back — the response carries only {connection_id, status}.
+	WebhookSecret *string `json:"webhook_secret,omitempty"`
 }
 
 // HandleIaCGitHubUpdateConnection — PATCH
@@ -873,6 +888,81 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubUpdateConnection(c *gin.Context) {
 				Message: "Squadron could not persist the connection update.",
 			}})
 			return
+		}
+	}
+
+	// v0.89.31 (#650) — per-connection webhook secret. Same partial-
+	// update posture as the learn flag:
+	//   nil          → leave untouched.
+	//   "" (empty)   → clear the column (fall back to env-var global).
+	//   non-empty    → seal via credstore.SealWebhookSecret and store.
+	// The plaintext bytes never leave this branch — no log line, no
+	// error message, no audit payload carries them.
+	if req.WebhookSecret != nil {
+		if *req.WebhookSecret == "" {
+			if err := h.store.SetWebhookSecret(c.Request.Context(), connectionID, nil); err != nil {
+				if errors.Is(err, iacconnstore.ErrConnectionNotFound) {
+					c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+						Code:    "ConnectionNotFound",
+						Message: "The IaC connection was deleted while the update was in flight.",
+					}})
+					return
+				}
+				if h.logger != nil {
+					h.logger.Error("iac github update connection: webhook secret clear failed", zap.Error(err))
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+					Code:    "IaCStoreWriteFailed",
+					Message: "Squadron could not clear the per-connection webhook secret.",
+				}})
+				return
+			}
+		} else {
+			if h.credKey == nil {
+				if h.logger != nil {
+					// No token bytes in the log line — the
+					// no-token-in-errors invariant covers webhook
+					// secrets the same way it covers PATs.
+					h.logger.Error("iac github update connection: credstore key not wired; cannot seal webhook secret")
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+					Code:    "CredstoreKeyNotWired",
+					Message: "Squadron's secrets key isn't configured. Verify SQUADRON_SECRETS_KEY is set and retry.",
+				}})
+				return
+			}
+			sealed, err := credstore.SealWebhookSecret(h.credKey, []byte(*req.WebhookSecret))
+			if err != nil {
+				if h.logger != nil {
+					// Critically: do NOT include the plaintext in
+					// the log line. The seal failure mode is a
+					// crypto-substrate failure, not a secret-shape
+					// failure — surface the error type only.
+					h.logger.Error("iac github update connection: webhook secret seal failed", zap.Error(err))
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+					Code:    "WebhookSecretEncryptFailed",
+					Message: "Squadron could not encrypt the per-connection webhook secret. The error has been logged.",
+				}})
+				return
+			}
+			if err := h.store.SetWebhookSecret(c.Request.Context(), connectionID, sealed); err != nil {
+				if errors.Is(err, iacconnstore.ErrConnectionNotFound) {
+					c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+						Code:    "ConnectionNotFound",
+						Message: "The IaC connection was deleted while the update was in flight.",
+					}})
+					return
+				}
+				if h.logger != nil {
+					h.logger.Error("iac github update connection: webhook secret write failed", zap.Error(err))
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+					Code:    "IaCStoreWriteFailed",
+					Message: "Squadron could not persist the per-connection webhook secret.",
+				}})
+				return
+			}
 		}
 	}
 

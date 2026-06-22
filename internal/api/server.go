@@ -916,6 +916,14 @@ func (s *Server) registerRoutes() {
 		if s.iacGitHubWebhookStore != nil {
 			h = h.WithDedupeStore(s.iacGitHubWebhookStore)
 		}
+		// v0.89.31 (#650) — wire the credstore Key so the receiver
+		// can unseal per-connection webhook secrets. Nil-safe; when
+		// unwired, the per-connection lookup short-circuits and the
+		// receiver falls back to the env-var global. The Key is the
+		// same one the discovery substrate uses to seal PATs.
+		if s.discoveryCredKey != nil {
+			h = h.WithCredstoreKey(s.discoveryCredKey)
+		}
 		h.HandleWebhook(c)
 	})
 

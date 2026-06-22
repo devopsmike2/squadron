@@ -185,6 +185,55 @@ func (m *memoryStore) UpdatePlacementMap(_ context.Context, connectionID string,
 	return nil
 }
 
+// SetWebhookSecret stores the sealed per-connection webhook secret
+// in the in-memory row and stamps UpdatedAt. A nil or zero-length
+// sealed slice clears the field — that's the env-var-fallback
+// sentinel mirrored from the SQLite NULL semantics. v0.89.31 (#650).
+func (m *memoryStore) SetWebhookSecret(_ context.Context, connectionID string, sealed []byte) error {
+	if connectionID == "" {
+		return errors.New("iacconnstore: SetWebhookSecret: connectionID is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	conn, ok := m.byID[connectionID]
+	if !ok {
+		return ErrConnectionNotFound
+	}
+	if len(sealed) == 0 {
+		conn.WebhookSecret = nil
+	} else {
+		// Defensive copy so a caller-side mutation post-call doesn't
+		// alias the stored bytes (mirrors the cloneConnection posture
+		// for CredCiphertext).
+		copied := make([]byte, len(sealed))
+		copy(copied, sealed)
+		conn.WebhookSecret = copied
+	}
+	conn.UpdatedAt = m.timeNow()
+	return nil
+}
+
+// GetWebhookSecret returns the sealed per-connection webhook secret
+// for the in-memory row, or (nil, nil) when none is set. Returns
+// ErrConnectionNotFound when no row matches. v0.89.31 (#650).
+func (m *memoryStore) GetWebhookSecret(_ context.Context, connectionID string) ([]byte, error) {
+	if connectionID == "" {
+		return nil, errors.New("iacconnstore: GetWebhookSecret: connectionID is required")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	conn, ok := m.byID[connectionID]
+	if !ok {
+		return nil, ErrConnectionNotFound
+	}
+	if len(conn.WebhookSecret) == 0 {
+		return nil, nil
+	}
+	out := make([]byte, len(conn.WebhookSecret))
+	copy(out, conn.WebhookSecret)
+	return out, nil
+}
+
 // UpdateLearnFromAcceptedRecommendations sets the per-connection
 // discovery-feedback opt-in flag and stamps UpdatedAt.
 // v0.89.28 (#643 slice 1).
@@ -213,8 +262,17 @@ func (m *memoryStore) Close() error {
 // store cannot share mutable state through slice or byte-slice
 // aliasing. Maps and pointers are not used in IaCConnection, so the
 // slice copies are sufficient.
+//
+// v0.89.31 (#650): the WebhookSecret blob is deliberately NOT
+// populated on the returned struct — the Store contract is that
+// Get(id) and List() leave it nil so the bytes don't leak through
+// the marshaling / logging / audit surfaces every other caller
+// exposes. Callers that genuinely need the sealed bytes call
+// GetWebhookSecret(connectionID) directly, which is the only path
+// through which the blob reaches user code.
 func cloneConnection(in *IaCConnection) *IaCConnection {
 	out := *in
+	out.WebhookSecret = nil // Defense in depth: never populated on Get/List.
 	if in.CredCiphertext != nil {
 		out.CredCiphertext = make([]byte, len(in.CredCiphertext))
 		copy(out.CredCiphertext, in.CredCiphertext)

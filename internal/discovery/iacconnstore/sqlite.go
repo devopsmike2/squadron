@@ -374,6 +374,68 @@ func (s *sqliteStore) UpdatePlacementMap(ctx context.Context, connectionID strin
 	return nil
 }
 
+// SetWebhookSecret writes the sealed per-connection webhook secret
+// blob and stamps UpdatedAt. A nil or zero-length sealed slice
+// clears the column (NULLs it) — that's the "fall back to env-var
+// global" sentinel. No other column is touched. Returns
+// ErrConnectionNotFound if no row matches. v0.89.31 (#650).
+func (s *sqliteStore) SetWebhookSecret(ctx context.Context, connectionID string, sealed []byte) error {
+	if connectionID == "" {
+		return errors.New("iacconnstore: SetWebhookSecret: connectionID is required")
+	}
+	now := s.timeNow()
+	const stmt = `
+		UPDATE iac_connections
+		SET webhook_secret_sealed = ?, updated_at = ?
+		WHERE connection_id = ?
+	`
+	// nil sealed → SQL NULL → the "use env-var global" sentinel.
+	// The handler upstream treats empty plaintext as clear-the-column
+	// so the empty case at this boundary is always the clear path.
+	var arg any
+	if len(sealed) == 0 {
+		arg = nil
+	} else {
+		arg = sealed
+	}
+	res, err := s.db.ExecContext(ctx, stmt, arg, now.Format(timestampLayout), connectionID)
+	if err != nil {
+		return fmt.Errorf("iacconnstore: set webhook_secret_sealed for %s: %w", connectionID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("iacconnstore: rows affected for %s: %w", connectionID, err)
+	}
+	if affected == 0 {
+		return ErrConnectionNotFound
+	}
+	return nil
+}
+
+// GetWebhookSecret returns the sealed per-connection webhook secret
+// for the named connection, or (nil, nil) when the column is NULL
+// (the env-var fallback sentinel). Returns ErrConnectionNotFound
+// when no row matches. v0.89.31 (#650).
+//
+// Get(id) and List() deliberately do NOT populate the WebhookSecret
+// field on the returned struct, so this dedicated method is the only
+// path through which the sealed bytes reach a caller. Keeps the
+// blob off every surface that doesn't explicitly opt in.
+func (s *sqliteStore) GetWebhookSecret(ctx context.Context, connectionID string) ([]byte, error) {
+	if connectionID == "" {
+		return nil, errors.New("iacconnstore: GetWebhookSecret: connectionID is required")
+	}
+	const stmt = `SELECT webhook_secret_sealed FROM iac_connections WHERE connection_id = ?`
+	var sealed []byte
+	if err := s.db.QueryRowContext(ctx, stmt, connectionID).Scan(&sealed); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrConnectionNotFound
+		}
+		return nil, fmt.Errorf("iacconnstore: get webhook_secret_sealed for %s: %w", connectionID, err)
+	}
+	return sealed, nil
+}
+
 // UpdateLearnFromAcceptedRecommendations sets the per-connection
 // discovery-feedback opt-in flag and stamps UpdatedAt. No other
 // column is touched. v0.89.28 (#643 slice 1).

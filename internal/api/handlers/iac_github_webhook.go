@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -121,12 +122,25 @@ type IaCGitHubWebhookHandler struct {
 	// (e.g. a test environment that doesn't wire the app store at
 	// all). Production callers always wire it.
 	dedupeStore WebhookDedupeStore
-	// secret is the raw HMAC key bytes, cached at construct time so
-	// HandleWebhook doesn't read the environment on every request.
-	// An empty (nil or zero-length) secret means the handler is
-	// configured-but-disabled — HandleWebhook 503s on every call
-	// with a humanized body naming the env var.
-	secret       []byte
+	// secret is the deployment-wide global HMAC key bytes — the env-
+	// var SQUADRON_GITHUB_WEBHOOK_SECRET surface. v0.89.31 (#650)
+	// reframes this from "the only secret" to "the fallback secret":
+	// the receiver looks up the per-connection sealed secret via
+	// store.GetWebhookSecret and unseals via
+	// credstore.UnsealWebhookSecret; if (and only if) that lookup
+	// returns nothing usable, the HMAC is verified against this
+	// global. An empty global is still 503 — even with per-
+	// connection secrets, the slice-2 reality is most connections
+	// haven't migrated yet, so we want operators to keep the global
+	// set so the fall-through path stays sane.
+	secret []byte
+
+	// credKey is the credstore Key used to unseal per-connection
+	// webhook secrets. Nil-safe: a nil key short-circuits the per-
+	// connection lookup so the receiver falls back to the env-var
+	// global on every delivery. v0.89.31 (#650).
+	credKey *credstore.Key
+
 	logger       *zap.Logger
 	branchPrefix string
 }
@@ -166,6 +180,19 @@ func NewIaCGitHubWebhookHandler(
 		logger:       logger,
 		branchPrefix: defaultSquadronBranchPrefix,
 	}
+}
+
+// WithCredstoreKey wires the credstore Key used to unseal per-
+// connection webhook secrets. v0.89.31 (#650). Nil-safe — when the
+// key isn't wired (test paths, deployments that never set
+// SQUADRON_SECRETS_KEY), the per-connection lookup short-circuits
+// and HandleWebhook falls back to the env-var global on every
+// delivery. Production callers always wire it; the discovery
+// substrate's key is the same Key used to seal PATs, so there is
+// nothing extra to provision.
+func (h *IaCGitHubWebhookHandler) WithCredstoreKey(key *credstore.Key) *IaCGitHubWebhookHandler {
+	h.credKey = key
+	return h
 }
 
 // WithDedupeStore wires the v0.89.30 (#649) replay-protection store.
@@ -251,42 +278,71 @@ type gitHubPullRequestEvent struct {
 	} `json:"pull_request"`
 }
 
+// webhookRepoSniff is the v0.89.31 (#650) MINIMAL parse shape — only
+// the one field the per-connection-secret lookup needs to pick the
+// HMAC key. We don't parse the full pull_request event here because
+// (a) the body may not even be a pull_request event (ping, push,
+// installation, etc.) and (b) the full parse can stay deferred to
+// the action/merged-filter step where we already needed it.
+//
+// Non-pull_request payloads either lack pull_request.base.repo or
+// shape it differently — that's fine, JSON unmarshal leaves missing
+// fields as zero values and the sniffed FullName ends up empty.
+// Empty FullName flows through pickWebhookSecret as the "no
+// per-connection secret" sentinel, so the env-var global is used.
+type webhookRepoSniff struct {
+	PullRequest struct {
+		Base struct {
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
+		} `json:"base"`
+	} `json:"pull_request"`
+}
+
 // HandleWebhook is the POST /api/v1/webhooks/github entry point.
 //
-// Lifecycle:
-//  1. 503 if no secret was configured (deployment misconfiguration).
+// Lifecycle (v0.89.31 — re-ordered from v0.89.30 to support per-
+// connection HMAC secrets):
+//  1. 503 if the env-var GLOBAL secret was not configured. Even with
+//     per-connection secrets in slice 2, most connections haven't
+//     migrated yet — we want operators to keep the global set so
+//     deliveries from unmigrated connections still validate.
 //  2. Read the body bytes (needed for HMAC; can't re-encode JSON
 //     and expect the signature to match GitHub's view).
-//  3. Read X-Hub-Signature-256, strip "sha256=", hex-decode.
-//  4. Constant-time HMAC compare via hmac.Equal — NOT bytes.Equal.
-//  5. 200 + ignored for any non-pull_request event type.
-//  6. Unmarshal the body into gitHubPullRequestEvent.
-//  7. 200 + ignored for action != "closed" or merged == false.
-//  8. Best-effort connection lookup by repo full name — nil result
-//     is fine, we still emit the audit row with connection_id="".
-//  9. Parse recommendation_kind from the head branch via
-//     parseRecommendationKindFromBranch — empty string when the
-//     branch isn't Squadron-shaped is honest reporting.
-// 10. Emit recommendation.pr_merged via auditSvc.Record.
+//  3. MINIMAL payload parse — extract pull_request.base.repo.full_name
+//     only, into webhookRepoSniff. For non-pull_request bodies the
+//     sniffed name ends up empty, which is fine. If JSON unmarshal
+//     itself fails (truly malformed body), return 400 — note this
+//     now lands BEFORE HMAC verify. The brief documents this
+//     tradeoff: an attacker would have to send a body that even
+//     claims to be JSON-shaped to get a 400 here, and 400 vs 401
+//     doesn't help them — there's no oracle in either response.
+//  4. Connection lookup by repo full name, then pickWebhookSecret
+//     unseals the per-connection secret OR falls back to the global.
+//  5. Read X-Hub-Signature-256, hex-decode, verify HMAC against the
+//     PICKED secret in constant time. 401 on any mismatch.
+//  6. Dedupe against X-GitHub-Delivery — unchanged from v0.89.30.
+//  7. Event-type filter (pull_request only) — unchanged.
+//  8. Full payload parse + action/merged filter — unchanged.
+//  9. Emit recommendation.pr_merged audit — unchanged.
 //
 // Status codes:
 //   - 200 — handled OR honestly ignored (unknown event, not merged,
-//     no matching connection). GitHub's redelivery system reads 200
-//     as "delivered" and doesn't retry.
-//   - 400 — body unreadable or unmarshalable. Operator-facing
-//     signal that the payload shape doesn't match what we expect;
-//     not retriable.
-//   - 401 — signature missing, malformed, or doesn't match. Same
-//     posture as above — retrying with the same payload + same
-//     headers is futile.
-//   - 503 — secret unconfigured. Recoverable by the operator
-//     setting the env var and restarting; GitHub will retry the
-//     delivery, but it'll keep failing until the operator acts.
-//     The body names the env var explicitly so the operator
-//     reading the GitHub webhook delivery log sees exactly which
-//     knob to turn.
+//     no matching connection, replayed delivery).
+//   - 400 — body unreadable or unmarshalable. v0.89.31: this now
+//     lands BEFORE HMAC verify because the per-connection-secret
+//     pick depends on a sniffed field from the body. Documented
+//     tradeoff per the issue brief — no security regression.
+//   - 401 — signature missing, malformed, or doesn't match the
+//     picked secret. Same posture as v0.89.30.
+//   - 503 — global secret unconfigured. Body names the env var.
 func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	if len(h.secret) == 0 {
+		// Slice 2 reality check: per-connection secrets are the
+		// per-team rotation path, but the env-var global is still
+		// the fall-through for connections that haven't migrated.
+		// 503 here keeps the failure mode sane for those.
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":  "webhook secret not configured",
 			"detail": "set " + gitHubWebhookSecretEnvVar + " to enable the GitHub PR-merged listener",
@@ -299,6 +355,51 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "request body could not be read"})
 		return
 	}
+
+	// MINIMAL parse — only the repo full name. Used to pick the
+	// HMAC key (per-connection vs global); the full event parse is
+	// deferred to the merge-detection step below where we need the
+	// action / merged / head.ref / merged_by fields.
+	var sniff webhookRepoSniff
+	if err := json.Unmarshal(body, &sniff); err != nil {
+		// v0.89.31 (#650) — this 400 lands BEFORE HMAC verify by
+		// design. The per-connection-secret pick depends on the
+		// sniffed repo name; we cannot pick a secret until we've
+		// looked at the body shape enough to know which connection
+		// the delivery is for. The tradeoff is documented in the
+		// brief — an attacker who can already send arbitrary bytes
+		// can flip our response from 401 to 400 by sending a
+		// non-JSON body, but the 400 carries no information that
+		// helps them forge a valid signature.
+		c.JSON(http.StatusBadRequest, gin.H{"error": "pull_request payload could not be parsed"})
+		return
+	}
+	repoFullName := sniff.PullRequest.Base.Repo.FullName
+
+	// Connection lookup happens BEFORE HMAC verify (v0.89.31 re-
+	// order). We need the connection_id to pick the per-connection
+	// secret. The lookup result is reused at the audit-emit step
+	// below so we don't double-query the store.
+	var connectionID string
+	if h.store != nil && repoFullName != "" {
+		conn, err := h.store.GetByRepoFullName(c.Request.Context(), repoFullName)
+		switch {
+		case err == nil && conn != nil:
+			connectionID = conn.ConnectionID
+		case errors.Is(err, iacconnstore.ErrConnectionNotFound):
+			// Honest no-match — log on the audit-emit branch
+			// below, not here, so the audit row gets the same
+			// log line whether the connection was missing pre-
+			// or post-merge.
+		default:
+			h.logger.Warn("iac github webhook: connection lookup failed; will retry secret lookup against env-var global",
+				zap.Error(err),
+				zap.String("repo_full_name", repoFullName),
+			)
+		}
+	}
+
+	pickedSecret := h.pickWebhookSecret(c.Request.Context(), connectionID)
 
 	sig := c.GetHeader("X-Hub-Signature-256")
 	if !strings.HasPrefix(sig, "sha256=") {
@@ -313,7 +414,7 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	mac := hmac.New(sha256.New, h.secret)
+	mac := hmac.New(sha256.New, pickedSecret)
 	mac.Write(body)
 	expected := mac.Sum(nil)
 	// hmac.Equal is the constant-time compare; bytes.Equal would
@@ -427,27 +528,18 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 		return
 	}
 
-	// Best-effort connection lookup. nil result is fine: the merge
-	// is real (the HMAC passed, GitHub said merged=true) so the
-	// audit row goes out regardless. Log a warning so an operator
-	// debugging "why didn't my webhook fire" can find the trail.
-	var connectionID string
-	if h.store != nil {
-		conn, err := h.store.GetByRepoFullName(c.Request.Context(), ev.PullRequest.Base.Repo.FullName)
-		switch {
-		case err == nil && conn != nil:
-			connectionID = conn.ConnectionID
-		case errors.Is(err, iacconnstore.ErrConnectionNotFound):
-			h.logger.Warn("iac github webhook: pr_merged received but no IaC connection matches repo",
-				zap.String("repo_full_name", ev.PullRequest.Base.Repo.FullName),
-				zap.Int("pr_number", ev.PullRequest.Number),
-			)
-		default:
-			h.logger.Warn("iac github webhook: connection lookup failed; emitting audit with empty connection_id",
-				zap.Error(err),
-				zap.String("repo_full_name", ev.PullRequest.Base.Repo.FullName),
-			)
-		}
+	// Connection lookup was already done at the pre-HMAC stage so we
+	// could pick the per-connection secret. We reuse the resulting
+	// connectionID here; an empty value still produces an audit row
+	// with an empty connection_id, matching v0.89.23's
+	// TestGitHubWebhook_SignatureValid_NoMatchingConnection_StillEmitsAudit
+	// contract. Emit the v0.89.30 warning line so the SIEM trail
+	// still shows the "merged-but-no-connection" signal.
+	if connectionID == "" && repoFullName != "" {
+		h.logger.Warn("iac github webhook: pr_merged received but no IaC connection matches repo",
+			zap.String("repo_full_name", repoFullName),
+			zap.Int("pr_number", ev.PullRequest.Number),
+		)
 	}
 
 	// Parse the recommendation kind off the branch suffix. Empty
@@ -501,6 +593,56 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 		"ok":                  true,
 		"audit_event_emitted": true,
 	})
+}
+
+// pickWebhookSecret returns the HMAC key bytes the receiver should
+// verify this delivery's X-Hub-Signature-256 against. v0.89.31 (#650).
+//
+// When connectionID is non-empty AND the credstore Key is wired AND
+// the store has a sealed per-connection secret stored AND that blob
+// unseals cleanly, return the unsealed plaintext. In every other
+// case, fall back to the env-var global (h.secret). Unseal failures
+// are warned (without the bytes) and treated as a fall-through so
+// a corrupted per-connection blob does not brick the env-var path.
+//
+// The return value is the plaintext key bytes; callers MUST NOT log
+// it or include it in error messages. The slice aliases internal
+// state on the fall-through path (it's h.secret directly) but
+// returns a freshly-decrypted slice on the per-connection path —
+// callers do not mutate either.
+func (h *IaCGitHubWebhookHandler) pickWebhookSecret(ctx context.Context, connectionID string) []byte {
+	if connectionID == "" || h.store == nil || h.credKey == nil {
+		return h.secret
+	}
+	sealed, err := h.store.GetWebhookSecret(ctx, connectionID)
+	if err != nil {
+		// Don't promote a store-read failure to a hard error — the
+		// env-var global is the documented fallback. Log so the
+		// SIEM trail shows the cause.
+		h.logger.Warn("iac github webhook: per-connection secret lookup failed; falling back to global",
+			zap.String("connection_id", connectionID),
+			zap.Error(err),
+		)
+		return h.secret
+	}
+	if len(sealed) == 0 {
+		// No per-connection secret stored — the "haven't migrated"
+		// connection. Backward compat with v0.89.30 deployments.
+		return h.secret
+	}
+	plaintext, err := credstore.UnsealWebhookSecret(h.credKey, sealed)
+	if err != nil {
+		// Critical: do NOT log the sealed bytes or the plaintext.
+		// Surface only the error type so an operator debugging a
+		// rotated-key incident can correlate against the secrets
+		// substrate's logs.
+		h.logger.Warn("iac github webhook: per-connection secret unseal failed; falling back to global",
+			zap.String("connection_id", connectionID),
+			zap.Error(err),
+		)
+		return h.secret
+	}
+	return plaintext
 }
 
 // parseRecommendationKindFromBranch is the v0.89.23 entry point that

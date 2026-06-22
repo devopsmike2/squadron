@@ -14,7 +14,7 @@ package iacconnstore
 // migration per bump, applied in order, idempotent SQL inside each
 // step. Existing migrations are NEVER edited after merge — they ran
 // against historical databases and edits desynchronize the schema.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // migration0001IaCConnections is the initial schema. One table for
 // IaC repository connections, parallel to credstore's
@@ -74,10 +74,27 @@ ALTER TABLE iac_connections ADD COLUMN learn_from_accepted_recommendations INTEG
 INSERT OR IGNORE INTO schema_version (version) VALUES (2);
 `
 
+// migration0003WebhookSecretSealed — v0.89.31 (#650). Adds the
+// per-connection inbound-webhook HMAC secret column. NULL allowed —
+// that's the sentinel for "use the env-var global
+// SQUADRON_GITHUB_WEBHOOK_SECRET" so pre-v0.89.31 connections keep
+// validating against the deployment-wide secret without operator
+// action.
+//
+// SQLite doesn't support ALTER TABLE ... ADD COLUMN IF NOT EXISTS;
+// the migrate runner already tolerates the "duplicate column name"
+// error so re-running on an up-to-date database is a no-op (the
+// same idempotency that v0.89.28's migration0002 relies on).
+const migration0003WebhookSecretSealed = `
+ALTER TABLE iac_connections ADD COLUMN webhook_secret_sealed BLOB;
+INSERT OR IGNORE INTO schema_version (version) VALUES (3);
+`
+
 // migrations is the ordered list of schema migrations. Index N is the
 // SQL applied at version N+1. New entries are appended; existing
 // entries are never edited.
 var migrations = []string{
 	migration0001IaCConnections,
 	migration0002LearnFromAcceptedRecommendations,
+	migration0003WebhookSecretSealed,
 }
