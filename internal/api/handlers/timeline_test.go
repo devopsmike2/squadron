@@ -241,6 +241,73 @@ func TestHumanizeIaCAuditEvent(t *testing.T) {
 			wantOK: false,
 		},
 
+		// --- recommendation.pr_merged (v0.89.24 #640) ---
+		// Pins the humanizer for the v0.89.23 (#639) webhook event.
+		// Cases verify happy path with all four required fields, the
+		// kindless-suffix fallback when the PR didn't come from a
+		// Squadron-shaped branch, and the missing-merged_by defensive
+		// path that falls through to the v0.81.4 raw-event_type
+		// renderer.
+		{
+			name: "pr_merged happy path with recommendation_kind",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventRecommendationPRMerged,
+				Payload: map[string]any{
+					"repo_full_name":      "acme/infra",
+					"pr_number":           float64(42),
+					"pr_url":              "https://github.com/acme/infra/pull/42",
+					"branch":              "squadron/rec/rds-pi-em/abc123",
+					"merged_at":           "2026-06-22T10:00:00Z",
+					"merged_by":           "alice",
+					"recommendation_kind": "rds-pi-em",
+					"connection_id":       "conn-abc",
+				},
+			},
+			wantTitle: "Merged PR #42 in github.com/acme/infra for rds-pi-em",
+			wantSub:   "Branch squadron/rec/rds-pi-em/abc123, merged by alice",
+			wantOK:    true,
+		},
+		{
+			// PR that landed under Squadron's webhook receiver but
+			// from a non-Squadron-shaped branch (operator hand-pushed
+			// or a custom prefix). The audit event still records the
+			// merge; the title omits "for <kind>" rather than render
+			// "Merged PR #5 in foo/bar for ".
+			name: "pr_merged without recommendation_kind drops kind suffix",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventRecommendationPRMerged,
+				Payload: map[string]any{
+					"repo_full_name": "acme/infra",
+					"pr_number":      float64(5),
+					"pr_url":         "https://github.com/acme/infra/pull/5",
+					"branch":         "feature/hand-pushed",
+					"merged_at":      "2026-06-22T10:00:00Z",
+					"merged_by":      "bob",
+					// recommendation_kind intentionally absent
+				},
+			},
+			wantTitle: "Merged PR #5 in github.com/acme/infra",
+			wantSub:   "Branch feature/hand-pushed, merged by bob",
+			wantOK:    true,
+		},
+		{
+			name: "pr_merged missing merged_by falls back",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventRecommendationPRMerged,
+				Payload: map[string]any{
+					"repo_full_name": "acme/infra",
+					"pr_number":      float64(42),
+					"branch":         "squadron/rec/rds-pi-em/abc123",
+					// merged_by intentionally absent — the receiver
+					// guarantees this field on a real merge, so if
+					// it's absent we treat the row as malformed and
+					// fall through to the v0.81.4 raw-event_type
+					// renderer rather than print "merged by ".
+				},
+			},
+			wantOK: false,
+		},
+
 		// --- nil-safe + unknown event type ---
 		{
 			name:   "nil event falls through",
