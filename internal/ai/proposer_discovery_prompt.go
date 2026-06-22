@@ -649,10 +649,59 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	b.WriteString("\n")
 
+	// v0.89.28 (#643 slice 1) — accepted-recommendations block. Append
+	// when the wiring layer supplied a non-empty AcceptedRecommendations
+	// slice. Cold-start path (empty slice) MUST produce a prompt
+	// byte-for-byte identical to the pre-v0.89.28 message; the §11
+	// acceptance test pins this invariant.
+	if len(in.AcceptedRecommendations) > 0 {
+		writeAcceptedRecommendationsBlock(&b, in.AcceptedRecommendations)
+	}
+
 	b.WriteString("Return your plan as the JSON object described in the system prompt. ")
 	b.WriteString("Each step's inline_config_snippet must be complete Terraform HCL the ")
 	b.WriteString("operator can paste into their IaC pipeline. ")
 	b.WriteString("group_id on every step MUST equal the account_id above. ")
 	b.WriteString("Set require_approval to true on step 0.\n")
 	return b.String()
+}
+
+// BuildDiscoveryUserMessageForTest is a test-only export of the
+// internal buildDiscoveryUserMessage helper. Cross-package tests in
+// internal/proposer need to assert on the prompt body byte-for-byte;
+// re-implementing the builder in a sibling test file would drift.
+// v0.89.28 (#643 slice 1).
+func BuildDiscoveryUserMessageForTest(in DiscoveryScanContext) string {
+	return buildDiscoveryUserMessage(in)
+}
+
+// writeAcceptedRecommendationsBlock — v0.89.28 (#643 slice 1) §6 prompt
+// block. Verbatim wording from the spec including the load-bearing
+// "Use these as preference signal..." instruction line — without it
+// the model sometimes interprets "accepted" as "do nothing on this
+// scope ever again," which is wrong (operators sometimes revert and
+// the recommendation is valid again).
+func writeAcceptedRecommendationsBlock(b *strings.Builder, examples []AcceptedRecommendationExample) {
+	b.WriteString("Recently accepted recommendations for this scope (operator merged a Squadron-opened PR):\n\n")
+	for _, ex := range examples {
+		fmt.Fprintf(b, "[ACCEPTED] kind=%s\n", ex.RecommendationKind)
+		if ex.PRURL != "" {
+			fmt.Fprintf(b, "  pr_url: %s\n", ex.PRURL)
+		}
+		if ex.Branch != "" {
+			fmt.Fprintf(b, "  branch: %s\n", ex.Branch)
+		}
+		if !ex.MergedAt.IsZero() {
+			fmt.Fprintf(b, "  merged_at: %s\n", ex.MergedAt.UTC().Format("2006-01-02T15:04:05Z"))
+		}
+		if ex.MergedBy != "" {
+			fmt.Fprintf(b, "  merged_by: %s\n", ex.MergedBy)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Use these as preference signal. Do NOT re-propose recommendations of the same kind ")
+	b.WriteString("against the same resource that was already accepted within the window above. The ")
+	b.WriteString("accepted snapshot may have drifted — if a resource clearly NEEDS a fresh ")
+	b.WriteString("recommendation (the previous PR was reverted, the resource's instrumented state is ")
+	b.WriteString("missing again), propose it with a note in the reasoning explaining the divergence.\n\n")
 }

@@ -77,6 +77,13 @@ func (m *memoryStore) Create(_ context.Context, conn *IaCConnection) error {
 	conn.ConnectionID = m.newUUID()
 	conn.CreatedAt = now
 	conn.UpdatedAt = now
+	// Default LearnFromAcceptedRecommendations=true at Create time.
+	// v0.89.28 (#643 slice 1): the design's per-connection opt-in flag
+	// defaults on so the discovery feedback loop is active for every
+	// fresh connection. The PATCH endpoint is the documented opt-out.
+	if !conn.LearnFromAcceptedRecommendations {
+		conn.LearnFromAcceptedRecommendations = true
+	}
 
 	// Defensive copy so a caller mutating its struct after Create
 	// doesn't mutate the stored row.
@@ -174,6 +181,24 @@ func (m *memoryStore) UpdatePlacementMap(_ context.Context, connectionID string,
 	copied := make([]PlacementMapEntry, len(entries))
 	copy(copied, entries)
 	conn.PlacementMap = copied
+	conn.UpdatedAt = m.timeNow()
+	return nil
+}
+
+// UpdateLearnFromAcceptedRecommendations sets the per-connection
+// discovery-feedback opt-in flag and stamps UpdatedAt.
+// v0.89.28 (#643 slice 1).
+func (m *memoryStore) UpdateLearnFromAcceptedRecommendations(_ context.Context, connectionID string, learn bool) error {
+	if connectionID == "" {
+		return errors.New("iacconnstore: UpdateLearnFromAcceptedRecommendations: connectionID is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	conn, ok := m.byID[connectionID]
+	if !ok {
+		return ErrConnectionNotFound
+	}
+	conn.LearnFromAcceptedRecommendations = learn
 	conn.UpdatedAt = m.timeNow()
 	return nil
 }

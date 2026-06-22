@@ -391,3 +391,70 @@ func TestGitHubWebhook_BranchPrefixParse(t *testing.T) {
 		})
 	}
 }
+
+// TestGitHubWebhook_BranchScopeParse — v0.89.28 (#643 slice 1).
+// Pins both backward-compat shapes (pre-extension 4-segment branches
+// that carry kind only) and the new 6-segment encoding that also
+// carries account_id + region. The discovery proposer's accepted-
+// examples lookup is scoped by (connection_id, account_id, region);
+// the only way that scope round-trips from PR open through PR merge
+// is via this parse so the audit row carries the right fields.
+func TestGitHubWebhook_BranchScopeParse(t *testing.T) {
+	cases := []struct {
+		name       string
+		branch     string
+		prefix     string
+		wantKind   string
+		wantAcct   string
+		wantRegion string
+		wantOK     bool
+	}{
+		{
+			name:       "new 6-segment shape with account and region",
+			branch:     "squadron/rec/rds-pi-em/123456789012/us-east-1/abc1234-0",
+			prefix:     "squadron/rec/",
+			wantKind:   "rds-pi-em",
+			wantAcct:   "123456789012",
+			wantRegion: "us-east-1",
+			wantOK:     true,
+		},
+		{
+			name:       "old 4-segment shape preserves kind, empty scope",
+			branch:     "squadron/rec/eks-observability-addon/abc123",
+			prefix:     "squadron/rec/",
+			wantKind:   "eks-observability-addon",
+			wantAcct:   "",
+			wantRegion: "",
+			wantOK:     true,
+		},
+		{
+			name:       "non-squadron branch",
+			branch:     "feature/something",
+			prefix:     "squadron/rec/",
+			wantKind:   "",
+			wantAcct:   "",
+			wantRegion: "",
+			wantOK:     false,
+		},
+		{
+			name:       "empty post-prefix returns ok=false",
+			branch:     "squadron/rec/",
+			prefix:     "squadron/rec/",
+			wantKind:   "",
+			wantAcct:   "",
+			wantRegion: "",
+			wantOK:     false,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			gotK, gotA, gotR, gotOK := parseRecommendationScopeFromBranch(tc.branch, tc.prefix)
+			if gotK != tc.wantKind || gotA != tc.wantAcct || gotR != tc.wantRegion || gotOK != tc.wantOK {
+				t.Errorf("parseRecommendationScopeFromBranch(%q, %q) = (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+					tc.branch, tc.prefix, gotK, gotA, gotR, gotOK,
+					tc.wantKind, tc.wantAcct, tc.wantRegion, tc.wantOK)
+			}
+		})
+	}
+}

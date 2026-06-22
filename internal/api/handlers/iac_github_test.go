@@ -485,8 +485,14 @@ func TestHandleIaCGitHubOpenPR_HappyPath_CreatesBranchWritesFileOpensPREmitsAudi
 	if resp.PRNumber != 42 || resp.PRURL == "" || resp.Branch == "" || resp.CommitSHA == "" || resp.FilePath == "" {
 		t.Fatalf("response missing field: %+v", resp)
 	}
-	if !strings.HasPrefix(resp.Branch, "squadron/rec-abc1234-0") {
-		t.Errorf("branch = %q, want prefix squadron/rec-abc1234-0", resp.Branch)
+	// v0.89.28 (#643 slice 1) — the branch shape now encodes the
+	// recommendation_kind segment so the v0.89.23 webhook receiver
+	// can extract account_id + region cleanly when both are in scope
+	// at PR open time. This test passes account_id only (no region),
+	// so the branch lands as the kind-only shape:
+	// "squadron/rec/lambda-otel-layer/abc1234-0".
+	if !strings.HasPrefix(resp.Branch, "squadron/rec/lambda-otel-layer/abc1234-0") {
+		t.Errorf("branch = %q, want prefix squadron/rec/lambda-otel-layer/abc1234-0", resp.Branch)
 	}
 
 	// Calls landed in the expected order: GetRepo, GetBranchSHA,

@@ -14,7 +14,7 @@ package iacconnstore
 // migration per bump, applied in order, idempotent SQL inside each
 // step. Existing migrations are NEVER edited after merge — they ran
 // against historical databases and edits desynchronize the schema.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // migration0001IaCConnections is the initial schema. One table for
 // IaC repository connections, parallel to credstore's
@@ -57,9 +57,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS iac_connections_provider_repo_idx
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 `
 
+// migration0002LearnFromAcceptedRecommendations — v0.89.28 (#643 slice 1).
+// Adds the per-connection opt-in flag for the discovery proposer's
+// accepted-examples feedback loop. Default 1 (on) so post-upgrade
+// behavior matches the design's opt-in default — every existing
+// connection participates in the loop until an operator flips the
+// flag via PATCH /api/v1/iac/github/connections/:id.
+//
+// SQLite doesn't support ALTER TABLE ... ADD COLUMN IF NOT EXISTS,
+// so the column add fails on a re-run; the substrate runner ignores
+// the error via the same isColumnExistsError pattern the application
+// store uses. The migration string is wrapped in an idempotent block
+// so re-running on an up-to-date database is a no-op.
+const migration0002LearnFromAcceptedRecommendations = `
+ALTER TABLE iac_connections ADD COLUMN learn_from_accepted_recommendations INTEGER NOT NULL DEFAULT 1;
+INSERT OR IGNORE INTO schema_version (version) VALUES (2);
+`
+
 // migrations is the ordered list of schema migrations. Index N is the
 // SQL applied at version N+1. New entries are appended; existing
 // entries are never edited.
 var migrations = []string{
 	migration0001IaCConnections,
+	migration0002LearnFromAcceptedRecommendations,
 }

@@ -646,6 +646,32 @@ func humanizeIaCAuditEvent(e *services.AuditEvent) (string, string, bool) {
 		}
 		sub := "Branch " + branch + ", merged by " + mergedBy
 		return title, sub, true
+
+	// v0.89.28 (#643 slice 1) — discovery_proposal.created humanizer.
+	// When verdict_examples_used is non-empty (the proposer was
+	// informed by N prior accepted PRs) the title surfaces the count;
+	// when empty or missing, the title falls through to the simple
+	// form. The cold-start fallback also lands in the humanizeEventType
+	// table below so the simple-title path renders consistently when
+	// the payload is missing entirely.
+	case services.AuditEventDiscoveryProposalCreated:
+		n := 0
+		if raw, ok := e.Payload["verdict_examples_used"]; ok {
+			switch v := raw.(type) {
+			case []any:
+				n = len(v)
+			case []string:
+				n = len(v)
+			}
+		}
+		if n == 0 {
+			return "Discovery recommendations generated", "", true
+		}
+		plural := "PRs"
+		if n == 1 {
+			plural = "PR"
+		}
+		return fmt.Sprintf("Discovery recommendations generated (informed by %d prior accepted %s)", n, plural), "", true
 	}
 	return "", "", false
 }
@@ -831,6 +857,14 @@ func humanizeEventType(eventType, action string) string {
 		return "AWS scan completed"
 	case "discovery.aws.scan_all_completed":
 		return "Multi-account AWS scan completed"
+	// v0.89.28 (#643 slice 1) — discovery proposal lifecycle. The
+	// payload-aware path at handleIaCAuditEvent above renders the
+	// enriched title when verdict_examples_used is populated; this
+	// entry is the cold-start fallback for an audit row missing the
+	// payload-aware enrichment path (defensive: handleIaCAuditEvent
+	// returns ok=true for non-empty payloads only).
+	case "discovery_proposal.created":
+		return "Discovery recommendations generated"
 	// v0.89.26 (#642 Stream 43) — per-rollout exclude-from-learning
 	// toggle for the #531 slice 2 feedback loop (§10 Q3). This is
 	// the cold-path default the timeline renders when no payload-

@@ -203,6 +203,35 @@ const (
 	AuditEventRecommendationPROpenFailed     = "recommendation.pr_open_failed"
 	AuditEventRecommendationPRMerged         = "recommendation.pr_merged"
 
+	// v0.89.28 (#643 slice 1) — Discovery proposer learns from accepted
+	// recommendations. Emitted by the discovery recommendations handler
+	// (POST /api/v1/discovery/aws/connections/:id/recommendations) AFTER
+	// the proposer returns, regardless of whether the model accepted or
+	// declined. Mirrors the cost-spike side's proposal.created shape so
+	// SIEM consumers see the same fields across both proposer surfaces,
+	// but the ID scheme on verdict_examples_used DIFFERS — discovery
+	// carries PR URLs (the identifying handle for an accepted discovery
+	// recommendation; see §11 Q5 of the spec) whereas the cost-spike
+	// side's proposal.created carries opaque rollout IDs. Don't conflate
+	// the two — different event types, different ID schemes.
+	//
+	// Payload contract:
+	//   - scan_id (string): the discovery scan that produced the
+	//     recommendations.
+	//   - connection_id (string): the IaC connection_id used as the
+	//     scope for the accepted-recommendations lookup.
+	//   - account_id (string): the AWS account scanned.
+	//   - region (string): the AWS region scanned (slice 1 ships
+	//     single-region scans; multi-region scans land in a later slice).
+	//   - recommendation_count (int): the number of recommendation rows
+	//     the proposer returned (0 when declined).
+	//   - verdict_examples_used ([]string of PR URLs): the prior accepted
+	//     PRs whose merges informed the proposer's prompt block. ALWAYS
+	//     present (never omitted) — empty array on cold start, opt-out,
+	//     or recency-window empty so SIEM consumers can filter on the
+	//     empty slice to find cold-start cases.
+	AuditEventDiscoveryProposalCreated = "discovery_proposal.created"
+
 	// Target type strings for the v0.89.3 IaC events. Used by the
 	// timeline humanizer to group connection-lifecycle events
 	// (iac.github.connection_*) separately from per-recommendation

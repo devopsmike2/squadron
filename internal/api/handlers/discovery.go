@@ -106,7 +106,30 @@ type DiscoveryHandlers struct {
 	// of the discovery surface stays reachable on AI-disabled
 	// deployments.
 	aiProposer DiscoveryAIProposer
-	logger     *zap.Logger
+	// v0.89.28 (#643 slice 1) — accepted-recommendations few-shot
+	// loop. Optional: nil means "no learning signal," which produces
+	// a cold-start prompt byte-for-byte identical to pre-v0.89.28.
+	// The wiring layer constructs a *proposer.DiscoveryBridge over
+	// the application store + iacconnstore.Store; production sets
+	// it via WithAcceptedRecommendationsAssembler, tests substitute
+	// a stub that returns pre-canned examples.
+	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
+	logger            *zap.Logger
+}
+
+// DiscoveryAcceptedRecommendationsAssembler is the slim contract
+// HandleAWSGenerateRecommendations calls to populate the
+// AcceptedRecommendations few-shot block. The wiring-layer adapter
+// resolves the (account_id, region) scope to a per-connection lookup
+// internally — the handler doesn't need to know how the connection
+// maps to the AWS scope. Production wires an adapter that delegates
+// to *proposer.DiscoveryBridge; tests substitute a stub. v0.89.28
+// (#643 slice 1).
+type DiscoveryAcceptedRecommendationsAssembler interface {
+	AssembleForDiscoveryScope(
+		ctx context.Context,
+		accountID, region string,
+	) ([]ai.AcceptedRecommendationExample, []string, error)
 }
 
 // AWSCredMarshaller turns the wizard-supplied AWSCredentials into the
@@ -195,6 +218,14 @@ func (h *DiscoveryHandlers) WithAWSScannerFactory(f AWSScannerFactory) *Discover
 // discovery surface stays unaffected.
 func (h *DiscoveryHandlers) WithAIProposer(p DiscoveryAIProposer) *DiscoveryHandlers {
 	h.aiProposer = p
+	return h
+}
+
+// WithAcceptedRecommendationsAssembler wires the v0.89.28 (#643 slice 1)
+// accepted-recommendations few-shot assembler. nil is fine — the
+// HandleAWSGenerateRecommendations path treats it as cold-start.
+func (h *DiscoveryHandlers) WithAcceptedRecommendationsAssembler(a DiscoveryAcceptedRecommendationsAssembler) *DiscoveryHandlers {
+	h.acceptedAssembler = a
 	return h
 }
 
@@ -1843,6 +1874,35 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		})
 	}
 
+	// v0.89.28 (#643 slice 1) — populate the accepted-recommendations
+	// few-shot block before the proposer call. The bridge returns
+	// (nil, nil, nil) on cold start / opt-out / recency-window empty;
+	// in that case the prompt is byte-for-byte unchanged from
+	// pre-v0.89.28. A bridge-side error is non-fatal: log and proceed
+	// with empty examples so the proposer still produces output.
+	var acceptedURLs []string
+	if h.acceptedAssembler != nil {
+		// Single-region scope tuple. Slice 1 ships single-region
+		// scans (req.ScanResult.Regions[0]); multi-region scans are a
+		// later slice and would call the assembler once per region.
+		region := ""
+		if len(req.ScanResult.Regions) > 0 {
+			region = req.ScanResult.Regions[0]
+		}
+		exs, urls, aErr := h.acceptedAssembler.AssembleForDiscoveryScope(
+			c.Request.Context(), req.ScanResult.AccountID, region,
+		)
+		if aErr != nil {
+			if h.logger != nil {
+				h.logger.Warn("aws generate recommendations: assemble accepted failed; cold-start",
+					zap.Error(aErr), zap.String("account_id", accountID))
+			}
+		} else {
+			aiCtx.AcceptedRecommendations = exs
+			acceptedURLs = urls
+		}
+	}
+
 	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
 	if err != nil {
 		if h.logger != nil {
@@ -1983,6 +2043,37 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 				"tokens_out":  result.TokensOut,
 				"model":       result.Model,
 				"recorded_at": now,
+			},
+		})
+
+		// v0.89.28 (#643 slice 1) — discovery_proposal.created event.
+		// Mirrors the cost-spike side's proposal.created posture but
+		// the verdict_examples_used field carries PR URLs (the
+		// identifying handle for accepted discovery recommendations,
+		// per §11 Q5 of the spec) rather than rollout IDs. ALWAYS
+		// present (never omitted) — empty array on cold start so
+		// SIEM consumers can filter on the empty slice.
+		examplesUsed := acceptedURLs
+		if examplesUsed == nil {
+			examplesUsed = []string{}
+		}
+		region := ""
+		if len(req.ScanResult.Regions) > 0 {
+			region = req.ScanResult.Regions[0]
+		}
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      "ai-proposer",
+			EventType:  services.AuditEventDiscoveryProposalCreated,
+			TargetType: credstore.TargetTypeCloudConnection,
+			TargetID:   accountID,
+			Action:     "discovery_proposal_created",
+			Payload: map[string]any{
+				"scan_id":               req.ScanResult.ScanID,
+				"connection_id":         "", // slice 1: handler doesn't see IaC connection_id
+				"account_id":            accountID,
+				"region":                region,
+				"recommendation_count":  len(recs),
+				"verdict_examples_used": examplesUsed,
 			},
 		})
 	}

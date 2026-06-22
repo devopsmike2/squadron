@@ -278,9 +278,12 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	// string when the branch isn't a Squadron-shaped one is the
 	// honest report — the operator may have merged a hand-authored
 	// PR in a connected repo and we shouldn't pretend it carries a
-	// Squadron recommendation kind.
+	// Squadron recommendation kind. v0.89.28 (#643 slice 1) extends
+	// the parse to also extract account_id + region from the new
+	// 6-segment branch shape; older 4-segment branches still parse
+	// the kind cleanly and produce empty account_id / region.
 	branch := ev.PullRequest.Head.Ref
-	kind, _ := parseRecommendationKindFromBranch(branch, h.branchPrefix)
+	kind, accountID, region, _ := parseRecommendationScopeFromBranch(branch, h.branchPrefix)
 
 	var mergedBy string
 	if ev.PullRequest.MergedBy != nil {
@@ -288,23 +291,33 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	}
 
 	if h.auditService != nil {
+		payload := map[string]any{
+			"repo_full_name":      ev.PullRequest.Base.Repo.FullName,
+			"pr_number":           ev.PullRequest.Number,
+			"pr_url":              ev.PullRequest.HTMLURL,
+			"branch":              branch,
+			"merged_at":           ev.PullRequest.MergedAt,
+			"merged_by":           mergedBy,
+			"recommendation_kind": kind,
+			"connection_id":       connectionID,
+			"recorded_at":         time.Now().UTC(),
+		}
+		// account_id + region are optional in the payload — omit on
+		// the older 4-segment branch shape so SIEM consumers can tell
+		// scope-encoded merges apart from pre-extension ones.
+		if accountID != "" {
+			payload["account_id"] = accountID
+		}
+		if region != "" {
+			payload["region"] = region
+		}
 		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
 			Actor:      "github_webhook",
 			EventType:  services.AuditEventRecommendationPRMerged,
 			TargetType: services.AuditTargetIaCRecommendation,
 			TargetID:   connectionID,
 			Action:     "pr_merged",
-			Payload: map[string]any{
-				"repo_full_name":      ev.PullRequest.Base.Repo.FullName,
-				"pr_number":           ev.PullRequest.Number,
-				"pr_url":              ev.PullRequest.HTMLURL,
-				"branch":              branch,
-				"merged_at":           ev.PullRequest.MergedAt,
-				"merged_by":           mergedBy,
-				"recommendation_kind": kind,
-				"connection_id":       connectionID,
-				"recorded_at":         time.Now().UTC(),
-			},
+			Payload:    payload,
 		})
 	}
 
@@ -314,45 +327,61 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	})
 }
 
-// parseRecommendationKindFromBranch extracts the recommendation kind
-// segment from a Squadron-shaped branch name.
+// parseRecommendationKindFromBranch is the v0.89.23 entry point that
+// callers still use to extract just the recommendation_kind. It now
+// delegates to parseRecommendationScopeFromBranch so the parsing logic
+// lives in one place; this wrapper preserves the original return
+// signature for callers that don't need account_id + region.
+func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
+	kind, _, _, ok := parseRecommendationScopeFromBranch(branch, prefix)
+	return kind, ok
+}
+
+// parseRecommendationScopeFromBranch — v0.89.28 (#643 slice 1) —
+// extracts the recommendation kind, account_id, and region segments
+// from a Squadron-shaped branch name.
 //
-// Squadron's Open-PR handler (internal/api/handlers/iac_github.go::
-// HandleIaCGitHubOpenPR) names branches as
-// "<connection.BranchPrefix or DefaultBranchPrefix>-<scan_id_short>-
-// <step_idx>". The DefaultBranchPrefix is "squadron/rec" and the
-// resulting branch is "squadron/rec-<scan>-<step>". The webhook side
-// of slice 1 normalizes against the trailing-slash variant
-// "squadron/rec/" so per-kind suffixes ("squadron/rec/<kind>/...",
-// which a slice-2 reshuffle would emit) parse cleanly today —
-// today's branches don't yet carry a kind segment because the
-// step_idx encodes the per-recommendation identity, but the parsing
-// helper is the right shape for tomorrow's encoding without a
-// breaking change to the audit payload schema.
+// The v0.89.28 branch encoding is
+//   "<prefix><kind>/<account_id>/<region>/<short_id>"
+// where prefix is the trailing-slash variant ("squadron/rec/"). Older
+// branches that pre-date the encoding extension are
+//   "<prefix><kind>/<short_id>"
+// (no account_id / region segments); the parser accepts both shapes
+// so a webhook fired against a PR opened on the previous release
+// still parses the kind cleanly. account_id and region come back
+// empty for the older shape — the webhook handler treats them as
+// optional in the audit payload.
 //
 // Return contract:
-//   - branch doesn't start with prefix → ("", false)
-//   - branch starts with prefix but the post-prefix first segment is
-//     empty → ("", false). This rejects "squadron/rec/" silently
-//     producing an empty-kind audit row.
-//   - otherwise → (firstSegment, true).
-func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
+//   - branch doesn't start with prefix → ("", "", "", false)
+//   - branch starts with prefix but the first segment after prefix is
+//     empty (e.g. "squadron/rec/") → ("", "", "", false)
+//   - 4-segment shape "squadron/rec/<kind>/<short_id>" or anything
+//     with 1 segment after prefix → (kind, "", "", true)
+//   - 6-segment shape
+//     "squadron/rec/<kind>/<account_id>/<region>/<short_id>" →
+//     (kind, account_id, region, true)
+func parseRecommendationScopeFromBranch(branch, prefix string) (kind, accountID, region string, ok bool) {
 	if prefix == "" || !strings.HasPrefix(branch, prefix) {
-		return "", false
+		return "", "", "", false
 	}
 	rest := strings.TrimPrefix(branch, prefix)
 	if rest == "" {
-		return "", false
+		return "", "", "", false
 	}
-	// Split on "/" and take the first segment. Empty segments (e.g.
-	// "squadron/rec/" or "squadron/rec//foo") return ("", false)
-	// rather than emit a silent empty-kind audit row.
-	first := rest
-	if idx := strings.IndexByte(rest, '/'); idx >= 0 {
-		first = rest[:idx]
+	parts := strings.Split(rest, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", "", "", false
 	}
-	if first == "" {
-		return "", false
+	kind = parts[0]
+	// New 6-segment encoding: kind / account_id / region / short_id.
+	// We DO NOT require exactly 4 trailing segments — anything 3+ past
+	// the kind passes; the spec's encoding is the common case but a
+	// hand-pushed branch with an extra path component shouldn't bin
+	// out as kind-only.
+	if len(parts) >= 4 && parts[1] != "" && parts[2] != "" {
+		accountID = parts[1]
+		region = parts[2]
 	}
-	return first, true
+	return kind, accountID, region, true
 }

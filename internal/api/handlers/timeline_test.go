@@ -72,6 +72,13 @@ func TestHumanizeEventType(t *testing.T) {
 		// TestExcludeFromLearningTitle below, which exercises
 		// auditToEvent so the dispatch chain is in scope.
 		{"rollout.excluded_from_learning", "rollout.excluded_from_learning", "exclude_from_learning", "AI proposal excluded from future learning"},
+		// v0.89.28 (#643 slice 1) — discovery_proposal.created cold-
+		// start fallback. The payload-aware humanizer at
+		// handleIaCAuditEvent emits the enriched count title when
+		// verdict_examples_used is non-empty; this table entry
+		// renders the simple title when handleIaCAuditEvent returned
+		// ok=false (e.g. payload absent entirely).
+		{"discovery_proposal.created", "discovery_proposal.created", "discovery_proposal_created", "Discovery recommendations generated"},
 		// Fallback — unknown event_type returns the raw string so we
 		// never lose information by humanizing. Pick a truly unknown
 		// type that's NOT in any of the v0.89.25 cleanup additions.
@@ -337,6 +344,44 @@ func TestHumanizeIaCAuditEvent(t *testing.T) {
 				},
 			},
 			wantOK: false,
+		},
+
+		// --- discovery_proposal.created (v0.89.28 #643 slice 1) ---
+		// Pins the payload-aware humanizer for the new event. When
+		// verdict_examples_used is non-empty the title surfaces the
+		// count; when empty the title falls through to the simple
+		// cold-start phrasing.
+		{
+			name: "discovery_proposal.created with prior accepted PRs",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventDiscoveryProposalCreated,
+				Payload: map[string]any{
+					"scan_id":              "scan-1",
+					"account_id":           "111111111111",
+					"region":               "us-east-1",
+					"recommendation_count": float64(3),
+					"verdict_examples_used": []any{
+						"https://github.com/octo/widgets/pull/142",
+						"https://github.com/octo/widgets/pull/138",
+					},
+				},
+			},
+			wantTitle: "Discovery recommendations generated (informed by 2 prior accepted PRs)",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "discovery_proposal.created cold-start: empty examples list",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventDiscoveryProposalCreated,
+				Payload: map[string]any{
+					"scan_id":               "scan-1",
+					"verdict_examples_used": []any{},
+				},
+			},
+			wantTitle: "Discovery recommendations generated",
+			wantSub:   "",
+			wantOK:    true,
 		},
 
 		// --- nil-safe + unknown event type ---

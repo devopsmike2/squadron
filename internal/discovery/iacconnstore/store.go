@@ -162,6 +162,18 @@ type IaCConnection struct {
 	// never emitted in an audit payload.
 	CredCiphertext []byte `json:"-"`
 
+	// LearnFromAcceptedRecommendations is the v0.89.28 (#643 slice 1)
+	// opt-in flag for the discovery proposer's accepted-examples
+	// feedback loop. Default true: every new connection participates
+	// in the loop unless the operator explicitly opts out via PATCH
+	// /api/v1/iac/github/connections/:id. Mirrors v0.89.17's
+	// Group.LearnFromVerdicts posture for the cost-spike side; an
+	// operator with a per-connection privacy concern (PR titles
+	// implying sensitive workload identity, etc.) can flip the flag
+	// off and the proposer's prompt block goes silent for that
+	// connection without any other state change.
+	LearnFromAcceptedRecommendations bool `json:"learn_from_accepted_recommendations"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -233,6 +245,13 @@ type Store interface {
 	//
 	// A nil slice is treated as an empty list (clears the map).
 	UpdatePlacementMap(ctx context.Context, connectionID string, entries []PlacementMapEntry) error
+
+	// UpdateLearnFromAcceptedRecommendations sets the per-connection
+	// opt-in flag for the discovery proposer's accepted-examples
+	// feedback loop. v0.89.28 (#643 slice 1). UpdatedAt is stamped
+	// to now; no other column is touched. Returns
+	// ErrConnectionNotFound if no row matches.
+	UpdateLearnFromAcceptedRecommendations(ctx context.Context, connectionID string, learn bool) error
 
 	// Close releases the underlying database handle. Subsequent
 	// calls to other methods return an error.

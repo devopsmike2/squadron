@@ -23,6 +23,7 @@ type AlertSeverity = types.AlertSeverity
 type ThresholdOperator = types.ThresholdOperator
 type AuditEvent = types.AuditEvent
 type AuditEventFilter = types.AuditEventFilter
+type AcceptedRecommendation = types.AcceptedRecommendation
 type Rollout = types.Rollout
 type RolloutStage = types.RolloutStage
 type RolloutStageMode = types.RolloutStageMode
