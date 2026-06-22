@@ -1962,7 +1962,7 @@ export function RecommendationsTab({
         showToast(
           "success",
           nextExcluded
-            ? "Excluded — Squadron won't propose this on future scans. Exclusion saved; restore from the Timeline or by clicking Restore on the same recommendation in this session."
+            ? "Excluded — Squadron won't propose this on future scans. Click Restore to undo."
             : "Restored — Squadron will propose this again on future scans.",
         );
       } catch (e) {
