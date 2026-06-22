@@ -101,6 +101,30 @@ func (m *memoryStore) Get(_ context.Context, connectionID string) (*IaCConnectio
 	return cloneConnection(conn), nil
 }
 
+// GetByRepoFullName scans the map for connections matching repoFullName
+// and returns the most recently created one. Mirrors the SQLite
+// implementation's ORDER BY created_at DESC LIMIT 1 contract.
+func (m *memoryStore) GetByRepoFullName(_ context.Context, repoFullName string) (*IaCConnection, error) {
+	if repoFullName == "" {
+		return nil, errors.New("iacconnstore: GetByRepoFullName: repoFullName is required")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var newest *IaCConnection
+	for _, existing := range m.byID {
+		if existing.RepoFullName != repoFullName {
+			continue
+		}
+		if newest == nil || existing.CreatedAt.After(newest.CreatedAt) {
+			newest = existing
+		}
+	}
+	if newest == nil {
+		return nil, ErrConnectionNotFound
+	}
+	return cloneConnection(newest), nil
+}
+
 // List returns every connection, ordered by created_at ascending then
 // connection_id ascending (same order as the SQLite implementation
 // for deterministic tests).

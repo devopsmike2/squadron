@@ -162,11 +162,25 @@ const (
 	//     humanized_message; pr_number omitted when no PR opened.
 	//     v0.89.11 adds disposition keyed off ResourceKind for
 	//     auditor-side correlation.
+	//   - recommendation.pr_merged: v0.89.23 (#639 Stream 40) — emitted
+	//     by the GitHub webhook listener when an operator merges a
+	//     PR Squadron either authored or (more generally) any PR in
+	//     the connected repo whose branch matches the configured
+	//     Squadron prefix. Payload: repo_full_name, pr_number,
+	//     pr_url, branch, merged_at (RFC3339 string from GitHub),
+	//     merged_by (GitHub login string), recommendation_kind
+	//     (parsed from the branch's first path segment after the
+	//     Squadron prefix; empty when the branch isn't Squadron-
+	//     shaped), connection_id (the matched iac_connection's id;
+	//     empty when no connection matches the repo). Token bytes
+	//     and webhook-secret bytes NEVER in payload; the HMAC is
+	//     validated and discarded before this row is written.
 	AuditEventIaCGitHubConnectionCreated     = "iac.github.connection_created"
 	AuditEventIaCGitHubConnectionValidated   = "iac.github.connection_validated"
 	AuditEventIaCGitHubPlacementMapUpdated   = "iac.github.placement_map_updated"
 	AuditEventRecommendationPROpened         = "recommendation.pr_opened"
 	AuditEventRecommendationPROpenFailed     = "recommendation.pr_open_failed"
+	AuditEventRecommendationPRMerged         = "recommendation.pr_merged"
 
 	// Target type strings for the v0.89.3 IaC events. Used by the
 	// timeline humanizer to group connection-lifecycle events

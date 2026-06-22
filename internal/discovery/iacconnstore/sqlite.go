@@ -229,6 +229,37 @@ func (s *sqliteStore) Get(ctx context.Context, connectionID string) (*IaCConnect
 	return conn, nil
 }
 
+// GetByRepoFullName returns the most recently created connection row
+// whose repo_full_name matches the supplied value, or
+// ErrConnectionNotFound when no row exists. The substrate's unique
+// index on (provider, repo_full_name) caps the result at one row per
+// provider; the ORDER BY + LIMIT 1 is the forward-compat hedge for the
+// slice-2 question of allowing multiple connections per repo.
+func (s *sqliteStore) GetByRepoFullName(ctx context.Context, repoFullName string) (*IaCConnection, error) {
+	if repoFullName == "" {
+		return nil, errors.New("iacconnstore: GetByRepoFullName: repoFullName is required")
+	}
+	const stmt = `
+		SELECT connection_id, provider, auth_kind, repo_full_name, default_branch,
+		       repo_layout, branch_prefix, reviewer_team_handle,
+		       placement_map_json, cred_ciphertext,
+		       created_at, updated_at
+		FROM iac_connections
+		WHERE repo_full_name = ?
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+	row := s.db.QueryRowContext(ctx, stmt, repoFullName)
+	conn, err := scanConnection(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrConnectionNotFound
+		}
+		return nil, err
+	}
+	return conn, nil
+}
+
 // List returns every connection row, ordered by created_at ascending.
 func (s *sqliteStore) List(ctx context.Context) ([]*IaCConnection, error) {
 	const stmt = `
