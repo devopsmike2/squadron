@@ -132,6 +132,15 @@ type Group struct {
 	// shipped to prod) without forcing approval on every fresh
 	// rollout. Independent of RequireApproval.
 	RequireApprovalForRollback bool `json:"require_approval_for_rollback"`
+	// v0.89.17 (#633) #531 slice 1 — when true, the cost-spike
+	// proposer reads prior accepted/rejected AI rollouts for this
+	// group (via ApplicationStore.ListAIVerdictsForGroup) and
+	// includes them as in-context few-shot examples on the next
+	// proposal. When false, assembleVerdicts short-circuits and
+	// the prompt is byte-for-byte identical to v0.79's. Plumbed
+	// through the API in v0.89.18 (#634); before that the field
+	// only round-tripped through storage and the proposer.
+	LearnFromVerdicts bool `json:"learn_from_verdicts"`
 	// v0.49 — recurring blackout windows. The rollout engine
 	// refuses to advance rollouts to this group while any of
 	// these windows is active. See changewindow.Window for the
