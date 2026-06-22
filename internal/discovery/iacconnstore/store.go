@@ -200,6 +200,22 @@ type Store interface {
 	// on-disk bytes.
 	Get(ctx context.Context, connectionID string) (*IaCConnection, error)
 
+	// GetByRepoFullName returns the most recently created connection
+	// row whose RepoFullName equals repoFullName, or
+	// ErrConnectionNotFound if no row matches. v0.89.23 (#639 Stream
+	// 40) — used by the GitHub webhook receiver to look up the
+	// connection corresponding to an incoming pull_request event so
+	// the recommendation.pr_merged audit row can carry the matching
+	// connection_id.
+	//
+	// Slice 1 of #639 ships one connection per repo as a hard
+	// invariant (the (provider, repo_full_name) unique index
+	// enforces it for the GitHub provider); the "newest first" order
+	// is a forward-compatibility hedge for the slice-2 question of
+	// allowing multiple connections per repo, so callers don't have
+	// to choose between them when that gate opens.
+	GetByRepoFullName(ctx context.Context, repoFullName string) (*IaCConnection, error)
+
 	// List returns every connection row, ordered by CreatedAt
 	// ascending. Empty store returns an empty slice and no error.
 	List(ctx context.Context) ([]*IaCConnection, error)

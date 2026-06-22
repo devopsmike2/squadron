@@ -118,6 +118,15 @@ type Server struct {
 	// "IaC connect not configured" message; the rest of the discovery
 	// surface stays unaffected.
 	iacConnStore iacconnstore.Store
+	// v0.89.23 Stream 40 (#639) — GitHub webhook listener secret.
+	// Cached at startup from os.Getenv(SQUADRON_GITHUB_WEBHOOK_SECRET);
+	// an empty value leaves the /api/v1/webhooks/github route mounted
+	// but 503ing with a clear "set SQUADRON_GITHUB_WEBHOOK_SECRET"
+	// body so the operator reading the GitHub webhook delivery log
+	// sees exactly which knob to turn. The webhook route is PUBLIC
+	// by design — the HMAC signature IS the authentication; GitHub
+	// does not carry a bearer token Squadron could validate.
+	iacGitHubWebhookSecret []byte
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -424,6 +433,29 @@ func (s *Server) SetDiscoveryAIService(svc *ai.Service) {
 // 500ing with a "key not wired" humanized error.
 func (s *Server) SetIaCConnStore(store iacconnstore.Store) {
 	s.iacConnStore = store
+}
+
+// SetIaCGitHubWebhookSecret wires the HMAC secret the GitHub PR-
+// merged webhook receiver validates inbound signatures against.
+// v0.89.23 #639 Stream 40. Slice 1 ships one shared deployment-wide
+// secret (read from SQUADRON_GITHUB_WEBHOOK_SECRET in main.go); slice
+// 2 will move to per-connection secrets, at which point this setter
+// stays the deployment-wide fallback.
+//
+// An empty or nil slice is a valid input: the route still mounts but
+// 503s with a humanized "set SQUADRON_GITHUB_WEBHOOK_SECRET" body so
+// the operator's GitHub webhook delivery log carries the actionable
+// pointer.
+func (s *Server) SetIaCGitHubWebhookSecret(secret []byte) {
+	if len(secret) == 0 {
+		s.iacGitHubWebhookSecret = nil
+		return
+	}
+	// Defensive copy so a caller scrubbing their env-loaded buffer
+	// doesn't aliasingly scrub Squadron's cached copy.
+	buf := make([]byte, len(secret))
+	copy(buf, secret)
+	s.iacGitHubWebhookSecret = buf
 }
 
 // iacGitHubTrampoline late-binds an IaC-GitHub handler call. Mirrors
@@ -778,6 +810,27 @@ func (s *Server) registerRoutes() {
 
 	// Health check — public so load balancers can probe.
 	s.router.GET("/health", healthHandlers.HandleHealth)
+
+	// PUBLIC route: GitHub doesn't authenticate to Squadron's API; the
+	// HMAC signature IS the auth. Do NOT add auth middleware here.
+	// v0.89.23 #639 Stream 40 — receives pull_request events from the
+	// connected IaC repo, validates X-Hub-Signature-256, and emits
+	// recommendation.pr_merged audit rows when action=="closed" &&
+	// merged==true. The receiver is registered above the v1 auth group
+	// so RequireBearer does NOT intercept; that is the design, not an
+	// oversight. The webhook secret is read at startup from
+	// SQUADRON_GITHUB_WEBHOOK_SECRET — an empty value mounts the route
+	// in a 503-on-every-call state so the GitHub webhook delivery log
+	// surfaces the misconfiguration cleanly.
+	s.router.POST("/api/v1/webhooks/github", func(c *gin.Context) {
+		h := handlers.NewIaCGitHubWebhookHandler(
+			s.auditService,
+			s.iacConnStore,
+			s.iacGitHubWebhookSecret,
+			s.logger,
+		)
+		h.HandleWebhook(c)
+	})
 
 	// API v1 routes
 	v1 := s.router.Group("/api/v1")

@@ -706,6 +706,21 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			apiServer.SetIaCConnStore(iacStore)
 			logger.Info("iac connection substrate wired", zap.String("path", iacDBPath))
 		}
+
+		// v0.89.23 #639 Stream 40 — wire the GitHub webhook listener
+		// secret. The /api/v1/webhooks/github route is mounted
+		// unconditionally by server.go; an empty secret leaves it in
+		// a 503-with-guidance state so the operator's GitHub webhook
+		// delivery log carries the actionable pointer rather than a
+		// silent no-op. Slice 1 ships one shared deployment-wide
+		// secret; per-connection secrets are slice 2. The secret
+		// bytes are NEVER logged.
+		if whSecret := os.Getenv("SQUADRON_GITHUB_WEBHOOK_SECRET"); whSecret != "" {
+			apiServer.SetIaCGitHubWebhookSecret([]byte(whSecret))
+			logger.Info("iac github webhook listener: secret wired (PR-merged events will be recorded)")
+		} else {
+			logger.Info("iac github webhook listener: SQUADRON_GITHUB_WEBHOOK_SECRET not set; /api/v1/webhooks/github will 503 until configured")
+		}
 	}
 
 	// v0.85 Stream 2F — wire the AI service onto the discovery
