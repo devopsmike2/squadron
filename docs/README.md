@@ -43,6 +43,14 @@ jump straight to that page.
   secret, configuring the GitHub repo webhook, verifying the
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
+- [GitHub Checks API back-signal](./proposals/checks-api-back-signal.md)
+  (design DOC LOCKED in v0.89.39). The inverse of the webhook
+  listener: Squadron writes check run state to Squadron-opened
+  PRs so operators see "what Squadron is seeing" inside
+  GitHub's PR review surface. Status lifecycle ties to existing
+  webhook events (in_progress on PR open, success on merge,
+  failure on close-without-merge, neutral on operator exclude).
+  Slice 1 implementation pending.
 - [Alerts](./alerts.md) — rule-based alerts on telemetry, fleet state, and
   rollout health.
 - [Audit log](./audit-log.md) — every state change in Squadron is recorded.
