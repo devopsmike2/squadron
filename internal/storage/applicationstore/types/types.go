@@ -86,6 +86,47 @@ type ApplicationStore interface {
 		since time.Time, limit int,
 	) ([]*DiscoveryVerdict, error)
 
+	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
+	// exclusion infrastructure for discovery recommendations. The
+	// "Don't propose this again" affordance on the Recommendations tab
+	// POSTs through the new exclude handler; the handler routes through
+	// these two methods to upsert / list rows in the new
+	// iac_recommendation_verdicts table.
+	//
+	// SetRecommendationExclusion is the upsert: the projection carries
+	// the full row shape (recommendation_id is the PK; scope tuple +
+	// kind + resource_id are required; excluded_at + excluded_by carry
+	// the "as of" stamp). The bool excluded parameter is the desired
+	// final state — true on click, false on un-click. The store stamps
+	// excluded_at + excluded_by from the projection only on a transition
+	// to true; on a transition to false those two fields are cleared.
+	// updated_at is always refreshed.
+	//
+	// The return value prevExcluded carries the row's exclude_from_learning
+	// value BEFORE the upsert (false on insert; the prior column value
+	// on update). The handler uses this to decide whether to emit the
+	// discovery_recommendation.excluded / .exclude_cleared audit event
+	// (transitions only) or skip the audit emit (no-op toggles).
+	//
+	// See docs/proposals/531-proposer-learning-slice2.md §10 contract
+	// items 7 + 8.
+	SetRecommendationExclusion(ctx context.Context, rec ExcludedRecommendation, excluded bool) (prevExcluded bool, err error)
+
+	// ListExcludedRecommendations returns the rows in the supplied
+	// (connection_id, account_id, region) scope with
+	// exclude_from_learning=1, ordered by excluded_at DESC, capped at
+	// limit. Empty scope tuple returns no rows (the discovery bridge's
+	// short-circuit path); limit<=0 falls through to a small default.
+	//
+	// The bridge calls this on every discovery proposal call; the
+	// idx_iac_rec_verdicts_scope partial-ish index keeps the sweep
+	// cheap even on a deployment that has accumulated many exclusions.
+	ListExcludedRecommendations(
+		ctx context.Context,
+		connectionID, accountID, region string,
+		limit int,
+	) ([]ExcludedRecommendation, error)
+
 	// Action runners + requests (v0.53 Move 2). An action runner is
 	// an installed squadron-action-runner daemon registered with
 	// this Squadron instance. An action request is one signed action
@@ -711,6 +752,47 @@ type DiscoveryVerdict struct {
 	Branch             string
 	MergedBy           string // merged_by OR closed_by depending on State
 	RecommendationKind string
+}
+
+// ExcludedRecommendation — v0.89.37 (#656 Stream 54, #531 slice 2
+// chunk 4) — projection over one iac_recommendation_verdicts row.
+// Carries the operator-set "Don't propose this again" verdict for
+// a single discovery recommendation. The bridge reads these via
+// ListExcludedRecommendations and folds each into the verdictsel
+// pool as a StateOperatorExcluded entry; the prompt block renders
+// `[OPERATOR_EXCLUDED]` stanzas per §7.2.
+//
+// Field semantics:
+//
+//   - RecommendationID: the deterministic ID the discovery proposer
+//     assigned when it emitted the recommendation. PK on the
+//     underlying table; same row updated on subsequent toggles.
+//   - ConnectionID/AccountID/Region: the scope tuple the bridge keys
+//     its sweep on. Matches the §6 selection algorithm's "same
+//     connection_id + account_id + region only" rule.
+//   - RecommendationKind: the kind string the proposer emitted (e.g.
+//     "rds-pi-em", "eks-observability-addon"). The prompt's
+//     `kind=<kind>` line surfaces this verbatim.
+//   - ResourceID: nullable. Empty string ("") in the projection
+//     means the exclusion is kind-level — operator never wants this
+//     kind proposed against this scope. Non-empty scopes the
+//     exclusion to a specific resource (the §11 Q4 distinction the
+//     prompt renderer surfaces with different instruction text in a
+//     later chunk).
+//   - ExcludedAt/ExcludedBy: the "as of" stamp populated on the
+//     transition to excluded=true. Cleared (zero / "") when the
+//     row's exclude_from_learning flag is back to false. The bridge
+//     uses ExcludedAt as the Verdict.Timestamp; the §7.2
+//     `reference: operator_excluded=<date>` line formats from it.
+type ExcludedRecommendation struct {
+	RecommendationID   string
+	ConnectionID       string
+	AccountID          string
+	Region             string
+	RecommendationKind string
+	ResourceID         string
+	ExcludedAt         time.Time
+	ExcludedBy         string
 }
 
 // AlertSeverity is the severity level attached to a firing alert.

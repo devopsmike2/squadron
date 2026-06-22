@@ -607,6 +607,41 @@ func (s *Storage) migrate() error {
 		// idx_audit_pr_merged_scope (dropped in the v7 migration).
 		`DROP INDEX IF EXISTS idx_audit_pr_merged_scope`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_recommendation_verdict_scope ON audit_events(event_type, timestamp DESC) WHERE event_type IN ('recommendation.pr_merged', 'recommendation.pr_closed_not_merged')`,
+
+		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-
+		// set exclusion table for discovery recommendations. Carries
+		// the "Don't propose this again" verdict the operator can
+		// click without ever opening a PR. The recommendation_id is
+		// the deterministic ID the discovery proposer assigns; the
+		// row is created lazily on the first toggle and updated in
+		// place on subsequent toggles. resource_id is nullable —
+		// NULL means the operator excluded the entire kind at scope;
+		// a populated value scopes the exclusion to a specific
+		// resource (the §11 Q4 distinction the prompt renderer
+		// surfaces with different instruction text).
+		//
+		// The scope index keeps the bridge's per-call lookup off a
+		// table scan; the partial-ish predicate is the
+		// exclude_from_learning column ordered last so the bridge's
+		// "rows with exclude_from_learning=1 in scope" sweep is
+		// covered by a single ranged read.
+		//
+		// See docs/proposals/531-proposer-learning-slice2.md §4.2,
+		// §5.2, §10 contract items 7+8+9.
+		`CREATE TABLE IF NOT EXISTS iac_recommendation_verdicts (
+			recommendation_id      TEXT PRIMARY KEY,
+			connection_id          TEXT NOT NULL,
+			account_id             TEXT NOT NULL,
+			region                 TEXT NOT NULL,
+			recommendation_kind    TEXT NOT NULL,
+			resource_id            TEXT,
+			exclude_from_learning  INTEGER NOT NULL DEFAULT 0,
+			excluded_at            TIMESTAMP,
+			excluded_by            TEXT,
+			created_at             TIMESTAMP NOT NULL,
+			updated_at             TIMESTAMP NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_iac_rec_verdicts_scope ON iac_recommendation_verdicts(connection_id, account_id, region, exclude_from_learning)`,
 	}
 
 	for _, migration := range migrations {
@@ -2033,6 +2068,233 @@ func (s *Storage) GCWebhookDeliveries(ctx context.Context, before time.Time) (in
 		return 0, fmt.Errorf("failed to read rows affected: %w", err)
 	}
 	return int(n), nil
+}
+
+// SetRecommendationExclusion — v0.89.37 (#656 Stream 54, #531 slice 2
+// chunk 4). Upserts one iac_recommendation_verdicts row and returns
+// the row's exclude_from_learning value BEFORE the upsert. The handler
+// uses prevExcluded to decide whether to emit an audit event (emitted
+// on state transitions only; no-op toggles produce no audit row).
+//
+// Transitions:
+//   - INSERT (no prior row): prevExcluded=false. excluded_at +
+//     excluded_by are populated from rec when excluded=true and left
+//     NULL when excluded=false (the latter is the operator unticking
+//     before any prior tick — vacuously a no-op, but the row is
+//     persisted so a future re-tick is fast).
+//   - UPDATE excluded=false → true: excluded_at + excluded_by stamped
+//     from rec.
+//   - UPDATE excluded=true → false: excluded_at + excluded_by cleared
+//     to NULL.
+//   - UPDATE excluded=true → true OR false → false: only updated_at
+//     refreshed; the existing stamps stay put.
+//
+// updated_at is always refreshed. created_at stays at the row's
+// original insert time.
+//
+// The two-step read-then-write is wrapped in a transaction so the
+// prevExcluded read and the upsert can't race with a concurrent
+// toggle from a parallel operator click.
+func (s *Storage) SetRecommendationExclusion(
+	ctx context.Context,
+	rec types.ExcludedRecommendation,
+	excluded bool,
+) (bool, error) {
+	if rec.RecommendationID == "" {
+		return false, fmt.Errorf("recommendation_id required")
+	}
+	if rec.ConnectionID == "" || rec.AccountID == "" || rec.Region == "" {
+		return false, fmt.Errorf("scope tuple (connection_id, account_id, region) required")
+	}
+	if rec.RecommendationKind == "" {
+		return false, fmt.Errorf("recommendation_kind required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Step 1: read prior exclude_from_learning. We use COALESCE on a
+	// LEFT-style read by checking row existence first to keep the
+	// (false on insert) semantics honest.
+	var (
+		hadRow       bool
+		prevExcluded bool
+	)
+	var existingExcluded sql.NullInt64
+	const selectStmt = `SELECT exclude_from_learning FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
+	if err := tx.QueryRowContext(ctx, selectStmt, rec.RecommendationID).Scan(&existingExcluded); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("failed to read prior exclusion: %w", err)
+		}
+	} else {
+		hadRow = true
+		prevExcluded = existingExcluded.Valid && existingExcluded.Int64 == 1
+	}
+
+	// Step 2: upsert. excluded_at + excluded_by are stamped only on a
+	// transition to excluded=true; cleared on transition to false; left
+	// unchanged on a no-op. The transition rules play out as
+	// expression-side CASEs in the ON CONFLICT branch so we do not need
+	// to fork to two distinct UPDATE statements.
+	now := time.Now().UTC()
+	excludedAt := rec.ExcludedAt
+	if excluded && excludedAt.IsZero() {
+		excludedAt = now
+	}
+	createdAt := now
+	if hadRow {
+		// Preserve the original created_at by reading it back. Cheap;
+		// the row is already loaded into the cache.
+		const cstmt = `SELECT created_at FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
+		if err := tx.QueryRowContext(ctx, cstmt, rec.RecommendationID).Scan(&createdAt); err != nil {
+			return false, fmt.Errorf("failed to read prior created_at: %w", err)
+		}
+	}
+
+	excludedFlag := int64(0)
+	if excluded {
+		excludedFlag = 1
+	}
+
+	// We compute the excluded_at + excluded_by values to write here
+	// rather than in SQL so the rules stay readable and the upsert
+	// stays a single statement.
+	var stampAt any
+	var stampBy any
+	switch {
+	case excluded && (!hadRow || !prevExcluded):
+		// Transition to excluded=true. Stamp.
+		stampAt = excludedAt
+		stampBy = rec.ExcludedBy
+	case !excluded && hadRow && prevExcluded:
+		// Transition to excluded=false. Clear.
+		stampAt = nil
+		stampBy = nil
+	case !excluded && !hadRow:
+		// Fresh insert with excluded=false. No stamp.
+		stampAt = nil
+		stampBy = nil
+	default:
+		// No-op toggle on an existing row: preserve current stamps by
+		// reading them back and writing them through.
+		var curAt sql.NullTime
+		var curBy sql.NullString
+		const stampStmt = `SELECT excluded_at, excluded_by FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
+		if err := tx.QueryRowContext(ctx, stampStmt, rec.RecommendationID).Scan(&curAt, &curBy); err != nil {
+			return false, fmt.Errorf("failed to read prior stamps: %w", err)
+		}
+		if curAt.Valid {
+			stampAt = curAt.Time
+		}
+		if curBy.Valid {
+			stampBy = curBy.String
+		}
+	}
+
+	const upsertStmt = `INSERT INTO iac_recommendation_verdicts (
+		recommendation_id, connection_id, account_id, region,
+		recommendation_kind, resource_id, exclude_from_learning,
+		excluded_at, excluded_by, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(recommendation_id) DO UPDATE SET
+		connection_id         = excluded.connection_id,
+		account_id            = excluded.account_id,
+		region                = excluded.region,
+		recommendation_kind   = excluded.recommendation_kind,
+		resource_id           = excluded.resource_id,
+		exclude_from_learning = excluded.exclude_from_learning,
+		excluded_at           = excluded.excluded_at,
+		excluded_by           = excluded.excluded_by,
+		updated_at            = excluded.updated_at`
+	var resourceID any
+	if rec.ResourceID != "" {
+		resourceID = rec.ResourceID
+	}
+	if _, err := tx.ExecContext(ctx, upsertStmt,
+		rec.RecommendationID,
+		rec.ConnectionID,
+		rec.AccountID,
+		rec.Region,
+		rec.RecommendationKind,
+		resourceID,
+		excludedFlag,
+		stampAt,
+		stampBy,
+		createdAt,
+		now,
+	); err != nil {
+		return false, fmt.Errorf("failed to upsert recommendation exclusion: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("failed to commit exclusion upsert: %w", err)
+	}
+	return prevExcluded, nil
+}
+
+// ListExcludedRecommendations — v0.89.37 (#656 Stream 54, #531 slice
+// 2 chunk 4). Returns the rows in the supplied scope tuple with
+// exclude_from_learning=1, ordered excluded_at DESC. The discovery
+// bridge calls this once per AssembleDiscoveryVerdicts call to fold
+// operator-set exclusions into the verdictsel pool.
+//
+// Empty scope tuple returns nil — the bridge's short-circuit path
+// treats an empty slice as the cold-start signal. limit<=0 falls
+// through to a small default (100); limit>1000 caps at 1000.
+func (s *Storage) ListExcludedRecommendations(
+	ctx context.Context,
+	connectionID, accountID, region string,
+	limit int,
+) ([]types.ExcludedRecommendation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if connectionID == "" || accountID == "" || region == "" {
+		return nil, nil
+	}
+	const stmt = `SELECT recommendation_id, connection_id, account_id, region,
+		recommendation_kind, COALESCE(resource_id, ''),
+		excluded_at, COALESCE(excluded_by, '')
+		FROM iac_recommendation_verdicts
+		WHERE connection_id = ?
+		  AND account_id = ?
+		  AND region = ?
+		  AND exclude_from_learning = 1
+		ORDER BY excluded_at DESC
+		LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, stmt, connectionID, accountID, region, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list excluded recommendations: %w", err)
+	}
+	defer rows.Close()
+	var out []types.ExcludedRecommendation
+	for rows.Next() {
+		var (
+			rec        types.ExcludedRecommendation
+			excludedAt sql.NullTime
+		)
+		if err := rows.Scan(
+			&rec.RecommendationID,
+			&rec.ConnectionID,
+			&rec.AccountID,
+			&rec.Region,
+			&rec.RecommendationKind,
+			&rec.ResourceID,
+			&excludedAt,
+			&rec.ExcludedBy,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan excluded recommendation row: %w", err)
+		}
+		if excludedAt.Valid {
+			rec.ExcludedAt = excludedAt.Time.UTC()
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
 
 func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {

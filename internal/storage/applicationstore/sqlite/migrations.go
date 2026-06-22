@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 7
+const SchemaVersion = 8
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -275,6 +275,55 @@ CREATE INDEX IF NOT EXISTS idx_audit_recommendation_verdict_scope
 INSERT OR IGNORE INTO schema_version (version) VALUES (7);
 `
 
+// IaCRecommendationVerdictsSchema bumps the database to schema v8.
+// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — introduces the
+// iac_recommendation_verdicts table that carries the operator-set
+// exclusion flag for discovery recommendations the operator has
+// explicitly suppressed without ever opening a PR ("Don't propose
+// this again" affordance on the Recommendations tab).
+//
+// recommendation_id is the deterministic ID the discovery proposer
+// assigns when it emits a recommendation; the row is created lazily
+// on the first exclude click and updated in place on subsequent
+// toggles. resource_id is nullable — a NULL row means the operator
+// excluded the entire kind at that scope; a populated row scopes
+// the exclusion to a single resource (the §11 Q4 distinction the
+// prompt renderer surfaces with different instruction text).
+//
+// excluded_at + excluded_by are populated only while
+// exclude_from_learning=1; they're cleared on a transition to 0 so
+// the row's audit story stays unambiguous. The store layer enforces
+// this; the SQL CHECK constraint is not strict because SQLite
+// CHECK constraints can't reference DEFAULT-stamped values without
+// significant ceremony, and the application layer is the only
+// writer.
+//
+// idx_iac_rec_verdicts_scope is the discovery proposer's bridge
+// lookup index: the bridge sweeps every (connection_id, account_id,
+// region) tuple for excluded rows whenever it assembles verdicts.
+// Including exclude_from_learning in the index keeps the partial
+// scan to just the rows that contribute signal.
+//
+// See docs/proposals/531-proposer-learning-slice2.md §4.2 and §5.2.
+const IaCRecommendationVerdictsSchema = `
+CREATE TABLE IF NOT EXISTS iac_recommendation_verdicts (
+    recommendation_id      TEXT PRIMARY KEY,
+    connection_id          TEXT NOT NULL,
+    account_id             TEXT NOT NULL,
+    region                 TEXT NOT NULL,
+    recommendation_kind    TEXT NOT NULL,
+    resource_id            TEXT,
+    exclude_from_learning  INTEGER NOT NULL DEFAULT 0,
+    excluded_at            TIMESTAMP,
+    excluded_by            TEXT,
+    created_at             TIMESTAMP NOT NULL,
+    updated_at             TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_iac_rec_verdicts_scope
+    ON iac_recommendation_verdicts(connection_id, account_id, region, exclude_from_learning);
+INSERT OR IGNORE INTO schema_version (version) VALUES (8);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -284,4 +333,5 @@ var Migrations = []string{
 	ExcludeFromLearningSchema,
 	WebhookDeliveryDedupeSchema,
 	DiscoveryVerdictScopeIndexSchema,
+	IaCRecommendationVerdictsSchema,
 }
