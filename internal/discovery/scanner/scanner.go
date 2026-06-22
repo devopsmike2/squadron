@@ -232,12 +232,13 @@ type Result struct {
 	// rather than parsing the formatted string. Empty when Partial
 	// is false.
 	//
-	// TODO(v0.87.4+): the AWS scanner currently OVERWRITES
-	// PartialReason on each service failure rather than accumulating.
-	// FailedServices is wired the same way for now (slice into a list
-	// but slice 3 paths each call clear-then-append). When the
-	// accumulator fix lands, both fields collect every failure.
-	// Filed as a separate task.
+	// As of v0.88.3 both PartialReason and FailedServices accumulate
+	// across every service failure during a single scan. The AWS
+	// scanner's recordPartialFailure helper joins PartialReason with
+	// "; " separators when multiple service walks fail in the same
+	// scan, and FailedServices is an append-only list. See
+	// internal/discovery/aws/scanner.go::recordPartialFailure for the
+	// accumulator implementation.
 	FailedServices []string `json:"failed_services,omitempty"`
 }
 
