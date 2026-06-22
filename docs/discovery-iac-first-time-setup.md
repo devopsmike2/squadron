@@ -687,3 +687,12 @@ ciphertext.
 - [proposals/603-connect-iac-repo.md](proposals/603-connect-iac-repo.md)
   — the design doc that scoped this slice 1, including the threat
   model and the slice-2 roadmap (GitHub App, webhooks, multi-repo).
+- [webhook-listener.md](webhook-listener.md) — v0.89.23 operator
+  runbook for the inbound webhook that records
+  `recommendation.pr_merged` events when Squadron-opened PRs land.
+- [discovery-proposer-learning.md](discovery-proposer-learning.md)
+  — v0.89.28 operator runbook for the discovery proposer's
+  feedback loop, which reads `recommendation.pr_merged` events
+  and stops re-proposing accepted recommendations on the next
+  scan. The connection's `LearnFromAcceptedRecommendations` flag
+  controls the loop per connection.

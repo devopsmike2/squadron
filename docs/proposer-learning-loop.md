@@ -500,14 +500,15 @@ The slice-1 trade-offs most likely to shift in later slices:
   the constant with a per-deployment setting on the AI
   service block. Useful for teams with slow-changing
   conventions who want a longer memory.
-- **Discovery proposer integration** —
-  [spec locked in v0.89.27](./proposals/643-discovery-proposer-verdict-learning.md).
-  The "accepted" question is answered:
+- **Discovery proposer integration** — **SHIPPED in v0.89.28**.
+  See [discovery-proposer-learning.md](./discovery-proposer-learning.md)
+  for the operator runbook and
+  [#643](./proposals/643-discovery-proposer-verdict-learning.md)
+  for the locked design. The "accepted" question is answered:
   `recommendation.pr_merged` within 30 days of `pr_opened`
   on the same connection × account × region × kind is the
-  positive signal. Slice 1 implementation is the next
-  code-bearing release in this arc. Rejected signal and
-  cross-scope learning stay slice 2 questions there.
+  positive signal. Rejected signal and cross-scope learning
+  stay slice 2 questions there.
 
 These slice candidates are tracked under
 [#531](./proposals/531-proposer-learns-from-accepted-rejected.md).
