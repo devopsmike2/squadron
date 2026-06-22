@@ -655,9 +655,13 @@ ciphertext.
 
 - **GitHub App authentication.** Slice 2.
 - **Webhooks from GitHub back to Squadron** for
-  `recommendation.pr_merged` and `pr_closed` events. Slice 1.5;
-  requires the operator's Squadron deployment to expose a public
-  callback URL.
+  `recommendation.pr_merged` events. **SHIPPED in v0.89.23 — see
+  [webhook-listener.md](./webhook-listener.md) for the operator
+  runbook.** The receiver requires the operator's Squadron
+  deployment to expose a public callback URL. `pr_closed`-without-
+  merge events are recorded as ignored deliveries, not audit
+  events. The wizard step for entering the secret + per-connection
+  secrets remain slice 2.
 - **Multiple repos per connection.** Slice 2. Today: one Squadron
   IaC connection per GitHub repository.
 - **Editing the PR body or title after open.** Each Open PR click

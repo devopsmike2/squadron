@@ -594,6 +594,48 @@ func humanizeIaCAuditEvent(e *services.AuditEvent) (string, string, bool) {
 		}
 		title := "Could not open PR in github.com/" + repo + " for " + kind
 		return title, msg, true
+
+	// v0.89.24 (#640) — humanizer entry for the v0.89.23 (#639) PR-
+	// merged webhook event. Mirrors the pr_opened shape above so an
+	// operator scanning the timeline sees "Merged PR #N in
+	// github.com/<repo>" alongside the earlier "Opened PR #N …"
+	// row from the same recommendation arc. The audit payload was
+	// written by the webhook receiver, not Squadron itself —
+	// repo_full_name, pr_number, branch, and merged_by are the four
+	// fields the handler guarantees are populated when a real merge
+	// event is verified; recommendation_kind and connection_id can
+	// be empty when the PR didn't come from a Squadron-managed
+	// branch prefix (we still emit the event honestly; only the
+	// title falls back to a kind-less form when kind is empty).
+	case services.AuditEventRecommendationPRMerged:
+		repo, ok := payloadString(e.Payload, "repo_full_name")
+		if !ok {
+			return "", "", false
+		}
+		prNum, ok := payloadInt(e.Payload, "pr_number")
+		if !ok {
+			return "", "", false
+		}
+		branch, ok := payloadString(e.Payload, "branch")
+		if !ok {
+			return "", "", false
+		}
+		mergedBy, ok := payloadString(e.Payload, "merged_by")
+		if !ok {
+			return "", "", false
+		}
+		// recommendation_kind is optional — present when the branch
+		// matched the squadron/rec/ prefix, absent otherwise. The
+		// title appends "for <kind>" only when we have it so a non-
+		// Squadron-shaped PR (an operator hand-pushed branch that
+		// somehow landed under the webhook) still gets a clean
+		// title rather than "Merged PR #5 in foo/bar for ".
+		title := "Merged PR #" + strconv.Itoa(prNum) + " in github.com/" + repo
+		if kind, ok := payloadString(e.Payload, "recommendation_kind"); ok {
+			title += " for " + kind
+		}
+		sub := "Branch " + branch + ", merged by " + mergedBy
+		return title, sub, true
 	}
 	return "", "", false
 }
