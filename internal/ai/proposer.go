@@ -67,50 +67,22 @@ type CostSpikeContext struct {
 	RecentLintFindings    []string // rule IDs that recently fired on configs in this group
 	RecentRecommendations []string // titles of open recommendations for this group
 
-	// v0.89.17 (#633) — prior operator verdicts on AI-originated
-	// rollouts for this group. The proposer bridge assembles this
-	// from ListAIVerdictsForGroup and applies the §5 selection
-	// policy (N=4 cap, ≤2 approved + ≤2 rejected, newest first
-	// within each bucket, rejections weighted higher). Cold start
-	// (empty slice) yields a prompt byte-for-byte identical to
-	// v0.79 — the prompt block is omitted entirely. The bridge
-	// also routes each example's free-form fields through
-	// RedactSecrets before they land here so the prompt cannot
-	// leak credentials. See docs/proposals/531-proposer-learns-
-	// from-accepted-rejected.md §§5–7.
-	PriorVerdicts []VerdictExample
+	// v0.89.17 (#633) / v0.89.35 (#654) — prior verdicts few-shot
+	// block. The proposer bridge precomputes the block via
+	// internal/proposer/verdictprompt.Render and threads it
+	// through here as a finished string. Empty (cold start, opt-
+	// out, or recency-window empty) yields a prompt byte-for-byte
+	// identical to v0.79 — the prompt block is omitted entirely.
+	// Redaction + truncation are owned by verdictprompt; nothing
+	// in the ai package reads or formats the underlying
+	// verdictsel.Verdict records.
+	//
+	// Slice 2 refactor — see
+	// docs/proposals/531-proposer-learning-slice2.md §7.2 for the
+	// block format. Moving the formatting up to the proposer
+	// package broke the would-be ai ↔ verdictprompt cycle.
+	VerdictBlock string
 }
-
-// VerdictExample is one prior operator verdict on an AI-originated
-// rollout, prepared for inclusion as a few-shot example in the next
-// cost-spike proposal. v0.89.17 (#633).
-//
-// State is "APPROVED" or "REJECTED" — the prompt template (see
-// proposer_prompt.go §6 block) uses this verbatim as the bracket
-// label. RolloutID lets the operator correlate the example back to
-// the specific rollout in the timeline. Reasoning is the AI's
-// original natural-language justification (capped at 240 chars by
-// the bridge's summarize() helper, redacted through RedactSecrets).
-// Notes carries the operator's approval/rejection notes (also
-// redacted; may be empty for unannotated approvals — per the design's
-// resolved Q2, unannotated approvals still ship as positive shape
-// signal).
-//
-// Inline config snippets are deliberately excluded — only Reasoning
-// and Notes flow into the prompt block, per §7 of the design.
-type VerdictExample struct {
-	State     string // "APPROVED" or "REJECTED"
-	RolloutID string
-	Reasoning string
-	Notes     string
-}
-
-// Verdict state labels. Match the bracket labels in the §6 prompt
-// block verbatim so a typo at a call site surfaces at compile time.
-const (
-	VerdictStateApproved = "APPROVED"
-	VerdictStateRejected = "REJECTED"
-)
 
 // EvidenceRefCandidate mirrors services.EvidenceRef but lives in
 // the ai package so the proposer doesn't import services (and we

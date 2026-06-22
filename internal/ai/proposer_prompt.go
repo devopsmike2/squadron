@@ -259,36 +259,26 @@ func buildProposeUserMessage(in CostSpikeContext) string {
 		b.WriteString("\n")
 	}
 
-	// v0.89.17 (#633) — prior verdicts few-shot block. Empty
-	// PriorVerdicts (cold start, opt-out, or recency-window empty)
-	// renders NOTHING here so the message is byte-for-byte identical
-	// to v0.79 — the cold-start parity test exists precisely to pin
-	// this. Verbatim shape per docs/proposals/531-proposer-learns-
-	// from-accepted-rejected.md §6.
-	if len(in.PriorVerdicts) > 0 {
-		b.WriteString("Prior verdicts for this group (operator decisions on past AI proposals):\n\n")
-		for _, v := range in.PriorVerdicts {
-			fmt.Fprintf(&b, "[%s] rollout_id=%s\n", v.State, v.RolloutID)
-			if v.Reasoning != "" {
-				fmt.Fprintf(&b, "  reasoning: %s\n", v.Reasoning)
-			}
-			if v.Notes != "" {
-				// The §6 template uses approver_notes for approved
-				// examples and rejecter_notes for rejected ones —
-				// the label tracks the bracket state so a reader
-				// can tell whose comment they're reading at a glance.
-				label := "approver_notes"
-				if v.State == VerdictStateRejected {
-					label = "rejecter_notes"
-				}
-				fmt.Fprintf(&b, "  %s: %q\n", label, v.Notes)
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString("Use these as preference signal. Match the shape of approved ")
-		b.WriteString("proposals; avoid the shape of rejected ones. Do NOT cite these ")
-		b.WriteString("rollout_ids in your evidence — they're operator history, not ")
-		b.WriteString("evidence for this spike.\n\n")
+	// v0.89.17 (#633) / v0.89.35 (#654) — prior verdicts few-shot
+	// block. The block is now precomputed by the proposer bridge
+	// via internal/proposer/verdictprompt.Render and threaded
+	// through CostSpikeContext.VerdictBlock as a finished string.
+	// Empty VerdictBlock (cold start, opt-out, or recency-window
+	// empty) renders NOTHING here so the message is byte-for-byte
+	// identical to v0.79 — the cold-start parity test pins this.
+	//
+	// Moving block construction out of the ai package broke the
+	// would-be ai ↔ verdictprompt import cycle (verdictprompt
+	// imports ai.RedactSecrets) without forcing a redaction helper
+	// duplicate. The format itself (§7.2 of
+	// docs/proposals/531-proposer-learning-slice2.md) is owned by
+	// verdictprompt; this layer just slots the block in.
+	if in.VerdictBlock != "" {
+		b.WriteString(in.VerdictBlock)
+		// Two newlines so the next paragraph ("Return your
+		// proposal...") sits on its own line block, matching the
+		// spacing of the surrounding sections.
+		b.WriteString("\n\n")
 	}
 
 	b.WriteString("Return your proposal as the JSON object described in the system prompt. ")

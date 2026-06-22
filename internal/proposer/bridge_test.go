@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/ai"
+	"github.com/devopsmike2/squadron/internal/proposer/verdictsel"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -652,12 +653,13 @@ func rejectedRollout(id, groupID, reasoning, notes string, rejectedAt time.Time)
 	}
 }
 
-// TestProposerVerdicts_ColdStartParity — Acceptance test §11.1.
-// A group with zero AI-originated rollouts: the user message must
-// be byte-for-byte identical to what v0.79's buildProposeUserMessage
-// would have produced (i.e. no examples block). Implemented by
-// comparing the cold-start prompt against an explicit "empty
-// PriorVerdicts" prompt — they must be equal.
+// TestProposerVerdicts_ColdStartParity — Acceptance test §11.1 of
+// the slice 1 design (also slice 2 §12 test 1). A group with zero
+// AI-originated rollouts: the user message must be byte-for-byte
+// identical to what v0.79's buildProposeUserMessage would have
+// produced (i.e. no examples block). After the v0.89.35 refactor,
+// "no block" means CostSpikeContext.VerdictBlock=="" and the
+// rendered prompt must match the empty-block path verbatim.
 func TestProposerVerdicts_ColdStartParity(t *testing.T) {
 	store, _ := verdictsFixture()
 	// Zero seeded verdicts.
@@ -672,9 +674,16 @@ func TestProposerVerdicts_ColdStartParity(t *testing.T) {
 	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
-	// The proposer received a context with empty PriorVerdicts.
-	assert.Empty(t, prop.lastCtx.PriorVerdicts,
-		"cold-start: no prior verdicts should reach the proposer context")
+	// The proposer received a context with an empty VerdictBlock.
+	assert.Empty(t, prop.lastCtx.VerdictBlock,
+		"cold-start: no verdict block should reach the proposer context")
+
+	// Cold-start parity: rendering the prompt against a context
+	// with VerdictBlock=="" must produce a message that omits the
+	// §7.2 block entirely.
+	rendered := ai.RenderProposeUserMessageForTest(prop.lastCtx)
+	assert.NotContains(t, rendered, "Prior verdicts for this group",
+		"cold start: the examples block must be omitted entirely")
 
 	// The audit payload carries an empty (not nil, not omitted) array.
 	require.Len(t, audit.entries, 2, "successful proposal emits proposal.created + evidence_linked")
@@ -687,8 +696,9 @@ func TestProposerVerdicts_ColdStartParity(t *testing.T) {
 // TestProposerVerdicts_ApprovedExampleSurfaces — Acceptance test §11.2.
 // Seed one approved AI rollout in group G with the design's canonical
 // example reasoning. Fire a new spike. Assert: the user message
-// would have contained [APPROVED] rollout_id=<that id>, and the
-// audit verdict_examples_used contains that id.
+// contains the §7.2 stanza for that rollout (under the cost-spike
+// surface's `reference: rollout_id=` shape), and the audit
+// verdict_examples_used contains that id.
 func TestProposerVerdicts_ApprovedExampleSurfaces(t *testing.T) {
 	store, _ := verdictsFixture()
 	const gid = "prod-utility-fleet"
@@ -708,19 +718,23 @@ func TestProposerVerdicts_ApprovedExampleSurfaces(t *testing.T) {
 	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
-	// The proposer context picked up the verdict.
-	require.Len(t, prop.lastCtx.PriorVerdicts, 1, "one approved verdict should flow into the context")
-	v := prop.lastCtx.PriorVerdicts[0]
-	assert.Equal(t, ai.VerdictStateApproved, v.State)
-	assert.Equal(t, wantID, v.RolloutID)
-	assert.Contains(t, v.Reasoning, "container.id")
+	// The proposer context carries the rendered §7.2 block.
+	assert.NotEmpty(t, prop.lastCtx.VerdictBlock,
+		"one approved verdict should produce a non-empty block on the context")
+	assert.Contains(t, prop.lastCtx.VerdictBlock, "[APPROVED] kind=cost-spike-rollout",
+		"block must carry the canonical APPROVED stanza header")
+	assert.Contains(t, prop.lastCtx.VerdictBlock, "reference: rollout_id="+wantID,
+		"block must carry the cost-spike surface's rollout_id reference line")
+	assert.Contains(t, prop.lastCtx.VerdictBlock, "container.id",
+		"reason line must carry the verdict's reasoning")
 
-	// Sanity check: rendering the prompt with this context must
-	// contain the exact [APPROVED] bracket line. We exercise the
-	// public prompt builder via the same path the proposer takes.
+	// Rendering the prompt with this context lands the same block
+	// inside the full user message at the §7.2 position.
 	rendered := ai.RenderProposeUserMessageForTest(prop.lastCtx)
-	assert.Contains(t, rendered, "[APPROVED] rollout_id="+wantID,
-		"prompt must carry the canonical APPROVED bracket line")
+	assert.Contains(t, rendered, "Prior verdicts for this group",
+		"prompt must carry the §7.2 header")
+	assert.Contains(t, rendered, "reference: rollout_id="+wantID,
+		"prompt must carry the canonical reference line")
 
 	// audit.verdict_examples_used contains the id.
 	require.Len(t, audit.entries, 2)
@@ -729,10 +743,13 @@ func TestProposerVerdicts_ApprovedExampleSurfaces(t *testing.T) {
 	assert.Equal(t, []string{wantID}, examples)
 }
 
-// TestProposerVerdicts_MixCapHonored — Acceptance test §11.3.
-// Seed 5 approved + 5 rejected within 30 days. Assert: exactly 4
-// examples, at most 2 approved, at most 2 rejected, newest first
-// within each bucket.
+// TestProposerVerdicts_MixCapHonored — Acceptance test §11.3 of
+// the slice 1 design, preserved across the slice 2 verdictsel
+// refactor. Seed 5 approved + 5 rejected within 30 days. Assert:
+// exactly 4 examples (DefaultMaxTotal), at most 2 approved, at most
+// 2 rejected (DefaultMaxPerKind = 2 inside each single-kind
+// bucket), newest first within each bucket, audit list ordered
+// rejected-first.
 func TestProposerVerdicts_MixCapHonored(t *testing.T) {
 	store, _ := verdictsFixture()
 	const gid = "prod-utility-fleet"
@@ -768,36 +785,27 @@ func TestProposerVerdicts_MixCapHonored(t *testing.T) {
 	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
-	pv := prop.lastCtx.PriorVerdicts
-	require.Len(t, pv, 4, "mix cap: exactly 4 examples total")
-
-	var approvedCount, rejectedCount int
-	var approvedIDs, rejectedIDs []string
-	for _, v := range pv {
-		switch v.State {
-		case ai.VerdictStateApproved:
-			approvedCount++
-			approvedIDs = append(approvedIDs, v.RolloutID)
-		case ai.VerdictStateRejected:
-			rejectedCount++
-			rejectedIDs = append(rejectedIDs, v.RolloutID)
-		}
-	}
-	assert.LessOrEqual(t, approvedCount, 2, "at most 2 approved examples")
-	assert.LessOrEqual(t, rejectedCount, 2, "at most 2 rejected examples")
-	// With 5 seeded of each, the cap should fill both buckets:
-	assert.Equal(t, 2, approvedCount, "with 5 seeded approveds, expect both approved slots filled")
-	assert.Equal(t, 2, rejectedCount, "with 5 seeded rejecteds, expect both rejected slots filled")
-	// Newest-first within each bucket: rlt_r0 then rlt_r1; rlt_a0 then rlt_a1.
-	assert.Equal(t, []string{"rlt_r0", "rlt_r1"}, rejectedIDs, "rejected bucket newest first")
-	assert.Equal(t, []string{"rlt_a0", "rlt_a1"}, approvedIDs, "approved bucket newest first")
-
 	// audit.verdict_examples_used carries all 4 ids in the same
 	// order they reached the prompt (rejections first, approvals
-	// second — §5 weights rejections higher).
+	// second — §6 step 7 weights rejections higher).
 	examples, ok := audit.entries[0].Payload["verdict_examples_used"].([]string)
 	require.True(t, ok)
-	assert.Equal(t, []string{"rlt_r0", "rlt_r1", "rlt_a0", "rlt_a1"}, examples)
+	assert.Equal(t, []string{"rlt_r0", "rlt_r1", "rlt_a0", "rlt_a1"}, examples,
+		"audit list: DefaultMaxTotal=4, rejected-first per §6 step 7, newest-first inside each bucket")
+
+	// The rendered block carries exactly the same four IDs as
+	// rollout_id reference lines in the same rejected-first order.
+	block := prop.lastCtx.VerdictBlock
+	require.NotEmpty(t, block, "non-empty pool must render a block")
+	for _, wantID := range []string{"rlt_r0", "rlt_r1", "rlt_a0", "rlt_a1"} {
+		assert.Contains(t, block, "reference: rollout_id="+wantID,
+			"block must carry rollout_id=%s", wantID)
+	}
+	// The dropped IDs (rlt_a2..a4, rlt_r2..r4) must NOT appear.
+	for _, dropID := range []string{"rlt_a2", "rlt_a3", "rlt_a4", "rlt_r2", "rlt_r3", "rlt_r4"} {
+		assert.NotContains(t, block, "rollout_id="+dropID,
+			"verdictsel.Select must cap past the per-kind/per-total limits; %s should not appear", dropID)
+	}
 }
 
 // TestProposerVerdicts_OptOutFlagRespected — Acceptance test §11.4.
@@ -836,8 +844,8 @@ func TestProposerVerdicts_OptOutFlagRespected(t *testing.T) {
 	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
-	assert.Empty(t, prop.lastCtx.PriorVerdicts,
-		"opt-out: no prior verdicts must reach the proposer context")
+	assert.Empty(t, prop.lastCtx.VerdictBlock,
+		"opt-out: no verdict block must reach the proposer context")
 
 	// Verify the rendered prompt has no examples block.
 	rendered := ai.RenderProposeUserMessageForTest(prop.lastCtx)
@@ -874,7 +882,7 @@ func TestProposerVerdicts_RecencyWindow(t *testing.T) {
 	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
-	assert.Empty(t, prop.lastCtx.PriorVerdicts,
+	assert.Empty(t, prop.lastCtx.VerdictBlock,
 		"recency window: a 31-day-old verdict must not surface")
 
 	// audit.verdict_examples_used must be empty array.
@@ -883,17 +891,18 @@ func TestProposerVerdicts_RecencyWindow(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, examples)
 
-	// The bridge asked the storage layer for since >= now-30d. We
-	// captured the actual since on the fake; assert it's within a
-	// minute of the design's 30-day window so a future regression
-	// (e.g. someone bumping the constant to 7 days) trips here.
-	wantSince := time.Now().Add(-30 * 24 * time.Hour)
+	// The bridge asked the storage layer for since >= now-30d
+	// (verdictsel.DefaultWindow). We captured the actual since on
+	// the fake; assert it's within a minute of the design's 30-day
+	// window so a future regression (e.g. someone bumping the
+	// constant to 7 days) trips here.
+	wantSince := time.Now().Add(-verdictsel.DefaultWindow)
 	delta := store.lastVerdictsSince.Sub(wantSince)
 	if delta < 0 {
 		delta = -delta
 	}
 	assert.Less(t, delta, time.Minute,
-		"bridge must call ListAIVerdictsForGroup with since=now-30d (slice 1's hard-coded window)")
+		"bridge must call ListAIVerdictsForGroup with since=now-verdictsel.DefaultWindow (30d)")
 }
 
 // TestProposerVerdicts_SecretsRedacted pins §7's redaction
@@ -923,12 +932,17 @@ func TestProposerVerdicts_SecretsRedacted(t *testing.T) {
 	b := New(prop, store, rollouts, audit, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
-	require.Len(t, prop.lastCtx.PriorVerdicts, 1)
-	got := prop.lastCtx.PriorVerdicts[0].Reasoning
-	assert.NotContains(t, got, "sk-ant-AAAABBBB",
+	// The block on the context (precomputed by verdictprompt.Render
+	// in the bridge) and the rendered prompt both carry the
+	// placeholder, not the literal credential. After the v0.89.35
+	// refactor, redaction lives in verdictprompt.reasonField so the
+	// secret is scrubbed at render time, not in assembleVerdicts.
+	assert.NotEmpty(t, prop.lastCtx.VerdictBlock,
+		"a verdict with secret-bearing reasoning should still produce a block (with redaction)")
+	assert.NotContains(t, prop.lastCtx.VerdictBlock, "sk-ant-AAAABBBB",
 		"secret material must not survive into the proposer context")
-	assert.Contains(t, got, "<redacted:anthropic_key>",
-		"RedactSecrets placeholder must be present in the reasoning")
+	assert.Contains(t, prop.lastCtx.VerdictBlock, "<redacted:anthropic_key>",
+		"RedactSecrets placeholder must be present in the rendered block")
 
 	// The rendered prompt likewise carries the placeholder, not the
 	// literal credential.
@@ -964,10 +978,16 @@ func TestProposerVerdicts_AssembleVerdicts_InlineSnippetsExcluded(t *testing.T) 
 	b := New(prop, store, rollouts, nil, Config{PollInterval: time.Hour}, zap.NewNop())
 	b.tick(context.Background())
 
-	require.Len(t, prop.lastCtx.PriorVerdicts, 1)
-	v := prop.lastCtx.PriorVerdicts[0]
-	assert.Empty(t, v.Reasoning, "empty reasoning must stay empty — never substitute snippet bytes")
-	assert.Empty(t, v.Notes, "empty notes must stay empty — never substitute snippet bytes")
+	// The rendered prompt + the precomputed verdict block must not
+	// carry the snippet-shaped identifiers. After the v0.89.35
+	// refactor the bridge maps each Rollout into a verdictsel.Verdict
+	// reading only ID, ProposalReasoning, ApprovalNotes, and
+	// ExcludeFromLearning — TargetConfigID and Name (where the
+	// snippet bytes live in this fixture) are never touched.
+	assert.NotEmpty(t, prop.lastCtx.VerdictBlock,
+		"a verdict with empty reasoning still renders a block (with `(no reason given)` placeholder)")
+	assert.NotContains(t, prop.lastCtx.VerdictBlock, "INLINE_SNIPPET_DO_NOT_LEAK",
+		"target_config_id (a snippet identifier) must not leak into the verdict block")
 	rendered := ai.RenderProposeUserMessageForTest(prop.lastCtx)
 	assert.NotContains(t, rendered, "INLINE_SNIPPET_DO_NOT_LEAK",
 		"target_config_id (a snippet identifier) must not leak into the prompt block")

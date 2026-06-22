@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/devopsmike2/squadron/internal/ai"
+	"github.com/devopsmike2/squadron/internal/proposer/verdictsel"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -75,14 +75,19 @@ func TestExcludeFromLearning_ExcludedRolloutNotInVerdictExamples(t *testing.T) {
 	store.verdicts = map[string][]*types.Rollout{gid: {excluded, included}}
 
 	b := newBridgeForVerdictsTest(store)
-	examples, ids, err := b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, err := b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
 
-	// Only the included rollout makes it through.
-	require.Len(t, examples, 1, "excluded rollout must be filtered out by the bridge")
-	assert.Equal(t, "rlt_included", examples[0].RolloutID,
+	// Only the included rollout makes it through. After the
+	// v0.89.35 refactor the fake's per-rollout filter is the load-
+	// bearing piece — the SQL store also enforces
+	// exclude_from_learning=0 — but verdictsel.Select step 1 would
+	// also drop any Excluded=true verdict that snuck through.
+	assert.Empty(t, rejected, "no rejected verdicts were seeded; rejected bucket should stay empty")
+	require.Len(t, approved, 1, "excluded rollout must be filtered out by the bridge")
+	assert.Equal(t, "rlt_included", approved[0].ID,
 		"the non-excluded rollout is the one that surfaces")
-	assert.Equal(t, ai.VerdictStateApproved, examples[0].State)
+	assert.Equal(t, verdictsel.StateApproved, approved[0].State)
 	assert.Equal(t, []string{"rlt_included"}, ids,
 		"the audit verdict_examples_used list must NOT carry the excluded rollout id")
 }
@@ -110,10 +115,11 @@ func TestExcludeFromLearning_ChangedAfterCreation_AffectsNextProposal(t *testing
 	b := newBridgeForVerdictsTest(store)
 
 	// First call: rollout is included.
-	examples, ids, err := b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, err := b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
-	require.Len(t, examples, 1, "first call: rollout must surface")
-	assert.Equal(t, "rlt_toggle", examples[0].RolloutID)
+	assert.Empty(t, rejected, "no rejected seeded")
+	require.Len(t, approved, 1, "first call: rollout must surface")
+	assert.Equal(t, "rlt_toggle", approved[0].ID)
 	assert.Equal(t, []string{"rlt_toggle"}, ids)
 
 	// Operator flips the flag — simulating the
@@ -124,10 +130,11 @@ func TestExcludeFromLearning_ChangedAfterCreation_AffectsNextProposal(t *testing
 	// Second call: rollout is excluded. The bridge must re-read the
 	// store; if there's a stale cache between calls the test sees a
 	// non-empty result and fails.
-	examples, ids, err = b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, err = b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
-	assert.Empty(t, examples,
+	assert.Empty(t, approved,
 		"second call: rollout must be filtered out — proves no stale cache")
+	assert.Empty(t, rejected, "no rejected seeded")
 	assert.Empty(t, ids,
 		"audit verdict_examples_used must be empty when the only candidate is excluded")
 }
@@ -165,11 +172,12 @@ func TestExcludeFromLearning_GroupOptOutStillRespected(t *testing.T) {
 	store.verdicts = map[string][]*types.Rollout{gid: {r}}
 
 	b := newBridgeForVerdictsTest(store)
-	examples, ids, err := b.assembleVerdicts(context.Background(), gid)
+	approved, rejected, ids, err := b.assembleVerdicts(context.Background(), gid)
 	require.NoError(t, err)
-	assert.Empty(t, examples,
+	assert.Empty(t, approved,
 		"group-level opt-out must short-circuit before the per-rollout filter — "+
 			"a non-suppressed rollout on an opted-out group must still surface zero examples")
+	assert.Empty(t, rejected, "opt-out must zero out the rejected bucket as well")
 	assert.Empty(t, ids,
 		"audit verdict_examples_used must be empty when the group is opted out")
 

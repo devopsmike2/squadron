@@ -36,6 +36,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/ai"
+	"github.com/devopsmike2/squadron/internal/proposer/verdictprompt"
+	"github.com/devopsmike2/squadron/internal/proposer/verdictsel"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -229,14 +231,17 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		return
 	}
 
-	// v0.89.17 (#633) — prior-verdicts few-shot loop. Pull the
-	// recent operator decisions on AI-originated rollouts for this
-	// group and stitch them into the proposer context. The IDs flow
-	// into the audit payload below; the formatted examples flow
-	// into the prompt block via cs.PriorVerdicts. Empty on cold
-	// start, opt-out, or recency-window empty — those cases all
-	// short-circuit inside assembleVerdicts.
-	verdicts, verdictIDs, vErr := b.assembleVerdicts(ctx, cs.GroupID)
+	// v0.89.17 (#633) / v0.89.35 (#654) — prior-verdicts few-shot
+	// loop. Pull the recent operator decisions on AI-originated
+	// rollouts for this group, run them through the shared
+	// verdictsel.Select policy, and render the prompt block via
+	// the shared verdictprompt.Render. The IDs flow into the audit
+	// payload below; the formatted block flows into the prompt
+	// via cs.VerdictBlock. Empty block on cold start, opt-out, or
+	// recency-window empty — those cases all short-circuit inside
+	// assembleVerdicts (returning four zero values) or inside
+	// verdictprompt.Render (empty pool → empty string).
+	approved, rejected, verdictIDs, vErr := b.assembleVerdicts(ctx, cs.GroupID)
 	if vErr != nil {
 		// Non-fatal: a verdicts query failure shouldn't sink the
 		// whole spike. Log and proceed with empty examples — the
@@ -244,10 +249,16 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 		// for this one tick.
 		b.logger.Warn("AI proposer bridge: assembleVerdicts failed; proceeding without examples",
 			zap.String("group_id", cs.GroupID), zap.Error(vErr))
-		verdicts = nil
+		approved = nil
+		rejected = nil
 		verdictIDs = nil
 	}
-	cs.PriorVerdicts = verdicts
+	cs.VerdictBlock = verdictprompt.Render(approved, rejected, verdictprompt.RenderOpts{
+		Surface:         verdictprompt.SurfaceCostSpike,
+		Now:             time.Now().UTC(),
+		Header:          verdictprompt.CostSpikeHeader,
+		InstructionTail: verdictprompt.CostSpikeInstructionTail,
+	})
 
 	result, err := b.proposer.ProposeFromCostSpike(ctx, cs)
 	if err != nil {
@@ -775,142 +786,153 @@ func copyMap(in map[string]string) map[string]string {
 // interface.
 var _ = applicationstore.Group{}
 
-// verdictsWindow is the fixed look-back the proposer applies when
-// pulling prior operator verdicts. Per the design's resolved Q5,
-// 30 days is hard-coded in slice 1 — config-driven windows land in
-// a follow-on slice. v0.89.17 (#633).
-const verdictsWindow = 30 * 24 * time.Hour
-
-// verdictsMaxExamples is the §5 selection cap: at most 4 examples
-// total. v0.89.17 (#633) ships at N=4 per the design's resolved Q1.
-const verdictsMaxExamples = 4
-
-// verdictsMaxPerBucket bounds each verdict-state bucket independently
-// — at most 2 approved and at most 2 rejected. With the 4-total cap
-// this gives the model a balanced shape signal. v0.89.17 (#633).
-const verdictsMaxPerBucket = 2
-
 // assembleVerdicts pulls recent operator verdicts on AI-originated
-// rollouts for the supplied group and returns:
-//   - the formatted examples ready to drop into the prompt block (§6),
-//   - the list of rollout IDs actually used (for the audit field §8).
+// rollouts for the supplied group, runs them through the shared
+// verdictsel.Select policy, and returns:
+//   - approved: the curated approved/merged-state slice (cost-spike
+//     side only emits StateApproved here),
+//   - rejected: the curated rejected-state slice,
+//   - exampleIDs: the audit-payload list of rollout IDs in the order
+//     they appear in the rendered output (rejected first, then
+//     approved, matching the prompt's emphasis-on-rejection ordering).
 //
-// Selection policy per §5:
+// v0.89.35 (#654) refactor: this function used to format the prompt
+// block inline; that responsibility now lives in
+// internal/proposer/verdictprompt. assembleVerdicts is the pure
+// selection step — Render is invoked at the call site.
+//
+// Selection policy per docs/proposals/531-proposer-learning-slice2.md
+// §6, driven by the verdictsel.Default* constants:
 //   - same group only,
-//   - since = now - 30d (hard-coded slice 1, per resolved Q5),
-//   - ≤2 approved + ≤2 rejected, newest verdict first within each bucket,
-//   - rejections weighted higher: fill the rejection bucket first,
-//   - cold start (zero matching rows) yields empty slices — the
-//     prompt block omits entirely and the audit array is empty.
+//   - since = now - DefaultWindow (30d hard-cliff),
+//   - hot/cold tier inside the window (DefaultHotWindow = 7d),
+//   - DefaultMaxTotal=4 across both buckets, DefaultMaxPerKind=2
+//     inside each bucket,
+//   - PreferNeg=true: rejection bucket fills first (cost-spike
+//     biases toward rejection signal),
+//   - cold start (zero matching rows) yields zero values across all
+//     three slices — the prompt block omits entirely and the audit
+//     array is empty.
 //
 // Opt-out: when Group.LearnFromVerdicts==false the function short-
-// circuits and returns empty slices regardless of stored verdicts.
-// The prompt builder sees no examples block; the audit row carries
-// the empty array (not omitted) so SIEM consumers can still detect
-// the proposal happened.
+// circuits before the storage query and returns four zero values
+// regardless of stored verdicts. The prompt builder sees no examples
+// block; the audit row carries the empty array (not omitted) so
+// SIEM consumers can still detect the proposal happened.
 //
-// Redaction: each example's reasoning and notes flow through the
-// ai package's RedactSecrets helper before they land on the
-// VerdictExample. Inline config snippets are intentionally NOT
-// considered — only ProposalReasoning and ApprovalNotes ship. The
-// design (§7) deliberately excludes config bodies from the prompt
-// block; nothing in this function reads the rollout's StagesJSON
-// or TargetConfigID.
+// Redaction + truncation: both happen downstream in
+// verdictprompt.Render via its reasonField helper (240-char cap
+// with ai.RedactSecrets). assembleVerdicts passes raw reasoning +
+// approval notes through; nothing in this function reads the
+// rollout's StagesJSON or TargetConfigID — inline config bodies
+// stay out of the prompt block by construction.
 //
-// v0.89.17 (#633).
-func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) ([]ai.VerdictExample, []string, error) {
+// v0.89.17 (#633), refactored v0.89.35 (#654).
+func (b *Bridge) assembleVerdicts(ctx context.Context, groupID string) (approved, rejected []verdictsel.Verdict, exampleIDs []string, err error) {
 	if groupID == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	// Per-group opt-out check. GetGroup may return (nil, nil) when
 	// the group has been deleted but a cost-spike row still
 	// references it. Treat that the same as "no examples": there's
-	// nothing meaningful to read off a non-existent group.
+	// nothing meaningful to read off a non-existent group. The
+	// opt-out short-circuit MUST run before any storage query so
+	// the v0.89.18 opt-out invariant + the v0.89.26
+	// TestExcludeFromLearning_GroupOptOutStillRespected pin both
+	// hold: the fake's lastVerdictsGroupID must stay empty when
+	// LearnFromVerdicts=false.
 	group, err := b.store.GetGroup(ctx, groupID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get group for verdicts: %w", err)
+		return nil, nil, nil, fmt.Errorf("get group for verdicts: %w", err)
 	}
 	if group == nil || !group.LearnFromVerdicts {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
-	// Pull a small superset and bucket locally. The query is
-	// ordered newest-verdict-first by the SQL index (idx_ai_verdicts
-	// for SQLite; equivalent sort in the memory store). Asking for
-	// more than 2×bucket-cap gives us headroom in case the storage
-	// layer returns rows in a slightly different order (e.g. memory
-	// store ties resolved differently); we still apply the bucket
-	// caps deterministically here.
-	since := time.Now().UTC().Add(-verdictsWindow)
-	rows, err := b.store.ListAIVerdictsForGroup(ctx, groupID, since, verdictsMaxExamples*2)
+	// Pull a small superset and let verdictsel.Select cap. The
+	// storage query is ordered newest-verdict-first by the SQL index
+	// (idx_ai_verdicts for SQLite; equivalent sort in the memory
+	// store). Asking for DefaultMaxTotal*4 gives Select plenty of
+	// headroom across tier+kind diversity caps without overpaying
+	// on the wire.
+	now := time.Now().UTC()
+	since := now.Add(-verdictsel.DefaultWindow)
+	rows, err := b.store.ListAIVerdictsForGroup(ctx, groupID, since, verdictsel.DefaultMaxTotal*4)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list ai verdicts: %w", err)
+		return nil, nil, nil, fmt.Errorf("list ai verdicts: %w", err)
 	}
 	if len(rows) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
-	// Bucket into rejected / approved, preserving the newest-first
-	// order the storage layer returned. The selection policy says
-	// "rejections weighted higher — fill rejection bucket first":
-	// concretely, we emit rejections before approvals in the output
-	// slice so the model reads them first, AND we bias the cap
-	// toward rejections by filling that bucket up to the per-bucket
-	// limit before adding any approveds.
-	var rejected, approved []ai.VerdictExample
+	// Project rollouts into verdictsel.Verdict. State maps from the
+	// approved_at / rejected_at non-NULL invariant the SQL predicate
+	// guarantees; the default branch is defensive against a future
+	// ListAIVerdictsForGroup that loosens the predicate.
+	verdicts := make([]verdictsel.Verdict, 0, len(rows))
 	for _, r := range rows {
-		state := ""
+		var state string
+		var ts time.Time
 		switch {
 		case r.RejectedAt != nil:
-			state = ai.VerdictStateRejected
+			state = verdictsel.StateRejected
+			ts = *r.RejectedAt
 		case r.ApprovedAt != nil:
-			state = ai.VerdictStateApproved
+			state = verdictsel.StateApproved
+			ts = *r.ApprovedAt
 		default:
-			// shouldn't happen — the SQL predicate requires one of
-			// approved_at or rejected_at to be non-NULL — but defend
-			// against a future ListAIVerdictsForGroup that loosens
-			// the predicate.
 			continue
 		}
-		ex := ai.VerdictExample{
+		// Body combines reasoning + approval/rejection notes. The
+		// downstream verdictprompt.reasonField redacts via
+		// ai.RedactSecrets and truncates to 240 chars, so the raw
+		// values flow through here unchanged — no summarize() or
+		// RedactSecrets call duplicated at this layer.
+		body := r.ProposalReasoning
+		if r.ApprovalNotes != "" {
+			if body != "" {
+				body = body + "\n  notes: " + r.ApprovalNotes
+			} else {
+				body = "notes: " + r.ApprovalNotes
+			}
+		}
+		verdicts = append(verdicts, verdictsel.Verdict{
+			ID:        r.ID,
+			Kind:      "cost-spike-rollout", // §7.2 canonical kind for this surface
 			State:     state,
-			RolloutID: r.ID,
-			Reasoning: ai.RedactSecrets(summarize(r.ProposalReasoning, 240)),
-			Notes:     ai.RedactSecrets(r.ApprovalNotes),
-		}
-		switch state {
-		case ai.VerdictStateRejected:
-			if len(rejected) < verdictsMaxPerBucket {
-				rejected = append(rejected, ex)
-			}
-		case ai.VerdictStateApproved:
-			if len(approved) < verdictsMaxPerBucket {
-				approved = append(approved, ex)
-			}
-		}
-		if len(rejected)+len(approved) >= verdictsMaxExamples {
-			// We have a full payload. Continue scanning would only
-			// waste cycles; the per-bucket caps make any further
-			// rows redundant.
-			if len(rejected) >= verdictsMaxPerBucket && len(approved) >= verdictsMaxPerBucket {
-				break
-			}
-		}
+			Timestamp: ts,
+			Body:      body,
+			Excluded:  r.ExcludeFromLearning,
+		})
 	}
 
-	// Output order: rejections first (denser "don't do this again"
-	// signal per §5), then approvals. Within each bucket the order
-	// is newest-first as inherited from the storage layer + the
-	// preserved iteration order above.
-	out := make([]ai.VerdictExample, 0, len(rejected)+len(approved))
-	out = append(out, rejected...)
-	out = append(out, approved...)
-	ids := make([]string, 0, len(out))
-	for _, ex := range out {
-		ids = append(ids, ex.RolloutID)
+	// Run the shared selection policy. PreferNeg=true mirrors the
+	// slice 1 rejection-weighted ordering — the rejection bucket
+	// fills first up to MaxTotal/2 before approveds backfill.
+	selected := verdictsel.Select(verdicts, verdictsel.SelectOpts{
+		Now:        now,
+		Window:     verdictsel.DefaultWindow,
+		HotWindow:  verdictsel.DefaultHotWindow,
+		MaxTotal:   verdictsel.DefaultMaxTotal,
+		MaxPerKind: verdictsel.DefaultMaxPerKind,
+		PreferNeg:  true,
+	})
+	if len(selected) == 0 {
+		return nil, nil, nil, nil
 	}
-	if len(out) == 0 {
-		return nil, nil, nil
+
+	// Split selected into approved + rejected slices for
+	// verdictprompt.Render. Walk in order to build exampleIDs so the
+	// audit payload preserves Select's documented ordering
+	// (rejected first, then approved).
+	for _, v := range selected {
+		exampleIDs = append(exampleIDs, v.ID)
+		switch v.State {
+		case verdictsel.StateApproved, verdictsel.StateMerged:
+			approved = append(approved, v)
+		case verdictsel.StateRejected, verdictsel.StateClosedNotMerged, verdictsel.StateOperatorExcluded:
+			rejected = append(rejected, v)
+		}
 	}
-	return out, ids, nil
+	return approved, rejected, exampleIDs, nil
 }
