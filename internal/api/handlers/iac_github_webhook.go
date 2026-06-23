@@ -143,6 +143,37 @@ type IaCGitHubWebhookHandler struct {
 
 	logger       *zap.Logger
 	branchPrefix string
+
+	// v0.89.44 (#664 Stream 62, slice 1 chunk 3 of the GitHub Checks
+	// API back-signal arc). All four fields are optional: when any
+	// one is nil/empty the chunk-3 check-run UPDATE on the inbound
+	// merge / close branch is a no-op (fail-open per design doc §5).
+	// The slice-1 posture: deployments that haven't enabled the
+	// Checks API integration keep round-tripping their merge / close
+	// audit events normally; the check-run side is value-add.
+	//
+	// checksClient is the slim ChecksAPI surface for the UpdateCheckRun
+	// PATCH; satisfied by *iacgithub.PATClient in production and a
+	// recording fake in tests.
+	//
+	// checkRunStore is the slim store surface for GetCheckRun /
+	// SetCheckRun. Production wiring satisfies this via the application
+	// store; tests substitute a recording fake.
+	//
+	// pat is the deployment-wide PAT used to authenticate the
+	// UpdateCheckRun call. Held on the handler because the webhook
+	// path has no per-request operator token — the audit event flows
+	// in from GitHub via HMAC, not from an operator. Slice 2 candidate:
+	// per-connection PAT lookup off the connection row (mirrors the
+	// chunk-2 PR-open path which uses the connection's sealed PAT).
+	//
+	// squadronHost is the base URL stamped onto the check-run update
+	// summary's "View in Squadron" link. Empty value suppresses the
+	// link line rather than emitting a broken (/) href.
+	checksClient  WebhookChecksAPI
+	checkRunStore WebhookCheckRunStore
+	pat           string
+	squadronHost  string
 }
 
 // NewIaCGitHubWebhookHandler constructs an IaCGitHubWebhookHandler.
@@ -202,6 +233,47 @@ func (h *IaCGitHubWebhookHandler) WithCredstoreKey(key *credstore.Key) *IaCGitHu
 // always wire it via Server.SetIaCGitHubWebhookStore at startup.
 func (h *IaCGitHubWebhookHandler) WithDedupeStore(s WebhookDedupeStore) *IaCGitHubWebhookHandler {
 	h.dedupeStore = s
+	return h
+}
+
+// WithChecksAPI wires the v0.89.44 (#664 Stream 62, slice 1 chunk 3
+// of the GitHub Checks API back-signal arc) Checks API client. Nil
+// keeps the chunk-3 follow-up dormant — the existing
+// recommendation.pr_merged / .pr_closed_not_merged path completes
+// normally with no check-run side-effects. See design doc §5
+// fail-open posture.
+func (h *IaCGitHubWebhookHandler) WithChecksAPI(c WebhookChecksAPI) *IaCGitHubWebhookHandler {
+	h.checksClient = c
+	return h
+}
+
+// WithCheckRunStore wires the v0.89.44 (#664 Stream 62, slice 1
+// chunk 3) durable check-run state store. Nil keeps the chunk-3
+// follow-up dormant.
+func (h *IaCGitHubWebhookHandler) WithCheckRunStore(s WebhookCheckRunStore) *IaCGitHubWebhookHandler {
+	h.checkRunStore = s
+	return h
+}
+
+// WithPAT wires the v0.89.44 (#664 Stream 62, slice 1 chunk 3) PAT
+// used by the chunk-3 UpdateCheckRun call. Empty keeps the chunk-3
+// follow-up dormant — without a credential we cannot authenticate
+// the PATCH to GitHub.
+//
+// Slice 2 candidate: per-connection PAT lookup off the connection
+// row, mirroring the chunk-2 PR-open path which already unseals
+// per-connection PATs from iacconnstore.
+func (h *IaCGitHubWebhookHandler) WithPAT(pat string) *IaCGitHubWebhookHandler {
+	h.pat = pat
+	return h
+}
+
+// WithSquadronHost configures the v0.89.44 (#664 Stream 62, slice 1
+// chunk 3) base URL the check-run update summary's "View in
+// Squadron" link targets. Empty value suppresses the link line.
+// Typically wired from os.Getenv("SQUADRON_PUBLIC_HOST") at startup.
+func (h *IaCGitHubWebhookHandler) WithSquadronHost(host string) *IaCGitHubWebhookHandler {
+	h.squadronHost = host
 	return h
 }
 
@@ -610,6 +682,22 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 				Payload:    payload,
 			})
 		}
+		// v0.89.44 (#664 Stream 62, slice 1 chunk 3) — follow up on
+		// the recommendation.pr_closed_not_merged audit emit by
+		// PATCHing the live check run to conclusion=failure. The
+		// chunk-3 helper short-circuits silently when ChecksAPI or
+		// CheckRunStore is unwired (slice-1 fail-open posture for
+		// deployments that haven't enabled the Checks API
+		// integration). The audit event above has ALREADY landed by
+		// the time control reaches here — order matters per design
+		// doc §7.1.
+		h.updateCheckRunForPRClosed(c.Request.Context(), checkRunUpdateArgs{
+			ConnectionID:       connectionID,
+			AccountID:          accountID,
+			Region:             region,
+			RecommendationKind: kind,
+			PRURL:              ev.PullRequest.HTMLURL,
+		})
 		c.JSON(http.StatusOK, gin.H{
 			"ok":                  true,
 			"ignored":             true,
@@ -654,6 +742,22 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 			Payload:    payload,
 		})
 	}
+
+	// v0.89.44 (#664 Stream 62, slice 1 chunk 3) — follow up on the
+	// recommendation.pr_merged audit emit by PATCHing the live check
+	// run to conclusion=success. The chunk-3 helper short-circuits
+	// silently when ChecksAPI or CheckRunStore is unwired (slice-1
+	// fail-open posture for deployments that haven't enabled the
+	// Checks API integration). The audit event above has ALREADY
+	// landed by the time control reaches here — order matters per
+	// design doc §7.1.
+	h.updateCheckRunForPRMerged(c.Request.Context(), checkRunUpdateArgs{
+		ConnectionID:       connectionID,
+		AccountID:          accountID,
+		Region:             region,
+		RecommendationKind: kind,
+		PRURL:              ev.PullRequest.HTMLURL,
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":                  true,

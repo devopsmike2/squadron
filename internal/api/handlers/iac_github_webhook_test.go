@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,8 +22,10 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
+	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
 // webhookTestSecret is the slice-1 deployment-wide HMAC secret used
@@ -1093,6 +1096,504 @@ func TestPerConnectionWebhookSecret_NeverRevealedInResponse(t *testing.T) {
 	}
 	if !strings.Contains(listBody, "acme/infra") {
 		t.Errorf("LIST response missing repo_full_name acme/infra: %s", listBody)
+	}
+}
+
+// --- v0.89.44 (#664 Stream 62, slice 1 chunk 3) Checks API webhook follow-up ---
+//
+// The five tests below pin the chunk-3 contract: on inbound
+// recommendation.pr_merged / recommendation.pr_closed_not_merged
+// audit emits, the receiver looks up the chunk-2
+// iac.check_run.created audit pivot, PATCHes the live check run on
+// GitHub via UpdateCheckRun, persists the new state via
+// SetCheckRunForRecommendation, and emits iac.check_run.updated.
+// Fail-open is exercised: missing wire (nil client / nil store /
+// empty PAT) silently no-ops; absent pivot row silently no-ops; a
+// CheckRunError surfaces as iac.check_run.failed without breaking
+// the original pr_merged emit.
+
+// fakeWebhookChecksClient is the test-side WebhookChecksAPI
+// implementation. Per-test canned response (err) + a recorded
+// request slice so tests can assert the wire shape that reached the
+// wrapper.
+type fakeWebhookChecksClient struct {
+	mu       sync.Mutex
+	updates  []iacgithub.CheckRunUpdate
+	updPATs  []string
+	respErr  error
+}
+
+func (f *fakeWebhookChecksClient) UpdateCheckRun(_ context.Context, pat string, req iacgithub.CheckRunUpdate) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updates = append(f.updates, req)
+	f.updPATs = append(f.updPATs, pat)
+	return f.respErr
+}
+
+// fakeWebhookCheckRunStore is the test-side WebhookCheckRunStore.
+// Records every Get / Set call. Pre-seed via SeedGet to pin the
+// canned response for the lookup half of the chunk-3 dance.
+type fakeWebhookCheckRunStore struct {
+	mu sync.Mutex
+
+	// seededGet: by recommendation_id → (ref, status, conclusion,
+	// exists, err). When unset, Get returns (zero, "", "", false, nil).
+	seededGet map[string]fakeWebhookCheckRunGetResult
+
+	getCalls []string
+	setCalls []fakeWebhookCheckRunSet
+	setErr   error
+}
+
+type fakeWebhookCheckRunGetResult struct {
+	Ref        types.CheckRunRef
+	Status     string
+	Conclusion string
+	Exists     bool
+	Err        error
+}
+
+type fakeWebhookCheckRunSet struct {
+	Rec        types.ExcludedRecommendation
+	Ref        types.CheckRunRef
+	Status     string
+	Conclusion string
+}
+
+func (s *fakeWebhookCheckRunStore) GetCheckRunForRecommendation(_ context.Context, recommendationID string) (types.CheckRunRef, string, string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getCalls = append(s.getCalls, recommendationID)
+	if r, ok := s.seededGet[recommendationID]; ok {
+		return r.Ref, r.Status, r.Conclusion, r.Exists, r.Err
+	}
+	return types.CheckRunRef{}, "", "", false, nil
+}
+
+func (s *fakeWebhookCheckRunStore) SetCheckRunForRecommendation(
+	_ context.Context,
+	rec types.ExcludedRecommendation,
+	ref types.CheckRunRef,
+	status, conclusion string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setCalls = append(s.setCalls, fakeWebhookCheckRunSet{
+		Rec: rec, Ref: ref, Status: status, Conclusion: conclusion,
+	})
+	return s.setErr
+}
+
+// seedCheckRunCreatedAuditPivot pre-records the chunk-2
+// iac.check_run.created audit row the chunk-3 helper pivots on.
+// Calling this BEFORE doWebhookRequest makes the pivot resolve and
+// the chunk-3 dance fires; omitting it makes the helper silently
+// no-op (no pivot found path).
+func seedCheckRunCreatedAuditPivot(
+	t *testing.T,
+	audit *discoveryRecordingAudit,
+	connectionID, recommendationID, prURL string,
+) {
+	t.Helper()
+	if err := audit.Record(context.Background(), services.AuditEntry{
+		Actor:      services.AuditActorSystem,
+		EventType:  services.AuditEventIaCCheckRunCreated,
+		TargetType: services.AuditTargetIaCRecommendation,
+		TargetID:   connectionID,
+		Action:     "check_run_created",
+		Payload: map[string]any{
+			"connection_id":     connectionID,
+			"recommendation_id": recommendationID,
+			"pr_url":            prURL,
+			"check_run_id":      int64(7777),
+		},
+	}); err != nil {
+		t.Fatalf("seed chunk-2 audit pivot: %v", err)
+	}
+}
+
+// newTestWebhookHandlerWithChecksAPI builds an IaCGitHubWebhookHandler
+// with the chunk-3 surfaces wired: ChecksAPI + CheckRunStore + PAT +
+// SquadronHost. The dedupe / cred-key surfaces stay unwired (the
+// chunk-3 tests don't exercise them). Returns the handler, the iac
+// connection store (so tests can seed connections), the fake checks
+// client (so tests can poke respErr or read updates), and the fake
+// store (so tests can seed Get results or assert Set calls).
+func newTestWebhookHandlerWithChecksAPI(
+	t *testing.T,
+	audit services.AuditService,
+	secret []byte,
+) (*IaCGitHubWebhookHandler, iacconnstore.Store, *fakeWebhookChecksClient, *fakeWebhookCheckRunStore) {
+	t.Helper()
+	connStore := iacconnstore.NewMemoryStore()
+	checks := &fakeWebhookChecksClient{}
+	crStore := &fakeWebhookCheckRunStore{}
+	h := NewIaCGitHubWebhookHandler(audit, connStore, secret, zap.NewNop()).
+		WithChecksAPI(checks).
+		WithCheckRunStore(crStore).
+		WithPAT("pat-checks-write-webhook").
+		WithSquadronHost("https://squadron.acme.example")
+	return h, connStore, checks, crStore
+}
+
+// TestWebhook_PRMerged_UpdatesCheckRunToSuccess — happy path on the
+// merge branch. Seed the chunk-2 audit pivot + the stored check run.
+// Fire a pull_request webhook with merged=true. Assert: (a)
+// recommendation.pr_merged audit fires (existing), (b)
+// iac.check_run.updated audit fires with new_conclusion=success and
+// previous_conclusion=in_progress (the seeded value), (c)
+// UpdateCheckRun was called with the right wire shape, and (d)
+// SetCheckRunForRecommendation persisted status=completed +
+// conclusion=success.
+func TestWebhook_PRMerged_UpdatesCheckRunToSuccess(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, checks, crStore := newTestWebhookHandlerWithChecksAPI(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	const recID = "rec-merged-1"
+	const prURL = "https://github.com/octo/widgets/pull/0"
+	seedCheckRunCreatedAuditPivot(t, audit, connectionID, recID, prURL)
+	crStore.seededGet = map[string]fakeWebhookCheckRunGetResult{
+		recID: {
+			Ref:        types.CheckRunRef{Owner: "octo", Repo: "widgets", CheckID: 12345, HeadSHA: "abc123"},
+			Status:     iacgithub.CheckRunStatusInProgress,
+			Conclusion: "",
+			Exists:     true,
+		},
+	}
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 0,
+		"squadron/rec/rds-pi-em/111111111111/us-east-1/abc1234-0",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// UpdateCheckRun: called once with the seeded ref + new
+	// status=completed + conclusion=success.
+	if len(checks.updates) != 1 {
+		t.Fatalf("UpdateCheckRun calls = %d, want 1", len(checks.updates))
+	}
+	got := checks.updates[0]
+	if got.Ref.CheckID != 12345 {
+		t.Errorf("UpdateCheckRun ref.check_id = %d, want 12345", got.Ref.CheckID)
+	}
+	if got.Status != iacgithub.CheckRunStatusCompleted {
+		t.Errorf("UpdateCheckRun status = %q, want %q", got.Status, iacgithub.CheckRunStatusCompleted)
+	}
+	if got.Conclusion != iacgithub.CheckRunConclusionSuccess {
+		t.Errorf("UpdateCheckRun conclusion = %q, want %q", got.Conclusion, iacgithub.CheckRunConclusionSuccess)
+	}
+	if got.CompletedAt.IsZero() {
+		t.Errorf("UpdateCheckRun completed_at is zero; want stamped")
+	}
+	if !strings.Contains(got.Output.Title, "SUCCESS") {
+		t.Errorf("UpdateCheckRun title = %q, want SUCCESS in it", got.Output.Title)
+	}
+	if checks.updPATs[0] != "pat-checks-write-webhook" {
+		t.Errorf("UpdateCheckRun pat = %q", checks.updPATs[0])
+	}
+
+	// SetCheckRunForRecommendation persisted the new state.
+	if len(crStore.setCalls) != 1 {
+		t.Fatalf("Set calls = %d, want 1", len(crStore.setCalls))
+	}
+	sc := crStore.setCalls[0]
+	if sc.Rec.RecommendationID != recID {
+		t.Errorf("Set rec.recommendation_id = %q", sc.Rec.RecommendationID)
+	}
+	if sc.Status != iacgithub.CheckRunStatusCompleted {
+		t.Errorf("Set status = %q, want %q", sc.Status, iacgithub.CheckRunStatusCompleted)
+	}
+	if sc.Conclusion != iacgithub.CheckRunConclusionSuccess {
+		t.Errorf("Set conclusion = %q, want %q", sc.Conclusion, iacgithub.CheckRunConclusionSuccess)
+	}
+
+	// Audit log: pr_merged + iac.check_run.updated (and the seeded
+	// iac.check_run.created already lives in the log as the pivot).
+	var prMergedCount, updatedCount int
+	var updatedEntry services.AuditEntry
+	for _, e := range audit.entries {
+		switch e.EventType {
+		case services.AuditEventRecommendationPRMerged:
+			prMergedCount++
+		case services.AuditEventIaCCheckRunUpdated:
+			updatedCount++
+			updatedEntry = e
+		}
+	}
+	if prMergedCount != 1 {
+		t.Errorf("recommendation.pr_merged count = %d, want 1", prMergedCount)
+	}
+	if updatedCount != 1 {
+		t.Fatalf("iac.check_run.updated count = %d, want 1", updatedCount)
+	}
+	if updatedEntry.Payload["new_conclusion"] != iacgithub.CheckRunConclusionSuccess {
+		t.Errorf("updated payload.new_conclusion = %v, want success", updatedEntry.Payload["new_conclusion"])
+	}
+	if updatedEntry.Payload["previous_status"] != iacgithub.CheckRunStatusInProgress {
+		t.Errorf("updated payload.previous_status = %v, want in_progress", updatedEntry.Payload["previous_status"])
+	}
+	if updatedEntry.Payload["new_status"] != iacgithub.CheckRunStatusCompleted {
+		t.Errorf("updated payload.new_status = %v, want completed", updatedEntry.Payload["new_status"])
+	}
+	if updatedEntry.Payload["recommendation_id"] != recID {
+		t.Errorf("updated payload.recommendation_id = %v, want %q", updatedEntry.Payload["recommendation_id"], recID)
+	}
+	if updatedEntry.TargetID != connectionID {
+		t.Errorf("updated target_id = %q, want %q", updatedEntry.TargetID, connectionID)
+	}
+}
+
+// TestWebhook_PRClosed_UpdatesCheckRunToFailure — parallel happy
+// path on the close-without-merge branch: new_conclusion=failure,
+// the chunk-3 dance + audit emit fire correctly.
+func TestWebhook_PRClosed_UpdatesCheckRunToFailure(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, checks, crStore := newTestWebhookHandlerWithChecksAPI(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	const recID = "rec-closed-1"
+	const prURL = "https://github.com/octo/widgets/pull/0"
+	seedCheckRunCreatedAuditPivot(t, audit, connectionID, recID, prURL)
+	crStore.seededGet = map[string]fakeWebhookCheckRunGetResult{
+		recID: {
+			Ref:        types.CheckRunRef{Owner: "octo", Repo: "widgets", CheckID: 22222, HeadSHA: "def456"},
+			Status:     iacgithub.CheckRunStatusInProgress,
+			Conclusion: "",
+			Exists:     true,
+		},
+	}
+
+	body := makePREventBody(t, "closed", false, "octo/widgets", 0,
+		"squadron/rec/lambda-otel-layer/222222222222/us-west-2/xyz9-1",
+		"2026-06-22T01:02:03Z", "bob")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	if len(checks.updates) != 1 {
+		t.Fatalf("UpdateCheckRun calls = %d, want 1", len(checks.updates))
+	}
+	if checks.updates[0].Conclusion != iacgithub.CheckRunConclusionFailure {
+		t.Errorf("UpdateCheckRun conclusion = %q, want %q",
+			checks.updates[0].Conclusion, iacgithub.CheckRunConclusionFailure)
+	}
+
+	var closedCount, updatedCount int
+	var updatedEntry services.AuditEntry
+	for _, e := range audit.entries {
+		switch e.EventType {
+		case services.AuditEventRecommendationPRClosedNotMerged:
+			closedCount++
+		case services.AuditEventIaCCheckRunUpdated:
+			updatedCount++
+			updatedEntry = e
+		}
+	}
+	if closedCount != 1 {
+		t.Errorf("recommendation.pr_closed_not_merged count = %d, want 1", closedCount)
+	}
+	if updatedCount != 1 {
+		t.Fatalf("iac.check_run.updated count = %d, want 1", updatedCount)
+	}
+	if updatedEntry.Payload["new_conclusion"] != iacgithub.CheckRunConclusionFailure {
+		t.Errorf("updated payload.new_conclusion = %v, want failure", updatedEntry.Payload["new_conclusion"])
+	}
+}
+
+// TestWebhook_PRMerged_NoCheckRunStored_NoUpdateAttempted — fire a
+// merged webhook for a PR that never had a chunk-2 audit pivot
+// recorded. The chunk-3 helper silently no-ops: the original
+// recommendation.pr_merged audit still fires, but no UpdateCheckRun
+// call happens and no iac.check_run.updated / .failed audit emits.
+func TestWebhook_PRMerged_NoCheckRunStored_NoUpdateAttempted(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, checks, crStore := newTestWebhookHandlerWithChecksAPI(t, audit, webhookTestSecret)
+	seedConnection(t, store, "octo/widgets")
+
+	// Deliberately NOT calling seedCheckRunCreatedAuditPivot — this
+	// PR predates the Checks API enablement (or chunk-2 emit
+	// failed). The chunk-3 helper must fail-open silent.
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 0,
+		"squadron/rec/rds-pi-em/111111111111/us-east-1/no-pivot-0",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// The chunk-3 helper short-circuits BEFORE GetCheckRunForRecommendation
+	// because the pivot lookup returns empty — no Get call lands.
+	if len(crStore.getCalls) != 0 {
+		t.Errorf("Get calls = %d, want 0 (pivot absent should short-circuit before lookup)", len(crStore.getCalls))
+	}
+	if len(checks.updates) != 0 {
+		t.Errorf("UpdateCheckRun calls = %d, want 0", len(checks.updates))
+	}
+	if len(crStore.setCalls) != 0 {
+		t.Errorf("Set calls = %d, want 0", len(crStore.setCalls))
+	}
+
+	var prMergedCount, updatedCount, failedCount int
+	for _, e := range audit.entries {
+		switch e.EventType {
+		case services.AuditEventRecommendationPRMerged:
+			prMergedCount++
+		case services.AuditEventIaCCheckRunUpdated:
+			updatedCount++
+		case services.AuditEventIaCCheckRunFailed:
+			failedCount++
+		}
+	}
+	if prMergedCount != 1 {
+		t.Errorf("recommendation.pr_merged count = %d, want 1", prMergedCount)
+	}
+	if updatedCount != 0 {
+		t.Errorf("iac.check_run.updated count = %d, want 0 (no check run was ever created)", updatedCount)
+	}
+	if failedCount != 0 {
+		t.Errorf("iac.check_run.failed count = %d, want 0 (absent pivot is not a failure)", failedCount)
+	}
+}
+
+// TestWebhook_PRMerged_UpdateCheckRunRateLimited_EmitsFailedAudit —
+// pivot resolves and Get returns a stored check run, but the
+// fakeWebhookChecksClient's UpdateCheckRun returns a
+// CheckRunError{Kind: rate_limit}. Assert: iac.check_run.failed
+// emits with error_kind=rate_limit AND the original
+// recommendation.pr_merged event still fires correctly (the order
+// guarantee from design doc §7.1).
+func TestWebhook_PRMerged_UpdateCheckRunRateLimited_EmitsFailedAudit(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, checks, crStore := newTestWebhookHandlerWithChecksAPI(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	const recID = "rec-rate-limited-1"
+	const prURL = "https://github.com/octo/widgets/pull/0"
+	seedCheckRunCreatedAuditPivot(t, audit, connectionID, recID, prURL)
+	crStore.seededGet = map[string]fakeWebhookCheckRunGetResult{
+		recID: {
+			Ref:        types.CheckRunRef{Owner: "octo", Repo: "widgets", CheckID: 33333, HeadSHA: "rate1"},
+			Status:     iacgithub.CheckRunStatusInProgress,
+			Conclusion: "",
+			Exists:     true,
+		},
+	}
+	checks.respErr = &iacgithub.CheckRunError{
+		Kind:    iacgithub.CheckRunErrorKindRateLimit,
+		Status:  403,
+		Message: "GitHub API rate limit exceeded",
+	}
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 0,
+		"squadron/rec/rds-pi-em/111111111111/us-east-1/rate-0",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// UpdateCheckRun was attempted (the call landed on the fake) but
+	// returned the rate_limit error.
+	if len(checks.updates) != 1 {
+		t.Fatalf("UpdateCheckRun calls = %d, want 1", len(checks.updates))
+	}
+	// On failure: NO Set persists — the GitHub side rejected the
+	// PATCH so our durable state stays at in_progress, awaiting the
+	// next attempt or slice-2's reconciliation pass.
+	if len(crStore.setCalls) != 0 {
+		t.Errorf("Set calls = %d, want 0 on failed PATCH", len(crStore.setCalls))
+	}
+
+	var prMergedCount, updatedCount, failedCount int
+	var failedEntry services.AuditEntry
+	for _, e := range audit.entries {
+		switch e.EventType {
+		case services.AuditEventRecommendationPRMerged:
+			prMergedCount++
+		case services.AuditEventIaCCheckRunUpdated:
+			updatedCount++
+		case services.AuditEventIaCCheckRunFailed:
+			failedCount++
+			failedEntry = e
+		}
+	}
+	if prMergedCount != 1 {
+		t.Errorf("recommendation.pr_merged count = %d, want 1 (original event must still fire)", prMergedCount)
+	}
+	if updatedCount != 0 {
+		t.Errorf("iac.check_run.updated count = %d, want 0 (PATCH failed → no success audit)", updatedCount)
+	}
+	if failedCount != 1 {
+		t.Fatalf("iac.check_run.failed count = %d, want 1", failedCount)
+	}
+	if failedEntry.Payload["error_kind"] != iacgithub.CheckRunErrorKindRateLimit {
+		t.Errorf("failed payload.error_kind = %v, want %q",
+			failedEntry.Payload["error_kind"], iacgithub.CheckRunErrorKindRateLimit)
+	}
+	if failedEntry.Payload["intended_conclusion"] != iacgithub.CheckRunConclusionSuccess {
+		t.Errorf("failed payload.intended_conclusion = %v, want success",
+			failedEntry.Payload["intended_conclusion"])
+	}
+}
+
+// TestWebhook_PRMerged_NilChecksClient_NoOps — wire the webhook
+// handler WITHOUT the chunk-3 ChecksAPI client. Fire a merged
+// webhook for a PR that DOES have a chunk-2 pivot in the audit log.
+// The chunk-3 helper must fail-open silent: no Get call, no
+// UpdateCheckRun, no chunk-3 audits, but the original
+// recommendation.pr_merged audit still fires.
+func TestWebhook_PRMerged_NilChecksClient_NoOps(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	// NOT using newTestWebhookHandlerWithChecksAPI — we want a
+	// handler with NO ChecksAPI wired.
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	const recID = "rec-nil-checks-1"
+	const prURL = "https://github.com/octo/widgets/pull/0"
+	// Pivot exists in the audit log — to prove the helper's
+	// short-circuit lands on the nil-ChecksAPI gate, not the
+	// missing-pivot gate.
+	seedCheckRunCreatedAuditPivot(t, audit, connectionID, recID, prURL)
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 0,
+		"squadron/rec/rds-pi-em/111111111111/us-east-1/nil-0",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var prMergedCount, updatedCount, failedCount int
+	for _, e := range audit.entries {
+		switch e.EventType {
+		case services.AuditEventRecommendationPRMerged:
+			prMergedCount++
+		case services.AuditEventIaCCheckRunUpdated:
+			updatedCount++
+		case services.AuditEventIaCCheckRunFailed:
+			failedCount++
+		}
+	}
+	if prMergedCount != 1 {
+		t.Errorf("recommendation.pr_merged count = %d, want 1", prMergedCount)
+	}
+	if updatedCount != 0 {
+		t.Errorf("iac.check_run.updated count = %d, want 0 (nil ChecksAPI must short-circuit)", updatedCount)
+	}
+	if failedCount != 0 {
+		t.Errorf("iac.check_run.failed count = %d, want 0 (nil ChecksAPI is not a failure)", failedCount)
 	}
 }
 
