@@ -280,11 +280,325 @@ Universal observability claim grows another dimension:
 > COMPUTE, DATABASE, AND KUBERNETES for observability gaps AND
 > verifies telemetry is actually flowing.
 
-Slice 2 will turn the visibility into recommendation kinds:
-`trace-emission-aws-compute`, `trace-emission-gcp-k8s`, etc. —
-each one a proposer-drafted recommendation that says
-"resource X has the primitive enabled but no recent emission.
-Investigate via the inventory tab on each provider."
+Slice 2 SHIPPED in v0.89.79 through v0.89.83. Read on for the
+slice 2 operator workflow.
+
+---
+
+# Slice 2 — recommendation kinds (v0.89.79 through v0.89.83)
+
+Slice 1 of trace integration shipped VISIBILITY: the dashboard
+panel, the per-Inventory-row `Last seen` column. Slice 2 ships
+ACTION: 12 new recommendation kinds the proposer drafts when a
+resource has its observability primitive enabled but Squadron's
+traceindex has seen no spans from it in the last 24 hours.
+
+This is the loop the Tuesday LinkedIn drumbeat post implicitly
+promised: Squadron doesn't just tell you what's wrong, it drafts
+the IaC PR that closes the gap, you review + merge + verify, and
+the verdict learning loop teaches the proposer from your
+decision.
+
+## The 12 new recommendation kinds
+
+One per provider per tier:
+
+```
+trace-emission-aws-compute     trace-emission-gcp-compute
+trace-emission-aws-db          trace-emission-gcp-db
+trace-emission-aws-k8s         trace-emission-gcp-k8s
+
+trace-emission-azure-compute   trace-emission-oci-compute
+trace-emission-azure-db        trace-emission-oci-db
+trace-emission-azure-k8s       trace-emission-oci-k8s
+```
+
+Each kind targets a specific Terraform pattern that deploys the
+cloud-native auto-instrumentation agent for that provider's
+tier. The proposer's reasoning explains which pattern was
+picked and why.
+
+## When a recommendation fires
+
+The detection rule is:
+
+```
+inventory_row.primitive_enabled == true
+  AND inventory_row.last_seen_at is null OR > 24h ago
+  AND inventory_row.last_excluded_at is null
+```
+
+The 24h staleness threshold is intentionally permissive in
+slice 2. Slice 3 may tune per workload type (a daily batch job
+won't emit continuously; a web service silent for an hour
+probably has a real issue).
+
+For each tier:
+
+- **Compute**: `primitive_enabled` = "has otel* tag" — the slice
+  1 detection rule. An EC2 with the `otel-collector` tag but no
+  spans in 24h fires `trace-emission-aws-compute`.
+- **Database**: `primitive_enabled` = per-cloud database axis —
+  `PerformanceInsightsEnabled` for RDS, `QueryInsightsEnabled`
+  for Cloud SQL, etc.
+- **Kubernetes**: `primitive_enabled` = per-cloud observability
+  addon — ADOT for EKS, Managed Prometheus for GKE, Azure
+  Monitor for AKS, Ops Insights for OKE.
+
+## The three failure modes the recommendation acknowledges
+
+The recommendation's reasoning text always names three possible
+causes for the gap. Slice 2 ALWAYS drafts the IaC PR for case
+(a). If your situation is actually (b) or (c), decline the PR
+and the verdict learning loop records it.
+
+1. **SDK not deployed.** The most common cause. The Terraform
+   PR installs the cloud-native auto-instrumentation agent
+   (CloudWatch Agent with ADOT for EC2, AzureMonitorAgent
+   extension for Azure VMs, etc.). Merge if this is your case.
+
+2. **SDK deployed but exporter misconfigured.** The agent is
+   running but pointed at the wrong OTLP endpoint, has a
+   broken authentication token, or has been throttled by the
+   collector. Check the agent's exporter configuration before
+   merging — the PR is wrong for this case. Decline with a
+   note like "SDK already deployed; checking exporter config."
+
+3. **SDK running but attribute mismatch.** The agent is
+   emitting fine, but with `host.name` or `cloud.resource_id`
+   values that don't match Squadron's expectation. Squadron
+   sees spans, just not attributed to this inventory row.
+   Decline with a note like "spans flowing under different
+   host.name — investigating resource detector config."
+
+The verdict learning loop records decline reasons and feeds
+them into the next proposal cycle. After 3-5 declines in a
+scope with the same reason, the proposer down-weights the
+recommendation kind for similar inventory rows.
+
+## The dashboard sub-indicator
+
+Below the existing TRACE COVERAGE panel ring + per-provider
+chips, slice 2 adds a sub-indicator line:
+
+> ⚠ N resources have the primitive enabled but no recent
+> emission — see Recommendations on each provider for the
+> drafts.
+
+The count is the sum of pending trace-emission recommendations
+across all 4 providers. The line is hidden entirely when the
+count is zero. Clicking the link takes you to the AWS
+Recommendations tab; the per-provider Recommendations tabs each
+have a filter chip "Show only trace-emission" that filters the
+list to just these kinds.
+
+## The Recommendations filter chip
+
+Each per-provider page's Recommendations tab gains a chip:
+
+> [ Show only trace-emission ]
+
+Click it to filter the list to only `trace-emission-*` kinds.
+Click again to clear the filter. The chip is yellow when
+active (matching the slice 1 weak-match-caveat color), slate
+otherwise.
+
+The chip currently only renders on the AWS Recommendations tab.
+The GCP/Azure/OCI Recommendations tabs are stubs awaiting their
+own chunk-5 follow-on. The dashboard sub-indicator deep-links
+to AWS for now.
+
+## Per-cloud Terraform patterns (the IaC picker)
+
+The new `internal/proposer/iacpicker` package picks which
+Terraform pattern to extend in your IaC repo. The picker reads
+the existing repo content (when available) and decides whether
+to extend an existing block or introduce a new one. Falls back
+to a documented default when it can't parse the repo or finds
+no related block.
+
+For Azure AKS — the most contested tier — the picker uses a
+deterministic three-way disjunction:
+
+1. **If the existing `azurerm_kubernetes_cluster` block has
+   `oms_agent`** → extend that block (legacy Container Insights
+   path wins, because mixing two observability addons in the
+   same cluster is a known failure mode).
+2. **Else if it has `azure_monitor_profile`** → extend that.
+3. **Else** → introduce `monitor_metrics.annotations_allowed`
+   (the §5 newer-default).
+
+Comments in HCL (`#`, `//`) are ignored, so a commented-out
+`oms_agent` doesn't false-positive into the legacy branch.
+
+The picker's `Reasoning` field captures the picker's decision
+in 1-2 sentences for the proposer's prompt context. You'll see
+it in the recommendation reasoning text on the
+Recommendations tab.
+
+The 12 per-cloud Terraform patterns the picker emits — copy
+these into your IaC review checklist:
+
+- **AWS EC2** (`trace-emission-aws-compute`):
+  `aws_ssm_association` with the `AWS-ConfigureAWSPackage` doc
+  installing CloudWatch Agent (includes ADOT collector binary).
+- **AWS RDS** (`trace-emission-aws-db`):
+  `performance_insights_retention_period = 731` on
+  `aws_db_instance` (LTR tier).
+- **AWS EKS** (`trace-emission-aws-k8s`):
+  `aws_eks_addon` with `addon_name = "adot"`.
+- **GCP GCE** (`trace-emission-gcp-compute`):
+  `google_compute_instance.metadata` enabling `enable-osconfig`
+  + `google-logging-enabled` + `google-monitoring-enabled`.
+- **GCP Cloud SQL** (`trace-emission-gcp-db`):
+  `insights_config { record_application_tags = true;
+  record_client_address = true }` on
+  `google_sql_database_instance`.
+- **GCP GKE** (`trace-emission-gcp-k8s`):
+  `google_gke_hub_feature` with `name = "servicemesh"`.
+- **Azure VM** (`trace-emission-azure-compute`):
+  `azurerm_virtual_machine_extension` with type
+  `AzureMonitorLinuxAgent`.
+- **Azure SQL** (`trace-emission-azure-db`):
+  `azurerm_mssql_database_extended_auditing_policy` with
+  `log_monitoring_enabled = true`.
+- **Azure AKS** (`trace-emission-azure-k8s`):
+  `monitor_metrics.annotations_allowed` per the picker
+  decision rule above.
+- **OCI Instance** (`trace-emission-oci-compute`):
+  cloud-init script in `oci_core_instance.metadata.user_data`.
+  ⚠ Cloud-init only runs on first boot — the recommendation
+  flags this as upgrade-during-maintenance. You'll need to
+  re-launch or migrate to a fresh instance with the new
+  user_data.
+- **OCI Autonomous DB** (`trace-emission-oci-db`):
+  `oci_database_management_managed_database_group`.
+- **OCI OKE** (`trace-emission-oci-k8s`):
+  OCI Service Operator deployed via `kubernetes_manifest`.
+
+## Webhook routing for the new kinds
+
+The IaC webhook handler now recognizes the `trace-emission-*`
+prefix and extracts the provider from the kind itself
+(`trace-emission-{provider}-{tier}`). All 12 kinds route to the
+correct provider's audit scope without any wiring changes on
+your end. The kind-prefix detection sits at the top of the
+switch — more specific than the existing single-segment prefixes
+(`gce-`, `vm-`, `compute-`, etc.) — so the routing stays
+deterministic even when kinds share a vague provider hint.
+
+If you've set up a SIEM consumer to filter on
+`recommendation_kind`, the prefix `trace-emission-` gives you a
+single regex for the new arc:
+
+```
+recommendation_kind ~= "^trace-emission-"
+```
+
+## Workflow — first trace-emission recommendation
+
+1. Open the Discovery dashboard at `/discovery`. Confirm the
+   TRACE COVERAGE panel renders. If the sub-indicator line
+   below the per-provider chips shows a non-zero count, you
+   have at least one resource that will trigger a
+   trace-emission recommendation.
+2. Click into the relevant per-provider page (AWS for now;
+   GCP/Azure/OCI Recommendations tabs ship in their own
+   chunk-5 follow-on).
+3. Click the "Show only trace-emission" filter chip.
+4. Review each draft recommendation. The reasoning text names
+   all three failure modes; pick yours.
+5. For case (a): click Open PR. The webhook listener records
+   the open. When you merge the PR, the
+   `recommendation.pr_merged` audit fires and the proposer's
+   verdict learning loop records the merge as positive signal
+   for the kind in this scope.
+6. For case (b) or (c): click Don't propose this again (chunk
+   4 of #531 slice 2 affordance). Leave a decline reason; the
+   verdict learning loop records the decline.
+7. Wait 24h+ and re-run discovery. If your fix worked, the
+   `Last seen` column should show a recent timestamp on the
+   target inventory row, and the count in the dashboard
+   sub-indicator should drop.
+
+## Troubleshooting
+
+- **A recommendation says "SDK not deployed" but I just deployed
+  the agent yesterday.** The 24h window may not have elapsed yet
+  with the agent live, OR the agent is emitting under a
+  different `host.name` / `cloud.resource_id` than Squadron
+  expects. Check the audit timeline for spans from your scope —
+  if Squadron is receiving them but the inventory's `Last seen`
+  is still empty, you're in case (3) attribute-mismatch.
+- **The dashboard sub-indicator says 5 but the per-provider
+  Recommendations tab shows 0.** The proposer hasn't run a
+  discovery scan since the inventory row aged out of recent
+  emission. Click "Run discovery" on the per-provider page to
+  force a scan; the recommendations should populate.
+- **The iacpicker recommended `monitor_metrics` but my AKS
+  cluster has `oms_agent` already.** Check the picker's
+  Reasoning field — if it says "fallback to default; couldn't
+  parse repo content," your IaC content wasn't supplied to
+  the picker. Either the connect-IaC-repo wizard didn't run
+  through for this repo, or the picker hit an HCL parse
+  failure. The audit timeline shows `iacpicker.fallback_used`
+  when this happens. Decline the PR and check your IaC repo
+  connection.
+- **I declined a `trace-emission-aws-k8s` recommendation but it
+  keeps coming back.** The verdict learning loop down-weights
+  after 3-5 declines with the same reason in the same scope.
+  One decline isn't enough signal yet. Add a meaningful decline
+  reason and the loop incorporates it faster.
+- **I'm getting trace-emission recommendations on resources I
+  know don't need spans (cron jobs, ephemeral CI runners,
+  etc.).** Click Don't propose this again on each. The
+  exclusion list persists per (scope, recommendation_kind,
+  resource_id). Slice 3 may add workload-aware staleness
+  thresholds.
+
+## What slice 2 is NOT
+
+Read this carefully. Slice 2 is bounded the same way slice 1
+was:
+
+- **Squadron does NOT deploy the SDK itself.** The
+  recommendation drafts the IaC PR. The operator reviews and
+  merges. The operator's CI applies. Squadron remains a
+  recommender, not an actor.
+- **Per-language SDK customization is slice 3.** Slice 2 ships
+  the cloud-native generic auto-instrumentation paths (ADOT,
+  Ops Agent, Azure Monitor Agent, OCI APM agent). Per-language
+  deep customization (Python asyncio, Go net/http middleware,
+  etc.) ships later.
+- **Service mesh sidecar injection is slice 3+.** Istio /
+  Linkerd / Cilium ambient have their own propagation paths.
+- **Helm chart deployment via the kubernetes Terraform provider
+  is a slice 2 candidate but not in scope.** Slice 2 ships
+  pure-IaC patterns.
+- **Span quality recommendations are slice 3.** Bad context
+  propagation, missing resource attributes, etc.
+- **Cross-cloud trace correlation is slice 4+.** A span chain
+  that crosses AWS Lambda then SQS then GCP Cloud Function
+  carries context across cloud boundaries; that's a separate
+  arc.
+- **Workload-aware staleness thresholds are slice 3.** Today
+  all kinds use the same 24h window.
+
+## The universal claim grows a third verb
+
+After slice 2, Squadron's positioning reads:
+
+> Squadron scans AWS, GCP, Azure, AND Oracle Cloud across
+> COMPUTE, DATABASE, AND KUBERNETES for observability gaps,
+> verifies telemetry is actually flowing, AND drafts the IaC
+> PRs that close the gaps it finds.
+
+Three verbs. One control plane. Squadron has gone from
+discovery + recommendation (the v0.85 era) to discovery +
+recommendation + reconciliation (today). The Tuesday LinkedIn
+drumbeat narrative — "make the postmortem about the proposal
+the operator turned down" — is now operator-visible at every
+layer of the stack.
 
 ## Cross-references
 
