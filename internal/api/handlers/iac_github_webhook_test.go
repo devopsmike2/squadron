@@ -2251,3 +2251,250 @@ func TestProviderFromRecommendationKind_K8sTierExtension(t *testing.T) {
 		}
 	}
 }
+
+// TestProviderFromTraceEmissionKind_Cases — Trace integration slice 2
+// chunk 2 (v0.89.81, #712 Stream 110). Unit test on the
+// providerFromTraceEmissionKind helper that drives the trace-emission
+// case in providerFromRecommendationKind's switch. The helper must
+// return the cloud provider segment for every recognized
+// `trace-emission-<provider>-<tier>` shape AND return "" for every
+// off-shape input so the switch's fallback policy kicks in cleanly.
+// See docs/proposals/trace-integration-slice2.md §6.
+func TestProviderFromTraceEmissionKind_Cases(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		// Happy path: each of the 12 trace-emission kinds parses
+		// cleanly to its provider segment.
+		{kind: "trace-emission-aws-compute", want: "aws"},
+		{kind: "trace-emission-aws-db", want: "aws"},
+		{kind: "trace-emission-aws-k8s", want: "aws"},
+		{kind: "trace-emission-gcp-compute", want: "gcp"},
+		{kind: "trace-emission-gcp-db", want: "gcp"},
+		{kind: "trace-emission-gcp-k8s", want: "gcp"},
+		{kind: "trace-emission-azure-compute", want: "azure"},
+		{kind: "trace-emission-azure-db", want: "azure"},
+		{kind: "trace-emission-azure-k8s", want: "azure"},
+		{kind: "trace-emission-oci-compute", want: "oci"},
+		{kind: "trace-emission-oci-db", want: "oci"},
+		{kind: "trace-emission-oci-k8s", want: "oci"},
+		// Off-shape inputs all return "" so the switch falls back.
+		{kind: "trace-emission-bogus-compute", want: ""}, // unrecognized provider segment
+		{kind: "gce-otel-label", want: ""},               // not a trace-emission kind
+		{kind: "", want: ""},                             // empty
+		{kind: "trace-emission-", want: ""},              // prefix only, no provider segment
+		{kind: "trace-emission-aws", want: ""},           // no tier segment (no internal hyphen)
+		{kind: "trace-emission--compute", want: ""},      // empty provider segment
+	}
+	for _, tc := range cases {
+		if got := providerFromTraceEmissionKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromTraceEmissionKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}
+
+// TestWebhook_TraceEmissionKinds_RouteCorrectly — Trace integration
+// slice 2 chunk 2 (v0.89.81, #712 Stream 110), acceptance tests 7
+// and 8 from docs/proposals/trace-integration-slice2.md §10. Each of
+// the 12 trace-emission recommendation kinds, when encoded into a
+// merged PR's head branch, must route through
+// providerFromRecommendationKind to the matching provider segment of
+// the kind. The audit payload's `provider` field carries that
+// provider; this pins acceptance tests 7 and 8 ("webhook routes
+// trace-emission-gcp-k8s to provider=gcp" and "webhook routes
+// trace-emission-azure-db to provider=azure") plus the 10 other
+// trace-emission permutations for symmetry.
+//
+// Branch shape per docs/proposals/trace-integration-slice2.md §6
+// reuses the v0.89.28 6-segment encoding:
+//
+//	squadron/rec/<kind>/<scope_id>/<region>/<short_id>
+//
+// The scope_id segment routes via writeScopePayloadFields to the
+// provider-appropriate field (account_id / project_id /
+// subscription_id / tenancy_ocid). We pick a representative scope_id
+// + region per provider so the audit payload is the same shape SIEM
+// consumers see in production.
+func TestWebhook_TraceEmissionKinds_RouteCorrectly(t *testing.T) {
+	cases := []struct {
+		kind           string
+		wantProvider   string
+		scopeID        string
+		region         string
+		scopeFieldName string // payload key the scope_id routes to
+	}{
+		{
+			kind:           "trace-emission-aws-compute",
+			wantProvider:   "aws",
+			scopeID:        "123456789012",
+			region:         "us-east-1",
+			scopeFieldName: "account_id",
+		},
+		{
+			kind:           "trace-emission-aws-db",
+			wantProvider:   "aws",
+			scopeID:        "123456789012",
+			region:         "us-east-1",
+			scopeFieldName: "account_id",
+		},
+		{
+			kind:           "trace-emission-aws-k8s",
+			wantProvider:   "aws",
+			scopeID:        "123456789012",
+			region:         "us-east-1",
+			scopeFieldName: "account_id",
+		},
+		{
+			kind:           "trace-emission-gcp-compute",
+			wantProvider:   "gcp",
+			scopeID:        "my-prod-project",
+			region:         "us-central1",
+			scopeFieldName: "project_id",
+		},
+		{
+			kind:           "trace-emission-gcp-db",
+			wantProvider:   "gcp",
+			scopeID:        "my-prod-project",
+			region:         "us-central1",
+			scopeFieldName: "project_id",
+		},
+		{
+			kind:           "trace-emission-gcp-k8s",
+			wantProvider:   "gcp",
+			scopeID:        "my-prod-project",
+			region:         "us-central1",
+			scopeFieldName: "project_id",
+		},
+		{
+			kind:           "trace-emission-azure-compute",
+			wantProvider:   "azure",
+			scopeID:        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			region:         "eastus",
+			scopeFieldName: "subscription_id",
+		},
+		{
+			kind:           "trace-emission-azure-db",
+			wantProvider:   "azure",
+			scopeID:        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			region:         "eastus",
+			scopeFieldName: "subscription_id",
+		},
+		{
+			kind:           "trace-emission-azure-k8s",
+			wantProvider:   "azure",
+			scopeID:        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			region:         "eastus",
+			scopeFieldName: "subscription_id",
+		},
+		{
+			kind:           "trace-emission-oci-compute",
+			wantProvider:   "oci",
+			scopeID:        "ocid1.tenancy.oc1..aaaaaaaa",
+			region:         "us-phoenix-1",
+			scopeFieldName: "tenancy_ocid",
+		},
+		{
+			kind:           "trace-emission-oci-db",
+			wantProvider:   "oci",
+			scopeID:        "ocid1.tenancy.oc1..aaaaaaaa",
+			region:         "us-phoenix-1",
+			scopeFieldName: "tenancy_ocid",
+		},
+		{
+			kind:           "trace-emission-oci-k8s",
+			wantProvider:   "oci",
+			scopeID:        "ocid1.tenancy.oc1..aaaaaaaa",
+			region:         "us-phoenix-1",
+			scopeFieldName: "tenancy_ocid",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+
+			branch := "squadron/rec/" + tc.kind + "/" + tc.scopeID + "/" + tc.region + "/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-22T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.EventType != services.AuditEventRecommendationPRMerged {
+				t.Errorf("event_type = %q, want %q", e.EventType, services.AuditEventRecommendationPRMerged)
+			}
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != tc.kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], tc.kind)
+			}
+			if pay["provider"] != tc.wantProvider {
+				t.Errorf("payload.provider = %v, want %s", pay["provider"], tc.wantProvider)
+			}
+			if pay[tc.scopeFieldName] != tc.scopeID {
+				t.Errorf("payload.%s = %v, want %s", tc.scopeFieldName, pay[tc.scopeFieldName], tc.scopeID)
+			}
+			if pay["region"] != tc.region {
+				t.Errorf("payload.region = %v, want %s", pay["region"], tc.region)
+			}
+		})
+	}
+}
+
+// TestWebhook_PreExistingKinds_StillRouteCorrectly — Trace
+// integration slice 2 chunk 2 (v0.89.81, #712 Stream 110) regression
+// test. Confirms the new trace-emission case sitting at the top of
+// providerFromRecommendationKind's switch does NOT accidentally
+// swallow other prefixes. Every kind in the pre-existing per-cloud
+// catalog (slice 1 + database tier slice 2 + Kubernetes tier slice 2)
+// must continue to route to the same provider it did before chunk 2.
+//
+// The unit-level coverage already lives in
+// TestProviderFromRecommendationKind /
+// TestProviderFromRecommendationKind_DatabaseTierExtension /
+// TestProviderFromRecommendationKind_K8sTierExtension; this test
+// re-pins the routing through the helper directly as a single
+// regression surface that's quick to scan when reviewing the chunk-2
+// diff.
+func TestWebhook_PreExistingKinds_StillRouteCorrectly(t *testing.T) {
+	cases := []struct {
+		kind         string
+		wantProvider string
+	}{
+		// Slice 1 — compute kinds.
+		{kind: "gce-otel-label", wantProvider: "gcp"},
+		{kind: "vm-otel-tag", wantProvider: "azure"},
+		{kind: "compute-otel-tag", wantProvider: "oci"},
+		{kind: "ec2-otel-layer", wantProvider: "aws"},
+		{kind: "lambda-otel-layer", wantProvider: "aws"},
+		{kind: "rds-pi-em", wantProvider: "aws"},
+		// Database tier slice 2.
+		{kind: "cloudsql-pi-enable", wantProvider: "gcp"},
+		{kind: "azsql-diag-enable", wantProvider: "azure"},
+		{kind: "ocidb-perfhub-enable", wantProvider: "oci"},
+		// Kubernetes tier slice 2.
+		{kind: "gke-mp-enable", wantProvider: "gcp"},
+		{kind: "aks-monitor-enable", wantProvider: "azure"},
+		{kind: "oke-ops-insights-enable", wantProvider: "oci"},
+		// Pre-extension empty kind from a legacy 4-segment branch
+		// still routes to AWS.
+		{kind: "", wantProvider: "aws"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			if got := providerFromRecommendationKind(tc.kind); got != tc.wantProvider {
+				t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.wantProvider)
+			}
+		})
+	}
+}
