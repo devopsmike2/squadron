@@ -1838,6 +1838,14 @@ export function RecommendationsTab({
   const [excludedSet, setExcludedSet] = useState<Set<string>>(
     () => new Set(),
   );
+  // v0.89.82 (#713 Stream 111, Trace integration slice 2 chunk 3) —
+  // operator-set filter chip that narrows the recommendations list to
+  // the slice-2 trace-emission-* drafts. Toggled via the chip above
+  // the list. Trace-emission recommendations are recognised by their
+  // resource_kind prefix ("trace-emission-…"); other kinds (the
+  // existing ec2-otel-layer / lambda-otel-layer / rds-pi-em / etc.)
+  // are hidden while the filter is active.
+  const [traceEmissionFilter, setTraceEmissionFilter] = useState(false);
   // v0.89.40 hydrate from the GET endpoint on mount and whenever the
   // scope tuple changes. The proposer's `connection_id` is today
   // equal to accountID (matching the substrate's connection_id
@@ -2061,8 +2069,39 @@ export function RecommendationsTab({
           </CardContent>
         </Card>
       )}
+      {/*
+        v0.89.82 (#713 Stream 111) — slice-2-chunk-3 filter chip.
+        Narrows the list to the trace-emission-* recommendation kinds
+        the slice-2 proposer arc produces. The dashboard sub-indicator
+        deeplinks here so the operator lands on the same drafts the
+        fleet-wide count refers to.
+      */}
+      <div
+        className="flex items-center gap-2"
+        data-testid="trace-emission-filter-row"
+      >
+        <button
+          type="button"
+          onClick={() => setTraceEmissionFilter((v) => !v)}
+          data-testid="trace-emission-filter-chip"
+          data-active={traceEmissionFilter ? "true" : "false"}
+          aria-pressed={traceEmissionFilter}
+          className={
+            traceEmissionFilter
+              ? "rounded-full bg-amber-500/20 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+              : "rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground"
+          }
+        >
+          Show only trace-emission
+        </button>
+      </div>
       <ul className="space-y-3">
-        {recs.recommendations.map((rec, i) => (
+        {(traceEmissionFilter
+          ? recs.recommendations.filter((r) =>
+              (r.resource_kind ?? "").startsWith("trace-emission-"),
+            )
+          : recs.recommendations
+        ).map((rec, i) => (
           <li key={rec.id}>
             <DiscoveryRecommendationCard
               rec={rec}

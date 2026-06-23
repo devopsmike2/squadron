@@ -60,6 +60,10 @@ function makeProviderTrace(
     coverage_pct: 50,
     strong_match_pct: 100,
     weak_match_pct: 0,
+    // v0.89.82 (#713 Stream 111, Trace integration slice 2 chunk 3) —
+    // default to zero so existing trace-coverage tests still pass and
+    // the sub-indicator stays hidden unless a test explicitly opts in.
+    pending_trace_emission_count: 0,
     ...over,
   };
 }
@@ -658,5 +662,57 @@ describe("DiscoveryDashboard", () => {
       "data-color",
       "#dc2626",
     );
+  });
+
+  // --- Trace coverage pending sub-indicator (v0.89.82 #713 Stream 111) ---
+  //
+  // Slice-2 chunk 3 surfaces a fleet-wide "instrumented but not
+  // emitting" count below the chip row. Renders when the cross-provider
+  // sum is non-zero; hides when zero (design doc §10 acceptance test
+  // 10).
+
+  it("TestDiscoveryDashboard_TraceCoverageSubIndicator_RendersWhenNonZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {},
+        {
+          aws: makeProviderTrace({ pending_trace_emission_count: 2 }),
+          gcp: makeProviderTrace({ pending_trace_emission_count: 1 }),
+          azure: makeProviderTrace({ pending_trace_emission_count: 1 }),
+          oci: makeProviderTrace({ pending_trace_emission_count: 1 }),
+        },
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("trace-coverage-pending-indicator"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId("trace-coverage-pending-indicator"),
+    ).toHaveTextContent(/5 resources/);
+    expect(
+      screen.getByText(
+        /5 resources have the primitive enabled but no recent emission/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_TraceCoverageSubIndicator_HiddenWhenZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Default makeTraceCoverage() carries pending_trace_emission_count
+    // = 0 on every provider, so the indicator must stay hidden.
+    mockedGetTraceCoverage.mockResolvedValue(makeTraceCoverage());
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-panel")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("trace-coverage-pending-indicator"),
+    ).not.toBeInTheDocument();
   });
 });
