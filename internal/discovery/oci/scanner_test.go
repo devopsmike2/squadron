@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )
 
 // --- Helpers: RSA key generation --------------------------------------
@@ -157,6 +158,17 @@ type fakeOCI struct {
 	// configure per-compartment failures via the Status fields.
 	InstancesByCompartment map[string][]ociInstance
 
+	// DBSystemsByCompartment maps compartmentId -> DB Systems served
+	// when /dbSystems is called with that compartmentId. Same
+	// missing-compartment-returns-empty convention as the instances
+	// map (per-compartment failures configure via DBStatus / ForCompartment).
+	DBSystemsByCompartment map[string][]dbSystem
+
+	// AutonomousByCompartment maps compartmentId -> Autonomous
+	// Databases served when /autonomousDatabases is called with that
+	// compartmentId. Same convention.
+	AutonomousByCompartment map[string][]autonomousDatabase
+
 	// CompartmentsStatus, when non-zero, makes the next compartments
 	// call return this status with a JSON error body.
 	CompartmentsStatus    int
@@ -170,6 +182,29 @@ type fakeOCI struct {
 	InstancesForCompartment string
 	InstancesRetryAfter    string
 
+	// DBSystemsStatus / ErrorCode / ForCompartment / RetryAfter:
+	// same shape as the instances knobs. Configures partial-failure
+	// scenarios for the DB Systems walk.
+	DBSystemsStatus         int
+	DBSystemsErrorCode      string
+	DBSystemsForCompartment string
+	DBSystemsRetryAfter     string
+
+	// AutonomousStatus / ErrorCode / ForCompartment / RetryAfter:
+	// same shape for the Autonomous Database walk.
+	AutonomousStatus         int
+	AutonomousErrorCode      string
+	AutonomousForCompartment string
+	AutonomousRetryAfter     string
+
+	// DBSystemsNetwork / AutonomousNetwork, when true, makes the
+	// corresponding endpoint hijack the connection and return a
+	// hard transport error to the client. Used to model a network
+	// fault inside the per-surface walk without taking down the
+	// other endpoints in the same test.
+	DBSystemsNetwork  bool
+	AutonomousNetwork bool
+
 	// AuthorizationGate, when true, makes the server return 401 on
 	// any /instances call regardless of the InstancesStatus
 	// configuration. Used to model "the OCI gateway rejected the
@@ -179,6 +214,8 @@ type fakeOCI struct {
 	// Call counters.
 	CompartmentsCalls int
 	InstancesCalls    int
+	DBSystemsCalls    int
+	AutonomousCalls   int
 
 	// Captured Authorization header from the most recent call.
 	LastAuthz string
@@ -186,7 +223,9 @@ type fakeOCI struct {
 
 func newFakeOCI() *fakeOCI {
 	return &fakeOCI{
-		InstancesByCompartment: map[string][]ociInstance{},
+		InstancesByCompartment:  map[string][]ociInstance{},
+		DBSystemsByCompartment:  map[string][]dbSystem{},
+		AutonomousByCompartment: map[string][]autonomousDatabase{},
 	}
 }
 
@@ -245,6 +284,88 @@ func (f *fakeOCI) handler() http.Handler {
 				instances = []ociInstance{}
 			}
 			_ = json.NewEncoder(w).Encode(instances)
+			return
+
+		case strings.HasSuffix(r.URL.Path, "/dbSystems"):
+			f.DBSystemsCalls++
+			compartmentID := r.URL.Query().Get("compartmentId")
+
+			if f.DBSystemsNetwork {
+				// Hijack the connection and close it without
+				// writing a response so the client sees an io.EOF
+				// / "EOF" transport error rather than a 4xx body.
+				if hj, ok := w.(http.Hijacker); ok {
+					conn, _, err := hj.Hijack()
+					if err == nil {
+						_ = conn.Close()
+						return
+					}
+				}
+				// Fallback if Hijack is unavailable for the
+				// underlying handler — write a 500 so the test
+				// still sees a non-2xx and the request fails.
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if f.DBSystemsRetryAfter != "" {
+				w.Header().Set("Retry-After", f.DBSystemsRetryAfter)
+			}
+
+			if f.DBSystemsStatus != 0 && (f.DBSystemsForCompartment == "" || f.DBSystemsForCompartment == compartmentID) {
+				code := f.DBSystemsErrorCode
+				if code == "" {
+					code = "InternalServerError"
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(f.DBSystemsStatus)
+				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: code, Message: "mock error"})
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			systems := f.DBSystemsByCompartment[compartmentID]
+			if systems == nil {
+				systems = []dbSystem{}
+			}
+			_ = json.NewEncoder(w).Encode(systems)
+			return
+
+		case strings.HasSuffix(r.URL.Path, "/autonomousDatabases"):
+			f.AutonomousCalls++
+			compartmentID := r.URL.Query().Get("compartmentId")
+
+			if f.AutonomousNetwork {
+				if hj, ok := w.(http.Hijacker); ok {
+					conn, _, err := hj.Hijack()
+					if err == nil {
+						_ = conn.Close()
+						return
+					}
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if f.AutonomousRetryAfter != "" {
+				w.Header().Set("Retry-After", f.AutonomousRetryAfter)
+			}
+
+			if f.AutonomousStatus != 0 && (f.AutonomousForCompartment == "" || f.AutonomousForCompartment == compartmentID) {
+				code := f.AutonomousErrorCode
+				if code == "" {
+					code = "InternalServerError"
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(f.AutonomousStatus)
+				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: code, Message: "mock error"})
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			adbs := f.AutonomousByCompartment[compartmentID]
+			if adbs == nil {
+				adbs = []autonomousDatabase{}
+			}
+			_ = json.NewEncoder(w).Encode(adbs)
 			return
 		}
 
@@ -704,6 +825,309 @@ func TestTruncate(t *testing.T) {
 	assert.Equal(t, 203, len(got))
 	assert.True(t, strings.HasSuffix(got, "..."))
 	assert.Equal(t, "short", truncate("short", 200))
+}
+
+// --- Helpers: DB System + Autonomous Database construction ----------
+
+func makeDBSystem(name, shape, version, mgmtStatus string, freeform map[string]string, defined map[string]map[string]interface{}) dbSystem {
+	return dbSystem{
+		ID:             "ocid1.dbsystem.oc1..." + name,
+		DisplayName:    name,
+		Shape:          shape,
+		Version:        version,
+		LifecycleState: "AVAILABLE",
+		FreeformTags:   freeform,
+		DefinedTags:    defined,
+		DatabaseManagementConfig: dbSystemManagementConfig{
+			DatabaseManagementStatus: mgmtStatus,
+		},
+	}
+}
+
+func makeAutonomousDB(name, workload string, cpuCount int, mgmtStatus string, freeform map[string]string, defined map[string]map[string]interface{}) autonomousDatabase {
+	return autonomousDatabase{
+		ID:                       "ocid1.autonomousdatabase.oc1..." + name,
+		DisplayName:              name,
+		DbName:                   name,
+		DbWorkload:               workload,
+		CpuCoreCount:             cpuCount,
+		LifecycleState:           "AVAILABLE",
+		FreeformTags:             freeform,
+		DefinedTags:              defined,
+		DatabaseManagementStatus: mgmtStatus,
+	}
+}
+
+func findDB(t *testing.T, dbs []scanner.DatabaseInstanceSnapshot, resourceID string) scanner.DatabaseInstanceSnapshot {
+	t.Helper()
+	for _, d := range dbs {
+		if d.ResourceID == resourceID {
+			return d
+		}
+	}
+	t.Fatalf("expected snapshot with ResourceID=%q in %v", resourceID, dbs)
+	return scanner.DatabaseInstanceSnapshot{}
+}
+
+// --- DB Systems Scan tests ------------------------------------------
+
+func TestScan_DBSystem_ReturnsDatabaseInstanceSnapshot(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{
+		makeDBSystem("db-prod", "VM.Standard2.4", "19.0.0.0", "ENABLED", map[string]string{"env": "prod"}, nil),
+		makeDBSystem("db-stage", "BM.DenseIO2.52", "21.0.0.0", "ENABLED", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 2, "expected 2 DB System snapshots")
+	for _, d := range res.Databases {
+		assert.True(t, d.DatabaseManagementEnabled, "expected DatabaseManagementEnabled=true for %s", d.ResourceID)
+		assert.Equal(t, "oracle", d.Engine)
+		assert.Equal(t, "oci", d.Provider)
+		assert.Equal(t, "us-phoenix-1", d.Region)
+	}
+
+	prod := findDB(t, res.Databases, "db-prod")
+	assert.Equal(t, "VM.Standard2.4", prod.InstanceClass)
+	assert.Equal(t, "19.0.0.0", prod.EngineVersion)
+	assert.Equal(t, map[string]string{"env": "prod"}, prod.Tags)
+}
+
+func TestScan_DBSystem_ManagementNotEnabled_DetectsAsFalse(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{
+		makeDBSystem("db-off", "VM.Standard2.4", "19.0.0.0", "NOT_ENABLED", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, res.Databases, 1)
+	assert.False(t, res.Databases[0].DatabaseManagementEnabled, "NOT_ENABLED status should flip the boolean false")
+}
+
+// --- Autonomous Database Scan tests ---------------------------------
+
+func TestScan_AutonomousDatabase_ReturnsDatabaseInstanceSnapshot(t *testing.T) {
+	fake := newFakeOCI()
+	fake.AutonomousByCompartment["ocid1.tenancy.oc1..aaa"] = []autonomousDatabase{
+		makeAutonomousDB("adb-oltp", "OLTP", 2, "NOT_ENABLED", nil, nil),
+		makeAutonomousDB("adb-dw", "DW", 4, "NOT_ENABLED", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 2)
+	oltp := findDB(t, res.Databases, "adb-oltp")
+	dw := findDB(t, res.Databases, "adb-dw")
+	assert.Equal(t, "autonomous-oltp", oltp.EngineVersion)
+	assert.Equal(t, "autonomous-dw", dw.EngineVersion)
+	assert.Equal(t, "ocpu-2", oltp.InstanceClass)
+	assert.Equal(t, "ocpu-4", dw.InstanceClass)
+	assert.Equal(t, "oracle", oltp.Engine)
+	assert.Equal(t, "oci", oltp.Provider)
+}
+
+func TestScan_AutonomousDatabase_ManagementEnabled_DetectsTrue(t *testing.T) {
+	fake := newFakeOCI()
+	fake.AutonomousByCompartment["ocid1.tenancy.oc1..aaa"] = []autonomousDatabase{
+		makeAutonomousDB("adb-on", "OLTP", 2, "ENABLED", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, res.Databases, 1)
+	assert.True(t, res.Databases[0].DatabaseManagementEnabled, "top-level ENABLED status should flip the boolean true")
+}
+
+// --- Cross-family + lifecycle tests ---------------------------------
+
+func TestScan_OCI_DB_BothFamilies_BothWalked(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{
+		makeDBSystem("db-prod", "VM.Standard2.4", "19.0.0.0", "ENABLED", nil, nil),
+	}
+	fake.AutonomousByCompartment["ocid1.tenancy.oc1..aaa"] = []autonomousDatabase{
+		makeAutonomousDB("adb-oltp", "OLTP", 2, "ENABLED", nil, nil),
+		makeAutonomousDB("adb-dw", "DW", 4, "NOT_ENABLED", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 3, "expected DB System + 2 Autonomous DBs all walked in the same scan")
+	dbProd := findDB(t, res.Databases, "db-prod")
+	adbOLTP := findDB(t, res.Databases, "adb-oltp")
+	adbDW := findDB(t, res.Databases, "adb-dw")
+	assert.Equal(t, "19.0.0.0", dbProd.EngineVersion)
+	assert.Equal(t, "autonomous-oltp", adbOLTP.EngineVersion)
+	assert.Equal(t, "autonomous-dw", adbDW.EngineVersion)
+	assert.True(t, dbProd.DatabaseManagementEnabled)
+	assert.True(t, adbOLTP.DatabaseManagementEnabled)
+	assert.False(t, adbDW.DatabaseManagementEnabled)
+}
+
+func TestScan_OCI_DB_SkipsNonAvailableLifecycle(t *testing.T) {
+	fake := newFakeOCI()
+	terminating := makeDBSystem("db-gone", "VM.Standard2.4", "19.0.0.0", "ENABLED", nil, nil)
+	terminating.LifecycleState = "TERMINATING"
+	provisioning := makeAutonomousDB("adb-pending", "OLTP", 2, "ENABLED", nil, nil)
+	provisioning.LifecycleState = "PROVISIONING"
+	available := makeDBSystem("db-live", "VM.Standard2.4", "19.0.0.0", "ENABLED", nil, nil)
+
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{terminating, available}
+	fake.AutonomousByCompartment["ocid1.tenancy.oc1..aaa"] = []autonomousDatabase{provisioning}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 1, "TERMINATING / PROVISIONING rows should be skipped")
+	assert.Equal(t, "db-live", res.Databases[0].ResourceID)
+}
+
+// --- Partial-failure tests ------------------------------------------
+
+func TestScan_OCI_DB_PermissionDenied_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsStatus = http.StatusForbidden
+	fake.DBSystemsErrorCode = "NotAuthorizedOrNotFound"
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "permission denied on the DB Systems walk is a partial-failure surface")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "permission denied")
+	assert.Contains(t, res.FailedServices, ServiceIDDatabase)
+}
+
+func TestScan_OCI_DB_RateLimited_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsStatus = http.StatusTooManyRequests
+	fake.DBSystemsErrorCode = "TooManyRequests"
+	fake.DBSystemsRetryAfter = "10"
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "rate limit on the DB Systems walk is partial, not hard")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "rate limit")
+	assert.Contains(t, res.FailedServices, ServiceIDDatabase)
+}
+
+func TestScan_OCI_DB_NetworkError_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsNetwork = true
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "network error on the DB Systems walk is partial — autonomous walk + compute succeeded")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "network")
+	assert.Contains(t, res.FailedServices, ServiceIDDatabase)
+}
+
+// --- Compute + Database integration tests ---------------------------
+
+func TestScan_OCI_ComputeAndDB_BothWalked(t *testing.T) {
+	fake := newFakeOCI()
+	fake.Compartments = []ociCompartment{makeCompartment("ocid1.compartment.oc1..teamA", "team-a")}
+
+	fake.InstancesByCompartment["ocid1.tenancy.oc1..aaa"] = []ociInstance{
+		makeInstance("web-1", "VM.Standard.E4.Flex", "us-phoenix-1", map[string]string{"otel": "v1"}, nil),
+	}
+	fake.InstancesByCompartment["ocid1.compartment.oc1..teamA"] = []ociInstance{
+		makeInstance("web-2", "VM.Standard.E4.Flex", "us-phoenix-1", nil, nil),
+	}
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{
+		makeDBSystem("db-prod", "VM.Standard2.4", "19.0.0.0", "ENABLED", nil, nil),
+	}
+	fake.AutonomousByCompartment["ocid1.compartment.oc1..teamA"] = []autonomousDatabase{
+		makeAutonomousDB("adb-oltp", "OLTP", 2, "NOT_ENABLED", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Compute, 2, "compute walk should still see 2 instances")
+	require.Len(t, res.Databases, 2, "database walk should see 1 DB System + 1 Autonomous DB")
+	assert.False(t, res.Partial)
+
+	// Both DB Systems AND Autonomous Databases endpoints were
+	// called once per compartment (2 compartments = 2 calls each).
+	assert.Equal(t, 2, fake.DBSystemsCalls)
+	assert.Equal(t, 2, fake.AutonomousCalls)
+}
+
+func TestScan_OCI_DB_TagsFlattening(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{
+		makeDBSystem(
+			"db-tagged",
+			"VM.Standard2.4",
+			"19.0.0.0",
+			"ENABLED",
+			map[string]string{"env": "prod", "team": "platform"},
+			map[string]map[string]interface{}{
+				"Operations": {"owner": "alice", "team": "should-be-overridden"},
+			},
+		),
+	}
+	fake.AutonomousByCompartment["ocid1.tenancy.oc1..aaa"] = []autonomousDatabase{
+		makeAutonomousDB(
+			"adb-tagged",
+			"OLTP",
+			2,
+			"ENABLED",
+			map[string]string{"env": "stage"},
+			map[string]map[string]interface{}{
+				"Custom": {"owner": "bob"},
+			},
+		),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, res.Databases, 2)
+
+	dbs := findDB(t, res.Databases, "db-tagged")
+	assert.Equal(t, "prod", dbs.Tags["env"], "DB System tag flattening should keep freeform")
+	assert.Equal(t, "platform", dbs.Tags["team"], "freeform should win over defined on key collision")
+	assert.Equal(t, "alice", dbs.Tags["owner"], "defined-tag namespace stripped, inner key surfaced")
+
+	adb := findDB(t, res.Databases, "adb-tagged")
+	assert.Equal(t, "stage", adb.Tags["env"])
+	assert.Equal(t, "bob", adb.Tags["owner"])
+}
+
+func TestScan_OCI_DB_ProviderFieldSet(t *testing.T) {
+	fake := newFakeOCI()
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{
+		makeDBSystem("db-prod", "VM.Standard2.4", "19.0.0.0", "ENABLED", nil, nil),
+	}
+	fake.AutonomousByCompartment["ocid1.tenancy.oc1..aaa"] = []autonomousDatabase{
+		makeAutonomousDB("adb-oltp", "OLTP", 2, "NOT_ENABLED", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, res.Databases, 2)
+	for _, d := range res.Databases {
+		assert.Equal(t, "oci", d.Provider, "every database snapshot should carry Provider=oci")
+	}
 }
 
 // TestScan_PrivateKeyMemoized_OnlyParsedOnce verifies the
