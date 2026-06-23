@@ -292,6 +292,17 @@ export function AppSidebar() {
           icon: Cloud,
         },
         {
+          // v0.89.53 #677 Stream 75 (slice-1 chunk 4) — Azure discovery
+          // page. Sits next to GCP under Discovery so all three
+          // provider entries (AWS / GCP / Azure) cluster together
+          // before the IaC GitHub entry. Same Cloud icon as AWS / GCP
+          // per the slice-1 "no per-provider iconography" decision.
+          key: "discovery-azure",
+          title: "Azure",
+          url: "/discovery/azure",
+          icon: Cloud,
+        },
+        {
           // v0.89.3 Stream 19 — #603 Connect-IaC-repo. Sits next to
           // AWS under Discovery so the operator's muscle memory for
           // "where I wire things up" stays in one place. Slice 1
