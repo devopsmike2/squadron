@@ -89,3 +89,56 @@ const azureProviderID = "azure"
 // scanner can hard-code this rather than reading a per-database
 // field.
 const azureSQLEngine = "sqlserver"
+
+// ServiceIDAKS is the kubernetes-tier-slice-2 (chunk 3) service
+// identifier the scanner reports against Result.FailedServices when
+// the AKS managed-cluster walk produces a non-fatal error. See
+// docs/proposals/kubernetes-tier-slice2.md §4.1
+// ("Result.FailedServices identifiers: Azure AKS scanner: aks").
+const ServiceIDAKS = "aks"
+
+// armAKSAPIVersion pins the Microsoft.ContainerService/managedClusters
+// list-by-subscription API version. 2024-09-01 returns both the
+// legacy addonProfiles.omsagent shape AND the newer
+// azureMonitorProfile.metrics / azureMonitorProfile.containerInsights
+// shape at stable JSON paths — the slice-2 three-way disjunction
+// detection rule reads all three.
+const armAKSAPIVersion = "2024-09-01"
+
+// aksOMSAgentAddonName is the legacy Container Insights addon
+// profile key the three-way detection rule inspects under
+// properties.addonProfiles. Older AKS clusters surface their
+// observability state here; newer clusters use the
+// azureMonitorProfile shape instead. The detection rule treats
+// either as sufficient evidence for AzureMonitorEnabled=true.
+const aksOMSAgentAddonName = "omsagent"
+
+// aksRunningPowerState is the powerState.code value the scanner
+// normalizes (alongside provisioningState=="Succeeded") into the
+// canonical "RUNNING" Status string. AKS exposes two orthogonal
+// lifecycle signals: provisioningState (the most recent
+// management-plane operation outcome) and powerState (whether the
+// cluster is started or stopped). A cluster is operator-actionable
+// for observability recommendations only when BOTH are healthy;
+// any other combination surfaces the raw provisioningState so the
+// proposer's "decline to recommend against a non-RUNNING cluster"
+// branch can fire.
+const aksRunningPowerState = "Running"
+
+// aksProvisioningSucceeded is the provisioningState value that
+// pairs with powerState.code=="Running" to produce the canonical
+// "RUNNING" Status. Other provisioningState values
+// ("Creating" / "Updating" / "Deleting" / "Failed") map through
+// verbatim — the proposer surfaces them raw so the Inventory tab
+// can dim mid-lifecycle rows and the AI recommendation pipeline
+// can skip them.
+const aksProvisioningSucceeded = "Succeeded"
+
+// aksStatusRunning is the canonical Status string the AKS walker
+// writes when provisioningState=="Succeeded" AND
+// powerState.code=="Running". Parallel to the AWS EKS "ACTIVE"
+// and GCP GKE "RUNNING" conventions — every per-cloud cluster
+// scanner emits its provider's natural healthy-status string into
+// ClusterSnapshot.Status so the Inventory tab and the proposer's
+// non-active-skip branch see provider-consistent values.
+const aksStatusRunning = "RUNNING"
