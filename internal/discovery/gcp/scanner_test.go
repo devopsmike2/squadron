@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	compute "google.golang.org/api/compute/v1"
+	container "google.golang.org/api/container/v1beta1"
 	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -74,10 +75,23 @@ type fakeGCP struct {
 	// instances.list call return this status.
 	CloudSQLListStatus int
 
+	// GKE (slice 2 kubernetes-tier) test surface.
+	//
+	// GKEClusters is the static cluster list returned by the
+	// v1beta1 ProjectsLocationsClustersService.List endpoint. The
+	// mock returns an empty list when no clusters are seeded.
+	GKEClusters []*container.Cluster
+
+	// GKEListStatus, when non-zero, makes the next GKE
+	// clusters.list call return this status (with a googleapi-style
+	// body).
+	GKEListStatus int
+
 	// Call counters for assertions.
 	ZonesListCalls     int
 	InstancesListCalls map[string]int
 	CloudSQLListCalls  int
+	GKEListCalls       int
 }
 
 func newFakeGCP() *fakeGCP {
@@ -127,6 +141,8 @@ func (f *fakeGCP) handler() http.Handler {
 		//   /compute/v1/projects/{project}/zones/{zone}/instances
 		// Cloud SQL Admin API path shape (REST, v1beta4):
 		//   /sql/v1beta4/projects/{project}/instances
+		// GKE Container API path shape (REST, v1beta1):
+		//   /v1beta1/projects/{project}/locations/-/clusters
 		switch {
 		case strings.HasSuffix(path, "/zones"):
 			f.ZonesListCalls++
@@ -163,6 +179,23 @@ func (f *fakeGCP) handler() http.Handler {
 				Kind:          "sql#instancesList",
 				NextPageToken: nextToken,
 			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+
+		case strings.Contains(path, "/v1beta1/projects/") && strings.HasSuffix(path, "/clusters"):
+			// GKE Container API: clusters.list with the "-" location
+			// wildcard. The parent path is "projects/{p}/locations/-",
+			// so the URL ends in "/locations/-/clusters". The mock
+			// returns every seeded cluster on a single response
+			// (the API doesn't expose a NextPageToken on
+			// ListClustersResponse — see gke.go::walkGKE godoc).
+			f.GKEListCalls++
+			if f.GKEListStatus != 0 {
+				writeAPIError(w, f.GKEListStatus, statusReason(f.GKEListStatus), statusName(f.GKEListStatus))
+				return
+			}
+			resp := container.ListClustersResponse{Clusters: f.GKEClusters}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
 			return
@@ -936,4 +969,316 @@ func TestNormalizeEngineAndExtractVersion_Standalone(t *testing.T) {
 	assert.Equal(t, "15", extractVersion("POSTGRES_15"))
 	assert.Equal(t, "", extractVersion(""))
 	assert.Equal(t, "", extractVersion("POSTGRES"))
+}
+
+// --- Slice 2 GKE tests -----------------------------------------------
+//
+// These tests exercise the kubernetes-tier-slice2.md §3.1 detection
+// rule and the §5.1 scanner extension. The mock surface is the same
+// fakeGCP server — GKE paths route through the
+// /v1beta1/projects/.../locations/-/clusters handler added alongside
+// the zones / instances / Cloud SQL handlers.
+
+// gkeCluster is a tiny helper for assembling test clusters without
+// verbose struct nesting. The ManagedPrometheus boolean is hoisted
+// into the convenience signature since it's the slice-2 detection
+// axis the proposer keys on. Tests that need a missing
+// MonitoringConfig (or a missing ManagedPrometheusConfig under a
+// present MonitoringConfig) fall through to the raw container.Cluster
+// literal — see TestScan_GKE_ManagedPrometheusMissing_TreatsAsFalse.
+func gkeCluster(name, masterVersion, location, status string, managedPrometheus bool, labels map[string]string) *container.Cluster {
+	return &container.Cluster{
+		Name:                 name,
+		SelfLink:             "https://container.googleapis.com/v1beta1/projects/p/locations/" + location + "/clusters/" + name,
+		CurrentMasterVersion: masterVersion,
+		Status:               status,
+		Location:             location,
+		ResourceLabels:       labels,
+		MonitoringConfig: &container.MonitoringConfig{
+			ManagedPrometheusConfig: &container.ManagedPrometheusConfig{
+				Enabled: managedPrometheus,
+			},
+		},
+	}
+}
+
+func TestScan_GKE_ReturnsClusterSnapshot(t *testing.T) {
+	fake := newFakeGCP()
+	// Empty zones list — the GKE walk runs even when compute returned
+	// no instances and no Cloud SQL instances were seeded.
+	fake.Zones = []*compute.Zone{}
+	fake.GKEClusters = []*container.Cluster{
+		gkeCluster("prod-cluster", "1.29.4-gke.1043000", "us-central1", "RUNNING", true, map[string]string{"env": "prod"}),
+		gkeCluster("staging-cluster", "1.30.1-gke.500", "us-west1", "RUNNING", false, map[string]string{"env": "staging"}),
+	}
+
+	s := newScannerWithFake(t, fake, "test-project", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 2)
+	assert.Equal(t, 1, fake.GKEListCalls)
+
+	byName := map[string]int{}
+	for i, c := range res.Clusters {
+		byName[c.Name] = i
+	}
+	require.Contains(t, byName, "prod-cluster")
+	require.Contains(t, byName, "staging-cluster")
+
+	prod := res.Clusters[byName["prod-cluster"]]
+	assert.Equal(t, "https://container.googleapis.com/v1beta1/projects/p/locations/us-central1/clusters/prod-cluster", prod.ResourceID)
+	assert.Equal(t, "1.29", prod.KubernetesVersion)
+	assert.Equal(t, "RUNNING", prod.Status)
+	assert.Equal(t, "us-central1", prod.Region)
+	assert.Equal(t, "gcp", prod.Provider)
+	assert.True(t, prod.ManagedPrometheusEnabled)
+	assert.Equal(t, map[string]string{"env": "prod"}, prod.Tags)
+	// AWS-specific fields must be untouched on GCP-projected snapshots.
+	assert.Empty(t, prod.ControlPlaneLogging)
+	assert.Empty(t, prod.Addons)
+	assert.Zero(t, prod.NodegroupCount)
+	assert.Zero(t, prod.FargateProfileCount)
+
+	staging := res.Clusters[byName["staging-cluster"]]
+	assert.Equal(t, "1.30", staging.KubernetesVersion)
+	assert.False(t, staging.ManagedPrometheusEnabled)
+}
+
+func TestScan_GKE_ManagedPrometheusEnabledDetection(t *testing.T) {
+	fake := newFakeGCP()
+	fake.GKEClusters = []*container.Cluster{
+		gkeCluster("mp-on", "1.29.4-gke.1043000", "us-central1", "RUNNING", true, nil),
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 1)
+	assert.True(t, res.Clusters[0].ManagedPrometheusEnabled)
+	// Slice 2 instrumented rule: ManagedPrometheusEnabled=true counts.
+	assert.Equal(t, 1, res.InstrumentedCount)
+	assert.Equal(t, 0, res.UninstrumentedCount)
+}
+
+func TestScan_GKE_ManagedPrometheusMissing_TreatsAsFalse(t *testing.T) {
+	fake := newFakeGCP()
+	fake.GKEClusters = []*container.Cluster{
+		// MonitoringConfig present but ManagedPrometheusConfig nil.
+		{
+			Name:                 "no-mp-cfg",
+			SelfLink:             "https://container.googleapis.com/v1beta1/projects/p/locations/us-central1/clusters/no-mp-cfg",
+			CurrentMasterVersion: "1.29.4-gke.1043000",
+			Status:               "RUNNING",
+			Location:             "us-central1",
+			MonitoringConfig: &container.MonitoringConfig{
+				// Only the componentConfig is set; managedPrometheusConfig
+				// is intentionally nil so the detection rule's nil-safety
+				// branch fires (design doc §3.1: missing
+				// managedPrometheusConfig reads as enabled=false).
+				ComponentConfig: &container.MonitoringComponentConfig{
+					EnableComponents: []string{"SYSTEM_COMPONENTS"},
+				},
+			},
+		},
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 1)
+	assert.False(t, res.Clusters[0].ManagedPrometheusEnabled, "missing managedPrometheusConfig should default to false")
+	assert.Equal(t, 0, res.InstrumentedCount)
+	assert.Equal(t, 1, res.UninstrumentedCount)
+}
+
+func TestScan_GKE_MonitoringConfigMissing_TreatsAsFalse(t *testing.T) {
+	fake := newFakeGCP()
+	fake.GKEClusters = []*container.Cluster{
+		// MonitoringConfig entirely nil — a pre-managed-observability
+		// cluster shape. The detection rule's outermost nil-safety
+		// branch fires.
+		{
+			Name:                 "legacy",
+			SelfLink:             "https://container.googleapis.com/v1beta1/projects/p/locations/us-central1/clusters/legacy",
+			CurrentMasterVersion: "1.28.7-gke.1100000",
+			Status:               "RUNNING",
+			Location:             "us-central1",
+		},
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 1)
+	assert.False(t, res.Clusters[0].ManagedPrometheusEnabled, "missing monitoringConfig should default to false")
+	assert.Equal(t, 0, res.InstrumentedCount)
+	assert.Equal(t, 1, res.UninstrumentedCount)
+}
+
+func TestScan_GKE_VersionExtraction(t *testing.T) {
+	cases := []struct {
+		in, out string
+	}{
+		{"1.29.4-gke.1043000", "1.29"},
+		{"1.30.1-gke.500", "1.30"},
+		{"1.28", "1.28"},
+		{"1.29.4", "1.29"},
+		{"", ""},
+		{"weirdshape", "weirdshape"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			assert.Equal(t, tc.out, extractMajorMinor(tc.in))
+		})
+	}
+}
+
+func TestScan_GKE_PermissionDenied_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeGCP()
+	// Seed a successful compute walk so the test confirms compute
+	// results survive a GKE failure.
+	fake.Zones = []*compute.Zone{{Name: "us-central1-a"}}
+	fake.InstancesByZone["us-central1-a"] = []*compute.Instance{
+		{Name: "vm-good", MachineType: "zones/us-central1-a/machineTypes/e2-medium", Labels: map[string]string{"otel": "v1"}},
+	}
+	fake.GKEListStatus = http.StatusForbidden
+
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "gke 403 is partial, not hard")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, res.PartialReason, ServiceIDGKE)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "permission denied")
+	assert.Contains(t, res.PartialReason, "roles/container.viewer")
+	assert.Contains(t, res.FailedServices, ServiceIDGKE)
+
+	// Compute walk still produced its result.
+	require.Len(t, res.Compute, 1)
+	assert.Equal(t, "vm-good", res.Compute[0].ResourceID)
+	assert.Empty(t, res.Clusters)
+}
+
+func TestScan_GKE_RateLimit_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeGCP()
+	fake.GKEListStatus = http.StatusTooManyRequests
+
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, res.PartialReason, ServiceIDGKE)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "rate limit")
+	assert.Contains(t, res.FailedServices, ServiceIDGKE)
+}
+
+func TestScan_GKE_ProviderFieldSet(t *testing.T) {
+	fake := newFakeGCP()
+	fake.GKEClusters = []*container.Cluster{
+		gkeCluster("a", "1.29.4-gke.1043000", "us-central1", "RUNNING", true, nil),
+		gkeCluster("b", "1.30.1-gke.500", "us-east1", "RUNNING", false, nil),
+		gkeCluster("c", "1.28.7-gke.1100000", "europe-west1", "RUNNING", true, nil),
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 3)
+	for _, c := range res.Clusters {
+		assert.Equal(t, "gcp", c.Provider, "cluster=%s should have Provider=gcp", c.Name)
+	}
+}
+
+func TestScan_GKE_TagsFromResourceLabels(t *testing.T) {
+	fake := newFakeGCP()
+	fake.GKEClusters = []*container.Cluster{
+		gkeCluster("tagged", "1.29.4-gke.1043000", "us-central1", "RUNNING", true, map[string]string{
+			"env":  "prod",
+			"team": "platform",
+		}),
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 1)
+	assert.Equal(t, map[string]string{"env": "prod", "team": "platform"}, res.Clusters[0].Tags)
+}
+
+func TestScan_ComputeCloudSQLAndGKE_AllThreeWalked(t *testing.T) {
+	fake := newFakeGCP()
+	fake.Zones = []*compute.Zone{
+		{Name: "us-central1-a"},
+		{Name: "us-west1-a"},
+	}
+	fake.InstancesByZone["us-central1-a"] = []*compute.Instance{
+		{Name: "vm-1", MachineType: "zones/us-central1-a/machineTypes/e2-medium"},
+		{Name: "vm-2", MachineType: "zones/us-central1-a/machineTypes/e2-medium", Labels: map[string]string{"otel": "v1"}},
+	}
+	fake.InstancesByZone["us-west1-a"] = []*compute.Instance{
+		{Name: "vm-3", MachineType: "zones/us-west1-a/machineTypes/e2-medium"},
+	}
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		cloudSQLInstance("db-1", "POSTGRES_15", "us-central1", "db-custom-1-3840", true),
+		cloudSQLInstance("db-2", "MYSQL_8_0", "us-west1", "db-n1-standard-2", false),
+	}
+	fake.GKEClusters = []*container.Cluster{
+		gkeCluster("k8s-1", "1.29.4-gke.1043000", "us-central1", "RUNNING", true, nil),
+		gkeCluster("k8s-2", "1.30.1-gke.500", "us-west1", "RUNNING", false, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	assert.Len(t, res.Compute, 3, "compute walk produced its rows")
+	assert.Len(t, res.Databases, 2, "cloud sql walk produced its rows")
+	assert.Len(t, res.Clusters, 2, "gke walk produced its rows")
+	assert.False(t, res.Partial)
+	// Tally:
+	//   compute (1 otel of 3) + databases (1 query insights of 2) +
+	//   clusters (1 mp enabled of 2) = 3 instrumented; 4 uninstrumented.
+	assert.Equal(t, 3, res.InstrumentedCount)
+	assert.Equal(t, 4, res.UninstrumentedCount)
+}
+
+func TestScan_GKE_RegionFilter(t *testing.T) {
+	// Confirms the s.Region client-side filter applies to GKE the same
+	// way it does to Cloud SQL (the API has no server-side region
+	// filter on the "-" location wildcard; the walk reads every
+	// cluster and the projection drops the ones outside the requested
+	// region).
+	fake := newFakeGCP()
+	fake.GKEClusters = []*container.Cluster{
+		gkeCluster("central-1", "1.29.4-gke.1043000", "us-central1", "RUNNING", true, nil),
+		gkeCluster("central-2", "1.29.4-gke.1043000", "us-central1", "RUNNING", false, nil),
+		gkeCluster("east-1", "1.30.1-gke.500", "us-east1", "RUNNING", true, nil),
+		gkeCluster("west-1", "1.30.1-gke.500", "us-west1", "RUNNING", true, nil),
+	}
+	s := newScannerWithFake(t, fake, "p", "us-central1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 2)
+	names := map[string]struct{}{}
+	for _, c := range res.Clusters {
+		names[c.Name] = struct{}{}
+		assert.Equal(t, "us-central1", c.Region)
+	}
+	assert.Contains(t, names, "central-1")
+	assert.Contains(t, names, "central-2")
+	assert.NotContains(t, names, "east-1")
+	assert.NotContains(t, names, "west-1")
+}
+
+func TestExtractMajorMinor_Standalone(t *testing.T) {
+	// Direct exercise of the helper; the table test above covers it
+	// via Scan, but the standalone form helps a debugger pinpoint a
+	// regression to the helper rather than the walker.
+	assert.Equal(t, "1.29", extractMajorMinor("1.29.4-gke.1043000"))
+	assert.Equal(t, "1.30", extractMajorMinor("1.30.1-gke.500"))
+	assert.Equal(t, "1.28", extractMajorMinor("1.28"))
+	assert.Equal(t, "", extractMajorMinor(""))
 }
