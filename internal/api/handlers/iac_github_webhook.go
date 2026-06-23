@@ -621,11 +621,19 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	// honest report — the operator may have merged a hand-authored
 	// PR in a connected repo and we shouldn't pretend it carries a
 	// Squadron recommendation kind. v0.89.28 (#643 slice 1) extends
-	// the parse to also extract account_id + region from the new
+	// the parse to also extract a scope_id + region from the new
 	// 6-segment branch shape; older 4-segment branches still parse
-	// the kind cleanly and produce empty account_id / region.
+	// the kind cleanly and produce empty scope_id / region.
+	//
+	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
+	// scope_id returned is provider-agnostic; the audit payload below
+	// routes it to the account_id field for AWS kinds and the
+	// project_id field for GCP kinds. The kind prefix discriminates
+	// (gce- = GCP today; future GCP kinds add their own prefix as
+	// they ship). See docs/proposals/gcp-discovery-slice1.md §9.1.
 	branch := ev.PullRequest.Head.Ref
-	kind, accountID, region, _ := parseRecommendationScopeFromBranch(branch, h.branchPrefix)
+	kind, scopeID, region, _ := parseRecommendationScopeFromBranch(branch, h.branchPrefix)
+	provider := providerFromRecommendationKind(kind)
 
 	// Connection lookup was already done at the pre-HMAC stage so we
 	// could pick the per-connection secret. We reuse the resulting
@@ -667,9 +675,18 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 				"connection_id":       connectionID,
 				"recorded_at":         time.Now().UTC(),
 			}
-			if accountID != "" {
-				payload["account_id"] = accountID
-			}
+			// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5)
+			// — provider-aware scope routing. For GCP kinds (gce-
+			// prefix today) the parsed scope_id lands in project_id
+			// with account_id explicitly empty; for AWS kinds it
+			// lands in account_id with project_id explicitly empty.
+			// The "always present, possibly empty" shape gives SIEM
+			// consumers a stable schema across providers without
+			// requiring them to read recommendation_kind to know
+			// which field carries signal. The pre-extension 4-segment
+			// branch shape (no scope_id) still omits both — matching
+			// v0.89.36 behavior.
+			writeScopePayloadFields(payload, provider, scopeID)
 			if region != "" {
 				payload["region"] = region
 			}
@@ -693,7 +710,7 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 		// doc §7.1.
 		h.updateCheckRunForPRClosed(c.Request.Context(), checkRunUpdateArgs{
 			ConnectionID:       connectionID,
-			AccountID:          accountID,
+			AccountID:          accountIDForCheckRun(provider, scopeID),
 			Region:             region,
 			RecommendationKind: kind,
 			PRURL:              ev.PullRequest.HTMLURL,
@@ -724,12 +741,16 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 			"connection_id":       connectionID,
 			"recorded_at":         time.Now().UTC(),
 		}
-		// account_id + region are optional in the payload — omit on
-		// the older 4-segment branch shape so SIEM consumers can tell
-		// scope-encoded merges apart from pre-extension ones.
-		if accountID != "" {
-			payload["account_id"] = accountID
-		}
+		// scope_id + region are optional in the payload — omit on the
+		// older 4-segment branch shape so SIEM consumers can tell
+		// scope-encoded merges apart from pre-extension ones. v0.89.48
+		// (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
+		// scope_id routes to account_id for AWS kinds and project_id
+		// for GCP kinds via writeScopePayloadFields. Both fields are
+		// always present (possibly empty) once any scope-encoded
+		// branch parses so SIEM consumers can read the right one
+		// without branching on provider.
+		writeScopePayloadFields(payload, provider, scopeID)
 		if region != "" {
 			payload["region"] = region
 		}
@@ -753,7 +774,7 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	// design doc §7.1.
 	h.updateCheckRunForPRMerged(c.Request.Context(), checkRunUpdateArgs{
 		ConnectionID:       connectionID,
-		AccountID:          accountID,
+		AccountID:          accountIDForCheckRun(provider, scopeID),
 		Region:             region,
 		RecommendationKind: kind,
 		PRURL:              ev.PullRequest.HTMLURL,
@@ -849,6 +870,67 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 //   - 6-segment shape
 //     "squadron/rec/<kind>/<account_id>/<region>/<short_id>" →
 //     (kind, account_id, region, true)
+// providerFromRecommendationKind — v0.89.48 (#671 Stream 69, GCP
+// discovery slice 1 chunk 5). Maps a recommendation kind to the
+// provider that owns it. GCP kinds carry the "gce-" prefix today
+// (gce-otel-label is the slice 1 GCP kind); every other kind
+// (including the legacy empty kind for old 4-segment branches) is
+// AWS. Slice 2 candidate: as the GCP kind catalog grows (gke-,
+// cloudsql-, gcs-, etc.) extend this lookup; an Azure path would
+// add its own prefix (azurevm-, etc.). The string-prefix dispatch
+// is deliberate — it keeps the substrate from needing a separate
+// kind registry until the GCP catalog actually grows past one.
+func providerFromRecommendationKind(kind string) string {
+	if strings.HasPrefix(kind, "gce-") {
+		return "gcp"
+	}
+	return "aws"
+}
+
+// writeScopePayloadFields — v0.89.48 (#671 Stream 69, GCP discovery
+// slice 1 chunk 5). Writes the provider-aware scope_id into the
+// audit payload. The "always-present, possibly-empty" shape gives
+// SIEM consumers a stable schema across providers without requiring
+// them to read recommendation_kind to know which field to read. The
+// pre-extension 4-segment branch shape (empty scopeID) leaves BOTH
+// fields absent so SIEM consumers can tell scope-encoded merges
+// apart from pre-extension ones.
+//
+// Slice 1 contract per docs/proposals/gcp-discovery-slice1.md §9.1:
+// GCP `recommendation.pr_merged` events carry both `account_id`
+// (empty for GCP) and `project_id` (set for GCP). SIEM consumers
+// reading historical events get unchanged shape; new consumers read
+// `project_id` when `provider="gcp"`.
+func writeScopePayloadFields(payload map[string]any, provider, scopeID string) {
+	if scopeID == "" {
+		return
+	}
+	payload["provider"] = provider
+	if provider == "gcp" {
+		payload["project_id"] = scopeID
+		payload["account_id"] = ""
+		return
+	}
+	payload["account_id"] = scopeID
+	payload["project_id"] = ""
+}
+
+// accountIDForCheckRun — v0.89.48 (#671 Stream 69, GCP discovery
+// slice 1 chunk 5). Returns the scope_id when the provider is AWS so
+// the existing check-run summary path renders the same account_id
+// line as v0.89.47 and earlier. GCP recommendations don't ride the
+// check-run path in slice 1 (the GCP wizard ships without the Checks
+// API integration); the empty AccountID flows through the check-run
+// helper's existing TrimSpace==""→omit guard without surprising the
+// SIEM trail. Slice 2 candidate: surface project_id on check-run
+// summaries once the GCP Checks API integration ships.
+func accountIDForCheckRun(provider, scopeID string) string {
+	if provider == "gcp" {
+		return ""
+	}
+	return scopeID
+}
+
 func parseRecommendationScopeFromBranch(branch, prefix string) (kind, accountID, region string, ok bool) {
 	if prefix == "" || !strings.HasPrefix(branch, prefix) {
 		return "", "", "", false

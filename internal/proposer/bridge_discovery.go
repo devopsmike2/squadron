@@ -25,9 +25,16 @@ import (
 // fold the new iac_recommendation_verdicts table's operator-set
 // exclusions into the verdictsel pool as StateOperatorExcluded rows.
 type DiscoveryVerdictStore interface {
+	// ListDiscoveryVerdicts — v0.89.48 (#671 Stream 69, GCP discovery
+	// slice 1 chunk 5) — the second parameter is the provider-agnostic
+	// scope_id; the substrate matches it against account_id OR
+	// project_id in the audit payload. AWS callers continue to pass
+	// account_id verbatim; GCP callers pass project_id. The interface
+	// parameter name preserves the v0.89.36 spelling for backward
+	// source compat but the semantics are now scope_id.
 	ListDiscoveryVerdicts(
 		ctx context.Context,
-		connectionID, accountID, region string,
+		connectionID, scopeID, region string,
 		since time.Time, limit int,
 	) ([]*applicationstore.DiscoveryVerdict, error)
 
@@ -107,6 +114,14 @@ func NewDiscoveryBridge(store DiscoveryVerdictStore, connections DiscoveryConnec
 // renamed from AssembleAcceptedRecommendations; the return shape
 // is now four-tuple (approved, rejected, urls, err); prompt block
 // formatting moved to verdictprompt.Render at the call site.
+//
+// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
+// second parameter is the provider-agnostic scope_id (AWS callers
+// pass account_id; GCP callers pass project_id). The parameter name
+// stays at "accountID" so AWS source callsites compile untouched,
+// but the semantic contract is now scope_id and the substrate's
+// ListDiscoveryVerdicts OR-matches account_id or project_id under
+// the hood.
 func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 	ctx context.Context,
 	connectionID, accountID, region string,
