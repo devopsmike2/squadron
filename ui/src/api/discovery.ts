@@ -126,6 +126,23 @@ export function listAWSConnections(): Promise<ListConnectionsResponse> {
 
 // --- Scan endpoint shapes (Stream 2E) -------------------------------
 
+// RowSpanQuality — v0.89.87 span quality slice 1 chunk 3. Compact
+// per-row summary of the three quality percentages the receiver's
+// quality counters expose. Travels on every Inventory row that
+// supports a Quality dot (compute, functions, databases, clusters).
+// The drill-down panel hits the dedicated per-resource endpoint for
+// placeholder observations; this row payload is intentionally
+// minimal so the scan response stays small.
+//
+// Chunk 2 (sibling branch, v0.89.86) extends the scan marshalling
+// to populate this field server-side. Until chunk 2 merges this is
+// always undefined and the QualityDot renders gray.
+export interface RowSpanQuality {
+  orphan_pct: number;
+  missing_attr_pct: number;
+  attr_mismatch_pct: number;
+}
+
 // ComputeInstanceSnapshot mirrors scanner.ComputeInstanceSnapshot. The
 // Inventory tab renders one row per entry — resource_id, instance_type,
 // region, and a HasOTel detection badge.
@@ -142,6 +159,10 @@ export interface ComputeInstanceSnapshot {
   // Inventory table renders "never" with a warning indicator on
   // that path.
   last_seen_at?: string;
+  // span_quality — v0.89.87 span quality slice 1 chunk 3. Server-
+  // side summary of the three pathology percentages. See
+  // RowSpanQuality godoc.
+  span_quality?: RowSpanQuality;
 }
 
 // FunctionRuntimeSnapshot mirrors scanner.FunctionRuntimeSnapshot.
@@ -151,6 +172,9 @@ export interface FunctionRuntimeSnapshot {
   runtime: string;
   has_otel_layer: boolean;
   region: string;
+  // span_quality — v0.89.87 span quality slice 1 chunk 3. See
+  // RowSpanQuality godoc.
+  span_quality?: RowSpanQuality;
 }
 
 // DatabaseInstanceSnapshot mirrors scanner.DatabaseInstanceSnapshot.
@@ -172,6 +196,9 @@ export interface DatabaseInstanceSnapshot {
   // last_seen_at — v0.89.77 trace integration slice 1 chunk 4. See
   // ComputeInstanceSnapshot.last_seen_at godoc.
   last_seen_at?: string;
+  // span_quality — v0.89.87 span quality slice 1 chunk 3. See
+  // RowSpanQuality godoc.
+  span_quality?: RowSpanQuality;
 }
 
 // ObjectStoreSnapshot mirrors scanner.ObjectStoreSnapshot. Slice 3a
@@ -244,6 +271,9 @@ export interface ClusterSnapshot {
   // last_seen_at — v0.89.77 trace integration slice 1 chunk 4. See
   // ComputeInstanceSnapshot.last_seen_at godoc.
   last_seen_at?: string;
+  // span_quality — v0.89.87 span quality slice 1 chunk 3. See
+  // RowSpanQuality godoc.
+  span_quality?: RowSpanQuality;
 }
 
 // ScanResult is the typed payload the scan endpoint returns. Mirrors
