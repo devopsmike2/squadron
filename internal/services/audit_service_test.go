@@ -232,3 +232,36 @@ func TestAuditEventConstants_GCPDiscoveryPresent(t *testing.T) {
 	assert.Equal(t, "discovery.gcp.scan_failed", AuditEventDiscoveryGCPScanFailed)
 	assert.Equal(t, "discovery.gcp.recommendations_generated", AuditEventDiscoveryGCPRecommendationsGenerated)
 }
+
+// TestAuditEventConstants_AzureDiscoveryPresent — v0.89.51 (#674
+// Stream 72, Azure discovery slice 1 chunk 1). Defensive: pins the six
+// Azure-discovery audit-event constants so a future refactor that
+// accidentally deletes one lands here rather than in a SIEM dashboard
+// that silently stops receiving Azure-side events. Chunks 2 / 3 / 5
+// (scanner, API handlers, proposer integration) reference these
+// constants by name; the constant strings are the contract SIEM
+// consumers fan out on. The six events mirror the AWS and GCP
+// discovery arc lifecycles one-for-one with subscription_id replacing
+// account_id / project_id — see
+// docs/proposals/azure-discovery-slice1.md §11, §13 contract item 6.
+func TestAuditEventConstants_AzureDiscoveryPresent(t *testing.T) {
+	checks := map[string]string{
+		"AuditEventDiscoveryAzureConnectionCreated":        AuditEventDiscoveryAzureConnectionCreated,
+		"AuditEventDiscoveryAzureConnectionDeleted":        AuditEventDiscoveryAzureConnectionDeleted,
+		"AuditEventDiscoveryAzureScanStarted":              AuditEventDiscoveryAzureScanStarted,
+		"AuditEventDiscoveryAzureScanCompleted":            AuditEventDiscoveryAzureScanCompleted,
+		"AuditEventDiscoveryAzureScanFailed":               AuditEventDiscoveryAzureScanFailed,
+		"AuditEventDiscoveryAzureRecommendationsGenerated": AuditEventDiscoveryAzureRecommendationsGenerated,
+	}
+	for name, value := range checks {
+		assert.NotEmpty(t, value, "%s must be a non-empty string", name)
+	}
+	// Pin the canonical dotted-name values so a future rename lands
+	// here too. The strings are the SIEM-side contract.
+	assert.Equal(t, "discovery.azure.connection_created", AuditEventDiscoveryAzureConnectionCreated)
+	assert.Equal(t, "discovery.azure.connection_deleted", AuditEventDiscoveryAzureConnectionDeleted)
+	assert.Equal(t, "discovery.azure.scan_started", AuditEventDiscoveryAzureScanStarted)
+	assert.Equal(t, "discovery.azure.scan_completed", AuditEventDiscoveryAzureScanCompleted)
+	assert.Equal(t, "discovery.azure.scan_failed", AuditEventDiscoveryAzureScanFailed)
+	assert.Equal(t, "discovery.azure.recommendations_generated", AuditEventDiscoveryAzureRecommendationsGenerated)
+}
