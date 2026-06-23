@@ -18,6 +18,7 @@ import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
 import DeployPage from "./pages/Deploy";
 import DiscoveryAWSPage from "./pages/DiscoveryAWS";
+import DiscoveryGCPPage from "./pages/DiscoveryGCP";
 import DiscoveryIaCGitHubPage from "./pages/DiscoveryIaCGitHub";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
@@ -177,6 +178,11 @@ function AuthBoundary() {
               payoff. /discovery/aws hosts the Account / Inventory /
               Recommendations triptych the design doc calls out. */}
           <Route path="/discovery/aws" element={<DiscoveryAWSPage />} />
+          {/* v0.89.48 #670 Stream 68 (slice-1 chunk 4) — GCP discovery
+              page parallels DiscoveryAWS. Wizard / Inventory /
+              Recommendations triptych under /discovery/gcp so the
+              namespace stays uniform across providers. */}
+          <Route path="/discovery/gcp" element={<DiscoveryGCPPage />} />
           {/* v0.89.3 Stream 19 — IaC connections list + Connect-IaC-repo
               wizard. /discovery/iac/<provider> namespace leaves room
               for slice-2 GitLab / Bitbucket without renaming routes. */}
