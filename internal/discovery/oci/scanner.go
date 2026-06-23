@@ -211,6 +211,16 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// per-surface auth duplication.
 	s.scanDatabases(ctx, signingKey, allCompartments, &result)
 
+	// Slice 2 (kubernetes tier): walk OKE clusters across the
+	// same compartment set the compute and database walks just
+	// visited. The walker is in scanner_oke.go; it appends rows
+	// to result.Clusters and surfaces partial failures under the
+	// ServiceIDKubernetes identifier ("oke"). All three walks
+	// (compute + databases + clusters) share the same SigningKey
+	// + httpClient — no per-surface auth duplication, per design
+	// doc §5.3.
+	s.scanOKEClusters(ctx, signingKey, allCompartments, &result)
+
 	// Slice 1 instrumented rule (Compute): HasOTel == true.
 	for _, c := range result.Compute {
 		if c.HasOTel {

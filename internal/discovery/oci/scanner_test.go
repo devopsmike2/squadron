@@ -169,6 +169,13 @@ type fakeOCI struct {
 	// compartmentId. Same convention.
 	AutonomousByCompartment map[string][]autonomousDatabase
 
+	// OKEByCompartment maps compartmentId -> OKE clusters served
+	// when /clusters is called with that compartmentId. Same
+	// missing-compartment-returns-empty convention as the
+	// instances / dbSystems / autonomousDatabases maps
+	// (per-compartment failures configure via OKEStatus / OKEForCompartment).
+	OKEByCompartment map[string][]okeCluster
+
 	// CompartmentsStatus, when non-zero, makes the next compartments
 	// call return this status with a JSON error body.
 	CompartmentsStatus    int
@@ -205,6 +212,20 @@ type fakeOCI struct {
 	DBSystemsNetwork  bool
 	AutonomousNetwork bool
 
+	// OKEStatus / ErrorCode / ForCompartment / RetryAfter: same
+	// shape as the instances / DB knobs. Configures partial-
+	// failure scenarios for the OKE clusters walk.
+	OKEStatus         int
+	OKEErrorCode      string
+	OKEForCompartment string
+	OKERetryAfter     string
+
+	// OKENetwork, when true, makes the /clusters endpoint hijack
+	// the connection and return a hard transport error to the
+	// client. Used to model a network fault inside the OKE walk
+	// without taking down the other endpoints in the same test.
+	OKENetwork bool
+
 	// AuthorizationGate, when true, makes the server return 401 on
 	// any /instances call regardless of the InstancesStatus
 	// configuration. Used to model "the OCI gateway rejected the
@@ -216,6 +237,7 @@ type fakeOCI struct {
 	InstancesCalls    int
 	DBSystemsCalls    int
 	AutonomousCalls   int
+	OKECalls          int
 
 	// Captured Authorization header from the most recent call.
 	LastAuthz string
@@ -226,6 +248,7 @@ func newFakeOCI() *fakeOCI {
 		InstancesByCompartment:  map[string][]ociInstance{},
 		DBSystemsByCompartment:  map[string][]dbSystem{},
 		AutonomousByCompartment: map[string][]autonomousDatabase{},
+		OKEByCompartment:        map[string][]okeCluster{},
 	}
 }
 
@@ -366,6 +389,44 @@ func (f *fakeOCI) handler() http.Handler {
 				adbs = []autonomousDatabase{}
 			}
 			_ = json.NewEncoder(w).Encode(adbs)
+			return
+
+		case strings.HasSuffix(r.URL.Path, "/clusters"):
+			f.OKECalls++
+			compartmentID := r.URL.Query().Get("compartmentId")
+
+			if f.OKENetwork {
+				if hj, ok := w.(http.Hijacker); ok {
+					conn, _, err := hj.Hijack()
+					if err == nil {
+						_ = conn.Close()
+						return
+					}
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if f.OKERetryAfter != "" {
+				w.Header().Set("Retry-After", f.OKERetryAfter)
+			}
+
+			if f.OKEStatus != 0 && (f.OKEForCompartment == "" || f.OKEForCompartment == compartmentID) {
+				code := f.OKEErrorCode
+				if code == "" {
+					code = "InternalServerError"
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(f.OKEStatus)
+				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: code, Message: "mock error"})
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			clusters := f.OKEByCompartment[compartmentID]
+			if clusters == nil {
+				clusters = []okeCluster{}
+			}
+			_ = json.NewEncoder(w).Encode(clusters)
 			return
 		}
 
@@ -1127,6 +1188,374 @@ func TestScan_OCI_DB_ProviderFieldSet(t *testing.T) {
 	require.Len(t, res.Databases, 2)
 	for _, d := range res.Databases {
 		assert.Equal(t, "oci", d.Provider, "every database snapshot should carry Provider=oci")
+	}
+}
+
+// --- Helpers: OKE cluster construction ------------------------------
+
+func makeOKECluster(name, version, lifecycle string, freeform map[string]string, defined map[string]map[string]interface{}) okeCluster {
+	return okeCluster{
+		ID:                "ocid1.cluster.oc1.iad.aaaaaaaa" + name,
+		Name:              name,
+		CompartmentID:     "ocid1.tenancy.oc1..aaa",
+		KubernetesVersion: version,
+		LifecycleState:    lifecycle,
+		FreeformTags:      freeform,
+		DefinedTags:       defined,
+	}
+}
+
+func findCluster(t *testing.T, clusters []scanner.ClusterSnapshot, name string) scanner.ClusterSnapshot {
+	t.Helper()
+	for _, c := range clusters {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("expected cluster with Name=%q in %v", name, clusters)
+	return scanner.ClusterSnapshot{}
+}
+
+// --- OKE Scan tests --------------------------------------------------
+
+// TestScan_OKE_ReturnsClusterSnapshot covers design doc §11 test 6:
+// OKE clusters with operations-insights-enabled=true freeform tag
+// surface as ClusterSnapshot rows with OperationsInsightsEnabled=true.
+func TestScan_OKE_ReturnsClusterSnapshot(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+		makeOKECluster("production-oke", "v1.29.1", "ACTIVE",
+			map[string]string{"env": "prod", "operations-insights-enabled": "true"}, nil),
+		makeOKECluster("staging-oke", "v1.30.0", "ACTIVE",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 2, "expected 2 OKE cluster snapshots")
+	for _, c := range res.Clusters {
+		assert.True(t, c.OperationsInsightsEnabled, "expected OperationsInsightsEnabled=true for %s", c.Name)
+		assert.Equal(t, "oci", c.Provider)
+		assert.Equal(t, "us-phoenix-1", c.Region)
+		assert.Equal(t, "ACTIVE", c.Status)
+	}
+
+	prod := findCluster(t, res.Clusters, "production-oke")
+	assert.Equal(t, "1.29", prod.KubernetesVersion, "extractMajorMinor normalizes v1.29.1 to 1.29")
+	assert.Equal(t, map[string]string{"env": "prod", "operations-insights-enabled": "true"}, prod.Tags)
+	assert.Contains(t, prod.ResourceID, "ocid1.cluster.oc1.iad.")
+}
+
+// TestScan_OKE_NoOpsInsightsTag_DetectsAsFalse covers design doc §11 test 8:
+// OKE cluster without the tag → OperationsInsightsEnabled=false (the
+// proposer will emit oke-ops-insights-enable in chunk 5).
+func TestScan_OKE_NoOpsInsightsTag_DetectsAsFalse(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+		makeOKECluster("untagged-oke", "v1.29.1", "ACTIVE",
+			map[string]string{"env": "prod", "team": "platform"}, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 1)
+	assert.False(t, res.Clusters[0].OperationsInsightsEnabled,
+		"absence of operations-insights-enabled tag should flip the boolean false")
+}
+
+// TestScan_OKE_OpsInsightsTagFalseValue_DetectsAsFalse — tag key
+// present but value "false" → OperationsInsightsEnabled=false. The
+// rule fires only when both key matches AND value (trimmed,
+// case-insensitive) equals "true".
+func TestScan_OKE_OpsInsightsTagFalseValue_DetectsAsFalse(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+		makeOKECluster("explicitly-off-oke", "v1.29.1", "ACTIVE",
+			map[string]string{"operations-insights-enabled": "false"}, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 1)
+	assert.False(t, res.Clusters[0].OperationsInsightsEnabled,
+		"tag value 'false' should not flip the boolean true")
+}
+
+// TestScan_OKE_CaseInsensitiveKey covers design doc §11 test 7 (key
+// half): operators may capitalize the tag key
+// ("Operations-Insights-Enabled") and the rule still fires.
+func TestScan_OKE_CaseInsensitiveKey(t *testing.T) {
+	cases := []struct {
+		name string
+		tags map[string]string
+	}{
+		{"Title-Case key", map[string]string{"Operations-Insights-Enabled": "true"}},
+		{"upper-case key", map[string]string{"OPERATIONS-INSIGHTS-ENABLED": "true"}},
+		{"Mixed-Case key", map[string]string{"OpeRations-INsights-EnAbled": "true"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeOCI()
+			fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+				makeOKECluster("case-key-oke", "v1.29.1", "ACTIVE", tc.tags, nil),
+			}
+			s := newScannerWithFake(t, fake, "us-phoenix-1")
+			res, err := s.Scan(context.Background())
+			require.NoError(t, err)
+			require.Len(t, res.Clusters, 1)
+			assert.True(t, res.Clusters[0].OperationsInsightsEnabled,
+				"case-insensitive key match should fire for tags %v", tc.tags)
+		})
+	}
+}
+
+// TestScan_OKE_CaseInsensitiveValue covers design doc §11 test 7
+// (value half): operators may use any casing on the tag value
+// ("TRUE", "True") and the rule still fires.
+func TestScan_OKE_CaseInsensitiveValue(t *testing.T) {
+	cases := []struct {
+		name string
+		tags map[string]string
+	}{
+		{"upper-case value", map[string]string{"operations-insights-enabled": "TRUE"}},
+		{"Title-case value", map[string]string{"operations-insights-enabled": "True"}},
+		{"mixed-case value", map[string]string{"operations-insights-enabled": "TrUe"}},
+		{"value with whitespace", map[string]string{"operations-insights-enabled": "  true  "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeOCI()
+			fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+				makeOKECluster("case-value-oke", "v1.29.1", "ACTIVE", tc.tags, nil),
+			}
+			s := newScannerWithFake(t, fake, "us-phoenix-1")
+			res, err := s.Scan(context.Background())
+			require.NoError(t, err)
+			require.Len(t, res.Clusters, 1)
+			assert.True(t, res.Clusters[0].OperationsInsightsEnabled,
+				"case-insensitive value match should fire for tags %v", tc.tags)
+		})
+	}
+}
+
+// TestScan_OKE_VersionExtraction covers extractMajorMinor's
+// leading-v normalization: "v1.29.1" → "1.29"; "1.30.0" → "1.30";
+// "v1.28" → "1.28".
+func TestScan_OKE_VersionExtraction(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"v1.29.1", "1.29"},
+		{"1.30.0", "1.30"},
+		{"v1.28", "1.28"},
+		{"v1.27.5-rc.1", "1.27"},
+		{"v2.0.0", "2.0"},
+		{"v1", "1"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got := extractMajorMinor(tc.in)
+			assert.Equal(t, tc.want, got, "extractMajorMinor(%q)", tc.in)
+		})
+	}
+}
+
+// TestScan_OKE_SkipsNonActiveLifecycle — clusters mid-create /
+// mid-delete / mid-update have no observability surface; the
+// scanner skips them so the Inventory tab + proposer don't recommend
+// against a transient state.
+func TestScan_OKE_SkipsNonActiveLifecycle(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+		makeOKECluster("creating-oke", "v1.29.1", "CREATING",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+		makeOKECluster("deleting-oke", "v1.29.1", "DELETING",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+		makeOKECluster("updating-oke", "v1.29.1", "UPDATING",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+		makeOKECluster("failed-oke", "v1.29.1", "FAILED",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+		makeOKECluster("live-oke", "v1.29.1", "ACTIVE",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Clusters, 1,
+		"CREATING / DELETING / UPDATING / FAILED clusters should be skipped")
+	assert.Equal(t, "live-oke", res.Clusters[0].Name)
+}
+
+// --- OKE partial-failure tests --------------------------------------
+
+func TestScan_OKE_PermissionDenied_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKEStatus = http.StatusForbidden
+	fake.OKEErrorCode = "NotAuthorizedOrNotFound"
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "permission denied on the OKE walk is a partial-failure surface")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "permission denied")
+	assert.Contains(t, strings.ToLower(res.PartialReason), "cluster-family",
+		"403 hint should name the cluster-family policy statement")
+	assert.Contains(t, res.FailedServices, ServiceIDKubernetes)
+	assert.Empty(t, res.Clusters)
+}
+
+func TestScan_OKE_RateLimited_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKEStatus = http.StatusTooManyRequests
+	fake.OKEErrorCode = "TooManyRequests"
+	fake.OKERetryAfter = "10"
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "rate limit on the OKE walk is partial, not hard")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "rate limit")
+	assert.Contains(t, res.FailedServices, ServiceIDKubernetes)
+}
+
+func TestScan_OKE_NetworkError_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKENetwork = true
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "network error on the OKE walk is partial — compute + databases succeeded")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "network")
+	assert.Contains(t, res.FailedServices, ServiceIDKubernetes)
+}
+
+func TestScan_OKE_ProviderFieldSet(t *testing.T) {
+	fake := newFakeOCI()
+	fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+		makeOKECluster("oke-1", "v1.29.1", "ACTIVE",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+		makeOKECluster("oke-2", "v1.30.0", "ACTIVE", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, res.Clusters, 2)
+	for _, c := range res.Clusters {
+		assert.Equal(t, "oci", c.Provider, "every cluster snapshot should carry Provider=oci")
+	}
+}
+
+// TestScan_OCI_ComputeDBAndOKE_AllThreeWalked verifies the three
+// per-surface walks (compute + database + kubernetes) coexist in a
+// single Scan invocation, share the same signing path, and
+// produce one Result with all three categories populated.
+func TestScan_OCI_ComputeDBAndOKE_AllThreeWalked(t *testing.T) {
+	fake := newFakeOCI()
+	fake.Compartments = []ociCompartment{makeCompartment("ocid1.compartment.oc1..teamA", "team-a")}
+
+	fake.InstancesByCompartment["ocid1.tenancy.oc1..aaa"] = []ociInstance{
+		makeInstance("web-1", "VM.Standard.E4.Flex", "us-phoenix-1", map[string]string{"otel": "v1"}, nil),
+	}
+	fake.InstancesByCompartment["ocid1.compartment.oc1..teamA"] = []ociInstance{
+		makeInstance("web-2", "VM.Standard.E4.Flex", "us-phoenix-1", nil, nil),
+	}
+	fake.DBSystemsByCompartment["ocid1.tenancy.oc1..aaa"] = []dbSystem{
+		makeDBSystem("db-prod", "VM.Standard2.4", "19.0.0.0", "ENABLED", nil, nil),
+	}
+	fake.AutonomousByCompartment["ocid1.compartment.oc1..teamA"] = []autonomousDatabase{
+		makeAutonomousDB("adb-oltp", "OLTP", 2, "NOT_ENABLED", nil, nil),
+	}
+	fake.OKEByCompartment["ocid1.tenancy.oc1..aaa"] = []okeCluster{
+		makeOKECluster("oke-platform", "v1.29.1", "ACTIVE",
+			map[string]string{"operations-insights-enabled": "true"}, nil),
+	}
+	fake.OKEByCompartment["ocid1.compartment.oc1..teamA"] = []okeCluster{
+		makeOKECluster("oke-team-a", "v1.30.0", "ACTIVE", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "us-phoenix-1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Compute, 2, "compute walk should still see 2 instances")
+	require.Len(t, res.Databases, 2, "database walk should see 1 DB System + 1 Autonomous DB")
+	require.Len(t, res.Clusters, 2, "OKE walk should see 2 clusters across both compartments")
+	assert.False(t, res.Partial)
+
+	// Each surface called once per compartment (2 compartments).
+	assert.Equal(t, 2, fake.DBSystemsCalls)
+	assert.Equal(t, 2, fake.AutonomousCalls)
+	assert.Equal(t, 2, fake.OKECalls)
+
+	platform := findCluster(t, res.Clusters, "oke-platform")
+	teamA := findCluster(t, res.Clusters, "oke-team-a")
+	assert.True(t, platform.OperationsInsightsEnabled, "tagged cluster should be detected as instrumented")
+	assert.False(t, teamA.OperationsInsightsEnabled, "untagged cluster should be detected as not instrumented")
+}
+
+// --- Direct helper tests --------------------------------------------
+
+func TestClusterHasOperationsInsights_DirectCases(t *testing.T) {
+	cases := []struct {
+		name string
+		tags map[string]string
+		want bool
+	}{
+		{"nil map", nil, false},
+		{"empty map", map[string]string{}, false},
+		{"canonical key + value", map[string]string{"operations-insights-enabled": "true"}, true},
+		{"upper-case key", map[string]string{"OPERATIONS-INSIGHTS-ENABLED": "true"}, true},
+		{"mixed-case key", map[string]string{"Operations-Insights-Enabled": "true"}, true},
+		{"value upper-case", map[string]string{"operations-insights-enabled": "TRUE"}, true},
+		{"value Title-case", map[string]string{"operations-insights-enabled": "True"}, true},
+		{"value with whitespace", map[string]string{"operations-insights-enabled": "  true  "}, true},
+		{"value false", map[string]string{"operations-insights-enabled": "false"}, false},
+		{"value empty", map[string]string{"operations-insights-enabled": ""}, false},
+		{"non-matching key", map[string]string{"observability-enabled": "true"}, false},
+		{"key partial match", map[string]string{"operations-insights": "true"}, false},
+		{"multiple tags one matches", map[string]string{"env": "prod", "Operations-Insights-Enabled": "TRUE"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, clusterHasOperationsInsights(tc.tags))
+		})
+	}
+}
+
+func TestIsClusterActive_DirectCases(t *testing.T) {
+	cases := []struct {
+		state string
+		want  bool
+	}{
+		{"ACTIVE", true},
+		{"active", true},
+		{"Active", true},
+		{"CREATING", false},
+		{"DELETING", false},
+		{"UPDATING", false},
+		{"FAILED", false},
+		{"DELETED", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.state, func(t *testing.T) {
+			assert.Equal(t, tc.want, isClusterActive(tc.state))
+		})
 	}
 }
 
