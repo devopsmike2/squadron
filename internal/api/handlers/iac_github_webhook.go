@@ -876,15 +876,24 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 // (gce-otel-label is the slice 1 GCP kind); every other kind
 // (including the legacy empty kind for old 4-segment branches) is
 // AWS. Slice 2 candidate: as the GCP kind catalog grows (gke-,
-// cloudsql-, gcs-, etc.) extend this lookup; an Azure path would
-// add its own prefix (azurevm-, etc.). The string-prefix dispatch
-// is deliberate — it keeps the substrate from needing a separate
-// kind registry until the GCP catalog actually grows past one.
+// cloudsql-, gcs-, etc.) extend this lookup. The string-prefix
+// dispatch is deliberate — it keeps the substrate from needing a
+// separate kind registry until the per-cloud catalog actually grows
+// past one or two prefixes.
+//
+// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — Azure
+// kinds carry the "vm-" prefix today (vm-otel-tag is the slice 1
+// Azure kind). Future Azure kinds (sql-, aks-, blob-, lb-, etc.)
+// will extend this lookup as the catalog grows.
 func providerFromRecommendationKind(kind string) string {
-	if strings.HasPrefix(kind, "gce-") {
+	switch {
+	case strings.HasPrefix(kind, "gce-"):
 		return "gcp"
+	case strings.HasPrefix(kind, "vm-"):
+		return "azure"
+	default:
+		return "aws"
 	}
-	return "aws"
 }
 
 // writeScopePayloadFields — v0.89.48 (#671 Stream 69, GCP discovery
@@ -892,27 +901,39 @@ func providerFromRecommendationKind(kind string) string {
 // audit payload. The "always-present, possibly-empty" shape gives
 // SIEM consumers a stable schema across providers without requiring
 // them to read recommendation_kind to know which field to read. The
-// pre-extension 4-segment branch shape (empty scopeID) leaves BOTH
-// fields absent so SIEM consumers can tell scope-encoded merges
-// apart from pre-extension ones.
+// pre-extension 4-segment branch shape (empty scopeID) leaves ALL
+// scope fields absent so SIEM consumers can tell scope-encoded
+// merges apart from pre-extension ones.
 //
 // Slice 1 contract per docs/proposals/gcp-discovery-slice1.md §9.1:
 // GCP `recommendation.pr_merged` events carry both `account_id`
 // (empty for GCP) and `project_id` (set for GCP). SIEM consumers
 // reading historical events get unchanged shape; new consumers read
 // `project_id` when `provider="gcp"`.
+//
+// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — Azure
+// `recommendation.pr_merged` events carry `subscription_id` (set
+// for Azure) alongside `account_id="" ` and `project_id=""`. Same
+// "stable schema across providers" invariant — SIEM consumers read
+// `subscription_id` when `provider="azure"`. See
+// docs/proposals/azure-discovery-slice1.md §10.
 func writeScopePayloadFields(payload map[string]any, provider, scopeID string) {
 	if scopeID == "" {
 		return
 	}
 	payload["provider"] = provider
-	if provider == "gcp" {
+	switch provider {
+	case "gcp":
 		payload["project_id"] = scopeID
 		payload["account_id"] = ""
-		return
+	case "azure":
+		payload["subscription_id"] = scopeID
+		payload["account_id"] = ""
+		payload["project_id"] = ""
+	default:
+		payload["account_id"] = scopeID
+		payload["project_id"] = ""
 	}
-	payload["account_id"] = scopeID
-	payload["project_id"] = ""
 }
 
 // accountIDForCheckRun — v0.89.48 (#671 Stream 69, GCP discovery
@@ -924,8 +945,15 @@ func writeScopePayloadFields(payload map[string]any, provider, scopeID string) {
 // helper's existing TrimSpace==""→omit guard without surprising the
 // SIEM trail. Slice 2 candidate: surface project_id on check-run
 // summaries once the GCP Checks API integration ships.
+//
+// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — Azure
+// recommendations also don't ride the check-run path in slice 1
+// (the Azure wizard ships without the Checks API integration); same
+// empty-string flow-through as GCP. Slice 2 candidate: surface
+// subscription_id on check-run summaries once the Azure Checks API
+// integration ships.
 func accountIDForCheckRun(provider, scopeID string) string {
-	if provider == "gcp" {
+	if provider == "gcp" || provider == "azure" {
 		return ""
 	}
 	return scopeID

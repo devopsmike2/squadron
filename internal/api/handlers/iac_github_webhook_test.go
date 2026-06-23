@@ -1731,6 +1731,9 @@ func TestWebhook_AWSRecommendationKind_AuditPayloadStillCarriesAccountID(t *test
 // kind-prefix dispatch. Pins the slice 1 contract that "gce-" prefix
 // implies GCP and everything else (including the empty kind from the
 // pre-extension 4-segment branch shape) implies AWS.
+//
+// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) extends
+// the table with "vm-" → "azure" cases below.
 func TestProviderFromRecommendationKind(t *testing.T) {
 	cases := []struct {
 		kind string
@@ -1744,10 +1747,69 @@ func TestProviderFromRecommendationKind(t *testing.T) {
 		{kind: "", want: "aws"},
 		{kind: "gce", want: "aws"},      // "gce" alone (no hyphen) is not the GCP prefix
 		{kind: "gcestuff", want: "aws"}, // boundary: requires the literal "gce-" prefix
+		// v0.89.53 chunk 5 — Azure prefix dispatch.
+		{kind: "vm-otel-tag", want: "azure"},
+		{kind: "vm", want: "aws"},      // "vm" alone (no hyphen) is not the Azure prefix
+		{kind: "vmstuff", want: "aws"}, // boundary: requires the literal "vm-" prefix
 	}
 	for _, tc := range cases {
 		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
 			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
 		}
+	}
+}
+
+// TestWebhook_VMRecommendationKind_AuditPayloadCarriesSubscriptionID
+// — v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5)
+// acceptance. When the merged PR's branch encodes an Azure
+// recommendation kind (vm- prefix) and a 6-segment scope tuple, the
+// emitted recommendation.pr_merged audit payload carries
+// subscription_id=<scope_id>, account_id="", project_id="", and
+// provider="azure". Branch shape per
+// docs/proposals/azure-discovery-slice1.md §10:
+//
+//	squadron/rec/vm-otel-tag/<subscription_id>/<region>/<short_id>
+func TestWebhook_VMRecommendationKind_AuditPayloadCarriesSubscriptionID(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/vm-otel-tag/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/eastus/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.EventType != services.AuditEventRecommendationPRMerged {
+		t.Errorf("event_type = %q, want %q", e.EventType, services.AuditEventRecommendationPRMerged)
+	}
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "vm-otel-tag" {
+		t.Errorf("payload.recommendation_kind = %v, want vm-otel-tag", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "azure" {
+		t.Errorf("payload.provider = %v, want azure", pay["provider"])
+	}
+	if pay["subscription_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Errorf("payload.subscription_id = %v, want aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pay["subscription_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["project_id"] != "" {
+		t.Errorf("payload.project_id = %v, want empty string", pay["project_id"])
+	}
+	if pay["region"] != "eastus" {
+		t.Errorf("payload.region = %v, want eastus", pay["region"])
 	}
 }

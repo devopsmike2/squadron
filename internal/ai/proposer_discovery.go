@@ -55,6 +55,27 @@ type DiscoveryScanContext struct {
 	// has a real value to bind to.
 	ProjectID string
 
+	// TenantID — v0.89.53 (#678 Stream 76, Azure discovery slice 1
+	// chunk 5) — populated when Provider="azure"; carries the Azure
+	// AD tenant ID the scan walked. Empty for Provider="aws" and
+	// Provider="gcp". The proposer prompt body cites it alongside
+	// SubscriptionID so the model's reasoning can hedge in
+	// cross-tenant edge cases the runbook documents. See
+	// docs/proposals/azure-discovery-slice1.md §10.
+	TenantID string
+
+	// SubscriptionID — v0.89.53 (#678 Stream 76, Azure discovery
+	// slice 1 chunk 5) — populated when Provider="azure"; carries
+	// the Azure subscription ID the scan walked. Empty for
+	// Provider="aws" and Provider="gcp". Used by ScopeID() so the
+	// verdict learning loop's scope tuple and the audit payload
+	// composition stay provider-agnostic downstream. The proposer's
+	// pre-call validator enforces non-empty SubscriptionID when
+	// Provider="azure" (mirroring the AWS AccountID + GCP ProjectID
+	// enforcement) so the prompt body's scope description has a real
+	// value to bind to.
+	SubscriptionID string
+
 	// Regions the scan walked. Slice 1 ships single-entry slices;
 	// slice 3 will iterate.
 	Regions []string
@@ -171,23 +192,29 @@ type DiscoveryScanContext struct {
 
 // ScopeID — v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5)
 // — returns the provider-agnostic scope identifier. For Provider="gcp"
-// the value is ProjectID; for Provider="aws" (or empty, the
-// backward-compat default) the value is AccountID. Used by the
-// verdict learning loop's scope tuple, by audit payload composition,
-// and by the prompt body's scope description so the discovery
-// proposer's call sites don't need to branch on Provider every time
-// they need the per-scope identifier.
+// the value is ProjectID; for Provider="azure" (v0.89.53, #678 Stream
+// 76, Azure discovery slice 1 chunk 5) the value is SubscriptionID;
+// for Provider="aws" (or empty, the backward-compat default) the
+// value is AccountID. Used by the verdict learning loop's scope
+// tuple, by audit payload composition, and by the prompt body's scope
+// description so the discovery proposer's call sites don't need to
+// branch on Provider every time they need the per-scope identifier.
 //
-// See docs/proposals/gcp-discovery-slice1.md §9 for the broader design
+// See docs/proposals/gcp-discovery-slice1.md §9 and
+// docs/proposals/azure-discovery-slice1.md §10 for the broader design
 // of the provider-agnostic scope_id substrate.
 func (c *DiscoveryScanContext) ScopeID() string {
 	if c == nil {
 		return ""
 	}
-	if c.Provider == "gcp" {
+	switch c.Provider {
+	case "gcp":
 		return c.ProjectID
+	case "azure":
+		return c.SubscriptionID
+	default: // "aws" (or empty for backward compat)
+		return c.AccountID
 	}
-	return c.AccountID
 }
 
 // AcceptedRecommendationExample is the minimal projection over a
@@ -415,15 +442,24 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 	}
 	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) —
 	// provider-aware required-scope check. Provider="gcp" requires
-	// ProjectID; Provider="aws" (or empty for backward compat) requires
-	// AccountID. The ScopeID() helper folds both into one assertion so
-	// downstream code paths can stay provider-agnostic.
-	if in.Provider == "gcp" {
+	// ProjectID; v0.89.53 (#678 Stream 76, Azure discovery slice 1
+	// chunk 5) adds Provider="azure" requires SubscriptionID;
+	// Provider="aws" (or empty for backward compat) requires
+	// AccountID. The ScopeID() helper folds all three into one
+	// assertion so downstream code paths can stay provider-agnostic.
+	switch in.Provider {
+	case "gcp":
 		if in.ProjectID == "" {
 			return nil, errors.New("project_id is required when provider=gcp")
 		}
-	} else if in.AccountID == "" {
-		return nil, errors.New("account_id is required")
+	case "azure":
+		if in.SubscriptionID == "" {
+			return nil, errors.New("subscription_id is required when provider=azure")
+		}
+	default:
+		if in.AccountID == "" {
+			return nil, errors.New("account_id is required")
+		}
 	}
 	if err := validateDatabaseCandidates(in.Databases); err != nil {
 		return nil, fmt.Errorf("discovery scan context: %w", err)
