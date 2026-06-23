@@ -23,6 +23,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/deploy"
+	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
@@ -132,6 +133,17 @@ type Server struct {
 	// cross-shape unsealing.
 	discoveryGCPStore          gcpconnstore.Store
 	discoveryGCPScannerFactory handlers.GCPScannerFactory
+	// v0.89.52 (#676 Stream 74, Azure discovery slice 1 chunk 3) — Azure
+	// discovery substrate. Optional at construction; the
+	// /api/v1/discovery/azure/* routes 503 when the store is unwired
+	// (test_server.go path stays unaffected). The Azure credstore key
+	// reuses s.discoveryCredKey — chunk 1 of #674 sealed the SP
+	// client_secret under the same SQUADRON_SECRETS_KEY the AWS / GCP
+	// / IaC paths use, with a domain-tagged AAD
+	// ("squadron.azure_client_secret.v1") that prevents cross-shape
+	// unsealing.
+	discoveryAzureStore          azureconnstore.Store
+	discoveryAzureScannerFactory handlers.AzureScannerFactory
 	// v0.89.23 Stream 40 (#639) — GitHub webhook listener secret.
 	// Cached at startup from os.Getenv(SQUADRON_GITHUB_WEBHOOK_SECRET);
 	// an empty value leaves the /api/v1/webhooks/github route mounted
@@ -535,6 +547,41 @@ func (s *Server) SetGCPDiscoveryScannerFactory(f handlers.GCPScannerFactory) {
 	s.discoveryGCPScannerFactory = f
 }
 
+// SetAzureDiscoveryStore wires the v0.89.52 (#676 chunk 3) Azure
+// connection substrate onto the API server. Optional in the same
+// posture as SetGCPDiscoveryStore: a nil store leaves the
+// /api/v1/discovery/azure/* routes 503ing with a clear "Azure
+// discovery not configured" message; the rest of the discovery
+// surface stays reachable.
+//
+// The Azure path reuses the credstore.Key wired by
+// SetDiscoveryCredKey — chunk 1 (#674 v0.89.51) sealed the SP
+// client_secret under the same SQUADRON_SECRETS_KEY the AWS / GCP /
+// IaC paths use, with a domain-tagged AAD
+// ("squadron.azure_client_secret.v1") preventing cross-shape
+// unsealing. Calling SetAzureDiscoveryStore without also calling
+// SetDiscoveryCredKey leaves Create / Validate / Scan 500ing with
+// a "key not wired" humanized error.
+func (s *Server) SetAzureDiscoveryStore(store azureconnstore.Store) {
+	s.discoveryAzureStore = store
+}
+
+// SetAzureDiscoveryScannerFactory wires the v0.89.52 (#676 chunk 3)
+// Azure scanner factory. Production wires a factory that
+// instantiates the chunk-2 *azure.Scanner with the unsealed SP
+// client_secret; tests substitute a fake that returns a pre-canned
+// scanner.Scanner. A nil factory leaves Validate / Scan 500ing with
+// a humanized error; the CRUD routes (Create / List / Get / Update /
+// Delete) stay unaffected.
+//
+// The setter pattern keeps NewServer's signature stable and mirrors
+// the SetGCPDiscoveryScannerFactory posture. Chunk 2 and chunk 3
+// ship in parallel worktrees; main.go composes the concrete factory
+// once both land in main.
+func (s *Server) SetAzureDiscoveryScannerFactory(f handlers.AzureScannerFactory) {
+	s.discoveryAzureScannerFactory = f
+}
+
 // SetIaCGitHubWebhookSecret wires the HMAC secret the GitHub PR-
 // merged webhook receiver validates inbound signatures against.
 // v0.89.23 #639 Stream 40. Slice 1 ships one shared deployment-wide
@@ -853,6 +900,41 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 		}
 		if s.discoveryGCPScannerFactory != nil {
 			h.WithGCPScannerFactory(s.discoveryGCPScannerFactory)
+		}
+		fn(h, c)
+	}
+}
+
+// discoveryAzureTrampoline late-binds an Azure discovery handler call
+// so the route table can be registered before SetAzureDiscoveryStore
+// runs. Mirrors discoveryGCPTrampoline one-for-one: 503s with a clear
+// message when the Azure store is still nil so the test_server.go
+// path (which never wires Azure discovery) stays unaffected.
+//
+// The handler is built per-request because the auditService is
+// supplied via SetAuditService and the credstore.Key via
+// SetDiscoveryCredKey — both are set on Server post-construction and
+// the trampoline picks up whatever's there at request time.
+//
+// v0.89.52 (#676 Stream 74, Azure discovery slice 1 chunk 3).
+func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.discoveryAzureStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "Azure discovery is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewDiscoveryAzureHandlers(s.discoveryAzureStore, s.logger)
+		if s.auditService != nil {
+			h.WithAzureAuditService(s.auditService)
+		}
+		if s.discoveryCredKey != nil {
+			h.WithAzureCredstoreKey(s.discoveryCredKey)
+		}
+		if s.discoveryAzureScannerFactory != nil {
+			h.WithAzureScannerFactory(s.discoveryAzureScannerFactory)
 		}
 		fn(h, c)
 	}
@@ -1812,6 +1894,46 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/gcp/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleRecommendationsForGCPScan(c) }))
+
+		// v0.89.52 (#676 Stream 74, Azure discovery slice 1 chunk 3) —
+		// Azure-side mirror of the /discovery/aws/* and /discovery/gcp/*
+		// surfaces. Per design doc §7 the route shapes mirror the AWS /
+		// GCP counterparts so the wizard, the API consumers, and the
+		// SIEM forwarders see one consistent pattern across providers.
+		// The handler is built per-request through
+		// discoveryAzureTrampoline; the trampoline 503s when
+		// SetAzureDiscoveryStore is unwired so test_server.go stays
+		// unaffected.
+		//
+		// Auth posture mirrors the AWS / GCP surfaces: agents:read on
+		// the list / get / validate / scan / recommendations routes
+		// (those create audit events but no Squadron-persisted state
+		// in slice 1); agents:write on Create / Update / Delete (all
+		// three mutate the azure_connections substrate).
+		v1.POST("/discovery/azure/connections",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleCreateAzureConnection(c) }))
+		v1.GET("/discovery/azure/connections",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleListAzureConnections(c) }))
+		v1.GET("/discovery/azure/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleGetAzureConnection(c) }))
+		v1.PATCH("/discovery/azure/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleUpdateAzureConnection(c) }))
+		v1.DELETE("/discovery/azure/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleDeleteAzureConnection(c) }))
+		v1.POST("/discovery/azure/connections/:id/validate",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleValidateAzureConnection(c) }))
+		v1.POST("/discovery/azure/connections/:id/scan",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleScanAzureConnection(c) }))
+		v1.POST("/discovery/azure/connections/:id/recommendations",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleRecommendationsForAzureScan(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
