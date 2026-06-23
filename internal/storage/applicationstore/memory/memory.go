@@ -956,10 +956,18 @@ func (s *Store) ListAIVerdictsForGroup(ctx context.Context, groupID string, sinc
 // discriminator. Linear scan over s.auditEvents with the same
 // predicate logic the SQL query applies: event_type in the two-event
 // set AND timestamp>=since AND the payload's (connection_id,
-// account_id, region) tuple matches.
+// scope_id, region) tuple matches.
+//
+// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
+// scopeID parameter is provider-agnostic and matches the payload's
+// account_id OR project_id field. AWS-shaped audit rows carry the
+// scope under account_id (with project_id empty or absent); GCP-shaped
+// audit rows carry it under project_id (with account_id empty or
+// absent). The OR predicate keeps both round-trips clean without
+// requiring a Provider parameter on the lookup.
 func (s *Store) ListDiscoveryVerdicts(
 	ctx context.Context,
-	connectionID, accountID, region string,
+	connectionID, scopeID, region string,
 	since time.Time, limit int,
 ) ([]*types.DiscoveryVerdict, error) {
 	if limit <= 0 {
@@ -968,7 +976,7 @@ func (s *Store) ListDiscoveryVerdicts(
 	if limit > 1000 {
 		limit = 1000
 	}
-	if connectionID == "" || accountID == "" || region == "" {
+	if connectionID == "" || scopeID == "" || region == "" {
 		return nil, nil
 	}
 	s.mu.RLock()
@@ -995,11 +1003,16 @@ func (s *Store) ListDiscoveryVerdicts(
 		if e.Payload == nil {
 			continue
 		}
-		// Predicate: connection_id + account_id + region all match.
+		// Predicate: connection_id + scope_id + region all match. The
+		// scope_id is matched against account_id OR project_id so AWS
+		// and GCP audit shapes both round-trip through one call. See
+		// v0.89.48 (#671 Stream 69) — GCP discovery slice 1 chunk 5.
 		if v, _ := e.Payload["connection_id"].(string); v != connectionID {
 			continue
 		}
-		if v, _ := e.Payload["account_id"].(string); v != accountID {
+		acct, _ := e.Payload["account_id"].(string)
+		proj, _ := e.Payload["project_id"].(string)
+		if acct != scopeID && proj != scopeID {
 			continue
 		}
 		if v, _ := e.Payload["region"].(string); v != region {
