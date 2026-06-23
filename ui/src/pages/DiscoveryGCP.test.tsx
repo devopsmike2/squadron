@@ -445,6 +445,118 @@ describe("DiscoveryGCP", () => {
     });
   });
 
+  // Database tier slice 2 chunk 5 (v0.89.66, #695 Stream 93) —
+  // Inventory tab gains a Databases sub-tab rendering the Cloud
+  // SQL inventory from the chunk 2 scanner extension. Default
+  // sub-tab is Compute so the slice-1 UX stays untouched; switching
+  // to Databases renders the per-row table with the Query Insights
+  // instrumentation column.
+  it("TestDiscoveryGCP_InventoryTab_DatabasesSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue({
+      ...sampleScan,
+      databases: [
+        {
+          resource_id: "projects/my-prod-project/instances/db-covered",
+          engine: "postgres",
+          engine_version: "15",
+          instance_class: "db-custom-2-7680",
+          region: "us-central1",
+          provider: "gcp",
+          query_insights_enabled: true,
+          tags: { env: "prod" },
+        },
+        {
+          resource_id: "projects/my-prod-project/instances/db-uncovered",
+          engine: "mysql",
+          engine_version: "8.0",
+          instance_class: "db-n1-standard-1",
+          region: "us-central1",
+          provider: "gcp",
+          query_insights_enabled: false,
+          tags: {},
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    // Default sub-tab is Compute — switch to Databases to inspect
+    // the new table.
+    const databasesTab = screen.getByRole("tab", { name: /^Databases$/i });
+    await user.click(databasesTab);
+    expect(databasesTab).toHaveAttribute("data-state", "active");
+
+    // Both database rows render. The covered row's instrumentation
+    // column reads "Yes"; the uncovered row reads "No". The
+    // instrumentation column header reads "Query Insights enabled?".
+    expect(
+      screen.getByText("projects/my-prod-project/instances/db-covered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("projects/my-prod-project/instances/db-uncovered"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Query Insights enabled\?/i)).toBeInTheDocument();
+  });
+
+  // Database tier slice 2 chunk 5 — empty-state UX: scans without
+  // databases (or older scan rows from before the chunk 2 scanner
+  // extension where the wire field is undefined) render the empty
+  // message rather than an empty table or a crash.
+  it("TestDiscoveryGCP_InventoryTab_DatabasesSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const databasesTab = screen.getByRole("tab", { name: /^Databases$/i });
+    await user.click(databasesTab);
+    expect(
+      screen.getByText(/No databases discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // advanceToKeyPasteStep walks the wizard from step 1 (project) to

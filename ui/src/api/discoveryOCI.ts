@@ -164,6 +164,30 @@ export interface ComputeInstanceSnapshot {
   region: string;
 }
 
+// DatabaseInstanceSnapshot mirrors scanner.DatabaseInstanceSnapshot —
+// the shared cross-cloud database row shape. Each cloud only
+// populates the axis flag that matches its scanner; the optional
+// fields keep the type stable across providers. See discoveryGCP.ts
+// for the full per-axis documentation.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93).
+export interface DatabaseInstanceSnapshot {
+  resource_id: string;
+  engine: string;
+  engine_version: string;
+  instance_class: string;
+  region: string;
+  tags?: Record<string, string>;
+  provider?: string;
+
+  performance_insights_enabled?: boolean; // AWS RDS (slice 1)
+  enhanced_monitoring_enabled?: boolean;  // AWS RDS (slice 1)
+
+  query_insights_enabled?: boolean;       // GCP Cloud SQL (slice 2)
+  sql_insights_diag_enabled?: boolean;    // Azure SQL (slice 2)
+  database_management_enabled?: boolean;  // OCI DB (slice 2)
+}
+
 // ScanOCIResponse mirrors ociScanResponse on the wire. Unlike the
 // Azure response which carries subscription_id + location, the OCI
 // response carries tenancy_ocid + region — the OCI substrate scopes
@@ -173,6 +197,12 @@ export interface ComputeInstanceSnapshot {
 // Field naming follows the Go json tags. instance_count is derived
 // on the server from len(result.Compute) but kept on the wire so the
 // UI can render a summary line without iterating the rows.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93) — `databases`
+// carries the OCI DB System + Autonomous Database inventory. The
+// Inventory tab's Databases sub-tab treats undefined as empty so
+// older scan rows from before the chunk 4 scanner extension render
+// the empty-state placeholder.
 export interface ScanOCIResponse {
   connection_id: string;
   tenancy_ocid: string;
@@ -184,6 +214,7 @@ export interface ScanOCIResponse {
   partial_reason?: string;
   failed_services?: string[];
   computes: ComputeInstanceSnapshot[];
+  databases?: DatabaseInstanceSnapshot[];
   scan_id: string;
 }
 
@@ -198,6 +229,7 @@ interface scanOCIConnectionWireResponse {
   tenancy_ocid: string;
   region: string;
   compute: ComputeInstanceSnapshot[];
+  databases?: DatabaseInstanceSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;
@@ -224,6 +256,7 @@ export async function scanOCIConnection(
     partial_reason: wire.partial_reason,
     failed_services: wire.failed_services,
     computes,
+    databases: wire.databases,
     scan_id: wire.scan_id,
   };
 }

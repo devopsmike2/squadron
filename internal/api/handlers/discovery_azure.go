@@ -778,17 +778,24 @@ func (h *DiscoveryAzureHandlers) HandleValidateAzureConnection(c *gin.Context) {
 // Wraps the scanner.Result with a few connection-level fields so
 // the UI doesn't need to round-trip back to the connection row to
 // render the inventory panel.
+//
+// v0.89.66 (#695 Stream 93, database tier slice 2 chunk 5) — adds
+// the Databases field carrying the Azure SQL database inventory the
+// chunk 3 scanner extension populates. The omitempty tag preserves
+// the cold-start wire shape for handlers that ran before the chunk
+// 3 scanner extension (the Databases slice is nil on those paths).
 type azureScanResponse struct {
-	ConnectionID        string                            `json:"connection_id"`
-	SubscriptionID      string                            `json:"subscription_id"`
-	Location            string                            `json:"location"`
-	Compute             []scanner.ComputeInstanceSnapshot `json:"compute"`
-	InstrumentedCount   int                               `json:"instrumented_count"`
-	UninstrumentedCount int                               `json:"uninstrumented_count"`
-	Partial             bool                              `json:"partial"`
-	PartialReason       string                            `json:"partial_reason,omitempty"`
-	FailedServices      []string                          `json:"failed_services,omitempty"`
-	ScanID              string                            `json:"scan_id"`
+	ConnectionID        string                             `json:"connection_id"`
+	SubscriptionID      string                             `json:"subscription_id"`
+	Location            string                             `json:"location"`
+	Compute             []scanner.ComputeInstanceSnapshot  `json:"compute"`
+	Databases           []scanner.DatabaseInstanceSnapshot `json:"databases,omitempty"`
+	InstrumentedCount   int                                `json:"instrumented_count"`
+	UninstrumentedCount int                                `json:"uninstrumented_count"`
+	Partial             bool                               `json:"partial"`
+	PartialReason       string                             `json:"partial_reason,omitempty"`
+	FailedServices      []string                           `json:"failed_services,omitempty"`
+	ScanID              string                             `json:"scan_id"`
 }
 
 // HandleScanAzureConnection — POST
@@ -976,6 +983,7 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		SubscriptionID:      conn.SubscriptionID,
 		Location:            conn.Location,
 		Compute:             result.Compute,
+		Databases:           result.Databases,
 		InstrumentedCount:   instrumentedCount,
 		UninstrumentedCount: uninstrumentedCount,
 		Partial:             result.Partial,

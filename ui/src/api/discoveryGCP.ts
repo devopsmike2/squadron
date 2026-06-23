@@ -146,15 +146,50 @@ export interface ComputeInstanceSnapshot {
   region: string;
 }
 
+// DatabaseInstanceSnapshot mirrors scanner.DatabaseInstanceSnapshot —
+// the shared cross-cloud database row shape. The four per-cloud
+// observability axis flags are optional because each cloud only
+// populates the one that matches its scanner: AWS RDS sets
+// performance_insights_enabled + enhanced_monitoring_enabled; GCP
+// Cloud SQL sets query_insights_enabled; Azure SQL sets
+// sql_insights_diag_enabled; OCI DB sets database_management_enabled.
+// The `provider` discriminator routes the inventory table's
+// instrumentation-column rendering to the right axis.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93).
+export interface DatabaseInstanceSnapshot {
+  resource_id: string;
+  engine: string;
+  engine_version: string;
+  instance_class: string;
+  region: string;
+  tags?: Record<string, string>;
+  provider?: string;
+
+  performance_insights_enabled?: boolean; // AWS RDS (slice 1)
+  enhanced_monitoring_enabled?: boolean;  // AWS RDS (slice 1)
+
+  query_insights_enabled?: boolean;       // GCP Cloud SQL (slice 2)
+  sql_insights_diag_enabled?: boolean;    // Azure SQL (slice 2)
+  database_management_enabled?: boolean;  // OCI DB (slice 2)
+}
+
 // ScanGCPResponse mirrors gcpScanResponse on the wire. Note that
 // unlike the AWS ScanResult there is no top-level instance_count —
 // the page computes it client-side as compute.length. Same posture
 // as the AWS handler which omitted a redundant tally.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93) — `databases`
+// carries the Cloud SQL instance inventory. Optional on the wire
+// (omitempty Go JSON tag) so older scan rows from before the
+// scanner extension don't render an undefined array; the Inventory
+// tab's Databases sub-tab treats undefined as empty.
 export interface ScanGCPResponse {
   connection_id: string;
   project_id: string;
   region: string;
   compute: ComputeInstanceSnapshot[];
+  databases?: DatabaseInstanceSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

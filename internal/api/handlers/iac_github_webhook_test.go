@@ -1875,3 +1875,190 @@ func TestWebhook_ComputeRecommendationKind_AuditPayloadCarriesTenancyOCID(t *tes
 		t.Errorf("payload.region = %v, want us-phoenix-1", pay["region"])
 	}
 }
+
+// TestWebhook_CloudSQLKind_RoutesToGCP — database tier slice 2
+// chunk 5 (v0.89.66, #695 Stream 93). Branch
+// `squadron/rec/cloudsql-pi-enable/<project_id>/<region>/<short_id>`
+// is a Cloud SQL recommendation kind that must route through the
+// providerFromRecommendationKind helper to provider="gcp" and
+// populate project_id (not account_id) in the audit payload.
+// Branch shape per docs/proposals/database-tier-slice2.md §6.
+func TestWebhook_CloudSQLKind_RoutesToGCP(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/cloudsql-pi-enable/my-prod-project/us-central1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.EventType != services.AuditEventRecommendationPRMerged {
+		t.Errorf("event_type = %q, want %q", e.EventType, services.AuditEventRecommendationPRMerged)
+	}
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "cloudsql-pi-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want cloudsql-pi-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "gcp" {
+		t.Errorf("payload.provider = %v, want gcp", pay["provider"])
+	}
+	if pay["project_id"] != "my-prod-project" {
+		t.Errorf("payload.project_id = %v, want my-prod-project", pay["project_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["region"] != "us-central1" {
+		t.Errorf("payload.region = %v, want us-central1", pay["region"])
+	}
+}
+
+// TestWebhook_AzSQLKind_RoutesToAzure — database tier slice 2 chunk
+// 5 (v0.89.66, #695 Stream 93). Branch
+// `squadron/rec/azsql-diag-enable/<subscription_id>/<region>/<short_id>`
+// is an Azure SQL recommendation kind that must route through the
+// providerFromRecommendationKind helper to provider="azure" and
+// populate subscription_id (not account_id) in the audit payload.
+func TestWebhook_AzSQLKind_RoutesToAzure(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/azsql-diag-enable/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/eastus/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "azsql-diag-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want azsql-diag-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "azure" {
+		t.Errorf("payload.provider = %v, want azure", pay["provider"])
+	}
+	if pay["subscription_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Errorf("payload.subscription_id = %v, want aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pay["subscription_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["project_id"] != "" {
+		t.Errorf("payload.project_id = %v, want empty string", pay["project_id"])
+	}
+	if pay["region"] != "eastus" {
+		t.Errorf("payload.region = %v, want eastus", pay["region"])
+	}
+}
+
+// TestWebhook_OCIDBKind_RoutesToOCI — database tier slice 2 chunk 5
+// (v0.89.66, #695 Stream 93). Branch
+// `squadron/rec/ocidb-perfhub-enable/<tenancy_ocid>/<region>/<short_id>`
+// is an OCI Database recommendation kind that must route through
+// the providerFromRecommendationKind helper to provider="oci" and
+// populate tenancy_ocid (not account_id) in the audit payload.
+func TestWebhook_OCIDBKind_RoutesToOCI(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/ocidb-perfhub-enable/ocid1.tenancy.oc1..aaaaaaaa/us-phoenix-1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "ocidb-perfhub-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want ocidb-perfhub-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "oci" {
+		t.Errorf("payload.provider = %v, want oci", pay["provider"])
+	}
+	if pay["tenancy_ocid"] != "ocid1.tenancy.oc1..aaaaaaaa" {
+		t.Errorf("payload.tenancy_ocid = %v, want ocid1.tenancy.oc1..aaaaaaaa", pay["tenancy_ocid"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["project_id"] != "" {
+		t.Errorf("payload.project_id = %v, want empty string", pay["project_id"])
+	}
+	if pay["subscription_id"] != "" {
+		t.Errorf("payload.subscription_id = %v, want empty string", pay["subscription_id"])
+	}
+	if pay["region"] != "us-phoenix-1" {
+		t.Errorf("payload.region = %v, want us-phoenix-1", pay["region"])
+	}
+}
+
+// TestProviderFromRecommendationKind_DatabaseTierExtension — database
+// tier slice 2 chunk 5 (v0.89.66, #695 Stream 93). The three new
+// database recommendation kind prefixes must route to the matching
+// provider, and the existing slice 1 routing must remain green.
+// The boundary cases ("cloudsql" / "azsql" / "ocidb" alone with no
+// trailing hyphen) must still return "aws" because the substrate
+// requires the literal hyphenated prefix.
+func TestProviderFromRecommendationKind_DatabaseTierExtension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		// Slice 1 — must stay green.
+		{kind: "gce-otel-label", want: "gcp"},
+		{kind: "vm-otel-tag", want: "azure"},
+		{kind: "compute-otel-tag", want: "oci"},
+		{kind: "ec2-otel-layer", want: "aws"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		{kind: "rds-pi-em", want: "aws"},
+		// Database tier slice 2 — new routing.
+		{kind: "cloudsql-pi-enable", want: "gcp"},
+		{kind: "azsql-diag-enable", want: "azure"},
+		{kind: "ocidb-perfhub-enable", want: "oci"},
+		// Boundary cases — bare keyword without trailing hyphen
+		// falls through to AWS.
+		{kind: "cloudsql", want: "aws"},
+		{kind: "azsql", want: "aws"},
+		{kind: "ocidb", want: "aws"},
+		{kind: "cloudsqlstuff", want: "aws"},
+		{kind: "azsqlstuff", want: "aws"},
+		{kind: "ocidbstuff", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}
