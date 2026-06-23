@@ -58,6 +58,7 @@ import {
   type AWSScanAllResponse,
   type CloudConnection,
   type GenerateRecommendationsResponse,
+  type RowSpanQuality,
   type ScanResult,
 } from "@/api/discovery";
 import {
@@ -1304,6 +1305,7 @@ function ComputeSection({
                     <div className="flex flex-wrap items-center gap-1">
                       <OtelBadge ok={c.has_otel} />
                       <LastSeenCell value={c.last_seen_at} />
+                      <QualityDot quality={c.span_quality} />
                     </div>
                   </div>
                   <TagPills tags={c.tags} />
@@ -1361,7 +1363,10 @@ function FunctionsSection({
                       {f.runtime} · {f.region}
                     </p>
                   </div>
-                  <OtelBadge ok={f.has_otel_layer} />
+                  <div className="flex flex-wrap items-center gap-1">
+                    <OtelBadge ok={f.has_otel_layer} />
+                    <QualityDot quality={f.span_quality} />
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1435,6 +1440,7 @@ function DatabasesSection({
                         label="Enhanced Monitoring"
                       />
                       <LastSeenCell value={d.last_seen_at} />
+                      <QualityDot quality={d.span_quality} />
                     </div>
                   </div>
                   <TagPills tags={d.tags} />
@@ -1676,7 +1682,10 @@ function ClustersSection({
                         {c.resource_id}
                       </code>
                     </div>
-                    <LastSeenCell value={c.last_seen_at} />
+                    <div className="flex flex-wrap items-center gap-1">
+                      <LastSeenCell value={c.last_seen_at} />
+                      <QualityDot quality={c.span_quality} />
+                    </div>
                   </div>
                   <div className="mt-2 flex flex-col gap-1">
                     <div className="flex flex-wrap items-center gap-1">
@@ -2816,5 +2825,61 @@ function LastSeenCell({ value }: { value?: string }) {
     <Badge variant="outline" className="text-muted-foreground" title={value}>
       Last seen: {rel.text}
     </Badge>
+  );
+}
+
+// QualityDot — v0.89.87 span quality slice 1 chunk 3. Per-row health
+// indicator rendered next to LastSeenCell. Four states per design
+// doc §7.2: green (no issues), yellow (1 pathology), red (2+),
+// gray (no observations / chunk-2 hasn't annotated this row yet).
+// Tooltip surfaces the three percentages.
+//
+// Per-row data sourcing: chunk 3 takes the server-side-annotation
+// path. The chunk-2 sibling branch extends the scan marshalling to
+// populate row.span_quality; until chunk 2 merges, every dot is
+// gray. The lazy per-row fetch alternative would add N round-trips
+// per scan render — overweight for slice 1.
+export function QualityDot({
+  quality,
+}: {
+  quality?: RowSpanQuality | null;
+}) {
+  if (!quality) {
+    return (
+      <span
+        className="inline-block h-2 w-2 rounded-full bg-slate-500/60 align-middle"
+        title="No spans observed"
+        aria-label="Span quality: no observations"
+        data-testid="quality-dot"
+        data-color="gray"
+      />
+    );
+  }
+  const issues = [
+    quality.orphan_pct > 0,
+    quality.missing_attr_pct > 0,
+    quality.attr_mismatch_pct > 0,
+  ].filter(Boolean).length;
+  let colorClass = "bg-emerald-500";
+  let colorTag = "green";
+  if (issues === 1) {
+    colorClass = "bg-amber-400";
+    colorTag = "yellow";
+  } else if (issues >= 2) {
+    colorClass = "bg-red-500";
+    colorTag = "red";
+  }
+  const tooltip =
+    `Orphan ${quality.orphan_pct.toFixed(1)}%, ` +
+    `Missing attrs ${quality.missing_attr_pct.toFixed(1)}%, ` +
+    `Mismatch ${quality.attr_mismatch_pct.toFixed(1)}%`;
+  return (
+    <span
+      className={`inline-block h-2 w-2 rounded-full align-middle ${colorClass}`}
+      title={tooltip}
+      aria-label={`Span quality: ${tooltip}`}
+      data-testid="quality-dot"
+      data-color={colorTag}
+    />
   );
 }

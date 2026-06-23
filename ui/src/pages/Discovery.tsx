@@ -37,6 +37,11 @@ import { Link } from "react-router-dom";
 import useSWR from "swr";
 
 import {
+  fetchSpanQuality,
+  type ProviderSpanQuality,
+  type SpanQualityResponse,
+} from "@/api/discoverySpanQuality";
+import {
   getDiscoverySummary,
   type DiscoverySummary,
   type ProviderSummary,
@@ -59,6 +64,25 @@ const SWR_KEY_SUMMARY = "/discovery/summary";
 // 1:1 with /discovery/trace_coverage so the same cache key works for
 // cross-page consumers too.
 const SWR_KEY_TRACE_COVERAGE = "/discovery/trace_coverage";
+
+// SWR cache key for the v0.89.87 #718 span quality endpoint (span
+// quality slice 1 chunk 3). Pairs 1:1 with /discovery/span_quality so
+// the same cache key works for cross-page consumers too.
+const SWR_KEY_SPAN_QUALITY = "/discovery/span_quality";
+
+// Filter-chip kinds the dashboard panel deep-links into. Three
+// recommendation kinds match 1:1 with the three columns of the
+// SPAN QUALITY panel. When the operator clicks a column, the
+// dashboard navigates to /discovery/aws#recommendations and seeds
+// the filter chip with the matching kind via a URL hash fragment
+// (the per-provider Recommendations tab reads it on mount). Mirrors
+// the v0.89.82 trace-emission sub-indicator deeplink pattern — the
+// AWS page is the only provider whose Recommendations tab renders
+// span-quality drafts in this slice; the other three carry stub
+// tabs (matching the slice-2-chunk-3 disposition).
+const SPAN_QUALITY_KIND_ORPHAN = "span-quality-orphan-trace";
+const SPAN_QUALITY_KIND_MISSING_ATTRS = "span-quality-missing-resource-attrs";
+const SPAN_QUALITY_KIND_MISMATCH = "span-quality-attribute-mismatch";
 
 // Threshold above which a provider's weak_match_pct triggers a caveat
 // icon next to its chip per design doc §6. 20% is the slice-1 floor —
@@ -150,10 +174,28 @@ export default function DiscoveryPage() {
     revalidateOnReconnect: false,
   });
 
+  // Span quality rides the same cadence (v0.89.87 chunk 3). The
+  // SPAN QUALITY panel hides itself when all three totals are zero
+  // (design doc §10 acceptance test 12) so a failed fetch surfaces
+  // silently rather than crowding the dashboard with an error
+  // banner — the operator's primary signal is the panel either
+  // appearing or not. The non-fatal posture matches trace coverage's
+  // panel-level failure handling.
+  const { data: spanQuality, mutate: spanQualityMutate } =
+    useSWR<SpanQualityResponse>(SWR_KEY_SPAN_QUALITY, fetchSpanQuality, {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      // Silence the SWR error log path; the panel hides itself on
+      // missing data, which is the right UX for a slice-1 backend
+      // endpoint that may not yet exist on older deployments.
+      shouldRetryOnError: false,
+    });
+
   const handleRefresh = useCallback(() => {
     void mutate();
     void traceMutate();
-  }, [mutate, traceMutate]);
+    void spanQualityMutate();
+  }, [mutate, traceMutate, spanQualityMutate]);
 
   return (
     <div className="space-y-6 p-6">
@@ -187,7 +229,13 @@ export default function DiscoveryPage() {
         </div>
       )}
 
-      {data && <DashboardBody summary={data} traceCoverage={traceData} />}
+      {data && (
+        <DashboardBody
+          summary={data}
+          traceCoverage={traceData}
+          spanQuality={spanQuality}
+        />
+      )}
     </div>
   );
 }
@@ -254,9 +302,11 @@ function DashboardHeader({
 function DashboardBody({
   summary,
   traceCoverage,
+  spanQuality,
 }: {
   summary: DiscoverySummary;
   traceCoverage: TraceCoverage | undefined;
+  spanQuality: SpanQualityResponse | undefined;
 }) {
   // Welcome state condition: no provider has been wired AND no
   // connection exists anywhere. Either signal alone is enough — a
@@ -276,6 +326,7 @@ function DashboardBody({
     <div className="space-y-6">
       <CoveragePanel totals={summary.totals} />
       {traceCoverage && <TraceCoveragePanel coverage={traceCoverage} />}
+      {spanQuality && <SpanQualityPanel quality={spanQuality} />}
       <ProviderGrid providers={summary.providers} />
       <RecentRecommendations rows={summary.recent_recommendations} />
     </div>
@@ -570,6 +621,150 @@ function TraceCoverageChip({
       )}
     </span>
   );
+}
+
+// --- Span quality panel ----------------------------------------------
+//
+// SpanQualityPanel — v0.89.87 (#718 Stream 116, Span quality slice 1
+// chunk 3). Renders the third-axis health view below the
+// TraceCoveragePanel — the visual hierarchy reads top-down as
+// "primitive enabled" → "telemetry flowing" → "telemetry healthy"
+// (design doc §1, §7.1).
+//
+// The panel hides entirely when all three totals percentages are
+// zero (design doc §10 acceptance test 12). A clean fleet has
+// nothing to surface here. Each column deep-links to the AWS
+// Recommendations tab with a kind hash fragment so the slice-2
+// chunk-3 filter chip lands pre-applied (matches the v0.89.82
+// trace-coverage pending-sub-indicator deeplink pattern).
+
+function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
+  const t = quality.totals;
+  // §10 test 12 — hide entirely when all three percentages are zero.
+  // The check is on the cross-provider totals; a per-provider non-zero
+  // still surfaces (rolled up into totals via raw span counts on the
+  // server side), but a fleet-wide all-zero hides the panel.
+  if (
+    t.orphan_pct === 0 &&
+    t.missing_attr_pct === 0 &&
+    t.attr_mismatch_pct === 0
+  ) {
+    return null;
+  }
+  return (
+    <div
+      className="rounded-lg border bg-card p-6"
+      data-testid="span-quality-panel"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold">Span quality</h2>
+          <p className="text-xs text-muted-foreground">
+            Are the spans Squadron receives healthy?
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <SpanQualityColumn
+          label="Orphan trace"
+          pct={t.orphan_pct}
+          count={countResourcesWith(
+            quality.providers,
+            (p) => p.orphan_pct > 0,
+          )}
+          kind={SPAN_QUALITY_KIND_ORPHAN}
+          testIdSuffix="orphan"
+        />
+        <SpanQualityColumn
+          label="Missing attrs"
+          pct={t.missing_attr_pct}
+          count={countResourcesWith(
+            quality.providers,
+            (p) => p.missing_attr_pct > 0,
+          )}
+          kind={SPAN_QUALITY_KIND_MISSING_ATTRS}
+          testIdSuffix="missing-attrs"
+        />
+        <SpanQualityColumn
+          label="Attribute mismatch"
+          pct={t.attr_mismatch_pct}
+          count={countResourcesWith(
+            quality.providers,
+            (p) => p.attr_mismatch_pct > 0,
+          )}
+          kind={SPAN_QUALITY_KIND_MISMATCH}
+          testIdSuffix="mismatch"
+        />
+      </div>
+    </div>
+  );
+}
+
+// SpanQualityColumn is the single-column tile. The whole tile is a
+// Link so the operator can click anywhere on it (design doc §7.1).
+// The hash carries the kind so the chunk-4 filter chip can pre-apply
+// it on mount; until that lands the hash is a graceful no-op.
+function SpanQualityColumn({
+  label,
+  pct,
+  count,
+  kind,
+  testIdSuffix,
+}: {
+  label: string;
+  pct: number;
+  count: number;
+  kind: string;
+  testIdSuffix: string;
+}) {
+  const resourceWord = count === 1 ? "resource" : "resources";
+  return (
+    <Link
+      to={`/discovery/aws#recommendations:${kind}`}
+      className="block rounded-md border border-transparent p-3 text-center transition hover:border-amber-400/40 hover:bg-amber-500/5"
+      data-testid={`span-quality-column-${testIdSuffix}`}
+      data-kind={kind}
+      aria-label={`${label} — ${pct.toFixed(1)}%, ${count} ${resourceWord}`}
+    >
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className="mt-1 text-2xl font-medium tabular-nums text-amber-600 dark:text-amber-300"
+        data-testid={`span-quality-pct-${testIdSuffix}`}
+      >
+        {pct.toFixed(1)}%
+      </div>
+      <div
+        className="mt-1 text-xs text-muted-foreground"
+        data-testid={`span-quality-count-${testIdSuffix}`}
+      >
+        {count} {resourceWord}
+      </div>
+    </Link>
+  );
+}
+
+// countResourcesWith approximates the per-kind "N resources" count
+// shown below each column. Slice 1's backend exposes only a fleet-
+// wide resources_with_issues per provider; per-kind counts are a
+// slice-2 candidate. We sum resources_with_issues across providers
+// reporting a non-zero percentage for the predicate — a slight
+// over-count when a provider has two pathology classes triggering
+// at once, but matches the design doc §7.1 mock granularity.
+function countResourcesWith(
+  providers: SpanQualityResponse["providers"],
+  predicate: (p: ProviderSpanQuality) => boolean,
+): number {
+  let total = 0;
+  for (const p of PROVIDER_ORDER) {
+    const row = providers[p];
+    if (!row) continue;
+    if (predicate(row)) {
+      total += row.resources_with_issues;
+    }
+  }
+  return total;
 }
 
 // --- Provider cards ---------------------------------------------------

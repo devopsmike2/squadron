@@ -2181,4 +2181,101 @@ describe("DiscoveryAWSPage", () => {
       ).toHaveLength(5);
     });
   });
+
+  // --- v0.89.87 #718 Stream 116 — Span quality slice 1 chunk 3 ----
+  //
+  // Per-Inventory-row Quality dot. The dot maps row.span_quality
+  // (an optional RowSpanQuality with the three pathology
+  // percentages) to a 4-state color: green=0 issues, yellow=1
+  // issue, red=2+ issues, gray=undefined (no observations). The
+  // tooltip surfaces the three percentages so the operator can
+  // read the per-pathology contribution without leaving the
+  // Inventory tab. The dot is exported from DiscoveryAWS.tsx so
+  // we can render it in isolation rather than driving the whole
+  // page state machine.
+
+  it("TestDiscoveryAWS_Inventory_QualityDot_GreenWhenNoIssues", async () => {
+    const { QualityDot } = await import("./DiscoveryAWS");
+    render(
+      <QualityDot
+        quality={{
+          orphan_pct: 0,
+          missing_attr_pct: 0,
+          attr_mismatch_pct: 0,
+        }}
+      />,
+    );
+    const dot = screen.getByTestId("quality-dot");
+    expect(dot).toHaveAttribute("data-color", "green");
+    // Tooltip surfaces the zero percentages — operator can confirm
+    // the row was inspected (vs the gray "no observations" state).
+    expect(dot).toHaveAttribute(
+      "title",
+      expect.stringContaining("Orphan 0.0%"),
+    );
+  });
+
+  it("TestDiscoveryAWS_Inventory_QualityDot_YellowWhenOneIssue", async () => {
+    const { QualityDot } = await import("./DiscoveryAWS");
+    render(
+      <QualityDot
+        quality={{
+          orphan_pct: 0,
+          missing_attr_pct: 11.5,
+          attr_mismatch_pct: 0,
+        }}
+      />,
+    );
+    const dot = screen.getByTestId("quality-dot");
+    expect(dot).toHaveAttribute("data-color", "yellow");
+  });
+
+  it("TestDiscoveryAWS_Inventory_QualityDot_RedWhenMultipleIssues", async () => {
+    const { QualityDot } = await import("./DiscoveryAWS");
+    render(
+      <QualityDot
+        quality={{
+          orphan_pct: 12.0,
+          missing_attr_pct: 8.5,
+          attr_mismatch_pct: 4.2,
+        }}
+      />,
+    );
+    expect(screen.getByTestId("quality-dot")).toHaveAttribute(
+      "data-color",
+      "red",
+    );
+  });
+
+  it("TestDiscoveryAWS_Inventory_QualityDot_GrayWhenNoObservations", async () => {
+    const { QualityDot } = await import("./DiscoveryAWS");
+    // null is the per-resource fetcher's "404 mapped" signal —
+    // same gray rendering as undefined so the dashboard handles
+    // both identically.
+    render(<QualityDot quality={undefined} />);
+    const dot = screen.getByTestId("quality-dot");
+    expect(dot).toHaveAttribute("data-color", "gray");
+    expect(dot).toHaveAttribute(
+      "title",
+      expect.stringContaining("No spans observed"),
+    );
+  });
+
+  it("TestDiscoveryAWS_Inventory_QualityDot_HoverTooltipShowsPercentages", async () => {
+    const { QualityDot } = await import("./DiscoveryAWS");
+    render(
+      <QualityDot
+        quality={{
+          orphan_pct: 3.2,
+          missing_attr_pct: 8.1,
+          attr_mismatch_pct: 1.7,
+        }}
+      />,
+    );
+    const dot = screen.getByTestId("quality-dot");
+    const tip = dot.getAttribute("title") ?? "";
+    expect(tip).toContain("Orphan 3.2%");
+    expect(tip).toContain("Missing attrs 8.1%");
+    expect(tip).toContain("Mismatch 1.7%");
+  });
 });
