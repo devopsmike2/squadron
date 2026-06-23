@@ -199,6 +199,32 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`is read-only (compute.viewer / compute.instances.list / ` +
 	`compute.instances.get). Each GCE plan step's inline_config_snippet ` +
 	`is Terraform the operator runs through their own IaC pipeline.` + "\n" +
+	`  - Azure Virtual Machines: the single observability lever is the ` +
+	`OTel TAG. An Azure VM is covered when its tags map contains a key ` +
+	`matching the case-insensitive prefix "otel"; when no such tag ` +
+	`exists, recommend adding the "otel-collector" tag. Recommendation ` +
+	`kind: vm-otel-tag. The Terraform updates the Azure VM resource's ` +
+	`tags map (e.g. tags = { "otel-collector" = "v1" }). RESOURCE TYPE: ` +
+	`pick azurerm_linux_virtual_machine or azurerm_windows_virtual_machine ` +
+	`based on the VM's OSFamily (linux → azurerm_linux_virtual_machine; ` +
+	`windows → azurerm_windows_virtual_machine). Older azurerm provider ` +
+	`versions (before the split resources) use a single ` +
+	`azurerm_virtual_machine resource — note this in the PR body if you ` +
+	`encounter it, so the operator running an older provider version ` +
+	`knows the snippet may need a one-line resource-type swap. TAG ` +
+	`CONSTRAINTS: Azure tag keys are case-sensitive in storage but ` +
+	`compared case-insensitively in observability tooling; emit the key ` +
+	`as "otel-collector" so the scanner's case-insensitive otel* prefix ` +
+	`detection picks it up on the next scan. Group multiple uncovered ` +
+	`VMs INTO ONE plan step per location (each VM is its own Terraform ` +
+	`target, but the snippet emits one VM resource block per instance ` +
+	`inside the same step so the operator's PR review covers the whole ` +
+	`batch). SQUADRON DOES NOT EXECUTE ` +
+	`Microsoft.Compute/virtualMachines/write — the discovery RBAC scope ` +
+	`for Azure VMs is read-only (Reader role at subscription scope, ` +
+	`Microsoft.Compute/virtualMachines/read). Each Azure VM plan step's ` +
+	`inline_config_snippet is Terraform the operator runs through their ` +
+	`own IaC pipeline.` + "\n" +
 	`  - ECS clusters: the single observability lever is CLUSTER-LEVEL CONTAINER ` +
 	`INSIGHTS — CloudWatch Container Insights surfaces per-cluster task and ` +
 	`service metrics. A cluster is covered when container_insights_status == ` +
@@ -417,12 +443,28 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	// UNCHANGED byte-for-byte from the v0.89.47 output so the
 	// cold-start parity tests and the slice 2 verdict-block byte
 	// identity invariant hold without surgery.
-	if in.Provider == "gcp" {
+	//
+	// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — when
+	// Provider="azure", the scope description renders provider=azure +
+	// subscription_id (the Azure scope tuple). AWS + GCP paths are
+	// UNCHANGED byte-for-byte so the v0.89.48 GCP cold-start parity
+	// test and the v0.89.28+ AWS parity test both stay green. See
+	// docs/proposals/azure-discovery-slice1.md §10.
+	switch in.Provider {
+	case "gcp":
 		fmt.Fprintf(&b, "GCP discovery scan completed on a Squadron-connected project.\n\n")
 		fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
 		fmt.Fprintf(&b, "provider: gcp\n")
 		fmt.Fprintf(&b, "project_id: %s\n", in.ProjectID)
-	} else {
+	case "azure":
+		fmt.Fprintf(&b, "Azure discovery scan completed on a Squadron-connected subscription.\n\n")
+		fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
+		fmt.Fprintf(&b, "provider: azure\n")
+		if in.TenantID != "" {
+			fmt.Fprintf(&b, "tenant_id: %s\n", in.TenantID)
+		}
+		fmt.Fprintf(&b, "subscription_id: %s\n", in.SubscriptionID)
+	default:
 		fmt.Fprintf(&b, "AWS discovery scan completed on a Squadron-connected account.\n\n")
 		fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
 		fmt.Fprintf(&b, "account_id: %s\n", in.AccountID)
@@ -711,10 +753,15 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	// group_id line names the appropriate scope identifier so the
 	// model's prompt-side reasoning binds to whichever shape the user
 	// message rendered above (account_id for AWS, project_id for GCP).
-	// AWS phrasing preserved byte-for-byte for cold-start parity.
-	if in.Provider == "gcp" {
+	// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — adds
+	// subscription_id for Azure. AWS + GCP phrasings preserved
+	// byte-for-byte for cold-start parity.
+	switch in.Provider {
+	case "gcp":
 		b.WriteString("group_id on every step MUST equal the project_id above. ")
-	} else {
+	case "azure":
+		b.WriteString("group_id on every step MUST equal the subscription_id above. ")
+	default:
 		b.WriteString("group_id on every step MUST equal the account_id above. ")
 	}
 	b.WriteString("Set require_approval to true on step 0.\n")
