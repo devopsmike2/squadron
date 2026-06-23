@@ -225,6 +225,28 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`Microsoft.Compute/virtualMachines/read). Each Azure VM plan step's ` +
 	`inline_config_snippet is Terraform the operator runs through their ` +
 	`own IaC pipeline.` + "\n" +
+	`  - OCI Compute instances (Oracle Cloud): the single ` +
+	`observability lever is the OTel TAG. An oci_core_instance is ` +
+	`covered when its freeform_tags map (or any DefinedTags namespace ` +
+	`map) contains a key matching the case-insensitive prefix "otel"; ` +
+	`when no such tag exists, recommend adding the "otel-collector" ` +
+	`freeform tag. Recommendation kind: compute-otel-tag. The ` +
+	`Terraform updates the oci_core_instance.freeform_tags map ` +
+	"(e.g. `freeform_tags = { \"otel-collector\" = \"v1\" }`)" + `. ` +
+	`For instances using DefinedTags, add the key to the appropriate ` +
+	`namespace map under defined_tags. TAG CONSTRAINTS: OCI freeform ` +
+	`tag keys are case-insensitive in observability tooling but ` +
+	`stored verbatim; emit the key as "otel-collector" so the ` +
+	`scanner's case-insensitive otel* prefix detection picks it up ` +
+	`on the next scan. Group multiple uncovered instances INTO ONE ` +
+	`plan step per region (each instance is its own Terraform target, ` +
+	`but the snippet emits one oci_core_instance block per instance ` +
+	`inside the same step so the operator's PR review covers the ` +
+	`whole batch). SQUADRON DOES NOT EXECUTE the OCI Compute ` +
+	`UpdateInstance API — the discovery IAM scope for OCI Compute is ` +
+	`read-only (inspect instances in compartment). Each OCI Compute ` +
+	`plan step's inline_config_snippet is Terraform the operator ` +
+	`runs through their own IaC pipeline.` + "\n" +
 	`  - ECS clusters: the single observability lever is CLUSTER-LEVEL CONTAINER ` +
 	`INSIGHTS — CloudWatch Container Insights surfaces per-cluster task and ` +
 	`service metrics. A cluster is covered when container_insights_status == ` +
@@ -464,6 +486,17 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 			fmt.Fprintf(&b, "tenant_id: %s\n", in.TenantID)
 		}
 		fmt.Fprintf(&b, "subscription_id: %s\n", in.SubscriptionID)
+	case "oci":
+		fmt.Fprintf(&b, "OCI discovery scan completed on a Squadron-connected tenancy.\n\n")
+		fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
+		fmt.Fprintf(&b, "provider: oci\n")
+		fmt.Fprintf(&b, "tenancy_ocid: %s\n", in.TenancyOCID)
+		if in.UserOCID != "" {
+			fmt.Fprintf(&b, "user_ocid: %s\n", in.UserOCID)
+		}
+		if in.CompartmentID != "" {
+			fmt.Fprintf(&b, "compartment_id: %s\n", in.CompartmentID)
+		}
 	default:
 		fmt.Fprintf(&b, "AWS discovery scan completed on a Squadron-connected account.\n\n")
 		fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
@@ -761,6 +794,8 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 		b.WriteString("group_id on every step MUST equal the project_id above. ")
 	case "azure":
 		b.WriteString("group_id on every step MUST equal the subscription_id above. ")
+	case "oci":
+		b.WriteString("group_id on every step MUST equal the tenancy_ocid above. ")
 	default:
 		b.WriteString("group_id on every step MUST equal the account_id above. ")
 	}

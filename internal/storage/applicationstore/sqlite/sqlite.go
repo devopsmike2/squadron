@@ -1939,11 +1939,18 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 // provider-agnostic scope_id. The WHERE clause OR-matches
 // `payload->>'account_id' = ?` OR `payload->>'project_id' = ?` so
 // AWS callers continue to round-trip account_id-keyed audit rows and
-// GCP callers find the parallel project_id-keyed rows. Empty/missing
-// AWS rows have payload.project_id="" (never equal to a GCP project
-// id) and vice versa, so cross-provider leakage is structurally
-// impossible at the query layer. See
-// docs/proposals/gcp-discovery-slice1.md §9.
+// GCP callers find the parallel project_id-keyed rows. v0.89.53
+// (#678 Stream 76, Azure discovery slice 1 chunk 5) extends the
+// match to `payload->>'subscription_id' = ?` so Azure callers
+// round-trip subscription_id-keyed rows. v0.89.58 (#685 Stream 83,
+// OCI discovery slice 1 chunk 5) extends the match to
+// `payload->>'tenancy_ocid' = ?` so OCI callers round-trip
+// tenancy_ocid-keyed rows. Empty/missing rows for one provider have
+// the other providers' fields empty (never equal to a populated
+// scope id) so cross-provider leakage is structurally impossible at
+// the query layer. See docs/proposals/gcp-discovery-slice1.md §9,
+// docs/proposals/azure-discovery-slice1.md §10, and
+// docs/proposals/oci-discovery-slice1.md §10.
 //
 // v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — the
 // WHERE predicate extends to a third OR-branch on
@@ -1989,18 +1996,22 @@ func (s *Storage) ListDiscoveryVerdicts(
 	// scope predicate OR-matches account_id (AWS shape) or project_id
 	// (GCP shape). v0.89.53 (#678 Stream 76, Azure discovery slice 1
 	// chunk 5) extends the predicate with a third OR-branch on
-	// subscription_id (Azure shape). The scopeID parameter is bound
-	// three times — the caller doesn't know the provider, the storage
-	// layer matches whichever populated field exists. SQLite's JSON1
-	// extension handles all three extracts as a single ranged scan
-	// thanks to the v7 partial index on (event_type, timestamp DESC).
+	// subscription_id (Azure shape). v0.89.58 (#685 Stream 83, OCI
+	// discovery slice 1 chunk 5) extends the predicate with a fourth
+	// OR-branch on tenancy_ocid (OCI shape). The scopeID parameter
+	// is bound four times — the caller doesn't know the provider, the
+	// storage layer matches whichever populated field exists. SQLite's
+	// JSON1 extension handles all four extracts as a single ranged
+	// scan thanks to the v7 partial index on
+	// (event_type, timestamp DESC).
 	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
 		WHERE event_type IN (?, ?)
 		  AND timestamp >= ?
 		  AND json_extract(payload, '$.connection_id') = ?
 		  AND (json_extract(payload, '$.account_id') = ?
 		       OR json_extract(payload, '$.project_id') = ?
-		       OR json_extract(payload, '$.subscription_id') = ?)
+		       OR json_extract(payload, '$.subscription_id') = ?
+		       OR json_extract(payload, '$.tenancy_ocid') = ?)
 		  AND json_extract(payload, '$.region') = ?
 		ORDER BY timestamp DESC
 		LIMIT ?`
@@ -2008,7 +2019,7 @@ func (s *Storage) ListDiscoveryVerdicts(
 		"recommendation.pr_merged",
 		"recommendation.pr_closed_not_merged",
 		since,
-		connectionID, scopeID, scopeID, scopeID, region,
+		connectionID, scopeID, scopeID, scopeID, scopeID, region,
 		limit,
 	)
 	if err != nil {
