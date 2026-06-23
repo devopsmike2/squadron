@@ -216,6 +216,33 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		walkedRegions[s.Region] = struct{}{}
 	}
 
+	// Slice 2 (kubernetes-tier-slice2.md §5.1) GKE clusters walk.
+	// Runs after the Cloud SQL walk completes so all three surfaces
+	// share the same per-scan credential setup and accumulate into
+	// the same Result. A GKE list failure is non-fatal — compute +
+	// Cloud SQL results from the same scan are still valuable, so
+	// the failure surfaces as a partial-failure entry against the
+	// "gke" service identifier rather than failing the whole scan.
+	//
+	// Mirrors the Cloud SQL walk's three-step error surface:
+	// build-client failure → partial; list failure → classified
+	// partial; success against a region-filtered scan → record the
+	// filtered region in walkedRegions so the audit payload reflects
+	// what was actually walked.
+	gkeClient, gkeErr := s.buildContainerClient(ctx, oauthClient)
+	if gkeErr != nil {
+		recordPartialFailure(&result, ServiceIDGKE, fmt.Sprintf("%s: build client: %s", ServiceIDGKE, truncate(gkeErr.Error(), 200)))
+	} else if err := s.walkGKE(ctx, gkeClient, &result); err != nil {
+		recordPartialFailure(&result, ServiceIDGKE, classifyGKEListError(err))
+	} else if s.Region != "" {
+		// Successful GKE walk against a region-filtered scan. Same
+		// idempotent walkedRegions absorption as the Cloud SQL path
+		// above — the GKE walk uses the "-" location wildcard and
+		// filters client-side, so the filtered region is the relevant
+		// one even when compute returned no zones for it.
+		walkedRegions[s.Region] = struct{}{}
+	}
+
 	// Denormalize the walked-region list into Result.Regions. Order is
 	// not stable across runs (map iteration); the field is documented
 	// as "regions actually walked" — a set, not a sequence.
@@ -240,6 +267,19 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// inert here.
 	for _, d := range result.Databases {
 		if d.Provider == ProviderGCP && d.QueryInsightsEnabled {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Slice 2 (kubernetes-tier-slice2.md §3.1) instrumented rule for
+	// GCP GKE: ManagedPrometheusEnabled == true. AWS EKS rows (which
+	// would have Provider="aws" or "", and read off
+	// ControlPlaneLogging+Addons composite) never appear in a GCP
+	// scan's Result.Clusters — this scanner only emits Provider="gcp"
+	// rows, so the AWS EKS composite tally branch is inert here.
+	for _, c := range result.Clusters {
+		if c.Provider == ProviderGCP && c.ManagedPrometheusEnabled {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++
@@ -374,16 +414,29 @@ func regionFromZone(zone string) string {
 //   - compute.ComputeReadonlyScope (compute.readonly) for the slice-1
 //     Compute Engine zones + instances walk.
 //   - sqladmin.SqlserviceAdminScope (sqlservice.admin) for the
-//     slice-2 Cloud SQL instances walk. Despite the "admin" suffix,
-//     this is the scope Google requires for the read-listing call
-//     (the alternative is the platform-wide cloud-platform scope —
-//     see proposal §3.1 design rationale).
+//     slice-2 database tier Cloud SQL instances walk. Despite the
+//     "admin" suffix, this is the scope Google requires for the
+//     read-listing call (the alternative is the platform-wide
+//     cloud-platform scope — see database-tier-slice2.md §3.1 design
+//     rationale).
+//   - ContainerReadonlyScope (cloud-platform.read-only) for the
+//     slice-2 kubernetes tier GKE clusters walk. The
+//     container/v1beta1 client library does not expose a more-targeted
+//     container.readonly constant; the platform-wide read-only scope
+//     is the narrowest scope the generated client offers for read
+//     paths against the GKE control plane. See consts.go
+//     ContainerReadonlyScope godoc for the rationale; see
+//     kubernetes-tier-slice2.md §5.1 for the matching IAM grant
+//     (roles/container.viewer at the project level).
 //
 // The compute.readonly scope alone is insufficient for Cloud SQL
-// (returns 403 Insufficient Permission); cloud-platform would cover
-// both but violates the slice-1 posture commitment to least-privilege
-// (the SA's effective scope should be the union of the read-only
-// scopes actually exercised, not the platform superset).
+// (returns 403 Insufficient Permission) and for GKE; the read-only
+// platform scope alone is insufficient for Cloud SQL list (returns
+// 403). The union is the least-privilege fit across all three APIs.
+// The full cloud-platform scope would cover everything but violates
+// the slice-1 posture commitment to least-privilege (the SA's
+// effective scope should be the union of the read-only scopes
+// actually exercised, not the platform superset).
 //
 // Returns nil with an error when the SA JSON is malformed or missing
 // fields. The error message NEVER embeds the bytes (substrate
@@ -404,6 +457,11 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 		s.SAJSON,
 		compute.ComputeReadonlyScope,
 		sqladmin.SqlserviceAdminScope,
+		// Slice-2 (kubernetes-tier-slice2.md §5.1) GKE Container API
+		// read scope. The container/v1beta1 client library doesn't
+		// expose a more-targeted container.readonly constant; see
+		// consts.go ContainerReadonlyScope godoc for the rationale.
+		ContainerReadonlyScope,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gcp: parse SA JSON: %w", err)
