@@ -1148,6 +1148,222 @@ func TestProposeFromDiscoveryScan_AzureRequiresSubscriptionID(t *testing.T) {
 	assert.Contains(t, err.Error(), "subscription_id is required when provider=azure")
 }
 
+// --- v0.89.58 (#685 Stream 83) OCI discovery slice 1 chunk 5 tests ---
+
+// TestDiscoveryProposer_OCIProvider_PromptIncludesComputeOtelTag — when
+// Provider="oci" and TenancyOCID is set, the user message renders the
+// OCI scope description (provider=oci + tenancy_ocid) and the system
+// prompt teaches the compute-otel-tag kind. Pins the §10 contract
+// from docs/proposals/oci-discovery-slice1.md.
+func TestDiscoveryProposer_OCIProvider_PromptIncludesComputeOtelTag(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:      "scan-oci-001",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		UserOCID:    "ocid1.user.oc1..bbbbbbbb",
+		Regions:     []string{"us-phoenix-1"},
+	}
+	msg := buildDiscoveryUserMessage(ctx)
+	// User message describes the scope as OCI tenancy, not AWS / GCP /
+	// Azure.
+	assert.Contains(t, msg, "provider: oci")
+	assert.Contains(t, msg, "tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaa")
+	assert.Contains(t, msg, "user_ocid: ocid1.user.oc1..bbbbbbbb")
+	assert.NotContains(t, msg, "account_id: ocid1.tenancy.oc1..aaaaaaaa")
+	assert.NotContains(t, msg, "project_id: ocid1.tenancy.oc1..aaaaaaaa")
+	assert.NotContains(t, msg, "subscription_id: ocid1.tenancy.oc1..aaaaaaaa")
+	assert.Contains(t, msg, "OCI discovery scan")
+	assert.Contains(t, msg, "group_id on every step MUST equal the tenancy_ocid above")
+
+	// System prompt teaches the compute-otel-tag kind and the
+	// oci_core_instance Terraform resource per §10 contract.
+	for _, want := range []string{
+		"compute-otel-tag",
+		"oci_core_instance",
+		"OCI Compute instances",
+		"OTel TAG",
+		"freeform_tags",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt should teach OCI rule: %q", want)
+	}
+}
+
+// TestDiscoveryProposer_AWSProvider_PromptUnchanged_PostOCI — chunk 5
+// cold-start parity: an AWS user message (provider="" and
+// provider="aws") is byte-for-byte identical to the AWS user message
+// produced by the chunk 4 baseline. The acceptance test §15.13
+// invariant — adding the OCI path doesn't perturb AWS prompt
+// generation.
+func TestDiscoveryProposer_AWSProvider_PromptUnchanged_PostOCI(t *testing.T) {
+	ctxAWSDefault := DiscoveryScanContext{
+		ScanID:    "scan-aws-001",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	}
+	ctxAWSExplicit := ctxAWSDefault
+	ctxAWSExplicit.Provider = "aws"
+
+	msgDefault := buildDiscoveryUserMessage(ctxAWSDefault)
+	msgExplicit := buildDiscoveryUserMessage(ctxAWSExplicit)
+
+	if msgDefault != msgExplicit {
+		t.Fatalf("AWS prompt parity broken between provider='' and provider='aws' after chunk 5 OCI addition\n--- default ---\n%s\n--- explicit ---\n%s",
+			msgDefault, msgExplicit)
+	}
+
+	assert.Contains(t, msgDefault, "AWS discovery scan")
+	assert.Contains(t, msgDefault, "account_id: 123456789012")
+	assert.NotContains(t, msgDefault, "provider: gcp")
+	assert.NotContains(t, msgDefault, "provider: azure")
+	assert.NotContains(t, msgDefault, "provider: oci")
+	assert.NotContains(t, msgDefault, "project_id:")
+	assert.NotContains(t, msgDefault, "subscription_id:")
+	assert.NotContains(t, msgDefault, "tenancy_ocid:")
+	assert.Contains(t, msgDefault, "group_id on every step MUST equal the account_id above")
+}
+
+// TestDiscoveryProposer_GCPProvider_PromptUnchanged_PostOCI — chunk 5
+// cold-start parity: the GCP user message produced under
+// Provider="gcp" is byte-for-byte identical to the GCP user message
+// from v0.89.48. Acceptance test §15.13 invariant.
+func TestDiscoveryProposer_GCPProvider_PromptUnchanged_PostOCI(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:    "scan-gcp-001",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	}
+	msg := buildDiscoveryUserMessage(ctx)
+
+	assert.Contains(t, msg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.Contains(t, msg, "provider: gcp")
+	assert.Contains(t, msg, "project_id: my-sandbox-project")
+	assert.NotContains(t, msg, "provider: azure")
+	assert.NotContains(t, msg, "provider: aws")
+	assert.NotContains(t, msg, "provider: oci")
+	assert.NotContains(t, msg, "subscription_id:")
+	assert.NotContains(t, msg, "tenant_id:")
+	assert.NotContains(t, msg, "tenancy_ocid:")
+	assert.NotContains(t, msg, "account_id:")
+	assert.Contains(t, msg, "group_id on every step MUST equal the project_id above")
+}
+
+// TestDiscoveryProposer_AzureProvider_PromptUnchanged_PostOCI — chunk
+// 5 cold-start parity: the Azure user message produced under
+// Provider="azure" is byte-for-byte identical to the Azure user
+// message from v0.89.53. Acceptance test §15.13 invariant — adding
+// the OCI path doesn't perturb Azure prompt generation.
+func TestDiscoveryProposer_AzureProvider_PromptUnchanged_PostOCI(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:         "scan-azure-001",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	}
+	msg := buildDiscoveryUserMessage(ctx)
+
+	assert.Contains(t, msg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.Contains(t, msg, "provider: azure")
+	assert.Contains(t, msg, "subscription_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	assert.Contains(t, msg, "tenant_id: 11111111-2222-3333-4444-555555555555")
+	assert.NotContains(t, msg, "provider: gcp")
+	assert.NotContains(t, msg, "provider: aws")
+	assert.NotContains(t, msg, "provider: oci")
+	assert.NotContains(t, msg, "project_id:")
+	assert.NotContains(t, msg, "tenancy_ocid:")
+	assert.NotContains(t, msg, "account_id:")
+	assert.Contains(t, msg, "group_id on every step MUST equal the subscription_id above")
+}
+
+// TestDiscoveryScanContext_ScopeID_OCIProvider — pins the ScopeID()
+// helper's provider-aware routing for the OCI path: TenancyOCID for
+// Provider="oci", SubscriptionID for Azure, ProjectID for GCP,
+// AccountID for AWS.
+func TestDiscoveryScanContext_ScopeID_OCIProvider(t *testing.T) {
+	ociCtx := DiscoveryScanContext{Provider: "oci", TenancyOCID: "ocid1.tenancy.oc1..xyz"}
+	if got := ociCtx.ScopeID(); got != "ocid1.tenancy.oc1..xyz" {
+		t.Errorf("OCI ScopeID = %q, want ocid1.tenancy.oc1..xyz", got)
+	}
+	// OCI ignores AccountID + ProjectID + SubscriptionID if all are populated.
+	ociCtxAll := DiscoveryScanContext{
+		Provider:       "oci",
+		TenancyOCID:    "ocid1.tenancy.oc1..main",
+		AccountID:      "aws-account-bleed",
+		ProjectID:      "gcp-project-bleed",
+		SubscriptionID: "azure-sub-bleed",
+	}
+	if got := ociCtxAll.ScopeID(); got != "ocid1.tenancy.oc1..main" {
+		t.Errorf("OCI ScopeID with bleed-through fields = %q, want ocid1.tenancy.oc1..main", got)
+	}
+	// Cross-check: AWS path still works after OCI was added.
+	awsCtx := DiscoveryScanContext{AccountID: "123456789012"}
+	if got := awsCtx.ScopeID(); got != "123456789012" {
+		t.Errorf("AWS ScopeID after OCI addition = %q, want 123456789012", got)
+	}
+	// Cross-check: GCP path still works after OCI was added.
+	gcpCtx := DiscoveryScanContext{Provider: "gcp", ProjectID: "my-project"}
+	if got := gcpCtx.ScopeID(); got != "my-project" {
+		t.Errorf("GCP ScopeID after OCI addition = %q, want my-project", got)
+	}
+	// Cross-check: Azure path still works after OCI was added.
+	azureCtx := DiscoveryScanContext{Provider: "azure", SubscriptionID: "sub-abc"}
+	if got := azureCtx.ScopeID(); got != "sub-abc" {
+		t.Errorf("Azure ScopeID after OCI addition = %q, want sub-abc", got)
+	}
+}
+
+// TestProposeFromDiscoveryScan_OCIRequiresTenancyOCID —
+// Provider="oci" with empty TenancyOCID is rejected at the pre-call
+// validator. AWS + GCP + Azure rules unchanged.
+func TestProposeFromDiscoveryScan_OCIRequiresTenancyOCID(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	_, err := svc.ProposeFromDiscoveryScan(context.Background(), &DiscoveryScanContext{
+		ScanID:   "scan-x",
+		Provider: "oci",
+		// TenancyOCID intentionally empty.
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tenancy_ocid is required when provider=oci")
+}
+
+// TestDiscoveryProposer_CrossProviderMix_OCIInstructionPresent — the
+// system prompt is shared across providers; the OCI compute-otel-tag
+// kind appears in the same system message that already carries the
+// AWS, GCP, and Azure kinds.
+func TestDiscoveryProposer_CrossProviderMix_OCIInstructionPresent(t *testing.T) {
+	for _, ociKind := range []string{
+		"compute-otel-tag",
+		"oci_core_instance",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, ociKind,
+			"shared system prompt should teach the OCI kind %q", ociKind)
+	}
+	// AWS + GCP + Azure kinds still present after OCI addition.
+	for _, awsKind := range []string{
+		"ec2-otel-layer", "lambda-otel-layer", "rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, awsKind,
+			"shared system prompt should still teach the AWS kind %q after OCI addition", awsKind)
+	}
+	for _, gcpKind := range []string{
+		"gce-otel-label", "google_compute_instance",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, gcpKind,
+			"shared system prompt should still teach the GCP kind %q after OCI addition", gcpKind)
+	}
+	for _, azureKind := range []string{
+		"vm-otel-tag", "azurerm_linux_virtual_machine",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, azureKind,
+			"shared system prompt should still teach the Azure kind %q after OCI addition", azureKind)
+	}
+}
+
 // TestDiscoveryProposer_CrossProviderMix_AzureInstructionPresent —
 // the system prompt is shared across providers; the Azure
 // vm-otel-tag kind appears in the same system message that already

@@ -885,12 +885,19 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 // kinds carry the "vm-" prefix today (vm-otel-tag is the slice 1
 // Azure kind). Future Azure kinds (sql-, aks-, blob-, lb-, etc.)
 // will extend this lookup as the catalog grows.
+//
+// v0.89.58 (#685 Stream 83, OCI discovery slice 1 chunk 5) — OCI
+// kinds carry the "compute-" prefix today (compute-otel-tag is the
+// slice 1 OCI kind). Future OCI kinds (db-, oke-, objectstorage-,
+// lb-, etc.) will extend this lookup as the catalog grows.
 func providerFromRecommendationKind(kind string) string {
 	switch {
 	case strings.HasPrefix(kind, "gce-"):
 		return "gcp"
 	case strings.HasPrefix(kind, "vm-"):
 		return "azure"
+	case strings.HasPrefix(kind, "compute-"):
+		return "oci"
 	default:
 		return "aws"
 	}
@@ -917,6 +924,12 @@ func providerFromRecommendationKind(kind string) string {
 // "stable schema across providers" invariant — SIEM consumers read
 // `subscription_id` when `provider="azure"`. See
 // docs/proposals/azure-discovery-slice1.md §10.
+//
+// v0.89.58 (#685 Stream 83, OCI discovery slice 1 chunk 5) — OCI
+// `recommendation.pr_merged` events carry `tenancy_ocid` (set for
+// OCI) alongside `account_id=""`, `project_id=""`, and
+// `subscription_id=""`. SIEM consumers read `tenancy_ocid` when
+// `provider="oci"`. See docs/proposals/oci-discovery-slice1.md §10.
 func writeScopePayloadFields(payload map[string]any, provider, scopeID string) {
 	if scopeID == "" {
 		return
@@ -930,6 +943,11 @@ func writeScopePayloadFields(payload map[string]any, provider, scopeID string) {
 		payload["subscription_id"] = scopeID
 		payload["account_id"] = ""
 		payload["project_id"] = ""
+	case "oci":
+		payload["tenancy_ocid"] = scopeID
+		payload["account_id"] = ""
+		payload["project_id"] = ""
+		payload["subscription_id"] = ""
 	default:
 		payload["account_id"] = scopeID
 		payload["project_id"] = ""
@@ -953,7 +971,7 @@ func writeScopePayloadFields(payload map[string]any, provider, scopeID string) {
 // subscription_id on check-run summaries once the Azure Checks API
 // integration ships.
 func accountIDForCheckRun(provider, scopeID string) string {
-	if provider == "gcp" || provider == "azure" {
+	if provider == "gcp" || provider == "azure" || provider == "oci" {
 		return ""
 	}
 	return scopeID

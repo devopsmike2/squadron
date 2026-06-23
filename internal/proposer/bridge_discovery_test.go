@@ -847,3 +847,168 @@ func TestAssembleDiscoveryVerdicts_TriProviderIsolation(t *testing.T) {
 		t.Errorf("AWS scope leaked another provider's row: %v", awsURLs)
 	}
 }
+
+// --- v0.89.58 (#685 Stream 83) OCI discovery slice 1 chunk 5 tests ---
+
+// seedPRMergedOCI — chunk 5 — inserts a recommendation.pr_merged
+// audit row with the OCI payload shape: tenancy_ocid is populated;
+// account_id, project_id, and subscription_id are empty;
+// provider="oci". The branch encodes compute-otel-tag per §10.
+func (f *discoveryBridgeFixture) seedPRMergedOCI(t *testing.T, connID, tenancyOCID, region, kind, prURL string, mergedAt time.Time) {
+	t.Helper()
+	ev := &types.AuditEvent{
+		ID:         "audit-" + prURL,
+		Timestamp:  mergedAt,
+		Actor:      "github_webhook",
+		EventType:  "recommendation.pr_merged",
+		TargetType: "iac_recommendation",
+		TargetID:   connID,
+		Action:     "pr_merged",
+		Payload: map[string]any{
+			"repo_full_name":      "octo/widgets",
+			"pr_number":           301,
+			"pr_url":              prURL,
+			"branch":              "squadron/rec/" + kind + "/" + tenancyOCID + "/" + region + "/oci-0",
+			"merged_at":           mergedAt.UTC().Format(time.RFC3339),
+			"merged_by":           "alice",
+			"recommendation_kind": kind,
+			"connection_id":       connID,
+			"provider":            "oci",
+			"tenancy_ocid":        tenancyOCID,
+			"account_id":          "",
+			"project_id":          "",
+			"subscription_id":     "",
+			"region":              region,
+		},
+	}
+	if err := f.store.CreateAuditEvent(context.Background(), ev); err != nil {
+		t.Fatalf("seed pr_merged (oci): %v", err)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_OCIScope_QueriesTenancyOCIDField —
+// chunk 5 acceptance. Seed a recommendation.pr_merged event with
+// payload {tenancy_ocid: "ocid1.tenancy.oc1..xyz", region:
+// "us-phoenix-1"}; call AssembleDiscoveryVerdicts with the OCI
+// tenancy_ocid as the scope_id. Assert: 1 approved verdict surfaces.
+// The bridge passes scope_id through to ListDiscoveryVerdicts which
+// OR-matches account_id OR project_id OR subscription_id OR
+// tenancy_ocid, so OCI payloads round-trip cleanly without changing
+// the public signature.
+func TestAssembleDiscoveryVerdicts_OCIScope_QueriesTenancyOCIDField(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	tenancyOCID := "ocid1.tenancy.oc1..aaaaaaaa"
+	region := "us-phoenix-1"
+	mergedAt := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	f.seedPRMergedOCI(t, f.connectionID, tenancyOCID, region, "compute-otel-tag",
+		"https://github.com/octo/widgets/pull/310", mergedAt)
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, tenancyOCID, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 1 {
+		t.Fatalf("expected 1 approved verdict (OCI), got %d", len(approved))
+	}
+	if len(rejected) != 0 {
+		t.Errorf("expected 0 rejected verdicts, got %d", len(rejected))
+	}
+	if approved[0].Kind != "compute-otel-tag" {
+		t.Errorf("kind = %q, want compute-otel-tag", approved[0].Kind)
+	}
+	if approved[0].ID != "https://github.com/octo/widgets/pull/310" {
+		t.Errorf("verdict ID = %q", approved[0].ID)
+	}
+	if approved[0].State != verdictsel.StateMerged {
+		t.Errorf("state = %q, want %q", approved[0].State, verdictsel.StateMerged)
+	}
+	if len(urls) != 1 || urls[0] != "https://github.com/octo/widgets/pull/310" {
+		t.Errorf("urls = %v", urls)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_FourProviderIsolation — chunk 5
+// negative acceptance. Seed one AWS + one GCP + one Azure + one OCI
+// pr_merged under the SAME connection_id and region but DIFFERENT
+// scope_ids. Call assemble with each provider's scope_id — only the
+// matching provider's row surfaces. Confirms the four-way OR-match in
+// ListDiscoveryVerdicts isn't a "match everything" leakage path.
+func TestAssembleDiscoveryVerdicts_FourProviderIsolation(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	region := "common-region"
+	mergedAt := time.Now().UTC().Add(-2 * 24 * time.Hour)
+	awsAccount := "123456789012"
+	projectID := "my-project"
+	subscriptionID := "my-subscription"
+	tenancyOCID := "ocid1.tenancy.oc1..my-tenancy"
+	f.seedPRMerged(t, f.connectionID, awsAccount, region, "rds-pi-em",
+		"https://github.com/octo/widgets/pull/aws", mergedAt)
+	f.seedPRMergedGCP(t, f.connectionID, projectID, region, "gce-otel-label",
+		"https://github.com/octo/widgets/pull/gcp", mergedAt)
+	f.seedPRMergedAzure(t, f.connectionID, subscriptionID, region, "vm-otel-tag",
+		"https://github.com/octo/widgets/pull/azure", mergedAt)
+	f.seedPRMergedOCI(t, f.connectionID, tenancyOCID, region, "compute-otel-tag",
+		"https://github.com/octo/widgets/pull/oci", mergedAt)
+
+	// Call with OCI scope.
+	ociApproved, _, ociURLs, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, tenancyOCID, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble oci: %v", err)
+	}
+	if len(ociApproved) != 1 {
+		t.Fatalf("expected 1 approved verdict on OCI scope, got %d", len(ociApproved))
+	}
+	if ociURLs[0] != "https://github.com/octo/widgets/pull/oci" {
+		t.Errorf("OCI scope leaked another provider's row: %v", ociURLs)
+	}
+	if ociApproved[0].Kind != "compute-otel-tag" {
+		t.Errorf("OCI scope verdict kind = %q, want compute-otel-tag", ociApproved[0].Kind)
+	}
+
+	// Call with Azure scope.
+	azureApproved, _, azureURLs, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, subscriptionID, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble azure: %v", err)
+	}
+	if len(azureApproved) != 1 {
+		t.Fatalf("expected 1 approved verdict on Azure scope, got %d", len(azureApproved))
+	}
+	if azureURLs[0] != "https://github.com/octo/widgets/pull/azure" {
+		t.Errorf("Azure scope leaked another provider's row: %v", azureURLs)
+	}
+
+	// Call with GCP scope.
+	gcpApproved, _, gcpURLs, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, projectID, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble gcp: %v", err)
+	}
+	if len(gcpApproved) != 1 {
+		t.Fatalf("expected 1 approved verdict on GCP scope, got %d", len(gcpApproved))
+	}
+	if gcpURLs[0] != "https://github.com/octo/widgets/pull/gcp" {
+		t.Errorf("GCP scope leaked another provider's row: %v", gcpURLs)
+	}
+
+	// Call with AWS scope.
+	awsApproved, _, awsURLs, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, awsAccount, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble aws: %v", err)
+	}
+	if len(awsApproved) != 1 {
+		t.Fatalf("expected 1 approved verdict on AWS scope, got %d", len(awsApproved))
+	}
+	if awsURLs[0] != "https://github.com/octo/widgets/pull/aws" {
+		t.Errorf("AWS scope leaked another provider's row: %v", awsURLs)
+	}
+}
+
