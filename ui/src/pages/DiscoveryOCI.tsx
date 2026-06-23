@@ -55,6 +55,7 @@ import {
   scanOCIConnection,
   validateOCIConnection,
   type ComputeInstanceSnapshot,
+  type DatabaseInstanceSnapshot,
   type OCIConnection,
   type OCIValidateErrorKind,
   type ScanOCIResponse,
@@ -100,6 +101,14 @@ import {
 const WIZARD_TAB = "wizard";
 const INVENTORY_TAB = "inventory";
 const RECS_TAB = "recommendations";
+
+// Inventory sub-tab values — database tier slice 2 (v0.89.66, #695
+// Stream 93) splits Inventory into Compute + Databases sub-tabs.
+// The Databases sub-tab surfaces the OCI DB Systems + Autonomous
+// Database inventory from the chunk 4 scanner extension with the
+// Database Management enrollment axis rendered per row.
+const INVENTORY_SUBTAB_COMPUTE = "compute";
+const INVENTORY_SUBTAB_DATABASES = "databases";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1151,10 +1160,28 @@ function InventoryTab({
       </div>
     );
   }
+  // Database tier slice 2 (v0.89.66, #695 Stream 93) — nested
+  // Compute / Databases sub-tabs. Default sub-tab is Compute so
+  // the slice-1 UX is preserved; the Databases sub-tab surfaces
+  // the OCI DB Systems + Autonomous Database inventory from the
+  // chunk 4 scanner extension.
   return (
     <div className="space-y-3">
       <InventorySummary scan={scan} />
-      <InventoryTable rows={scan.computes} />
+      <Tabs defaultValue={INVENTORY_SUBTAB_COMPUTE}>
+        <TabsList>
+          <TabsTrigger value={INVENTORY_SUBTAB_COMPUTE}>Compute</TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_DATABASES}>
+            Databases
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
+          <InventoryTable rows={scan.computes} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_DATABASES} className="mt-3">
+          <DatabaseInventoryTable rows={scan.databases ?? []} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -1223,6 +1250,71 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
                 {Object.keys(row.tags ?? {}).length === 0
                   ? "-"
                   : Object.entries(row.tags)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ")}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// DatabaseInventoryTable — database tier slice 2 (v0.89.66, #695
+// Stream 93). Renders the OCI DB Systems + Autonomous Database
+// inventory from the chunk 4 scanner extension. The instrumentation
+// column reads from database_management_enabled (the OCI single-
+// axis observability lever — Operations Insights / Database
+// Management enrollment); rows where the field is undefined render
+// "No" because absence is the uncovered signal per design doc §3.3.
+function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
+        No databases discovered. Run a scan to refresh.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Resource ID</th>
+            <th className="px-3 py-2 font-medium">Engine</th>
+            <th className="px-3 py-2 font-medium">Engine Version</th>
+            <th className="px-3 py-2 font-medium">Shape</th>
+            <th className="px-3 py-2 font-medium">
+              Database Management enabled?
+            </th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">Tags</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.resource_id} className="border-t">
+              <td className="px-3 py-2 font-mono text-xs">{row.resource_id}</td>
+              <td className="px-3 py-2 text-xs">{row.engine || "-"}</td>
+              <td className="px-3 py-2 text-xs">{row.engine_version || "-"}</td>
+              <td className="px-3 py-2 text-xs">{row.instance_class || "-"}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.database_management_enabled ? (
+                  <Badge variant="outline" className="text-emerald-600">
+                    Yes
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    No
+                  </Badge>
+                )}
+              </td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 font-mono text-xs">
+                {Object.keys(row.tags ?? {}).length === 0
+                  ? "-"
+                  : Object.entries(row.tags ?? {})
                       .map(([k, v]) => `${k}=${v}`)
                       .join(", ")}
               </td>

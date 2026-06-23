@@ -166,15 +166,46 @@ export interface ComputeInstanceSnapshot {
   region: string;
 }
 
+// DatabaseInstanceSnapshot mirrors scanner.DatabaseInstanceSnapshot —
+// the shared cross-cloud database row shape. Each cloud only
+// populates the axis flag that matches its scanner; the optional
+// fields keep the type stable across providers. See discoveryGCP.ts
+// for the full per-axis documentation.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93).
+export interface DatabaseInstanceSnapshot {
+  resource_id: string;
+  engine: string;
+  engine_version: string;
+  instance_class: string;
+  region: string;
+  tags?: Record<string, string>;
+  provider?: string;
+
+  performance_insights_enabled?: boolean; // AWS RDS (slice 1)
+  enhanced_monitoring_enabled?: boolean;  // AWS RDS (slice 1)
+
+  query_insights_enabled?: boolean;       // GCP Cloud SQL (slice 2)
+  sql_insights_diag_enabled?: boolean;    // Azure SQL (slice 2)
+  database_management_enabled?: boolean;  // OCI DB (slice 2)
+}
+
 // ScanAzureResponse mirrors azureScanResponse on the wire. The
 // handler emits instance_count, instrumented_count, uninstrumented_count
 // directly so the UI doesn't have to derive them — symmetric with the
 // GCP handler's tally pass.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93) — `databases`
+// carries the Azure SQL Database inventory. Optional on the wire
+// (omitempty Go JSON tag) so older scan rows from before the chunk
+// 3 scanner extension don't render an undefined array; the
+// Inventory tab's Databases sub-tab treats undefined as empty.
 export interface ScanAzureResponse {
   connection_id: string;
   subscription_id: string;
   location: string;
   compute: ComputeInstanceSnapshot[];
+  databases?: DatabaseInstanceSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

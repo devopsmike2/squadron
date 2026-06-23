@@ -484,6 +484,119 @@ describe("DiscoveryAzure", () => {
     });
   });
 
+  // Database tier slice 2 chunk 5 (v0.89.66, #695 Stream 93) —
+  // Inventory tab gains a Databases sub-tab rendering the Azure SQL
+  // inventory from the chunk 3 scanner extension. The
+  // instrumentation column reads from sql_insights_diag_enabled.
+  it("TestDiscoveryAzure_InventoryTab_DatabasesSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      databases: [
+        {
+          resource_id: "/subscriptions/s/databases/db-covered",
+          engine: "sqlserver",
+          engine_version: "12.0",
+          instance_class: "GP_S_Gen5_2",
+          region: "eastus",
+          provider: "azure",
+          sql_insights_diag_enabled: true,
+          tags: { env: "prod" },
+        },
+        {
+          resource_id: "/subscriptions/s/databases/db-uncovered",
+          engine: "sqlserver",
+          engine_version: "12.0",
+          instance_class: "GP_S_Gen5_1",
+          region: "eastus",
+          provider: "azure",
+          sql_insights_diag_enabled: false,
+          tags: {},
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const databasesTab = screen.getByRole("tab", { name: /^Databases$/i });
+    await user.click(databasesTab);
+    expect(databasesTab).toHaveAttribute("data-state", "active");
+    expect(
+      screen.getByText("/subscriptions/s/databases/db-covered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("/subscriptions/s/databases/db-uncovered"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/SQLInsights routed\?/i)).toBeInTheDocument();
+  });
+
+  // Database tier slice 2 chunk 5 — empty-state UX for Azure.
+  it("TestDiscoveryAzure_InventoryTab_DatabasesSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const databasesTab = screen.getByRole("tab", { name: /^Databases$/i });
+    await user.click(databasesTab);
+    expect(
+      screen.getByText(/No databases discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // advanceToServicePrincipalStep walks the wizard from step 1

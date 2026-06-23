@@ -556,6 +556,110 @@ describe("DiscoveryOCI", () => {
     });
   });
 
+  // Database tier slice 2 chunk 5 (v0.89.66, #695 Stream 93) —
+  // Inventory tab gains a Databases sub-tab rendering the OCI DB
+  // Systems + Autonomous Database inventory from the chunk 4
+  // scanner extension. The instrumentation column reads from
+  // database_management_enabled (Operations Insights enrollment).
+  it("TestDiscoveryOCI_InventoryTab_DatabasesSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      databases: [
+        {
+          resource_id: "ocid1.dbsystem.oc1.phx.covered",
+          engine: "oracle",
+          engine_version: "19c",
+          instance_class: "VM.Standard.E4.Flex",
+          region: "us-phoenix-1",
+          provider: "oci",
+          database_management_enabled: true,
+          tags: { env: "prod" },
+        },
+        {
+          resource_id: "ocid1.autonomousdatabase.oc1.phx.uncovered",
+          engine: "oracle",
+          engine_version: "19c",
+          instance_class: "OCPU=2",
+          region: "us-phoenix-1",
+          provider: "oci",
+          database_management_enabled: false,
+          tags: {},
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const databasesTab = screen.getByRole("tab", { name: /^Databases$/i });
+    await user.click(databasesTab);
+    expect(databasesTab).toHaveAttribute("data-state", "active");
+    expect(
+      screen.getByText("ocid1.dbsystem.oc1.phx.covered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("ocid1.autonomousdatabase.oc1.phx.uncovered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Database Management enabled\?/i),
+    ).toBeInTheDocument();
+  });
+
+  // Database tier slice 2 chunk 5 — empty-state UX for OCI.
+  it("TestDiscoveryOCI_InventoryTab_DatabasesSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const databasesTab = screen.getByRole("tab", { name: /^Databases$/i });
+    await user.click(databasesTab);
+    expect(
+      screen.getByText(/No databases discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // selectRegion picks the canonical test region from the Radix

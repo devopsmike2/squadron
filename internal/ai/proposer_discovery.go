@@ -295,6 +295,19 @@ type FunctionResourceCandidate struct {
 // are missing, two steps. The handler-side validator below enforces
 // ResourceID + Engine non-empty so the prompt body's reasoning has
 // something to bind to.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93) — Provider plus
+// three provider-specific axis flags extend the candidate so the
+// proposer can route findings to per-cloud kinds:
+//
+//   - Provider="" or "aws" → existing PI/EM axis (cold-start path).
+//   - Provider="gcp"      → QueryInsightsEnabled gates cloudsql-pi-enable.
+//   - Provider="azure"    → SQLInsightsDiagEnabled gates azsql-diag-enable.
+//   - Provider="oci"      → DatabaseManagementEnabled gates ocidb-perfhub-enable.
+//
+// The AWS path stays byte-identical to v0.89.65 because the new
+// fields default to zero / empty and the user-message renderer
+// branches on Provider before reading them.
 type DatabaseResourceCandidate struct {
 	ResourceID                 string
 	Engine                     string
@@ -303,6 +316,24 @@ type DatabaseResourceCandidate struct {
 	PerformanceInsightsEnabled bool
 	EnhancedMonitoringEnabled  bool
 	Region                     string
+
+	// Provider discriminates which axis the proposer reads. Empty
+	// defaults to "aws" for backward compatibility with v0.87.0
+	// audit rows and v0.89.65 cold-start parity.
+	Provider string
+
+	// QueryInsightsEnabled signals GCP Cloud SQL Query Insights.
+	// Only read when Provider="gcp".
+	QueryInsightsEnabled bool
+
+	// SQLInsightsDiagEnabled signals an Azure SQL Diagnostic
+	// Setting routing the SQLInsights category. Only read when
+	// Provider="azure".
+	SQLInsightsDiagEnabled bool
+
+	// DatabaseManagementEnabled signals OCI Operations Insights /
+	// Database Management enrollment. Only read when Provider="oci".
+	DatabaseManagementEnabled bool
 }
 
 // ObjectStoreCandidate is one S3-shaped row from the scan. Mirrors

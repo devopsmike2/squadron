@@ -899,6 +899,13 @@ type awsFunctionRuntimeRow struct {
 // lever flags surface as separate booleans so the Inventory tab can
 // render them as independent badge columns, matching the proposer
 // prompt's "treat PI + EM as independent levers" framing.
+//
+// Database tier slice 2 (v0.89.66, #695 Stream 93) — extended with
+// Provider + the three per-cloud observability axis flags so the
+// generate-recommendations request body can carry GCP / Azure / OCI
+// database rows through the same wire shape. The new fields use
+// omitempty so AWS-only request bodies emitted before this release
+// deserialize unchanged.
 type awsDatabaseInstanceRow struct {
 	ResourceID                 string            `json:"resource_id"`
 	Engine                     string            `json:"engine"`
@@ -908,6 +915,11 @@ type awsDatabaseInstanceRow struct {
 	EnhancedMonitoringEnabled  bool              `json:"enhanced_monitoring_enabled"`
 	Region                     string            `json:"region"`
 	Tags                       map[string]string `json:"tags"`
+
+	Provider                  string `json:"provider,omitempty"`
+	QueryInsightsEnabled      bool   `json:"query_insights_enabled,omitempty"`
+	SQLInsightsDiagEnabled    bool   `json:"sql_insights_diag_enabled,omitempty"`
+	DatabaseManagementEnabled bool   `json:"database_management_enabled,omitempty"`
 }
 
 // awsObjectStoreRow is the snake_case wire shape for one S3 row.
@@ -1064,6 +1076,11 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		})
 	}
 	for _, db := range r.Databases {
+		// Database tier slice 2 (v0.89.66, #695 Stream 93) — forward
+		// the Provider + per-cloud axis flags through the wire shape.
+		// AWS rows leave Provider="" so the wire shape stays unchanged
+		// for AWS-only callers; GCP / Azure / OCI rows surface their
+		// matching axis to the proposer.
 		out.Databases = append(out.Databases, awsDatabaseInstanceRow{
 			ResourceID:                 db.ResourceID,
 			Engine:                     db.Engine,
@@ -1073,6 +1090,10 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
 			Region:                     db.Region,
 			Tags:                       db.Tags,
+			Provider:                   db.Provider,
+			QueryInsightsEnabled:       db.QueryInsightsEnabled,
+			SQLInsightsDiagEnabled:     db.SQLInsightsDiagEnabled,
+			DatabaseManagementEnabled:  db.DatabaseManagementEnabled,
 		})
 	}
 	for _, o := range r.ObjectStores {
@@ -1930,6 +1951,12 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 	// inherits PI+EM, sqlserver caveats Performance Insights by
 	// edition) read from these fields.
 	for _, db := range req.ScanResult.Databases {
+		// Database tier slice 2 (v0.89.66, #695 Stream 93) — pass
+		// the Provider discriminator + the three per-cloud axis
+		// flags through to the proposer. AWS rows (empty Provider
+		// or "aws") fall through to the existing PI/EM logic;
+		// GCP / Azure / OCI rows route to the matching kind via
+		// the prompt body's per-provider rules.
 		aiCtx.Databases = append(aiCtx.Databases, ai.DatabaseResourceCandidate{
 			ResourceID:                 db.ResourceID,
 			Engine:                     db.Engine,
@@ -1938,6 +1965,10 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			PerformanceInsightsEnabled: db.PerformanceInsightsEnabled,
 			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
 			Region:                     db.Region,
+			Provider:                   db.Provider,
+			QueryInsightsEnabled:       db.QueryInsightsEnabled,
+			SQLInsightsDiagEnabled:     db.SQLInsightsDiagEnabled,
+			DatabaseManagementEnabled:  db.DatabaseManagementEnabled,
 		})
 	}
 	// ObjectStores + LoadBalancers — slice 3a (v0.88.0). The proposer

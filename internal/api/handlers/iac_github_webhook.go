@@ -890,13 +890,22 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 // kinds carry the "compute-" prefix today (compute-otel-tag is the
 // slice 1 OCI kind). Future OCI kinds (db-, oke-, objectstorage-,
 // lb-, etc.) will extend this lookup as the catalog grows.
+//
+// v0.89.66 (#695 Stream 93, database tier slice 2 chunk 5) — the
+// per-cloud catalog has grown to two kinds each: the three new
+// database recommendation kinds (cloudsql-pi-enable for GCP Cloud
+// SQL, azsql-diag-enable for Azure SQL, ocidb-perfhub-enable for
+// OCI Database) route to the same providers as the slice 1 compute
+// kinds. The string-prefix dispatch stays — the per-cloud catalog
+// is still small enough that an OR of HasPrefix checks beats a
+// registry indirection.
 func providerFromRecommendationKind(kind string) string {
 	switch {
-	case strings.HasPrefix(kind, "gce-"):
+	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-"):
 		return "gcp"
-	case strings.HasPrefix(kind, "vm-"):
+	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-"):
 		return "azure"
-	case strings.HasPrefix(kind, "compute-"):
+	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-"):
 		return "oci"
 	default:
 		return "aws"

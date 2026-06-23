@@ -1393,3 +1393,260 @@ func TestDiscoveryProposer_CrossProviderMix_AzureInstructionPresent(t *testing.T
 			"shared system prompt should still teach the GCP kind %q after Azure addition", gcpKind)
 	}
 }
+
+// TestDiscoveryProposer_DatabaseTierKindsInSystemPrompt — database
+// tier slice 2 chunk 5 (v0.89.66, #695 Stream 93). The three new
+// per-cloud database recommendation kinds (cloudsql-pi-enable for
+// GCP, azsql-diag-enable for Azure, ocidb-perfhub-enable for OCI)
+// must appear in the shared system prompt so the model can route
+// findings to the right kind when the scan inventory carries
+// database rows. The slice 1 compute kinds (gce-otel-label,
+// vm-otel-tag, compute-otel-tag) must remain present after the
+// extension — same shared-system-prompt invariant the prior chunk
+// 5 tests pin.
+func TestDiscoveryProposer_DatabaseTierKindsInSystemPrompt(t *testing.T) {
+	for _, dbKind := range []string{
+		"cloudsql-pi-enable",
+		"azsql-diag-enable",
+		"ocidb-perfhub-enable",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, dbKind,
+			"shared system prompt should teach the database tier slice 2 kind %q", dbKind)
+	}
+	// Slice 1 compute kinds still present after the database tier
+	// addition — defends against an accidental rewrite of the
+	// compute-kind paragraphs.
+	for _, computeKind := range []string{
+		"gce-otel-label", "vm-otel-tag", "compute-otel-tag",
+		"ec2-otel-layer", "lambda-otel-layer", "rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, computeKind,
+			"shared system prompt should still teach the slice 1 kind %q after database tier slice 2", computeKind)
+	}
+	// Terraform shape hints make it into the prompt body so the
+	// model's Terraform snippet emits the right resource type.
+	for _, marker := range []string{
+		"google_sql_database_instance",
+		"azurerm_monitor_diagnostic_setting",
+		"oci_database_db_systems_management",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, marker,
+			"shared system prompt should mention Terraform resource %q for the database tier", marker)
+	}
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostDBTier —
+// database tier slice 2 chunk 5 (v0.89.66, #695 Stream 93)
+// cold-start parity invariant: across all four providers, the
+// compute-only user message produced by buildDiscoveryUserMessage
+// must remain byte-identical to v0.89.65 when the scan context
+// carries no database rows. The acceptance test §11.7 invariant —
+// adding the database tier kinds must not perturb compute-only
+// prompt generation for any provider.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostDBTier(t *testing.T) {
+	// AWS cold start.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	assert.Contains(t, awsMsg, "account_id: 123456789012")
+	assert.Contains(t, awsMsg, "Databases (0 total):")
+	assert.NotContains(t, awsMsg, "cloudsql-pi-enable")
+	assert.NotContains(t, awsMsg, "azsql-diag-enable")
+	assert.NotContains(t, awsMsg, "ocidb-perfhub-enable")
+	assert.Contains(t, awsMsg, "group_id on every step MUST equal the account_id above")
+
+	// GCP cold start.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.Contains(t, gcpMsg, "project_id: my-sandbox-project")
+	assert.Contains(t, gcpMsg, "Databases (0 total):")
+	assert.Contains(t, gcpMsg, "group_id on every step MUST equal the project_id above")
+
+	// Azure cold start.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.Contains(t, azureMsg, "subscription_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	assert.Contains(t, azureMsg, "Databases (0 total):")
+	assert.Contains(t, azureMsg, "group_id on every step MUST equal the subscription_id above")
+
+	// OCI cold start.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	assert.Contains(t, ociMsg, "tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaa")
+	assert.Contains(t, ociMsg, "Databases (0 total):")
+	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
+}
+
+// TestDiscoveryProposer_DatabasesInScanResult_AppendedToUserMessage —
+// database tier slice 2 chunk 5 (v0.89.66, #695 Stream 93). When
+// the scan context carries database rows with the new per-cloud
+// axis flags populated, the user message renders each row with the
+// correct coverage shorthand:
+//   - GCP rows with QueryInsightsEnabled=true → "covered"; else "uncovered"
+//   - Azure rows with SQLInsightsDiagEnabled=true → "covered"; else "uncovered"
+//   - OCI rows with DatabaseManagementEnabled=true → "covered"; else "uncovered"
+//   - AWS rows continue to render the v0.89.65 covered / pi-only /
+//     em-only / uncovered shorthand based on PI + EM (cold-start
+//     parity).
+func TestDiscoveryProposer_DatabasesInScanResult_AppendedToUserMessage(t *testing.T) {
+	// GCP — a covered + uncovered Cloud SQL row.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-db",
+		Provider:  "gcp",
+		ProjectID: "my-prod-project",
+		Regions:   []string{"us-central1"},
+		Databases: []DatabaseResourceCandidate{
+			{
+				ResourceID:           "projects/p/instances/db-covered",
+				Engine:               "postgres",
+				EngineVersion:        "15",
+				InstanceClass:        "db-custom-2-7680",
+				Region:               "us-central1",
+				Provider:             "gcp",
+				QueryInsightsEnabled: true,
+			},
+			{
+				ResourceID:           "projects/p/instances/db-uncovered",
+				Engine:               "mysql",
+				EngineVersion:        "8.0",
+				InstanceClass:        "db-n1-standard-1",
+				Region:               "us-central1",
+				Provider:             "gcp",
+				QueryInsightsEnabled: false,
+			},
+		},
+	})
+	assert.Contains(t, gcpMsg, "Databases (2 total):")
+	assert.Contains(t, gcpMsg, "projects/p/instances/db-covered (engine=postgres 15, class=db-custom-2-7680, us-central1, covered)")
+	assert.Contains(t, gcpMsg, "projects/p/instances/db-uncovered (engine=mysql 8.0, class=db-n1-standard-1, us-central1, uncovered)")
+
+	// Azure — a covered + uncovered Azure SQL row.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-db",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+		Databases: []DatabaseResourceCandidate{
+			{
+				ResourceID:             "/subscriptions/s/.../databases/db-covered",
+				Engine:                 "sqlserver",
+				EngineVersion:          "12.0",
+				InstanceClass:          "GP_S_Gen5_2",
+				Region:                 "eastus",
+				Provider:               "azure",
+				SQLInsightsDiagEnabled: true,
+			},
+			{
+				ResourceID:             "/subscriptions/s/.../databases/db-uncovered",
+				Engine:                 "sqlserver",
+				EngineVersion:          "12.0",
+				InstanceClass:          "GP_S_Gen5_1",
+				Region:                 "eastus",
+				Provider:               "azure",
+				SQLInsightsDiagEnabled: false,
+			},
+		},
+	})
+	assert.Contains(t, azureMsg, "Databases (2 total):")
+	assert.Contains(t, azureMsg, "/subscriptions/s/.../databases/db-covered (engine=sqlserver 12.0, class=GP_S_Gen5_2, eastus, covered)")
+	assert.Contains(t, azureMsg, "/subscriptions/s/.../databases/db-uncovered (engine=sqlserver 12.0, class=GP_S_Gen5_1, eastus, uncovered)")
+
+	// OCI — a covered + uncovered OCI Database row.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-db",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+		Databases: []DatabaseResourceCandidate{
+			{
+				ResourceID:                "ocid1.dbsystem.oc1.phx.covered",
+				Engine:                    "oracle",
+				EngineVersion:             "19c",
+				InstanceClass:             "VM.Standard.E4.Flex",
+				Region:                    "us-phoenix-1",
+				Provider:                  "oci",
+				DatabaseManagementEnabled: true,
+			},
+			{
+				ResourceID:                "ocid1.autonomousdatabase.oc1.phx.uncovered",
+				Engine:                    "oracle",
+				EngineVersion:             "19c",
+				InstanceClass:             "OCPU=2",
+				Region:                    "us-phoenix-1",
+				Provider:                  "oci",
+				DatabaseManagementEnabled: false,
+			},
+		},
+	})
+	assert.Contains(t, ociMsg, "Databases (2 total):")
+	assert.Contains(t, ociMsg, "ocid1.dbsystem.oc1.phx.covered (engine=oracle 19c, class=VM.Standard.E4.Flex, us-phoenix-1, covered)")
+	assert.Contains(t, ociMsg, "ocid1.autonomousdatabase.oc1.phx.uncovered (engine=oracle 19c, class=OCPU=2, us-phoenix-1, uncovered)")
+
+	// AWS — the v0.89.65 pi/em coverage shorthand must survive the
+	// new switch so the cold-start invariant holds for inventories
+	// that DO carry database rows.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-db",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+		Databases: []DatabaseResourceCandidate{
+			{
+				ResourceID:                 "arn:aws:rds:us-east-1:123:db:covered",
+				Engine:                     "postgres",
+				EngineVersion:              "15",
+				InstanceClass:              "db.r6g.large",
+				Region:                     "us-east-1",
+				PerformanceInsightsEnabled: true,
+				EnhancedMonitoringEnabled:  true,
+			},
+			{
+				ResourceID:                 "arn:aws:rds:us-east-1:123:db:pi-only",
+				Engine:                     "mysql",
+				EngineVersion:              "8.0",
+				InstanceClass:              "db.t3.medium",
+				Region:                     "us-east-1",
+				PerformanceInsightsEnabled: true,
+			},
+			{
+				ResourceID:                "arn:aws:rds:us-east-1:123:db:em-only",
+				Engine:                    "mysql",
+				EngineVersion:             "8.0",
+				InstanceClass:             "db.t3.medium",
+				Region:                    "us-east-1",
+				EnhancedMonitoringEnabled: true,
+			},
+			{
+				ResourceID:    "arn:aws:rds:us-east-1:123:db:uncovered",
+				Engine:        "postgres",
+				EngineVersion: "15",
+				InstanceClass: "db.r6g.large",
+				Region:        "us-east-1",
+			},
+		},
+	})
+	assert.Contains(t, awsMsg, "Databases (4 total):")
+	assert.Contains(t, awsMsg, "arn:aws:rds:us-east-1:123:db:covered (engine=postgres 15, class=db.r6g.large, us-east-1, covered)")
+	assert.Contains(t, awsMsg, "arn:aws:rds:us-east-1:123:db:pi-only (engine=mysql 8.0, class=db.t3.medium, us-east-1, pi-only)")
+	assert.Contains(t, awsMsg, "arn:aws:rds:us-east-1:123:db:em-only (engine=mysql 8.0, class=db.t3.medium, us-east-1, em-only)")
+	assert.Contains(t, awsMsg, "arn:aws:rds:us-east-1:123:db:uncovered (engine=postgres 15, class=db.r6g.large, us-east-1, uncovered)")
+}

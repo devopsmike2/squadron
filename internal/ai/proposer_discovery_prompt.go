@@ -280,7 +280,54 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`confirm. SQUADRON DOES NOT EXECUTE ecs:UpdateClusterSettings. The discovery ` +
 	`IAM policy is read-only (ecs:ListClusters + ecs:DescribeClusters + ` +
 	`ecs:ListTagsForResource). Each ECS plan step's inline_config_snippet is ` +
-	`Terraform the operator runs through their own IaC pipeline.` + "\n\n" +
+	`Terraform the operator runs through their own IaC pipeline.` + "\n" +
+	`  - GCP Cloud SQL instances (database tier slice 2): the single ` +
+	`observability lever is QUERY INSIGHTS. A google_sql_database_instance is ` +
+	`covered when settings.insightsConfig.queryInsightsEnabled == true; when ` +
+	`false (or insightsConfig is absent), recommend enabling. Recommendation ` +
+	`kind: cloudsql-pi-enable. The Terraform updates ` +
+	`google_sql_database_instance.settings[0].insights_config[0].query_insights_enabled = true. ` +
+	`Group multiple uncovered instances INTO ONE plan step per region (each ` +
+	`instance is its own Terraform target, but the snippet emits one ` +
+	`google_sql_database_instance block per instance inside the same step so ` +
+	`the operator's PR review covers the whole batch). SQUADRON DOES NOT ` +
+	`EXECUTE the Cloud SQL UpdateInstance API — the discovery IAM scope for ` +
+	`Cloud SQL is read-only (roles/cloudsql.viewer). Each Cloud SQL plan ` +
+	`step's inline_config_snippet is Terraform the operator runs through ` +
+	`their own IaC pipeline.` + "\n" +
+	`  - Azure SQL databases (database tier slice 2): the single observability ` +
+	`lever is the SQLInsights DIAGNOSTIC SETTING. An azurerm_mssql_database is ` +
+	`covered when at least one Diagnostic Setting routes the SQLInsights log ` +
+	`category to a destination (Log Analytics workspace, Storage, or Event ` +
+	`Hub); when no SQLInsights routing exists, recommend adding one. ` +
+	`Recommendation kind: azsql-diag-enable. The Terraform creates an ` +
+	`azurerm_monitor_diagnostic_setting resource with an enabled_log block of ` +
+	`category = "SQLInsights" targeting the database. Group multiple uncovered ` +
+	`databases INTO ONE plan step per subscription (each database is its own ` +
+	`Terraform target, but the snippet emits one azurerm_monitor_diagnostic_setting ` +
+	`block per database inside the same step so the operator's PR review ` +
+	`covers the whole batch). SQUADRON DOES NOT EXECUTE the Azure Monitor ` +
+	`Diagnostic Settings write API — the discovery RBAC scope for Azure SQL ` +
+	`is read-only (Reader role at subscription scope, ` +
+	`Microsoft.Sql/servers/databases/read + microsoft.insights/diagnosticSettings/read). ` +
+	`Each Azure SQL plan step's inline_config_snippet is Terraform the ` +
+	`operator runs through their own IaC pipeline.` + "\n" +
+	`  - OCI Database instances (database tier slice 2): the single ` +
+	`observability lever is OPERATIONS INSIGHTS / DATABASE MANAGEMENT ` +
+	`enrollment. An OCI DB System or Autonomous Database is covered when ` +
+	`databaseManagementConfig.databaseManagementStatus == "ENABLED"; when ` +
+	`the status is any other value (DISABLED, NEEDS_ATTENTION, FAILED_ENABLING, ` +
+	`absent), recommend enabling. Recommendation kind: ocidb-perfhub-enable. ` +
+	`The Terraform updates oci_database_db_systems_management for DB Systems ` +
+	`or the equivalent management block on oci_database_autonomous_database. ` +
+	`Group multiple uncovered instances INTO ONE plan step per region (each ` +
+	`instance is its own Terraform target, but the snippet emits one ` +
+	`management resource block per instance inside the same step so the ` +
+	`operator's PR review covers the whole batch). SQUADRON DOES NOT EXECUTE ` +
+	`the OCI Database Management enable API — the discovery IAM scope for ` +
+	`OCI Databases is read-only (read database-family in tenancy). Each OCI ` +
+	`Database plan step's inline_config_snippet is Terraform the operator ` +
+	`runs through their own IaC pipeline.` + "\n\n" +
 
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
@@ -564,14 +611,41 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 		dsample = dsample[:20]
 	}
 	for _, d := range dsample {
+		// Database tier slice 2 (v0.89.66, #695 Stream 93) — the
+		// coverage shorthand is provider-specific. The AWS path
+		// (Provider="" or "aws") stays byte-identical to v0.89.65
+		// because the row format string is unchanged and only the
+		// coverage selector logic branches on Provider before
+		// reading the new fields. GCP / Azure / OCI rows use the
+		// matching per-cloud axis: QueryInsightsEnabled,
+		// SQLInsightsDiagEnabled, DatabaseManagementEnabled. Each
+		// renders as "covered" or "uncovered" — single-axis, no
+		// pi-only / em-only intermediate state because the three
+		// new providers only expose one observability lever each
+		// at slice 2.
 		coverage := "uncovered"
-		switch {
-		case d.PerformanceInsightsEnabled && d.EnhancedMonitoringEnabled:
-			coverage = "covered"
-		case d.PerformanceInsightsEnabled:
-			coverage = "pi-only"
-		case d.EnhancedMonitoringEnabled:
-			coverage = "em-only"
+		switch d.Provider {
+		case "gcp":
+			if d.QueryInsightsEnabled {
+				coverage = "covered"
+			}
+		case "azure":
+			if d.SQLInsightsDiagEnabled {
+				coverage = "covered"
+			}
+		case "oci":
+			if d.DatabaseManagementEnabled {
+				coverage = "covered"
+			}
+		default: // "" or "aws" — cold-start parity preserved.
+			switch {
+			case d.PerformanceInsightsEnabled && d.EnhancedMonitoringEnabled:
+				coverage = "covered"
+			case d.PerformanceInsightsEnabled:
+				coverage = "pi-only"
+			case d.EnhancedMonitoringEnabled:
+				coverage = "em-only"
+			}
 		}
 		fmt.Fprintf(&b, "  - %s (engine=%s %s, class=%s, %s, %s)\n",
 			d.ResourceID, d.Engine, d.EngineVersion, d.InstanceClass, d.Region, coverage)
