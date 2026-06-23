@@ -175,6 +175,14 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		// failures accumulate independently under the "aks" service
 		// id.
 		s.scanAKS(ctx, token, &result)
+		// Serverless-tier-slice-1 (chunk 3, v0.89.91, #723 Stream 121):
+		// the Azure Functions walk runs against the same OAuth token
+		// and is independent of the Compute / SQL / AKS surfaces.
+		// A VM listing failure does NOT preclude scanning Function
+		// Apps — the SP may have Reader on Microsoft.Web but not
+		// Microsoft.Compute in unusual policy splits. Partial
+		// failures accumulate under the "azfunc" service id.
+		s.scanAzureFunctions(ctx, token, &result)
 		return result, nil
 	}
 
@@ -238,6 +246,16 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// proposer wiring); this chunk only emits raw ClusterSnapshot
 	// rows with the three-way disjunction detection result.
 	s.scanAKS(ctx, token, &result)
+
+	// Serverless-tier-slice-1 (chunk 3, v0.89.91, #723 Stream 121):
+	// walk the Microsoft.Web/sites Function Apps surface using the
+	// same OAuth token. Partial failures accumulate under the
+	// "azfunc" service id and do NOT invalidate the compute / SQL
+	// / AKS results above. The serverless-tier instrumented-count
+	// tally is owned by chunk 5 (handler / proposer wiring); this
+	// chunk only emits raw ServerlessInstanceSnapshot rows with
+	// the two-axis (HasTraceAxis + HasOTelDistro) detection result.
+	s.scanAzureFunctions(ctx, token, &result)
 
 	return result, nil
 }

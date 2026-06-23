@@ -159,6 +159,22 @@ func (f *fakeAzure) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(armAKSListResponse{Value: nil})
 			return
+
+		case strings.HasSuffix(r.URL.Path, "/providers/Microsoft.Web/sites"):
+			// Serverless-tier-slice-1 (chunk 3, v0.89.91, #723
+			// Stream 121): the VM-walk fakeAzure also routes the
+			// Microsoft.Web/sites list endpoint so slice-1 VM,
+			// slice-2 SQL, and chunk-3 AKS tests don't get
+			// spurious "azfunc" partial failures from the new
+			// serverless walker that always runs after the
+			// VM / SQL / AKS walks. The default response is an
+			// empty sites list — operator has no Function Apps
+			// inventory, the walker appends zero
+			// ServerlessInstanceSnapshot entries and records no
+			// partial failure.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(armWebSiteListResponse{Value: nil})
+			return
 		}
 
 		// Unmatched path — surface as 404 so test failures are
