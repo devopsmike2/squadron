@@ -31,7 +31,7 @@
 // /discovery is "Squadron is the universal observability control
 // plane." The difference matters.
 
-import { Cloud, RefreshCw } from "lucide-react";
+import { AlertTriangle, Cloud, RefreshCw } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import useSWR from "swr";
@@ -42,6 +42,11 @@ import {
   type ProviderSummary,
   type RecentRecommendation,
 } from "@/api/discoverySummary";
+import {
+  getTraceCoverage,
+  type ProviderTraceCoverage,
+  type TraceCoverage,
+} from "@/api/discoveryTraceCoverage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -49,6 +54,17 @@ import { Button } from "@/components/ui/button";
 // match the wire endpoint — a future cross-page integration (the
 // command palette, say) can read the same cache without re-fetching.
 const SWR_KEY_SUMMARY = "/discovery/summary";
+
+// SWR cache key for the v0.89.76 #707 trace coverage endpoint. Pairs
+// 1:1 with /discovery/trace_coverage so the same cache key works for
+// cross-page consumers too.
+const SWR_KEY_TRACE_COVERAGE = "/discovery/trace_coverage";
+
+// Threshold above which a provider's weak_match_pct triggers a caveat
+// icon next to its chip per design doc §6. 20% is the slice-1 floor —
+// a provider where >20% of matches keyed by host.name or service.name
+// alone is noisy enough to flag.
+const WEAK_MATCH_CAVEAT_THRESHOLD_PCT = 20;
 
 // PROVIDER_ORDER is the deterministic render order for the four
 // provider cards. Mirrors the design doc §6 order (AWS first, OCI
@@ -119,9 +135,25 @@ export default function DiscoveryPage() {
     },
   );
 
+  // Trace coverage rides on the same poll cadence as the summary —
+  // refresh both together so the dashboard's two coverage numbers
+  // (primitive instrumentation vs trace emission) describe the same
+  // moment in time. A failure here does NOT block the summary card
+  // render; the trace coverage panel renders an error state in-place
+  // while the rest of the dashboard stays useful.
+  const {
+    data: traceData,
+    error: traceError,
+    mutate: traceMutate,
+  } = useSWR<TraceCoverage>(SWR_KEY_TRACE_COVERAGE, getTraceCoverage, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+  });
+
   const handleRefresh = useCallback(() => {
     void mutate();
-  }, [mutate]);
+    void traceMutate();
+  }, [mutate, traceMutate]);
 
   return (
     <div className="space-y-6 p-6">
@@ -142,7 +174,20 @@ export default function DiscoveryPage() {
         </div>
       )}
 
-      {data && <DashboardBody summary={data} />}
+      {traceError && !traceData && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+          data-testid="trace-coverage-error"
+        >
+          Failed to load trace coverage:{" "}
+          {traceError instanceof Error
+            ? traceError.message
+            : String(traceError)}
+        </div>
+      )}
+
+      {data && <DashboardBody summary={data} traceCoverage={traceData} />}
     </div>
   );
 }
@@ -206,7 +251,13 @@ function DashboardHeader({
 
 // --- Body switcher ------------------------------------------------------
 
-function DashboardBody({ summary }: { summary: DiscoverySummary }) {
+function DashboardBody({
+  summary,
+  traceCoverage,
+}: {
+  summary: DiscoverySummary;
+  traceCoverage: TraceCoverage | undefined;
+}) {
   // Welcome state condition: no provider has been wired AND no
   // connection exists anywhere. Either signal alone is enough — a
   // deployment with all four stores wired but zero connections still
@@ -224,6 +275,7 @@ function DashboardBody({ summary }: { summary: DiscoverySummary }) {
   return (
     <div className="space-y-6">
       <CoveragePanel totals={summary.totals} />
+      {traceCoverage && <TraceCoveragePanel coverage={traceCoverage} />}
       <ProviderGrid providers={summary.providers} />
       <RecentRecommendations rows={summary.recent_recommendations} />
     </div>
@@ -292,8 +344,18 @@ function CoveragePanel({ totals }: { totals: DiscoverySummary["totals"] }) {
 // circumference minus the visible arc length so the ring "fills" from
 // the 12 o'clock position clockwise. The unfilled portion shows as a
 // muted track ring underneath. Color comes from the parent so the
-// threshold logic lives in one place (coverageColor).
-function CoverageRing({ pct, color }: { pct: number; color: string }) {
+// threshold logic lives in one place (coverageColor). testId is
+// overridable so the trace coverage panel's ring is distinguishable
+// from the primary instrumentation coverage ring (v0.89.76 panel).
+function CoverageRing({
+  pct,
+  color,
+  testId = "coverage-ring",
+}: {
+  pct: number;
+  color: string;
+  testId?: string;
+}) {
   const size = 96;
   const stroke = 10;
   const r = (size - stroke) / 2;
@@ -309,7 +371,7 @@ function CoverageRing({ pct, color }: { pct: number; color: string }) {
       viewBox={`0 0 ${size} ${size}`}
       role="img"
       aria-label={`Overall coverage ${pct}%`}
-      data-testid="coverage-ring"
+      data-testid={testId}
       data-color={color}
     >
       <circle
@@ -350,6 +412,131 @@ function coverageColor(pct: number): string {
   if (pct >= 80) return "#16a34a"; // green-600
   if (pct >= 50) return "#ca8a04"; // yellow-600
   return "#dc2626"; // red-600
+}
+
+// --- Trace coverage panel ---------------------------------------------
+//
+// TraceCoveragePanel — v0.89.76 (#707 Stream 105, Trace integration
+// slice 1 chunk 3). Renders the second-axis coverage view: of the
+// resources the discovery scanner has inventoried, how many have
+// actually emitted spans recently? The panel sits BELOW the existing
+// CoveragePanel because the two values describe distinct gaps —
+// "primitive enabled" vs "telemetry actually flowing" (design doc §1).
+//
+// Empty state: when every provider reports inventory_count=0, the
+// panel renders an actionable hint inside its own card rather than
+// disappearing. Operators landing on a freshly-installed Squadron
+// see "Run a discovery scan to populate the trace coverage view."
+// inside the panel — the panel itself stays visible so the operator
+// can tell the feature exists.
+
+function TraceCoveragePanel({ coverage }: { coverage: TraceCoverage }) {
+  const totals = coverage.totals;
+  const isEmpty = totals.inventory_count === 0;
+
+  return (
+    <div
+      className="rounded-lg border bg-card p-6"
+      data-testid="trace-coverage-panel"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold">Trace coverage</h2>
+          <p className="text-xs text-muted-foreground">
+            Is telemetry actually flowing?
+          </p>
+        </div>
+      </div>
+
+      {isEmpty ? (
+        <div
+          className="mt-4 rounded-md border border-dashed p-4 text-sm text-muted-foreground"
+          data-testid="trace-coverage-empty"
+        >
+          Run a discovery scan to populate the trace coverage view.
+        </div>
+      ) : (
+        <>
+          <div className="mt-4 flex flex-wrap items-center gap-6">
+            <CoverageRing
+              pct={totals.coverage_pct}
+              color={coverageColor(totals.coverage_pct)}
+              testId="trace-coverage-ring"
+            />
+            <div>
+              <div
+                className="text-4xl font-semibold tabular-nums"
+                data-testid="trace-coverage-pct"
+              >
+                {totals.coverage_pct.toFixed(1)}%
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {totals.emitting_count} of {totals.inventory_count}{" "}
+                inventoried resources have emitted spans in the last 24h
+              </p>
+            </div>
+          </div>
+          <ProviderChipRow providers={coverage.providers} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ProviderChipRow renders the four per-provider chips beneath the
+// headline ring. Each chip color-codes by the per-provider
+// coverage_pct against the same threshold logic as the top ring.
+// A weak_match_pct above the slice-1 floor surfaces a caveat icon
+// next to the chip — the operator hovers it for the matching
+// explanation per design doc §3 (confidence indicator UX).
+function ProviderChipRow({
+  providers,
+}: {
+  providers: TraceCoverage["providers"];
+}) {
+  return (
+    <div
+      className="mt-4 flex flex-wrap gap-2"
+      data-testid="trace-coverage-chip-row"
+    >
+      {PROVIDER_ORDER.map((p) => (
+        <TraceCoverageChip key={p} provider={p} coverage={providers[p]} />
+      ))}
+    </div>
+  );
+}
+
+function TraceCoverageChip({
+  provider,
+  coverage,
+}: {
+  provider: keyof TraceCoverage["providers"];
+  coverage: ProviderTraceCoverage;
+}) {
+  const label = PROVIDER_LABEL[provider];
+  const pct = coverage.coverage_pct;
+  const color = coverageColor(pct);
+  const showCaveat = coverage.weak_match_pct > WEAK_MATCH_CAVEAT_THRESHOLD_PCT;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs tabular-nums"
+      style={{ borderColor: color, color }}
+      data-testid={`trace-coverage-chip-${provider}`}
+      data-color={color}
+    >
+      <span className="font-medium">{label.toLowerCase()}</span>
+      <span aria-label={`${label} trace coverage`}>{pct.toFixed(0)}%</span>
+      {showCaveat && (
+        <span
+          title={`${coverage.weak_match_pct.toFixed(0)}% of matches are best-effort (host.name or service.name). Consider deploying OTel SDKs with full host detector enabled.`}
+          data-testid={`trace-coverage-caveat-${provider}`}
+          aria-label={`${label} weak match caveat`}
+        >
+          <AlertTriangle className="h-3 w-3" aria-hidden />
+        </span>
+      )}
+    </span>
+  );
 }
 
 // --- Provider cards ---------------------------------------------------

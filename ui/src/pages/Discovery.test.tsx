@@ -20,6 +20,11 @@ import {
   type DiscoverySummary,
   type ProviderSummary,
 } from "@/api/discoverySummary";
+import {
+  getTraceCoverage,
+  type ProviderTraceCoverage,
+  type TraceCoverage,
+} from "@/api/discoveryTraceCoverage";
 
 vi.mock("@/api/discoverySummary", async () => {
   const actual = await vi.importActual<typeof import("@/api/discoverySummary")>(
@@ -31,7 +36,62 @@ vi.mock("@/api/discoverySummary", async () => {
   };
 });
 
+vi.mock("@/api/discoveryTraceCoverage", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/api/discoveryTraceCoverage")
+  >("@/api/discoveryTraceCoverage");
+  return {
+    ...actual,
+    getTraceCoverage: vi.fn(),
+  };
+});
+
 const mockedGetDiscoverySummary = vi.mocked(getDiscoverySummary);
+const mockedGetTraceCoverage = vi.mocked(getTraceCoverage);
+
+// makeProviderTrace builds a ProviderTraceCoverage with sensible
+// defaults the per-test partials override.
+function makeProviderTrace(
+  over: Partial<ProviderTraceCoverage> = {},
+): ProviderTraceCoverage {
+  return {
+    inventory_count: 10,
+    emitting_count: 5,
+    coverage_pct: 50,
+    strong_match_pct: 100,
+    weak_match_pct: 0,
+    ...over,
+  };
+}
+
+// makeTraceCoverage builds a fully populated TraceCoverage payload.
+// Tests override per-provider state via the `providers` partial.
+function makeTraceCoverage(
+  over: Partial<TraceCoverage> = {},
+  providersOver: Partial<
+    Record<keyof TraceCoverage["providers"], Partial<ProviderTraceCoverage>>
+  > = {},
+): TraceCoverage {
+  const base: TraceCoverage = {
+    providers: {
+      aws: makeProviderTrace({ coverage_pct: 67 }),
+      gcp: makeProviderTrace({ coverage_pct: 40 }),
+      azure: makeProviderTrace({ coverage_pct: 55 }),
+      oci: makeProviderTrace({ coverage_pct: 30 }),
+    },
+    totals: {
+      inventory_count: 40,
+      emitting_count: 20,
+      coverage_pct: 50,
+    },
+  };
+  for (const k of Object.keys(providersOver) as Array<
+    keyof TraceCoverage["providers"]
+  >) {
+    base.providers[k] = { ...base.providers[k], ...(providersOver[k] ?? {}) };
+  }
+  return { ...base, ...over };
+}
 
 function renderPage(initialEntries: string[] = ["/discovery"]) {
   function Wrapper({ children }: { children: ReactNode }) {
@@ -91,6 +151,11 @@ function makeSummary(
 describe("DiscoveryDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default the trace coverage fetch to a benign payload so the
+    // existing summary-only tests don't trip on the new fetcher
+    // surfacing an unmocked-call error. Per-test overrides land in
+    // the trace-coverage-focused tests below.
+    mockedGetTraceCoverage.mockResolvedValue(makeTraceCoverage());
   });
 
   it("TestDiscoveryDashboard_RendersFourProviderCards", async () => {
@@ -400,5 +465,198 @@ describe("DiscoveryDashboard", () => {
     expect(
       screen.getByText(/No recommendations yet/i),
     ).toBeInTheDocument();
+  });
+
+  // --- Trace coverage panel (v0.89.76 #707 Stream 105) --------------
+
+  it("TestDiscoveryDashboard_RendersTraceCoveragePanel", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage({
+        totals: { inventory_count: 198, emitting_count: 122, coverage_pct: 61.6 },
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-panel")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("trace-coverage-pct")).toHaveTextContent("61.6%");
+    expect(
+      screen.getByText(
+        /122 of 198 inventoried resources have emitted spans in the last 24h/i,
+      ),
+    ).toBeInTheDocument();
+    // All four provider chips present.
+    for (const p of ["aws", "gcp", "azure", "oci"] as const) {
+      expect(
+        screen.getByTestId(`trace-coverage-chip-${p}`),
+      ).toBeInTheDocument();
+    }
+  });
+
+  it("TestDiscoveryDashboard_TraceCoverageEmptyState", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {
+          totals: { inventory_count: 0, emitting_count: 0, coverage_pct: 0 },
+        },
+        {
+          aws: makeProviderTrace({
+            inventory_count: 0,
+            emitting_count: 0,
+            coverage_pct: 0,
+          }),
+          gcp: makeProviderTrace({
+            inventory_count: 0,
+            emitting_count: 0,
+            coverage_pct: 0,
+          }),
+          azure: makeProviderTrace({
+            inventory_count: 0,
+            emitting_count: 0,
+            coverage_pct: 0,
+          }),
+          oci: makeProviderTrace({
+            inventory_count: 0,
+            emitting_count: 0,
+            coverage_pct: 0,
+          }),
+        },
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-empty")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        /Run a discovery scan to populate the trace coverage view/i,
+      ),
+    ).toBeInTheDocument();
+    // Headline pct + chip row should NOT render in empty state.
+    expect(screen.queryByTestId("trace-coverage-pct")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("trace-coverage-chip-row"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_TraceCoverageWeakMatchCaveat", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {},
+        {
+          gcp: makeProviderTrace({
+            coverage_pct: 40,
+            strong_match_pct: 75,
+            weak_match_pct: 25,
+          }),
+        },
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("trace-coverage-chip-gcp"),
+      ).toBeInTheDocument();
+    });
+    // GCP shows the caveat icon (weak_match_pct=25 > threshold 20).
+    expect(
+      screen.getByTestId("trace-coverage-caveat-gcp"),
+    ).toBeInTheDocument();
+    // Other providers (weak_match_pct=0) do NOT show the icon.
+    expect(
+      screen.queryByTestId("trace-coverage-caveat-aws"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("trace-coverage-caveat-azure"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("trace-coverage-caveat-oci"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_TraceCoverageColorByThreshold_Green", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {
+          totals: {
+            inventory_count: 100,
+            emitting_count: 90,
+            coverage_pct: 90,
+          },
+        },
+        {
+          aws: makeProviderTrace({ coverage_pct: 90 }),
+        },
+      ),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-panel")).toBeInTheDocument();
+    });
+    // The trace coverage panel's own ring picks up the green threshold;
+    // the per-provider AWS chip color-codes the same way.
+    expect(screen.getByTestId("trace-coverage-chip-aws")).toHaveAttribute(
+      "data-color",
+      "#16a34a",
+    );
+  });
+
+  it("TestDiscoveryDashboard_TraceCoverageColorByThreshold_Yellow", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {
+          totals: {
+            inventory_count: 100,
+            emitting_count: 65,
+            coverage_pct: 65,
+          },
+        },
+        {
+          aws: makeProviderTrace({ coverage_pct: 65 }),
+        },
+      ),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-panel")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("trace-coverage-chip-aws")).toHaveAttribute(
+      "data-color",
+      "#ca8a04",
+    );
+  });
+
+  it("TestDiscoveryDashboard_TraceCoverageColorByThreshold_Red", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {
+          totals: {
+            inventory_count: 100,
+            emitting_count: 30,
+            coverage_pct: 30,
+          },
+        },
+        {
+          aws: makeProviderTrace({ coverage_pct: 30 }),
+        },
+      ),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-panel")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("trace-coverage-chip-aws")).toHaveAttribute(
+      "data-color",
+      "#dc2626",
+    );
   });
 });

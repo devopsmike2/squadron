@@ -169,6 +169,20 @@ type Server struct {
 	// 30s; the constructor pins that via DefaultSummaryCacheTTL.
 	discoverySummaryHandler *handlers.DiscoverySummaryHandlers
 	summaryHandlerOnce      sync.Once
+	// v0.89.76 (#707 Stream 105, Trace integration slice 1 chunk 3) —
+	// unified trace coverage handler. Same lazily-constructed pattern as
+	// discoverySummaryHandler so the 30s cache lives across requests
+	// rather than being reset per call. The handler nil-tolerantly wraps
+	// every per-provider store (a deployment that hasn't wired any
+	// provider still serves a 200 with zero counts per provider). The
+	// traceIndexForDiscovery field is wired post-construction via
+	// SetTraceIndexForDiscovery — nil leaves the endpoint serving
+	// all-zero coverage (the same posture as a deployment that hasn't
+	// observed any spans yet). Per design doc §7 the cache TTL is 30s;
+	// DefaultTraceCoverageCacheTTL pins that.
+	discoveryTraceCoverageHandler *handlers.DiscoveryTraceCoverageHandlers
+	traceCoverageHandlerOnce      sync.Once
+	traceIndexForDiscovery        handlers.TraceIndex
 	// v0.89.23 Stream 40 (#639) — GitHub webhook listener secret.
 	// Cached at startup from os.Getenv(SQUADRON_GITHUB_WEBHOOK_SECRET);
 	// an empty value leaves the /api/v1/webhooks/github route mounted
@@ -1068,6 +1082,55 @@ func (s *Server) discoverySummaryTrampoline(fn func(*handlers.DiscoverySummaryHa
 			)
 		})
 		fn(s.discoverySummaryHandler, c)
+	}
+}
+
+// SetTraceIndexForDiscovery wires the v0.89.76 (#707 Stream 105, Trace
+// integration slice 1 chunk 3) traceindex.Index onto the API server so
+// the new /api/v1/discovery/trace_coverage handler can project per-
+// scope coverage. The traceindex.Index satisfies the
+// handlers.TraceIndex interface directly through its Coverage method.
+//
+// Optional in the same posture as SetGCPDiscoveryStore: a nil index
+// leaves the endpoint serving all-zero coverage for every provider —
+// the correct cold-start posture for a deployment that hasn't observed
+// any spans yet. Production wiring (cmd/all-in-one) calls this with the
+// same *traceindex.Index the chunk-2 OTLP receiver dispatches Observe
+// to so the dashboard and the receiver share one index.
+func (s *Server) SetTraceIndexForDiscovery(idx handlers.TraceIndex) {
+	s.traceIndexForDiscovery = idx
+}
+
+// discoveryTraceCoverageTrampoline late-binds the v0.89.76 (#707 Stream
+// 105) trace coverage handler call so the route table can be registered
+// before SetTraceIndexForDiscovery (or any of the four provider stores)
+// runs. Same posture as discoverySummaryTrampoline: ALWAYS serves —
+// a deployment that hasn't wired any provider gets a 200 with every
+// provider key populated as zero-count. This is by design per the
+// design doc §7 cold-start contract; the dashboard renders an empty
+// state inside the panel rather than hiding the panel entirely.
+//
+// Per design doc §7 the handler caches the TraceCoverageResponse for
+// 30s. The trampoline builds the handler once on first call and reuses
+// it thereafter so the cache lives on the Server struct.
+func (s *Server) discoveryTraceCoverageTrampoline(fn func(*handlers.DiscoveryTraceCoverageHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.traceCoverageHandlerOnce.Do(func() {
+			audit := handlers.NewApplicationStoreAuditQuery(s.appStore)
+			s.discoveryTraceCoverageHandler = handlers.NewDiscoveryTraceCoverageHandlers(
+				handlers.NewAWSSummaryStore(s.discoveryCredStore),
+				handlers.NewGCPSummaryStore(s.discoveryGCPStore),
+				handlers.NewAzureSummaryStore(s.discoveryAzureStore),
+				handlers.NewOCISummaryStore(s.discoveryOCIStore),
+				s.traceIndexForDiscovery,
+				handlers.NewAuditInventoryCountQuery(audit),
+				s.auditService,
+				handlers.DefaultTraceCoverageCacheTTL,
+				nil, // production clock
+				s.logger,
+			)
+		})
+		fn(s.discoveryTraceCoverageHandler, c)
 	}
 }
 
@@ -2129,6 +2192,27 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/summary",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoverySummaryTrampoline(func(h *handlers.DiscoverySummaryHandlers, c *gin.Context) { h.HandleSummary(c) }))
+
+		// v0.89.76 (#707 Stream 105, Trace integration slice 1 chunk 3) —
+		// trace coverage endpoint. Joins discovery inventory (sourced
+		// from the same scan_completed audit projection /discovery/summary
+		// reads) against the in-process traceindex shipped by chunks 1+2
+		// to answer "of the resources Squadron has inventoried, how many
+		// have actually emitted spans recently." Per design doc §7 the
+		// route mounts under the existing auth middleware; agents:read
+		// matches the rest of the read-shaped discovery surface and the
+		// /discovery/summary precedent.
+		//
+		// Same nil-tolerant posture as the summary trampoline: an
+		// operator on a fresh install with no clouds connected AND no
+		// spans observed still sees a 200 with every provider key
+		// populated as zero-counts. The Discovery dashboard panel
+		// renders the cold-start "Run a discovery scan to populate the
+		// trace coverage view" message inside the panel rather than
+		// hiding it.
+		v1.GET("/discovery/trace_coverage",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTraceCoverageTrampoline(func(h *handlers.DiscoveryTraceCoverageHandlers, c *gin.Context) { h.HandleTraceCoverage(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
