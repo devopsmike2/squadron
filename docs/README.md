@@ -37,16 +37,18 @@ jump straight to that page.
   the connection × account × region scope tuple, the new
   `discovery_proposal.created` audit event, the branch-name
   backward-compat note, and the worked example.
-- [GCP discovery — slice 1](./proposals/gcp-discovery-slice1.md)
-  (design DOC LOCKED in v0.89.45). First non-AWS discovery arc.
-  Adds GCP Compute Engine scanning via a Service Account JSON
-  credential model with credstore sealing. Mirrors the AWS slice
-  1 wizard / inventory / recommendations structure but at
-  `/discovery/gcp`. Slice 1 implementation pending across chunks
-  1-6 (foundation, scanner, API handlers, UI, proposer
-  integration, runbook). After slice 1 ships, Squadron's
-  positioning becomes "the universal observability control
-  plane that scans your AWS AND GCP fleets."
+- [GCP discovery — first-time setup](./discovery-gcp-first-time-setup.md) —
+  v0.89.45 through v0.89.49 operator runbook for the GCP arc
+  (design at [proposals/gcp-discovery-slice1.md](./proposals/gcp-discovery-slice1.md)).
+  First non-AWS discovery arc. Adds GCP Compute Engine scanning
+  via Service Account JSON credentials sealed via credstore.
+  Mirrors AWS slice 1's wizard / inventory / recommendations
+  structure at `/discovery/gcp`. Same proposer feedback loop,
+  same Checks API integration, same Don't propose this again
+  affordance — just on a different cloud. **Slice 1 SHIPPED in
+  v0.89.49.** Squadron's positioning shifts to "the universal
+  observability control plane that scans your AWS AND GCP
+  fleets."
 - [GitHub webhook listener](./webhook-listener.md) — v0.89.23 +
   v0.89.24 operator runbook for the PR-merged webhook that closes
   the recommendation lifecycle in audit. Covers generating the
