@@ -1,5 +1,7 @@
 # Connect an Azure subscription to Squadron — first-time setup
 
+**As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
+
 This is the operator runbook for the v0.89.50 through v0.89.54
 Azure discovery arc that closed Azure slice 1: Squadron now scans
 Azure Virtual Machine fleets for observability gaps, drafts

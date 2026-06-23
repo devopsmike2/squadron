@@ -1,5 +1,7 @@
 # Connect a GCP project to Squadron — first-time setup
 
+**As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
+
 This is the operator runbook for the v0.89.45 through v0.89.49 GCP
 discovery arc that closed GCP slice 1: Squadron now scans Google
 Cloud Compute Engine fleets for observability gaps, drafts

@@ -74,6 +74,21 @@ jump straight to that page.
   clouds — the strongest universal observability claim a
   single OSS control plane can defensibly support: "scans
   AWS, GCP, Azure, AND Oracle Cloud fleets."
+- [Unified Discovery dashboard](./proposals/unified-discovery-dashboard-slice1.md) —
+  v0.89.60 through v0.89.62 design + delivery for the
+  cross-cloud aggregate view at `/discovery`. Aggregates
+  connection / instance / coverage counts + the 10 most
+  recent recommendations across all four clouds (AWS, GCP,
+  Azure, OCI) into a single landing screen, so an operator
+  with multi-cloud fleets sees Squadron's universal-
+  observability claim in one screen instead of after four
+  clicks. Backend aggregation endpoint at
+  `GET /api/v1/discovery/summary` (30s in-memory cache);
+  frontend page at `/discovery` with a coverage ring +
+  four-card responsive grid + recent recommendations table.
+  **Slice 1 SHIPPED in v0.89.62.** The four-cloud claim is
+  now operator-visible in one glance; per-provider pages
+  remain for wizards / deep-dive surfaces.
 - [GitHub webhook listener](./webhook-listener.md) — v0.89.23 +
   v0.89.24 operator runbook for the PR-merged webhook that closes
   the recommendation lifecycle in audit. Covers generating the
