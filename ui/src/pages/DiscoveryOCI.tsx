@@ -1,0 +1,1254 @@
+// DiscoveryOCI — the v0.89.58 #684 Stream 82 (slice-1 chunk 4) OCI
+// discovery page. Parallels DiscoveryAzure.tsx in tab structure
+// (Wizard / Inventory / Recommendations) and operator UX, but the
+// step bodies differ because the OCI credential model is "tenancy
+// OCID + user OCID + API Signing Key (RSA keypair) + fingerprint +
+// region" rather than Azure's "tenant + subscription + Service
+// Principal client_id + client_secret paste" — see
+// docs/proposals/oci-discovery-slice1.md §8 for the verbatim 5-step
+// list this file implements.
+//
+// Slice-1 honesty (chunk 4):
+//   - The Wizard tab is the primary surface. The 5-step state
+//     machine lives in this file (no factoring into a shared shell
+//     yet — the Azure page deferred the shared-shell extraction as a
+//     slice-2 candidate so a single chunk doesn't carry that
+//     refactor on top of the new page).
+//   - The Inventory tab renders the last successful scan response
+//     for the selected connection. Scans are NOT persisted (matches
+//     AWS + GCP + Azure slice-1 posture); a refresh clears the
+//     panel.
+//   - The Recommendations tab is a stub. The proposer extension
+//     (Provider="oci" path, compute-otel-tag kind, prompt extension)
+//     ships in chunk 5 of this arc — until then the tab surfaces a
+//     "ships in chunk 5" message so an operator who clicks through
+//     during the chunk-4 → chunk-5 gap isn't stranded on an empty
+//     panel.
+//
+// Token discipline: the pasted API Signing Key private key (PEM)
+// lives in component state ONLY. It is base64-encoded into the
+// createOCIConnection request body and then dropped from state on
+// success. There is no reveal-toggle, no localStorage, no
+// sessionStorage; an operator who refreshes the page loses the
+// in-progress paste and has to re-paste from the openssl / oci CLI
+// output. Same posture as the Azure SP client_secret in
+// DiscoveryAzure.tsx and the GCP SA JSON in DiscoveryGCP.tsx — and
+// the RSA private key is the strongest credential type Squadron
+// handles, so this posture is non-negotiable per design doc §12.
+
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronLeft,
+  Cloud,
+  Copy,
+  ExternalLink,
+  Loader2,
+} from "lucide-react";
+import { useCallback, useState } from "react";
+import useSWR from "swr";
+
+import {
+  createOCIConnection,
+  encodePrivateKeyForWire,
+  listOCIConnections,
+  scanOCIConnection,
+  validateOCIConnection,
+  type ComputeInstanceSnapshot,
+  type OCIConnection,
+  type OCIValidateErrorKind,
+  type ScanOCIResponse,
+  type ValidateOCIResponse,
+} from "@/api/discoveryOCI";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  OCI_API_KEYS_DOC_LINK,
+  OCI_DOC_LINK,
+  OCI_FINGERPRINT_REGEX,
+  OCI_IAM_DOC_LINK,
+  OCI_OPENSSL_GENERATE_CMD,
+  OCI_REGIONS,
+  OCI_SETUP_KEYS_CMD,
+  OCI_STEP_CREDENTIALS,
+  OCI_STEP_GENERATE_KEY,
+  OCI_STEP_IDS,
+  OCI_STEP_TENANCY,
+  OCI_STEP_TITLES,
+  OCI_STEP_UPLOAD_KEY,
+  OCI_STEP_VALIDATE_SCAN,
+  OCI_TENANCY_OCID_REGEX,
+  OCI_USER_OCID_REGEX,
+  validateErrorRemediation,
+} from "@/data/ociDiscoveryWizard";
+
+// Tab values — stable string literals double as both the Radix Tabs
+// `value` and the test selector key. Mirrors the Azure page's
+// constants one-for-one.
+const WIZARD_TAB = "wizard";
+const INVENTORY_TAB = "inventory";
+const RECS_TAB = "recommendations";
+
+// SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
+// wizard's onSave mutate() targets.
+const SWR_KEY_CONNECTIONS = "/discovery/oci/connections";
+
+export default function DiscoveryOCIPage() {
+  // activeTab is controlled at the page level so the wizard's
+  // "View Inventory" CTA after a successful scan can hop the
+  // operator straight into the Inventory tab. Same controlled-tab
+  // pattern as DiscoveryAzure / DiscoveryGCP / DiscoveryAWS.
+  const [activeTab, setActiveTab] = useState<string>(WIZARD_TAB);
+
+  // Selected connection drives the Inventory tab + the post-scan
+  // result lookup. Empty when no connection is selected — the page
+  // defaults to the wizard surface in that case.
+  const [selectedConnectionID, setSelectedConnectionID] = useState<string>("");
+
+  // scanResultByConn keeps the most-recent scan response per
+  // connection ID in a single mutable map. Slice-1: in-memory only,
+  // cleared on page refresh, matching the AWS / GCP / Azure posture.
+  // The map keyed by connection ID (not just "the latest scan") so
+  // switching the selector between two connections doesn't blow away
+  // the other's result.
+  const [scanResultByConn, setScanResultByConn] = useState<
+    Record<string, ScanOCIResponse>
+  >({});
+
+  const { data: connections, mutate: mutateConnections } = useSWR(
+    SWR_KEY_CONNECTIONS,
+    () => listOCIConnections(),
+  );
+
+  const conns = connections ?? [];
+  const hasConnections = conns.length > 0;
+
+  const handleConnectionPicked = useCallback((id: string) => {
+    setSelectedConnectionID(id);
+    setActiveTab(INVENTORY_TAB);
+  }, []);
+
+  const handleWizardSuccess = useCallback(
+    (conn: OCIConnection, scan: ScanOCIResponse) => {
+      // Persist the scan result locally so the Inventory tab picks
+      // it up on the tab swap below.
+      setScanResultByConn((prev) => ({ ...prev, [conn.id]: scan }));
+      setSelectedConnectionID(conn.id);
+      // Refresh the SWR cache so the connection selector picks up
+      // the new row.
+      void mutateConnections();
+      // Auto-switch to Inventory so the operator sees the result of
+      // the work they just did. Matches the Azure scan-then-show-
+      // inventory hop.
+      setActiveTab(INVENTORY_TAB);
+    },
+    [mutateConnections],
+  );
+
+  const selectedScan = scanResultByConn[selectedConnectionID];
+
+  return (
+    <div className="space-y-4 p-6">
+      <header>
+        <div className="flex items-center gap-2">
+          <Cloud className="h-5 w-5 text-red-500" />
+          <h1 className="text-2xl font-semibold">OCI Discovery</h1>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Connect Oracle Cloud tenancies and discover what&apos;s uninstrumented.
+        </p>
+      </header>
+
+      <ConnectionSelectorBar
+        connections={conns}
+        selectedID={selectedConnectionID}
+        onSelect={handleConnectionPicked}
+      />
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value={WIZARD_TAB}>Wizard</TabsTrigger>
+          <TabsTrigger value={INVENTORY_TAB}>Inventory</TabsTrigger>
+          <TabsTrigger value={RECS_TAB}>Recommendations</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value={WIZARD_TAB} className="mt-4">
+          <OCIWizard onComplete={handleWizardSuccess} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_TAB} className="mt-4">
+          <InventoryTab
+            hasConnections={hasConnections}
+            scan={selectedScan}
+            onJumpToWizard={() => setActiveTab(WIZARD_TAB)}
+          />
+        </TabsContent>
+        <TabsContent value={RECS_TAB} className="mt-4">
+          <RecommendationsTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// --- Connection selector bar ----------------------------------------
+
+function ConnectionSelectorBar({
+  connections,
+  selectedID,
+  onSelect,
+}: {
+  connections: OCIConnection[];
+  selectedID: string;
+  onSelect: (id: string) => void;
+}) {
+  if (connections.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+        No OCI tenancies connected yet. Use the Wizard tab to connect one.
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-3">
+      <Label
+        htmlFor="oci-connection-select"
+        className="text-xs uppercase tracking-wider text-muted-foreground"
+      >
+        Tenancy
+      </Label>
+      <div className="w-72">
+        <Select value={selectedID} onValueChange={onSelect}>
+          <SelectTrigger
+            id="oci-connection-select"
+            aria-label="OCI connection selector"
+          >
+            <SelectValue placeholder="Select a tenancy" />
+          </SelectTrigger>
+          <SelectContent>
+            {connections.map((c) => (
+              <SelectItem key={c.id} value={c.id}>
+                {c.display_name} — {c.region}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
+
+// --- Wizard ---------------------------------------------------------
+
+interface OCIWizardProps {
+  // onComplete fires after step 5 (scan) succeeds. The page uses it
+  // to seed the Inventory tab and hop the operator over.
+  onComplete: (conn: OCIConnection, scan: ScanOCIResponse) => void;
+}
+
+function OCIWizard({ onComplete }: OCIWizardProps) {
+  const [stepIndex, setStepIndex] = useState(0);
+
+  // Step-1 form state.
+  const [displayName, setDisplayName] = useState("");
+  const [tenancyOCID, setTenancyOCID] = useState("");
+  const [userOCID, setUserOCID] = useState("");
+  const [region, setRegion] = useState("");
+  const [showWhyExplainer, setShowWhyExplainer] = useState(false);
+
+  // Step-4 form state — pasted fingerprint + private key PEM + ack
+  // checkbox. The PEM text lives in state for the duration of the
+  // wizard; on a successful step-5 it gets dropped from state.
+  // NEVER persisted to localStorage / cookies.
+  const [fingerprint, setFingerprint] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [keyAcknowledged, setKeyAcknowledged] = useState(false);
+
+  // Step-5 in-flight + result state. Step 5 fuses validate + scan —
+  // the operator hits "Validate" first; on success the same step
+  // surfaces a "Run scan" button.
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [createdConnection, setCreatedConnection] =
+    useState<OCIConnection | null>(null);
+  const [validateResult, setValidateResult] =
+    useState<ValidateOCIResponse | null>(null);
+  const [scanResult, setScanResult] = useState<ScanOCIResponse | null>(null);
+
+  const stepCount = OCI_STEP_IDS.length;
+  const currentStepID = OCI_STEP_IDS[stepIndex];
+  const isLastStep = stepIndex === stepCount - 1;
+
+  // Step-1 field validation.
+  const displayNameValid = displayName.trim() !== "";
+  const tenancyOCIDValid =
+    tenancyOCID !== "" && OCI_TENANCY_OCID_REGEX.test(tenancyOCID.trim());
+  const userOCIDValid =
+    userOCID !== "" && OCI_USER_OCID_REGEX.test(userOCID.trim());
+  const regionValid = region.trim() !== "";
+
+  // Step-4 field validation.
+  const fingerprintValid =
+    fingerprint !== "" &&
+    OCI_FINGERPRINT_REGEX.test(fingerprint.trim().toLowerCase());
+  // Best-effort PEM shape check — the operator pasted something
+  // that contains the BEGIN PRIVATE KEY marker. The server does the
+  // real RSA parse; this is a "did the operator paste anything that
+  // looks like a key" guard so the ack checkbox doesn't enable on a
+  // blank textarea.
+  const privateKeyValid =
+    privateKey.trim() !== "" &&
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(privateKey) &&
+    /-----END [A-Z ]*PRIVATE KEY-----/.test(privateKey);
+
+  // Next-enablement matrix per step. Mirrors the Azure / GCP /
+  // IaCGitHubWizard pattern: a switch on currentStepID populates a
+  // single boolean the global Next button reads.
+  let nextEnabled = false;
+  switch (currentStepID) {
+    case OCI_STEP_TENANCY:
+      nextEnabled =
+        displayNameValid && tenancyOCIDValid && userOCIDValid && regionValid;
+      break;
+    case OCI_STEP_GENERATE_KEY:
+      // The key-generate step is read-only instructions — Next is
+      // always advanceable.
+      nextEnabled = true;
+      break;
+    case OCI_STEP_UPLOAD_KEY:
+      // The upload-key step is read-only instructions — Next is
+      // always advanceable.
+      nextEnabled = true;
+      break;
+    case OCI_STEP_CREDENTIALS:
+      nextEnabled = fingerprintValid && privateKeyValid && keyAcknowledged;
+      break;
+    case OCI_STEP_VALIDATE_SCAN:
+      // Validate+scan step's primary actions are the Validate and
+      // Scan buttons in the step body — the global Next is unused on
+      // the last step (it disappears via isLastStep).
+      nextEnabled = false;
+      break;
+  }
+
+  const handleBack = useCallback(() => {
+    setStepIndex((i) => Math.max(0, i - 1));
+    // Back from validate / scan invalidates the validate result so
+    // the operator must re-run after any edit.
+    setValidateResult(null);
+    setSubmitError(null);
+  }, []);
+
+  const handleNext = useCallback(() => {
+    if (!nextEnabled) return;
+    setStepIndex((i) => Math.min(stepCount - 1, i + 1));
+  }, [nextEnabled, stepCount]);
+
+  const handleCopy = useCallback((value: string) => {
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(value);
+    }
+  }, []);
+
+  // handleValidate — Step 5 first action.
+  //
+  // Two-stage: createOCIConnection persists the row (encoded
+  // private_key gets credstore-sealed server-side under the
+  // squadron.oci_signing_key.v1 AAD), then validateOCIConnection
+  // dry-runs a ListInstances call against the configured tenancy +
+  // region. On a permission_denied / tenancy_not_found /
+  // fingerprint_mismatch / private_key_invalid / network failure the
+  // connection still exists but is unhealthy; the operator gets a
+  // remediation-specific banner and can re-validate after fixing the
+  // upstream state. (We do NOT delete the connection on validation
+  // failure — partial setup beats no setup, mirroring the Azure /
+  // GCP / IaCGitHubWizard two-stage submit.)
+  const handleValidate = useCallback(async () => {
+    if (submitting) return;
+    if (!fingerprintValid || !privateKeyValid) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    setValidateResult(null);
+    try {
+      // If we already created the connection on a prior validate
+      // attempt, reuse it — don't create a duplicate row.
+      let conn = createdConnection;
+      if (!conn) {
+        conn = await createOCIConnection({
+          display_name: displayName.trim(),
+          tenancy_ocid: tenancyOCID.trim(),
+          user_ocid: userOCID.trim(),
+          fingerprint: fingerprint.trim().toLowerCase(),
+          sealed_private_key: encodePrivateKeyForWire(privateKey),
+          region: region.trim(),
+        });
+        setCreatedConnection(conn);
+      }
+      const v = await validateOCIConnection(conn.id);
+      setValidateResult(v);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [
+    submitting,
+    fingerprintValid,
+    privateKeyValid,
+    createdConnection,
+    displayName,
+    tenancyOCID,
+    userOCID,
+    fingerprint,
+    privateKey,
+    region,
+  ]);
+
+  // handleScan — Step 5 second action.
+  const handleScan = useCallback(async () => {
+    if (submitting) return;
+    if (!createdConnection) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const s = await scanOCIConnection(createdConnection.id);
+      setScanResult(s);
+      // Hand off to the page so the Inventory tab loads with the
+      // result. Drop the pasted private key from state on success
+      // — the wizard is done with it.
+      onComplete(createdConnection, s);
+      setPrivateKey("");
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [submitting, createdConnection, onComplete]);
+
+  return (
+    <div className="space-y-6">
+      <WizardHeader stepIndex={stepIndex} stepCount={stepCount} />
+
+      <div className="rounded-lg border bg-card p-6">
+        <h3 className="text-base font-semibold">
+          {OCI_STEP_TITLES[currentStepID]}
+        </h3>
+
+        <div className="mt-4">
+          {currentStepID === OCI_STEP_TENANCY && (
+            <TenancyStep
+              displayName={displayName}
+              onDisplayNameChange={setDisplayName}
+              tenancyOCID={tenancyOCID}
+              onTenancyOCIDChange={setTenancyOCID}
+              userOCID={userOCID}
+              onUserOCIDChange={setUserOCID}
+              region={region}
+              onRegionChange={setRegion}
+              tenancyOCIDValid={tenancyOCIDValid}
+              userOCIDValid={userOCIDValid}
+              regionValid={regionValid}
+              showWhyExplainer={showWhyExplainer}
+              onToggleWhyExplainer={() => setShowWhyExplainer((v) => !v)}
+            />
+          )}
+
+          {currentStepID === OCI_STEP_GENERATE_KEY && (
+            <GenerateKeyStep onCopy={handleCopy} />
+          )}
+
+          {currentStepID === OCI_STEP_UPLOAD_KEY && <UploadKeyStep />}
+
+          {currentStepID === OCI_STEP_CREDENTIALS && (
+            <CredentialsStep
+              fingerprint={fingerprint}
+              onFingerprintChange={setFingerprint}
+              privateKey={privateKey}
+              onPrivateKeyChange={setPrivateKey}
+              fingerprintValid={fingerprintValid}
+              privateKeyValid={privateKeyValid}
+              acknowledged={keyAcknowledged}
+              onAcknowledgeChange={setKeyAcknowledged}
+            />
+          )}
+
+          {currentStepID === OCI_STEP_VALIDATE_SCAN && (
+            <ValidateScanStep
+              submitting={submitting}
+              submitError={submitError}
+              validateResult={validateResult}
+              scanResult={scanResult}
+              connectionRegion={region}
+              connectionTenancyOCID={tenancyOCID}
+              onValidate={handleValidate}
+              onScan={handleScan}
+            />
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={handleBack}
+          disabled={stepIndex === 0 || submitting}
+        >
+          <ChevronLeft className="mr-1 h-4 w-4" aria-hidden />
+          Back
+        </Button>
+        {!isLastStep && (
+          <Button
+            type="button"
+            onClick={handleNext}
+            disabled={!nextEnabled || submitting}
+          >
+            Next
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- Wizard header / progress ---------------------------------------
+
+function WizardHeader({
+  stepIndex,
+  stepCount,
+}: {
+  stepIndex: number;
+  stepCount: number;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">
+          Step {stepIndex + 1} of {stepCount}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {OCI_STEP_TITLES[OCI_STEP_IDS[stepIndex]]}
+        </span>
+      </div>
+      <div className="h-1 w-full rounded bg-muted">
+        <div
+          className="h-1 rounded bg-primary transition-all"
+          style={{ width: `${((stepIndex + 1) / stepCount) * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// --- Step 1: Connect an OCI tenancy ---------------------------------
+
+function TenancyStep({
+  displayName,
+  onDisplayNameChange,
+  tenancyOCID,
+  onTenancyOCIDChange,
+  userOCID,
+  onUserOCIDChange,
+  region,
+  onRegionChange,
+  tenancyOCIDValid,
+  userOCIDValid,
+  regionValid,
+  showWhyExplainer,
+  onToggleWhyExplainer,
+}: {
+  displayName: string;
+  onDisplayNameChange: (v: string) => void;
+  tenancyOCID: string;
+  onTenancyOCIDChange: (v: string) => void;
+  userOCID: string;
+  onUserOCIDChange: (v: string) => void;
+  region: string;
+  onRegionChange: (v: string) => void;
+  tenancyOCIDValid: boolean;
+  userOCIDValid: boolean;
+  regionValid: boolean;
+  showWhyExplainer: boolean;
+  onToggleWhyExplainer: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Tell Squadron which Oracle Cloud tenancy to scan. We&apos;ll never
+        write to it — read-only IAM permissions on compute instances are the
+        most the API Signing Key will be asked to carry.
+      </p>
+
+      <div className="space-y-2">
+        <Label htmlFor="oci-display-name">Display name</Label>
+        <Input
+          id="oci-display-name"
+          value={displayName}
+          onChange={(e) => onDisplayNameChange(e.target.value)}
+          placeholder="Production OCI"
+        />
+        <p className="text-xs text-muted-foreground">
+          A human-friendly label shown in the connection selector. Editable
+          later.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="oci-tenancy-ocid">Tenancy OCID</Label>
+        <Input
+          id="oci-tenancy-ocid"
+          value={tenancyOCID}
+          onChange={(e) => onTenancyOCIDChange(e.target.value)}
+          placeholder="ocid1.tenancy.oc1..aaaaaaaa..."
+          aria-invalid={tenancyOCID !== "" && !tenancyOCIDValid}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {tenancyOCID !== "" && !tenancyOCIDValid && (
+          <p className="text-xs text-destructive">
+            Tenancy OCIDs must start with{" "}
+            <code>ocid1.tenancy.oc1.</code> Find the value in the OCI Console
+            under Profile → Tenancy → OCID.
+          </p>
+        )}
+        {tenancyOCID === "" && (
+          <p className="text-xs text-muted-foreground">
+            The OCI tenancy the scan targets. Visible in the OCI Console at
+            Profile → Tenancy → OCID.
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="oci-user-ocid">User OCID</Label>
+        <Input
+          id="oci-user-ocid"
+          value={userOCID}
+          onChange={(e) => onUserOCIDChange(e.target.value)}
+          placeholder="ocid1.user.oc1..aaaaaaaa..."
+          aria-invalid={userOCID !== "" && !userOCIDValid}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {userOCID !== "" && !userOCIDValid && (
+          <p className="text-xs text-destructive">
+            User OCIDs must start with <code>ocid1.user.oc1.</code> Find the
+            value in the OCI Console under Identity → Users → select user →
+            OCID.
+          </p>
+        )}
+        {userOCID === "" && (
+          <p className="text-xs text-muted-foreground">
+            The OCI user whose API Signing Key will sign Squadron&apos;s API
+            calls. Visible in the OCI Console at Identity → Users.
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="oci-region">Region</Label>
+        <Select value={region} onValueChange={onRegionChange}>
+          <SelectTrigger
+            id="oci-region"
+            aria-label="OCI region"
+            aria-invalid={region !== "" && !regionValid}
+          >
+            <SelectValue placeholder="Select an OCI region" />
+          </SelectTrigger>
+          <SelectContent>
+            {OCI_REGIONS.map((r) => (
+              <SelectItem key={r.id} value={r.id}>
+                {r.id} — {r.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Unlike AWS / GCP / Azure, OCI requires a region — OCI&apos;s API
+          endpoints are regional, so the scanner has to know where to query.
+          Slice 1 ships single-region per connection.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        className="text-xs text-primary underline"
+        onClick={onToggleWhyExplainer}
+      >
+        Why am I doing this?
+      </button>
+      {showWhyExplainer && (
+        <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <p>
+            Squadron walks your OCI Compute Instances inventory and flags
+            instances that lack the OpenTelemetry tag heuristic the proposer
+            reads. The connection here is the credential + scope tuple
+            Squadron uses to call the OCI ListInstances API — nothing else.
+            You can disconnect at any time; the sealed API Signing Key
+            private key is removed from the credstore on delete.
+          </p>
+          <p className="mt-2">
+            <a
+              href={OCI_DOC_LINK}
+              className="text-primary underline"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Read the operator runbook
+            </a>
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Step 2: Generate the API signing key ---------------------------
+
+function GenerateKeyStep({ onCopy }: { onCopy: (v: string) => void }) {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Generate a 2048-bit RSA keypair locally. The private half stays on
+        your machine + gets pasted into Squadron in Step 4; the public half
+        gets uploaded to OCI Console in Step 3.
+      </p>
+
+      <CommandBlock
+        label="Option 1: OCI CLI helper"
+        cmd={OCI_SETUP_KEYS_CMD}
+        onCopy={() => onCopy(OCI_SETUP_KEYS_CMD)}
+      />
+
+      <CommandBlock
+        label="Option 2: openssl"
+        cmd={OCI_OPENSSL_GENERATE_CMD}
+        onCopy={() => onCopy(OCI_OPENSSL_GENERATE_CMD)}
+      />
+
+      <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <p>
+          The last command outputs the key fingerprint — note it for Step 4.
+          It looks like a colon-separated 16-hex-pair string, e.g.
+          <code> aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99</code>.
+        </p>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        <a
+          href={OCI_API_KEYS_DOC_LINK}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary underline inline-flex items-center gap-1"
+        >
+          Learn more about OCI API Signing Keys
+          <ExternalLink className="h-3 w-3" aria-hidden />
+        </a>
+      </p>
+    </div>
+  );
+}
+
+// CommandBlock renders a monospace pre + Copy button for one CLI
+// command. Factored out for parallelism with the Azure wizard's
+// CommandBlock and the GCP wizard's three uses.
+function CommandBlock({
+  label,
+  cmd,
+  onCopy,
+}: {
+  label: string;
+  cmd: string;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onCopy}
+          aria-label={`Copy command: ${label}`}
+        >
+          <Copy className="mr-1 h-3 w-3" aria-hidden />
+          Copy
+        </Button>
+      </div>
+      <pre className="rounded-md border bg-muted/40 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all">
+        {cmd}
+      </pre>
+    </div>
+  );
+}
+
+// --- Step 3: Upload public key to OCI Console -----------------------
+
+function UploadKeyStep() {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Upload the public half of the keypair (<code>oci_api_key_public.pem</code>)
+        to OCI Console so OCI can verify Squadron&apos;s signed requests.
+      </p>
+
+      <ol className="ml-4 list-decimal space-y-2 text-sm">
+        <li>
+          Navigate to the{" "}
+          <a
+            href="https://cloud.oracle.com/identity/users"
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline inline-flex items-center gap-1"
+          >
+            OCI Console → Identity → Users
+            <ExternalLink className="h-3 w-3" aria-hidden />
+          </a>
+          .
+        </li>
+        <li>Select the user whose OCID you entered in Step 1.</li>
+        <li>
+          Under the Resources sidebar, click <strong>API Keys</strong>.
+        </li>
+        <li>
+          Click <strong>Add API Key</strong>.
+        </li>
+        <li>
+          Choose <strong>Paste a public key</strong> and paste the contents of{" "}
+          <code>oci_api_key_public.pem</code>.
+        </li>
+        <li>
+          Confirm the fingerprint OCI Console displays matches the fingerprint
+          your openssl command output in Step 2. Note the fingerprint for
+          Step 4.
+        </li>
+      </ol>
+
+      <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <p>
+          OCI Console also displays a config file snippet after the upload —
+          you can ignore that snippet for Squadron; Squadron only needs the
+          tenancy OCID, user OCID, region, fingerprint, and private key
+          (entered separately in this wizard).
+        </p>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        <a
+          href={OCI_IAM_DOC_LINK}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary underline inline-flex items-center gap-1"
+        >
+          Learn more about OCI IAM policies
+          <ExternalLink className="h-3 w-3" aria-hidden />
+        </a>
+      </p>
+    </div>
+  );
+}
+
+// --- Step 4: Paste credentials --------------------------------------
+
+function CredentialsStep({
+  fingerprint,
+  onFingerprintChange,
+  privateKey,
+  onPrivateKeyChange,
+  fingerprintValid,
+  privateKeyValid,
+  acknowledged,
+  onAcknowledgeChange,
+}: {
+  fingerprint: string;
+  onFingerprintChange: (v: string) => void;
+  privateKey: string;
+  onPrivateKeyChange: (v: string) => void;
+  fingerprintValid: boolean;
+  privateKeyValid: boolean;
+  acknowledged: boolean;
+  onAcknowledgeChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Paste the fingerprint OCI Console displayed in Step 3 and the contents
+        of <code>oci_api_key.pem</code> from Step 2.
+      </p>
+
+      <div className="space-y-2">
+        <Label htmlFor="oci-fingerprint">Fingerprint</Label>
+        <Input
+          id="oci-fingerprint"
+          value={fingerprint}
+          onChange={(e) => onFingerprintChange(e.target.value)}
+          placeholder="aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+          aria-invalid={fingerprint !== "" && !fingerprintValid}
+          autoComplete="off"
+          spellCheck={false}
+          className="font-mono text-xs"
+        />
+        {fingerprint !== "" && !fingerprintValid && (
+          <p className="text-xs text-destructive">
+            Fingerprints must be 16 colon-separated hex pairs (e.g.{" "}
+            <code>aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99</code>).
+            Re-verify with{" "}
+            <code>
+              openssl rsa -pubout -outform DER -in oci_api_key.pem | openssl
+              md5 -c
+            </code>
+            .
+          </p>
+        )}
+      </div>
+
+      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+        <div className="flex items-start gap-2">
+          <AlertTriangle
+            className="mt-0.5 h-4 w-4 flex-shrink-0"
+            aria-hidden
+          />
+          <p className="text-xs">
+            The API Signing Key private key is full asymmetric authentication
+            material — the strongest credential type Squadron handles.
+            Squadron seals it at rest with AES-GCM; the bytes never appear in
+            audit payloads or logs. Never paste this key into Slack, email,
+            or any other transient surface.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="oci-private-key">Private key (PEM)</Label>
+        <Textarea
+          id="oci-private-key"
+          value={privateKey}
+          onChange={(e) => onPrivateKeyChange(e.target.value)}
+          placeholder={
+            "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIB...\n-----END PRIVATE KEY-----"
+          }
+          rows={8}
+          className="font-mono text-xs"
+          aria-invalid={privateKey !== "" && !privateKeyValid}
+          autoComplete="off"
+          spellCheck={false}
+          data-1p-ignore
+        />
+        {privateKey !== "" && !privateKeyValid && (
+          <p className="text-xs text-destructive">
+            The paste should include the{" "}
+            <code>-----BEGIN PRIVATE KEY-----</code> and{" "}
+            <code>-----END PRIVATE KEY-----</code> markers (or the matching
+            RSA-PRIVATE-KEY variant). Re-copy the file contents — most
+            terminals truncate when copying via select-all.
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          The key stays in browser memory until the wizard completes — it is
+          base64-encoded over the wire and sealed at rest by Squadron under
+          the <code>squadron.oci_signing_key.v1</code> AAD.
+        </p>
+      </div>
+
+      <div className="flex items-start gap-2">
+        <Checkbox
+          id="oci-key-ack"
+          checked={acknowledged}
+          onCheckedChange={(v) => onAcknowledgeChange(v === true)}
+          disabled={!fingerprintValid || !privateKeyValid}
+        />
+        <Label
+          htmlFor="oci-key-ack"
+          className="text-xs font-normal leading-tight text-muted-foreground"
+        >
+          I have stored this private key securely. Squadron seals it at rest,
+          but the bytes are visible during paste.
+        </Label>
+      </div>
+    </div>
+  );
+}
+
+// --- Step 5: Validate + Scan ----------------------------------------
+
+function ValidateScanStep({
+  submitting,
+  submitError,
+  validateResult,
+  scanResult,
+  connectionRegion,
+  connectionTenancyOCID,
+  onValidate,
+  onScan,
+}: {
+  submitting: boolean;
+  submitError: string | null;
+  validateResult: ValidateOCIResponse | null;
+  scanResult: ScanOCIResponse | null;
+  connectionRegion: string;
+  connectionTenancyOCID: string;
+  onValidate: () => void;
+  onScan: () => void;
+}) {
+  const validatedOK = validateResult?.ok === true;
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Squadron will dry-run a ListInstances call against your tenancy to
+        confirm the API Signing Key works. On success, the second button
+        runs a full scan and lands you on the Inventory tab.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          onClick={onValidate}
+          disabled={submitting || validatedOK}
+        >
+          {submitting && !validatedOK ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+              Validating...
+            </>
+          ) : (
+            "Validate connection"
+          )}
+        </Button>
+        <Button
+          type="button"
+          onClick={onScan}
+          disabled={submitting || !validatedOK}
+          variant={validatedOK ? "default" : "secondary"}
+        >
+          {submitting && validatedOK ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+              Scanning...
+            </>
+          ) : (
+            "Run scan"
+          )}
+        </Button>
+      </div>
+
+      {submitError && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {submitError}
+        </div>
+      )}
+
+      {validateResult?.ok === true && (
+        <div
+          role="status"
+          className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" aria-hidden />
+            <span className="font-medium">
+              Connected — {validateResult.instance_count ?? 0} compute
+              instances visible.
+            </span>
+          </div>
+          <p className="mt-1 text-xs">
+            Click <strong>Run scan</strong> to inventory the tenancy.
+          </p>
+        </div>
+      )}
+
+      {validateResult?.ok === false && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4" aria-hidden />
+            <span>Validation failed</span>
+          </div>
+          {validateResult.message && (
+            <p className="mt-1 text-xs">{validateResult.message}</p>
+          )}
+          <p className="mt-2 text-xs">
+            {validateErrorRemediation(
+              validateResult.error_kind as OCIValidateErrorKind,
+              {
+                connectionRegion,
+                connectionTenancyOCID,
+              },
+            )}
+          </p>
+        </div>
+      )}
+
+      {scanResult && (
+        <div
+          role="status"
+          className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" aria-hidden />
+            <span className="font-medium">
+              Scan complete: {scanResult.instance_count} compute instances (
+              {scanResult.instrumented_count} instrumented,{" "}
+              {scanResult.uninstrumented_count} uninstrumented). View
+              Inventory →
+            </span>
+          </div>
+          <p className="mt-1 text-xs">
+            View the Inventory tab for per-instance detail.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Inventory tab --------------------------------------------------
+
+function InventoryTab({
+  hasConnections,
+  scan,
+  onJumpToWizard,
+}: {
+  hasConnections: boolean;
+  scan: ScanOCIResponse | undefined;
+  onJumpToWizard: () => void;
+}) {
+  if (!hasConnections) {
+    return (
+      <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+        Connect an OCI tenancy from the Wizard tab to populate inventory.
+      </div>
+    );
+  }
+  if (!scan) {
+    return (
+      <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+        No inventory loaded. Run a scan from the{" "}
+        <button
+          type="button"
+          onClick={onJumpToWizard}
+          className="text-primary underline"
+        >
+          Wizard tab
+        </button>
+        .
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <InventorySummary scan={scan} />
+      <InventoryTable rows={scan.computes} />
+    </div>
+  );
+}
+
+function InventorySummary({ scan }: { scan: ScanOCIResponse }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border p-3 text-sm">
+      <span>
+        Tenancy: <code className="text-xs">{scan.tenancy_ocid}</code>
+      </span>
+      <span>Region: {scan.region}</span>
+      <span>Instances: {scan.instance_count}</span>
+      <span>Instrumented: {scan.instrumented_count}</span>
+      <span>Uninstrumented: {scan.uninstrumented_count}</span>
+      {scan.partial && (
+        <Badge variant="outline" className="text-amber-600">
+          Partial: {scan.partial_reason || "unknown"}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
+        Scan completed but no compute instances were returned. Either the
+        tenancy is empty in this region or the user OCID lacks read access
+        on the compartments it spans.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Instance Name</th>
+            <th className="px-3 py-2 font-medium">Shape</th>
+            <th className="px-3 py-2 font-medium">OS</th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">OTel?</th>
+            <th className="px-3 py-2 font-medium">Tags</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.resource_id} className="border-t">
+              <td className="px-3 py-2 font-mono text-xs">{row.resource_id}</td>
+              <td className="px-3 py-2 text-xs">{row.instance_type}</td>
+              <td className="px-3 py-2 text-xs">{row.os_family || "unknown"}</td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.has_otel ? (
+                  <Badge variant="outline" className="text-emerald-600">
+                    Yes
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    No
+                  </Badge>
+                )}
+              </td>
+              <td className="px-3 py-2 font-mono text-xs">
+                {Object.keys(row.tags ?? {}).length === 0
+                  ? "-"
+                  : Object.entries(row.tags)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ")}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// --- Recommendations tab --------------------------------------------
+
+function RecommendationsTab() {
+  return (
+    <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+      <p>
+        Recommendations are pending — proposer integration ships in chunk 5
+        of this arc.
+      </p>
+      <p className="mt-2 text-xs">
+        Chunk 5 extends the discovery proposer with the Provider=&quot;oci&quot;
+        path and the compute-otel-tag recommendation kind, then wires this
+        tab to the same generate-recommendations flow the AWS / GCP / Azure
+        pages use.
+      </p>
+    </div>
+  );
+}

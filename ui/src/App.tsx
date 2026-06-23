@@ -21,6 +21,7 @@ import DiscoveryAWSPage from "./pages/DiscoveryAWS";
 import DiscoveryAzurePage from "./pages/DiscoveryAzure";
 import DiscoveryGCPPage from "./pages/DiscoveryGCP";
 import DiscoveryIaCGitHubPage from "./pages/DiscoveryIaCGitHub";
+import DiscoveryOCIPage from "./pages/DiscoveryOCI";
 import FleetMapPage from "./pages/FleetMap";
 import GroupsPage from "./pages/Groups";
 import IncidentsPage from "./pages/Incidents";
@@ -190,6 +191,13 @@ function AuthBoundary() {
               between GCP and the IaC GitHub entry so the
               /discovery/<cloud> routes group together. */}
           <Route path="/discovery/azure" element={<DiscoveryAzurePage />} />
+          {/* v0.89.58 #684 Stream 82 (slice-1 chunk 4) — OCI discovery
+              page parallels DiscoveryAzure. Same Wizard / Inventory /
+              Recommendations triptych under /discovery/oci. Sits next
+              to Azure so all four /discovery/<cloud> routes (AWS,
+              GCP, Azure, OCI) cluster together before the IaC GitHub
+              entry. */}
+          <Route path="/discovery/oci" element={<DiscoveryOCIPage />} />
           {/* v0.89.3 Stream 19 — IaC connections list + Connect-IaC-repo
               wizard. /discovery/iac/<provider> namespace leaves room
               for slice-2 GitLab / Bitbucket without renaming routes. */}

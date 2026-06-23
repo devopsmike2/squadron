@@ -1,0 +1,665 @@
+// Vitest coverage for the v0.89.58 #684 Stream 82 (slice-1 chunk 4)
+// DiscoveryOCI page. Mirrors the DiscoveryAzure.test.tsx posture:
+//   - SWR cache is wiped per-test via a fresh SWRConfig provider.
+//   - Network mocked at the @/api/discoveryOCI module boundary.
+//   - jsdom polyfills for Radix Select / Tabs pointer-capture.
+//
+// Test naming follows the chunk-4 brief's TestDiscoveryOCI_<area>_<behavior>
+// convention so a future arc-spanning audit can grep for the OCI suite
+// in one pass.
+
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
+import { SWRConfig } from "swr";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import DiscoveryOCIPage from "./DiscoveryOCI";
+
+import {
+  createOCIConnection,
+  listOCIConnections,
+  scanOCIConnection,
+  validateOCIConnection,
+  type OCIConnection,
+  type ScanOCIResponse,
+} from "@/api/discoveryOCI";
+
+// jsdom polyfills for Radix Select / Tabs pointer-capture lookups.
+// Same posture as the Azure test file — without these the components
+// throw `target.hasPointerCapture is not a function` as soon as the
+// user clicks a trigger.
+if (!Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+}
+if (!Element.prototype.releasePointerCapture) {
+  Element.prototype.releasePointerCapture = () => {};
+}
+if (!Element.prototype.setPointerCapture) {
+  Element.prototype.setPointerCapture = () => {};
+}
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
+vi.mock("@/api/discoveryOCI", async () => {
+  const actual = await vi.importActual<typeof import("@/api/discoveryOCI")>(
+    "@/api/discoveryOCI",
+  );
+  return {
+    ...actual,
+    listOCIConnections: vi.fn(),
+    createOCIConnection: vi.fn(),
+    validateOCIConnection: vi.fn(),
+    scanOCIConnection: vi.fn(),
+  };
+});
+
+const mockedListOCIConnections = vi.mocked(listOCIConnections);
+const mockedCreateOCIConnection = vi.mocked(createOCIConnection);
+const mockedValidateOCIConnection = vi.mocked(validateOCIConnection);
+const mockedScanOCIConnection = vi.mocked(scanOCIConnection);
+
+// renderPage wraps the page in a fresh SWRConfig so each test starts
+// with an empty cache. Mirrors the Azure page's renderPage helper.
+function renderPage(initialEntries: string[] = ["/discovery/oci"]) {
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
+      </SWRConfig>
+    );
+  }
+  return render(<DiscoveryOCIPage />, { wrapper: Wrapper });
+}
+
+// Canonical OCID + fingerprint values used throughout the tests.
+// Real OCI shapes — the regex validators only care about the shape,
+// not the content, so any valid OCID works.
+const TENANCY_OCID =
+  "ocid1.tenancy.oc1..aaaaaaaaexampletenancyocid1234567890abcdef";
+const USER_OCID =
+  "ocid1.user.oc1..aaaaaaaaexampleuserocid1234567890abcdef1234";
+const REGION = "us-phoenix-1";
+const FINGERPRINT = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99";
+const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBexample
+-----END PRIVATE KEY-----`;
+
+const sampleConnection: OCIConnection = {
+  id: "conn-uuid-1",
+  display_name: "Production OCI",
+  tenancy_ocid: TENANCY_OCID,
+  user_ocid: USER_OCID,
+  fingerprint: FINGERPRINT,
+  region: REGION,
+  learn_from_accepted_recommendations: true,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+const sampleScan: ScanOCIResponse = {
+  connection_id: "conn-uuid-1",
+  tenancy_ocid: TENANCY_OCID,
+  region: REGION,
+  scan_id: "scan-uuid-1",
+  instance_count: 5,
+  computes: [
+    {
+      resource_id: "web-1",
+      instance_type: "VM.Standard.E4.Flex",
+      tags: { otel: "true" },
+      has_otel: true,
+      os_family: "unknown",
+      region: REGION,
+    },
+    {
+      resource_id: "web-2",
+      instance_type: "VM.Standard.E4.Flex",
+      tags: { env: "prod" },
+      has_otel: false,
+      os_family: "unknown",
+      region: REGION,
+    },
+    {
+      resource_id: "web-3",
+      instance_type: "VM.Standard.A1.Flex",
+      tags: {},
+      has_otel: false,
+      os_family: "unknown",
+      region: REGION,
+    },
+    {
+      resource_id: "web-4",
+      instance_type: "VM.Standard.E4.Flex",
+      tags: {},
+      has_otel: false,
+      os_family: "unknown",
+      region: REGION,
+    },
+    {
+      resource_id: "web-5",
+      instance_type: "VM.Standard.E4.Flex",
+      tags: {},
+      has_otel: false,
+      os_family: "unknown",
+      region: REGION,
+    },
+  ],
+  instrumented_count: 1,
+  uninstrumented_count: 4,
+  partial: false,
+};
+
+describe("DiscoveryOCI", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedListOCIConnections.mockResolvedValue([]);
+  });
+
+  it("TestDiscoveryOCI_WizardStep1_TenancyOCIDValidation", async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    // Fill display name + user OCID so Next-enablement isn't gated
+    // on the unrelated fields. Region remains empty so Next stays
+    // disabled regardless of tenancy validity — but the inline error
+    // for tenancy still surfaces, which is what this test asserts.
+    fireEvent.change(screen.getByLabelText(/Display name/i), {
+      target: { value: "Production OCI" },
+    });
+    fireEvent.change(screen.getByLabelText(/User OCID/i), {
+      target: { value: USER_OCID },
+    });
+
+    const tenancyInput = screen.getByLabelText(/Tenancy OCID/i);
+
+    // Invalid tenancy OCID (non-OCID format) — Next stays disabled
+    // and the inline error message renders.
+    fireEvent.change(tenancyInput, { target: { value: "not-an-ocid" } });
+    expect(
+      screen.getByText(/Tenancy OCIDs must start with/i),
+    ).toBeInTheDocument();
+    const nextBtn = screen.getByRole("button", { name: /^Next$/i });
+    expect(nextBtn).toBeDisabled();
+
+    // Valid tenancy OCID — inline error clears.
+    fireEvent.change(tenancyInput, { target: { value: TENANCY_OCID } });
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Tenancy OCIDs must start with/i),
+      ).not.toBeInTheDocument();
+    });
+    // Next stays disabled because region is still empty (verified by
+    // the dedicated RegionRequired test); the per-field test only
+    // proves the format check itself.
+  });
+
+  it("TestDiscoveryOCI_WizardStep1_UserOCIDValidation", async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/Display name/i), {
+      target: { value: "Production OCI" },
+    });
+    fireEvent.change(screen.getByLabelText(/Tenancy OCID/i), {
+      target: { value: TENANCY_OCID },
+    });
+
+    const userInput = screen.getByLabelText(/User OCID/i);
+
+    // Invalid user OCID — Next stays disabled, inline error renders.
+    fireEvent.change(userInput, { target: { value: "not-an-ocid" } });
+    expect(
+      screen.getByText(/User OCIDs must start with/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
+
+    // Valid user OCID — inline error clears.
+    fireEvent.change(userInput, { target: { value: USER_OCID } });
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/User OCIDs must start with/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("TestDiscoveryOCI_WizardStep1_RegionRequired", async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    // All other fields valid, region intentionally empty — Next
+    // stays disabled. Per design doc §5, OCI requires region always.
+    fireEvent.change(screen.getByLabelText(/Display name/i), {
+      target: { value: "Production OCI" },
+    });
+    fireEvent.change(screen.getByLabelText(/Tenancy OCID/i), {
+      target: { value: TENANCY_OCID },
+    });
+    fireEvent.change(screen.getByLabelText(/User OCID/i), {
+      target: { value: USER_OCID },
+    });
+
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
+  });
+
+  it("TestDiscoveryOCI_WizardStep4_FingerprintValidation", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToCredentialsStep(user);
+
+    const fingerprintInput = screen.getByLabelText(/Fingerprint/i);
+
+    // Malformed fingerprint — inline error renders, ack stays
+    // disabled, Next stays disabled.
+    fireEvent.change(fingerprintInput, {
+      target: { value: "not-a-fingerprint" },
+    });
+    expect(
+      screen.getByText(/Fingerprints must be 16 colon-separated hex pairs/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
+
+    // Valid fingerprint — inline error clears.
+    fireEvent.change(fingerprintInput, { target: { value: FINGERPRINT } });
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Fingerprints must be 16 colon-separated hex pairs/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("TestDiscoveryOCI_WizardStep4_RequiresAllFields", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToCredentialsStep(user);
+
+    // Acknowledgment checkbox is disabled until fingerprint +
+    // private key both validate.
+    const ack = screen.getByRole("checkbox", {
+      name: /I have stored this private key securely/i,
+    });
+    expect(ack).toBeDisabled();
+
+    // Fingerprint alone — ack still disabled because private key
+    // empty.
+    fireEvent.change(screen.getByLabelText(/Fingerprint/i), {
+      target: { value: FINGERPRINT },
+    });
+    expect(ack).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
+
+    // Add private key — ack enables but unchecked, Next stays
+    // disabled.
+    fireEvent.change(screen.getByLabelText(/Private key \(PEM\)/i), {
+      target: { value: PRIVATE_KEY },
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("checkbox", {
+          name: /I have stored this private key securely/i,
+        }),
+      ).not.toBeDisabled();
+    });
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
+  });
+
+  it("TestDiscoveryOCI_WizardStep5_ValidateSuccess_AdvancesToScan", async () => {
+    const user = userEvent.setup();
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+
+    const validateBtn = screen.getByRole("button", {
+      name: /Validate connection/i,
+    });
+    await user.click(validateBtn);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+
+    // The scan button enables after a successful validate.
+    const scanBtn = screen.getByRole("button", { name: /Run scan/i });
+    expect(scanBtn).toBeEnabled();
+
+    expect(mockedCreateOCIConnection).toHaveBeenCalledTimes(1);
+    expect(mockedValidateOCIConnection).toHaveBeenCalledWith(
+      sampleConnection.id,
+    );
+  });
+
+  it("TestDiscoveryOCI_WizardStep5_PermissionDenied_ShowsRemediation", async () => {
+    const user = userEvent.setup();
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: false,
+      error_kind: "permission_denied",
+      message:
+        "NotAuthorizedOrNotFound: user lacks compute.instances:read on tenancy.",
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Verify the user has compute.instances:read permission/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    // Server's message renders too.
+    expect(
+      screen.getByText(/NotAuthorizedOrNotFound: user lacks compute/i),
+    ).toBeInTheDocument();
+    // Scan button stays disabled — operator must fix the upstream
+    // state and re-validate.
+    expect(screen.getByRole("button", { name: /Run scan/i })).toBeDisabled();
+  });
+
+  it("TestDiscoveryOCI_WizardStep5_FingerprintMismatch_ShowsRemediation", async () => {
+    const user = userEvent.setup();
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: false,
+      error_kind: "fingerprint_mismatch",
+      message: "InvalidSignature: fingerprint does not match uploaded key.",
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /The fingerprint doesn't match the public key uploaded/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/InvalidSignature: fingerprint does not match/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Run scan/i })).toBeDisabled();
+  });
+
+  it("TestDiscoveryOCI_WizardStep5_PrivateKeyInvalid_ShowsRemediation", async () => {
+    const user = userEvent.setup();
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: false,
+      error_kind: "private_key_invalid",
+      message: "Squadron could not decrypt the stored API Signing Key.",
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /The pasted PEM is malformed or not an RSA key/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/Squadron could not decrypt the stored API Signing Key/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Run scan/i })).toBeDisabled();
+  });
+
+  it("TestDiscoveryOCI_ScanSuccess_TransitionsToInventory", async () => {
+    const user = userEvent.setup();
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+    // After the wizard succeeds the page re-lists connections; return
+    // the new row so the selector shows it.
+    mockedListOCIConnections.mockResolvedValueOnce([]);
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    // Page auto-switches to the Inventory tab.
+    await waitFor(() => {
+      const inventoryTab = screen.getByRole("tab", { name: /Inventory/i });
+      expect(inventoryTab).toHaveAttribute("data-state", "active");
+    });
+
+    // The table renders with the seeded 5 rows.
+    await waitFor(() => {
+      expect(screen.getByText("web-1")).toBeInTheDocument();
+    });
+    expect(screen.getByText("web-5")).toBeInTheDocument();
+    expect(mockedScanOCIConnection).toHaveBeenCalledWith(sampleConnection.id);
+  });
+
+  it("TestDiscoveryOCI_InventoryTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    // Walk the wizard so the scan result lands on the page state.
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    // Inventory tab should have the 5-row table + summary.
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Instrumented: 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Uninstrumented: 4/)).toBeInTheDocument();
+
+    // Each compute row's resource_id is present.
+    for (const row of sampleScan.computes) {
+      expect(screen.getByText(row.resource_id)).toBeInTheDocument();
+    }
+  });
+
+  it("TestDiscoveryOCI_RecommendationsTab_ChunkStubMessage", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("tab", { name: /Recommendations/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/ships in chunk 5 of this arc/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // --- helpers ---
+
+  // selectRegion picks the canonical test region from the Radix
+  // Select on step 1. The Region trigger renders as a button with
+  // accessible name "OCI region" (from the SelectTrigger's
+  // aria-label); Radix opens the listbox on click; the option text
+  // includes the region id + label so we filter on the id substring.
+  async function selectRegion(user: ReturnType<typeof userEvent.setup>) {
+    const regionTrigger = screen.getByRole("combobox", { name: /OCI region/i });
+    await user.click(regionTrigger);
+    // Radix renders options as role="option" inside the listbox.
+    const option = await screen.findByRole("option", {
+      name: new RegExp(REGION, "i"),
+    });
+    await user.click(option);
+  }
+
+  // advanceToGenerateKeyStep walks the wizard from step 1 (tenancy)
+  // to step 2 (generate key instructions).
+  async function advanceToGenerateKeyStep(
+    user: ReturnType<typeof userEvent.setup>,
+  ) {
+    fireEvent.change(screen.getByLabelText(/Display name/i), {
+      target: { value: "Production OCI" },
+    });
+    fireEvent.change(screen.getByLabelText(/Tenancy OCID/i), {
+      target: { value: TENANCY_OCID },
+    });
+    fireEvent.change(screen.getByLabelText(/User OCID/i), {
+      target: { value: USER_OCID },
+    });
+    await selectRegion(user);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Next$/i })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    // Step 2's body has the unique "oci setup keys" command text.
+    await waitFor(() => {
+      expect(screen.getByText(/oci setup keys/i)).toBeInTheDocument();
+    });
+  }
+
+  // advanceToUploadKeyStep walks the wizard from step 1 to step 3.
+  async function advanceToUploadKeyStep(
+    user: ReturnType<typeof userEvent.setup>,
+  ) {
+    await advanceToGenerateKeyStep(user);
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/OCI Console → Identity → Users/i),
+      ).toBeInTheDocument();
+    });
+  }
+
+  // advanceToCredentialsStep walks from step 1 to step 4.
+  async function advanceToCredentialsStep(
+    user: ReturnType<typeof userEvent.setup>,
+  ) {
+    await advanceToUploadKeyStep(user);
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Fingerprint/i)).toBeInTheDocument();
+    });
+  }
+
+  // advanceToValidateScanStep walks from step 1 to step 5.
+  // userEvent is used for the checkbox click because Radix Checkbox
+  // branches on pointer events that fireEvent.click doesn't fire.
+  async function advanceToValidateScanStep(
+    user: ReturnType<typeof userEvent.setup>,
+  ) {
+    await advanceToCredentialsStep(user);
+    fireEvent.change(screen.getByLabelText(/Fingerprint/i), {
+      target: { value: FINGERPRINT },
+    });
+    fireEvent.change(screen.getByLabelText(/Private key \(PEM\)/i), {
+      target: { value: PRIVATE_KEY },
+    });
+    await waitFor(() => {
+      const ack = screen.getByRole("checkbox", {
+        name: /I have stored this private key securely/i,
+      });
+      expect(ack).not.toBeDisabled();
+    });
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /I have stored this private key securely/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Next$/i })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Validate connection/i }),
+      ).toBeInTheDocument();
+    });
+  }
+});
+
+// within is imported above for potential per-row scoping; silence the
+// unused warning by referencing it once. (Some tests may scope by
+// table row in a follow-up; keeping the import keeps the diff narrow
+// when that lands.)
+void within;
