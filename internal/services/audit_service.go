@@ -424,4 +424,54 @@ const (
 	AuditEventDiscoveryGCPScanCompleted          = "discovery.gcp.scan_completed"
 	AuditEventDiscoveryGCPScanFailed             = "discovery.gcp.scan_failed"
 	AuditEventDiscoveryGCPRecommendationsGenerated = "discovery.gcp.recommendations_generated"
+
+	// v0.89.51 (#674 Stream 72, Azure discovery slice 1 chunk 1) —
+	// audit event types for the second non-AWS discovery arc, mirroring
+	// the GCP arc's lifecycle one-for-one with subscription_id replacing
+	// the GCP project_id (and the AWS account_id). Chunk 1 adds the
+	// constants only; chunks 2 / 3 / 5 (scanner, API handlers, proposer
+	// integration) wire the call sites to actually emit these events.
+	// SIEM consumers that already fan out on discovery.aws.* and
+	// discovery.gcp.* rows can apply the same shape to discovery.azure.*
+	// rows — the only field swap is the cloud-specific scope id.
+	//
+	// Payload contract (per docs/proposals/azure-discovery-slice1.md
+	// §11, §13 contract item 6):
+	//
+	//   - .connection_created: connection_id, display_name, tenant_id,
+	//     subscription_id, client_id, location (empty="scan all").
+	//     SealedSecret bytes NEVER in payload — the credstore-sealed
+	//     posture extends to the audit surface. The plaintext SP
+	//     client_secret is NEVER in payload under any circumstance;
+	//     the seal/unseal pair is the only sanctioned access path.
+	//   - .connection_deleted: connection_id, tenant_id, subscription_id.
+	//     SealedSecret bytes NEVER in payload (the delete path doesn't
+	//     touch them anyway).
+	//   - .scan_started: connection_id, tenant_id, subscription_id,
+	//     location, scan_id.
+	//   - .scan_completed: connection_id, tenant_id, subscription_id,
+	//     location, scan_id, total_resources, instrumented_count,
+	//     partial (bool), partial_reason (string, omitempty),
+	//     failed_services ([]string of Azure service names like
+	//     "azurevm").
+	//   - .scan_failed: connection_id, tenant_id, subscription_id,
+	//     location, scan_id, error_kind ("permission_denied" |
+	//     "subscription_not_found" | "tenant_invalid" |
+	//     "credentials_invalid" | "network"), humanized_message.
+	//     Plaintext SP client_secret NEVER in payload or error message.
+	//   - .recommendations_generated: connection_id, tenant_id,
+	//     subscription_id, location, scan_id, recommendation_count,
+	//     verdict_examples_used ([]string of PR URLs — mirrors the
+	//     AWS / GCP proposer payload shape so chunk 5's proposer
+	//     integration slots into the existing verdict-learning loop
+	//     without schema changes).
+	//
+	// See docs/proposals/azure-discovery-slice1.md §11 (audit events)
+	// and §13 contract item 6.
+	AuditEventDiscoveryAzureConnectionCreated        = "discovery.azure.connection_created"
+	AuditEventDiscoveryAzureConnectionDeleted        = "discovery.azure.connection_deleted"
+	AuditEventDiscoveryAzureScanStarted              = "discovery.azure.scan_started"
+	AuditEventDiscoveryAzureScanCompleted            = "discovery.azure.scan_completed"
+	AuditEventDiscoveryAzureScanFailed               = "discovery.azure.scan_failed"
+	AuditEventDiscoveryAzureRecommendationsGenerated = "discovery.azure.recommendations_generated"
 )
