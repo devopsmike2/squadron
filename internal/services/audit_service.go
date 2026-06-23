@@ -549,4 +549,26 @@ const (
 	// the way the response did so SIEM consumers can reconstruct the
 	// aggregate without round-tripping the endpoint.
 	AuditEventDiscoverySummaryRequested = "discovery.summary.requested"
+
+	// v0.89.75 (#706 Stream 104, slice 1 chunk 2 of the Trace
+	// integration arc) — receiver-wiring + background flush. The
+	// trace_index.background_flushed event fires once per flush cycle
+	// from the chunk-2 background goroutine
+	// (internal/traceindex.BackgroundFlusher). Payload is the meta-
+	// shape ONLY — rows_written (int), rows_evicted (int),
+	// duration_ms (int), interval_s (int). NO span content, NO
+	// resource attributes — design doc §8 + §11 acceptance test 12
+	// ("Span content not in audit") pin this.
+	//
+	// discovery.trace_coverage.requested fires from the chunk-3
+	// /api/v1/discovery/trace_coverage handler on cache MISS only,
+	// mirroring the cache-miss-only emission pattern AuditEvent-
+	// DiscoverySummaryRequested established. Cache hits return the
+	// composed payload instantly with no audit row so the timeline
+	// doesn't drown in dashboard polls.
+	//
+	// See docs/proposals/trace-integration-slice1.md §8 (audit
+	// events) and §9 contract item 5.
+	AuditEventTraceIndexBackgroundFlushed = "trace_index.background_flushed"
+	AuditEventTraceCoverageRequested      = "discovery.trace_coverage.requested"
 )
