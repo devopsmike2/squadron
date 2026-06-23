@@ -154,6 +154,26 @@ type Server struct {
 	iacChecksClient handlers.ChecksAPI
 	squadronHost    string
 	checkRunName    string
+	// v0.89.44 (#664 Stream 62, slice 1 chunk 3 of the GitHub Checks
+	// API back-signal arc). Optional wires consumed by the chunk-3
+	// follow-up on the webhook handler when an inbound merge / close
+	// event lands:
+	//   - iacWebhookChecksClient: the *iacgithub.PATClient that issues
+	//     the UpdateCheckRun PATCH. Production wires the SAME client
+	//     used for iacChecksClient (chunk 2) since one
+	//     *iacgithub.PATClient satisfies both interfaces; the
+	//     field is separately typed because the two interfaces
+	//     deliberately stay narrow per their respective chunks. Nil
+	//     leaves the chunk-3 follow-up dormant.
+	//   - iacWebhookChecksPAT: the deployment-wide PAT used to
+	//     authenticate the UpdateCheckRun PATCH. The webhook
+	//     receiver has no per-request operator credential (events
+	//     come from GitHub via HMAC); the PAT is supplied at startup
+	//     and reused for every chunk-3 update. Empty keeps the
+	//     follow-up dormant. Slice 2 candidate: per-connection PAT
+	//     lookup off the connection row.
+	iacWebhookChecksClient handlers.WebhookChecksAPI
+	iacWebhookChecksPAT    string
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -526,6 +546,40 @@ func (s *Server) SetSquadronHost(host string) {
 // Empty value keeps the default.
 func (s *Server) SetCheckRunName(name string) {
 	s.checkRunName = name
+}
+
+// SetIaCWebhookChecksClient wires the v0.89.44 (#664 Stream 62,
+// slice 1 chunk 3 of the GitHub Checks API back-signal arc) Checks
+// API client used by the chunk-3 webhook follow-up on inbound merge
+// / close events. Nil leaves the follow-up dormant — the existing
+// recommendation.pr_merged / .pr_closed_not_merged path completes
+// normally with no check-run side-effects. Production wires the
+// SAME underlying *iacgithub.PATClient that satisfies the chunk-2
+// SetIaCChecksClient surface; the two setters take different
+// interface types because each chunk's interface stays deliberately
+// narrow.
+func (s *Server) SetIaCWebhookChecksClient(c handlers.WebhookChecksAPI) {
+	s.iacWebhookChecksClient = c
+}
+
+// SetIaCWebhookChecksPAT wires the v0.89.44 (#664 Stream 62, slice 1
+// chunk 3) deployment-wide PAT the webhook handler uses to
+// authenticate the UpdateCheckRun PATCH. Empty leaves the chunk-3
+// follow-up dormant — without a credential we cannot authenticate
+// the PATCH. The PAT MUST carry the checks:write scope per design
+// doc §5; missing scope surfaces as iac.check_run.failed with
+// error_kind=scope_missing.
+//
+// Typically wired from os.Getenv("SQUADRON_IAC_GITHUB_PAT") at
+// startup, but the runbook is explicit: the value is a credential
+// and SHOULD live in the deployment's secrets substrate, not in
+// plaintext config.
+//
+// Slice 2 candidate: per-connection PAT lookup off iacconnstore,
+// mirroring the chunk-2 PR-open path which already unseals
+// per-connection PATs.
+func (s *Server) SetIaCWebhookChecksPAT(pat string) {
+	s.iacWebhookChecksPAT = pat
 }
 
 // iacGitHubTrampoline late-binds an IaC-GitHub handler call. Mirrors
@@ -1087,6 +1141,28 @@ func (s *Server) registerRoutes() {
 		// same one the discovery substrate uses to seal PATs.
 		if s.discoveryCredKey != nil {
 			h = h.WithCredstoreKey(s.discoveryCredKey)
+		}
+		// v0.89.44 (#664 Stream 62, slice 1 chunk 3 of the GitHub
+		// Checks API back-signal arc). Wire the chunk-3 follow-up
+		// surfaces. All four are optional — when any one is unwired
+		// the helper short-circuits silently per design doc §5
+		// fail-open posture. Production wires iacWebhookChecksClient
+		// against the same shared *iacgithub.PATClient chunk 2's
+		// SetIaCChecksClient uses; appStore satisfies the slim
+		// WebhookCheckRunStore interface directly via its
+		// GetCheckRunForRecommendation + SetCheckRunForRecommendation
+		// methods.
+		if s.iacWebhookChecksClient != nil {
+			h = h.WithChecksAPI(s.iacWebhookChecksClient)
+		}
+		if s.appStore != nil {
+			h = h.WithCheckRunStore(s.appStore)
+		}
+		if strings.TrimSpace(s.iacWebhookChecksPAT) != "" {
+			h = h.WithPAT(s.iacWebhookChecksPAT)
+		}
+		if strings.TrimSpace(s.squadronHost) != "" {
+			h = h.WithSquadronHost(s.squadronHost)
 		}
 		h.HandleWebhook(c)
 	})
