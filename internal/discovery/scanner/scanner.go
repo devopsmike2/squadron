@@ -1062,6 +1062,61 @@ type ServerlessInstanceSnapshot struct {
 	Detail map[string]any `json:"detail,omitempty"`
 }
 
+// ScanScope is the per-call narrowing envelope the serverless-tier
+// ScanServerless methods accept (docs/proposals/serverless-tier-
+// slice1.md §5 scanner contract). The chunk-5 trampoline passes a
+// ScanScope per invocation so the scanner can target a specific
+// account / project / subscription / tenancy + (optionally) a
+// narrower compartment / resource-group / project subset than the
+// scanner's connection-wide default. An empty ScanScope means "scan
+// the full default surface the scanner is configured for".
+//
+// For the chunk-4 OCI Functions scanner the relevant fields are
+// AccountID (overrides the per-snapshot AccountID stamped onto
+// every row — the scanner falls back to its configured TenancyOCID
+// when empty) and CompartmentIDs (overrides the default "tenancy
+// root + first-level children" walk; the scanner walks exactly the
+// listed compartments when set, skipping the Identity API call
+// entirely). The other fields are reserved for the GCP / Azure /
+// AWS chunk-2 / 3 scanners' equivalent narrowing.
+//
+// Kept as a struct (not a function-args bag) so future per-tier
+// scope expansions land on the same envelope without churning the
+// per-scanner method signatures.
+type ScanScope struct {
+	// AccountID overrides the per-snapshot AccountID stamped on
+	// every row. Empty means "use the scanner's configured
+	// connection-level account id" (TenancyOCID on OCI,
+	// ProjectID on GCP, SubscriptionID on Azure, the assumed-role
+	// account on AWS).
+	AccountID string `json:"account_id,omitempty"`
+
+	// CompartmentIDs narrows the walk to a specific subset of OCI
+	// compartments. Empty defaults to "tenancy root + first-level
+	// children" via the existing listCompartments helper. Reserved
+	// here as the canonical OCI-side narrowing slot; the GCP /
+	// Azure / AWS scanners read their own per-cloud narrowing
+	// fields below.
+	CompartmentIDs []string `json:"compartment_ids,omitempty"`
+
+	// ResourceGroups narrows an Azure walk to specific
+	// resource-group names. Reserved for the chunk-3 Azure
+	// Functions scanner.
+	ResourceGroups []string `json:"resource_groups,omitempty"`
+
+	// Projects narrows a GCP walk to specific project IDs.
+	// Reserved for the chunk-2 GCP Cloud Run / Cloud Functions
+	// scanners.
+	Projects []string `json:"projects,omitempty"`
+
+	// Regions narrows the walk to a subset of regions. Empty
+	// means "scan every region the scanner's connection is
+	// configured for". Reserved across all four clouds; slice 1
+	// ships single-region per connection so the chunk-4 OCI
+	// scanner ignores this field.
+	Regions []string `json:"regions,omitempty"`
+}
+
 // IsInstrumented implements the slice 1 OR-rule for serverless
 // resources: a function or service counts as instrumented when at
 // least one of the two axes (HasTraceAxis OR HasOTelDistro) is true.
