@@ -342,8 +342,65 @@ func (r *discoveryRecordingAudit) Record(_ context.Context, e services.AuditEntr
 	return nil
 }
 
-func (r *discoveryRecordingAudit) List(_ context.Context, _ services.AuditEventFilter) ([]*services.AuditEvent, error) {
-	return nil, nil
+// List projects the captured entries into the *AuditEvent shape and
+// applies the documented filter (EventType + TargetType + TargetID +
+// Since + Limit). v0.89.44 (#664 Stream 62, slice 1 chunk 3 of the
+// GitHub Checks API back-signal arc) — the chunk-3 webhook follow-up
+// calls AuditService.List to pivot from the inbound pr_merged /
+// pr_closed_not_merged event to the original iac.check_run.created
+// row that carries the recommendation_id. Tests that exercise that
+// pivot need List to actually return the entries they Record'd
+// earlier in the same test; returning nil here silently broke that
+// path.
+//
+// Backward compatible with the pre-chunk-3 callers: every existing
+// test reads against r.entries directly, never against the List
+// return value, so promoting List to a real filter is additive.
+//
+// The projection stamps a synthetic ID + Timestamp so the returned
+// rows are well-formed for any downstream that reads them, but
+// callers in the handler test surface key off Payload (where the
+// pr_url + recommendation_id pivot lives).
+func (r *discoveryRecordingAudit) List(_ context.Context, f services.AuditEventFilter) ([]*services.AuditEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UTC()
+	// Iterate newest-first so callers that rely on the "find first
+	// match" semantics get the most recent matching row (mirrors the
+	// production sqlite store's ORDER BY created_at DESC contract).
+	out := make([]*services.AuditEvent, 0, len(r.entries))
+	for i := len(r.entries) - 1; i >= 0; i-- {
+		e := r.entries[i]
+		if f.EventType != "" && e.EventType != f.EventType {
+			continue
+		}
+		if f.TargetType != "" && e.TargetType != f.TargetType {
+			continue
+		}
+		if f.TargetID != "" && e.TargetID != f.TargetID {
+			continue
+		}
+		// Since filter is a lower bound on Timestamp. The recorded
+		// entry doesn't carry an explicit timestamp here — we stamp
+		// it at projection time using now, which always satisfies a
+		// Since cutoff in the past. Tests don't depend on a precise
+		// Since filter.
+		out = append(out, &services.AuditEvent{
+			ID:         "rec-" + e.EventType + "-" + e.TargetID,
+			Timestamp:  now,
+			Actor:      e.Actor,
+			EventType:  e.EventType,
+			TargetType: e.TargetType,
+			TargetID:   e.TargetID,
+			Action:     e.Action,
+			Payload:    e.Payload,
+			CreatedAt:  now,
+		})
+		if f.Limit > 0 && len(out) >= f.Limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (r *discoveryRecordingAudit) Get(_ context.Context, _ string) (*services.AuditEvent, error) {
