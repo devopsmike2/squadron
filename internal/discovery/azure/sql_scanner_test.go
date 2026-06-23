@@ -174,6 +174,17 @@ func (f *fakeAzureSQL) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(settings)
 			return
+
+		case strings.HasSuffix(path, "/providers/Microsoft.ContainerService/managedClusters"):
+			// Kubernetes-tier-slice-2 (chunk 3): the SQL-walk fake
+			// also routes the AKS managedClusters list endpoint so
+			// slice-2 SQL tests don't get spurious "aks" partial
+			// failures from the chunk-3 walker. The default response
+			// is an empty cluster list — operator has no AKS
+			// inventory.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(armAKSListResponse{Value: nil})
+			return
 		}
 
 		// Unhandled.
