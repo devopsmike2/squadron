@@ -136,6 +136,12 @@ export interface ComputeInstanceSnapshot {
   has_otel: boolean;
   os_family: string;
   region: string;
+  // last_seen_at — v0.89.77 trace integration slice 1 chunk 4. ISO
+  // timestamp of the most recent span the receiver observed for
+  // this resource. Undefined when traces have never been seen — the
+  // Inventory table renders "never" with a warning indicator on
+  // that path.
+  last_seen_at?: string;
 }
 
 // FunctionRuntimeSnapshot mirrors scanner.FunctionRuntimeSnapshot.
@@ -163,6 +169,9 @@ export interface DatabaseInstanceSnapshot {
   enhanced_monitoring_enabled: boolean;
   region: string;
   tags: Record<string, string>;
+  // last_seen_at — v0.89.77 trace integration slice 1 chunk 4. See
+  // ComputeInstanceSnapshot.last_seen_at godoc.
+  last_seen_at?: string;
 }
 
 // ObjectStoreSnapshot mirrors scanner.ObjectStoreSnapshot. Slice 3a
@@ -232,6 +241,9 @@ export interface ClusterSnapshot {
   fargate_profile_count: number;
   region: string;
   tags: Record<string, string>;
+  // last_seen_at — v0.89.77 trace integration slice 1 chunk 4. See
+  // ComputeInstanceSnapshot.last_seen_at godoc.
+  last_seen_at?: string;
 }
 
 // ScanResult is the typed payload the scan endpoint returns. Mirrors

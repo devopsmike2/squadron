@@ -45,6 +45,7 @@ import {
 import { Link, useSearchParams } from "react-router-dom";
 import useSWR from "swr";
 
+
 import {
   generateAWSRecommendations,
   listAWSConnections,
@@ -94,6 +95,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { awsWizard } from "@/data/awsWizard";
+import { relativeTime } from "@/lib/relativeTime";
 
 // ACCOUNT_TAB / INVENTORY_TAB / RECS_TAB — string literals used both as
 // Radix Tabs values and as a stable key for tests to query by role.
@@ -1299,7 +1301,10 @@ function ComputeSection({
                         {c.instance_type} · {c.region}
                       </p>
                     </div>
-                    <OtelBadge ok={c.has_otel} />
+                    <div className="flex flex-wrap items-center gap-1">
+                      <OtelBadge ok={c.has_otel} />
+                      <LastSeenCell value={c.last_seen_at} />
+                    </div>
                   </div>
                   <TagPills tags={c.tags} />
                 </li>
@@ -1429,6 +1434,7 @@ function DatabasesSection({
                         ok={d.enhanced_monitoring_enabled}
                         label="Enhanced Monitoring"
                       />
+                      <LastSeenCell value={d.last_seen_at} />
                     </div>
                   </div>
                   <TagPills tags={d.tags} />
@@ -1670,6 +1676,7 @@ function ClustersSection({
                         {c.resource_id}
                       </code>
                     </div>
+                    <LastSeenCell value={c.last_seen_at} />
                   </div>
                   <div className="mt-2 flex flex-col gap-1">
                     <div className="flex flex-wrap items-center gap-1">
@@ -1857,7 +1864,7 @@ export function RecommendationsTab({
         // Graceful degradation: log + leave the Set empty so the
         // operator can still toggle. The audit timeline remains
         // the authoritative log for "was this excluded?" questions.
-        // eslint-disable-next-line no-console
+         
         console.error("listExcludedRecommendations failed", err);
       });
     return () => {
@@ -2743,4 +2750,32 @@ function buildIaCPlacementDeepLink(
   params.set("step", "placement");
   params.set("kind", resourceKind);
   return `/discovery/iac/github?${params.toString()}`;
+}
+
+// LastSeenCell — v0.89.77 trace integration slice 1 chunk 4. The AWS
+// Inventory tab uses a card layout rather than a table, so the cell
+// renders as an inline pill placed next to the per-row OTel /
+// instrumentation badge. The "never" branch carries the same amber
+// warning indicator as the GCP / Azure / OCI tables so the operator's
+// visual vocabulary is consistent across the four provider pages.
+function LastSeenCell({ value }: { value?: string }) {
+  const rel = relativeTime(value);
+  if (rel.isNever) {
+    return (
+      <Badge
+        variant="outline"
+        className="border-amber-500/50 text-amber-700 dark:text-amber-400"
+        title="No spans observed for this resource"
+        data-testid="last-seen-never"
+      >
+        <AlertTriangle className="h-3 w-3" aria-hidden />
+        Last seen: {rel.text}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-muted-foreground" title={value}>
+      Last seen: {rel.text}
+    </Badge>
+  );
 }

@@ -274,6 +274,18 @@ type ComputeInstanceSnapshot struct {
 	// snapshot so the proposer can reason about collector
 	// colocation without referring back to the Result.
 	Region string `json:"region"`
+
+	// LastSeenAt — trace integration slice 1 chunk 4
+	// (docs/proposals/trace-integration-slice1.md §6, v0.89.77).
+	// Most recent timestamp at which Squadron's traceindex saw any
+	// span from this resource. Nil means "no traces ever observed"
+	// (rendered as "never" in the UI). Set at scan-response time by
+	// joining against the traceindex on the projected resource key
+	// (see traceindex.ComputeResourceKey and the inventory-side
+	// ProjectComputeKey helper). Empty / unwired on the scanner-
+	// produced result; the handler-side annotation step populates
+	// it just before JSON emission.
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // DatabaseInstanceSnapshot is the category-typed view of a managed
@@ -361,6 +373,13 @@ type DatabaseInstanceSnapshot struct {
 	// for non-AWS database snapshots so the proposer routes to
 	// the right recommendation kind.
 	Provider string `json:"provider,omitempty"`
+
+	// LastSeenAt — trace integration slice 1 chunk 4
+	// (docs/proposals/trace-integration-slice1.md §6, v0.89.77).
+	// See ComputeInstanceSnapshot.LastSeenAt godoc for the join
+	// semantics; the database-side projection key is documented on
+	// traceindex.ProjectDatabaseKey.
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // ObjectStoreSnapshot is the category-typed view of an object-storage
@@ -613,6 +632,13 @@ type ClusterSnapshot struct {
 	// for non-AWS cluster snapshots so the proposer routes to the
 	// right recommendation kind.
 	Provider string `json:"provider,omitempty"`
+
+	// LastSeenAt — trace integration slice 1 chunk 4
+	// (docs/proposals/trace-integration-slice1.md §6, v0.89.77).
+	// See ComputeInstanceSnapshot.LastSeenAt godoc for the join
+	// semantics; the cluster-side projection key is documented on
+	// traceindex.ProjectClusterKey.
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // ClusterAddon is a single EKS managed add-on attached to a

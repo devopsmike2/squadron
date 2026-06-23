@@ -779,6 +779,96 @@ describe("DiscoveryAzure", () => {
       ).toBeInTheDocument();
     });
   }
+
+  // --- v0.89.77 trace integration slice 1 chunk 4 — last_seen_at ---
+
+  it("TestInventoryTab_ComputeSubTab_LastSeenColumn_RendersRelativeTime", async () => {
+    const user = userEvent.setup();
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      compute: [
+        { ...sampleScan.compute[0], last_seen_at: twoHoursAgo },
+      ],
+      instrumented_count: 1,
+      uninstrumented_count: 0,
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/2h ago/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Last seen/i)).toBeInTheDocument();
+  });
+
+  it("TestInventoryTab_ComputeSubTab_LastSeenColumn_NeverValue", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      compute: [
+        { ...sampleScan.compute[0], last_seen_at: undefined },
+      ],
+      instrumented_count: 1,
+      uninstrumented_count: 0,
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(0);
+    });
+  });
 });
 
 // within is imported above for potential per-row scoping; silence the
