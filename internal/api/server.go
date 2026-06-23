@@ -24,6 +24,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/incidents"
@@ -121,6 +122,16 @@ type Server struct {
 	// "IaC connect not configured" message; the rest of the discovery
 	// surface stays unaffected.
 	iacConnStore iacconnstore.Store
+	// v0.89.47 (#667 Stream 67, GCP discovery slice 1 chunk 3) — GCP
+	// discovery substrate. Optional at construction; the
+	// /api/v1/discovery/gcp/* routes 503 when the store is unwired
+	// (test_server.go path stays unaffected). The GCP credstore key
+	// reuses s.discoveryCredKey — chunk 1 of #667 sealed the SA JSON
+	// under the same SQUADRON_SECRETS_KEY the AWS / IaC paths use,
+	// with a domain-tagged AAD ("squadron.gcp_sa.v1") that prevents
+	// cross-shape unsealing.
+	discoveryGCPStore          gcpconnstore.Store
+	discoveryGCPScannerFactory handlers.GCPScannerFactory
 	// v0.89.23 Stream 40 (#639) — GitHub webhook listener secret.
 	// Cached at startup from os.Getenv(SQUADRON_GITHUB_WEBHOOK_SECRET);
 	// an empty value leaves the /api/v1/webhooks/github route mounted
@@ -491,6 +502,39 @@ func (s *Server) SetIaCConnStore(store iacconnstore.Store) {
 	s.iacConnStore = store
 }
 
+// SetGCPDiscoveryStore wires the v0.89.47 (#667 chunk 3) GCP
+// connection substrate onto the API server. Optional in the same
+// posture as SetDiscoveryCredStore: a nil store leaves the
+// /api/v1/discovery/gcp/* routes 503ing with a clear "GCP discovery
+// not configured" message; the rest of the discovery surface stays
+// reachable.
+//
+// The GCP path reuses the credstore.Key wired by SetDiscoveryCredKey —
+// chunk 1 (#667 v0.89.46) sealed the SA JSON under the same
+// SQUADRON_SECRETS_KEY the AWS / IaC paths use, with a domain-tagged
+// AAD ("squadron.gcp_sa.v1") preventing cross-shape unsealing.
+// Calling SetGCPDiscoveryStore without also calling
+// SetDiscoveryCredKey leaves Create / Validate / Scan 500ing with
+// a "key not wired" humanized error.
+func (s *Server) SetGCPDiscoveryStore(store gcpconnstore.Store) {
+	s.discoveryGCPStore = store
+}
+
+// SetGCPDiscoveryScannerFactory wires the v0.89.47 (#667 chunk 3) GCP
+// scanner factory. Production wires a factory that instantiates the
+// chunk-2 *gcp.Scanner with the unsealed SA JSON; tests substitute a
+// fake that returns a pre-canned scanner.Scanner. A nil factory
+// leaves Validate / Scan 500ing with a humanized error; the CRUD
+// routes (Create / List / Get / Update / Delete) stay unaffected.
+//
+// The setter pattern keeps NewServer's signature stable and mirrors
+// the SetDiscoveryCredStore / SetDiscoveryAIService posture. Chunk 2
+// and chunk 3 ship in parallel worktrees; main.go composes the
+// concrete factory once both land in main.
+func (s *Server) SetGCPDiscoveryScannerFactory(f handlers.GCPScannerFactory) {
+	s.discoveryGCPScannerFactory = f
+}
+
 // SetIaCGitHubWebhookSecret wires the HMAC secret the GitHub PR-
 // merged webhook receiver validates inbound signatures against.
 // v0.89.23 #639 Stream 40. Slice 1 ships one shared deployment-wide
@@ -774,6 +818,41 @@ func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin
 		// under discoveryTrampoline also picks it up consistently.
 		if s.appStore != nil {
 			h.WithExclusionStore(s.appStore)
+		}
+		fn(h, c)
+	}
+}
+
+// discoveryGCPTrampoline late-binds a GCP discovery handler call so
+// the route table can be registered before SetGCPDiscoveryStore runs.
+// Mirrors discoveryTrampoline one-for-one: 503s with a clear message
+// when the GCP store is still nil so the test_server.go path (which
+// never wires GCP discovery) stays unaffected.
+//
+// The handler is built per-request because the auditService is
+// supplied via SetAuditService and the credstore.Key via
+// SetDiscoveryCredKey — both are set on Server post-construction and
+// the trampoline picks up whatever's there at request time.
+//
+// v0.89.47 (#667 Stream 67, GCP discovery slice 1 chunk 3).
+func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.discoveryGCPStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "GCP discovery is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewDiscoveryGCPHandlers(s.discoveryGCPStore, s.logger)
+		if s.auditService != nil {
+			h.WithGCPAuditService(s.auditService)
+		}
+		if s.discoveryCredKey != nil {
+			h.WithGCPCredstoreKey(s.discoveryCredKey)
+		}
+		if s.discoveryGCPScannerFactory != nil {
+			h.WithGCPScannerFactory(s.discoveryGCPScannerFactory)
 		}
 		fn(h, c)
 	}
@@ -1690,6 +1769,49 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/aws/recommendations/excluded",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRecommendationListExcluded(c) }))
+
+		// v0.89.47 (#667 Stream 67, GCP discovery slice 1 chunk 3) —
+		// GCP-side mirror of the /discovery/aws/* surface. Per design
+		// doc §6 the route shapes mirror the AWS counterparts so the
+		// wizard, the API consumers, and the SIEM forwarders see one
+		// consistent pattern across providers. The handler is built
+		// per-request through discoveryGCPTrampoline; the trampoline
+		// 503s when SetGCPDiscoveryStore is unwired so test_server.go
+		// stays unaffected.
+		//
+		// Auth posture mirrors the AWS surface: agents:read on the
+		// list / get / validate / scan / recommendations routes
+		// (those create audit events but no Squadron-persisted state
+		// in slice 1); agents:write on Create / Update / Delete (all
+		// three mutate the gcp_connections substrate). The scan route
+		// uses agents:read for the same reason its AWS counterpart
+		// does: the scan creates audit rows but no persisted scan
+		// result; the operator is reading the cloud's state mediated
+		// by Squadron's read-only SA.
+		v1.POST("/discovery/gcp/connections",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleCreateGCPConnection(c) }))
+		v1.GET("/discovery/gcp/connections",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleListGCPConnections(c) }))
+		v1.GET("/discovery/gcp/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGetGCPConnection(c) }))
+		v1.PATCH("/discovery/gcp/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleUpdateGCPConnection(c) }))
+		v1.DELETE("/discovery/gcp/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleDeleteGCPConnection(c) }))
+		v1.POST("/discovery/gcp/connections/:id/validate",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleValidateGCPConnection(c) }))
+		v1.POST("/discovery/gcp/connections/:id/scan",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleScanGCPConnection(c) }))
+		v1.POST("/discovery/gcp/connections/:id/recommendations",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleRecommendationsForGCPScan(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
