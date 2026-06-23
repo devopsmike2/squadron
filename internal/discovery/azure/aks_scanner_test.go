@@ -108,6 +108,18 @@ func (f *fakeAzureAKS) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(armAKSListResponse{Value: f.Clusters})
 			return
+
+		case strings.HasSuffix(path, "/providers/Microsoft.Web/sites"):
+			// Serverless-tier-slice-1 (chunk 3, v0.89.91, #723
+			// Stream 121): the AKS-walk fake also routes the
+			// Microsoft.Web/sites list endpoint so existing AKS
+			// tests don't get spurious "azfunc" partial failures
+			// from the chunk-3 serverless walker that always runs
+			// after the AKS walk. The default response is an empty
+			// sites list.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(armWebSiteListResponse{Value: nil})
+			return
 		}
 
 		// Unhandled.

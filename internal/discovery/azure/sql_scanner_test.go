@@ -185,6 +185,18 @@ func (f *fakeAzureSQL) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(armAKSListResponse{Value: nil})
 			return
+
+		case strings.HasSuffix(path, "/providers/Microsoft.Web/sites"):
+			// Serverless-tier-slice-1 (chunk 3, v0.89.91, #723
+			// Stream 121): the SQL-walk fake also routes the
+			// Microsoft.Web/sites list endpoint so existing SQL
+			// tests don't get spurious "azfunc" partial failures
+			// from the chunk-3 serverless walker that always runs
+			// after the SQL walk. The default response is an empty
+			// sites list — operator has no Function Apps inventory.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(armWebSiteListResponse{Value: nil})
+			return
 		}
 
 		// Unhandled.
