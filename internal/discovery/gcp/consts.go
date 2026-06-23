@@ -11,6 +11,18 @@ package gcp
 // identifier is unprefixed.
 const ServiceIDComputeEngine = "gce"
 
+// ServiceIDCloudSQL is the slice-2 (database-tier-slice2.md §4.1)
+// service identifier the scanner reports against Result.FailedServices
+// when the Cloud SQL walk produces a non-fatal error. Same unprefixed
+// shape as ServiceIDComputeEngine.
+const ServiceIDCloudSQL = "cloudsql"
+
+// ProviderGCP is the Provider discriminator value the scanner stamps
+// on every DatabaseInstanceSnapshot it produces. The proposer reads
+// this to route Cloud SQL rows to the cloudsql-pi-enable recommendation
+// kind (see scanner.DatabaseInstanceSnapshot.Provider godoc).
+const ProviderGCP = "gcp"
+
 // OTelLabelPrefix is the case-insensitive prefix the slice-1
 // "instrumented" rule looks for on a GCE instance's labels. Mirrors
 // the AWS EC2 scanner's slice-1 single-axis tag heuristic — symmetry

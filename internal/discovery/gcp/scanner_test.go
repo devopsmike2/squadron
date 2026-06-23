@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	compute "google.golang.org/api/compute/v1"
+	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 )
@@ -55,9 +56,28 @@ type fakeGCP struct {
 	// instances.list call for that zone return the configured status.
 	InstancesListStatusByZone map[string]int
 
+	// Cloud SQL (slice 2) test surface.
+	//
+	// CloudSQLInstances is the flat list returned when no pagination is
+	// configured. The mock returns an empty list when neither
+	// CloudSQLInstances nor CloudSQLPages is set.
+	CloudSQLInstances []*sqladmin.DatabaseInstance
+
+	// CloudSQLPages, when non-nil, makes the Cloud SQL list endpoint
+	// page through the supplied page sequence. Each page returns its
+	// instances and a NextPageToken pointing at the next page (or
+	// empty for the last page). The mock pulls the page by index
+	// based on the inbound pageToken query param.
+	CloudSQLPages [][]*sqladmin.DatabaseInstance
+
+	// CloudSQLListStatus, when non-zero, makes the next Cloud SQL
+	// instances.list call return this status.
+	CloudSQLListStatus int
+
 	// Call counters for assertions.
 	ZonesListCalls     int
 	InstancesListCalls map[string]int
+	CloudSQLListCalls  int
 }
 
 func newFakeGCP() *fakeGCP {
@@ -105,6 +125,8 @@ func (f *fakeGCP) handler() http.Handler {
 		// Compute API path shapes (REST, v1):
 		//   /compute/v1/projects/{project}/zones
 		//   /compute/v1/projects/{project}/zones/{zone}/instances
+		// Cloud SQL Admin API path shape (REST, v1beta4):
+		//   /sql/v1beta4/projects/{project}/instances
 		switch {
 		case strings.HasSuffix(path, "/zones"):
 			f.ZonesListCalls++
@@ -128,6 +150,22 @@ func (f *fakeGCP) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
 			return
+
+		case strings.Contains(path, "/sql/v1beta4/projects/") && strings.HasSuffix(path, "/instances"):
+			f.CloudSQLListCalls++
+			if f.CloudSQLListStatus != 0 {
+				writeAPIError(w, f.CloudSQLListStatus, statusReason(f.CloudSQLListStatus), statusName(f.CloudSQLListStatus))
+				return
+			}
+			items, nextToken := f.cloudSQLPage(r.URL.Query().Get("pageToken"))
+			resp := sqladmin.InstancesListResponse{
+				Items:         items,
+				Kind:          "sql#instancesList",
+				NextPageToken: nextToken,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
 		}
 
 		// Unmatched path — surface as 404 so test failures are
@@ -135,6 +173,31 @@ func (f *fakeGCP) handler() http.Handler {
 		// empty body).
 		writeAPIError(w, http.StatusNotFound, fmt.Sprintf("unhandled mock path: %s", path), "NOT_FOUND")
 	})
+}
+
+// cloudSQLPage resolves the inbound pageToken into the (items, nextToken)
+// pair the mock should return. The token shape is "page-N" (1-indexed);
+// the empty token selects page 0 (or the flat CloudSQLInstances list
+// when no pages are configured).
+func (f *fakeGCP) cloudSQLPage(pageToken string) ([]*sqladmin.DatabaseInstance, string) {
+	if len(f.CloudSQLPages) == 0 {
+		return f.CloudSQLInstances, ""
+	}
+	idx := 0
+	if pageToken != "" {
+		// Parse "page-N" -> N. Default to 0 on parse failure (defensive).
+		var n int
+		_, _ = fmt.Sscanf(pageToken, "page-%d", &n)
+		idx = n
+	}
+	if idx >= len(f.CloudSQLPages) {
+		return nil, ""
+	}
+	items := f.CloudSQLPages[idx]
+	if idx+1 < len(f.CloudSQLPages) {
+		return items, fmt.Sprintf("page-%d", idx+1)
+	}
+	return items, ""
 }
 
 func parseZoneFromInstancesPath(path string) string {
@@ -529,4 +592,348 @@ func TestTrimMachineType(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.out, trimMachineType(tc.in), "in=%q", tc.in)
 	}
+}
+
+// --- Slice 2 Cloud SQL tests -----------------------------------------
+//
+// These tests exercise the database-tier-slice2.md §3.1 detection rule
+// and the §5.1 scanner extension. The mock surface is the same
+// fakeGCP server — Cloud SQL paths route through the
+// /sql/v1beta4/projects/.../instances handler added alongside the
+// zones / instances handlers.
+
+// cloudSQLInstance is a tiny helper for assembling test instances
+// without verbose struct nesting. Tests that need richer fields fall
+// through to the raw sqladmin.DatabaseInstance literal.
+func cloudSQLInstance(name, databaseVersion, region, tier string, queryInsights bool) *sqladmin.DatabaseInstance {
+	return &sqladmin.DatabaseInstance{
+		Name:            name,
+		DatabaseVersion: databaseVersion,
+		Region:          region,
+		Settings: &sqladmin.Settings{
+			Tier: tier,
+			InsightsConfig: &sqladmin.InsightsConfig{
+				QueryInsightsEnabled: queryInsights,
+			},
+		},
+	}
+}
+
+func TestScan_CloudSQL_ReturnsDatabaseInstanceSnapshot(t *testing.T) {
+	fake := newFakeGCP()
+	// Empty zones list — the Cloud SQL walk runs even when compute
+	// returned no instances.
+	fake.Zones = []*compute.Zone{}
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		cloudSQLInstance("db-postgres-1", "POSTGRES_15", "us-central1", "db-custom-2-7680", true),
+		cloudSQLInstance("db-mysql-1", "MYSQL_8_0", "us-east1", "db-n1-standard-2", false),
+		cloudSQLInstance("db-sqlserver-1", "SQLSERVER_2019_STANDARD", "europe-west1", "db-custom-4-15360", true),
+	}
+
+	s := newScannerWithFake(t, fake, "test-project", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 3)
+	assert.Equal(t, 1, fake.CloudSQLListCalls)
+
+	byID := map[string]int{}
+	for i, d := range res.Databases {
+		byID[d.ResourceID] = i
+	}
+	require.Contains(t, byID, "db-postgres-1")
+	require.Contains(t, byID, "db-mysql-1")
+	require.Contains(t, byID, "db-sqlserver-1")
+
+	pg := res.Databases[byID["db-postgres-1"]]
+	assert.Equal(t, "postgres", pg.Engine)
+	assert.Equal(t, "15", pg.EngineVersion)
+	assert.Equal(t, "db-custom-2-7680", pg.InstanceClass)
+	assert.Equal(t, "us-central1", pg.Region)
+	assert.Equal(t, "gcp", pg.Provider)
+	assert.True(t, pg.QueryInsightsEnabled)
+
+	mysql := res.Databases[byID["db-mysql-1"]]
+	assert.Equal(t, "mysql", mysql.Engine)
+	assert.Equal(t, "8_0", mysql.EngineVersion)
+	assert.False(t, mysql.QueryInsightsEnabled)
+
+	mssql := res.Databases[byID["db-sqlserver-1"]]
+	assert.Equal(t, "sqlserver", mssql.Engine)
+	assert.Equal(t, "2019_STANDARD", mssql.EngineVersion)
+	assert.True(t, mssql.QueryInsightsEnabled)
+}
+
+func TestScan_CloudSQL_QueryInsightsEnabledDetection(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		cloudSQLInstance("db-on", "POSTGRES_15", "us-central1", "db-custom-2-7680", true),
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 1)
+	assert.True(t, res.Databases[0].QueryInsightsEnabled)
+	// Slice 2 instrumented rule: QueryInsightsEnabled=true counts.
+	assert.Equal(t, 1, res.InstrumentedCount)
+	assert.Equal(t, 0, res.UninstrumentedCount)
+}
+
+func TestScan_CloudSQL_QueryInsightsMissing_TreatsAsFalse(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		// Settings present but InsightsConfig nil.
+		{
+			Name:            "no-insights-cfg",
+			DatabaseVersion: "POSTGRES_14",
+			Region:          "us-central1",
+			Settings: &sqladmin.Settings{
+				Tier: "db-custom-1-3840",
+			},
+		},
+		// Settings nil entirely.
+		{
+			Name:            "no-settings",
+			DatabaseVersion: "MYSQL_5_7",
+			Region:          "us-west1",
+		},
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 2)
+	for _, d := range res.Databases {
+		assert.False(t, d.QueryInsightsEnabled, "missing insightsConfig should default to false (resource=%s)", d.ResourceID)
+	}
+	// Both rows uninstrumented per the slice 2 rule.
+	assert.Equal(t, 0, res.InstrumentedCount)
+	assert.Equal(t, 2, res.UninstrumentedCount)
+}
+
+func TestScan_CloudSQL_EngineNormalization(t *testing.T) {
+	cases := []struct {
+		databaseVersion string
+		engine          string
+		engineVersion   string
+	}{
+		{"POSTGRES_15", "postgres", "15"},
+		{"POSTGRES_14", "postgres", "14"},
+		{"POSTGRES_9_6", "postgres", "9_6"},
+		{"MYSQL_8_0", "mysql", "8_0"},
+		{"MYSQL_5_7", "mysql", "5_7"},
+		{"MYSQL_8_4", "mysql", "8_4"},
+		{"SQLSERVER_2019_STANDARD", "sqlserver", "2019_STANDARD"},
+		{"SQLSERVER_2017_ENTERPRISE", "sqlserver", "2017_ENTERPRISE"},
+		// Unknown family — passthrough lowercase, empty version.
+		{"WEIRD_NEW_ENGINE", "weird_new_engine", "NEW_ENGINE"},
+		{"", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.databaseVersion, func(t *testing.T) {
+			assert.Equal(t, tc.engine, normalizeEngine(tc.databaseVersion))
+			assert.Equal(t, tc.engineVersion, extractVersion(tc.databaseVersion))
+		})
+	}
+}
+
+func TestScan_CloudSQL_PermissionDenied_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeGCP()
+	// Seed a successful compute walk so the test confirms compute
+	// results survive a cloudsql failure.
+	fake.Zones = []*compute.Zone{{Name: "us-central1-a"}}
+	fake.InstancesByZone["us-central1-a"] = []*compute.Instance{
+		{Name: "vm-good", MachineType: "zones/us-central1-a/machineTypes/e2-medium", Labels: map[string]string{"otel": "v1"}},
+	}
+	fake.CloudSQLListStatus = http.StatusForbidden
+
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "cloudsql 403 is partial, not hard")
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, res.PartialReason, ServiceIDCloudSQL)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "permission denied")
+	assert.Contains(t, res.PartialReason, "roles/cloudsql.viewer")
+	assert.Contains(t, res.FailedServices, ServiceIDCloudSQL)
+
+	// Compute walk still produced its result.
+	require.Len(t, res.Compute, 1)
+	assert.Equal(t, "vm-good", res.Compute[0].ResourceID)
+	assert.Empty(t, res.Databases)
+}
+
+func TestScan_CloudSQL_RateLimit_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLListStatus = http.StatusTooManyRequests
+
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, res.PartialReason, ServiceIDCloudSQL)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "rate limit")
+	assert.Contains(t, res.FailedServices, ServiceIDCloudSQL)
+}
+
+func TestScan_CloudSQL_ProjectNotFound_RecordsPartialFailure(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLListStatus = http.StatusNotFound
+
+	s := newScannerWithFake(t, fake, "missing-project", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, strings.ToLower(res.PartialReason), "project not found")
+	assert.Contains(t, res.PartialReason, "project_id")
+	assert.Contains(t, res.FailedServices, ServiceIDCloudSQL)
+}
+
+func TestScan_CloudSQL_Pagination(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLPages = [][]*sqladmin.DatabaseInstance{
+		{
+			cloudSQLInstance("db-a-1", "POSTGRES_15", "us-central1", "db-custom-1-3840", false),
+			cloudSQLInstance("db-a-2", "POSTGRES_15", "us-central1", "db-custom-1-3840", false),
+		},
+		{
+			cloudSQLInstance("db-b-1", "POSTGRES_15", "us-central1", "db-custom-1-3840", true),
+			cloudSQLInstance("db-b-2", "POSTGRES_15", "us-central1", "db-custom-1-3840", false),
+		},
+		{
+			cloudSQLInstance("db-c-1", "POSTGRES_15", "us-central1", "db-custom-1-3840", false),
+			cloudSQLInstance("db-c-2", "POSTGRES_15", "us-central1", "db-custom-1-3840", true),
+		},
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 6)
+	assert.Equal(t, 3, fake.CloudSQLListCalls, "pagination should produce 3 list calls")
+
+	ids := map[string]struct{}{}
+	for _, d := range res.Databases {
+		ids[d.ResourceID] = struct{}{}
+	}
+	for _, want := range []string{"db-a-1", "db-a-2", "db-b-1", "db-b-2", "db-c-1", "db-c-2"} {
+		assert.Contains(t, ids, want)
+	}
+	// Instrumented tally: db-b-1, db-c-2 (2 enabled, 4 disabled).
+	assert.Equal(t, 2, res.InstrumentedCount)
+	assert.Equal(t, 4, res.UninstrumentedCount)
+}
+
+func TestScan_CloudSQL_TagsFromUserLabels(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		{
+			Name:            "tagged",
+			DatabaseVersion: "POSTGRES_15",
+			Region:          "us-central1",
+			Settings: &sqladmin.Settings{
+				Tier: "db-custom-1-3840",
+				UserLabels: map[string]string{
+					"env":  "prod",
+					"team": "platform",
+				},
+				InsightsConfig: &sqladmin.InsightsConfig{QueryInsightsEnabled: true},
+			},
+		},
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 1)
+	assert.Equal(t, map[string]string{"env": "prod", "team": "platform"}, res.Databases[0].Tags)
+}
+
+func TestScan_ComputeAndCloudSQL_BothWalked(t *testing.T) {
+	fake := newFakeGCP()
+	fake.Zones = []*compute.Zone{
+		{Name: "us-central1-a"},
+		{Name: "us-west1-a"},
+	}
+	fake.InstancesByZone["us-central1-a"] = []*compute.Instance{
+		{Name: "vm-1", MachineType: "zones/us-central1-a/machineTypes/e2-medium"},
+		{Name: "vm-2", MachineType: "zones/us-central1-a/machineTypes/e2-medium", Labels: map[string]string{"otel": "v1"}},
+	}
+	fake.InstancesByZone["us-west1-a"] = []*compute.Instance{
+		{Name: "vm-3", MachineType: "zones/us-west1-a/machineTypes/e2-medium"},
+		{Name: "vm-4", MachineType: "zones/us-west1-a/machineTypes/e2-medium"},
+	}
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		cloudSQLInstance("db-1", "POSTGRES_15", "us-central1", "db-custom-1-3840", true),
+		cloudSQLInstance("db-2", "MYSQL_8_0", "us-west1", "db-n1-standard-2", false),
+	}
+
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	assert.Len(t, res.Compute, 4)
+	assert.Len(t, res.Databases, 2)
+	assert.False(t, res.Partial)
+	// Tally: compute (1 otel) + databases (1 query insights) = 2
+	// instrumented, 4 compute uninstrumented + 1 database = 5 total.
+	assert.Equal(t, 2, res.InstrumentedCount)
+	assert.Equal(t, 4, res.UninstrumentedCount)
+}
+
+func TestScan_CloudSQL_ProviderFieldSet(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		cloudSQLInstance("a", "POSTGRES_15", "us-central1", "db-custom-1-3840", true),
+		cloudSQLInstance("b", "MYSQL_8_0", "us-east1", "db-n1-standard-2", false),
+		cloudSQLInstance("c", "SQLSERVER_2019_STANDARD", "europe-west1", "db-custom-4-15360", true),
+	}
+	s := newScannerWithFake(t, fake, "p", "")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, res.Databases, 3)
+	for _, d := range res.Databases {
+		assert.Equal(t, "gcp", d.Provider, "resource=%s should have Provider=gcp", d.ResourceID)
+	}
+}
+
+func TestScan_CloudSQL_RegionFilter(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudSQLInstances = []*sqladmin.DatabaseInstance{
+		cloudSQLInstance("central-1", "POSTGRES_15", "us-central1", "db-custom-1-3840", true),
+		cloudSQLInstance("central-2", "POSTGRES_15", "us-central1", "db-custom-1-3840", false),
+		cloudSQLInstance("east-1", "POSTGRES_15", "us-east1", "db-custom-1-3840", true),
+		cloudSQLInstance("west-1", "POSTGRES_15", "us-west1", "db-custom-1-3840", true),
+	}
+	s := newScannerWithFake(t, fake, "p", "us-central1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	// Region filter applies client-side after the full list arrives.
+	require.Len(t, res.Databases, 2)
+	ids := map[string]struct{}{}
+	for _, d := range res.Databases {
+		ids[d.ResourceID] = struct{}{}
+		assert.Equal(t, "us-central1", d.Region)
+	}
+	assert.Contains(t, ids, "central-1")
+	assert.Contains(t, ids, "central-2")
+	assert.NotContains(t, ids, "east-1")
+	assert.NotContains(t, ids, "west-1")
+}
+
+func TestNormalizeEngineAndExtractVersion_Standalone(t *testing.T) {
+	// Direct exercise of the helpers; the table test above covers
+	// these via Scan but the standalone form helps a debugger
+	// pinpoint a regression to the helper rather than the walker.
+	assert.Equal(t, "postgres", normalizeEngine("POSTGRES_15"))
+	assert.Equal(t, "mysql", normalizeEngine("MYSQL_8_0"))
+	assert.Equal(t, "sqlserver", normalizeEngine("SQLSERVER_2019_STANDARD"))
+	assert.Equal(t, "15", extractVersion("POSTGRES_15"))
+	assert.Equal(t, "", extractVersion(""))
+	assert.Equal(t, "", extractVersion("POSTGRES"))
 }
