@@ -325,6 +325,42 @@ type DatabaseInstanceSnapshot struct {
 
 	// Tags follows the same flattened shape as ComputeInstanceSnapshot.
 	Tags map[string]string `json:"tags,omitempty"`
+
+	// Slice 2 (database-tier-slice2.md, v0.89.63) — per-cloud
+	// observability primitives. Each is provider-specific; the
+	// proposer reads Provider plus the matching axis to decide
+	// whether to emit a recommendation, and which kind. AWS RDS
+	// slice 1 logic uses PerformanceInsightsEnabled +
+	// EnhancedMonitoringEnabled (above) and these fields stay
+	// zero — backward compat preserved.
+
+	// QueryInsightsEnabled signals GCP Cloud SQL Query Insights
+	// (settings.insightsConfig.queryInsightsEnabled). When false on
+	// a Cloud SQL instance, the proposer emits a
+	// cloudsql-pi-enable recommendation.
+	QueryInsightsEnabled bool `json:"query_insights_enabled,omitempty"`
+
+	// SQLInsightsDiagEnabled signals at least one Azure Diagnostic
+	// Setting routing the SQLInsights log category to any
+	// destination (Log Analytics, Storage, Event Hub) for the
+	// instance. When false on an Azure SQL Database, the proposer
+	// emits an azsql-diag-enable recommendation.
+	SQLInsightsDiagEnabled bool `json:"sql_insights_diag_enabled,omitempty"`
+
+	// DatabaseManagementEnabled signals OCI Operations Insights /
+	// Database Management enrollment
+	// (databaseManagementConfig.databaseManagementStatus ==
+	// "ENABLED") on an OCI DB System or Autonomous Database. When
+	// false, the proposer emits an ocidb-perfhub-enable
+	// recommendation.
+	DatabaseManagementEnabled bool `json:"database_management_enabled,omitempty"`
+
+	// Provider discriminates which detection axis the proposer
+	// reads. Empty defaults to "aws" for backward compatibility
+	// with v0.87.0 audit rows. Slice 2 callers must set Provider
+	// for non-AWS database snapshots so the proposer routes to
+	// the right recommendation kind.
+	Provider string `json:"provider,omitempty"`
 }
 
 // ObjectStoreSnapshot is the category-typed view of an object-storage
