@@ -54,3 +54,25 @@ const ProviderGCP = "gcp"
 // across providers makes the recommendation kinds parallel (see
 // design doc §8). Slice 2 adds richer signals.
 const OTelLabelPrefix = "otel"
+
+// RunReadonlyScope is the OAuth scope the Cloud Run Admin API
+// (serverless-tier-slice1.md §3.2) walk is authorized against. The
+// run/v1 client library exposes
+// "https://www.googleapis.com/auth/run.readonly" as the canonical
+// constant; the scanner pins it explicitly here so the scope union
+// in buildOAuthHTTPClient is greppable alongside the compute /
+// Cloud SQL / GKE / Cloud Functions scopes. The runbook documents
+// roles/run.viewer as the project-level IAM grant.
+const RunReadonlyScope = "https://www.googleapis.com/auth/run.readonly"
+
+// CloudFunctionsPlatformScope is the OAuth scope the Cloud Functions
+// API (serverless-tier-slice1.md §3.3) walk is authorized against.
+// The cloudfunctions/v1 client library does NOT expose a targeted
+// cloudfunctions.readonly constant — only the platform-wide
+// cloud-platform scope. We pin the read-only platform scope which
+// the client accepts as the least-privilege fit for the
+// read-listing call; the runbook documents
+// roles/cloudfunctions.viewer as the project-level IAM grant (the
+// role layer is the actual least-privilege ask either way, mirroring
+// the GKE container-scope rationale on ContainerReadonlyScope above).
+const CloudFunctionsPlatformScope = "https://www.googleapis.com/auth/cloud-platform.read-only"
