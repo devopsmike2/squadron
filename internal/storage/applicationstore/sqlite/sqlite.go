@@ -642,6 +642,38 @@ func (s *Storage) migrate() error {
 			updated_at             TIMESTAMP NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_iac_rec_verdicts_scope ON iac_recommendation_verdicts(connection_id, account_id, region, exclude_from_learning)`,
+
+		// v0.89.42 (#662 Stream 60, slice 1 chunk 1 of the GitHub
+		// Checks API back-signal arc) — 5 optional columns on the
+		// chunk-4 iac_recommendation_verdicts table so the durable
+		// check-run state for a recommendation lives on the same
+		// row as its operator-set exclusion and verdict-learning
+		// history. All columns nullable so rows written by the
+		// chunk-4 exclusion path keep round-tripping unchanged.
+		// check_run_id is the int64 GitHub returns on the create
+		// POST; check_run_head_sha pins the SHA the run was opened
+		// against (force-pushes do NOT migrate the run in slice 1
+		// per §7.2). status / conclusion follow GitHub's vocabulary;
+		// conclusion stays NULL while status is in_progress.
+		// check_run_updated_at supports a future slice-2 drift
+		// reconciliation pass.
+		//
+		// See docs/proposals/checks-api-back-signal.md §6.1.
+		//
+		// owner / repo are persisted alongside the int64 check_run_id
+		// so the chunk-3 webhook handler can construct the PATCH URL
+		// without re-resolving connection_id → repo on every inbound
+		// merge / close event. The design doc §6 names these as
+		// "minimal additions"; carrying owner / repo on the row keeps
+		// the chunk-3 hot path off a second lookup at trivial schema
+		// cost.
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_owner TEXT`,
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_repo TEXT`,
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_id INTEGER`,
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_head_sha TEXT`,
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_status TEXT`,
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_conclusion TEXT`,
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_updated_at TIMESTAMP`,
 	}
 
 	for _, migration := range migrations {
@@ -2295,6 +2327,213 @@ func (s *Storage) ListExcludedRecommendations(
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+// SetCheckRunForRecommendation — v0.89.42 (#662 Stream 60, slice 1
+// chunk 1). Upserts the check-run state for one recommendation on
+// the iac_recommendation_verdicts row keyed by recommendation_id.
+//
+// Cross-cutting semantics:
+//
+//   - INSERT path (no prior row): exclude_from_learning defaults to
+//     0, excluded_at + excluded_by are NULL. Per §11 Q3 of the
+//     design doc the row exists with check_run_* populated even
+//     though the operator has not (yet) excluded the kind — the
+//     row's existence here means "Squadron has a check run on this
+//     PR," not "operator has acted."
+//   - UPDATE path (row exists): only the 5 check_run_* columns +
+//     updated_at are mutated. The scope tuple (connection_id /
+//     account_id / region / recommendation_kind / resource_id) is
+//     invariant once persisted and the upsert does not overwrite
+//     it — the chunk-4 exclusion handler could legitimately race
+//     this method on the same recommendation_id and we don't want
+//     the check-run upsert to clobber the scope it already wrote.
+//
+// status and conclusion may be empty strings during transient
+// states (GitHub's Checks API treats status="in_progress" with
+// conclusion="" as valid); both columns are nullable so the
+// in-progress row stores conclusion as SQL NULL.
+//
+// See docs/proposals/checks-api-back-signal.md §6, §9, and §11
+// open question 3.
+func (s *Storage) SetCheckRunForRecommendation(
+	ctx context.Context,
+	rec types.ExcludedRecommendation,
+	ref types.CheckRunRef,
+	status, conclusion string,
+) error {
+	if rec.RecommendationID == "" {
+		return fmt.Errorf("recommendation_id required")
+	}
+	if rec.ConnectionID == "" || rec.AccountID == "" || rec.Region == "" {
+		return fmt.Errorf("scope tuple (connection_id, account_id, region) required")
+	}
+	if rec.RecommendationKind == "" {
+		return fmt.Errorf("recommendation_kind required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Check row existence so we know which branch to take. The
+	// chunk-4 SetRecommendationExclusion uses the same read-then-
+	// write structure under a transaction so the two methods race
+	// cleanly on the same recommendation_id.
+	var hadRow bool
+	const existsStmt = `SELECT 1 FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
+	var one int
+	if err := tx.QueryRowContext(ctx, existsStmt, rec.RecommendationID).Scan(&one); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("failed to read row presence: %w", err)
+		}
+	} else {
+		hadRow = true
+	}
+
+	// Marshal nullable columns: empty strings become SQL NULL so the
+	// "no check run on this row yet" state stays distinguishable from
+	// a future empty-string write.
+	now := time.Now().UTC()
+	var (
+		owner       any
+		repo        any
+		checkID     any
+		headSHA     any
+		statusVal   any
+		conclusion_ any
+	)
+	if ref.Owner != "" {
+		owner = ref.Owner
+	}
+	if ref.Repo != "" {
+		repo = ref.Repo
+	}
+	if ref.CheckID != 0 {
+		checkID = ref.CheckID
+	}
+	if ref.HeadSHA != "" {
+		headSHA = ref.HeadSHA
+	}
+	if status != "" {
+		statusVal = status
+	}
+	if conclusion != "" {
+		conclusion_ = conclusion
+	}
+
+	if hadRow {
+		const upd = `UPDATE iac_recommendation_verdicts SET
+			check_run_owner       = ?,
+			check_run_repo        = ?,
+			check_run_id          = ?,
+			check_run_head_sha    = ?,
+			check_run_status      = ?,
+			check_run_conclusion  = ?,
+			check_run_updated_at  = ?,
+			updated_at            = ?
+		WHERE recommendation_id = ?`
+		if _, err := tx.ExecContext(ctx, upd,
+			owner, repo, checkID, headSHA, statusVal, conclusion_, now, now,
+			rec.RecommendationID,
+		); err != nil {
+			return fmt.Errorf("failed to update check run state: %w", err)
+		}
+	} else {
+		// Insert with exclude_from_learning=0 and excluded_at /
+		// excluded_by NULL — per §11 Q3 the row's existence here
+		// means "Squadron has a check run on this PR," not
+		// "operator has acted." resource_id is nullable too: empty
+		// string in the projection becomes SQL NULL on the row so
+		// ListExcludedRecommendations' COALESCE on resource_id keeps
+		// behaving the way the chunk-4 path established.
+		var resourceID any
+		if rec.ResourceID != "" {
+			resourceID = rec.ResourceID
+		}
+		const ins = `INSERT INTO iac_recommendation_verdicts (
+			recommendation_id, connection_id, account_id, region,
+			recommendation_kind, resource_id, exclude_from_learning,
+			excluded_at, excluded_by,
+			check_run_owner, check_run_repo,
+			check_run_id, check_run_head_sha, check_run_status,
+			check_run_conclusion, check_run_updated_at,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		if _, err := tx.ExecContext(ctx, ins,
+			rec.RecommendationID,
+			rec.ConnectionID,
+			rec.AccountID,
+			rec.Region,
+			rec.RecommendationKind,
+			resourceID,
+			owner, repo,
+			checkID, headSHA, statusVal, conclusion_, now,
+			now, now,
+		); err != nil {
+			return fmt.Errorf("failed to insert check run state: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit check run upsert: %w", err)
+	}
+	return nil
+}
+
+// GetCheckRunForRecommendation — v0.89.42 (#662 Stream 60, slice 1
+// chunk 1). Returns the durable check-run state for recommendationID
+// off the iac_recommendation_verdicts row.
+//
+// exists semantics:
+//
+//   - exists=false (no error): no row at all matches
+//     recommendationID. The chunks-2/3/4 callers read this to skip
+//     the check-run side entirely on the inbound event.
+//   - exists=true with a zero-value CheckRunRef + empty status /
+//     conclusion: the row exists (the chunk-4 exclusion path
+//     created it) but no SetCheckRunForRecommendation has populated
+//     the check_run_* columns yet. Distinct from exists=false so
+//     the chunk-2 bridge can patch a fresh create onto the existing
+//     row instead of inserting a duplicate.
+//
+// See docs/proposals/checks-api-back-signal.md §6, §9.
+func (s *Storage) GetCheckRunForRecommendation(
+	ctx context.Context,
+	recommendationID string,
+) (types.CheckRunRef, string, string, bool, error) {
+	if recommendationID == "" {
+		return types.CheckRunRef{}, "", "", false, fmt.Errorf("recommendation_id required")
+	}
+	const stmt = `SELECT
+		COALESCE(check_run_owner, ''),
+		COALESCE(check_run_repo, ''),
+		COALESCE(check_run_id, 0),
+		COALESCE(check_run_head_sha, ''),
+		COALESCE(check_run_status, ''),
+		COALESCE(check_run_conclusion, '')
+		FROM iac_recommendation_verdicts
+		WHERE recommendation_id = ?`
+	var (
+		ref        types.CheckRunRef
+		status     string
+		conclusion string
+	)
+	if err := s.db.QueryRowContext(ctx, stmt, recommendationID).Scan(
+		&ref.Owner,
+		&ref.Repo,
+		&ref.CheckID,
+		&ref.HeadSHA,
+		&status,
+		&conclusion,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return types.CheckRunRef{}, "", "", false, nil
+		}
+		return types.CheckRunRef{}, "", "", false, fmt.Errorf("failed to read check run state: %w", err)
+	}
+	return ref, status, conclusion, true, nil
 }
 
 func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {

@@ -66,6 +66,27 @@ type Store struct {
 	// the bit clear so a future re-toggle can return prevExcluded
 	// honestly.
 	excludedRecommendationFlags map[string]bool
+	// v0.89.42 (#662 Stream 60, slice 1 chunk 1 of the GitHub Checks
+	// API back-signal arc) — durable check-run state keyed on
+	// recommendation_id. Mirrors the 5 new columns on the SQLite
+	// iac_recommendation_verdicts table (check_run_id, head_sha,
+	// status, conclusion, updated_at). One map keeps the in-memory
+	// projection compact and lets the chunk-2/3/4 callers round-trip
+	// the same CheckRunRef + status / conclusion the SQLite path
+	// returns.
+	checkRunState map[string]memoryCheckRunRecord
+}
+
+// memoryCheckRunRecord — v0.89.42 (#662 Stream 60). Mirror of the 5
+// check_run_* columns the v9 migration adds to the SQLite
+// iac_recommendation_verdicts table. Kept private to the memory
+// package so the storage interface stays cleanly described by the
+// public CheckRunRef + status / conclusion strings.
+type memoryCheckRunRecord struct {
+	ref        types.CheckRunRef
+	status     string
+	conclusion string
+	updatedAt  time.Time
 }
 
 // webhookDeliveryRecord is the memory-store payload for one
@@ -103,6 +124,8 @@ func NewStore() *Store {
 		// v0.89.37 (#656 Stream 54).
 		excludedRecommendations:     make(map[string]types.ExcludedRecommendation),
 		excludedRecommendationFlags: make(map[string]bool),
+		// v0.89.42 (#662 Stream 60).
+		checkRunState: make(map[string]memoryCheckRunRecord),
 	}
 }
 
@@ -1120,6 +1143,90 @@ func (s *Store) ListExcludedRecommendations(
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// SetCheckRunForRecommendation — v0.89.42 (#662 Stream 60, slice 1
+// chunk 1). Memory-store mirror of the SQLite same-named method.
+// Upserts the durable check-run state on the row keyed by
+// recommendation_id; creates the underlying excludedRecommendations
+// row if it doesn't exist yet (with exclude_from_learning=0 and
+// excluded_at / excluded_by zero-valued, mirroring the SQLite
+// NULL-on-insert semantics).
+//
+// Per §11 Q3 of the design doc the row's existence here means
+// "Squadron has a check run on this PR," not "operator has acted" —
+// the chunk-4 listing path filters on excludedRecommendationFlags
+// so a row created by this method does NOT surface in
+// ListExcludedRecommendations until the operator clicks exclude.
+func (s *Store) SetCheckRunForRecommendation(
+	_ context.Context,
+	rec types.ExcludedRecommendation,
+	ref types.CheckRunRef,
+	status, conclusion string,
+) error {
+	if rec.RecommendationID == "" {
+		return fmt.Errorf("recommendation_id required")
+	}
+	if rec.ConnectionID == "" || rec.AccountID == "" || rec.Region == "" {
+		return fmt.Errorf("scope tuple (connection_id, account_id, region) required")
+	}
+	if rec.RecommendationKind == "" {
+		return fmt.Errorf("recommendation_kind required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// If no excludedRecommendations row exists, create one with the
+	// projection's scope tuple and exclude_from_learning=false. The
+	// chunk-4 SetRecommendationExclusion path's read-then-upsert is
+	// unaffected — both paths converge on the same map entry keyed
+	// by recommendation_id.
+	if _, hadRow := s.excludedRecommendations[rec.RecommendationID]; !hadRow {
+		s.excludedRecommendations[rec.RecommendationID] = types.ExcludedRecommendation{
+			RecommendationID:   rec.RecommendationID,
+			ConnectionID:       rec.ConnectionID,
+			AccountID:          rec.AccountID,
+			Region:             rec.Region,
+			RecommendationKind: rec.RecommendationKind,
+			ResourceID:         rec.ResourceID,
+		}
+		s.excludedRecommendationFlags[rec.RecommendationID] = false
+	}
+
+	s.checkRunState[rec.RecommendationID] = memoryCheckRunRecord{
+		ref:        ref,
+		status:     status,
+		conclusion: conclusion,
+		updatedAt:  time.Now().UTC(),
+	}
+	return nil
+}
+
+// GetCheckRunForRecommendation — v0.89.42 (#662 Stream 60, slice 1
+// chunk 1). Memory-store mirror of the SQLite same-named method.
+// Returns exists=false (no error) when no check-run state has been
+// written for recommendationID.
+//
+// Note: matching SQLite semantics, exists=true means the underlying
+// iac_recommendation_verdicts row carries check_run_* state. A row
+// that exists only because the chunk-4 exclusion path wrote it
+// (without ever calling SetCheckRunForRecommendation) returns
+// exists=false here — chunks 2/3 use exists to decide whether to
+// patch a check run on inbound webhook events.
+func (s *Store) GetCheckRunForRecommendation(
+	_ context.Context,
+	recommendationID string,
+) (types.CheckRunRef, string, string, bool, error) {
+	if recommendationID == "" {
+		return types.CheckRunRef{}, "", "", false, fmt.Errorf("recommendation_id required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rec, ok := s.checkRunState[recommendationID]
+	if !ok {
+		return types.CheckRunRef{}, "", "", false, nil
+	}
+	return rec.ref, rec.status, rec.conclusion, true, nil
 }
 
 // API token management

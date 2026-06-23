@@ -127,6 +127,50 @@ type ApplicationStore interface {
 		limit int,
 	) ([]ExcludedRecommendation, error)
 
+	// v0.89.42 (#662 Stream 60, slice 1 chunk 1 of the GitHub Checks
+	// API back-signal arc) — durable check-run state for one
+	// recommendation. The lifecycle is intentionally tied to the same
+	// iac_recommendation_verdicts row that carries the operator-set
+	// exclusion flag (chunk 4): every recommendation Squadron speaks
+	// on (opened a PR for, learned a verdict on, or had the operator
+	// exclude) gets exactly one row, joined on recommendation_id.
+	//
+	// SetCheckRunForRecommendation upserts the check-run state for a
+	// recommendation. The recommendation_id row is created if it does
+	// not exist yet (with exclude_from_learning=0 and excluded_at /
+	// excluded_by both NULL — see §11 Q3 of the design doc for the
+	// "option A" decision: durable storage on PR open rather than a
+	// transient in-memory map). status and conclusion can be empty
+	// strings during transient states (the GitHub Checks API treats
+	// status="in_progress" with conclusion="" as valid). The rec
+	// projection carries the full scope tuple so the row inserts
+	// cleanly; on the upsert path the scope fields are NOT overwritten
+	// because the underlying row's scope is invariant once persisted.
+	//
+	// See docs/proposals/checks-api-back-signal.md §6, §10 contract
+	// item 4, and §11 open question 3.
+	SetCheckRunForRecommendation(ctx context.Context,
+		rec ExcludedRecommendation,
+		ref CheckRunRef,
+		status, conclusion string,
+	) error
+
+	// GetCheckRunForRecommendation returns the stored check-run ref +
+	// current status / conclusion for recommendationID. exists=false
+	// (with no error) when no row matches — this is the cold-start /
+	// "PR open path never reached chunk 2" signal the webhook handler
+	// and exclusion handler (chunks 2-4) read to decide whether to
+	// patch a check run on the inbound merge / close / exclude event.
+	//
+	// The CheckRunRef returned has its zero value when the row exists
+	// but no check_run_id has been written yet (e.g., the row was
+	// created by the chunk-4 exclusion path, before the chunk-2
+	// bridge wired the create-on-open). exists distinguishes "row not
+	// present" from "row present, no check run yet."
+	GetCheckRunForRecommendation(ctx context.Context,
+		recommendationID string,
+	) (ref CheckRunRef, status string, conclusion string, exists bool, err error)
+
 	// Action runners + requests (v0.53 Move 2). An action runner is
 	// an installed squadron-action-runner daemon registered with
 	// this Squadron instance. An action request is one signed action
@@ -793,6 +837,35 @@ type ExcludedRecommendation struct {
 	ResourceID         string
 	ExcludedAt         time.Time
 	ExcludedBy         string
+}
+
+// CheckRunRef — v0.89.42 (#662 Stream 60) — storage-layer mirror of
+// the iac/github Checks API check-run identifier. Defined locally so
+// the storage package never imports the iac/github client; the two
+// types are field-compatible and the bridge will convert between
+// them at the boundary in chunk 2.
+//
+// The four fields together are the durable addressable identity of
+// one check run on one PR's head commit:
+//
+//   - Owner / Repo: the GitHub repo coordinates the check run lives
+//     on. Persisted alongside the row to avoid a second join on read
+//     (re-deriving from connection_id would add a round-trip to the
+//     hot path that updates the check on PR merge / close).
+//   - CheckID: the int64 GitHub assigns on the create POST. The PATCH
+//     path keys exclusively on this value; we MUST store it.
+//   - HeadSHA: the commit SHA the check run was created against.
+//     §7.2 of the design doc names "force-pushed head SHA" as the
+//     reason this matters — slice 1 stays pinned to the original SHA
+//     even when GitHub's HEAD moves, so the stored SHA is ground
+//     truth for "which commit did Squadron speak on."
+//
+// See docs/proposals/checks-api-back-signal.md §6 and §9.
+type CheckRunRef struct {
+	Owner   string
+	Repo    string
+	CheckID int64
+	HeadSHA string
 }
 
 // AlertSeverity is the severity level attached to a firing alert.

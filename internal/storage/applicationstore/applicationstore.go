@@ -34,6 +34,14 @@ type DiscoveryVerdict = types.DiscoveryVerdict
 // chunk 4). Projection over the new iac_recommendation_verdicts
 // table for the discovery proposer's operator-set exclusion signal.
 type ExcludedRecommendation = types.ExcludedRecommendation
+
+// CheckRunRef — v0.89.42 (#662 Stream 60, slice 1 chunk 1 of the
+// GitHub Checks API back-signal arc). Storage-layer mirror of the
+// internal/iac/github CheckRunRef. Defined in the types package so
+// the storage layer carries the projection without importing the
+// iac/github client; the two types are field-compatible and the
+// bridge converts between them at the boundary in chunk 2.
+type CheckRunRef = types.CheckRunRef
 type Rollout = types.Rollout
 type RolloutStage = types.RolloutStage
 type RolloutStageMode = types.RolloutStageMode

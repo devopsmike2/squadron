@@ -308,6 +308,42 @@ const (
 	AuditEventDiscoveryRecommendationExcluded      = "discovery_recommendation.excluded"
 	AuditEventDiscoveryRecommendationExcludeCleared = "discovery_recommendation.exclude_cleared"
 
+	// v0.89.42 (#662 Stream 60, slice 1 chunk 1 of the GitHub Checks
+	// API back-signal arc) — three audit event types framing the
+	// check-run lifecycle Squadron speaks into GitHub on Squadron-
+	// opened PRs. Chunk 1 adds the constants only; chunks 2 / 3 / 4
+	// wire the bridge / webhook handler / exclusion handler to
+	// actually emit these events. The triplet is intentional:
+	//
+	//   - .created: emitted on the successful POST that opens the
+	//     check run just after the PR open path lands. Payload
+	//     (per §8 of the design doc): connection_id, pr_url,
+	//     head_sha, check_run_id, recommendation_kind, status
+	//     (always "in_progress" at this emit point).
+	//   - .updated: emitted on every successful PATCH that moves
+	//     the check run forward (merge / close-not-merged / operator-
+	//     exclude). Payload mirrors .created plus previous_status /
+	//     previous_conclusion / new_status / new_conclusion so SIEM
+	//     consumers can reconstruct the transition without cracking
+	//     a second row.
+	//   - .failed: emitted on any wrapper-returned *CheckRunError.
+	//     Payload mirrors .created with check_run_id omitted (no id
+	//     when create failed) plus an error_kind discriminator. The
+	//     four error_kinds slice 1 emits — "scope_missing",
+	//     "rate_limit", "pr_not_found", and "network" — are pinned
+	//     by the iac/github wrapper in checks.go so SIEM consumers
+	//     can fan out on this field without parsing free-form prose.
+	//
+	// Fail-open posture: .failed is a sibling of, not a replacement
+	// for, the existing recommendation.pr_opened / .pr_merged /
+	// .pr_closed_not_merged rows. The PR open / merge / close paths
+	// still emit their own audit events regardless of whether the
+	// check-run-side call succeeded. See design doc §8 (full payload
+	// contracts) and §10 contract item 2.
+	AuditEventIaCCheckRunCreated = "iac.check_run.created"
+	AuditEventIaCCheckRunUpdated = "iac.check_run.updated"
+	AuditEventIaCCheckRunFailed  = "iac.check_run.failed"
+
 	// Target type strings for the v0.89.3 IaC events. Used by the
 	// timeline humanizer to group connection-lifecycle events
 	// (iac.github.connection_*) separately from per-recommendation

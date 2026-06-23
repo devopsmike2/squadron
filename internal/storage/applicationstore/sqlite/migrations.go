@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 8
+const SchemaVersion = 9
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -324,6 +324,58 @@ CREATE INDEX IF NOT EXISTS idx_iac_rec_verdicts_scope
 INSERT OR IGNORE INTO schema_version (version) VALUES (8);
 `
 
+// CheckRunStateSchema bumps the database to schema v9.
+// v0.89.42 (#662 Stream 60, slice 1 chunk 1 of the GitHub Checks
+// API back-signal arc) — adds 5 optional columns to the existing
+// iac_recommendation_verdicts table so the durable check-run state
+// for a recommendation lives on the same row as its operator-set
+// exclusion + verdict-learning history.
+//
+// Column-by-column rationale (see design doc §6.1 + §11 Q3):
+//
+//   - check_run_id (INTEGER, nullable): the int64 GitHub assigns on
+//     the create POST. NULL when the row was created by the chunk-4
+//     exclusion path before any PR was opened, or while a future
+//     reconciliation job has not yet stamped the late-arriving id.
+//   - check_run_head_sha (TEXT, nullable): the commit SHA the check
+//     run was created against. §7.2 of the design doc names "force-
+//     pushed head SHA" — slice 1 stays pinned to the original SHA
+//     even when GitHub's HEAD moves.
+//   - check_run_status (TEXT, nullable): "queued" | "in_progress" |
+//     "completed" per the Checks API. NULL = "no check run on this
+//     row yet" — distinct from "" which would be a write the
+//     application layer never produces.
+//   - check_run_conclusion (TEXT, nullable): "success" | "failure" |
+//     "neutral" per the Checks API. NULL while status is
+//     "in_progress"; populated when status transitions to
+//     "completed". Conclusion-without-completed is invalid per the
+//     GitHub API and the application layer enforces the pairing.
+//   - check_run_updated_at (TIMESTAMP, nullable): the timestamp of
+//     the last successful create / patch on the row. Used by a
+//     future slice-2 reconciliation job that compares stored state
+//     against the audit log on startup.
+//
+// All 5 columns are nullable so rows the chunk-4 exclusion handler
+// has been writing since v0.89.37 keep round-tripping unchanged.
+// The shape lets the chunk-2 bridge integration upsert
+// check_run_id + head_sha + status on PR open, and the chunk-3
+// webhook handler patch status + conclusion on PR merge / close,
+// without ever needing to mutate the chunk-4 exclude_from_learning
+// column.
+//
+// See docs/proposals/checks-api-back-signal.md §6.1, §7, §10
+// contract item 3, and §11 open question 3.
+const CheckRunStateSchema = `
+ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_owner TEXT;
+ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_repo TEXT;
+ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_id INTEGER;
+ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_head_sha TEXT;
+ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_status TEXT;
+ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_conclusion TEXT;
+ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_updated_at TIMESTAMP;
+INSERT OR IGNORE INTO schema_version (version) VALUES (9);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -334,4 +386,5 @@ var Migrations = []string{
 	WebhookDeliveryDedupeSchema,
 	DiscoveryVerdictScopeIndexSchema,
 	IaCRecommendationVerdictsSchema,
+	CheckRunStateSchema,
 }
