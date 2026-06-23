@@ -44,3 +44,48 @@ const loginMicrosoftEndpoint = "https://login.microsoftonline.com"
 // granted to the SP, which for slice 1 is Reader at the subscription
 // scope.
 const armScope = "https://management.azure.com/.default"
+
+// ServiceIDAzureSQL is the slice-2 service identifier the scanner
+// reports against Result.FailedServices when the Azure SQL walk
+// (servers + databases + Diagnostic Settings) produces a non-fatal
+// error. See docs/proposals/database-tier-slice2.md §4.1
+// ("Result.FailedServices identifiers: Azure SQL scanner: azuresql").
+const ServiceIDAzureSQL = "azuresql"
+
+// armSQLAPIVersion pins the Microsoft.Sql/servers and databases
+// list APIs. The 2023-08-01-preview surface returns the database
+// shape fields slice 2 needs (sku.name, location, tags,
+// properties.currentServiceObjectiveName) at stable JSON paths.
+const armSQLAPIVersion = "2023-08-01-preview"
+
+// armDiagSettingsAPIVersion pins the
+// microsoft.insights/diagnosticSettings list API. 2021-05-01-preview
+// returns the SQLInsights category routing shape slice 2 detects on.
+const armDiagSettingsAPIVersion = "2021-05-01-preview"
+
+// sqlInsightsCategory is the Diagnostic Settings log-category name
+// the slice-2 detection rule keys on. Azure's category names are
+// case-sensitive in the response body; the rule matches the exact
+// string the Diagnostic Settings API publishes.
+const sqlInsightsCategory = "SQLInsights"
+
+// sqlMasterDatabase is the system database every SQL Server
+// exposes. Squadron skips it during the walk — there is no
+// operator-controllable observability surface on master, and
+// emitting a recommendation against it would be noise.
+const sqlMasterDatabase = "master"
+
+// azureProviderID is the Provider discriminator the scanner writes
+// into DatabaseInstanceSnapshot.Provider so the proposer can route
+// to azsql-diag-enable rather than the default AWS branch. See
+// internal/discovery/scanner/scanner.go::DatabaseInstanceSnapshot
+// godoc for the empty=AWS backward-compat note.
+const azureProviderID = "azure"
+
+// azureSQLEngine is the Engine string the scanner writes into
+// DatabaseInstanceSnapshot.Engine. Azure SQL is always the SQL
+// Server engine — the database service does not multiplex engines
+// the way GCP Cloud SQL does (postgres / mysql / sqlserver), so the
+// scanner can hard-code this rather than reading a per-database
+// field.
+const azureSQLEngine = "sqlserver"
