@@ -543,3 +543,158 @@ func TestAssembleDiscoveryVerdicts_ExcludedRecommendationOptOutShortCircuits(t *
 			len(approved), len(rejected), len(urls))
 	}
 }
+
+// --- v0.89.48 (#671 Stream 69) GCP discovery slice 1 chunk 5 tests ---
+
+// seedPRMergedGCP — chunk 5 — inserts a recommendation.pr_merged
+// audit row with the GCP payload shape: project_id is populated,
+// account_id is empty, provider="gcp". The branch encodes
+// gce-otel-label per §9.1.
+func (f *discoveryBridgeFixture) seedPRMergedGCP(t *testing.T, connID, projectID, region, kind, prURL string, mergedAt time.Time) {
+	t.Helper()
+	ev := &types.AuditEvent{
+		ID:         "audit-" + prURL,
+		Timestamp:  mergedAt,
+		Actor:      "github_webhook",
+		EventType:  "recommendation.pr_merged",
+		TargetType: "iac_recommendation",
+		TargetID:   connID,
+		Action:     "pr_merged",
+		Payload: map[string]any{
+			"repo_full_name":      "octo/widgets",
+			"pr_number":           99,
+			"pr_url":              prURL,
+			"branch":              "squadron/rec/" + kind + "/" + projectID + "/" + region + "/gcp-0",
+			"merged_at":           mergedAt.UTC().Format(time.RFC3339),
+			"merged_by":           "alice",
+			"recommendation_kind": kind,
+			"connection_id":       connID,
+			"provider":            "gcp",
+			"project_id":          projectID,
+			"account_id":          "",
+			"region":              region,
+		},
+	}
+	if err := f.store.CreateAuditEvent(context.Background(), ev); err != nil {
+		t.Fatalf("seed pr_merged (gcp): %v", err)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_GCPScope_QueriesProjectIDField —
+// chunk 5 acceptance. Seed a recommendation.pr_merged event with
+// payload {project_id: "my-project", region: "us-central1"}; call
+// AssembleDiscoveryVerdicts with the GCP project_id as the scope_id.
+// Assert: 1 approved verdict surfaces. The bridge passes accountID
+// through to ListDiscoveryVerdicts which OR-matches account_id OR
+// project_id, so GCP payloads round-trip cleanly without changing
+// the public signature.
+func TestAssembleDiscoveryVerdicts_GCPScope_QueriesProjectIDField(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	projectID := "my-sandbox-project"
+	region := "us-central1"
+	mergedAt := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	f.seedPRMergedGCP(t, f.connectionID, projectID, region, "gce-otel-label",
+		"https://github.com/octo/widgets/pull/200", mergedAt)
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, projectID, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 1 {
+		t.Fatalf("expected 1 approved verdict (GCP), got %d", len(approved))
+	}
+	if len(rejected) != 0 {
+		t.Errorf("expected 0 rejected verdicts, got %d", len(rejected))
+	}
+	if approved[0].Kind != "gce-otel-label" {
+		t.Errorf("kind = %q, want gce-otel-label", approved[0].Kind)
+	}
+	if approved[0].ID != "https://github.com/octo/widgets/pull/200" {
+		t.Errorf("verdict ID = %q", approved[0].ID)
+	}
+	if approved[0].State != verdictsel.StateMerged {
+		t.Errorf("state = %q, want %q", approved[0].State, verdictsel.StateMerged)
+	}
+	if len(urls) != 1 || urls[0] != "https://github.com/octo/widgets/pull/200" {
+		t.Errorf("urls = %v", urls)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_AWSScope_QueriesAccountIDField —
+// chunk 5 acceptance: AWS callers (the v0.89.47 path) still round-
+// trip through the OR-matched storage query. Backward compat — the
+// existing AWS test pattern works without modification because the
+// OR predicate matches account_id when project_id is empty.
+func TestAssembleDiscoveryVerdicts_AWSScope_QueriesAccountIDField(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	mergedAt := time.Now().UTC().Add(-3 * 24 * time.Hour)
+	f.seedPRMerged(t, f.connectionID, f.accountID, f.region, "rds-pi-em",
+		"https://github.com/octo/widgets/pull/300", mergedAt)
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, f.accountID, f.region,
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 1 {
+		t.Fatalf("expected 1 approved verdict (AWS), got %d", len(approved))
+	}
+	if len(rejected) != 0 {
+		t.Errorf("expected 0 rejected verdicts, got %d", len(rejected))
+	}
+	if approved[0].Kind != "rds-pi-em" {
+		t.Errorf("kind = %q, want rds-pi-em", approved[0].Kind)
+	}
+	if len(urls) != 1 || urls[0] != "https://github.com/octo/widgets/pull/300" {
+		t.Errorf("urls = %v", urls)
+	}
+}
+
+// TestAssembleDiscoveryVerdicts_CrossProviderIsolation — chunk 5
+// negative acceptance. Seed one AWS pr_merged + one GCP pr_merged
+// under the SAME connection_id and region but DIFFERENT scope_ids.
+// Call assemble with the GCP project_id — only the GCP row surfaces.
+// Call again with the AWS account_id — only the AWS row surfaces.
+// Confirms the OR-match isn't a "match everything" leakage path.
+func TestAssembleDiscoveryVerdicts_CrossProviderIsolation(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	region := "us-central1"
+	mergedAt := time.Now().UTC().Add(-2 * 24 * time.Hour)
+	projectID := "my-project"
+	awsAccount := "123456789012"
+	f.seedPRMerged(t, f.connectionID, awsAccount, region, "rds-pi-em",
+		"https://github.com/octo/widgets/pull/aws", mergedAt)
+	f.seedPRMergedGCP(t, f.connectionID, projectID, region, "gce-otel-label",
+		"https://github.com/octo/widgets/pull/gcp", mergedAt)
+
+	// Call with GCP scope.
+	gcpApproved, _, gcpURLs, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, projectID, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble gcp: %v", err)
+	}
+	if len(gcpApproved) != 1 {
+		t.Fatalf("expected 1 approved verdict on GCP scope, got %d", len(gcpApproved))
+	}
+	if gcpURLs[0] != "https://github.com/octo/widgets/pull/gcp" {
+		t.Errorf("GCP scope leaked AWS row: %v", gcpURLs)
+	}
+
+	// Call with AWS scope.
+	awsApproved, _, awsURLs, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), f.connectionID, awsAccount, region,
+	)
+	if err != nil {
+		t.Fatalf("assemble aws: %v", err)
+	}
+	if len(awsApproved) != 1 {
+		t.Fatalf("expected 1 approved verdict on AWS scope, got %d", len(awsApproved))
+	}
+	if awsURLs[0] != "https://github.com/octo/widgets/pull/aws" {
+		t.Errorf("AWS scope leaked GCP row: %v", awsURLs)
+	}
+}

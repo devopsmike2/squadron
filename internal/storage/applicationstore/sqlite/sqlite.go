@@ -1931,8 +1931,19 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 // ListDiscoveryVerdicts — v0.89.36 (#655 Stream 53, #531 slice 2
 // chunk 3). Sweeps audit_events for recommendation.pr_merged AND
 // recommendation.pr_closed_not_merged rows whose payload's
-// (connection_id, account_id, region) matches the supplied scope
+// (connection_id, scope_id, region) matches the supplied scope
 // tuple AND whose timestamp falls within the (since, now] window.
+//
+// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
+// second parameter named `accountID` historically is now a
+// provider-agnostic scope_id. The WHERE clause OR-matches
+// `payload->>'account_id' = ?` OR `payload->>'project_id' = ?` so
+// AWS callers continue to round-trip account_id-keyed audit rows and
+// GCP callers find the parallel project_id-keyed rows. Empty/missing
+// AWS rows have payload.project_id="" (never equal to a GCP project
+// id) and vice versa, so cross-provider leakage is structurally
+// impossible at the query layer. See
+// docs/proposals/gcp-discovery-slice1.md §9.
 // Returns the unioned DiscoveryVerdict projection per row, newest-
 // first. State is derived from the event_type column:
 // recommendation.pr_merged → "merged" (verdictsel.StateMerged);
@@ -1951,7 +1962,7 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 // types.
 func (s *Storage) ListDiscoveryVerdicts(
 	ctx context.Context,
-	connectionID, accountID, region string,
+	connectionID, scopeID, region string,
 	since time.Time, limit int,
 ) ([]*types.DiscoveryVerdict, error) {
 	if limit <= 0 {
@@ -1960,17 +1971,23 @@ func (s *Storage) ListDiscoveryVerdicts(
 	if limit > 1000 {
 		limit = 1000
 	}
-	if connectionID == "" || accountID == "" || region == "" {
+	if connectionID == "" || scopeID == "" || region == "" {
 		// Empty scope tuple — return no rows rather than match the
 		// whole table. The caller's cold-start path treats an empty
 		// slice as the byte-identity signal.
 		return nil, nil
 	}
+	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
+	// scope predicate OR-matches account_id (AWS shape) or project_id
+	// (GCP shape). The scopeID parameter is bound twice. SQLite's
+	// JSON1 extension handles both extracts as a single ranged scan
+	// thanks to the v7 partial index on (event_type, timestamp DESC).
 	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
 		WHERE event_type IN (?, ?)
 		  AND timestamp >= ?
 		  AND json_extract(payload, '$.connection_id') = ?
-		  AND json_extract(payload, '$.account_id') = ?
+		  AND (json_extract(payload, '$.account_id') = ?
+		       OR json_extract(payload, '$.project_id') = ?)
 		  AND json_extract(payload, '$.region') = ?
 		ORDER BY timestamp DESC
 		LIMIT ?`
@@ -1978,7 +1995,7 @@ func (s *Storage) ListDiscoveryVerdicts(
 		"recommendation.pr_merged",
 		"recommendation.pr_closed_not_merged",
 		since,
-		connectionID, accountID, region,
+		connectionID, scopeID, scopeID, region,
 		limit,
 	)
 	if err != nil {
