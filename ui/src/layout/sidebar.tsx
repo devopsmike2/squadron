@@ -303,6 +303,18 @@ export function AppSidebar() {
           icon: Cloud,
         },
         {
+          // v0.89.58 #684 Stream 82 (slice-1 chunk 4) — OCI discovery
+          // page. Sits next to Azure under Discovery so all four
+          // provider entries (AWS / GCP / Azure / OCI) cluster
+          // together before the IaC GitHub entry. Same Cloud icon as
+          // AWS / GCP / Azure per the slice-1 "no per-provider
+          // iconography" decision.
+          key: "discovery-oci",
+          title: "OCI",
+          url: "/discovery/oci",
+          icon: Cloud,
+        },
+        {
           // v0.89.3 Stream 19 — #603 Connect-IaC-repo. Sits next to
           // AWS under Discovery so the operator's muscle memory for
           // "where I wire things up" stays in one place. Slice 1
