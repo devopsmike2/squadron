@@ -1751,6 +1751,10 @@ func TestProviderFromRecommendationKind(t *testing.T) {
 		{kind: "vm-otel-tag", want: "azure"},
 		{kind: "vm", want: "aws"},      // "vm" alone (no hyphen) is not the Azure prefix
 		{kind: "vmstuff", want: "aws"}, // boundary: requires the literal "vm-" prefix
+		// v0.89.58 chunk 5 — OCI prefix dispatch.
+		{kind: "compute-otel-tag", want: "oci"},
+		{kind: "compute", want: "aws"},      // "compute" alone (no hyphen) is not the OCI prefix
+		{kind: "computestuff", want: "aws"}, // boundary: requires the literal "compute-" prefix
 	}
 	for _, tc := range cases {
 		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
@@ -1811,5 +1815,63 @@ func TestWebhook_VMRecommendationKind_AuditPayloadCarriesSubscriptionID(t *testi
 	}
 	if pay["region"] != "eastus" {
 		t.Errorf("payload.region = %v, want eastus", pay["region"])
+	}
+}
+
+// TestWebhook_ComputeRecommendationKind_AuditPayloadCarriesTenancyOCID
+// — v0.89.58 (#685 Stream 83, OCI discovery slice 1 chunk 5)
+// acceptance. When the merged PR's branch encodes an OCI
+// recommendation kind (compute- prefix) and a 6-segment scope tuple,
+// the emitted recommendation.pr_merged audit payload carries
+// tenancy_ocid=<scope_id>, account_id="", project_id="",
+// subscription_id="", and provider="oci". Branch shape per
+// docs/proposals/oci-discovery-slice1.md §10:
+//
+//	squadron/rec/compute-otel-tag/<tenancy_ocid>/<region>/<short_id>
+func TestWebhook_ComputeRecommendationKind_AuditPayloadCarriesTenancyOCID(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/compute-otel-tag/ocid1.tenancy.oc1..aaaaaaaa/us-phoenix-1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.EventType != services.AuditEventRecommendationPRMerged {
+		t.Errorf("event_type = %q, want %q", e.EventType, services.AuditEventRecommendationPRMerged)
+	}
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "compute-otel-tag" {
+		t.Errorf("payload.recommendation_kind = %v, want compute-otel-tag", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "oci" {
+		t.Errorf("payload.provider = %v, want oci", pay["provider"])
+	}
+	if pay["tenancy_ocid"] != "ocid1.tenancy.oc1..aaaaaaaa" {
+		t.Errorf("payload.tenancy_ocid = %v, want ocid1.tenancy.oc1..aaaaaaaa", pay["tenancy_ocid"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["project_id"] != "" {
+		t.Errorf("payload.project_id = %v, want empty string", pay["project_id"])
+	}
+	if pay["subscription_id"] != "" {
+		t.Errorf("payload.subscription_id = %v, want empty string", pay["subscription_id"])
+	}
+	if pay["region"] != "us-phoenix-1" {
+		t.Errorf("payload.region = %v, want us-phoenix-1", pay["region"])
 	}
 }

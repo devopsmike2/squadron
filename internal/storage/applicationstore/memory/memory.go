@@ -1011,18 +1011,20 @@ func (s *Store) ListDiscoveryVerdicts(
 		}
 		// Predicate: connection_id + scope_id + region all match. The
 		// scope_id is matched against account_id OR project_id OR
-		// subscription_id so AWS, GCP, and Azure audit shapes all
-		// round-trip through one call. See v0.89.48 (#671 Stream 69) —
-		// GCP discovery slice 1 chunk 5 — and v0.89.53 (#678 Stream
-		// 76) — Azure discovery slice 1 chunk 5 — for the broader
-		// substrate.
+		// subscription_id OR tenancy_ocid so AWS, GCP, Azure, and OCI
+		// audit shapes all round-trip through one call. See v0.89.48
+		// (#671 Stream 69) — GCP discovery slice 1 chunk 5 — and
+		// v0.89.53 (#678 Stream 76) — Azure discovery slice 1 chunk 5
+		// — and v0.89.58 (#685 Stream 83) — OCI discovery slice 1
+		// chunk 5 — for the broader substrate.
 		if v, _ := e.Payload["connection_id"].(string); v != connectionID {
 			continue
 		}
 		acct, _ := e.Payload["account_id"].(string)
 		proj, _ := e.Payload["project_id"].(string)
 		sub, _ := e.Payload["subscription_id"].(string)
-		if acct != scopeID && proj != scopeID && sub != scopeID {
+		tenancy, _ := e.Payload["tenancy_ocid"].(string)
+		if acct != scopeID && proj != scopeID && sub != scopeID && tenancy != scopeID {
 			continue
 		}
 		if v, _ := e.Payload["region"].(string); v != region {
