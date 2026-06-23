@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -505,4 +506,293 @@ func TestListExcludedRecommendations_StoreNotWired_Returns503(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
 	}
+}
+
+// --- v0.89.44 #665 Stream 63 (slice 1 chunk 4) ---------------------
+//
+// Tests for HandleAWSRecommendationExclude's PATCH-to-neutral chunk-4
+// follow-up. The handler emits the discovery_recommendation.excluded
+// audit event AND, when wired, looks up the in-flight check run and
+// PATCHes it to conclusion=neutral via the Checks API. Five tests:
+//   - false → true with in-flight check run → UpdateCheckRun called
+//     with conclusion=neutral, iac.check_run.updated emitted with the
+//     in_progress → neutral transition, storage row reconciled.
+//   - false → true with NO check run row → no UpdateCheckRun call,
+//     no iac.check_run.* audit event (only the discovery exclude
+//     audit fires).
+//   - false → true with completed check run → no UpdateCheckRun
+//     call (the PR has already merged or closed; conclusion is
+//     final per design doc §7).
+//   - false → true with chunk-4 wiring unwired (no checksClient /
+//     no PAT) → no UpdateCheckRun call. Fail-open posture: the
+//     discovery exclude audit still fires; chunk-4 stays dormant.
+//   - false → true with UpdateCheckRun returning a CheckRunError →
+//     iac.check_run.failed emitted with the structured error_kind.
+
+// newCheckRunExcludeHandlers builds a DiscoveryHandlers with all four
+// chunk-4 follow-up surfaces wired. The chunk-2 fakes
+// (fakeChecksClient, fakeCheckRunStore) defined in
+// iac_github_checkrun_test.go are reused — both now satisfy the
+// chunk-4-extended ChecksAPI + CheckRunStore interfaces.
+func newCheckRunExcludeHandlers(
+	t *testing.T,
+	store *fakeExclusionStore,
+	audit services.AuditService,
+	checks ChecksAPI,
+	crStore CheckRunStore,
+	pat string,
+) *DiscoveryHandlers {
+	t.Helper()
+	h := newExcludeHandlers(t, store, audit)
+	if checks != nil {
+		h.WithChecksClient(checks)
+	}
+	if crStore != nil {
+		h.WithCheckRunStore(crStore)
+	}
+	if pat != "" {
+		h.WithChecksPAT(pat)
+	}
+	h.WithSquadronHost("https://squadron.acme.example")
+	return h
+}
+
+// TestExcludeRecommendation_WithInflightCheckRun_PATCHesNeutral pins
+// the chunk-4 happy path. Seed a fakeCheckRunStore with an
+// in_progress check run for rec_abc123; click exclude (false → true).
+// Assert: UpdateCheckRun fired with conclusion=neutral, the
+// iac.check_run.updated audit row landed with the in_progress →
+// neutral transition, the discovery exclude audit also fired.
+func TestExcludeRecommendation_WithInflightCheckRun_PATCHesNeutral(t *testing.T) {
+	store := &fakeExclusionStore{prevExcluded: false}
+	audit := &discoveryRecordingAudit{}
+	checks := &fakeChecksClient{}
+	crStore := &fakeCheckRunStore{
+		seeded: map[string]fakeCheckRunStoreCall{
+			"rec_abc123": {
+				Ref: types.CheckRunRef{
+					Owner: "octo", Repo: "widgets", CheckID: 9001, HeadSHA: "abc123",
+				},
+				Status:     iacgithub.CheckRunStatusInProgress,
+				Conclusion: "",
+			},
+		},
+	}
+	h := newCheckRunExcludeHandlers(t, store, audit, checks, crStore, "pat-chk-write")
+
+	w := doExcludeRequest(h, sampleExcludeRequest(t, true))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// UpdateCheckRun fired once.
+	if len(checks.updateCalls) != 1 {
+		t.Fatalf("UpdateCheckRun calls = %d, want 1", len(checks.updateCalls))
+	}
+	up := checks.updateCalls[0]
+	if up.Ref.Owner != "octo" || up.Ref.Repo != "widgets" || up.Ref.CheckID != 9001 {
+		t.Errorf("update ref = %+v, want octo/widgets#9001", up.Ref)
+	}
+	if up.Status != iacgithub.CheckRunStatusCompleted {
+		t.Errorf("update status = %q, want completed", up.Status)
+	}
+	if up.Conclusion != iacgithub.CheckRunConclusionNeutral {
+		t.Errorf("update conclusion = %q, want neutral", up.Conclusion)
+	}
+	if checks.updatePATs[0] != "pat-chk-write" {
+		t.Errorf("update PAT = %q", checks.updatePATs[0])
+	}
+	if !strings.Contains(up.Output.Title, "NEUTRAL") {
+		t.Errorf("update title = %q (expected NEUTRAL)", up.Output.Title)
+	}
+
+	// Audit log: discovery_recommendation.excluded + iac.check_run.updated.
+	var sawExcluded, sawCRUpdated bool
+	for _, e := range audit.entries {
+		switch e.EventType {
+		case services.AuditEventDiscoveryRecommendationExcluded:
+			sawExcluded = true
+		case services.AuditEventIaCCheckRunUpdated:
+			sawCRUpdated = true
+			if got, _ := e.Payload["new_conclusion"].(string); got != "neutral" {
+				t.Errorf("new_conclusion = %q, want neutral", got)
+			}
+			if got, _ := e.Payload["new_status"].(string); got != "completed" {
+				t.Errorf("new_status = %q, want completed", got)
+			}
+			if got, _ := e.Payload["previous_status"].(string); got != iacgithub.CheckRunStatusInProgress {
+				t.Errorf("previous_status = %q, want in_progress", got)
+			}
+		}
+	}
+	if !sawExcluded {
+		t.Errorf("expected discovery_recommendation.excluded audit; entries=%+v", audit.entries)
+	}
+	if !sawCRUpdated {
+		t.Errorf("expected iac.check_run.updated audit; entries=%+v", audit.entries)
+	}
+
+	// Storage reconciliation: SetCheckRunForRecommendation fired with
+	// completed + neutral so the next read sees the new state.
+	if len(crStore.calls) != 1 {
+		t.Fatalf("SetCheckRunForRecommendation calls = %d, want 1", len(crStore.calls))
+	}
+	if crStore.calls[0].Status != iacgithub.CheckRunStatusCompleted ||
+		crStore.calls[0].Conclusion != iacgithub.CheckRunConclusionNeutral {
+		t.Errorf("storage reconcile = (status=%q, conclusion=%q), want (completed, neutral)",
+			crStore.calls[0].Status, crStore.calls[0].Conclusion)
+	}
+}
+
+// TestExcludeRecommendation_NoCheckRunRow_SkipsPATCH pins the
+// chunk-2-not-wired or row-pruned path. exists=false from the store
+// → no UpdateCheckRun call, no iac.check_run.* audit.
+func TestExcludeRecommendation_NoCheckRunRow_SkipsPATCH(t *testing.T) {
+	store := &fakeExclusionStore{prevExcluded: false}
+	audit := &discoveryRecordingAudit{}
+	checks := &fakeChecksClient{}
+	crStore := &fakeCheckRunStore{seeded: map[string]fakeCheckRunStoreCall{}}
+	h := newCheckRunExcludeHandlers(t, store, audit, checks, crStore, "pat-chk-write")
+
+	w := doExcludeRequest(h, sampleExcludeRequest(t, true))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(checks.updateCalls) != 0 {
+		t.Errorf("UpdateCheckRun should not have fired; got %d calls", len(checks.updateCalls))
+	}
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventIaCCheckRunUpdated || e.EventType == services.AuditEventIaCCheckRunFailed {
+			t.Errorf("no iac.check_run.* audit expected; got %s", e.EventType)
+		}
+	}
+}
+
+// TestExcludeRecommendation_CompletedCheckRun_SkipsPATCH pins the
+// design doc §7 invariant: when the check run has already been
+// PATCHed to completed (by the merge / close webhook), the exclusion
+// handler does NOT overwrite the success / failure conclusion.
+func TestExcludeRecommendation_CompletedCheckRun_SkipsPATCH(t *testing.T) {
+	store := &fakeExclusionStore{prevExcluded: false}
+	audit := &discoveryRecordingAudit{}
+	checks := &fakeChecksClient{}
+	crStore := &fakeCheckRunStore{
+		seeded: map[string]fakeCheckRunStoreCall{
+			"rec_abc123": {
+				Ref: types.CheckRunRef{
+					Owner: "octo", Repo: "widgets", CheckID: 9001, HeadSHA: "abc123",
+				},
+				Status:     iacgithub.CheckRunStatusCompleted,
+				Conclusion: iacgithub.CheckRunConclusionSuccess,
+			},
+		},
+	}
+	h := newCheckRunExcludeHandlers(t, store, audit, checks, crStore, "pat-chk-write")
+
+	w := doExcludeRequest(h, sampleExcludeRequest(t, true))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(checks.updateCalls) != 0 {
+		t.Errorf("UpdateCheckRun should not have fired on completed check run; got %d calls", len(checks.updateCalls))
+	}
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventIaCCheckRunUpdated {
+			t.Errorf("no iac.check_run.updated audit expected on completed check run; got %s", e.EventType)
+		}
+	}
+}
+
+// TestExcludeRecommendation_ChecksAPIUnwired_SkipsPATCH pins the
+// fail-open posture for deployments that haven't enabled the chunk-4
+// follow-up (nil checksClient or empty PAT). The discovery exclude
+// audit still fires; no UpdateCheckRun call, no iac.check_run.*
+// audit.
+func TestExcludeRecommendation_ChecksAPIUnwired_SkipsPATCH(t *testing.T) {
+	store := &fakeExclusionStore{prevExcluded: false}
+	audit := &discoveryRecordingAudit{}
+	crStore := &fakeCheckRunStore{
+		seeded: map[string]fakeCheckRunStoreCall{
+			"rec_abc123": {
+				Ref:        types.CheckRunRef{Owner: "octo", Repo: "widgets", CheckID: 9001, HeadSHA: "abc"},
+				Status:     iacgithub.CheckRunStatusInProgress,
+				Conclusion: "",
+			},
+		},
+	}
+	// Pass a non-nil crStore + nil checks client AND empty PAT — both
+	// short-circuit the follow-up.
+	h := newCheckRunExcludeHandlers(t, store, audit, nil, crStore, "")
+
+	w := doExcludeRequest(h, sampleExcludeRequest(t, true))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	// The crStore.getCalls slice MUST stay empty — the handler
+	// short-circuits BEFORE looking up the row.
+	if len(crStore.getCalls) != 0 {
+		t.Errorf("expected no Get calls when chunk-4 is unwired; got %d", len(crStore.getCalls))
+	}
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventIaCCheckRunUpdated || e.EventType == services.AuditEventIaCCheckRunFailed {
+			t.Errorf("no iac.check_run.* audit expected on unwired chunk-4; got %s", e.EventType)
+		}
+	}
+}
+
+// TestExcludeRecommendation_UpdateCheckRunFails_EmitsFailedAudit pins
+// the failure path. UpdateCheckRun returns a *CheckRunError; the
+// handler emits iac.check_run.failed with the structured error_kind
+// and the discovery exclude audit still fires. The PR open's
+// existing check run stays where GitHub left it.
+func TestExcludeRecommendation_UpdateCheckRunFails_EmitsFailedAudit(t *testing.T) {
+	store := &fakeExclusionStore{prevExcluded: false}
+	audit := &discoveryRecordingAudit{}
+	checks := &fakeChecksClient{
+		updateRespErr: &iacgithub.CheckRunError{
+			Kind:    iacgithub.CheckRunErrorKindScopeMissing,
+			Status:  403,
+			Message: "PAT lacks checks:write scope",
+		},
+	}
+	crStore := &fakeCheckRunStore{
+		seeded: map[string]fakeCheckRunStoreCall{
+			"rec_abc123": {
+				Ref: types.CheckRunRef{
+					Owner: "octo", Repo: "widgets", CheckID: 9001, HeadSHA: "abc123",
+				},
+				Status:     iacgithub.CheckRunStatusInProgress,
+				Conclusion: "",
+			},
+		},
+	}
+	h := newCheckRunExcludeHandlers(t, store, audit, checks, crStore, "pat-chk-write")
+
+	w := doExcludeRequest(h, sampleExcludeRequest(t, true))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(checks.updateCalls) != 1 {
+		t.Fatalf("UpdateCheckRun calls = %d, want 1", len(checks.updateCalls))
+	}
+
+	var sawFailed bool
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventIaCCheckRunFailed {
+			sawFailed = true
+			if got, _ := e.Payload["error_kind"].(string); got != iacgithub.CheckRunErrorKindScopeMissing {
+				t.Errorf("error_kind = %q, want scope_missing", got)
+			}
+		}
+		if e.EventType == services.AuditEventIaCCheckRunUpdated {
+			t.Errorf("no iac.check_run.updated audit expected on UpdateCheckRun failure; got %s", e.EventType)
+		}
+	}
+	if !sawFailed {
+		t.Errorf("expected iac.check_run.failed audit; entries=%+v", audit.entries)
+	}
+
+	// Verify the unused import doesn't break compile when the
+	// time.Time fields land on the audit entries.
+	_ = time.Now()
 }

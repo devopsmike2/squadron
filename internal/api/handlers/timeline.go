@@ -679,8 +679,153 @@ func humanizeIaCAuditEvent(e *services.AuditEvent) (string, string, bool) {
 			plural = "PR"
 		}
 		return fmt.Sprintf("Discovery recommendations generated (informed by %d prior accepted %s)", n, plural), "", true
+
+	// v0.89.44 (#665 Stream 63, slice 1 chunk 4) — humanizer entries
+	// for the three GitHub Checks API back-signal arc audit event
+	// types. The created event fires from the chunk-2 PR-open follow-up
+	// (v0.89.43). The updated event fires from chunk 3's
+	// pr_merged / pr_closed_not_merged webhook handlers AND chunk 4's
+	// operator-exclude handler. The failed event fires whenever the
+	// underlying GitHub API call returned a structured CheckRunError.
+	// See design doc §8.1.
+
+	// iac.check_run.created — chunk-2 emit on PR open. Payload fields:
+	//   pr_url, head_sha, check_run_id, owner, repo, status,
+	//   recommendation_kind. Title format:
+	//     "Squadron posted a check run on PR #<N> in <owner>/<repo>
+	//      (kind=<kind>)."
+	// We derive <N> from pr_url's trailing path segment because the
+	// audit payload does not separately carry pr_number on this event
+	// (the bridge emits pr_url, not a parsed number). Owner / repo
+	// come from the payload directly. Fall-through ok=false rather
+	// than an empty placeholder.
+	case services.AuditEventIaCCheckRunCreated:
+		prURL, ok := payloadString(e.Payload, "pr_url")
+		if !ok {
+			return "", "", false
+		}
+		owner, ok := payloadString(e.Payload, "owner")
+		if !ok {
+			return "", "", false
+		}
+		repo, ok := payloadString(e.Payload, "repo")
+		if !ok {
+			return "", "", false
+		}
+		kind, ok := payloadString(e.Payload, "recommendation_kind")
+		if !ok {
+			return "", "", false
+		}
+		prNum := prNumberFromURL(prURL)
+		title := fmt.Sprintf("Squadron posted a check run on PR #%s in %s/%s (kind=%s)",
+			prNum, owner, repo, kind)
+		return title, "", true
+
+	// iac.check_run.updated — chunks 3 + 4 emit on PR
+	// merge / close / operator-exclude. Payload fields:
+	//   previous_status, previous_conclusion, new_status,
+	//   new_conclusion, pr_url, recommendation_kind. Title format
+	//   depends on the transition (§8.1):
+	//     in_progress → success → "marked SUCCESS … (operator merged)"
+	//     in_progress → failure → "marked FAILURE … (operator closed
+	//       without merging)"
+	//     in_progress → neutral → "marked NEUTRAL … (operator excluded
+	//       this kind from future recommendations)"
+	//   Fallback for any other new_conclusion: a generic
+	//     "updated on PR #<N> (status=<...> conclusion=<...>)".
+	case services.AuditEventIaCCheckRunUpdated:
+		prURL, ok := payloadString(e.Payload, "pr_url")
+		if !ok {
+			return "", "", false
+		}
+		newConclusion, ok := payloadString(e.Payload, "new_conclusion")
+		if !ok {
+			return "", "", false
+		}
+		prNum := prNumberFromURL(prURL)
+		switch newConclusion {
+		case "success":
+			return fmt.Sprintf("Squadron's check run marked SUCCESS on PR #%s (operator merged).", prNum), "", true
+		case "failure":
+			return fmt.Sprintf("Squadron's check run marked FAILURE on PR #%s (operator closed without merging).", prNum), "", true
+		case "neutral":
+			return fmt.Sprintf("Squadron's check run marked NEUTRAL on PR #%s (operator excluded this kind from future recommendations).", prNum), "", true
+		default:
+			newStatus, _ := payloadString(e.Payload, "new_status")
+			return fmt.Sprintf("Squadron's check run updated on PR #%s (status=%s conclusion=%s).",
+				prNum, newStatus, newConclusion), "", true
+		}
+
+	// iac.check_run.failed — chunks 2/3/4 emit when the underlying
+	// CreateCheckRun or UpdateCheckRun call returned an error. Payload
+	// fields:
+	//   pr_url, error_kind, http_status, error_message,
+	//   recommendation_kind. Title format depends on error_kind
+	//   (§8.1). scope_missing / rate_limit / pr_not_found get pinned
+	//   fix-it copy; network / unknown fall through to a generic
+	//   surface that includes error_message.
+	case services.AuditEventIaCCheckRunFailed:
+		prURL, ok := payloadString(e.Payload, "pr_url")
+		if !ok {
+			return "", "", false
+		}
+		errKind, ok := payloadString(e.Payload, "error_kind")
+		if !ok {
+			return "", "", false
+		}
+		prNum := prNumberFromURL(prURL)
+		switch errKind {
+		case "scope_missing":
+			return fmt.Sprintf("Squadron couldn't post a check run on PR #%s: your IaC PAT is missing the checks:write scope.", prNum), "", true
+		case "rate_limit":
+			return fmt.Sprintf("Squadron couldn't post a check run on PR #%s: GitHub API rate limit exceeded.", prNum), "", true
+		case "pr_not_found":
+			return fmt.Sprintf("Squadron couldn't post a check run on PR #%s: the PR was not found on GitHub.", prNum), "", true
+		case "network":
+			msg, _ := payloadString(e.Payload, "error_message")
+			if msg == "" {
+				msg = "transient network failure"
+			}
+			return fmt.Sprintf("Squadron couldn't post a check run on PR #%s: %s.", prNum, msg), "", true
+		default:
+			msg, _ := payloadString(e.Payload, "error_message")
+			if msg == "" {
+				msg = errKind
+			}
+			return fmt.Sprintf("Squadron couldn't post a check run on PR #%s: %s.", prNum, msg), "", true
+		}
 	}
 	return "", "", false
+}
+
+// prNumberFromURL extracts the trailing /pull/<N> segment from a
+// GitHub PR URL. Returns "?" on malformed input so the humanized
+// title still renders the rest of the line rather than emitting
+// "PR # on …" with the number dropped silently. v0.89.44 (#665
+// Stream 63, slice 1 chunk 4) — the chunks 2/3/4 audit payloads
+// carry pr_url verbatim from the PR-open and merge-/close-webhook
+// paths; chunk-4 specifically reconstructs a kindless URL (owner/repo
+// only, no /pull/<n>) on the exclusion-emit path, in which case "?"
+// is the honest renderer.
+func prNumberFromURL(prURL string) string {
+	const marker = "/pull/"
+	idx := strings.LastIndex(prURL, marker)
+	if idx < 0 {
+		return "?"
+	}
+	tail := prURL[idx+len(marker):]
+	// Strip anything after the number (query, fragment, trailing slash).
+	for i := 0; i < len(tail); i++ {
+		c := tail[i]
+		if c < '0' || c > '9' {
+			tail = tail[:i]
+			break
+		}
+	}
+	if tail == "" {
+		return "?"
+	}
+	return tail
 }
 
 // payloadString returns the string at key when it is present AND

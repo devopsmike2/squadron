@@ -6,6 +6,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/iac"
+	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
+	"github.com/devopsmike2/squadron/internal/proposer/checkrunprompt"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -122,7 +125,22 @@ type DiscoveryHandlers struct {
 	// (which satisfies the slim DiscoveryExclusionStore interface);
 	// tests substitute a fake.
 	exclusionStore DiscoveryExclusionStore
-	logger         *zap.Logger
+
+	// v0.89.44 (#665 Stream 63, slice 1 chunk 4 of the GitHub Checks
+	// API back-signal arc). All four fields are optional: when any one
+	// is nil/empty the chunk-4 PATCH-to-neutral follow-up inside
+	// HandleAWSRecommendationExclude is a no-op (fail-open per design
+	// doc §5). This is the slice-1 posture for deployments that
+	// haven't upgraded their PAT scope or wired the checks integration.
+	// ChecksAPI + CheckRunStore are the slim interfaces defined in
+	// iac_github_checkrun.go — the application store satisfies
+	// CheckRunStore directly; *iacgithub.PATClient satisfies ChecksAPI
+	// directly.
+	checksClient ChecksAPI
+	checkRunStore CheckRunStore
+	checksPAT     string
+	squadronHost  string
+	logger        *zap.Logger
 }
 
 // DiscoveryExclusionStore — v0.89.37 (#656 Stream 54, #531 slice 2
@@ -310,6 +328,61 @@ func (h *DiscoveryHandlers) WithAcceptedRecommendationsAssembler(a DiscoveryAcce
 // returning 503 with a clear "not wired" message.
 func (h *DiscoveryHandlers) WithExclusionStore(s DiscoveryExclusionStore) *DiscoveryHandlers {
 	h.exclusionStore = s
+	return h
+}
+
+// WithChecksClient — v0.89.44 (#665 Stream 63, slice 1 chunk 4) —
+// wires the Checks API client used by the chunk-4 PATCH-to-neutral
+// follow-up inside HandleAWSRecommendationExclude. Nil keeps the
+// follow-up dormant: the existing discovery_recommendation.excluded
+// audit emit completes normally with no check-run side-effects (the
+// open PR's check run on GitHub stays in_progress until the PR
+// merges or closes, which the chunk-3 webhook handler then PATCHes).
+// See design doc §5 fail-open posture and §10 contract item 7.
+func (h *DiscoveryHandlers) WithChecksClient(c ChecksAPI) *DiscoveryHandlers {
+	h.checksClient = c
+	return h
+}
+
+// WithCheckRunStore — v0.89.44 (#665 Stream 63, slice 1 chunk 4) —
+// wires the application-store surface the chunk-4 follow-up consults
+// to look up the in-flight check-run ref for a recommendation_id
+// before PATCHing it to neutral. The application store satisfies the
+// slim CheckRunStore interface directly; tests substitute a recording
+// fake. A nil store leaves the lookup short-circuited (the audit
+// emit + 200 still complete normally).
+func (h *DiscoveryHandlers) WithCheckRunStore(s CheckRunStore) *DiscoveryHandlers {
+	h.checkRunStore = s
+	return h
+}
+
+// WithChecksPAT — v0.89.44 (#665 Stream 63, slice 1 chunk 4) — wires
+// the PAT the chunk-4 follow-up uses to authenticate to GitHub's
+// Checks API when PATCHing a check run to neutral on operator
+// exclude. Per design doc §3 option A this is the same PAT-backed
+// model the rest of slice 1 ships on; production wires the same PAT
+// the IaC connection uses to open PRs, surfaced here so the discovery
+// handler — which does not unseal the IaC credstore — can authenticate
+// the follow-up without a per-call decryption hop. An empty PAT keeps
+// the chunk-4 follow-up dormant (matches the nil-client posture).
+//
+// SECURITY: the PAT is stored on the handler struct for the
+// deployment lifetime. The build-edition layer in cmd/all-in-one is
+// responsible for sourcing it from the same secret-manager pipeline
+// the iacgithub.PATClient already uses. Tests pass a fixture string.
+func (h *DiscoveryHandlers) WithChecksPAT(pat string) *DiscoveryHandlers {
+	h.checksPAT = pat
+	return h
+}
+
+// WithSquadronHost — v0.89.44 (#665 Stream 63, slice 1 chunk 4) —
+// configures the base URL the check-run summary's "View in Squadron"
+// deep link targets. Empty value suppresses the link line rather
+// than emitting a broken (/) href. Mirrors the IaCGitHubHandlers
+// chunk-2 setter so the same SQUADRON_PUBLIC_HOST env var threads
+// through both handlers.
+func (h *DiscoveryHandlers) WithSquadronHost(host string) *DiscoveryHandlers {
+	h.squadronHost = host
 	return h
 }
 
@@ -2512,6 +2585,20 @@ func (h *DiscoveryHandlers) HandleAWSRecommendationExclude(c *gin.Context) {
 		})
 	}
 
+	// v0.89.44 (#665 Stream 63, slice 1 chunk 4 of the GitHub Checks
+	// API back-signal arc). Follow up on the
+	// discovery_recommendation.excluded emit by PATCHing the in-flight
+	// check run (if any) to conclusion=neutral so the operator who's
+	// reading the PR review surface sees Squadron's reasoning
+	// up-to-date without having to bounce back to Squadron's UI. Only
+	// fires on the false → true (Excluded) transition; the cleared and
+	// no-op paths leave the check run wherever it was (the merge /
+	// close webhook will reconcile if the PR moves). See design doc §7
+	// + §10 contract item 7 + §12 acceptance test 5.
+	if req.Excluded && prevExcluded != req.Excluded {
+		h.maybeUpdateCheckRunOnExclude(c.Request.Context(), &req, actor)
+	}
+
 	resp := awsRecommendationExcludeResponse{
 		RecommendationID: req.RecommendationID,
 		Excluded:         req.Excluded,
@@ -2521,6 +2608,242 @@ func (h *DiscoveryHandlers) HandleAWSRecommendationExclude(c *gin.Context) {
 		resp.ExcludedBy = actor
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// maybeUpdateCheckRunOnExclude — v0.89.44 (#665 Stream 63, slice 1
+// chunk 4) — PATCHes the in-flight check run for recommendationID to
+// conclusion=neutral with the operator-exclude summary, and emits the
+// iac.check_run.updated audit event with the transition payload. The
+// helper is fail-open: any missing wiring (nil checksClient, nil
+// checkRunStore, empty PAT), any short-circuit condition (no row,
+// completed status), any GitHub failure path all degrade silently —
+// the operator's excluded audit event already fired upstream.
+//
+// Short-circuit conditions (all silent):
+//   - h.checksClient == nil: chunk-4 Checks API not wired on this
+//     deployment.
+//   - h.checkRunStore == nil: chunk-4 storage surface not wired.
+//   - h.checksPAT == "": PAT not configured.
+//   - GetCheckRunForRecommendation returns exists=false: no row for
+//     this recommendation (chunk-2 bridge never opened a PR for it,
+//     or the row was pruned).
+//   - status == "completed": the PR has already been merged or
+//     closed; the conclusion is final. PATCHing to neutral would
+//     overwrite the success / failure state the merge / close
+//     webhook already PATCHed in. Per design doc §7: "only fires if
+//     the underlying PR is still open."
+//
+// On UpdateCheckRun success: emit iac.check_run.updated with
+// transition payload (previous_status + previous_conclusion +
+// new_status + new_conclusion). Persist the new state via
+// SetCheckRunForRecommendation so the next read sees completed +
+// neutral. On UpdateCheckRun failure: emit iac.check_run.failed with
+// the structured error_kind discriminator.
+func (h *DiscoveryHandlers) maybeUpdateCheckRunOnExclude(
+	ctx context.Context,
+	req *awsRecommendationExcludeRequest,
+	actor string,
+) {
+	if h.checksClient == nil || h.checkRunStore == nil {
+		return
+	}
+	if strings.TrimSpace(h.checksPAT) == "" {
+		return
+	}
+	if strings.TrimSpace(req.RecommendationID) == "" {
+		return
+	}
+
+	ref, prevStatus, prevConclusion, exists, err := h.checkRunStore.GetCheckRunForRecommendation(ctx, req.RecommendationID)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("aws recommendation exclude: check-run lookup failed",
+				zap.Error(err),
+				zap.String("recommendation_id", req.RecommendationID))
+		}
+		return
+	}
+	if !exists || ref.CheckID == 0 {
+		// No check run was ever opened for this recommendation —
+		// nothing to PATCH. Fast path for deployments that haven't
+		// upgraded chunk-2's bridge wiring yet.
+		return
+	}
+	if prevStatus == iacgithub.CheckRunStatusCompleted {
+		// PR has already been merged or closed; the conclusion is
+		// final. Comment per design doc §7: only the merge / close
+		// webhook transitions a completed run; the operator-exclude
+		// neutral arrow is only valid from in_progress.
+		return
+	}
+
+	in := checkrunprompt.SummaryInput{
+		RecommendationKind: req.RecommendationKind,
+		// RecommendationReason is intentionally empty on the exclusion
+		// PATCH — the operator's intent is "don't propose this again,"
+		// not "here's the original reasoning a second time." The
+		// summary's sanitizeReasoning emits a placeholder when empty.
+		AccountID:        req.AccountID,
+		Region:           req.Region,
+		ConnectionID:     req.ConnectionID,
+		PRURL:            "",
+		RecommendationID: req.RecommendationID,
+		SquadronHost:     h.squadronHost,
+	}
+	title, summary := checkrunprompt.ComposeUpdateSummary(in, iacgithub.CheckRunConclusionNeutral)
+
+	updateReq := iacgithub.CheckRunUpdate{
+		Ref: iacgithub.CheckRunRef{
+			Owner:   ref.Owner,
+			Repo:    ref.Repo,
+			CheckID: ref.CheckID,
+			HeadSHA: ref.HeadSHA,
+		},
+		Status:      iacgithub.CheckRunStatusCompleted,
+		Conclusion:  iacgithub.CheckRunConclusionNeutral,
+		CompletedAt: time.Now().UTC(),
+		Output: iacgithub.CheckRunOutput{
+			Title:   title,
+			Summary: summary,
+		},
+	}
+	if err := h.checksClient.UpdateCheckRun(ctx, h.checksPAT, updateReq); err != nil {
+		h.emitDiscoveryCheckRunFailedAudit(ctx, req, ref, err)
+		return
+	}
+
+	// Persist the new state.
+	rec := types.ExcludedRecommendation{
+		RecommendationID:   req.RecommendationID,
+		ConnectionID:       req.ConnectionID,
+		AccountID:          req.AccountID,
+		Region:             req.Region,
+		RecommendationKind: req.RecommendationKind,
+		ResourceID:         req.ResourceID,
+		ExcludedAt:         time.Now().UTC(),
+		ExcludedBy:         actor,
+	}
+	if werr := h.checkRunStore.SetCheckRunForRecommendation(
+		ctx, rec,
+		types.CheckRunRef{Owner: ref.Owner, Repo: ref.Repo, CheckID: ref.CheckID, HeadSHA: ref.HeadSHA},
+		iacgithub.CheckRunStatusCompleted,
+		iacgithub.CheckRunConclusionNeutral,
+	); werr != nil && h.logger != nil {
+		h.logger.Warn("aws recommendation exclude: check-run storage write failed (fail-open)",
+			zap.Error(werr),
+			zap.Int64("check_run_id", ref.CheckID))
+	}
+
+	h.emitDiscoveryCheckRunUpdatedAudit(ctx, req, ref, prevStatus, prevConclusion)
+}
+
+// emitDiscoveryCheckRunUpdatedAudit records iac.check_run.updated for
+// the chunk-4 exclusion path. Mirrors the chunk-2/3 emit shape so the
+// SIEM forwarder + humanizer see a single uniform schema across all
+// three transition sources.
+func (h *DiscoveryHandlers) emitDiscoveryCheckRunUpdatedAudit(
+	ctx context.Context,
+	req *awsRecommendationExcludeRequest,
+	ref types.CheckRunRef,
+	prevStatus, prevConclusion string,
+) {
+	if h.auditService == nil {
+		return
+	}
+	prURL := ""
+	if ref.Owner != "" && ref.Repo != "" {
+		// Reconstruct a humanizer-friendly PR-coordinates URL even
+		// though we don't have the PR number on this path — the
+		// humanizer's title falls back to a kindless form when the
+		// "/pull/<n>" suffix is missing. The owner/repo half is the
+		// audit-correlation value SIEM consumers join on.
+		prURL = "https://github.com/" + ref.Owner + "/" + ref.Repo
+	}
+	payload := map[string]any{
+		"connection_id":        req.ConnectionID,
+		"recommendation_id":    req.RecommendationID,
+		"recommendation_kind":  req.RecommendationKind,
+		"account_id":           req.AccountID,
+		"region":               req.Region,
+		"pr_url":               prURL,
+		"head_sha":             ref.HeadSHA,
+		"check_run_id":         ref.CheckID,
+		"owner":                ref.Owner,
+		"repo":                 ref.Repo,
+		"previous_status":      prevStatus,
+		"previous_conclusion":  prevConclusion,
+		"new_status":           iacgithub.CheckRunStatusCompleted,
+		"new_conclusion":       iacgithub.CheckRunConclusionNeutral,
+		"actor":                services.AuditActorSystem,
+		"recorded_at":          time.Now().UTC(),
+	}
+	_ = h.auditService.Record(ctx, services.AuditEntry{
+		Actor:      services.AuditActorSystem,
+		EventType:  services.AuditEventIaCCheckRunUpdated,
+		TargetType: services.AuditTargetIaCRecommendation,
+		TargetID:   req.ConnectionID,
+		Action:     "check_run_updated",
+		Payload:    payload,
+	})
+}
+
+// emitDiscoveryCheckRunFailedAudit records iac.check_run.failed when
+// the UpdateCheckRun call fails on the chunk-4 exclusion path. The
+// structured error_kind discriminator drives SIEM dashboards and the
+// humanizer's fix-it copy.
+func (h *DiscoveryHandlers) emitDiscoveryCheckRunFailedAudit(
+	ctx context.Context,
+	req *awsRecommendationExcludeRequest,
+	ref types.CheckRunRef,
+	err error,
+) {
+	if h.auditService == nil {
+		return
+	}
+	errKind := iacgithub.CheckRunErrorKindNetwork
+	httpStatus := 0
+	msg := err.Error()
+	var cre *iacgithub.CheckRunError
+	if errors.As(err, &cre) {
+		errKind = cre.Kind
+		httpStatus = cre.Status
+		msg = cre.Message
+	}
+	prURL := ""
+	if ref.Owner != "" && ref.Repo != "" {
+		prURL = "https://github.com/" + ref.Owner + "/" + ref.Repo
+	}
+	payload := map[string]any{
+		"connection_id":       req.ConnectionID,
+		"recommendation_id":   req.RecommendationID,
+		"recommendation_kind": req.RecommendationKind,
+		"account_id":          req.AccountID,
+		"region":              req.Region,
+		"pr_url":              prURL,
+		"head_sha":            ref.HeadSHA,
+		"check_run_id":        ref.CheckID,
+		"owner":               ref.Owner,
+		"repo":                ref.Repo,
+		"error_kind":          errKind,
+		"http_status":         httpStatus,
+		"error_message":       msg,
+		"actor":               services.AuditActorSystem,
+		"recorded_at":         time.Now().UTC(),
+	}
+	_ = h.auditService.Record(ctx, services.AuditEntry{
+		Actor:      services.AuditActorSystem,
+		EventType:  services.AuditEventIaCCheckRunFailed,
+		TargetType: services.AuditTargetIaCRecommendation,
+		TargetID:   req.ConnectionID,
+		Action:     "check_run_failed",
+		Payload:    payload,
+	})
+	if h.logger != nil {
+		h.logger.Info("aws recommendation exclude: check run update failed (fail-open)",
+			zap.String("error_kind", errKind),
+			zap.Int("http_status", httpStatus),
+			zap.String("recommendation_id", req.RecommendationID))
+	}
 }
 
 // --- HandleAWSRecommendationListExcluded (v0.89.40 #660 Stream 58) ---
