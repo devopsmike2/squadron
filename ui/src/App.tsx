@@ -18,6 +18,7 @@ import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
 import DeployPage from "./pages/Deploy";
 import DiscoveryAWSPage from "./pages/DiscoveryAWS";
+import DiscoveryAzurePage from "./pages/DiscoveryAzure";
 import DiscoveryGCPPage from "./pages/DiscoveryGCP";
 import DiscoveryIaCGitHubPage from "./pages/DiscoveryIaCGitHub";
 import FleetMapPage from "./pages/FleetMap";
@@ -183,6 +184,12 @@ function AuthBoundary() {
               Recommendations triptych under /discovery/gcp so the
               namespace stays uniform across providers. */}
           <Route path="/discovery/gcp" element={<DiscoveryGCPPage />} />
+          {/* v0.89.53 #677 Stream 75 (slice-1 chunk 4) — Azure discovery
+              page parallels DiscoveryGCP. Same Wizard / Inventory /
+              Recommendations triptych under /discovery/azure. Sits
+              between GCP and the IaC GitHub entry so the
+              /discovery/<cloud> routes group together. */}
+          <Route path="/discovery/azure" element={<DiscoveryAzurePage />} />
           {/* v0.89.3 Stream 19 — IaC connections list + Connect-IaC-repo
               wizard. /discovery/iac/<provider> namespace leaves room
               for slice-2 GitLab / Bitbucket without renaming routes. */}
