@@ -434,6 +434,20 @@ function TraceCoveragePanel({ coverage }: { coverage: TraceCoverage }) {
   const totals = coverage.totals;
   const isEmpty = totals.inventory_count === 0;
 
+  // v0.89.82 (#713 Stream 111, Trace integration slice 2 chunk 3) —
+  // fleet-wide sum of "primitive_enabled but no recent emission" rows
+  // across the four providers. Drives the conditional sub-indicator
+  // below the chip row. Hidden when zero (design doc §10 acceptance
+  // test 10). The Recommendations-tab deeplink points to AWS today
+  // because AWS is the only provider whose RecommendationsTab renders
+  // trace-emission-* drafts; the other three pages still have stub
+  // tabs in this chunk.
+  const totalPendingTraceEmission =
+    coverage.providers.aws.pending_trace_emission_count +
+    coverage.providers.gcp.pending_trace_emission_count +
+    coverage.providers.azure.pending_trace_emission_count +
+    coverage.providers.oci.pending_trace_emission_count;
+
   return (
     <div
       className="rounded-lg border bg-card p-6"
@@ -477,6 +491,25 @@ function TraceCoveragePanel({ coverage }: { coverage: TraceCoverage }) {
             </div>
           </div>
           <ProviderChipRow providers={coverage.providers} />
+          {totalPendingTraceEmission > 0 && (
+            <div
+              data-testid="trace-coverage-pending-indicator"
+              className="mt-3 flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400"
+            >
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+              <span>
+                {totalPendingTraceEmission} resources have the primitive
+                enabled but no recent emission —{" "}
+                <Link
+                  to="/discovery/aws#recommendations"
+                  className="underline"
+                >
+                  see Recommendations on each provider
+                </Link>{" "}
+                for the drafts.
+              </span>
+            </div>
+          )}
         </>
       )}
     </div>

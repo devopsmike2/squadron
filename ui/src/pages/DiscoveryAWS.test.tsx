@@ -2101,4 +2101,84 @@ describe("DiscoveryAWSPage", () => {
       expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(0);
     });
   });
+
+  // ----- v0.89.82 (#713 Stream 111, Trace integration slice 2 chunk 3) ---
+  //
+  // Filter chip above the recommendations list narrows to the slice-2
+  // trace-emission-* drafts. Rendered directly via the exported
+  // RecommendationsTab so the test stays focused on the filter
+  // behavior, not the full page state machine. Recommendation kind is
+  // recognised via the resource_kind prefix per recommendations.ts.
+
+  it("TestDiscoveryAWS_RecommendationsTab_TraceEmissionFilter_FiltersList", async () => {
+    const mk = (i: number, kind: string): Recommendation => ({
+      id: `rec-${i}`,
+      category: "empty_signal",
+      severity: "warn",
+      title: `Step ${i}`,
+      detail: "draft",
+      est_savings_bytes: 0,
+      generated_at: new Date().toISOString(),
+      source: { kind: "discovery_scan", ref_id: "scan-x" },
+      iac: { format: "terraform", source: "resource ..." },
+      resource_kind: kind,
+      affected_resources: [`arn:aws:test::${i}`],
+    });
+    const recs: GenerateRecommendationsResponse = {
+      declined: false,
+      reasoning: "",
+      recommendations: [
+        mk(1, "trace-emission-ec2"),
+        mk(2, "trace-emission-lambda"),
+        mk(3, "trace-emission-rds"),
+        mk(4, "ec2-otel-layer"),
+        mk(5, "lambda-otel-layer"),
+      ],
+    };
+    // Hydration GET defaults to empty so the Excluded badges don't
+    // distract from the filter behavior.
+    mockedListExcludedRecommendations.mockResolvedValueOnce([]);
+
+    const { RecommendationsTab } = await import("./DiscoveryAWS");
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <MemoryRouter>
+          <RecommendationsTab
+            recs={recs}
+            accountID="123456789012"
+            scanID="scan-x"
+            region="us-east-1"
+          />
+        </MemoryRouter>
+      </SWRConfig>,
+    );
+
+    // All 5 cards visible initially.
+    expect(
+      screen.getAllByTestId("discovery-recommendation-card"),
+    ).toHaveLength(5);
+
+    // Click the filter chip; only the 3 trace-emission-* cards remain.
+    const chip = screen.getByTestId("trace-emission-filter-chip");
+    expect(chip).toHaveAttribute("data-active", "false");
+    const user = userEvent.setup();
+    await user.click(chip);
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId("discovery-recommendation-card"),
+      ).toHaveLength(3);
+    });
+    expect(
+      screen.getByTestId("trace-emission-filter-chip"),
+    ).toHaveAttribute("data-active", "true");
+
+    // Click again — filter clears, all 5 return.
+    await user.click(screen.getByTestId("trace-emission-filter-chip"));
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId("discovery-recommendation-card"),
+      ).toHaveLength(5);
+    });
+  });
 });
