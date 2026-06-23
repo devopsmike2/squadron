@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/google/uuid"
 )
 
@@ -170,6 +171,38 @@ type ApplicationStore interface {
 	GetCheckRunForRecommendation(ctx context.Context,
 		recommendationID string,
 	) (ref CheckRunRef, status string, conclusion string, exists bool, err error)
+
+	// v0.89.74 (#705 Stream 103, slice 1 chunk 1 of the Trace
+	// integration arc) — trace_resource_seen storage layer. The new
+	// internal/traceindex package's Index flushes its in-memory write-
+	// through cache through UpsertTraceResources every 30s; the
+	// Discovery dashboard's TRACE COVERAGE panel and the per-provider
+	// Inventory tabs' last_seen_at column read through the other three.
+	//
+	// UpsertTraceResources accepts a batch of ResourceRow projections
+	// and applies INSERT ... ON CONFLICT(resource_key) DO UPDATE with
+	// span_count_24h += new.span_count_24h, last_seen_at + attributes_json
+	// + updated_at refreshed to the new values, and first_seen_at
+	// preserved. After the upsert, if the row count exceeds the storage
+	// layer's max-rows cap (SQUADRON_TRACEINDEX_MAX_ROWS, default 100K
+	// per design doc §12) the layer DELETEs the oldest last_seen_at
+	// rows until the count drops to the cap. evicted returns the count
+	// removed by that sweep — zero on the common path; non-zero
+	// triggers the chunk-2 flush audit payload's eviction_count field.
+	//
+	// GetTraceResource returns the row for resource_key or nil when no
+	// row matches. ListTraceResourcesByScope returns rows for a
+	// (provider, scope_id) tuple with last_seen_at >= since, ordered
+	// newest-first, capped at limit. CountTraceResourcesByScope returns
+	// the row count for the same tuple — the dashboard's coverage_pct
+	// numerator.
+	//
+	// See docs/proposals/trace-integration-slice1.md §4, §9 contract
+	// items 1-3, and §11 acceptance tests 1-4 + 6.
+	UpsertTraceResources(ctx context.Context, rows []traceindex.ResourceRow) (evicted int, err error)
+	GetTraceResource(ctx context.Context, key string) (*traceindex.ResourceRow, error)
+	ListTraceResourcesByScope(ctx context.Context, provider, scopeID string, since time.Time, limit int) ([]traceindex.ResourceRow, error)
+	CountTraceResourcesByScope(ctx context.Context, provider, scopeID string) (int, error)
 
 	// Action runners + requests (v0.53 Move 2). An action runner is
 	// an installed squadron-action-runner daemon registered with

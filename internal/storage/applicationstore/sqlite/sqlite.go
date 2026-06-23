@@ -15,10 +15,19 @@ import (
 	"go.uber.org/zap"
 )
 
+// defaultTraceIndexMaxRows mirrors traceindex.defaultMaxRows. The
+// storage layer enforces the cap because LRU eviction is a storage
+// concern — the Index hands the store a batch and the store decides
+// whether the upsert pushed the row count past the cap. Design doc
+// §12 names 100K as the slice-1 default with an operator override
+// via SQUADRON_TRACEINDEX_MAX_ROWS.
+const defaultTraceIndexMaxRows = 100_000
+
 // Storage implements the ApplicationStore interface using SQLite
 type Storage struct {
-	db     *sql.DB
-	logger *zap.Logger
+	db               *sql.DB
+	logger           *zap.Logger
+	traceIndexMaxRow int
 }
 
 // NewSQLiteStorage creates a new SQLite storage instance
@@ -44,8 +53,9 @@ func NewSQLiteStorage(dbPath string, logger *zap.Logger) (types.ApplicationStore
 	}
 
 	storage := &Storage{
-		db:     db,
-		logger: logger,
+		db:               db,
+		logger:           logger,
+		traceIndexMaxRow: readTraceIndexMaxRowsEnv(),
 	}
 
 	// Run migrations
@@ -674,6 +684,44 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_status TEXT`,
 		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_conclusion TEXT`,
 		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_updated_at TIMESTAMP`,
+
+		// v0.89.74 (#705 Stream 103, slice 1 chunk 1 of the Trace
+		// integration arc) — trace_resource_seen carries one row per
+		// resource the OTLP receiver has seen emit spans recently, keyed
+		// by the §3 fallback-chain resource_key. The Discovery dashboard's
+		// TRACE COVERAGE panel reads span_count_24h and the per-provider
+		// rollup off the (provider, scope_id) index; chunk 4's
+		// last_seen_at column on the per-provider Inventory tabs reads
+		// last_seen_at by key.
+		//
+		// attributes_json carries the latest resource-attribute snapshot
+		// for the diagnostic UI. §12 of the design doc pins the no-span-
+		// content guarantee on this column — it carries RESOURCE
+		// attributes only, NEVER span attributes / names / trace IDs.
+		//
+		// idx_trace_resource_seen_last_seen backs the LRU eviction sweep
+		// the storage layer runs whenever an upsert pushes the row count
+		// past SQUADRON_TRACEINDEX_MAX_ROWS (default 100K). The sweep is
+		// a single ranged DELETE keyed on this index so it stays cheap
+		// even when the cap is hit hard.
+		//
+		// See docs/proposals/trace-integration-slice1.md §4 and §12.
+		`CREATE TABLE IF NOT EXISTS trace_resource_seen (
+			resource_key             TEXT PRIMARY KEY,
+			provider                 TEXT NOT NULL,
+			scope_id                 TEXT,
+			resource_id_hint         TEXT,
+			service_name             TEXT,
+			first_seen_at            TIMESTAMP NOT NULL,
+			last_seen_at             TIMESTAMP NOT NULL,
+			span_count_24h           INTEGER NOT NULL,
+			root_span_count_24h      INTEGER NOT NULL,
+			attributes_json          TEXT,
+			match_confidence         TEXT NOT NULL,
+			updated_at               TIMESTAMP NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_provider_scope ON trace_resource_seen(provider, scope_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_last_seen ON trace_resource_seen(last_seen_at)`,
 	}
 
 	for _, migration := range migrations {

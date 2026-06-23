@@ -11,8 +11,13 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
+	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/google/uuid"
 )
+
+// memoryTraceIndexMaxRows mirrors the SQLite layer's
+// defaultTraceIndexMaxRows. Slice 1 design doc §12.
+const memoryTraceIndexMaxRows = 100_000
 
 // Store is an in-memory implementation of ApplicationStore
 type Store struct {
@@ -75,6 +80,18 @@ type Store struct {
 	// the same CheckRunRef + status / conclusion the SQLite path
 	// returns.
 	checkRunState map[string]memoryCheckRunRecord
+
+	// v0.89.74 (#705 Stream 103, slice 1 chunk 1 of the Trace
+	// integration arc) — trace_resource_seen mirror. Keyed by
+	// resource_key (the §3 fallback-chain projection). traceMaxRows
+	// is the LRU cap enforced on UpsertTraceResources; defaults to
+	// 100K per design doc §12 and overridable by the wiring layer
+	// (chunk 2) via SetTraceIndexMaxRowsForTest. The SQLite store
+	// reads the operator-supplied env var on construction; the
+	// memory store keeps the same default so tests don't need to
+	// touch the environment.
+	traceResourceSeen map[string]traceindex.ResourceRow
+	traceMaxRows      int
 }
 
 // memoryCheckRunRecord — v0.89.42 (#662 Stream 60). Mirror of the 5
@@ -126,6 +143,9 @@ func NewStore() *Store {
 		excludedRecommendationFlags: make(map[string]bool),
 		// v0.89.42 (#662 Stream 60).
 		checkRunState: make(map[string]memoryCheckRunRecord),
+		// v0.89.74 (#705 Stream 103).
+		traceResourceSeen: make(map[string]traceindex.ResourceRow),
+		traceMaxRows:      memoryTraceIndexMaxRows,
 	}
 }
 

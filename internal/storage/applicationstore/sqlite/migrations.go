@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 9
+const SchemaVersion = 10
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -376,6 +376,52 @@ ALTER TABLE iac_recommendation_verdicts ADD COLUMN check_run_updated_at TIMESTAM
 INSERT OR IGNORE INTO schema_version (version) VALUES (9);
 `
 
+// TraceResourceSeenSchema bumps the database to schema v10.
+// v0.89.74 (#705 Stream 103, slice 1 chunk 1 of the Trace integration
+// arc) — adds the trace_resource_seen table that the new
+// internal/traceindex package flushes to every 30s.
+//
+// The table stores one row per resource the OTLP receiver has seen
+// emit spans recently, keyed by the §3 fallback-chain resource_key.
+// span_count_24h is the rolling counter the chunk-3 Discovery
+// dashboard's TRACE COVERAGE panel reads. attributes_json carries
+// the latest resource-attribute snapshot for the diagnostic UI; per
+// §12 of the design doc the field stores RESOURCE attributes only
+// (host.id, cloud.provider, k8s.cluster.name, etc.), explicitly NOT
+// span attributes — the threat model pins the no-span-content
+// guarantee on this column.
+//
+// idx_trace_resource_seen_provider_scope backs the per-provider
+// coverage rollup (the Discovery dashboard's per-card breakdown) and
+// the per-scope inventory join (chunk 4's last_seen_at column on
+// DiscoveryAWS / GCP / Azure / OCI). idx_trace_resource_seen_last_seen
+// backs the LRU eviction sweep — when the row count exceeds
+// SQUADRON_TRACEINDEX_MAX_ROWS the storage layer DELETEs the oldest
+// last_seen_at rows until the count drops to the cap.
+//
+// See docs/proposals/trace-integration-slice1.md §4.
+const TraceResourceSeenSchema = `
+CREATE TABLE IF NOT EXISTS trace_resource_seen (
+    resource_key             TEXT PRIMARY KEY,
+    provider                 TEXT NOT NULL,
+    scope_id                 TEXT,
+    resource_id_hint         TEXT,
+    service_name             TEXT,
+    first_seen_at            TIMESTAMP NOT NULL,
+    last_seen_at             TIMESTAMP NOT NULL,
+    span_count_24h           INTEGER NOT NULL,
+    root_span_count_24h      INTEGER NOT NULL,
+    attributes_json          TEXT,
+    match_confidence         TEXT NOT NULL,
+    updated_at               TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_provider_scope
+    ON trace_resource_seen(provider, scope_id);
+CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_last_seen
+    ON trace_resource_seen(last_seen_at);
+INSERT OR IGNORE INTO schema_version (version) VALUES (10);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -387,4 +433,5 @@ var Migrations = []string{
 	DiscoveryVerdictScopeIndexSchema,
 	IaCRecommendationVerdictsSchema,
 	CheckRunStateSchema,
+	TraceResourceSeenSchema,
 }
