@@ -909,8 +909,33 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 // checks beats a registry indirection. AWS EKS continues to use
 // the slice 1 generic kinds (no eks- prefix on the new arc since
 // EKS already shipped at slice 1).
+//
+// v0.89.81 (#712 Stream 110, Trace integration slice 2 chunk 2) —
+// the per-cloud catalog grows to FOUR kinds each with the new
+// trace-emission recommendation kinds (`trace-emission-<provider>-<tier>`
+// where provider is one of aws/gcp/azure/oci and tier is one of
+// compute/db/k8s). The trace-emission case sits at the top of the
+// switch because its prefix is more specific than the other matches
+// — a kind like "trace-emission-aws-compute" must NOT fall into the
+// default "aws" branch on the strength of the literal "aws" segment,
+// nor must "trace-emission-gcp-compute" route to "gcp" via the
+// "gcp-" half-match. The dedicated providerFromTraceEmissionKind
+// helper parses the provider segment cleanly; an unrecognized
+// provider segment falls back to "aws" to match the original
+// switch's default. See docs/proposals/trace-integration-slice2.md
+// §6.
 func providerFromRecommendationKind(kind string) string {
 	switch {
+	case strings.HasPrefix(kind, "trace-emission-"):
+		provider := providerFromTraceEmissionKind(kind)
+		if provider == "" {
+			// Fallback: unrecognized provider segment. Default to
+			// "aws" to match the original switch's default behavior
+			// so a malformed kind doesn't fall off the routing table
+			// entirely.
+			return "aws"
+		}
+		return provider
 	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-"):
 		return "gcp"
 	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-"):
@@ -920,6 +945,39 @@ func providerFromRecommendationKind(kind string) string {
 	default:
 		return "aws"
 	}
+}
+
+// providerFromTraceEmissionKind extracts the cloud provider from a
+// trace-emission-* recommendation kind. The kind shape is
+// `trace-emission-<provider>-<tier>` where provider is one of
+// aws/gcp/azure/oci and tier is one of compute/db/k8s.
+//
+// Returns "" if the kind doesn't match the trace-emission pattern OR
+// the provider segment isn't recognized OR the tier segment is absent
+// (e.g. "trace-emission-aws" with no trailing tier). Callers fall
+// back to the original switch's default when this returns empty —
+// see providerFromRecommendationKind's trace-emission case for the
+// fallback policy.
+//
+// v0.89.81 (#712 Stream 110, Trace integration slice 2 chunk 2). See
+// docs/proposals/trace-integration-slice2.md §6.
+func providerFromTraceEmissionKind(kind string) string {
+	const prefix = "trace-emission-"
+	if !strings.HasPrefix(kind, prefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(kind, prefix)
+	// rest now looks like "aws-compute" / "gcp-k8s" / etc.
+	sepIdx := strings.Index(rest, "-")
+	if sepIdx <= 0 {
+		return ""
+	}
+	provider := rest[:sepIdx]
+	switch provider {
+	case "aws", "gcp", "azure", "oci":
+		return provider
+	}
+	return ""
 }
 
 // writeScopePayloadFields — v0.89.48 (#671 Stream 69, GCP discovery
