@@ -597,6 +597,119 @@ describe("DiscoveryAzure", () => {
     ).toBeInTheDocument();
   });
 
+  // Kubernetes tier slice 2 chunk 5 (v0.89.71, #702 Stream 100) —
+  // Inventory tab gains a Kubernetes sub-tab rendering the AKS
+  // cluster inventory from the v0.89.70 chunk 3 scanner extension.
+  // The instrumentation column reads from azure_monitor_enabled.
+  it("TestDiscoveryAzure_InventoryTab_KubernetesSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      clusters: [
+        {
+          resource_id: "/subscriptions/s/managedClusters/aks-covered",
+          name: "aks-covered",
+          kubernetes_version: "1.29",
+          status: "Succeeded",
+          region: "eastus",
+          provider: "azure",
+          azure_monitor_enabled: true,
+          tags: { env: "prod" },
+        },
+        {
+          resource_id: "/subscriptions/s/managedClusters/aks-uncovered",
+          name: "aks-uncovered",
+          kubernetes_version: "1.29",
+          status: "Succeeded",
+          region: "eastus",
+          provider: "azure",
+          azure_monitor_enabled: false,
+          tags: {},
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
+    await user.click(kubernetesTab);
+    expect(kubernetesTab).toHaveAttribute("data-state", "active");
+    expect(
+      screen.getByText("/subscriptions/s/managedClusters/aks-covered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("/subscriptions/s/managedClusters/aks-uncovered"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Azure Monitor\?/i)).toBeInTheDocument();
+  });
+
+  // Kubernetes tier slice 2 chunk 5 — empty-state UX for Azure.
+  it("TestDiscoveryAzure_InventoryTab_KubernetesSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
+    await user.click(kubernetesTab);
+    expect(
+      screen.getByText(/No Kubernetes clusters discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // advanceToServicePrincipalStep walks the wizard from step 1

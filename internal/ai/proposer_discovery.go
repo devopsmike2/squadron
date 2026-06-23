@@ -390,6 +390,19 @@ type LoadBalancerCandidate struct {
 // doesn't have to re-implement the status filter.) Both axes must
 // hold for a cluster to count as covered; either alone is
 // insufficient.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100) — Provider
+// plus three provider-specific axis flags extend the candidate so
+// the proposer can route findings to per-cloud kinds:
+//
+//   - Provider="" or "aws" → existing composite EKS axes (cold-start path).
+//   - Provider="gcp"      → ManagedPrometheusEnabled gates gke-mp-enable.
+//   - Provider="azure"    → AzureMonitorEnabled gates aks-monitor-enable.
+//   - Provider="oci"      → OperationsInsightsEnabled gates oke-ops-insights-enable.
+//
+// The AWS path stays byte-identical to v0.89.70 because the new
+// fields default to zero / empty and the user-message renderer
+// branches on Provider before reading them.
 type ClusterCandidate struct {
 	ResourceID          string   `json:"resource_id"`
 	Name                string   `json:"name"`
@@ -397,6 +410,25 @@ type ClusterCandidate struct {
 	ControlPlaneLogging []string `json:"control_plane_logging"`
 	AddonNames          []string `json:"addon_names"`
 	Region              string   `json:"region"`
+
+	// Provider discriminates which axis the proposer reads. Empty
+	// defaults to "aws" for backward compatibility with v0.89.0
+	// audit rows and v0.89.70 cold-start parity.
+	Provider string `json:"provider,omitempty"`
+
+	// ManagedPrometheusEnabled signals GCP GKE Managed Prometheus.
+	// Only read when Provider="gcp".
+	ManagedPrometheusEnabled bool `json:"managed_prometheus_enabled,omitempty"`
+
+	// AzureMonitorEnabled signals Azure AKS managed observability
+	// (any one of three addon profile flags). Only read when
+	// Provider="azure".
+	AzureMonitorEnabled bool `json:"azure_monitor_enabled,omitempty"`
+
+	// OperationsInsightsEnabled signals OCI OKE Operations Insights
+	// enrollment via the operations-insights-enabled=true tag. Only
+	// read when Provider="oci".
+	OperationsInsightsEnabled bool `json:"operations_insights_enabled,omitempty"`
 }
 
 // DynamoDBTableCandidate is one DynamoDB-shaped row from the scan.

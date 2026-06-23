@@ -2062,3 +2062,192 @@ func TestProviderFromRecommendationKind_DatabaseTierExtension(t *testing.T) {
 		}
 	}
 }
+
+// TestWebhook_GKEKind_RoutesToGCP — Kubernetes tier slice 2 chunk 5
+// (v0.89.71, #702 Stream 100). Branch
+// `squadron/rec/gke-mp-enable/<project_id>/<region>/<short_id>` is
+// a GKE recommendation kind that must route through the
+// providerFromRecommendationKind helper to provider="gcp" and
+// populate project_id (not account_id) in the audit payload.
+// Branch shape per docs/proposals/kubernetes-tier-slice2.md §6.
+func TestWebhook_GKEKind_RoutesToGCP(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/gke-mp-enable/my-prod-project/us-central1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.EventType != services.AuditEventRecommendationPRMerged {
+		t.Errorf("event_type = %q, want %q", e.EventType, services.AuditEventRecommendationPRMerged)
+	}
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "gke-mp-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want gke-mp-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "gcp" {
+		t.Errorf("payload.provider = %v, want gcp", pay["provider"])
+	}
+	if pay["project_id"] != "my-prod-project" {
+		t.Errorf("payload.project_id = %v, want my-prod-project", pay["project_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["region"] != "us-central1" {
+		t.Errorf("payload.region = %v, want us-central1", pay["region"])
+	}
+}
+
+// TestWebhook_AKSKind_RoutesToAzure — Kubernetes tier slice 2 chunk 5
+// (v0.89.71, #702 Stream 100). Branch
+// `squadron/rec/aks-monitor-enable/<subscription_id>/<region>/<short_id>`
+// is an AKS recommendation kind that must route through the
+// providerFromRecommendationKind helper to provider="azure" and
+// populate subscription_id (not account_id) in the audit payload.
+func TestWebhook_AKSKind_RoutesToAzure(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/aks-monitor-enable/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/eastus/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "aks-monitor-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want aks-monitor-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "azure" {
+		t.Errorf("payload.provider = %v, want azure", pay["provider"])
+	}
+	if pay["subscription_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Errorf("payload.subscription_id = %v, want aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pay["subscription_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["project_id"] != "" {
+		t.Errorf("payload.project_id = %v, want empty string", pay["project_id"])
+	}
+	if pay["region"] != "eastus" {
+		t.Errorf("payload.region = %v, want eastus", pay["region"])
+	}
+}
+
+// TestWebhook_OKEKind_RoutesToOCI — Kubernetes tier slice 2 chunk 5
+// (v0.89.71, #702 Stream 100). Branch
+// `squadron/rec/oke-ops-insights-enable/<tenancy_ocid>/<region>/<short_id>`
+// is an OKE recommendation kind that must route through the
+// providerFromRecommendationKind helper to provider="oci" and
+// populate tenancy_ocid (not account_id) in the audit payload.
+func TestWebhook_OKEKind_RoutesToOCI(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/oke-ops-insights-enable/ocid1.tenancy.oc1..aaaaaaaa/us-phoenix-1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "oke-ops-insights-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want oke-ops-insights-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "oci" {
+		t.Errorf("payload.provider = %v, want oci", pay["provider"])
+	}
+	if pay["tenancy_ocid"] != "ocid1.tenancy.oc1..aaaaaaaa" {
+		t.Errorf("payload.tenancy_ocid = %v, want ocid1.tenancy.oc1..aaaaaaaa", pay["tenancy_ocid"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["project_id"] != "" {
+		t.Errorf("payload.project_id = %v, want empty string", pay["project_id"])
+	}
+	if pay["subscription_id"] != "" {
+		t.Errorf("payload.subscription_id = %v, want empty string", pay["subscription_id"])
+	}
+	if pay["region"] != "us-phoenix-1" {
+		t.Errorf("payload.region = %v, want us-phoenix-1", pay["region"])
+	}
+}
+
+// TestProviderFromRecommendationKind_K8sTierExtension — Kubernetes
+// tier slice 2 chunk 5 (v0.89.71, #702 Stream 100). The three new
+// K8s recommendation kind prefixes must route to the matching
+// provider, and the existing slice 1 + database tier routing must
+// remain green. Boundary cases ("gke" / "aks" / "oke" alone with
+// no trailing hyphen) must still return "aws" because the substrate
+// requires the literal hyphenated prefix.
+func TestProviderFromRecommendationKind_K8sTierExtension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		// Slice 1 + database tier — must stay green.
+		{kind: "gce-otel-label", want: "gcp"},
+		{kind: "vm-otel-tag", want: "azure"},
+		{kind: "compute-otel-tag", want: "oci"},
+		{kind: "cloudsql-pi-enable", want: "gcp"},
+		{kind: "azsql-diag-enable", want: "azure"},
+		{kind: "ocidb-perfhub-enable", want: "oci"},
+		{kind: "ec2-otel-layer", want: "aws"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		// K8s tier slice 2 — new routing.
+		{kind: "gke-mp-enable", want: "gcp"},
+		{kind: "aks-monitor-enable", want: "azure"},
+		{kind: "oke-ops-insights-enable", want: "oci"},
+		// Boundary cases — bare keyword without trailing hyphen
+		// falls through to AWS.
+		{kind: "gke", want: "aws"},
+		{kind: "aks", want: "aws"},
+		{kind: "oke", want: "aws"},
+		{kind: "gkesomething", want: "aws"},
+		{kind: "akssomething", want: "aws"},
+		{kind: "okesomething", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}

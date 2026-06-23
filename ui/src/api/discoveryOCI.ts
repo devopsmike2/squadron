@@ -188,6 +188,32 @@ export interface DatabaseInstanceSnapshot {
   database_management_enabled?: boolean;  // OCI DB (slice 2)
 }
 
+// ClusterSnapshot mirrors scanner.ClusterSnapshot — the shared
+// cross-cloud Kubernetes cluster row shape. See discoveryGCP.ts for
+// the full per-axis documentation.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100).
+export interface ClusterSnapshot {
+  resource_id: string;
+  name: string;
+  kubernetes_version: string;
+  status: string;
+  region: string;
+  tags?: Record<string, string>;
+  provider?: string;
+
+  // AWS EKS slice 1.
+  control_plane_logging?: string[];
+  addons?: Array<{ name: string; status: string; version?: string }>;
+  nodegroup_count?: number;
+  fargate_profile_count?: number;
+
+  // Slice 2 per-cloud managed-observability axes.
+  managed_prometheus_enabled?: boolean;     // GCP GKE
+  azure_monitor_enabled?: boolean;          // Azure AKS
+  operations_insights_enabled?: boolean;    // OCI OKE
+}
+
 // ScanOCIResponse mirrors ociScanResponse on the wire. Unlike the
 // Azure response which carries subscription_id + location, the OCI
 // response carries tenancy_ocid + region — the OCI substrate scopes
@@ -203,6 +229,12 @@ export interface DatabaseInstanceSnapshot {
 // Inventory tab's Databases sub-tab treats undefined as empty so
 // older scan rows from before the chunk 4 scanner extension render
 // the empty-state placeholder.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100) — `clusters`
+// carries the OKE cluster inventory the v0.89.70 chunk 4 OKE
+// scanner populates. The Inventory tab's Kubernetes sub-tab treats
+// undefined as empty so older scan rows from before the scanner
+// extension render the empty-state placeholder.
 export interface ScanOCIResponse {
   connection_id: string;
   tenancy_ocid: string;
@@ -215,6 +247,7 @@ export interface ScanOCIResponse {
   failed_services?: string[];
   computes: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
+  clusters?: ClusterSnapshot[];
   scan_id: string;
 }
 
@@ -230,6 +263,7 @@ interface scanOCIConnectionWireResponse {
   region: string;
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
+  clusters?: ClusterSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;
@@ -257,6 +291,7 @@ export async function scanOCIConnection(
     failed_services: wire.failed_services,
     computes,
     databases: wire.databases,
+    clusters: wire.clusters,
     scan_id: wire.scan_id,
   };
 }

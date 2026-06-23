@@ -174,6 +174,39 @@ export interface DatabaseInstanceSnapshot {
   database_management_enabled?: boolean;  // OCI DB (slice 2)
 }
 
+// ClusterSnapshot mirrors scanner.ClusterSnapshot — the shared
+// cross-cloud Kubernetes cluster row shape. The three per-cloud
+// observability axis flags are optional because each cloud only
+// populates the one that matches its scanner: AWS EKS uses the
+// composite control_plane_logging + addons rule (slice 1); GCP GKE
+// sets managed_prometheus_enabled (slice 2); Azure AKS sets
+// azure_monitor_enabled (slice 2); OCI OKE sets
+// operations_insights_enabled (slice 2). The `provider` discriminator
+// routes the inventory table's instrumentation-column rendering to
+// the right axis.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100).
+export interface ClusterSnapshot {
+  resource_id: string;
+  name: string;
+  kubernetes_version: string;
+  status: string;
+  region: string;
+  tags?: Record<string, string>;
+  provider?: string;
+
+  // AWS EKS slice 1.
+  control_plane_logging?: string[];
+  addons?: Array<{ name: string; status: string; version?: string }>;
+  nodegroup_count?: number;
+  fargate_profile_count?: number;
+
+  // Slice 2 per-cloud managed-observability axes.
+  managed_prometheus_enabled?: boolean;     // GCP GKE
+  azure_monitor_enabled?: boolean;          // Azure AKS
+  operations_insights_enabled?: boolean;    // OCI OKE
+}
+
 // ScanGCPResponse mirrors gcpScanResponse on the wire. Note that
 // unlike the AWS ScanResult there is no top-level instance_count —
 // the page computes it client-side as compute.length. Same posture
@@ -184,12 +217,20 @@ export interface DatabaseInstanceSnapshot {
 // (omitempty Go JSON tag) so older scan rows from before the
 // scanner extension don't render an undefined array; the Inventory
 // tab's Databases sub-tab treats undefined as empty.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100) — `clusters`
+// carries the GKE cluster inventory the chunk 2 scanner extension
+// populates on result.Clusters. Optional on the wire (omitempty Go
+// JSON tag) so older scan rows from before the v0.89.70 scanner
+// extension don't render an undefined array; the Inventory tab's
+// Kubernetes sub-tab treats undefined as empty.
 export interface ScanGCPResponse {
   connection_id: string;
   project_id: string;
   region: string;
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
+  clusters?: ClusterSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

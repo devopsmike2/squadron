@@ -660,6 +660,108 @@ describe("DiscoveryOCI", () => {
     ).toBeInTheDocument();
   });
 
+  // Kubernetes tier slice 2 chunk 5 (v0.89.71, #702 Stream 100) —
+  // Inventory tab gains a Kubernetes sub-tab rendering the OKE
+  // cluster inventory from the v0.89.70 chunk 4 scanner extension.
+  // The instrumentation column reads from
+  // operations_insights_enabled (Operations Insights enrollment).
+  it("TestDiscoveryOCI_InventoryTab_KubernetesSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      clusters: [
+        {
+          resource_id: "ocid1.cluster.oc1.phx.covered",
+          name: "oke-covered",
+          kubernetes_version: "1.29",
+          status: "ACTIVE",
+          region: "us-phoenix-1",
+          provider: "oci",
+          operations_insights_enabled: true,
+          tags: { env: "prod" },
+        },
+        {
+          resource_id: "ocid1.cluster.oc1.phx.uncovered",
+          name: "oke-uncovered",
+          kubernetes_version: "1.29",
+          status: "ACTIVE",
+          region: "us-phoenix-1",
+          provider: "oci",
+          operations_insights_enabled: false,
+          tags: {},
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
+    await user.click(kubernetesTab);
+    expect(kubernetesTab).toHaveAttribute("data-state", "active");
+    expect(
+      screen.getByText("ocid1.cluster.oc1.phx.covered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("ocid1.cluster.oc1.phx.uncovered"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Operations Insights\?/i)).toBeInTheDocument();
+  });
+
+  // Kubernetes tier slice 2 chunk 5 — empty-state UX for OCI.
+  it("TestDiscoveryOCI_InventoryTab_KubernetesSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
+    await user.click(kubernetesTab);
+    expect(
+      screen.getByText(/No Kubernetes clusters discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // selectRegion picks the canonical test region from the Radix
