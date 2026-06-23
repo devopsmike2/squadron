@@ -528,4 +528,25 @@ const (
 	AuditEventDiscoveryOCIScanCompleted            = "discovery.oci.scan_completed"
 	AuditEventDiscoveryOCIScanFailed               = "discovery.oci.scan_failed"
 	AuditEventDiscoveryOCIRecommendationsGenerated = "discovery.oci.recommendations_generated"
+
+	// v0.89.61 (#688 Stream 86, Unified Discovery dashboard slice 1
+	// chunk 1) — emitted by the discovery summary handler each time
+	// the cache MISSES and a fresh aggregation walk runs. Cache hits
+	// are intentionally NOT audited: the aggregation walks four
+	// provider stores + an audit-table sweep, and emitting an event
+	// per HTTP hit on the /discovery dashboard would drown the
+	// timeline. The cache-miss row is the operationally interesting
+	// signal — it says "Squadron actually walked all four clouds at
+	// this timestamp." Cache-hit calls return the same payload
+	// instantly with no audit row.
+	//
+	// Per docs/proposals/unified-discovery-dashboard-slice1.md §7
+	// contract item 4 + §9 acceptance test TestDiscoverySummary_
+	// EmitsAuditOnCacheMiss.
+	//
+	// Actor: "system". TargetType: empty (the summary is fleet-wide,
+	// not scoped to one connection). Payload carries provider counts
+	// the way the response did so SIEM consumers can reconstruct the
+	// aggregate without round-tripping the endpoint.
+	AuditEventDiscoverySummaryRequested = "discovery.summary.requested"
 )
