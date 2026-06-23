@@ -106,6 +106,48 @@ union, NOT the broader `cloud-platform` scope).
 custom role for Cloud SQL, the minimum permissions are
 `cloudsql.instances.list` and `cloudsql.instances.get`.
 
+## Kubernetes tier slice 2 — SHIPPED in v0.89.70 through v0.89.72
+
+As of v0.89.70 (chunk 2 of the Kubernetes tier arc — design at
+[proposals/kubernetes-tier-slice2.md](./proposals/kubernetes-tier-slice2.md)),
+Squadron's GCP scanner ALSO walks GKE clusters during the same
+scan call. The Inventory tab gains a Kubernetes sub-tab alongside
+the existing Compute and Databases sub-tabs; the proposer emits a
+new `gke-mp-enable` recommendation kind for GKE clusters where
+Managed Prometheus is disabled.
+
+**Detection rule:** cluster is INSTRUMENTED if
+`monitoringConfig.managedPrometheusConfig.enabled == true`.
+Otherwise uninstrumented.
+
+**Recommendation kind:** `gke-mp-enable`. Targets
+`google_container_cluster.monitoring_config[0].managed_prometheus[0].enabled = true`
+in your Terraform repo.
+
+**IAM scope additions for K8s slice 2:** the existing
+`roles/compute.viewer` and `roles/cloudsql.viewer` do NOT cover
+GKE. Add `roles/container.viewer`:
+
+```sh
+gcloud projects add-iam-policy-binding <your-project-id> \
+  --member="serviceAccount:squadron-discovery@<your-project-id>.iam.gserviceaccount.com" \
+  --role="roles/container.viewer"
+```
+
+Without this role, GKE list calls return 403 and Squadron
+records a partial failure with `failed_services=["gke"]` in the
+scan_completed audit event. Compute and database results are
+still emitted normally. Re-run the scan after adding the role.
+
+**OAuth scope:** the SA JSON now authenticates with
+`compute.readonly` + `sqlservice.admin` + `cloud-platform.read-only`
+(the third scope is the least-privilege union that covers the
+GKE Container API since the generated client library doesn't
+expose a narrower container-readonly constant).
+
+**Service identifier in audit:** partial-failure events use
+`failed_services=["gke"]`.
+
 ## What this is NOT (slice 1)
 
 Slice 1 ships intentionally narrow. The following are slice 2+
@@ -113,6 +155,8 @@ candidates, called out so you don't expect them yet:
 
 - **~~No Cloud SQL scanning.~~** ✓ SHIPPED in v0.89.65 — see
   "Database tier slice 2" section above.
+- **~~No GKE scanning.~~** ✓ SHIPPED in v0.89.70 — see
+  "Kubernetes tier slice 2" section above.
 - **No GKE scanning.** The GKE equivalent of the AWS EKS scanner
   is slice 3 work.
 - **No Cloud Storage / Cloud Load Balancing / Pub/Sub scanning.**

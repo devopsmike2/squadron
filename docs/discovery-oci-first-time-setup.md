@@ -124,12 +124,65 @@ statement.
 **Service identifier in audit:** partial-failure events use
 `failed_services=["ocidb"]`.
 
+## Kubernetes tier slice 2 — SHIPPED in v0.89.70 through v0.89.72
+
+As of v0.89.70 (chunk 4 of the Kubernetes tier arc — design at
+[proposals/kubernetes-tier-slice2.md](./proposals/kubernetes-tier-slice2.md)),
+Squadron's OCI scanner ALSO walks OKE clusters across the same
+compartments it walks for Compute Instances and Databases. The
+Inventory tab gains a Kubernetes sub-tab; the proposer emits a
+new `oke-ops-insights-enable` recommendation kind for OKE
+clusters not enrolled in Operations Insights.
+
+**Detection rule:** cluster is INSTRUMENTED if it has a freeform
+tag with key `operations-insights-enabled` (case-insensitive)
+AND value `true` (case-insensitive, whitespace-trimmed).
+
+Slice 2 uses this tag-based convention because OCI does not
+expose a top-level "managed observability enrolled" boolean on
+the cluster resource the way GCP and Azure do. Operators
+self-tag the cluster when they enroll it in Operations Insights.
+Slice 3 will move to a direct Operations Insights API call.
+
+Clusters with `lifecycleState != "ACTIVE"` (mid-create,
+mid-delete, etc.) are skipped — they have no observability
+surface to recommend on.
+
+**Recommendation kind:** `oke-ops-insights-enable`. Targets the
+`oci_containerengine_cluster.freeform_tags` block.
+
+**IAM policy additions for K8s slice 2:** the existing
+`Allow group SquadronDiscovery to read instance-family in tenancy`
+and `read database-family` do NOT cover OKE. Add:
+
+```sh
+oci iam policy update \
+  --policy-id <squadron-discovery-policy-ocid> \
+  --statements '[
+    "Allow group SquadronDiscovery to read instance-family in tenancy",
+    "Allow group SquadronDiscovery to read compartments in tenancy",
+    "Allow group SquadronDiscovery to read database-family in tenancy",
+    "Allow group SquadronDiscovery to read cluster-family in tenancy"
+  ]' \
+  --version-date "2025-01-01"
+```
+
+Without the `cluster-family` statement, OKE list calls return
+403 and Squadron records a partial failure with
+`failed_services=["oke"]`. Compute + database results are still
+emitted normally. Re-run the scan after adding the statement.
+
+**Service identifier in audit:** partial-failure events use
+`failed_services=["oke"]`.
+
 ## What this is NOT (slice 1)
 
 Slice 1 ships intentionally narrow:
 
 - **~~No Autonomous Database / DB Systems scanning.~~** ✓ SHIPPED
   in v0.89.65 — see "Database tier slice 2" section above.
+- **~~No OKE (Oracle Kubernetes Engine).~~** ✓ SHIPPED in
+  v0.89.70 — see "Kubernetes tier slice 2" section above.
 - **No OKE (Oracle Kubernetes Engine).** Slice 3.
 - **No Object Storage scanning.** Slice 4.
 - **No Load Balancer scanning.** Slice 5.
