@@ -78,3 +78,61 @@ const dbManagementEnabledStatus = "ENABLED"
 // emit a Database Management enable plan step against a row that
 // isn't running.
 const dbAvailableLifecycleState = "AVAILABLE"
+
+// ServiceIDKubernetes is the slice-2 (kubernetes tier) service
+// identifier the scanner reports against Result.FailedServices when
+// the OKE cluster walk produces a non-fatal error. Mirrors the
+// compute / database service identifiers ("ocicompute" / "ocidb");
+// the per-provider connection model carries the provider
+// discriminator separately, so the identifier is unprefixed
+// ("oke").
+//
+// See docs/proposals/kubernetes-tier-slice2.md §4.1
+// ("Result.FailedServices identifiers: OCI OKE scanner: oke").
+const ServiceIDKubernetes = "oke"
+
+// okeListAPIVersion pins the OCI Container Engine for Kubernetes
+// /clusters list API path version. OCI versions live in the path
+// (e.g. "/20180222/") not a query parameter; the constant lives
+// here so the scanner path construction is single-sourced. OKE's
+// API surface uses a different version date than Identity /
+// Compute / Database — the constant keeps the per-surface version
+// pin explicit.
+const okeListAPIVersion = "20180222"
+
+// clusterProviderOCI is the Provider discriminator the scanner
+// writes onto every ClusterSnapshot row. Kept as a constant so
+// future renames reuse the same string without scattering literal
+// "oci" through the OKE projection helper.
+const clusterProviderOCI = "oci"
+
+// okeActiveLifecycleState is the OCI lifecycle state value the
+// scanner treats as "this cluster has an observability surface to
+// recommend on". Slice 2 skips non-ACTIVE rows (CREATING,
+// DELETING, UPDATING, FAILED) — mid-create / mid-delete clusters
+// can't usefully receive an Operations Insights plan step.
+// Mirrors the AVAILABLE filter on the database surface; the
+// per-surface enum value differs ("AVAILABLE" on DB Systems /
+// Autonomous Databases; "ACTIVE" on OKE clusters) but the
+// skip-non-active posture is identical.
+const okeActiveLifecycleState = "ACTIVE"
+
+// opsInsightsEnabledTagKey is the canonical lower-case form of the
+// freeform tag key the slice-2 OKE detection rule looks for. The
+// rule matches the key case-insensitively (operators may use
+// "operations-insights-enabled", "Operations-Insights-Enabled", or
+// any mixed-case variant); the constant carries the canonical
+// lower-case shape so the comparison is centralized.
+//
+// See docs/proposals/kubernetes-tier-slice2.md §3.3 ("Detection
+// rule: cluster is INSTRUMENTED if the cluster has a tag key
+// matching operations-insights-enabled (case-insensitive) with
+// value true").
+const opsInsightsEnabledTagKey = "operations-insights-enabled"
+
+// opsInsightsEnabledTagValue is the canonical lower-case form of
+// the freeform tag value the slice-2 OKE detection rule looks for.
+// Same case-insensitive convention as the key — operators may use
+// "true", "TRUE", or "True" and the rule still fires. Slice 2
+// design doc §11 test 7 pins this convention.
+const opsInsightsEnabledTagValue = "true"

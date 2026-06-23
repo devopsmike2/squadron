@@ -153,6 +153,52 @@ type autonomousDatabase struct {
 // directly as a JSON array.
 type autonomousDatabaseList = []autonomousDatabase
 
+// okeCluster is the bare JSON shape of an OCI OKE managed
+// Kubernetes cluster as returned by the Container Engine
+// /clusters list call. Slice 2 (kubernetes tier) reads ID
+// (-> ResourceID), Name (-> Name), KubernetesVersion (->
+// extractMajorMinor -> KubernetesVersion), LifecycleState
+// (-> Status, also gates the skip-non-active filter), FreeformTags
+// + DefinedTags (-> flattened Tags map + tag-based detection
+// rule), and CompartmentID (carried for diagnostic hints only;
+// the scanner does not project it onto the snapshot since the
+// proposer reads Provider + Region for routing).
+//
+// OCI Container Engine API path:
+//
+//	GET https://containerengine.<region>.oraclecloud.com/20180222/clusters
+//	  ?compartmentId=<compartment_ocid>
+//
+// The slice-2 detection rule (operations-insights-enabled=true
+// freeform tag, case-insensitive on both key and value) is
+// implemented by clusterHasOperationsInsights — see scanner_oke.go.
+//
+// Note on KubernetesVersion shape: OCI returns "v1.29.1" /
+// "v1.30.0" style values with a leading "v" most of the time, but
+// some older clusters / mocked responses surface the value without
+// the leading "v" (e.g. "1.30.0"). The extractMajorMinor helper
+// strips the optional leading "v" before taking the first two
+// version components ("v1.29.1" -> "1.29", "1.30.0" -> "1.30")
+// so the snapshot field carries a canonical normalized form for
+// the proposer.
+type okeCluster struct {
+	ID                string                            `json:"id"`
+	Name              string                            `json:"name"`
+	CompartmentID     string                            `json:"compartmentId"`
+	KubernetesVersion string                            `json:"kubernetesVersion"`
+	LifecycleState    string                            `json:"lifecycleState"`
+	FreeformTags      map[string]string                 `json:"freeformTags,omitempty"`
+	DefinedTags       map[string]map[string]interface{} `json:"definedTags,omitempty"`
+}
+
+// okeClusterList is the JSON envelope returned by the Container
+// Engine /clusters list call. OCI returns the list directly as a
+// JSON array; the scanner unmarshals into a []okeCluster slice.
+// Pagination (opc-next-page header) is slice 3 — slice 2 ships a
+// single-page walk matching the compute / database per-surface
+// posture.
+type okeClusterList = []okeCluster
+
 // ociErrorBody is the JSON shape OCI returns on a 4xx / 5xx error.
 // The scanner reads .Code to disambiguate permission_denied
 // ("NotAuthorizedOrNotFound") vs tenancy/compartment-not-found
