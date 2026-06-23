@@ -265,3 +265,37 @@ func TestAuditEventConstants_AzureDiscoveryPresent(t *testing.T) {
 	assert.Equal(t, "discovery.azure.scan_failed", AuditEventDiscoveryAzureScanFailed)
 	assert.Equal(t, "discovery.azure.recommendations_generated", AuditEventDiscoveryAzureRecommendationsGenerated)
 }
+
+// TestAuditEventConstants_OCIDiscoveryPresent — v0.89.56 (#681
+// Stream 79, OCI discovery slice 1 chunk 1). Defensive: pins the
+// six OCI-discovery audit-event constants so a future refactor that
+// accidentally deletes one lands here rather than in a SIEM
+// dashboard that silently stops receiving OCI-side events. Chunks
+// 2 / 3 / 5 (scanner, API handlers, proposer integration)
+// reference these constants by name; the constant strings are the
+// contract SIEM consumers fan out on. The six events mirror the
+// AWS, GCP, and Azure discovery arc lifecycles one-for-one with
+// tenancy_ocid replacing account_id / project_id / subscription_id
+// — see docs/proposals/oci-discovery-slice1.md §11, §13 contract
+// item 4.
+func TestAuditEventConstants_OCIDiscoveryPresent(t *testing.T) {
+	checks := map[string]string{
+		"AuditEventDiscoveryOCIConnectionCreated":        AuditEventDiscoveryOCIConnectionCreated,
+		"AuditEventDiscoveryOCIConnectionDeleted":        AuditEventDiscoveryOCIConnectionDeleted,
+		"AuditEventDiscoveryOCIScanStarted":              AuditEventDiscoveryOCIScanStarted,
+		"AuditEventDiscoveryOCIScanCompleted":            AuditEventDiscoveryOCIScanCompleted,
+		"AuditEventDiscoveryOCIScanFailed":               AuditEventDiscoveryOCIScanFailed,
+		"AuditEventDiscoveryOCIRecommendationsGenerated": AuditEventDiscoveryOCIRecommendationsGenerated,
+	}
+	for name, value := range checks {
+		assert.NotEmpty(t, value, "%s must be a non-empty string", name)
+	}
+	// Pin the canonical dotted-name values so a future rename lands
+	// here too. The strings are the SIEM-side contract.
+	assert.Equal(t, "discovery.oci.connection_created", AuditEventDiscoveryOCIConnectionCreated)
+	assert.Equal(t, "discovery.oci.connection_deleted", AuditEventDiscoveryOCIConnectionDeleted)
+	assert.Equal(t, "discovery.oci.scan_started", AuditEventDiscoveryOCIScanStarted)
+	assert.Equal(t, "discovery.oci.scan_completed", AuditEventDiscoveryOCIScanCompleted)
+	assert.Equal(t, "discovery.oci.scan_failed", AuditEventDiscoveryOCIScanFailed)
+	assert.Equal(t, "discovery.oci.recommendations_generated", AuditEventDiscoveryOCIRecommendationsGenerated)
+}

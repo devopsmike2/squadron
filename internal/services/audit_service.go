@@ -474,4 +474,58 @@ const (
 	AuditEventDiscoveryAzureScanCompleted            = "discovery.azure.scan_completed"
 	AuditEventDiscoveryAzureScanFailed               = "discovery.azure.scan_failed"
 	AuditEventDiscoveryAzureRecommendationsGenerated = "discovery.azure.recommendations_generated"
+
+	// v0.89.56 (#681 Stream 79, OCI discovery slice 1 chunk 1) —
+	// audit event types for the THIRD non-AWS discovery arc, mirroring
+	// the GCP and Azure arcs' lifecycles one-for-one with tenancy_ocid
+	// replacing the GCP project_id / Azure subscription_id (and the AWS
+	// account_id). Chunk 1 adds the constants only; chunks 2 / 3 / 5
+	// (scanner, API handlers, proposer integration) wire the call sites
+	// to actually emit these events. SIEM consumers that already fan
+	// out on discovery.aws.* / discovery.gcp.* / discovery.azure.* rows
+	// can apply the same shape to discovery.oci.* rows — the only field
+	// swap is the cloud-specific scope id.
+	//
+	// Payload contract (per docs/proposals/oci-discovery-slice1.md
+	// §11, §13 contract item 4):
+	//
+	//   - .connection_created: connection_id, display_name,
+	//     tenancy_ocid, user_ocid, fingerprint, region (REQUIRED for
+	//     OCI — regional endpoints mean empty is invalid, not "scan
+	//     all"). SealedPrivateKey bytes NEVER in payload — the
+	//     credstore-sealed posture extends to the audit surface. The
+	//     plaintext RSA private key is NEVER in payload under any
+	//     circumstance; the seal/unseal pair is the only sanctioned
+	//     access path. Private key bytes are the strongest credential
+	//     type Squadron handles.
+	//   - .connection_deleted: connection_id, tenancy_ocid, user_ocid.
+	//     SealedPrivateKey bytes NEVER in payload (the delete path
+	//     doesn't touch them anyway).
+	//   - .scan_started: connection_id, tenancy_ocid, user_ocid,
+	//     region, scan_id.
+	//   - .scan_completed: connection_id, tenancy_ocid, user_ocid,
+	//     region, scan_id, total_resources, instrumented_count,
+	//     partial (bool), partial_reason (string, omitempty),
+	//     failed_services ([]string of OCI service names like
+	//     "ocicompute").
+	//   - .scan_failed: connection_id, tenancy_ocid, user_ocid,
+	//     region, scan_id, error_kind ("permission_denied" |
+	//     "tenancy_not_found" | "fingerprint_mismatch" |
+	//     "private_key_invalid" | "network"), humanized_message.
+	//     Plaintext private key NEVER in payload or error message.
+	//   - .recommendations_generated: connection_id, tenancy_ocid,
+	//     user_ocid, region, scan_id, recommendation_count,
+	//     verdict_examples_used ([]string of PR URLs — mirrors the
+	//     AWS / GCP / Azure proposer payload shape so chunk 5's
+	//     proposer integration slots into the existing verdict-
+	//     learning loop without schema changes).
+	//
+	// See docs/proposals/oci-discovery-slice1.md §11 (audit events)
+	// and §13 contract item 4.
+	AuditEventDiscoveryOCIConnectionCreated        = "discovery.oci.connection_created"
+	AuditEventDiscoveryOCIConnectionDeleted        = "discovery.oci.connection_deleted"
+	AuditEventDiscoveryOCIScanStarted              = "discovery.oci.scan_started"
+	AuditEventDiscoveryOCIScanCompleted            = "discovery.oci.scan_completed"
+	AuditEventDiscoveryOCIScanFailed               = "discovery.oci.scan_failed"
+	AuditEventDiscoveryOCIRecommendationsGenerated = "discovery.oci.recommendations_generated"
 )
