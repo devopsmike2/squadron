@@ -96,18 +96,29 @@ jump straight to that page.
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
 - [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
-  v0.89.73 through v0.89.78 operator runbook for the trace
-  integration arc (design at
-  [proposals/trace-integration-slice1.md](./proposals/trace-integration-slice1.md)).
-  First arc that consumes Squadron's own OTLP receiver stream
-  as discovery signal, transforming the recommendation surface
-  from "did you turn on the primitive" to "is telemetry
-  actually flowing." Discovery dashboard gains a TRACE COVERAGE
-  panel; per-provider Inventory tabs gain a Last seen column.
-  **Slice 1 SHIPPED in v0.89.78.** Squadron's claim grows: "scans
-  AWS, GCP, Azure, AND Oracle Cloud across COMPUTE, DATABASE,
-  AND KUBERNETES for observability gaps AND verifies telemetry
-  is actually flowing."
+  v0.89.73 through v0.89.83 operator runbook for the trace
+  integration arc. Slice 1 (design at
+  [proposals/trace-integration-slice1.md](./proposals/trace-integration-slice1.md))
+  consumed Squadron's own OTLP receiver stream as discovery
+  signal, transforming the recommendation surface from "did
+  you turn on the primitive" to "is telemetry actually
+  flowing." Discovery dashboard gained a TRACE COVERAGE panel;
+  per-provider Inventory tabs gained a Last seen column. Slice
+  2 (design at
+  [proposals/trace-integration-slice2.md](./proposals/trace-integration-slice2.md))
+  turned the visibility into 12 new proposer-drafted
+  recommendation kinds: `trace-emission-{aws,gcp,azure,oci}-{compute,db,k8s}`.
+  New `internal/proposer/iacpicker` package picks which
+  Terraform pattern to extend in the operator's IaC repo.
+  Dashboard sub-indicator surfaces pending recommendation
+  counts; per-provider Recommendations tab gains a "Show only
+  trace-emission" filter chip. Webhook routing extends to the
+  new kind prefix. **Slice 1 SHIPPED in v0.89.78. Slice 2
+  SHIPPED in v0.89.83.** Squadron's claim grows a third verb:
+  "scans AWS, GCP, Azure, AND Oracle Cloud across COMPUTE,
+  DATABASE, AND KUBERNETES for observability gaps, verifies
+  telemetry is actually flowing, AND drafts the IaC PRs that
+  close the gaps it finds."
 - [GitHub Checks API back-signal](./checks-api.md) — v0.89.42
   through v0.89.44 operator runbook for the inverse of the
   webhook listener: Squadron writes check run state to
