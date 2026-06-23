@@ -202,6 +202,15 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		}
 	}
 
+	// Slice 2 (database tier): walk DB Systems + Autonomous
+	// Databases across the same compartment set the compute walk
+	// just visited. The walker is in scanner_db.go; it appends
+	// rows to result.Databases and surfaces partial failures
+	// under the ServiceIDDatabase identifier. Both walks (compute
+	// + databases) share the same SigningKey + httpClient — no
+	// per-surface auth duplication.
+	s.scanDatabases(ctx, signingKey, allCompartments, &result)
+
 	// Slice 1 instrumented rule (Compute): HasOTel == true.
 	for _, c := range result.Compute {
 		if c.HasOTel {

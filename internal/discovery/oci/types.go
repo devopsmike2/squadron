@@ -69,6 +69,90 @@ type ociInstance struct {
 // posture of the GCP and Azure first-revision walkers.
 type ociInstanceList = []ociInstance
 
+// dbSystem is the bare JSON shape of an OCI Database DB System as
+// returned by the /dbSystems list call. Slice 2 (database tier)
+// reads DisplayName (-> ResourceID), Shape (-> InstanceClass),
+// Version (-> EngineVersion), FreeformTags + DefinedTags (->
+// flattened Tags map), and DatabaseManagementConfig (-> the OCI
+// observability primitive used by the slice 2 detection rule).
+// LifecycleState is read to filter out non-AVAILABLE rows (the
+// proposer has no observability surface to recommend on for
+// TERMINATING / PROVISIONING / FAILED instances).
+//
+// OCI Database API path:
+//
+//	GET https://database.<region>.oraclecloud.com/20160918/dbSystems
+//	  ?compartmentId=<compartment_ocid>
+//
+// The DatabaseManagementConfig field is a NESTED object on DB
+// Systems — distinct from the Autonomous Database surface where
+// the same observability signal is flattened to a top-level
+// status field. Both are reduced to a single boolean by the
+// per-type Has-Management helpers (see scanner_db.go).
+type dbSystem struct {
+	ID                       string                            `json:"id"`
+	DisplayName              string                            `json:"displayName"`
+	Shape                    string                            `json:"shape"`
+	Version                  string                            `json:"version"`
+	LifecycleState           string                            `json:"lifecycleState"`
+	FreeformTags             map[string]string                 `json:"freeformTags,omitempty"`
+	DefinedTags              map[string]map[string]interface{} `json:"definedTags,omitempty"`
+	DatabaseManagementConfig dbSystemManagementConfig          `json:"databaseManagementConfig"`
+}
+
+// dbSystemManagementConfig is the nested observability-status block
+// on a DB System. OCI returns a small object whose only
+// scanner-relevant field is databaseManagementStatus
+// ("ENABLED" / "NOT_ENABLED"). Kept as a typed struct so the
+// scanner doesn't have to chase a generic map[string]interface{}
+// out of every list response.
+type dbSystemManagementConfig struct {
+	DatabaseManagementStatus string `json:"databaseManagementStatus"`
+}
+
+// dbSystemList is the JSON envelope returned by the Database
+// /dbSystems list call. OCI returns the list directly as a JSON
+// array; the scanner unmarshals into a []dbSystem slice. Single-
+// page walk matches the compute path's slice 1 posture; pagination
+// is slice 3.
+type dbSystemList = []dbSystem
+
+// autonomousDatabase is the bare JSON shape of an OCI Autonomous
+// Database as returned by the /autonomousDatabases list call. The
+// slice 2 mapping reads DisplayName (-> ResourceID), DbWorkload
+// (-> EngineVersion via "autonomous-<workload>"), CpuCoreCount
+// (-> InstanceClass via "ocpu-<n>"), FreeformTags + DefinedTags
+// (-> flattened Tags map), and DatabaseManagementStatus (the
+// flat top-level field that differs from the DB System shape).
+//
+// OCI Database API path:
+//
+//	GET https://database.<region>.oraclecloud.com/20160918/autonomousDatabases
+//	  ?compartmentId=<compartment_ocid>
+//
+// Note on the API shape difference vs DB Systems: Autonomous
+// Database surfaces databaseManagementStatus as a top-level
+// string field rather than as a nested config object. The
+// per-type Has-Management helper handles the difference; the
+// scanner-side detection rule remains the same canonical
+// "status == ENABLED" predicate across both shapes.
+type autonomousDatabase struct {
+	ID                       string                            `json:"id"`
+	DisplayName              string                            `json:"displayName"`
+	DbName                   string                            `json:"dbName"`
+	DbWorkload               string                            `json:"dbWorkload"`
+	CpuCoreCount             int                               `json:"cpuCoreCount"`
+	LifecycleState           string                            `json:"lifecycleState"`
+	FreeformTags             map[string]string                 `json:"freeformTags,omitempty"`
+	DefinedTags              map[string]map[string]interface{} `json:"definedTags,omitempty"`
+	DatabaseManagementStatus string                            `json:"databaseManagementStatus"`
+}
+
+// autonomousDatabaseList is the JSON envelope returned by the
+// Database /autonomousDatabases list call. OCI returns the list
+// directly as a JSON array.
+type autonomousDatabaseList = []autonomousDatabase
+
 // ociErrorBody is the JSON shape OCI returns on a 4xx / 5xx error.
 // The scanner reads .Code to disambiguate permission_denied
 // ("NotAuthorizedOrNotFound") vs tenancy/compartment-not-found

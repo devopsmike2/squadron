@@ -32,3 +32,49 @@ const computeListAPIVersion = "20160918"
 // identityListAPIVersion pins the OCI Identity /compartments list
 // API path version. Single-sourced for the same reason.
 const identityListAPIVersion = "20160918"
+
+// ServiceIDDatabase is the slice-2 service identifier the scanner
+// reports against Result.FailedServices when the Database walk
+// (DB Systems + Autonomous Databases) produces a non-fatal error.
+// Mirrors the cross-cloud pattern (cloudsql / azuresql) — the
+// per-provider connection model carries the provider discriminator
+// separately, so the identifier is unprefixed.
+//
+// See docs/proposals/database-tier-slice2.md §4.1 ("Result.
+// FailedServices identifiers: OCI DB Systems / Autonomous Database
+// scanner: ocidb").
+const ServiceIDDatabase = "ocidb"
+
+// databaseListAPIVersion pins the OCI Database /dbSystems and
+// /autonomousDatabases list API path version. Single-sourced for
+// the same reason as the compute / identity constants.
+const databaseListAPIVersion = "20160918"
+
+// dbProviderOCI is the Provider discriminator the scanner writes
+// onto every database snapshot. Kept as a constant so future
+// renames (or per-tenancy multi-region scanners) reuse the same
+// string without scattering literal "oci" throughout the
+// projection helpers.
+const dbProviderOCI = "oci"
+
+// dbEngineOracle is the canonical Engine string for every OCI
+// database snapshot. Both DB Systems and Autonomous Databases
+// run Oracle Database in slice 2 — OCI's MySQL HeatWave and the
+// future PostgreSQL service have their own scanner extension
+// arc.
+const dbEngineOracle = "oracle"
+
+// dbManagementEnabledStatus is the case-insensitive sentinel that
+// flips DatabaseManagementEnabled to true on a snapshot. OCI's
+// API surface uses "ENABLED" / "NOT_ENABLED"; the scanner is
+// permissive on case to keep the rule resilient to future API
+// version drift.
+const dbManagementEnabledStatus = "ENABLED"
+
+// dbAvailableLifecycleState is the OCI lifecycle state value the
+// scanner treats as "this row has an observability surface to
+// recommend on". Slice 2 skips non-AVAILABLE rows (TERMINATING,
+// PROVISIONING, FAILED, etc.) — the proposer cannot usefully
+// emit a Database Management enable plan step against a row that
+// isn't running.
+const dbAvailableLifecycleState = "AVAILABLE"
