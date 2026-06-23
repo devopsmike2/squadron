@@ -862,6 +862,81 @@ func (h *DiscoveryHandlers) HandleAWSListConnections(c *gin.Context) {
 // explicit; the empty-body path keeps the endpoint curl-friendly.
 type awsRunScanRequest struct {
 	Regions []string `json:"regions"`
+
+	// Tiers — serverless-tier slice 1 chunk 1 (v0.89.90, #721 Stream
+	// 119). Optional explicit tier list. When non-empty, narrows the
+	// per-region walk to the named tiers; when empty (or absent),
+	// the scanner walks every tier in the default set. The opt-in
+	// posture preserves backward-compat — existing callers who omit
+	// the field get the full surface, just as they did before
+	// slice 1.
+	//
+	// Valid values: "compute" / "database" / "kubernetes" /
+	// "serverless". Unknown values are silently ignored (operators
+	// who hand-rolled a curl with a typo get the safe default
+	// rather than a 400).
+	//
+	// Today the AWS scanner ignores Tiers — the per-region walk
+	// always covers every tier. Chunk 5 wires Tiers through to the
+	// scanner once the UI surfaces a per-tier filter; chunk 1's
+	// contribution is the validated parse path so the wire shape
+	// is stable as soon as serverless lands.
+	//
+	// See docs/proposals/serverless-tier-slice1.md §6.1.
+	Tiers []string `json:"tiers,omitempty"`
+}
+
+// TierCompute / TierDatabase / TierKubernetes / TierServerless are
+// the four tier identifiers slice 1 chunk 1 accepts on the scan
+// endpoint's Tiers field. DefaultScanTiers is the implicit value
+// when the field is empty — the full surface, matching the design
+// doc §6.1: "When the scan request omits tiers, the default behavior
+// extends from [compute, database, kubernetes] to [compute, database,
+// kubernetes, serverless]."
+const (
+	TierCompute    = "compute"
+	TierDatabase   = "database"
+	TierKubernetes = "kubernetes"
+	TierServerless = "serverless"
+)
+
+// DefaultScanTiers is the default tier list applied when a scan
+// request omits the Tiers field. Slice 1 chunk 1 widens the default
+// from the historical [compute, database, kubernetes] to include
+// serverless. Operators who passed an explicit list keep their old
+// behavior; default callers get the wider surface.
+var DefaultScanTiers = []string{
+	TierCompute, TierDatabase, TierKubernetes, TierServerless,
+}
+
+// parseTiersOrDefault normalizes the request's Tiers field into the
+// canonical tier list. Empty input falls back to DefaultScanTiers;
+// unknown tier strings are silently dropped (an operator's typo
+// shouldn't 400 the scan). Returns a defensively-copied slice so the
+// caller can mutate without leaking back to the request.
+//
+// Used by HandleAWSRunScan + the future GCP / Azure / OCI scan
+// handlers to apply consistent tier parsing across providers.
+func parseTiersOrDefault(in []string) []string {
+	if len(in) == 0 {
+		out := make([]string, len(DefaultScanTiers))
+		copy(out, DefaultScanTiers)
+		return out
+	}
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case TierCompute, TierDatabase, TierKubernetes, TierServerless:
+			out = append(out, strings.ToLower(strings.TrimSpace(t)))
+		}
+	}
+	if len(out) == 0 {
+		// Every tier was unrecognized — fall back to the default
+		// rather than scan nothing. Matches the "intent is scan
+		// whatever's configured" curl-friendliness posture.
+		out = append(out, DefaultScanTiers...)
+	}
+	return out
 }
 
 // awsScanResponse is the snake_case wire shape the React Inventory tab
@@ -894,7 +969,14 @@ type awsScanResponse struct {
 	DynamoDBTables []awsDynamoDBTableRow `json:"dynamodb_tables"`
 	// ECSClusters joins the wire shape in slice 5 (v0.89.10). Same
 	// non-null posture as the other category arrays.
-	ECSClusters         []awsECSClusterRow `json:"ecs_clusters"`
+	ECSClusters []awsECSClusterRow `json:"ecs_clusters"`
+	// Serverless joins the wire shape in serverless-tier slice 1
+	// chunk 1 (v0.89.90, #721 Stream 119). Same non-null posture as
+	// the other category arrays. Carries the cross-cloud detection
+	// shape (provider / surface / two-axis booleans + LastSeenAt)
+	// alongside a per-surface Detail bag the per-cloud Inventory
+	// tab renders.
+	Serverless          []awsServerlessRow `json:"serverless"`
 	InstrumentedCount   int                `json:"instrumented_count"`
 	UninstrumentedCount int                `json:"uninstrumented_count"`
 	Partial             bool               `json:"partial"`
@@ -1068,6 +1150,34 @@ type awsECSClusterRow struct {
 	Tags                              map[string]string `json:"tags"`
 }
 
+// awsServerlessRow is the snake_case wire shape for one serverless
+// function / service row. Serverless-tier slice 1 chunk 1 (v0.89.90,
+// #721 Stream 119). Mirrors scanner.ServerlessInstanceSnapshot — the
+// two detection-rule axes (has_trace_axis + has_otel_distro) surface
+// as independent booleans so the per-cloud Inventory tab renders
+// them as independent badge columns, matching the proposer prompt's
+// "either axis presence is informationally surfaced" framing.
+//
+// Provider + Surface drive the proposer's recommendation-kind prefix
+// routing (lambda-* → AWS, cloudrun-* / cloudfunc-* → GCP, azfunc-*
+// → Azure, ocifunc-* → OCI). Detail carries surface-specific context
+// (Lambda's x_ray_mode + layer_count; Cloud Run's container counts;
+// Azure Functions' app_settings subset; OCI Functions' config subset)
+// the per-cloud Inventory tab renders as a per-row drilldown.
+type awsServerlessRow struct {
+	Provider      string         `json:"provider"`
+	Surface       string         `json:"surface"`
+	AccountID     string         `json:"account_id"`
+	Region        string         `json:"region"`
+	ResourceName  string         `json:"resource_name"`
+	ResourceARN   string         `json:"resource_arn"`
+	Runtime       string         `json:"runtime,omitempty"`
+	HasTraceAxis  bool           `json:"has_trace_axis"`
+	HasOTelDistro bool           `json:"has_otel_distro"`
+	LastSeenAt    *time.Time     `json:"last_seen_at,omitempty"`
+	Detail        map[string]any `json:"detail,omitempty"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -1087,6 +1197,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		Clusters:            make([]awsClusterRow, 0, len(r.Clusters)),
 		DynamoDBTables:      make([]awsDynamoDBTableRow, 0, len(r.DynamoDBTables)),
 		ECSClusters:         make([]awsECSClusterRow, 0, len(r.ECSClusters)),
+		Serverless:          make([]awsServerlessRow, 0, len(r.Serverless)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -1207,6 +1318,26 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			Tags:                              c.Tags,
 		})
 	}
+	// Serverless-tier slice 1 chunk 1 (v0.89.90, #721 Stream 119) —
+	// serverless rows surface alongside the other category arrays.
+	// Same non-null posture; the two detection-rule axes
+	// (has_trace_axis + has_otel_distro) pass verbatim through to
+	// the UI alongside the per-surface Detail bag.
+	for _, sv := range r.Serverless {
+		out.Serverless = append(out.Serverless, awsServerlessRow{
+			Provider:      sv.Provider,
+			Surface:       sv.Surface,
+			AccountID:     sv.AccountID,
+			Region:        sv.Region,
+			ResourceName:  sv.ResourceName,
+			ResourceARN:   sv.ResourceARN,
+			Runtime:       sv.Runtime,
+			HasTraceAxis:  sv.HasTraceAxis,
+			HasOTelDistro: sv.HasOTelDistro,
+			LastSeenAt:    sv.LastSeenAt,
+			Detail:        sv.Detail,
+		})
+	}
 	return out
 }
 
@@ -1260,6 +1391,16 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 	// browser sent no payload.
 	var req awsRunScanRequest
 	_ = c.ShouldBindJSON(&req)
+
+	// Serverless-tier slice 1 chunk 1 (v0.89.90, #721 Stream 119) —
+	// normalize the optional Tiers field. parseTiersOrDefault drops
+	// unknown values and falls back to DefaultScanTiers (which now
+	// includes "serverless") on empty input. The normalized list is
+	// validated even though the AWS scanner currently walks every
+	// tier — chunk 5 wires the filter through once the per-tier UI
+	// lands, and the validated parse path means the wire shape stays
+	// stable.
+	req.Tiers = parseTiersOrDefault(req.Tiers)
 
 	// runAWSScan emits scan_started + scan_completed audit events and
 	// drives the scanner. The single-account endpoint passes an empty
