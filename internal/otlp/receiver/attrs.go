@@ -5,6 +5,7 @@ package receiver
 
 import (
 	"context"
+	"encoding/hex"
 	"strconv"
 	"time"
 
@@ -118,4 +119,132 @@ func observeResourceSpans(ctx context.Context, idx TraceObserver, resourceSpans 
 			Timestamp:     now,
 		})
 	}
+}
+
+// QualityObserver is the minimal surface the receiver needs from the
+// traceindex Quality observer for the slice-1 span-quality chunk-1
+// wiring. The full traceindex.Quality type satisfies it; tests use a
+// recording fake that just appends each SpanObservation. Keeping the
+// interface receiver-local matches the TraceObserver pattern above —
+// future evolution of Quality (batched observe, per-span metrics)
+// doesn't ripple through receiver tests.
+type QualityObserver interface {
+	Observe(obs traceindex.SpanObservation)
+}
+
+// observeQualitySpans is the §3 span-quality detection hot path. It
+// runs in addition to (not instead of) observeResourceSpans because
+// the two observers consume the OTLP payload at different
+// granularities — Index aggregates per ResourceSpan, Quality classifies
+// per-span. Both are called with the same ResourceSpans pointer; we
+// re-walk the ScopeSpans only for the Quality pass when qual != nil so
+// the index-only deployment shape (SPANQUALITY_DISABLED) pays nothing
+// for the quality detection.
+//
+// Hot-path budget: ~200ns per span (§11 threat model). The function
+// hex-encodes trace_id / span_id / parent_span_id once per span via
+// encoding/hex (allocates a small string per encoding; this is the
+// dominant per-span cost) and reuses the resource attribute map
+// pointer for every span on the same ResourceSpan — span-level
+// attributes are flattened into a fresh map only when the span
+// actually carries any, so the common "resource-attrs-only" case
+// stays allocation-bounded.
+func observeQualitySpans(qual QualityObserver, resourceSpans []*tracepb.ResourceSpans) {
+	if qual == nil || len(resourceSpans) == 0 {
+		return
+	}
+	for _, rs := range resourceSpans {
+		if rs == nil || rs.Resource == nil {
+			continue
+		}
+		resourceAttrs := extractResourceAttributes(rs.Resource.Attributes)
+		key, _, _, _, _, _, ok := traceindex.ComputeResourceKey(resourceAttrs)
+		if !ok {
+			continue
+		}
+		tier := tierFromAttrs(resourceAttrs)
+		for _, ss := range rs.ScopeSpans {
+			if ss == nil {
+				continue
+			}
+			for _, sp := range ss.Spans {
+				if sp == nil {
+					continue
+				}
+				// Span-level attributes get merged on top of resource
+				// attributes ONLY when the span actually carries any.
+				// The dispatcher's intended common case is "no span
+				// attrs" (the resource carries the identity); we keep
+				// that path free of the merge allocation.
+				attrs := resourceAttrs
+				if len(sp.Attributes) > 0 {
+					attrs = mergeSpanAttrs(resourceAttrs, sp.Attributes)
+				}
+				qual.Observe(traceindex.SpanObservation{
+					Key:          key,
+					TraceID:      hex.EncodeToString(sp.TraceId),
+					SpanID:       hex.EncodeToString(sp.SpanId),
+					ParentSpanID: hex.EncodeToString(sp.ParentSpanId),
+					Tier:         tier,
+					Attrs:        attrs,
+				})
+			}
+		}
+	}
+}
+
+// tierFromAttrs returns the §3.2 tier label for the supplied resource
+// attribute map. Precedence: k8s wins over db wins over compute. This
+// matches the keying-chain precedence (tier 3 k8s before tier 4 db
+// before tier 2 host.id) so a span with BOTH k8s.* and db.* attrs
+// gets classified as k8s for required-attrs purposes — the same call
+// the discovery side makes for the inventory-row tier label.
+//
+// An unknown tier is "compute" by default: that keeps the "no
+// k8s/db attrs" case classified as compute (the most common) without
+// returning a sentinel value the firstMissingRequired table would
+// have to handle separately.
+func tierFromAttrs(attrs map[string]string) string {
+	for k := range attrs {
+		if len(k) > 4 && k[:4] == "k8s." {
+			return "k8s"
+		}
+	}
+	if attrs["db.system"] != "" {
+		return "db"
+	}
+	return "compute"
+}
+
+// mergeSpanAttrs returns a new map containing resource attrs plus the
+// supplied span attrs flattened into string form. Span attrs override
+// resource attrs on key collision — a span carries a more specific
+// identity than its resource by convention. Allocates a fresh map of
+// size (resource + span attr count) so the resource map remains
+// reusable for sibling spans on the same ResourceSpan.
+//
+// The span-attr extraction follows the same AnyValue handling as
+// extractResourceAttributes (StringValue / IntValue / DoubleValue /
+// BoolValue; array + kvlist dropped).
+func mergeSpanAttrs(resourceAttrs map[string]string, spanAttrs []*commonpb.KeyValue) map[string]string {
+	out := make(map[string]string, len(resourceAttrs)+len(spanAttrs))
+	for k, v := range resourceAttrs {
+		out[k] = v
+	}
+	for _, kv := range spanAttrs {
+		if kv == nil || kv.Key == "" || kv.Value == nil {
+			continue
+		}
+		switch v := kv.Value.Value.(type) {
+		case *commonpb.AnyValue_StringValue:
+			out[kv.Key] = v.StringValue
+		case *commonpb.AnyValue_IntValue:
+			out[kv.Key] = strconv.FormatInt(v.IntValue, 10)
+		case *commonpb.AnyValue_DoubleValue:
+			out[kv.Key] = strconv.FormatFloat(v.DoubleValue, 'g', -1, 64)
+		case *commonpb.AnyValue_BoolValue:
+			out[kv.Key] = strconv.FormatBool(v.BoolValue)
+		}
+	}
+	return out
 }

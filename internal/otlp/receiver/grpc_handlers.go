@@ -25,6 +25,9 @@ type TraceService struct {
 	// traceIndex is the slice-1 chunk-2 wire-up — same shape as the
 	// HTTPServer field. Nil disables the dispatch path cleanly.
 	traceIndex TraceObserver
+	// qualityIndex is the span-quality slice-1 chunk-1 wire-up,
+	// mirroring HTTPServer.qualityIndex. Nil disables cleanly.
+	qualityIndex QualityObserver
 }
 
 // SetTraceIndex wires the traceindex Observer onto the gRPC trace
@@ -32,6 +35,14 @@ type TraceService struct {
 // in cmd/all-in-one can hand the same Index to both transports.
 func (s *TraceService) SetTraceIndex(idx TraceObserver) {
 	s.traceIndex = idx
+}
+
+// SetQualityIndex wires the span-quality Observer onto the gRPC
+// trace service. Mirrors HTTPServer.SetQualityIndex so the chunk-1
+// wiring in cmd/all-in-one can hand the same Quality to both
+// transports.
+func (s *TraceService) SetQualityIndex(qual QualityObserver) {
+	s.qualityIndex = qual
 }
 
 // MetricsService implements the OTLP Metrics Service gRPC interface
@@ -95,6 +106,11 @@ func (s *TraceService) Export(ctx context.Context, req *coltracepb.ExportTraceSe
 	// should land even when the queue submit subsequently fails).
 	if s.traceIndex != nil {
 		observeResourceSpans(ctx, s.traceIndex, req.ResourceSpans, start)
+	}
+	// Span-quality slice-1 chunk-1 (#716 Stream 114) — runs after
+	// the traceindex pass. Same nil-guard pattern as the HTTP path.
+	if s.qualityIndex != nil {
+		observeQualitySpans(s.qualityIndex, req.ResourceSpans)
 	}
 
 	// Serialize the request to protobuf bytes
