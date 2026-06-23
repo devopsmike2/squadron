@@ -49,6 +49,18 @@ jump straight to that page.
   v0.89.49.** Squadron's positioning shifts to "the universal
   observability control plane that scans your AWS AND GCP
   fleets."
+- [Azure discovery — slice 1](./proposals/azure-discovery-slice1.md)
+  (design DOC LOCKED in v0.89.50). Second non-AWS discovery
+  arc. Adds Azure Virtual Machines scanning via a Service
+  Principal client_secret credential model with credstore
+  sealing. Mirrors the GCP slice 1 wizard / inventory /
+  recommendations structure at `/discovery/azure`. Slice 1
+  implementation pending across chunks 1-6 (foundation,
+  scanner, API handlers, UI, proposer integration, runbook).
+  After slice 1 ships, Squadron's positioning becomes "the
+  universal observability control plane that scans AWS, GCP,
+  AND Azure fleets" — the three-cloud claim that supports a
+  real GTM moment.
 - [GitHub webhook listener](./webhook-listener.md) — v0.89.23 +
   v0.89.24 operator runbook for the PR-merged webhook that closes
   the recommendation lifecycle in audit. Covers generating the
