@@ -182,6 +182,23 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`dynamodb:DescribeContributorInsights + dynamodb:ListTagsOfResource). Each ` +
 	`DynamoDB plan step's inline_config_snippet is Terraform the operator runs ` +
 	`through their own IaC pipeline.` + "\n" +
+	`  - GCE instances (Google Cloud Compute Engine): the single observability ` +
+	`lever is the OTel LABEL. A google_compute_instance is covered when its ` +
+	`labels map contains a key matching the case-insensitive prefix "otel"; ` +
+	`when no such label exists, recommend adding the "otel-collector" label. ` +
+	`Recommendation kind: gce-otel-label. The Terraform updates the ` +
+	`google_compute_instance.labels map (e.g. labels = { "otel-collector" = ` +
+	`"v1" }). LABEL CONSTRAINTS: GCP label keys MUST be lowercase, may ` +
+	`contain hyphens and underscores, and are the GCP equivalent of AWS ` +
+	`tags — emit the snippet with these rules respected. Group multiple ` +
+	`uncovered instances INTO ONE plan step per region (each instance is ` +
+	`its own Terraform target, but the snippet emits one ` +
+	`google_compute_instance block per instance inside the same step so the ` +
+	`operator's PR review covers the whole batch). SQUADRON DOES NOT ` +
+	`EXECUTE compute.instances.setLabels — the discovery IAM scope for GCE ` +
+	`is read-only (compute.viewer / compute.instances.list / ` +
+	`compute.instances.get). Each GCE plan step's inline_config_snippet ` +
+	`is Terraform the operator runs through their own IaC pipeline.` + "\n" +
 	`  - ECS clusters: the single observability lever is CLUSTER-LEVEL CONTAINER ` +
 	`INSIGHTS — CloudWatch Container Insights surfaces per-cluster task and ` +
 	`service metrics. A cluster is covered when container_insights_status == ` +
@@ -393,9 +410,23 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 // category counts is enough for the plan-kind output we want.
 func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "AWS discovery scan completed on a Squadron-connected account.\n\n")
-	fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
-	fmt.Fprintf(&b, "account_id: %s\n", in.AccountID)
+	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — when
+	// Provider="gcp", the scope description renders provider=gcp +
+	// project_id (the GCP scope tuple) instead of the legacy AWS shape.
+	// The AWS path (Provider="aws" or empty, the slice 1 default) is
+	// UNCHANGED byte-for-byte from the v0.89.47 output so the
+	// cold-start parity tests and the slice 2 verdict-block byte
+	// identity invariant hold without surgery.
+	if in.Provider == "gcp" {
+		fmt.Fprintf(&b, "GCP discovery scan completed on a Squadron-connected project.\n\n")
+		fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
+		fmt.Fprintf(&b, "provider: gcp\n")
+		fmt.Fprintf(&b, "project_id: %s\n", in.ProjectID)
+	} else {
+		fmt.Fprintf(&b, "AWS discovery scan completed on a Squadron-connected account.\n\n")
+		fmt.Fprintf(&b, "scan_id: %s\n", in.ScanID)
+		fmt.Fprintf(&b, "account_id: %s\n", in.AccountID)
+	}
 	if len(in.Regions) > 0 {
 		fmt.Fprintf(&b, "regions: %s\n", strings.Join(in.Regions, ", "))
 	}
@@ -676,7 +707,16 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	b.WriteString("Return your plan as the JSON object described in the system prompt. ")
 	b.WriteString("Each step's inline_config_snippet must be complete Terraform HCL the ")
 	b.WriteString("operator can paste into their IaC pipeline. ")
-	b.WriteString("group_id on every step MUST equal the account_id above. ")
+	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
+	// group_id line names the appropriate scope identifier so the
+	// model's prompt-side reasoning binds to whichever shape the user
+	// message rendered above (account_id for AWS, project_id for GCP).
+	// AWS phrasing preserved byte-for-byte for cold-start parity.
+	if in.Provider == "gcp" {
+		b.WriteString("group_id on every step MUST equal the project_id above. ")
+	} else {
+		b.WriteString("group_id on every step MUST equal the account_id above. ")
+	}
 	b.WriteString("Set require_approval to true on step 0.\n")
 	return b.String()
 }

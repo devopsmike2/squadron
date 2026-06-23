@@ -33,6 +33,28 @@ type DiscoveryScanContext struct {
 	ScanID    string
 	AccountID string
 
+	// Provider — v0.89.48 (#671 Stream 69, GCP discovery slice 1
+	// chunk 5) — discriminates the cloud surface the recommendations
+	// target. Slice 1 supports "aws" and "gcp"; empty string is
+	// treated as "aws" for backward compatibility with v0.89.47 and
+	// earlier callers that pre-date the field. When Provider="aws"
+	// (or empty), AccountID carries the AWS account ID and
+	// ProjectID is empty. When Provider="gcp", ProjectID carries the
+	// GCP project ID and AccountID is empty. See
+	// docs/proposals/gcp-discovery-slice1.md §9.
+	Provider string
+
+	// ProjectID — v0.89.48 (#671 Stream 69, GCP discovery slice 1
+	// chunk 5) — populated when Provider="gcp"; carries the GCP
+	// project ID the scan walked. Empty for Provider="aws". Used by
+	// ScopeID() so the verdict learning loop's scope tuple and the
+	// audit payload composition can stay provider-agnostic
+	// downstream. The proposer's pre-call validator enforces
+	// non-empty ProjectID when Provider="gcp" (mirroring the AWS
+	// AccountID enforcement) so the prompt body's scope description
+	// has a real value to bind to.
+	ProjectID string
+
 	// Regions the scan walked. Slice 1 ships single-entry slices;
 	// slice 3 will iterate.
 	Regions []string
@@ -145,6 +167,27 @@ type DiscoveryScanContext struct {
 	// drops the block entirely so the cold-start prompt remains
 	// byte-for-byte identical to the slice 1 (v0.89.28) output.
 	VerdictBlock string
+}
+
+// ScopeID — v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5)
+// — returns the provider-agnostic scope identifier. For Provider="gcp"
+// the value is ProjectID; for Provider="aws" (or empty, the
+// backward-compat default) the value is AccountID. Used by the
+// verdict learning loop's scope tuple, by audit payload composition,
+// and by the prompt body's scope description so the discovery
+// proposer's call sites don't need to branch on Provider every time
+// they need the per-scope identifier.
+//
+// See docs/proposals/gcp-discovery-slice1.md §9 for the broader design
+// of the provider-agnostic scope_id substrate.
+func (c *DiscoveryScanContext) ScopeID() string {
+	if c == nil {
+		return ""
+	}
+	if c.Provider == "gcp" {
+		return c.ProjectID
+	}
+	return c.AccountID
 }
 
 // AcceptedRecommendationExample is the minimal projection over a
@@ -370,7 +413,16 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 	if in.ScanID == "" {
 		return nil, errors.New("scan_id is required")
 	}
-	if in.AccountID == "" {
+	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) —
+	// provider-aware required-scope check. Provider="gcp" requires
+	// ProjectID; Provider="aws" (or empty for backward compat) requires
+	// AccountID. The ScopeID() helper folds both into one assertion so
+	// downstream code paths can stay provider-agnostic.
+	if in.Provider == "gcp" {
+		if in.ProjectID == "" {
+			return nil, errors.New("project_id is required when provider=gcp")
+		}
+	} else if in.AccountID == "" {
 		return nil, errors.New("account_id is required")
 	}
 	if err := validateDatabaseCandidates(in.Databases); err != nil {
@@ -466,7 +518,12 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 	result.Kind = ProposalKindPlan
 	result.Plan = p.Plan
 
-	if err := validateDiscoveryPlan(p.Plan, in.AccountID); err != nil {
+	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) —
+	// provider-aware plan-step group_id check. Slice 1's discovery
+	// pipeline uses the provider-agnostic scope_id (account_id for AWS,
+	// project_id for GCP) as the group identifier so the per-step
+	// validation has one rule, not two.
+	if err := validateDiscoveryPlan(p.Plan, in.ScopeID()); err != nil {
 		return nil, fmt.Errorf("propose from discovery scan: model returned an invalid plan: %w", err)
 	}
 	return result, nil
@@ -590,15 +647,21 @@ func validateECSClusterCandidates(cs []ECSClusterCandidate) error {
 
 // validateDiscoveryPlan is the discovery-side smoke test on the
 // model's plan candidate. Differs from validatePlan only in the
-// expected group_id semantics — discovery uses account_id as the
-// group_id (per the design doc's "account_id is the primary key"
-// posture) — and in the no-empty-Terraform requirement (the
-// cost-spike validator already enforces inline_config_snippet
-// non-empty for YAML; the discovery handler relies on the same check
-// for HCL). Kept as a separate function so future divergence
-// (e.g. Terraform-syntax preflight) can land here without touching
-// the cost-spike path.
-func validateDiscoveryPlan(p PlanCandidate, expectedAccountID string) error {
+// expected group_id semantics — discovery uses the provider-agnostic
+// scope_id as the group_id (account_id for AWS, project_id for GCP,
+// per docs/proposals/gcp-discovery-slice1.md §9) — and in the
+// no-empty-Terraform requirement (the cost-spike validator already
+// enforces inline_config_snippet non-empty for YAML; the discovery
+// handler relies on the same check for HCL). Kept as a separate
+// function so future divergence (e.g. Terraform-syntax preflight)
+// can land here without touching the cost-spike path.
+//
+// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) renamed
+// the second parameter from expectedAccountID to expectedScopeID to
+// match the provider-agnostic substrate; AWS callers pass
+// AccountID, GCP callers pass ProjectID, and the proposer call site
+// already routes through DiscoveryScanContext.ScopeID().
+func validateDiscoveryPlan(p PlanCandidate, expectedScopeID string) error {
 	if len(p.Steps) == 0 {
 		return errors.New("plan has no steps")
 	}
@@ -609,9 +672,9 @@ func validateDiscoveryPlan(p PlanCandidate, expectedAccountID string) error {
 		if step.GroupID == "" {
 			return fmt.Errorf("plan step %d missing group_id", i)
 		}
-		if step.GroupID != expectedAccountID {
-			return fmt.Errorf("plan step %d group_id %q does not match context account_id %q",
-				i, step.GroupID, expectedAccountID)
+		if step.GroupID != expectedScopeID {
+			return fmt.Errorf("plan step %d group_id %q does not match context scope_id %q",
+				i, step.GroupID, expectedScopeID)
 		}
 		if strings.TrimSpace(step.InlineConfigSnippet) == "" {
 			return fmt.Errorf("plan step %d missing inline_config_snippet (Terraform)", i)

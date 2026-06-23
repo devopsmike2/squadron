@@ -1630,3 +1630,124 @@ func TestPerConnectionWebhookSecret_NoConnectionFound_UsesGlobal(t *testing.T) {
 		t.Errorf("audit payload.repo_full_name = %v, want some-randomperson/repo", audit.entries[0].Payload["repo_full_name"])
 	}
 }
+
+// --- v0.89.48 (#671 Stream 69) GCP discovery slice 1 chunk 5 tests ---
+
+// TestWebhook_GCERecommendationKind_AuditPayloadCarriesProjectID —
+// chunk 5 acceptance: when the merged PR's branch encodes a GCP
+// recommendation kind (gce- prefix) and a 6-segment scope tuple, the
+// emitted recommendation.pr_merged audit payload carries
+// project_id=<scope_id>, account_id="", and provider="gcp".
+//
+// Branch shape per docs/proposals/gcp-discovery-slice1.md §9.1:
+//   squadron/rec/gce-otel-label/<project_id>/<region>/<short_id>
+func TestWebhook_GCERecommendationKind_AuditPayloadCarriesProjectID(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/gce-otel-label/my-project/us-central1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.EventType != services.AuditEventRecommendationPRMerged {
+		t.Errorf("event_type = %q, want %q", e.EventType, services.AuditEventRecommendationPRMerged)
+	}
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "gce-otel-label" {
+		t.Errorf("payload.recommendation_kind = %v, want gce-otel-label", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "gcp" {
+		t.Errorf("payload.provider = %v, want gcp", pay["provider"])
+	}
+	if pay["project_id"] != "my-project" {
+		t.Errorf("payload.project_id = %v, want my-project", pay["project_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["region"] != "us-central1" {
+		t.Errorf("payload.region = %v, want us-central1", pay["region"])
+	}
+}
+
+// TestWebhook_AWSRecommendationKind_AuditPayloadStillCarriesAccountID
+// — chunk 5 acceptance: existing v0.89.36+ behavior on AWS kinds is
+// preserved. The 6-segment AWS branch (squadron/rec/rds-pi-em/<account_id>/
+// <region>/<id>) yields payload.account_id=<account_id>, payload.project_id="",
+// payload.provider="aws".
+func TestWebhook_AWSRecommendationKind_AuditPayloadStillCarriesAccountID(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/rds-pi-em/123456789012/us-east-1/def456",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "rds-pi-em" {
+		t.Errorf("payload.recommendation_kind = %v, want rds-pi-em", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "aws" {
+		t.Errorf("payload.provider = %v, want aws", pay["provider"])
+	}
+	if pay["account_id"] != "123456789012" {
+		t.Errorf("payload.account_id = %v, want 123456789012", pay["account_id"])
+	}
+	if pay["project_id"] != "" {
+		t.Errorf("payload.project_id = %v, want empty string", pay["project_id"])
+	}
+	if pay["region"] != "us-east-1" {
+		t.Errorf("payload.region = %v, want us-east-1", pay["region"])
+	}
+}
+
+// TestProviderFromRecommendationKind — chunk 5 unit test on the
+// kind-prefix dispatch. Pins the slice 1 contract that "gce-" prefix
+// implies GCP and everything else (including the empty kind from the
+// pre-extension 4-segment branch shape) implies AWS.
+func TestProviderFromRecommendationKind(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{kind: "gce-otel-label", want: "gcp"},
+		{kind: "ec2-otel-layer", want: "aws"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		{kind: "rds-pi-em", want: "aws"},
+		{kind: "eks-cluster-logging", want: "aws"},
+		{kind: "", want: "aws"},
+		{kind: "gce", want: "aws"},      // "gce" alone (no hyphen) is not the GCP prefix
+		{kind: "gcestuff", want: "aws"}, // boundary: requires the literal "gce-" prefix
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}

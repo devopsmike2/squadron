@@ -841,3 +841,151 @@ func TestBuildDiscoveryUserMessage_Clusters(t *testing.T) {
 	assert.Contains(t, got, "amazon-cloudwatch-observability")
 	assert.Contains(t, got, "k8s=1.29")
 }
+
+// --- v0.89.48 (#671 Stream 69) GCP discovery slice 1 chunk 5 tests ---
+
+// TestDiscoveryProposer_GCPProvider_PromptIncludesGCEOtelLabel — when
+// Provider="gcp" and ProjectID is set, the user message renders the
+// GCP scope description (provider=gcp + project_id) and the system
+// prompt teaches the gce-otel-label kind. Pins the §9 contract from
+// docs/proposals/gcp-discovery-slice1.md.
+func TestDiscoveryProposer_GCPProvider_PromptIncludesGCEOtelLabel(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:    "scan-gcp-001",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	}
+	msg := buildDiscoveryUserMessage(ctx)
+	// User message describes the scope as GCP project, not AWS account.
+	assert.Contains(t, msg, "provider: gcp")
+	assert.Contains(t, msg, "project_id: my-sandbox-project")
+	assert.NotContains(t, msg, "account_id: my-sandbox-project")
+	assert.Contains(t, msg, "GCP discovery scan")
+	assert.Contains(t, msg, "group_id on every step MUST equal the project_id above")
+
+	// System prompt teaches the gce-otel-label kind and the
+	// google_compute_instance Terraform resource per §10 contract
+	// item 10.
+	for _, want := range []string{
+		"gce-otel-label",
+		"google_compute_instance",
+		"GCE instances",
+		"OTel LABEL",
+		"compute.viewer",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt should teach GCP rule: %q", want)
+	}
+}
+
+// TestDiscoveryProposer_AWSProvider_PromptUnchanged — when Provider
+// is unset (the v0.89.47 default) or set to "aws", the user message
+// renders the exact same scope description shape as before chunk 5.
+// Cold-start parity preservation per §9 of the design doc — the
+// existing slice 1 v0.89.28 prompt golden tests stay green.
+func TestDiscoveryProposer_AWSProvider_PromptUnchanged(t *testing.T) {
+	// Empty provider — the backward-compat default.
+	ctxAWSDefault := DiscoveryScanContext{
+		ScanID:    "scan-aws-001",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	}
+	// Explicit "aws" provider.
+	ctxAWSExplicit := ctxAWSDefault
+	ctxAWSExplicit.Provider = "aws"
+
+	msgDefault := buildDiscoveryUserMessage(ctxAWSDefault)
+	msgExplicit := buildDiscoveryUserMessage(ctxAWSExplicit)
+
+	// Byte-identity: empty provider and explicit "aws" produce the
+	// same message. This is the chunk 5 acceptance test 7 cold-start
+	// parity invariant — explicit-aws callers see no regression in
+	// the prompt body shape.
+	if msgDefault != msgExplicit {
+		t.Fatalf("AWS prompt parity broken between provider='' and provider='aws'\n--- default ---\n%s\n--- explicit ---\n%s",
+			msgDefault, msgExplicit)
+	}
+
+	// AWS framing preserved.
+	assert.Contains(t, msgDefault, "AWS discovery scan")
+	assert.Contains(t, msgDefault, "account_id: 123456789012")
+	assert.NotContains(t, msgDefault, "provider: gcp")
+	assert.NotContains(t, msgDefault, "project_id:")
+	assert.Contains(t, msgDefault, "group_id on every step MUST equal the account_id above")
+}
+
+// TestDiscoveryProposer_CrossProviderMix_InstructionPresentForBoth —
+// the system prompt is shared across providers; both AWS kinds and
+// the GCP gce-otel-label kind appear in the same system message
+// (the user message discriminates which scope was scanned). Design
+// choice documented inline so a future provider-scoped-prompt
+// refactor surfaces the intent.
+//
+// Design choice: a single shared system prompt simplifies the
+// proposer engine — one System constant, one parser, one validator.
+// Cross-provider proposals are invalid at the contract layer, not
+// at the prompt layer; the validateDiscoveryPlan group_id check
+// rejects any plan whose group_id doesn't match the context's
+// ScopeID() so a model that mis-emitted a gce-otel-label step
+// against an AWS scope would fail the post-call validator. Slice 2+
+// can revisit if the prompt becomes too long.
+func TestDiscoveryProposer_CrossProviderMix_InstructionPresentForBoth(t *testing.T) {
+	// System prompt carries both vocabularies.
+	for _, awsKind := range []string{
+		"ec2-otel-layer", "lambda-otel-layer", "rds-pi-em",
+		"s3-access-logging", "alb-access-logs",
+		"eks-cluster-logging", "eks-observability-addon",
+		"dynamodb-contributor-insights", "ecs-container-insights",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, awsKind,
+			"shared system prompt should still teach the AWS kind %q", awsKind)
+	}
+	for _, gcpKind := range []string{
+		"gce-otel-label",
+		"google_compute_instance",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, gcpKind,
+			"shared system prompt should teach the GCP kind %q", gcpKind)
+	}
+}
+
+// TestDiscoveryScanContext_ScopeID_Provider — pins the ScopeID()
+// helper's provider-aware routing: ProjectID for GCP, AccountID for
+// AWS (including the empty-provider default).
+func TestDiscoveryScanContext_ScopeID_Provider(t *testing.T) {
+	awsCtx := DiscoveryScanContext{AccountID: "123456789012"}
+	if got := awsCtx.ScopeID(); got != "123456789012" {
+		t.Errorf("AWS empty-provider ScopeID = %q, want 123456789012", got)
+	}
+	awsCtxExplicit := DiscoveryScanContext{Provider: "aws", AccountID: "999999999999"}
+	if got := awsCtxExplicit.ScopeID(); got != "999999999999" {
+		t.Errorf("AWS explicit-provider ScopeID = %q, want 999999999999", got)
+	}
+	gcpCtx := DiscoveryScanContext{Provider: "gcp", ProjectID: "my-project"}
+	if got := gcpCtx.ScopeID(); got != "my-project" {
+		t.Errorf("GCP ScopeID = %q, want my-project", got)
+	}
+	// Nil receiver is empty-safe.
+	var nilCtx *DiscoveryScanContext
+	if got := nilCtx.ScopeID(); got != "" {
+		t.Errorf("nil ScopeID = %q, want empty", got)
+	}
+}
+
+// TestProposeFromDiscoveryScan_GCPRequiresProjectID — provider="gcp"
+// with empty ProjectID is rejected at the pre-call validator. AWS
+// rules unchanged.
+func TestProposeFromDiscoveryScan_GCPRequiresProjectID(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	_, err := svc.ProposeFromDiscoveryScan(context.Background(), &DiscoveryScanContext{
+		ScanID:   "scan-x",
+		Provider: "gcp",
+		// ProjectID intentionally empty.
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project_id is required when provider=gcp")
+}
