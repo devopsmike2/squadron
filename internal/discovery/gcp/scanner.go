@@ -48,6 +48,7 @@ import (
 	compute "google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
+	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -134,7 +135,20 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		return result, errors.New("gcp: SAJSON is required")
 	}
 
-	client, err := s.buildComputeClient(ctx)
+	// Build the shared oauth client once per scan. Both the compute
+	// and Cloud SQL clients reuse it so the SA JSON is parsed once
+	// regardless of how many APIs the scan walks. The scope union
+	// (compute.readonly + sqlservice.admin) is requested explicitly
+	// — see buildOAuthHTTPClient godoc for why we don't fall back
+	// to cloud-platform.
+	oauthClient, err := s.buildOAuthHTTPClient(ctx)
+	if err != nil {
+		// Authentication-layer failure — no instances were walked.
+		// Surface as a hard error so the caller's audit emit path
+		// fires scan_failed rather than scan_completed-with-partial.
+		return result, fmt.Errorf("gcp: build oauth client: %w", err)
+	}
+	client, err := s.buildComputeClient(ctx, oauthClient)
 	if err != nil {
 		// Authentication-layer failure — no instances were walked.
 		// Surface as a hard error so the caller's audit emit path
@@ -178,6 +192,30 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		}
 	}
 
+	// Slice 2 (database-tier-slice2.md §5.1) Cloud SQL walk. Runs
+	// after the compute walk completes so the two surfaces share the
+	// same per-scan credential setup and accumulate into the same
+	// Result. A Cloud SQL list failure is non-fatal — compute results
+	// from the same scan are still valuable, so the failure surfaces
+	// as a partial-failure entry against the "cloudsql" service
+	// identifier rather than failing the whole scan.
+	sqlClient, sqlErr := s.buildCloudSQLClient(ctx, oauthClient)
+	if sqlErr != nil {
+		recordPartialFailure(&result, ServiceIDCloudSQL, fmt.Sprintf("%s: build client: %s", ServiceIDCloudSQL, truncate(sqlErr.Error(), 200)))
+	} else if err := s.walkCloudSQL(ctx, sqlClient, &result); err != nil {
+		recordPartialFailure(&result, ServiceIDCloudSQL, classifyCloudSQLListError(err))
+	} else if s.Region != "" {
+		// Successful Cloud SQL walk against a region-filtered scan.
+		// The Cloud SQL walk reads every instance in the project
+		// and filters client-side (the API has no server-side region
+		// filter), so the walked-regions set already contains s.Region
+		// from the compute path — but in the degenerate case where
+		// compute returned zero zones for the filtered region, we
+		// still want s.Region surfaced. The walkedRegions set absorbs
+		// it idempotently.
+		walkedRegions[s.Region] = struct{}{}
+	}
+
 	// Denormalize the walked-region list into Result.Regions. Order is
 	// not stable across runs (map iteration); the field is documented
 	// as "regions actually walked" — a set, not a sequence.
@@ -188,6 +226,20 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// Slice 1 instrumented rule (Compute): HasOTel == true.
 	for _, c := range result.Compute {
 		if c.HasOTel {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Slice 2 (database-tier-slice2.md §4) instrumented rule for GCP
+	// Cloud SQL: QueryInsightsEnabled == true. AWS RDS rows (which
+	// would have Provider="aws" or "", and read off
+	// PerformanceInsightsEnabled+EnhancedMonitoringEnabled) never
+	// appear in a GCP scan's Result.Databases — this scanner only
+	// emits Provider="gcp" rows, so the slice 1 RDS tally branch is
+	// inert here.
+	for _, d := range result.Databases {
+		if d.Provider == ProviderGCP && d.QueryInsightsEnabled {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++
@@ -315,11 +367,57 @@ func regionFromZone(zone string) string {
 	return zone
 }
 
+// buildOAuthHTTPClient parses the SA JSON once per scan and returns a
+// shared *http.Client whose transport re-mints short-lived access
+// tokens against the scope union the slice-1 + slice-2 walks need:
+//
+//   - compute.ComputeReadonlyScope (compute.readonly) for the slice-1
+//     Compute Engine zones + instances walk.
+//   - sqladmin.SqlserviceAdminScope (sqlservice.admin) for the
+//     slice-2 Cloud SQL instances walk. Despite the "admin" suffix,
+//     this is the scope Google requires for the read-listing call
+//     (the alternative is the platform-wide cloud-platform scope —
+//     see proposal §3.1 design rationale).
+//
+// The compute.readonly scope alone is insufficient for Cloud SQL
+// (returns 403 Insufficient Permission); cloud-platform would cover
+// both but violates the slice-1 posture commitment to least-privilege
+// (the SA's effective scope should be the union of the read-only
+// scopes actually exercised, not the platform superset).
+//
+// Returns nil with an error when the SA JSON is malformed or missing
+// fields. The error message NEVER embeds the bytes (substrate
+// invariant inherited from credstore: SA JSON never appears in error
+// strings or logs).
+//
+// Returns nil with nil when the test bypass path is active (caller
+// provided s.httpClient — the per-API builders construct an
+// option.WithoutAuthentication-flagged client in that case).
+func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error) {
+	if s.httpClient != nil {
+		// Test bypass: the per-API client builders use s.httpClient
+		// directly with WithoutAuthentication. Return nil so the
+		// production-path branches in the builders don't run.
+		return nil, nil
+	}
+	cfg, err := google.JWTConfigFromJSON(
+		s.SAJSON,
+		compute.ComputeReadonlyScope,
+		sqladmin.SqlserviceAdminScope,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gcp: parse SA JSON: %w", err)
+	}
+	ts := cfg.TokenSource(ctx)
+	return oauth2.NewClient(ctx, ts), nil
+}
+
 // buildComputeClient constructs a compute.Service using either the
-// test-injected httpClient + endpoint (no auth) or the SA-JSON-backed
-// oauth2 client. Production callers reach the latter path; tests
-// the former.
-func (s *Scanner) buildComputeClient(ctx context.Context) (*compute.Service, error) {
+// test-injected httpClient + endpoint (no auth) or the shared
+// oauth-backed client built by buildOAuthHTTPClient. Production
+// callers pass the shared client; tests pass nil and the function
+// reads s.httpClient directly.
+func (s *Scanner) buildComputeClient(ctx context.Context, oauthClient *http.Client) (*compute.Service, error) {
 	if s.httpClient != nil {
 		// Test path. The httpClient is already pointing at the test
 		// server; we pass option.WithoutAuthentication so the compute
@@ -335,20 +433,9 @@ func (s *Scanner) buildComputeClient(ctx context.Context) (*compute.Service, err
 		}
 		return compute.NewService(ctx, opts...)
 	}
-	// Production path. JWTConfigFromJSON parses the SA JSON and
-	// extracts the private key + token URL; the resulting Config
-	// produces a TokenSource that re-mints short-lived access tokens.
-	cfg, err := google.JWTConfigFromJSON(s.SAJSON, compute.ComputeReadonlyScope)
-	if err != nil {
-		// The SA JSON is malformed or missing required fields. NEVER
-		// embed the bytes in the returned error (substrate invariant
-		// inherited from credstore: SA JSON never appears in error
-		// strings or logs).
-		return nil, fmt.Errorf("gcp: parse SA JSON: %w", err)
-	}
-	ts := cfg.TokenSource(ctx)
-	httpClient := oauth2.NewClient(ctx, ts)
-	return compute.NewService(ctx, option.WithHTTPClient(httpClient))
+	// Production path. The oauthClient already wraps the SA JSON's
+	// TokenSource via buildOAuthHTTPClient.
+	return compute.NewService(ctx, option.WithHTTPClient(oauthClient))
 }
 
 // recordPartialFailure marks the scan partial and appends both a
