@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 10
+const SchemaVersion = 11
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -422,6 +422,63 @@ CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_last_seen
 INSERT OR IGNORE INTO schema_version (version) VALUES (10);
 `
 
+// ServerlessInstanceSchema bumps the database to schema v11.
+// v0.89.90 (#721 Stream 119, slice 1 chunk 1 of the Serverless tier
+// arc) — adds the serverless_instance table that the new
+// internal/discovery/scanner ServerlessInstanceSnapshot persists into.
+//
+// One row per (connection_id, scan_id, resource_arn) serverless
+// function or service Squadron's per-cloud scanners detect. The
+// universal columns (provider / surface / account_id / region /
+// resource_name / resource_arn / runtime / has_trace_axis /
+// has_otel_distro / last_seen_at) carry the cross-cloud detection
+// shape; snapshot_json carries the full ServerlessInstanceSnapshot
+// (including the surface-specific Detail bag) so per-cloud Inventory
+// tabs can render provider-specific context without a second join.
+//
+// The (connection_id, scan_id, resource_arn) UNIQUE constraint mirrors
+// the trace_resource_seen v10 keying pattern — a re-scan of the same
+// connection on the same scan_id is idempotent on a per-resource
+// basis. Cross-scan history is preserved (each scan_id gets its own
+// row per resource); the chunk-5 dashboard rollup reads through the
+// most-recent scan per connection.
+//
+// idx_serverless_scan backs the per-scan inventory read (the
+// per-provider Inventory tab's filter on a single scan_id). idx_serverless_conn
+// backs the per-connection rollup (the Discovery dashboard's
+// per-card aggregation across all scans).
+//
+// Migration adds the table without backfilling — pre-slice-1 scans
+// don't have serverless data. The chunk-1 v0.89.90 migration is
+// idempotent (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+// EXISTS); running it twice is a no-op.
+//
+// See docs/proposals/serverless-tier-slice1.md §4 (storage schema)
+// and §11 acceptance test 10 (migration idempotence).
+const ServerlessInstanceSchema = `
+CREATE TABLE IF NOT EXISTS serverless_instance (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    scan_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    region TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    resource_arn TEXT,
+    runtime TEXT,
+    has_trace_axis INTEGER NOT NULL,
+    has_otel_distro INTEGER NOT NULL,
+    last_seen_at TIMESTAMP,
+    snapshot_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (connection_id, scan_id, resource_arn)
+);
+CREATE INDEX IF NOT EXISTS idx_serverless_scan ON serverless_instance(scan_id);
+CREATE INDEX IF NOT EXISTS idx_serverless_conn ON serverless_instance(connection_id);
+INSERT OR IGNORE INTO schema_version (version) VALUES (11);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -434,4 +491,5 @@ var Migrations = []string{
 	IaCRecommendationVerdictsSchema,
 	CheckRunStateSchema,
 	TraceResourceSeenSchema,
+	ServerlessInstanceSchema,
 }

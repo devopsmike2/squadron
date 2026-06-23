@@ -528,6 +528,23 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 		if err := s.scanRegionECS(ctx, factory, region, result); err != nil {
 			recordPartialFailure(result, "ecs", fmt.Sprintf("ecs scan failed in %s: %s", region, err.Error()))
 		}
+		// Serverless tier slice 1 chunk 1 (v0.89.90, #721 Stream 119)
+		// — Lambda serverless join. This is the second Lambda walk in
+		// the scan: scanRegionLambda above populates result.Functions
+		// with the legacy FunctionRuntimeSnapshot shape (single-axis
+		// HasOTelLayer rule, compute-tier-adjacent). The new
+		// scanRegionLambdaServerless populates result.Serverless with
+		// the two-axis (HasTraceAxis + HasOTelDistro) detection rule
+		// the serverless-tier proposer reads. Both paths reuse the
+		// already-paginated ListFunctions API; the cost is one
+		// additional pagination pass per region — acceptable for
+		// slice 1 chunk 1, and chunk 5 deprecates the legacy
+		// Functions wire shape after the per-provider Inventory
+		// tabs migrate to the new Serverless sub-tab. See
+		// docs/proposals/serverless-tier-slice1.md §6.2.
+		if err := s.scanRegionLambdaServerless(ctx, factory, region, result); err != nil {
+			recordPartialFailure(result, "lambda_serverless", fmt.Sprintf("lambda serverless scan failed in %s: %s", region, err.Error()))
+		}
 	}
 
 	for _, c := range result.Compute {
@@ -609,6 +626,21 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 	// reasoning, and the Inventory tab all reference IsInstrumented.
 	for _, c := range result.ECSClusters {
 		if c.IsInstrumented() {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Serverless tier slice 1 (v0.89.90, #721 Stream 119) — a
+	// serverless row counts as instrumented when EITHER the
+	// HasTraceAxis (cloud-native trace primitive on) or
+	// HasOTelDistro (OTel distribution attached) axis holds — the
+	// OR rule documented on scanner.ServerlessInstanceSnapshot.
+	// IsInstrumented(). Slice 2's per-surface span-quality probe
+	// can tighten the predicate per surface; slice 1 lands the
+	// honest OR rule across all five surfaces.
+	for _, sv := range result.Serverless {
+		if sv.IsInstrumented() {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++

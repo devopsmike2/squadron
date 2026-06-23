@@ -145,6 +145,29 @@ type Result struct {
 	// dynamodb:UpdateContributorInsights.
 	DynamoDBTables []DynamoDBTableSnapshot `json:"dynamodb_tables"`
 
+	// Serverless is the serverless function / service inventory.
+	// Added in slice 1 of the serverless-tier arc (v0.89.90, #721
+	// Stream 119). Covers AWS Lambda + GCP Cloud Run + GCP Cloud
+	// Functions + Azure Functions + OCI Functions — five surfaces
+	// across the four clouds. The proposer's recommendation surface
+	// for serverless reasons about a TWO-axis detection rule:
+	//
+	//  1. HasTraceAxis — the cloud-native trace primitive is on
+	//     (X-Ray active tracing for Lambda, Cloud Trace for Cloud
+	//     Run / Functions, Application Insights for Azure Functions,
+	//     APM for OCI Functions).
+	//  2. HasOTelDistro — an OpenTelemetry distribution / layer /
+	//     sidecar / env wrapper is attached.
+	//
+	// Either axis presence is informationally surfaced; neither axis
+	// gates Result.InstrumentedCount on its own. The scanner-side
+	// tally and the proposer-side reasoning denominate coverage on a
+	// per-surface basis (see ServerlessInstanceSnapshot.IsInstrumented).
+	//
+	// See docs/proposals/serverless-tier-slice1.md §3 (detection
+	// surfaces) and §11 (acceptance tests).
+	Serverless []ServerlessInstanceSnapshot `json:"serverless"`
+
 	// ECSClusters is the ECS (and future Cloud Run / AKS-style
 	// container-orchestration) cluster inventory. Added in slice 5
 	// of the universal-observation arc (v0.89.10). The proposer's
@@ -922,6 +945,143 @@ type FunctionRuntimeSnapshot struct {
 
 	// Region is where the function lives.
 	Region string `json:"region"`
+}
+
+// ServerlessInstanceSnapshot is the category-typed view of a
+// serverless function or service. Provider-specific scanners populate
+// this from Lambda ListFunctions (AWS) / Cloud Run services.list (GCP)
+// / cloudfunctions.list (GCP) / Microsoft.Web/sites?$filter=kind eq
+// 'functionapp' (Azure) / functions.ListFunctions (OCI). The proposer
+// reasons about category-level levers (trace primitive enabled, OTel
+// distro attached) rather than provider-specific feature names.
+//
+// Slice 1 of the serverless-tier arc (v0.89.90, #721 Stream 119)
+// detects per-surface:
+//
+//  1. HasTraceAxis — the cloud-native trace primitive is on. AWS:
+//     X-Ray active tracing. GCP Cloud Run: Cloud Trace integration.
+//     GCP Cloud Functions: GOOGLE_CLOUD_TRACE env var. Azure: App
+//     Insights connection string set. OCI: OCI_APM_ENABLED config.
+//  2. HasOTelDistro — an OpenTelemetry distribution is attached.
+//     AWS: ADOT layer ARN matches the canonical prefix, or the
+//     AWS_LAMBDA_EXEC_WRAPPER env var is set. GCP Cloud Run: a
+//     sidecar container named "otel-collector*" or
+//     OTEL_EXPORTER_OTLP_ENDPOINT is set. GCP Cloud Functions: OTel
+//     layer attached. Azure: OTEL_DOTNET_AUTO_HOME or
+//     OTEL_PYTHON_DISTRO app setting. OCI: OTEL_DISTRO config.
+//
+// The two axes are surfaced as independent booleans; the proposer's
+// per-surface recommendation kinds (lambda-xray-active,
+// lambda-otel-layer, lambda-otel-wrapper, ...) key off whichever axis
+// is missing. Slice 1 does NOT collapse the two into a single
+// "instrumented" predicate at the Result level — the per-surface
+// rules differ enough that a composite-rule predicate would either
+// over- or under-count.
+//
+// Surface-specific detail (Lambda's x_ray_mode + layer_count, Cloud
+// Run's container names, Azure Functions' app settings, OCI's
+// config map) lives in the Detail bag so the per-cloud Inventory
+// tabs can render provider-specific context without forcing a
+// universal struct shape.
+//
+// Squadron does NOT execute any modify call — discovery is strictly
+// read-only; the operator runs the enablement Terraform through their
+// own IaC pipeline. Same posture as the compute / database / cluster
+// / DynamoDB / ECS levers.
+//
+// See docs/proposals/serverless-tier-slice1.md §3 (per-cloud detection
+// axes), §5 (scanner contract), §11 acceptance tests 1-9, §12 (threat
+// model — the Lambda layer ARN whitelist drift mitigation).
+type ServerlessInstanceSnapshot struct {
+	// Provider is the cloud name — "aws" / "gcp" / "azure" / "oci".
+	// Discriminator for the Detail bag's shape.
+	Provider string `json:"provider"`
+
+	// Surface is the per-cloud serverless surface identifier —
+	// "lambda" / "cloudrun" / "cloudfunc" / "azfunc" / "ocifunc".
+	// Drives the proposer's recommendation-kind prefix routing
+	// (lambda-* → AWS, cloudrun-* / cloudfunc-* → GCP, azfunc-* →
+	// Azure, ocifunc-* → OCI).
+	Surface string `json:"surface"`
+
+	// AccountID is the provider-native primary identifier of the
+	// owning connection (account_id / project_id / subscription_id /
+	// tenancy OCID).
+	AccountID string `json:"account_id"`
+
+	// Region is where the function / service lives. Serverless
+	// surfaces are per-region on every cloud Squadron supports.
+	Region string `json:"region"`
+
+	// ResourceName is the operator-readable name. For Lambda this is
+	// the function name; for Cloud Run a service name; for Cloud
+	// Functions a function name; for Azure Functions a site name;
+	// for OCI Functions a function name.
+	ResourceName string `json:"resource_name"`
+
+	// ResourceARN is the provider-native fully-qualified resource
+	// identifier. Lambda ARN / Cloud Run service self-link / Cloud
+	// Functions resource path / Azure Functions resource ID / OCI
+	// Functions OCID. Carries the canonical handle the proposer's
+	// evidence list and the recommendation envelope's
+	// AffectedResources field both reference.
+	ResourceARN string `json:"resource_arn"`
+
+	// Runtime is the provider-typed runtime string: "nodejs20.x" /
+	// "python3.11" / "dotnet6" / "go1.21" / etc. Drives the
+	// proposer's per-language SDK customization in slice 2; surfaced
+	// raw in slice 1.
+	Runtime string `json:"runtime,omitempty"`
+
+	// HasTraceAxis signals the cloud-native trace primitive is on
+	// (see type godoc for per-cloud detection). One of the two axes
+	// the proposer's recommendation kinds key off.
+	HasTraceAxis bool `json:"has_trace_axis"`
+
+	// HasOTelDistro signals an OpenTelemetry distribution / layer /
+	// sidecar / env wrapper is attached. The other axis.
+	HasOTelDistro bool `json:"has_otel_distro"`
+
+	// LastSeenAt — slice 1 trace integration parity (see
+	// ComputeInstanceSnapshot.LastSeenAt godoc for the join
+	// semantics). Most recent timestamp at which Squadron's
+	// traceindex saw any span from this resource. Nil means "no
+	// traces ever observed" (rendered as "never" in the UI). Set at
+	// scan-response time by joining against the traceindex on the
+	// per-surface projection key; empty on the scanner-produced
+	// result.
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+
+	// Detail is the per-surface bag the per-cloud Inventory tabs
+	// render alongside the universal columns. Lambda populates
+	// {"x_ray_mode": "Active"/"PassThrough"/"", "layer_count": N};
+	// Cloud Run populates {"container_count": N,
+	// "sidecar_names": ["otel-collector"]}; Azure populates a slim
+	// app_settings subset; OCI populates a config subset. Empty when
+	// no surface-specific context applies.
+	Detail map[string]any `json:"detail,omitempty"`
+}
+
+// IsInstrumented implements the slice 1 OR-rule for serverless
+// resources: a function or service counts as instrumented when at
+// least one of the two axes (HasTraceAxis OR HasOTelDistro) is true.
+//
+// Rationale: serverless surfaces differ from the compute / database /
+// cluster tiers in that the cloud-native trace primitive (X-Ray, Cloud
+// Trace, App Insights, APM) is itself a meaningful observability
+// signal — operators frequently ship to the cloud's native APM and
+// do NOT layer OTel on top. The composite "both axes" rule we use
+// for EKS would over-count uninstrumented serverless deployments;
+// the single-axis "HasOTelDistro only" rule we use for compute would
+// under-count operators on the native APM. Slice 1 lands the OR
+// rule; slice 2's per-surface span-quality probe can tighten the
+// predicate per surface if operator feedback warrants it.
+//
+// Kept as a method on the snapshot so the scanner-side tally, the
+// proposer-side reasoning, and the per-cloud Inventory tab can all
+// reference the same predicate.
+func (s ServerlessInstanceSnapshot) IsInstrumented() bool {
+	return s.HasTraceAxis || s.HasOTelDistro
 }
 
 // ValidationResult is the response shape for Scanner.Validate. The

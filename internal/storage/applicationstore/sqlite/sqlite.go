@@ -722,6 +722,43 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_provider_scope ON trace_resource_seen(provider, scope_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_last_seen ON trace_resource_seen(last_seen_at)`,
+
+		// v0.89.90 (#721 Stream 119, slice 1 chunk 1 of the
+		// Serverless tier arc) — serverless_instance carries one row
+		// per (connection_id, scan_id, resource_arn) serverless
+		// function or service Squadron's per-cloud scanners detect.
+		// Universal columns (provider / surface / account_id /
+		// region / resource_name / resource_arn / runtime /
+		// has_trace_axis / has_otel_distro / last_seen_at) carry the
+		// cross-cloud detection shape; snapshot_json holds the full
+		// per-cloud snapshot including the surface-specific Detail
+		// bag. The (connection_id, scan_id, resource_arn) UNIQUE
+		// constraint makes re-scan idempotent on a per-resource
+		// basis; idx_serverless_scan backs the per-scan inventory
+		// read; idx_serverless_conn backs the per-connection rollup
+		// the Discovery dashboard's per-card aggregation reads.
+		//
+		// See docs/proposals/serverless-tier-slice1.md §4.
+		`CREATE TABLE IF NOT EXISTS serverless_instance (
+			id TEXT PRIMARY KEY,
+			connection_id TEXT NOT NULL,
+			scan_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			surface TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			region TEXT NOT NULL,
+			resource_name TEXT NOT NULL,
+			resource_arn TEXT,
+			runtime TEXT,
+			has_trace_axis INTEGER NOT NULL,
+			has_otel_distro INTEGER NOT NULL,
+			last_seen_at TIMESTAMP,
+			snapshot_json TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (connection_id, scan_id, resource_arn)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_serverless_scan ON serverless_instance(scan_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_serverless_conn ON serverless_instance(connection_id)`,
 	}
 
 	for _, migration := range migrations {
