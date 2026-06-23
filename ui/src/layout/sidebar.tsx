@@ -87,6 +87,17 @@ interface MenuItem {
 interface MenuGroup {
   label: string;
   items: MenuItem[];
+  /**
+   * v0.89.62 #689 Stream 87 (slice-1 chunk 2) — when set, the group
+   * label itself becomes a clickable Link that navigates to this URL
+   * (e.g. the Discovery group header points to the unified
+   * /discovery dashboard). Mutually exclusive with the per-item
+   * navigation — the child items still drive the per-provider
+   * landings. Slice-1 honesty: the label-as-link affordance is
+   * Discovery-only for now; other groups keep their plain label
+   * because no other group has an aggregate-view destination.
+   */
+  url?: string;
 }
 
 export function AppSidebar() {
@@ -271,7 +282,14 @@ export function AppSidebar() {
       // and Admin. Slice 1 ships one entry (AWS); slice 4-6 add GCP,
       // Azure, on-prem under the same group label so the operator's
       // muscle memory carries across providers.
+      //
+      // v0.89.62 #689 Stream 87 — group label becomes a Link to the
+      // unified Discovery dashboard at /discovery so the four-cloud
+      // aggregate view is the default Discovery landing surface.
+      // Per-provider entries below stay as-is so the operator can
+      // still jump straight to a specific cloud's wizard.
       label: "Discovery",
+      url: "/discovery",
       items: [
         {
           key: "discovery-aws",
@@ -398,11 +416,27 @@ export function AppSidebar() {
       <SidebarContent className="gap-1 pt-2">
         {groups.map((group, gi) => (
           <SidebarGroup key={group.label} className={gi === 0 ? "" : "mt-1"}>
-            {!collapsed && (
-              <SidebarGroupLabel className="text-[10px] uppercase tracking-[0.16em] text-sidebar-foreground/50 font-semibold">
-                {group.label}
-              </SidebarGroupLabel>
-            )}
+            {!collapsed &&
+              (group.url ? (
+                // v0.89.62 #689 Stream 87 — Discovery group header is
+                // a clickable Link to /discovery (the unified
+                // dashboard). asChild lets the existing
+                // SidebarGroupLabel styling pass through onto the
+                // Link element so the visual treatment matches the
+                // other group labels exactly.
+                <SidebarGroupLabel
+                  asChild
+                  className="text-[10px] uppercase tracking-[0.16em] text-sidebar-foreground/50 font-semibold hover:text-sidebar-foreground hover:underline"
+                >
+                  <Link to={group.url} aria-label={`${group.label} dashboard`}>
+                    {group.label}
+                  </Link>
+                </SidebarGroupLabel>
+              ) : (
+                <SidebarGroupLabel className="text-[10px] uppercase tracking-[0.16em] text-sidebar-foreground/50 font-semibold">
+                  {group.label}
+                </SidebarGroupLabel>
+              ))}
             <SidebarMenu>
               {group.items.map((item) => {
                 // v0.81 — items with onClick render as buttons that

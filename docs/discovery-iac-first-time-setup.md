@@ -1,5 +1,7 @@
 # Discovery IaC (GitHub) — first-time setup
 
+**As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
+
 This is the operator-facing runbook for connecting a Squadron
 deployment to a GitHub-hosted Terraform repository for the first
 time. It covers the GitHub-side PAT bootstrap plus the in-product

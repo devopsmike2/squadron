@@ -17,6 +17,7 @@ import ConfigsPage from "./pages/Configs";
 import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
 import DeployPage from "./pages/Deploy";
+import DiscoveryPage from "./pages/Discovery";
 import DiscoveryAWSPage from "./pages/DiscoveryAWS";
 import DiscoveryAzurePage from "./pages/DiscoveryAzure";
 import DiscoveryGCPPage from "./pages/DiscoveryGCP";
@@ -176,6 +177,16 @@ function AuthBoundary() {
             element={<ProposerPlaygroundPage />}
           />
           <Route path="/deploy" element={<DeployPage />} />
+          {/* v0.89.62 #689 Stream 87 (slice-1 chunk 2) — unified
+              Discovery dashboard. Aggregates connection / instance /
+              recommendation counts across all four clouds into a
+              single landing screen. Mounted at /discovery so the
+              sidebar Discovery group header can navigate here as the
+              default; the per-provider /discovery/<cloud> routes
+              still host the wizard surfaces. Closes the unified
+              dashboard slice 1 (design doc
+              docs/proposals/unified-discovery-dashboard-slice1.md). */}
+          <Route path="/discovery" element={<DiscoveryPage />} />
           {/* v0.85 Stream 2E — universal-discovery first user-facing
               payoff. /discovery/aws hosts the Account / Inventory /
               Recommendations triptych the design doc calls out. */}

@@ -1,5 +1,7 @@
 # Connect an OCI tenancy to Squadron — first-time setup
 
+**As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
+
 This is the operator runbook for the v0.89.55 through v0.89.59 OCI
 discovery arc that closed OCI slice 1: Squadron now scans Oracle
 Cloud Compute Instance fleets for observability gaps, drafts
