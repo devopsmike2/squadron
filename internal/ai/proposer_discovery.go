@@ -76,6 +76,33 @@ type DiscoveryScanContext struct {
 	// value to bind to.
 	SubscriptionID string
 
+	// TenancyOCID — v0.89.58 (#685 Stream 83, OCI discovery slice 1
+	// chunk 5) — populated when Provider="oci"; carries the Oracle
+	// Cloud tenancy OCID the scan walked. Empty for Provider="aws",
+	// Provider="gcp", and Provider="azure". Used by ScopeID() so the
+	// verdict learning loop's scope tuple and the audit payload
+	// composition stay provider-agnostic downstream. The proposer's
+	// pre-call validator enforces non-empty TenancyOCID when
+	// Provider="oci" (mirroring the AWS AccountID + GCP ProjectID +
+	// Azure SubscriptionID enforcement) so the prompt body's scope
+	// description has a real value to bind to. See
+	// docs/proposals/oci-discovery-slice1.md §10.
+	TenancyOCID string
+
+	// UserOCID — v0.89.58 (#685 Stream 83, OCI discovery slice 1
+	// chunk 5) — the OCI user identity used to scan the tenancy.
+	// Populated when Provider="oci". Surfaced on the context so the
+	// prompt builder can include it as evidence in the rendered user
+	// message; downstream audit + scope plumbing uses TenancyOCID.
+	UserOCID string
+
+	// CompartmentID — v0.89.58 (#685 Stream 83, OCI discovery slice 1
+	// chunk 5) — restricts the scan to a specific OCI compartment
+	// when set. Empty means the slice 1 default walk: root +
+	// first-level children per docs/proposals/oci-discovery-slice1.md
+	// §9. Populated when Provider="oci"; ignored for other providers.
+	CompartmentID string
+
 	// Regions the scan walked. Slice 1 ships single-entry slices;
 	// slice 3 will iterate.
 	Regions []string
@@ -212,6 +239,8 @@ func (c *DiscoveryScanContext) ScopeID() string {
 		return c.ProjectID
 	case "azure":
 		return c.SubscriptionID
+	case "oci":
+		return c.TenancyOCID
 	default: // "aws" (or empty for backward compat)
 		return c.AccountID
 	}
@@ -455,6 +484,10 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 	case "azure":
 		if in.SubscriptionID == "" {
 			return nil, errors.New("subscription_id is required when provider=azure")
+		}
+	case "oci":
+		if in.TenancyOCID == "" {
+			return nil, errors.New("tenancy_ocid is required when provider=oci")
 		}
 	default:
 		if in.AccountID == "" {
