@@ -66,14 +66,53 @@ affordance, same check run lifecycle.
   instrumentation coverage across the full cloud footprint, not
   just one provider.
 
+## Database tier slice 2 — SHIPPED in v0.89.65 through v0.89.67
+
+As of v0.89.65 (chunk 2 of the database tier arc — design at
+[proposals/database-tier-slice2.md](./proposals/database-tier-slice2.md)),
+Squadron's GCP scanner ALSO walks Cloud SQL instances during the
+same scan call. The Inventory tab gains a Databases sub-tab; the
+proposer emits a new `cloudsql-pi-enable` recommendation kind for
+Cloud SQL instances where Query Insights is disabled.
+
+**Detection rule:** instance is INSTRUMENTED if
+`settings.insightsConfig.queryInsightsEnabled == true`. Otherwise
+uninstrumented.
+
+**Recommendation kind:** `cloudsql-pi-enable`. Targets
+`google_sql_database_instance.settings[0].insights_config[0].query_insights_enabled = true`
+in your Terraform repo.
+
+**IAM scope additions for slice 2:** the existing
+`roles/compute.viewer` does NOT cover Cloud SQL. Add
+`roles/cloudsql.viewer` to your Squadron Discovery SA:
+
+```sh
+gcloud projects add-iam-policy-binding <your-project-id> \
+  --member="serviceAccount:squadron-discovery@<your-project-id>.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.viewer"
+```
+
+Without this role, Cloud SQL list calls return 403 and Squadron
+records a partial failure with `failed_services=["cloudsql"]` in
+the scan_completed audit event — compute results are still
+emitted normally. Re-run the scan after adding the role.
+
+**OAuth scope:** the SA JSON now authenticates with both
+`compute.readonly` AND `sqlservice.admin` scopes (least-privilege
+union, NOT the broader `cloud-platform` scope).
+
+**Custom-role addition for stricter posture:** if you use a
+custom role for Cloud SQL, the minimum permissions are
+`cloudsql.instances.list` and `cloudsql.instances.get`.
+
 ## What this is NOT (slice 1)
 
 Slice 1 ships intentionally narrow. The following are slice 2+
 candidates, called out so you don't expect them yet:
 
-- **No Cloud SQL scanning.** The Cloud SQL equivalent of the AWS
-  RDS scanner is slice 2 work. Cloud SQL instances are invisible
-  to slice 1.
+- **~~No Cloud SQL scanning.~~** ✓ SHIPPED in v0.89.65 — see
+  "Database tier slice 2" section above.
 - **No GKE scanning.** The GKE equivalent of the AWS EKS scanner
   is slice 3 work.
 - **No Cloud Storage / Cloud Load Balancing / Pub/Sub scanning.**

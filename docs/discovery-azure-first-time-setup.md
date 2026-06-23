@@ -74,13 +74,49 @@ verdict learning is correctly isolated per subscription.
   instrumentation coverage across the entire cloud footprint
   without per-provider tool sprawl.
 
+## Database tier slice 2 — SHIPPED in v0.89.65 through v0.89.67
+
+As of v0.89.65 (chunk 3 of the database tier arc — design at
+[proposals/database-tier-slice2.md](./proposals/database-tier-slice2.md)),
+Squadron's Azure scanner ALSO walks SQL Servers, their Databases,
+and the Diagnostic Settings on each database during the same scan
+call. The Inventory tab gains a Databases sub-tab; the proposer
+emits a new `azsql-diag-enable` recommendation kind for Azure SQL
+Databases that lack a SQLInsights diagnostic routing.
+
+**Detection rule:** database is INSTRUMENTED if it has at least
+one Diagnostic Setting routing the `SQLInsights` log category to
+ANY destination (Log Analytics workspace, Storage Account, or
+Event Hub) with `enabled: true`. The system `master` database is
+skipped.
+
+**Recommendation kind:** `azsql-diag-enable`. Targets
+`azurerm_monitor_diagnostic_setting` resource on the SQL database
+with an `enabled_log { category = "SQLInsights" }` block.
+
+**IAM scope additions for slice 2:** none — the existing `Reader`
+role at subscription scope already covers Microsoft.Sql/servers,
+Microsoft.Sql/servers/databases, and
+microsoft.insights/diagnosticSettings. No SP credential changes
+needed.
+
+**Engine version field:** Squadron reports
+`properties.currentServiceObjectiveName` (e.g. "GP_S_Gen5_2")
+because it reflects the database's current autoscale tier
+precisely. When that property is empty (freshly-created
+databases), Squadron falls back to `sku.name`.
+
+**Service identifier in audit:** partial-failure events use
+`failed_services=["azuresql"]` (parallel to the slice-1
+`azurevm` for compute).
+
 ## What this is NOT (slice 1)
 
 Slice 1 ships intentionally narrow. The following are slice 2+
 candidates:
 
-- **No Azure SQL Database scanning.** The RDS / Cloud SQL
-  equivalent. Slice 2 work.
+- **~~No Azure SQL Database scanning.~~** ✓ SHIPPED in v0.89.65 —
+  see "Database tier slice 2" section above.
 - **No Azure Kubernetes Service (AKS) scanning.** Slice 3.
 - **No Azure Blob Storage / Load Balancer / Application Gateway
   scanning.** Slices 4-5.

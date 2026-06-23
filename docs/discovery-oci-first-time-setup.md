@@ -70,11 +70,66 @@ clouds.
 - An enterprise evaluating Squadron against multi-cloud
   procurement requirements — the four-cloud claim is decisive.
 
+## Database tier slice 2 — SHIPPED in v0.89.65 through v0.89.67
+
+As of v0.89.65 (chunk 4 of the database tier arc — design at
+[proposals/database-tier-slice2.md](./proposals/database-tier-slice2.md)),
+Squadron's OCI scanner ALSO walks DB Systems AND Autonomous
+Databases across the same compartments it walks for Compute
+Instances. The Inventory tab gains a Databases sub-tab; the
+proposer emits a new `ocidb-perfhub-enable` recommendation kind
+for instances where Operations Insights / Database Management
+is not enabled.
+
+**Detection rule:**
+- DB Systems: instrumented if
+  `databaseManagementConfig.databaseManagementStatus == "ENABLED"`
+- Autonomous Databases: instrumented if the top-level
+  `databaseManagementStatus == "ENABLED"`
+
+The two product families have slightly different response shapes
+(nested vs top-level) but the semantic is identical. Squadron
+case-insensitively matches `ENABLED` to defend against future API
+casing drift.
+
+Instances with `lifecycleState != "AVAILABLE"` (terminating,
+provisioning, etc.) are skipped — they have no observability
+surface to recommend on.
+
+**Recommendation kind:** `ocidb-perfhub-enable`. Targets
+`oci_database_db_systems_management` for DB Systems, or the
+equivalent autonomous-database block.
+
+**IAM policy additions for slice 2:** the existing
+`Allow group SquadronDiscovery to read instance-family in tenancy`
+does NOT cover databases. Add:
+
+```sh
+oci iam policy update \
+  --policy-id <squadron-discovery-policy-ocid> \
+  --statements '[
+    "Allow group SquadronDiscovery to read instance-family in tenancy",
+    "Allow group SquadronDiscovery to read compartments in tenancy",
+    "Allow group SquadronDiscovery to read database-family in tenancy"
+  ]' \
+  --version-date "2025-01-01"
+```
+
+Without the `database-family` statement, DB Systems and Autonomous
+Database list calls return 403 and Squadron records a partial
+failure with `failed_services=["ocidb"]`. Compute results are
+still emitted normally. Re-run the scan after adding the
+statement.
+
+**Service identifier in audit:** partial-failure events use
+`failed_services=["ocidb"]`.
+
 ## What this is NOT (slice 1)
 
 Slice 1 ships intentionally narrow:
 
-- **No Autonomous Database / DB Systems scanning.** Slice 2.
+- **~~No Autonomous Database / DB Systems scanning.~~** ✓ SHIPPED
+  in v0.89.65 — see "Database tier slice 2" section above.
 - **No OKE (Oracle Kubernetes Engine).** Slice 3.
 - **No Object Storage scanning.** Slice 4.
 - **No Load Balancer scanning.** Slice 5.
