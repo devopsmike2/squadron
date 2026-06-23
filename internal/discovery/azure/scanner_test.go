@@ -145,6 +145,20 @@ func (f *fakeAzure) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(armSQLServerListResponse{Value: nil})
 			return
+
+		case strings.HasSuffix(r.URL.Path, "/providers/Microsoft.ContainerService/managedClusters"):
+			// Kubernetes-tier-slice-2 (chunk 3): the VM-walk
+			// fakeAzure also routes the AKS managedClusters list
+			// endpoint so slice-1 VM tests and slice-2 SQL tests
+			// don't get spurious "aks" partial failures from the
+			// new chunk-3 walker that always runs after the VM and
+			// SQL walks. The default response is an empty cluster
+			// list — operator has no AKS inventory, the walker
+			// appends zero ClusterSnapshot entries and records no
+			// partial failure.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(armAKSListResponse{Value: nil})
+			return
 		}
 
 		// Unmatched path — surface as 404 so test failures are

@@ -164,6 +164,17 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		// has already been bucketed as partial. The SQL walk's own
 		// partial failures accumulate independently.
 		s.scanAzureSQL(ctx, token, &result)
+		// Kubernetes-tier-slice-2 (chunk 3): the AKS walk runs
+		// against the same OAuth token and is independent of both
+		// the Compute and SQL surfaces. A VM listing failure does
+		// NOT preclude scanning AKS — the SP may have Reader on
+		// Microsoft.ContainerService but not Microsoft.Compute in
+		// unusual policy splits, and surfacing the cluster
+		// inventory is still useful when the VM walk has already
+		// been bucketed as partial. The AKS walk's own partial
+		// failures accumulate independently under the "aks" service
+		// id.
+		s.scanAKS(ctx, token, &result)
 		return result, nil
 	}
 
@@ -218,6 +229,15 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// instrumented-count tally is owned by chunk 5 (handler /
 	// proposer wiring); this chunk only emits raw snapshot rows.
 	s.scanAzureSQL(ctx, token, &result)
+
+	// Kubernetes-tier-slice-2 (chunk 3): walk the AKS managed-
+	// clusters surface using the same OAuth token. Partial failures
+	// accumulate under the "aks" service id and do NOT invalidate
+	// the compute / SQL results above. The slice-2 kubernetes
+	// instrumented-count tally is owned by chunk 5 (handler /
+	// proposer wiring); this chunk only emits raw ClusterSnapshot
+	// rows with the three-way disjunction detection result.
+	s.scanAKS(ctx, token, &result)
 
 	return result, nil
 }
