@@ -133,6 +133,18 @@ func (f *fakeAzure) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(armVMListResponse{Value: f.VMs})
 			return
+
+		case strings.HasSuffix(r.URL.Path, "/providers/Microsoft.Sql/servers"):
+			// Slice-2 chunk-3: the VM-walk fakeAzure also routes the
+			// SQL server list endpoint so slice-1 VM tests don't get
+			// spurious "azuresql" partial failures from the new
+			// chunk-3 walker that always runs after the VM walk.
+			// The default response is an empty server list —
+			// operator has no SQL inventory, the walker appends zero
+			// database snapshots and records no partial failure.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(armSQLServerListResponse{Value: nil})
+			return
 		}
 
 		// Unmatched path — surface as 404 so test failures are

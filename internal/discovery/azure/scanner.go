@@ -155,6 +155,15 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		if s.Location != "" {
 			result.Regions = []string{s.Location}
 		}
+		// Slice 2 (chunk 3): the Azure SQL walk runs against the
+		// same OAuth token and is independent of the Compute
+		// surface. A VM listing failure does NOT preclude scanning
+		// SQL — the SP may have Reader on Microsoft.Sql but not
+		// Microsoft.Compute in unusual policy splits, and surfacing
+		// the database inventory is still useful when the VM walk
+		// has already been bucketed as partial. The SQL walk's own
+		// partial failures accumulate independently.
+		s.scanAzureSQL(ctx, token, &result)
 		return result, nil
 	}
 
@@ -201,6 +210,14 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 			result.UninstrumentedCount++
 		}
 	}
+
+	// Slice 2 (chunk 3): walk the Azure SQL surface (servers +
+	// databases + Diagnostic Settings) using the same OAuth token.
+	// Partial failures accumulate under the "azuresql" service id
+	// and do NOT invalidate the compute results above. The slice 2
+	// instrumented-count tally is owned by chunk 5 (handler /
+	// proposer wiring); this chunk only emits raw snapshot rows.
+	s.scanAzureSQL(ctx, token, &result)
 
 	return result, nil
 }
