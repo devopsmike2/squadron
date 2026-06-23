@@ -57,6 +57,13 @@ type Quality struct {
 	mu           sync.Mutex
 	perKey       map[string]*QualityCounters
 	placeholders map[string][]PlaceholderObservation
+	// providers maps a quality key -> the normalized provider token
+	// the first observation for that key reported. Stable across the
+	// rolling window: once a key is bucketed under a provider we keep
+	// that mapping (a key flipping providers mid-window would be a
+	// keying-rule bug; the chunk-2 aggregate endpoint reads this map
+	// rather than re-parsing the key string).
+	providers map[string]string
 	// parentSeen maps trace_id -> span_id -> seen_at. Used by §3.1
 	// orphan detection: when a span arrives with a non-zero
 	// parent_span_id we look up whether we've seen that span_id on
@@ -75,6 +82,7 @@ func NewQuality() *Quality {
 	return &Quality{
 		perKey:       make(map[string]*QualityCounters),
 		placeholders: make(map[string][]PlaceholderObservation),
+		providers:    make(map[string]string),
 		parentSeen:   make(map[string]map[string]time.Time),
 		window:       1 * time.Hour,
 		parentTTL:    5 * time.Minute,
@@ -102,8 +110,17 @@ func NewQuality() *Quality {
 // Attrs is the merged resource + span attribute map. Quality reads
 // presence + sentinel values only; values never escape the in-memory
 // counter (threat-model §11).
+//
+// Provider — v0.89.86 chunk 2 additive — normalized provider token
+// ("aws"/"gcp"/"azure"/"oci"/"unknown") sourced from the same
+// ComputeResourceKey call site that computed Key. The chunk-2 §6.1
+// per-provider aggregate endpoint reads it off SnapshotAll() to bucket
+// keys without re-parsing the key string (tier-5 and tier-6 keys carry
+// no provider prefix). Empty Provider is preserved as "" in the
+// snapshot — the API handler buckets the unknown case explicitly.
 type SpanObservation struct {
 	Key          string
+	Provider     string
 	TraceID      string
 	SpanID       string
 	ParentSpanID string
@@ -135,6 +152,16 @@ func (q *Quality) Observe(obs SpanObservation) {
 	if counters == nil {
 		counters = &QualityCounters{WindowStart: now}
 		q.perKey[obs.Key] = counters
+	}
+	// Provider bucketing — chunk-2 §6.1 aggregate endpoint reads this
+	// off the snapshot. Recorded once per key on first observation;
+	// subsequent observations don't rewrite the value (a key flipping
+	// providers mid-window would indicate a keying bug, not a
+	// legitimate signal worth surfacing).
+	if obs.Provider != "" {
+		if _, ok := q.providers[obs.Key]; !ok {
+			q.providers[obs.Key] = obs.Provider
+		}
 	}
 	// Rolling 1h window per resource (§3.4 step 5). Reset zeros the
 	// four counters in place rather than reallocating — keeps the hot
@@ -289,6 +316,7 @@ func (q *Quality) EvictExpired() (countersEvicted, tracesEvicted int) {
 		if now.Sub(counters.WindowStart) > 2*q.window {
 			delete(q.perKey, key)
 			delete(q.placeholders, key)
+			delete(q.providers, key)
 			countersEvicted++
 		}
 	}
@@ -318,6 +346,7 @@ func (q *Quality) EvictExpired() (countersEvicted, tracesEvicted int) {
 // follows for the cold-start case.
 type QualityCountersSnapshot struct {
 	Key             string
+	Provider        string
 	OrphanPct       float64
 	MissingAttrPct  float64
 	AttrMismatchPct float64
@@ -338,6 +367,7 @@ func (q *Quality) SnapshotKey(key string) (QualityCountersSnapshot, bool) {
 		return QualityCountersSnapshot{}, false
 	}
 	snap := snapshotFromCounters(key, c)
+	snap.Provider = q.providers[key]
 	if obs := q.placeholders[key]; len(obs) > 0 {
 		snap.Placeholders = make([]PlaceholderObservation, len(obs))
 		copy(snap.Placeholders, obs)
@@ -354,6 +384,7 @@ func (q *Quality) SnapshotAll() []QualityCountersSnapshot {
 	out := make([]QualityCountersSnapshot, 0, len(q.perKey))
 	for key, c := range q.perKey {
 		snap := snapshotFromCounters(key, c)
+		snap.Provider = q.providers[key]
 		if obs := q.placeholders[key]; len(obs) > 0 {
 			snap.Placeholders = make([]PlaceholderObservation, len(obs))
 			copy(snap.Placeholders, obs)

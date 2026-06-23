@@ -158,7 +158,7 @@ func observeQualitySpans(qual QualityObserver, resourceSpans []*tracepb.Resource
 			continue
 		}
 		resourceAttrs := extractResourceAttributes(rs.Resource.Attributes)
-		key, _, _, _, _, _, ok := traceindex.ComputeResourceKey(resourceAttrs)
+		key, provider, _, _, _, _, ok := traceindex.ComputeResourceKey(resourceAttrs)
 		if !ok {
 			continue
 		}
@@ -182,6 +182,7 @@ func observeQualitySpans(qual QualityObserver, resourceSpans []*tracepb.Resource
 				}
 				qual.Observe(traceindex.SpanObservation{
 					Key:          key,
+					Provider:     provider,
 					TraceID:      hex.EncodeToString(sp.TraceId),
 					SpanID:       hex.EncodeToString(sp.SpanId),
 					ParentSpanID: hex.EncodeToString(sp.ParentSpanId),
