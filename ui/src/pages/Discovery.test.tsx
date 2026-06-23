@@ -16,6 +16,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import DiscoveryPage from "./Discovery";
 
 import {
+  fetchSpanQuality,
+  type ProviderSpanQuality,
+  type SpanQualityResponse,
+} from "@/api/discoverySpanQuality";
+import {
   getDiscoverySummary,
   type DiscoverySummary,
   type ProviderSummary,
@@ -46,8 +51,19 @@ vi.mock("@/api/discoveryTraceCoverage", async () => {
   };
 });
 
+vi.mock("@/api/discoverySpanQuality", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/api/discoverySpanQuality")
+  >("@/api/discoverySpanQuality");
+  return {
+    ...actual,
+    fetchSpanQuality: vi.fn(),
+  };
+});
+
 const mockedGetDiscoverySummary = vi.mocked(getDiscoverySummary);
 const mockedGetTraceCoverage = vi.mocked(getTraceCoverage);
+const mockedFetchSpanQuality = vi.mocked(fetchSpanQuality);
 
 // makeProviderTrace builds a ProviderTraceCoverage with sensible
 // defaults the per-test partials override.
@@ -152,6 +168,59 @@ function makeSummary(
   return { ...base, ...over };
 }
 
+// --- Span quality factories (v0.89.87 #718 Stream 116) -------------
+
+// makeProviderSpanQuality builds a ProviderSpanQuality with sensible
+// defaults the per-test partials override. Defaults are all-zero so
+// the SPAN QUALITY panel stays hidden in tests that don't opt in
+// (matching the §10 acceptance test 12 contract).
+function makeProviderSpanQuality(
+  over: Partial<ProviderSpanQuality> = {},
+): ProviderSpanQuality {
+  return {
+    resource_count: 0,
+    resources_with_issues: 0,
+    orphan_pct: 0,
+    missing_attr_pct: 0,
+    attr_mismatch_pct: 0,
+    ...over,
+  };
+}
+
+// makeSpanQuality builds a fully populated SpanQualityResponse. Tests
+// override per-provider state via the `providers` partial.
+function makeSpanQuality(
+  over: Partial<SpanQualityResponse> = {},
+  providersOver: Partial<
+    Record<keyof SpanQualityResponse["providers"], Partial<ProviderSpanQuality>>
+  > = {},
+): SpanQualityResponse {
+  const base: SpanQualityResponse = {
+    providers: {
+      aws: makeProviderSpanQuality(),
+      gcp: makeProviderSpanQuality(),
+      azure: makeProviderSpanQuality(),
+      oci: makeProviderSpanQuality(),
+    },
+    totals: {
+      resource_count: 0,
+      resources_with_issues: 0,
+      orphan_pct: 0,
+      missing_attr_pct: 0,
+      attr_mismatch_pct: 0,
+    },
+  };
+  for (const k of Object.keys(providersOver) as Array<
+    keyof SpanQualityResponse["providers"]
+  >) {
+    base.providers[k] = {
+      ...base.providers[k],
+      ...(providersOver[k] ?? {}),
+    };
+  }
+  return { ...base, ...over };
+}
+
 describe("DiscoveryDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -160,6 +229,10 @@ describe("DiscoveryDashboard", () => {
     // surfacing an unmocked-call error. Per-test overrides land in
     // the trace-coverage-focused tests below.
     mockedGetTraceCoverage.mockResolvedValue(makeTraceCoverage());
+    // Default span quality to all-zero so the SPAN QUALITY panel
+    // stays hidden in tests that don't opt in (mirrors the trace-
+    // coverage benign default).
+    mockedFetchSpanQuality.mockResolvedValue(makeSpanQuality());
   });
 
   it("TestDiscoveryDashboard_RendersFourProviderCards", async () => {
@@ -714,5 +787,122 @@ describe("DiscoveryDashboard", () => {
     expect(
       screen.queryByTestId("trace-coverage-pending-indicator"),
     ).not.toBeInTheDocument();
+  });
+
+  // --- SPAN QUALITY panel (v0.89.87 #718 Stream 116) -----------------
+  //
+  // Span quality slice 1 chunk 3 surfaces a 3-column health grid below
+  // the TRACE COVERAGE panel. The panel renders when ANY of the three
+  // totals percentages is non-zero (test 11) and hides entirely when
+  // all three are zero (test 12, design doc §10 acceptance contract).
+  // Each column is a Link that deeplinks to /discovery/aws#recommendations
+  // with the matching kind in the hash — the slice-2-chunk-3 trace
+  // emission filter chip pattern carries over.
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_RendersWhenNonZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality(
+        {
+          totals: {
+            resource_count: 142,
+            resources_with_issues: 38,
+            orphan_pct: 4.1,
+            missing_attr_pct: 6.3,
+            attr_mismatch_pct: 2.0,
+          },
+        },
+        {
+          aws: {
+            resource_count: 47,
+            resources_with_issues: 12,
+            orphan_pct: 3.2,
+            missing_attr_pct: 8.1,
+            attr_mismatch_pct: 1.7,
+          },
+        },
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("span-quality-pct-orphan")).toHaveTextContent(
+      "4.1%",
+    );
+    expect(
+      screen.getByTestId("span-quality-pct-missing-attrs"),
+    ).toHaveTextContent("6.3%");
+    expect(
+      screen.getByTestId("span-quality-pct-mismatch"),
+    ).toHaveTextContent("2.0%");
+
+    // The three columns are present and deep-link to the matching
+    // recommendation kind via a hash fragment.
+    const orphanCol = screen.getByTestId("span-quality-column-orphan");
+    expect(orphanCol).toHaveAttribute(
+      "data-kind",
+      "span-quality-orphan-trace",
+    );
+    expect(orphanCol).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-orphan-trace",
+    );
+  });
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_HiddenWhenAllZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Default makeSpanQuality() carries all-zero totals — the panel
+    // must stay out of the DOM entirely (§10 acceptance test 12).
+    mockedFetchSpanQuality.mockResolvedValue(makeSpanQuality());
+    renderPage();
+
+    // Wait for the dashboard body to land so we're not asserting
+    // against a transient pre-fetch state.
+    await waitFor(() => {
+      expect(screen.getByTestId("provider-grid")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("span-quality-panel"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("span-quality-pct-orphan"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_ColumnClickDeepLinksToFilteredRecommendations", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality({
+        totals: {
+          resource_count: 50,
+          resources_with_issues: 20,
+          orphan_pct: 7.0,
+          missing_attr_pct: 12.0,
+          attr_mismatch_pct: 3.0,
+        },
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
+    });
+
+    // Each column is a Link whose href carries the kind hash. The
+    // chunk-4 filter chip reads the hash on mount.
+    const missing = screen.getByTestId("span-quality-column-missing-attrs");
+    expect(missing.tagName).toBe("A");
+    expect(missing).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-missing-resource-attrs",
+    );
+    expect(
+      screen.getByTestId("span-quality-column-mismatch"),
+    ).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-attribute-mismatch",
+    );
   });
 });
