@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -137,6 +138,22 @@ type Server struct {
 	// rest of the server uses; the cmd/all-in-one wiring also starts
 	// the background GC sweep via handlers.StartWebhookDedupeGC.
 	iacGitHubWebhookStore handlers.WebhookDedupeStore
+	// v0.89.43 (#663 Stream 61, slice 1 chunk 2 of the GitHub Checks
+	// API back-signal arc). Optional wires consumed by the chunk-2
+	// follow-up on the IaC PR-open handler:
+	//   - iacChecksClient: the *iacgithub.PATClient that posts the
+	//     check-run create. Per-request PAT is supplied at call time
+	//     so a single client serves every operator. Nil leaves the
+	//     follow-up dormant (slice-1 fail-open posture for
+	//     deployments upgrading PAT scope).
+	//   - squadronHost: base URL the "View in Squadron" deep link in
+	//     the check-run summary targets. Empty value suppresses the
+	//     link line.
+	//   - checkRunName: operator override for the slice-1 default
+	//     "Squadron recommendation" name (design doc §11 Q2).
+	iacChecksClient handlers.ChecksAPI
+	squadronHost    string
+	checkRunName    string
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -485,6 +502,32 @@ func (s *Server) SetIaCGitHubWebhookStore(store handlers.WebhookDedupeStore) {
 	s.iacGitHubWebhookStore = store
 }
 
+// SetIaCChecksClient wires the v0.89.43 (#663 Stream 61, slice 1
+// chunk 2) GitHub Checks API client used by the chunk-2 PR-open
+// follow-up. Nil leaves the follow-up dormant — the existing
+// recommendation.pr_opened path completes normally with no
+// check-run side-effects. Production wiring constructs a single
+// *iacgithub.PATClient and passes it here; the PAT is supplied
+// per-request at call time inside the helper.
+func (s *Server) SetIaCChecksClient(c handlers.ChecksAPI) {
+	s.iacChecksClient = c
+}
+
+// SetSquadronHost configures the base URL the check-run summary's
+// "View in Squadron" link targets. Empty value suppresses the link
+// line. Typically wired from os.Getenv("SQUADRON_PUBLIC_HOST").
+func (s *Server) SetSquadronHost(host string) {
+	s.squadronHost = host
+}
+
+// SetCheckRunName overrides the slice-1 default check-run name
+// ("Squadron recommendation"). Operators wanting a different
+// namespace can set this from os.Getenv("SQUADRON_CHECK_RUN_NAME").
+// Empty value keeps the default.
+func (s *Server) SetCheckRunName(name string) {
+	s.checkRunName = name
+}
+
 // iacGitHubTrampoline late-binds an IaC-GitHub handler call. Mirrors
 // discoveryTrampoline: 503s when the substrate is unwired so the
 // test_server.go path stays unaffected.
@@ -508,6 +551,27 @@ func (s *Server) iacGitHubTrampoline(fn func(*handlers.IaCGitHubHandlers, *gin.C
 		}
 		if s.discoveryCredKey != nil {
 			h.WithCredstoreKey(s.discoveryCredKey)
+		}
+		// v0.89.43 (#663 Stream 61, slice 1 chunk 2 of the GitHub
+		// Checks API back-signal arc). Wire the chunk-2 follow-up
+		// surfaces. All four are optional — when any one is unwired
+		// the helper short-circuits silently per design doc §5
+		// fail-open posture. Production wires checksClient against a
+		// shared *iacgithub.PATClient (token is supplied per-call so a
+		// single client serves every operator); appStore satisfies the
+		// slim CheckRunStore interface directly via its
+		// SetCheckRunForRecommendation method.
+		if s.iacChecksClient != nil {
+			h.WithChecksClient(s.iacChecksClient)
+		}
+		if s.appStore != nil {
+			h.WithCheckRunStore(s.appStore)
+		}
+		if strings.TrimSpace(s.squadronHost) != "" {
+			h.WithSquadronHost(s.squadronHost)
+		}
+		if strings.TrimSpace(s.checkRunName) != "" {
+			h.WithCheckRunName(s.checkRunName)
 		}
 		fn(h, c)
 	}

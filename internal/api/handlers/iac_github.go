@@ -56,6 +56,18 @@ type IaCGitHubHandlers struct {
 	clientFor    IaCGitHubClientFactory
 	auditService services.AuditService
 	logger       *zap.Logger
+
+	// v0.89.43 (#663 Stream 61, slice 1 chunk 2 of the GitHub Checks
+	// API back-signal arc). All four fields are optional: when any
+	// one is nil/empty the chunk-2 check-run follow-up on the PR open
+	// path is a no-op (fail-open per design doc §5). This is the
+	// slice-1 posture for deployments that haven't upgraded their PAT
+	// scope or wired the checks integration. ChecksAPI + CheckRunStore
+	// are the slim interfaces defined in iac_github_checkrun.go.
+	checksClient    ChecksAPI
+	checkRunStore   CheckRunStore
+	squadronHost    string
+	checkRunNameVal string
 }
 
 // NewIaCGitHubHandlers constructs an IaCGitHubHandlers. store may be
@@ -100,6 +112,49 @@ func (h *IaCGitHubHandlers) WithAuditService(a services.AuditService) *IaCGitHub
 // PATClient.
 func (h *IaCGitHubHandlers) WithClientFactory(f IaCGitHubClientFactory) *IaCGitHubHandlers {
 	h.clientFor = f
+	return h
+}
+
+// WithChecksClient wires the Checks API client used by the chunk-2
+// PR-open follow-up. Nil keeps the follow-up dormant — the existing
+// recommendation.pr_opened path completes normally with no check-run
+// side-effects. See design doc §5 fail-open posture.
+//
+// v0.89.43 (#663 Stream 61, slice 1 chunk 2).
+func (h *IaCGitHubHandlers) WithChecksClient(c ChecksAPI) *IaCGitHubHandlers {
+	h.checksClient = c
+	return h
+}
+
+// WithCheckRunStore wires the application-store surface the chunk-2
+// follow-up uses to persist the durable check-run state per
+// recommendation. Nil keeps the storage write a no-op — the live
+// check run on GitHub will reconcile on the next event (chunks 3+).
+//
+// v0.89.43 (#663 Stream 61, slice 1 chunk 2).
+func (h *IaCGitHubHandlers) WithCheckRunStore(s CheckRunStore) *IaCGitHubHandlers {
+	h.checkRunStore = s
+	return h
+}
+
+// WithSquadronHost configures the base URL the check-run summary's
+// "View in Squadron" link targets. Empty value suppresses the link
+// line rather than emitting a broken (/) href.
+//
+// v0.89.43 (#663 Stream 61, slice 1 chunk 2).
+func (h *IaCGitHubHandlers) WithSquadronHost(host string) *IaCGitHubHandlers {
+	h.squadronHost = host
+	return h
+}
+
+// WithCheckRunName overrides the slice-1 default check-run name
+// ("Squadron recommendation" per design doc §11 Q2). Operator
+// override via env var SQUADRON_CHECK_RUN_NAME flows here; an empty
+// value keeps the default.
+//
+// v0.89.43 (#663 Stream 61, slice 1 chunk 2).
+func (h *IaCGitHubHandlers) WithCheckRunName(name string) *IaCGitHubHandlers {
+	h.checkRunNameVal = name
 	return h
 }
 
@@ -1007,6 +1062,26 @@ type iacGitHubOpenPRRequest struct {
 	// take a patch input) and on patch_existing recommendations
 	// produced by a pre-v0.89.12 proposer prompt.
 	HCLPatch *hclpatch.Patch `json:"hcl_patch,omitempty"`
+
+	// RecommendationID — v0.89.43 (#663 Stream 61, slice 1 chunk 2)
+	// — the proposer-emitted ID for this recommendation. Stamped
+	// onto the check-run summary's View-in-Squadron deep link and
+	// onto the durable iac_recommendation_verdicts row the chunk-2
+	// follow-up writes via SetCheckRunForRecommendation. Optional:
+	// when empty the link omits the anchor and the storage write is
+	// skipped (the live check run on GitHub still creates).
+	RecommendationID string `json:"recommendation_id,omitempty"`
+
+	// VerdictExamplesUsedByState — v0.89.43 (#663 Stream 61, slice 1
+	// chunk 2) — the per-state bucket map carried forward from the
+	// discovery_proposal.created audit event (chunk 6 of #531 slice
+	// 2, v0.89.37). The discovery proposer's
+	// verdict_examples_used_by_state shape feeds the check-run
+	// summary's "Verdict learning context" section verbatim.
+	// Optional: empty / nil triggers the cold-start path inside
+	// checkrunprompt.ComposeCreateSummary — the entire learning-
+	// context section is omitted.
+	VerdictExamplesUsedByState map[string][]string `json:"verdict_examples_used_by_state,omitempty"`
 }
 
 // iacGitHubOpenPRResponse is the success-path body.
@@ -1608,6 +1683,26 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 			Payload:    payload,
 		})
 	}
+
+	// v0.89.43 (#663 Stream 61, slice 1 chunk 2 of the GitHub Checks
+	// API back-signal arc). Follow up on the recommendation.pr_opened
+	// emit by creating a GitHub check run on the PR's head commit
+	// with the verdict-learning summary. Fail-open per design doc §5:
+	// any error inside the helper emits iac.check_run.failed and
+	// returns — the PR open and its audit event have already
+	// completed, the check run is value-add. The helper short-circuits
+	// silently when h.checksClient is unwired (operator hasn't enabled
+	// the integration yet).
+	h.emitCheckRunForOpenedPR(c.Request.Context(), checkRunOpenedPRArgs{
+		Connection:                 conn,
+		Request:                    &req,
+		PRURL:                      pr.HTMLURL,
+		HeadSHA:                    putRes.CommitSHA,
+		Owner:                      owner,
+		Repo:                       repo,
+		PAT:                        creds.Token,
+		VerdictExamplesUsedByState: req.VerdictExamplesUsedByState,
+	})
 
 	c.JSON(http.StatusOK, iacGitHubOpenPRResponse{
 		PRNumber:              pr.Number,
