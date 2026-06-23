@@ -110,6 +110,49 @@ databases), Squadron falls back to `sku.name`.
 `failed_services=["azuresql"]` (parallel to the slice-1
 `azurevm` for compute).
 
+## Kubernetes tier slice 2 — SHIPPED in v0.89.70 through v0.89.72
+
+As of v0.89.70 (chunk 3 of the Kubernetes tier arc — design at
+[proposals/kubernetes-tier-slice2.md](./proposals/kubernetes-tier-slice2.md)),
+Squadron's Azure scanner ALSO walks AKS managed clusters during
+the same scan call. The Inventory tab gains a Kubernetes sub-tab
+alongside Compute and Databases; the proposer emits a new
+`aks-monitor-enable` recommendation kind for AKS clusters with
+no managed observability addon enabled.
+
+**Detection rule:** cluster is INSTRUMENTED if ANY of the three
+observability profile flags is true:
+- `properties.addonProfiles.omsagent.enabled == true` (legacy
+  Container Insights)
+- `properties.azureMonitorProfile.metrics.enabled == true`
+  (newer Managed Prometheus)
+- `properties.azureMonitorProfile.containerInsights.enabled == true`
+  (newer Container Insights)
+
+The three-way disjunction mirrors AWS EKS's "ADOT OR
+CloudWatch-observability" pattern — operators on the legacy or
+the newer addon get credit.
+
+**Recommendation kind:** `aks-monitor-enable`. Targets the
+`azurerm_kubernetes_cluster.monitor_metrics` block (Managed
+Prometheus) or `oms_agent` block (legacy Container Insights)
+depending on operator preference.
+
+**IAM scope additions for K8s slice 2:** none — the existing
+`Reader` role at subscription scope already covers
+`Microsoft.ContainerService/managedClusters` reads. No SP
+credential changes needed.
+
+**Status normalization:** Squadron projects AKS status as
+`RUNNING` only when BOTH `provisioningState == "Succeeded"` AND
+`powerState.code == "Running"`. Other states (mid-update,
+mid-create, stopped, failed) surface the raw `provisioningState`
+value verbatim so the Inventory tab can dim them and the
+proposer's non-running-skip branch fires uniformly.
+
+**Service identifier in audit:** partial-failure events use
+`failed_services=["aks"]`.
+
 ## What this is NOT (slice 1)
 
 Slice 1 ships intentionally narrow. The following are slice 2+
@@ -117,6 +160,8 @@ candidates:
 
 - **~~No Azure SQL Database scanning.~~** ✓ SHIPPED in v0.89.65 —
   see "Database tier slice 2" section above.
+- **~~No Azure Kubernetes Service (AKS) scanning.~~** ✓ SHIPPED
+  in v0.89.70 — see "Kubernetes tier slice 2" section above.
 - **No Azure Kubernetes Service (AKS) scanning.** Slice 3.
 - **No Azure Blob Storage / Load Balancer / Application Gateway
   scanning.** Slices 4-5.
