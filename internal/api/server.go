@@ -27,6 +27,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
+	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
@@ -144,6 +145,19 @@ type Server struct {
 	// unsealing.
 	discoveryAzureStore          azureconnstore.Store
 	discoveryAzureScannerFactory handlers.AzureScannerFactory
+	// v0.89.57 (#683 Stream 81, OCI discovery slice 1 chunk 3) — OCI
+	// discovery substrate. Optional at construction; the
+	// /api/v1/discovery/oci/* routes 503 when the store is unwired
+	// (test_server.go path stays unaffected). The OCI credstore key
+	// reuses s.discoveryCredKey — chunk 1 of #681 sealed the RSA
+	// private key under the same SQUADRON_SECRETS_KEY the AWS / GCP /
+	// Azure / IaC paths use, with a domain-tagged AAD
+	// ("squadron.oci_signing_key.v1") that prevents cross-shape
+	// unsealing. OCI is the fourth sealed credential type — defense-
+	// in-depth posture extends across PAT, webhook secret, GCP SA,
+	// Azure SP client_secret, AND OCI API Signing Key private key.
+	discoveryOCIStore          ociconnstore.Store
+	discoveryOCIScannerFactory handlers.OCIScannerFactory
 	// v0.89.23 Stream 40 (#639) — GitHub webhook listener secret.
 	// Cached at startup from os.Getenv(SQUADRON_GITHUB_WEBHOOK_SECRET);
 	// an empty value leaves the /api/v1/webhooks/github route mounted
@@ -582,6 +596,40 @@ func (s *Server) SetAzureDiscoveryScannerFactory(f handlers.AzureScannerFactory)
 	s.discoveryAzureScannerFactory = f
 }
 
+// SetOCIDiscoveryStore wires the v0.89.57 (#683 chunk 3) OCI
+// connection substrate onto the API server. Optional in the same
+// posture as SetAzureDiscoveryStore: a nil store leaves the
+// /api/v1/discovery/oci/* routes 503ing with a clear "OCI discovery
+// not configured" message; the rest of the discovery surface stays
+// reachable.
+//
+// The OCI path reuses the credstore.Key wired by SetDiscoveryCredKey
+// — chunk 1 (#681 v0.89.56) sealed the RSA private key under the
+// same SQUADRON_SECRETS_KEY the AWS / GCP / Azure / IaC paths use,
+// with a domain-tagged AAD ("squadron.oci_signing_key.v1")
+// preventing cross-shape unsealing. Calling SetOCIDiscoveryStore
+// without also calling SetDiscoveryCredKey leaves Create / Validate
+// / Scan 500ing with a "key not wired" humanized error.
+func (s *Server) SetOCIDiscoveryStore(store ociconnstore.Store) {
+	s.discoveryOCIStore = store
+}
+
+// SetOCIDiscoveryScannerFactory wires the v0.89.57 (#683 chunk 3)
+// OCI scanner factory. Production wires a factory that instantiates
+// the chunk-2 *oci.Scanner with the unsealed RSA private key; tests
+// substitute a fake that returns a pre-canned scanner.Scanner. A
+// nil factory leaves Validate / Scan 500ing with a humanized error;
+// the CRUD routes (Create / List / Get / Update / Delete) stay
+// unaffected.
+//
+// The setter pattern keeps NewServer's signature stable and mirrors
+// the SetAzureDiscoveryScannerFactory posture. Chunk 2 and chunk 3
+// ship in parallel worktrees; main.go composes the concrete factory
+// once both land in main.
+func (s *Server) SetOCIDiscoveryScannerFactory(f handlers.OCIScannerFactory) {
+	s.discoveryOCIScannerFactory = f
+}
+
 // SetIaCGitHubWebhookSecret wires the HMAC secret the GitHub PR-
 // merged webhook receiver validates inbound signatures against.
 // v0.89.23 #639 Stream 40. Slice 1 ships one shared deployment-wide
@@ -935,6 +983,42 @@ func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandle
 		}
 		if s.discoveryAzureScannerFactory != nil {
 			h.WithAzureScannerFactory(s.discoveryAzureScannerFactory)
+		}
+		fn(h, c)
+	}
+}
+
+// discoveryOCITrampoline late-binds an OCI discovery handler call
+// so the route table can be registered before SetOCIDiscoveryStore
+// runs. Mirrors discoveryAzureTrampoline one-for-one: 503s with a
+// clear message when the OCI store is still nil so the
+// test_server.go path (which never wires OCI discovery) stays
+// unaffected.
+//
+// The handler is built per-request because the auditService is
+// supplied via SetAuditService and the credstore.Key via
+// SetDiscoveryCredKey — both are set on Server post-construction
+// and the trampoline picks up whatever's there at request time.
+//
+// v0.89.57 (#683 Stream 81, OCI discovery slice 1 chunk 3).
+func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.discoveryOCIStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "OCI discovery is not configured",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewDiscoveryOCIHandlers(s.discoveryOCIStore, s.logger)
+		if s.auditService != nil {
+			h.WithOCIAuditService(s.auditService)
+		}
+		if s.discoveryCredKey != nil {
+			h.WithOCICredstoreKey(s.discoveryCredKey)
+		}
+		if s.discoveryOCIScannerFactory != nil {
+			h.WithOCIScannerFactory(s.discoveryOCIScannerFactory)
 		}
 		fn(h, c)
 	}
@@ -1934,6 +2018,47 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/azure/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleRecommendationsForAzureScan(c) }))
+
+		// v0.89.57 (#683 Stream 81, OCI discovery slice 1 chunk 3) —
+		// OCI-side mirror of the /discovery/aws/*, /discovery/gcp/*,
+		// and /discovery/azure/* surfaces. Per design doc §7 the route
+		// shapes mirror the AWS / GCP / Azure counterparts so the
+		// wizard, the API consumers, and the SIEM forwarders see one
+		// consistent pattern across all four providers. The handler is
+		// built per-request through discoveryOCITrampoline; the
+		// trampoline 503s when SetOCIDiscoveryStore is unwired so
+		// test_server.go stays unaffected.
+		//
+		// Auth posture mirrors the AWS / GCP / Azure surfaces:
+		// agents:read on the list / get / validate / scan /
+		// recommendations routes (those create audit events but no
+		// Squadron-persisted state in slice 1); agents:write on
+		// Create / Update / Delete (all three mutate the
+		// oci_connections substrate).
+		v1.POST("/discovery/oci/connections",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleCreateOCIConnection(c) }))
+		v1.GET("/discovery/oci/connections",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleListOCIConnections(c) }))
+		v1.GET("/discovery/oci/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleGetOCIConnection(c) }))
+		v1.PATCH("/discovery/oci/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleUpdateOCIConnection(c) }))
+		v1.DELETE("/discovery/oci/connections/:id",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleDeleteOCIConnection(c) }))
+		v1.POST("/discovery/oci/connections/:id/validate",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleValidateOCIConnection(c) }))
+		v1.POST("/discovery/oci/connections/:id/scan",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleScanOCIConnection(c) }))
+		v1.POST("/discovery/oci/connections/:id/recommendations",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleRecommendationsForOCIScan(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
