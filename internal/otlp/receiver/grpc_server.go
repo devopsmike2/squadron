@@ -72,6 +72,16 @@ func (s *GRPCServer) SetTraceIndex(idx TraceObserver) {
 	}
 }
 
+// SetQualityIndex wires the span-quality slice-1 chunk-1 observer
+// onto the underlying TraceService. The GRPCServer holds the
+// reference so cmd/all-in-one can set the index from a single call
+// site regardless of which transport (HTTP / gRPC) it's wiring.
+func (s *GRPCServer) SetQualityIndex(qual QualityObserver) {
+	if s.traceService != nil {
+		s.traceService.SetQualityIndex(qual)
+	}
+}
+
 // Start starts the gRPC server
 func (s *GRPCServer) Start() error {
 	// Listen on the gRPC port

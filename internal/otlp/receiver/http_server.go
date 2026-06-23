@@ -45,6 +45,11 @@ type HTTPServer struct {
 	// is in-memory only, the background flusher handles the SQLite
 	// transaction.
 	traceIndex TraceObserver
+	// qualityIndex is the span-quality slice-1 chunk-1 wire-up,
+	// running side-by-side with traceIndex on the hot path. Same
+	// nil-guard pattern — SQUADRON_SPANQUALITY_DISABLED leaves this
+	// field zero and the handler skips the quality pass cleanly.
+	qualityIndex QualityObserver
 }
 
 // NewHTTPServer creates a new HTTP server instance
@@ -90,6 +95,15 @@ func NewHTTPServer(port int, metricsInstance *metrics.OTLPMetrics, workerPool *w
 // callers and matches the SetX accessor pattern the api server uses.
 func (s *HTTPServer) SetTraceIndex(idx TraceObserver) {
 	s.traceIndex = idx
+}
+
+// SetQualityIndex wires the span-quality slice-1 chunk-1 observer.
+// Mirrors SetTraceIndex — nil disables the dispatch path cleanly so
+// SQUADRON_SPANQUALITY_DISABLED=true at deploy keeps the receiver
+// path untouched. The setter style preserves binary compat the same
+// way SetTraceIndex does.
+func (s *HTTPServer) SetQualityIndex(qual QualityObserver) {
+	s.qualityIndex = qual
 }
 
 // setupRoutes configures the HTTP server with routes
@@ -169,6 +183,14 @@ func (s *HTTPServer) handleOTLPTraces(c *gin.Context) {
 	// receiver path is unchanged in that mode.
 	if s.traceIndex != nil {
 		observeResourceSpans(c.Request.Context(), s.traceIndex, req.ResourceSpans, time.Now())
+	}
+	// Span-quality slice-1 chunk-1 (#716 Stream 114) — runs after the
+	// traceindex pass so a panic in quality detection cannot starve
+	// the index. nil qualityIndex is the disabled-mode sentinel; the
+	// observeQualitySpans guard handles it without extra branching
+	// here.
+	if s.qualityIndex != nil {
+		observeQualitySpans(s.qualityIndex, req.ResourceSpans)
 	}
 
 	// Submit raw bytes to worker pool for async processing

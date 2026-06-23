@@ -366,12 +366,33 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Info("Trace index enabled", zap.Int("max_rows", 100_000))
 	}
 
+	// v0.89.85 (#716 Stream 114) — Span quality slice 1 chunk 1.
+	// Sibling of traceIndex: the OTLP receivers fan each span out to
+	// the QualityObserver in addition to the per-ResourceSpan Index
+	// pass. The detection runs on the same key derivation
+	// (ComputeResourceKey) so the Discovery dashboard's per-resource
+	// rollup joins cleanly across the two observers.
+	//
+	// Disabled-mode escape hatch: SQUADRON_SPANQUALITY_DISABLED=true
+	// skips construction. The receivers' nil-guards handle the
+	// disabled case without extra branching on the hot path.
+	var qualityIndex *traceindex.Quality
+	if strings.EqualFold(os.Getenv("SQUADRON_SPANQUALITY_DISABLED"), "true") {
+		logger.Info("Quality index disabled via SQUADRON_SPANQUALITY_DISABLED")
+	} else {
+		qualityIndex = traceindex.NewQuality()
+		logger.Info("Quality index enabled", zap.Duration("window", time.Hour))
+	}
+
 	grpcServer, err := receiver.NewGRPCServer(grpcPort, otlpMetrics, workerPool, logger)
 	if err != nil {
 		logger.Fatal("Failed to create gRPC server", zap.Error(err))
 	}
 	if traceIndex != nil {
 		grpcServer.SetTraceIndex(traceIndex)
+	}
+	if qualityIndex != nil {
+		grpcServer.SetQualityIndex(qualityIndex)
 	}
 	if err := grpcServer.Start(); err != nil {
 		logger.Fatal("Failed to start gRPC server", zap.Error(err))
@@ -388,6 +409,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}
 	if traceIndex != nil {
 		httpServer.SetTraceIndex(traceIndex)
+	}
+	if qualityIndex != nil {
+		httpServer.SetQualityIndex(qualityIndex)
 	}
 	if err := httpServer.Start(); err != nil {
 		logger.Fatal("Failed to start HTTP server", zap.Error(err))
