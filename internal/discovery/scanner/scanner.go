@@ -573,6 +573,46 @@ type ClusterSnapshot struct {
 	// Tags follows the same flattened shape as the other category
 	// snapshots.
 	Tags map[string]string `json:"tags,omitempty"`
+
+	// Slice 2 (kubernetes-tier-slice2.md, v0.89.68) — per-cloud
+	// managed observability primitives. Each is provider-specific;
+	// the proposer reads Provider plus the matching axis to decide
+	// whether to emit a recommendation and which kind. AWS EKS slice
+	// 1 logic uses ControlPlaneLogging + Addons (above) and these
+	// fields stay zero — backward compat preserved.
+
+	// ManagedPrometheusEnabled signals GCP GKE Google Cloud Managed
+	// Service for Prometheus
+	// (monitoringConfig.managedPrometheusConfig.enabled). When false
+	// on a GKE cluster, the proposer emits a gke-mp-enable
+	// recommendation.
+	ManagedPrometheusEnabled bool `json:"managed_prometheus_enabled,omitempty"`
+
+	// AzureMonitorEnabled signals Azure AKS managed observability
+	// via any one of three addon profile flags
+	// (addonProfiles.omsagent.enabled OR
+	// azureMonitorProfile.metrics.enabled OR
+	// azureMonitorProfile.containerInsights.enabled). When all three
+	// are false on an AKS cluster, the proposer emits an
+	// aks-monitor-enable recommendation. The three-way disjunction
+	// mirrors EKS's "ADOT OR CloudWatch observability" pattern —
+	// operators on either the legacy or newer addon get credit.
+	AzureMonitorEnabled bool `json:"azure_monitor_enabled,omitempty"`
+
+	// OperationsInsightsEnabled signals OCI OKE Operations Insights
+	// enrollment via the operations-insights-enabled=true freeform
+	// tag convention (slice 2 ships tag-based detection; slice 3
+	// moves to a direct Operations Insights API call). When false
+	// on an OKE cluster, the proposer emits an
+	// oke-ops-insights-enable recommendation.
+	OperationsInsightsEnabled bool `json:"operations_insights_enabled,omitempty"`
+
+	// Provider discriminates which detection axis the proposer
+	// reads. Empty defaults to "aws" for backward compatibility
+	// with v0.89.0 audit rows. Slice 2 callers MUST set Provider
+	// for non-AWS cluster snapshots so the proposer routes to the
+	// right recommendation kind.
+	Provider string `json:"provider,omitempty"`
 }
 
 // ClusterAddon is a single EKS managed add-on attached to a
