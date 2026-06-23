@@ -243,6 +243,34 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		walkedRegions[s.Region] = struct{}{}
 	}
 
+	// Serverless tier slice 1 chunk 2 (v0.89.91, #722 Stream 120) —
+	// Cloud Run + Cloud Functions walks. ScanServerless dispatches
+	// to both surfaces in sequence so each can fail independently
+	// without contaminating the other; either one's failure is
+	// recorded as a partial-failure entry against the matching
+	// service identifier (cloudrun / cloudfunc). See
+	// docs/proposals/serverless-tier-slice1.md §3.2 + §3.3 for the
+	// per-surface detection rules and §11 acceptance tests 4-6 for
+	// the chunk-2 cases.
+	if err := s.ScanServerless(ctx, oauthClient, &result); err != nil {
+		// ScanServerless only returns a hard error when BOTH the
+		// Cloud Run AND Cloud Functions walks fail at the
+		// build-client layer — in that case both surfaces are
+		// already recorded as partial failures and we want the
+		// scan to continue rather than fail the whole result. The
+		// returned error is informational; we drop it because the
+		// partial-failure entries carry the operator-facing
+		// detail.
+		_ = err
+	}
+	if s.Region != "" {
+		// Successful serverless walk against a region-filtered scan
+		// records the filtered region the same way GKE / Cloud SQL
+		// do — the walked-regions set absorbs it idempotently so
+		// the audit payload reflects what was actually walked.
+		walkedRegions[s.Region] = struct{}{}
+	}
+
 	// Denormalize the walked-region list into Result.Regions. Order is
 	// not stable across runs (map iteration); the field is documented
 	// as "regions actually walked" — a set, not a sequence.
@@ -285,8 +313,79 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 			result.UninstrumentedCount++
 		}
 	}
+	// Serverless tier slice 1 chunk 2 (v0.89.91, #722 Stream 120) —
+	// a serverless row counts as instrumented when EITHER the
+	// HasTraceAxis (cloud-native trace primitive on) OR HasOTelDistro
+	// (OTel distribution attached) axis holds — the OR rule
+	// documented on scanner.ServerlessInstanceSnapshot.IsInstrumented.
+	// AWS Lambda rows never appear in a GCP scan's Result.Serverless
+	// (this scanner only emits Provider="gcp" rows), so the AWS
+	// branch is inert here. The shared predicate keeps the scanner-
+	// side tally, the proposer-side reasoning, and the per-cloud
+	// Inventory tab honest about the same denominator.
+	for _, sv := range result.Serverless {
+		if sv.IsInstrumented() {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
 
 	return result, nil
+}
+
+// ScanServerless dispatches to the Cloud Run + Cloud Functions walks
+// in sequence, accumulating their snapshots into result.Serverless
+// and routing per-surface failures into result.PartialReason /
+// result.FailedServices. Both surfaces are independent — a Cloud Run
+// failure does NOT short-circuit the Cloud Functions walk; partial
+// results from either side are surfaced.
+//
+// Returns a non-nil error only when BOTH surfaces' build-client paths
+// fail; in that case the caller already has both surfaces recorded
+// as partial failures and the error is informational. The walker
+// layer never returns nil-failure when partial entries were added —
+// the caller in Scan() inspects result.Partial / result.FailedServices
+// for the operator-facing detail.
+//
+// Per docs/proposals/serverless-tier-slice1.md §11 acceptance tests
+// 4-6: the dispatcher is tested by seeding the fake with both
+// Cloud Run services and Cloud Functions and asserting that both
+// land in result.Serverless after a single Scan call; and by failing
+// one surface (e.g. cloudrun 403) and asserting the other still
+// produces its snapshots (the partial-failure recording is honest
+// about which side failed).
+func (s *Scanner) ScanServerless(ctx context.Context, oauthClient *http.Client, result *scanner.Result) error {
+	// Cloud Run walk. Build-client failure is non-fatal at the
+	// scan level — recorded as a partial-failure entry against the
+	// cloudrun service identifier so the operator sees the
+	// build-time hint (typically a malformed SA JSON or revoked
+	// credentials issue, both of which the Cloud Functions walk
+	// will also hit).
+	var runBuildErr, funcBuildErr error
+	runClient, runErr := s.buildRunClient(ctx, oauthClient)
+	if runErr != nil {
+		recordPartialFailure(result, ServiceIDCloudRun, fmt.Sprintf("%s: build client: %s", ServiceIDCloudRun, truncate(runErr.Error(), 200)))
+		runBuildErr = runErr
+	} else if err := s.walkCloudRun(ctx, runClient, result); err != nil {
+		recordPartialFailure(result, ServiceIDCloudRun, classifyCloudRunListError(err))
+	}
+
+	// Cloud Functions walk. Same build-client + list-error handling
+	// as Cloud Run; the two walks are independent so a failure on
+	// one side leaves the other's snapshots intact.
+	funcClient, funcErr := s.buildCloudFunctionsClient(ctx, oauthClient)
+	if funcErr != nil {
+		recordPartialFailure(result, ServiceIDCloudFunctions, fmt.Sprintf("%s: build client: %s", ServiceIDCloudFunctions, truncate(funcErr.Error(), 200)))
+		funcBuildErr = funcErr
+	} else if err := s.walkCloudFunctions(ctx, funcClient, result); err != nil {
+		recordPartialFailure(result, ServiceIDCloudFunctions, classifyCloudFunctionsListError(err))
+	}
+
+	if runBuildErr != nil && funcBuildErr != nil {
+		return fmt.Errorf("gcp: serverless build-client failed for both surfaces: cloudrun=%v cloudfunc=%v", runBuildErr, funcBuildErr)
+	}
+	return nil
 }
 
 // walkZoneInstances lists instances in a single zone and appends each
@@ -462,6 +561,16 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 		// expose a more-targeted container.readonly constant; see
 		// consts.go ContainerReadonlyScope godoc for the rationale.
 		ContainerReadonlyScope,
+		// Serverless tier slice 1 chunk 2 (v0.89.91, #722 Stream 120)
+		// — Cloud Run + Cloud Functions read scopes. The run/v1
+		// client library exposes a targeted run.readonly constant;
+		// the cloudfunctions/v1 library only exposes the platform-
+		// wide cloud-platform scope, so we pin the read-only
+		// platform variant for Cloud Functions. The runbook
+		// documents roles/run.viewer and roles/cloudfunctions.viewer
+		// as the project-level IAM grants.
+		RunReadonlyScope,
+		CloudFunctionsPlatformScope,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gcp: parse SA JSON: %w", err)
