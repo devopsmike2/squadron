@@ -28,6 +28,13 @@ const (
 	// lands in slice 5.
 	ProviderAzure Provider = "azure"
 
+	// ProviderOCI identifies an Oracle Cloud Infrastructure tenancy
+	// connected via API Signing Key (RSA keypair). The scanner lives
+	// in internal/discovery/oci; the connection rows live in the
+	// ociconnstore substrate (see docs/proposals/oci-discovery-
+	// slice1.md). v0.89.57 (#682 slice 1 chunk 2).
+	ProviderOCI Provider = "oci"
+
 	// ProviderOnPrem identifies an on-prem site whose inventory
 	// arrives via the on-prem connector daemon. Implementation lands
 	// in slice 6.
