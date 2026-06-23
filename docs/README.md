@@ -95,6 +95,23 @@ jump straight to that page.
   secret, configuring the GitHub repo webhook, verifying the
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
+- [Span quality — operator guide](./span-quality-operator-guide.md) —
+  v0.89.84 through v0.89.88 operator runbook for the span
+  quality slice 1 arc (design at
+  [proposals/span-quality-slice1.md](./proposals/span-quality-slice1.md)).
+  Squadron's traceindex now inspects every incoming OTLP span
+  on the hot path for three pathology classes: orphan spans
+  (broken context propagation), spans missing required
+  resource attributes, and spans with placeholder values in
+  required attributes. New SPAN QUALITY panel on Discovery
+  dashboard sits next to TRACE COVERAGE. Each Inventory row
+  gets a Quality dot indicator. Three new recommendation
+  kinds: `span-quality-orphan-trace`,
+  `span-quality-missing-resource-attrs`,
+  `span-quality-attribute-mismatch`. **Slice 1 SHIPPED in
+  v0.89.88.** Universal claim grows a fourth verb: "scans,
+  verifies telemetry is flowing, validates the spans are
+  healthy, AND drafts the IaC PRs that close the gaps."
 - [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
   v0.89.73 through v0.89.83 operator runbook for the trace
   integration arc. Slice 1 (design at

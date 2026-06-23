@@ -1855,6 +1855,15 @@ export function RecommendationsTab({
   // existing ec2-otel-layer / lambda-otel-layer / rds-pi-em / etc.)
   // are hidden while the filter is active.
   const [traceEmissionFilter, setTraceEmissionFilter] = useState(false);
+  // v0.89.88 (#719 Stream 117, Span quality slice 1 chunk 4) —
+  // sibling filter chip for the span-quality-* recommendation
+  // kinds shipped in v0.89.86. Same toggle semantics as the
+  // trace-emission filter — narrows to recommendations whose
+  // resource_kind starts with "span-quality-" (orphan-trace /
+  // missing-resource-attrs / attribute-mismatch). The dashboard
+  // SPAN QUALITY panel deeplinks here so operators land on the
+  // filtered drafts.
+  const [spanQualityFilter, setSpanQualityFilter] = useState(false);
   // v0.89.40 hydrate from the GET endpoint on mount and whenever the
   // scope tuple changes. The proposer's `connection_id` is today
   // equal to accountID (matching the substrate's connection_id
@@ -2103,14 +2112,41 @@ export function RecommendationsTab({
         >
           Show only trace-emission
         </button>
+        {/*
+          v0.89.88 (#719 Stream 117) — span quality slice 1 chunk 4
+          sibling chip. Toggles independently of the trace-emission
+          chip; if both are active, the list shows the union (rows
+          whose resource_kind starts with EITHER prefix).
+        */}
+        <button
+          type="button"
+          onClick={() => setSpanQualityFilter((v) => !v)}
+          data-testid="span-quality-filter-chip"
+          data-active={spanQualityFilter ? "true" : "false"}
+          aria-pressed={spanQualityFilter}
+          className={
+            spanQualityFilter
+              ? "rounded-full bg-amber-500/20 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+              : "rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground"
+          }
+        >
+          Show only span-quality
+        </button>
       </div>
       <ul className="space-y-3">
-        {(traceEmissionFilter
-          ? recs.recommendations.filter((r) =>
-              (r.resource_kind ?? "").startsWith("trace-emission-"),
-            )
-          : recs.recommendations
-        ).map((rec, i) => (
+        {(() => {
+          const anyFilter = traceEmissionFilter || spanQualityFilter;
+          return anyFilter
+            ? recs.recommendations.filter((r) => {
+                const kind = r.resource_kind ?? "";
+                if (traceEmissionFilter && kind.startsWith("trace-emission-"))
+                  return true;
+                if (spanQualityFilter && kind.startsWith("span-quality-"))
+                  return true;
+                return false;
+              })
+            : recs.recommendations;
+        })().map((rec, i) => (
           <li key={rec.id}>
             <DiscoveryRecommendationCard
               rec={rec}
