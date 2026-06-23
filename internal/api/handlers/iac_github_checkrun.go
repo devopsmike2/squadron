@@ -54,19 +54,38 @@ const defaultCheckRunName = "Squadron recommendation"
 // a recording fake in tests. Stated as an interface so the handler
 // never carries a concrete PATClient field — the PAT is supplied at
 // call time per design doc §3 option A.
+//
+// v0.89.44 (#665 Stream 63, slice 1 chunk 4): the interface grew the
+// UpdateCheckRun method so the discovery-side exclusion handler can
+// PATCH an in-flight check run to conclusion=neutral when an operator
+// excludes a kind. The chunk-2 bridge does not call UpdateCheckRun;
+// the fake in chunk-2 tests stays compatible because nil/zero is the
+// safe default for unused methods on the interface.
 type ChecksAPI interface {
 	CreateCheckRun(ctx context.Context, pat string, req iacgithub.CheckRunCreate) (iacgithub.CheckRunRef, error)
+	UpdateCheckRun(ctx context.Context, pat string, req iacgithub.CheckRunUpdate) error
 }
 
 // CheckRunStore is the slim subset of applicationstore.ApplicationStore
 // the chunk-2 follow-up writes through. The real store satisfies
 // this directly; tests substitute a recording fake.
+//
+// v0.89.44 (#665 Stream 63, slice 1 chunk 4): the interface grew the
+// GetCheckRunForRecommendation read surface so the discovery-side
+// exclusion handler can look up the in-flight check run for a
+// recommendation_id before PATCHing it to neutral. The chunk-2
+// bridge does not call Get; the fake in chunk-2 tests stays
+// compatible by returning exists=false on the zero value.
 type CheckRunStore interface {
 	SetCheckRunForRecommendation(ctx context.Context,
 		rec types.ExcludedRecommendation,
 		ref types.CheckRunRef,
 		status, conclusion string,
 	) error
+
+	GetCheckRunForRecommendation(ctx context.Context,
+		recommendationID string,
+	) (ref types.CheckRunRef, status string, conclusion string, exists bool, err error)
 }
 
 // checkRunOpenedPRArgs is the per-call payload the OpenPR handler

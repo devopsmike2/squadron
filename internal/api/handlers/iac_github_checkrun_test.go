@@ -21,12 +21,22 @@ import (
 // fakeChecksClient is the test-side ChecksAPI implementation. Per-test
 // canned response + an error + a single recorded request so tests can
 // assert the wire shape that landed on the wrapper.
+//
+// v0.89.44 (#665 Stream 63, slice 1 chunk 4): grew updateCalls /
+// updatePATs / updateRespErr so the chunk-4 discovery exclusion
+// handler tests can drive the UpdateCheckRun side of the interface
+// without a parallel fake.
 type fakeChecksClient struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// CreateCheckRun side
 	calls   []iacgithub.CheckRunCreate
 	pats    []string
 	respRef iacgithub.CheckRunRef
 	respErr error
+	// UpdateCheckRun side
+	updateCalls   []iacgithub.CheckRunUpdate
+	updatePATs    []string
+	updateRespErr error
 }
 
 func (f *fakeChecksClient) CreateCheckRun(_ context.Context, pat string, req iacgithub.CheckRunCreate) (iacgithub.CheckRunRef, error) {
@@ -48,12 +58,34 @@ func (f *fakeChecksClient) CreateCheckRun(_ context.Context, pat string, req iac
 	return f.respRef, nil
 }
 
+// UpdateCheckRun records the PATCH call and returns the canned error.
+// Added in v0.89.44 (#665 Stream 63, slice 1 chunk 4) for the
+// discovery-side exclusion-on-neutral path.
+func (f *fakeChecksClient) UpdateCheckRun(_ context.Context, pat string, req iacgithub.CheckRunUpdate) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateCalls = append(f.updateCalls, req)
+	f.updatePATs = append(f.updatePATs, pat)
+	return f.updateRespErr
+}
+
 // fakeCheckRunStore is the test-side CheckRunStore implementation.
 // Records every SetCheckRunForRecommendation call.
+//
+// v0.89.44 (#665 Stream 63, slice 1 chunk 4): grew the get-side state
+// so the chunk-4 discovery exclusion handler tests can seed an
+// in-flight check run for a given recommendation_id.
 type fakeCheckRunStore struct {
 	mu    sync.Mutex
 	calls []fakeCheckRunStoreCall
 	err   error
+	// Get-side canned response. seeded maps recommendation_id to the
+	// stored ref + status + conclusion. exists=true when the key is
+	// present; missing keys return exists=false with zero values
+	// (matching the production store's "row not present" signal).
+	seeded  map[string]fakeCheckRunStoreCall
+	getErr  error
+	getCalls []string
 }
 
 type fakeCheckRunStoreCall struct {
@@ -73,6 +105,28 @@ func (s *fakeCheckRunStore) SetCheckRunForRecommendation(
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, fakeCheckRunStoreCall{Rec: rec, Ref: ref, Status: status, Conclusion: conclusion})
 	return s.err
+}
+
+// GetCheckRunForRecommendation returns the seeded row for recID or
+// exists=false when none was seeded. Added in v0.89.44 (#665 Stream 63,
+// slice 1 chunk 4) so the discovery-side exclusion handler tests can
+// drive both the "no check run yet" and "in-flight check run found"
+// branches without standing up the full SQLite store.
+func (s *fakeCheckRunStore) GetCheckRunForRecommendation(
+	_ context.Context,
+	recID string,
+) (types.CheckRunRef, string, string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getCalls = append(s.getCalls, recID)
+	if s.getErr != nil {
+		return types.CheckRunRef{}, "", "", false, s.getErr
+	}
+	row, ok := s.seeded[recID]
+	if !ok {
+		return types.CheckRunRef{}, "", "", false, nil
+	}
+	return row.Ref, row.Status, row.Conclusion, true, nil
 }
 
 // newCheckRunTestHandler builds an IaCGitHubHandlers with the
