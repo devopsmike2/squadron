@@ -390,6 +390,202 @@ func TestHumanizeIaCAuditEvent(t *testing.T) {
 			wantOK:    true,
 		},
 
+		// --- iac.check_run.created (v0.89.44 #665 Stream 63 slice 1
+		// chunk 4) — humanizer for the chunk-2 PR-open follow-up emit.
+		// Payload comes from internal/api/handlers/iac_github_checkrun.go's
+		// emitCheckRunCreatedAudit shape.
+		{
+			name: "check_run.created happy path",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunCreated,
+				Payload: map[string]any{
+					"connection_id":       "conn-abc",
+					"recommendation_id":   "rec-xyz",
+					"recommendation_kind": "rds-pi-em",
+					"pr_url":              "https://github.com/octo/widgets/pull/142",
+					"head_sha":            "abc123",
+					"check_run_id":        float64(9001),
+					"owner":               "octo",
+					"repo":                "widgets",
+					"status":              "in_progress",
+				},
+			},
+			wantTitle: "Squadron posted a check run on PR #142 in octo/widgets (kind=rds-pi-em)",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.created missing recommendation_kind falls back",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunCreated,
+				Payload: map[string]any{
+					"pr_url": "https://github.com/octo/widgets/pull/142",
+					"owner":  "octo",
+					"repo":   "widgets",
+				},
+			},
+			wantOK: false,
+		},
+
+		// --- iac.check_run.updated transitions (v0.89.44 #665 Stream
+		// 63 slice 1 chunk 4) — humanizer for the chunks 3 + 4 emit.
+		// Three pinned transitions + a generic fallback when
+		// new_conclusion is unrecognized.
+		{
+			name: "check_run.updated in_progress -> success (merge)",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunUpdated,
+				Payload: map[string]any{
+					"pr_url":              "https://github.com/octo/widgets/pull/142",
+					"previous_status":     "in_progress",
+					"previous_conclusion": "",
+					"new_status":          "completed",
+					"new_conclusion":      "success",
+					"recommendation_kind": "rds-pi-em",
+				},
+			},
+			wantTitle: "Squadron's check run marked SUCCESS on PR #142 (operator merged).",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.updated in_progress -> failure (closed without merge)",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunUpdated,
+				Payload: map[string]any{
+					"pr_url":              "https://github.com/octo/widgets/pull/142",
+					"previous_status":     "in_progress",
+					"previous_conclusion": "",
+					"new_status":          "completed",
+					"new_conclusion":      "failure",
+					"recommendation_kind": "rds-pi-em",
+				},
+			},
+			wantTitle: "Squadron's check run marked FAILURE on PR #142 (operator closed without merging).",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.updated in_progress -> neutral (operator excluded)",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunUpdated,
+				Payload: map[string]any{
+					"pr_url":              "https://github.com/octo/widgets/pull/142",
+					"previous_status":     "in_progress",
+					"previous_conclusion": "",
+					"new_status":          "completed",
+					"new_conclusion":      "neutral",
+					"recommendation_kind": "rds-pi-em",
+				},
+			},
+			wantTitle: "Squadron's check run marked NEUTRAL on PR #142 (operator excluded this kind from future recommendations).",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			// Unknown new_conclusion → generic fallback that surfaces
+			// the raw status + conclusion so SIEM consumers don't lose
+			// the signal even on a future-shape transition.
+			name: "check_run.updated unknown conclusion falls back to generic",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunUpdated,
+				Payload: map[string]any{
+					"pr_url":         "https://github.com/octo/widgets/pull/142",
+					"new_status":     "completed",
+					"new_conclusion": "skipped",
+				},
+			},
+			wantTitle: "Squadron's check run updated on PR #142 (status=completed conclusion=skipped).",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.updated missing pr_url falls back",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunUpdated,
+				Payload: map[string]any{
+					"new_status":     "completed",
+					"new_conclusion": "success",
+				},
+			},
+			wantOK: false,
+		},
+
+		// --- iac.check_run.failed error_kinds (v0.89.44 #665 Stream
+		// 63 slice 1 chunk 4) — humanizer for chunks 2/3/4's failed
+		// emit. Four pinned error_kinds: scope_missing, rate_limit,
+		// pr_not_found, network. Unknown error_kinds fall back to the
+		// network-style phrasing with the raw error_message attached.
+		{
+			name: "check_run.failed scope_missing",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunFailed,
+				Payload: map[string]any{
+					"pr_url":              "https://github.com/octo/widgets/pull/142",
+					"error_kind":          "scope_missing",
+					"http_status":         float64(403),
+					"error_message":       "PAT lacks checks:write scope",
+					"recommendation_kind": "rds-pi-em",
+				},
+			},
+			wantTitle: "Squadron couldn't post a check run on PR #142: your IaC PAT is missing the checks:write scope.",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.failed rate_limit",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunFailed,
+				Payload: map[string]any{
+					"pr_url":        "https://github.com/octo/widgets/pull/142",
+					"error_kind":    "rate_limit",
+					"http_status":   float64(429),
+					"error_message": "GitHub API rate limit exceeded (reset=1750000000)",
+				},
+			},
+			wantTitle: "Squadron couldn't post a check run on PR #142: GitHub API rate limit exceeded.",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.failed pr_not_found",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunFailed,
+				Payload: map[string]any{
+					"pr_url":      "https://github.com/octo/widgets/pull/142",
+					"error_kind":  "pr_not_found",
+					"http_status": float64(422),
+				},
+			},
+			wantTitle: "Squadron couldn't post a check run on PR #142: the PR was not found on GitHub.",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.failed network",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunFailed,
+				Payload: map[string]any{
+					"pr_url":        "https://github.com/octo/widgets/pull/142",
+					"error_kind":    "network",
+					"error_message": "context deadline exceeded",
+				},
+			},
+			wantTitle: "Squadron couldn't post a check run on PR #142: context deadline exceeded.",
+			wantSub:   "",
+			wantOK:    true,
+		},
+		{
+			name: "check_run.failed missing error_kind falls back",
+			event: &services.AuditEvent{
+				EventType: services.AuditEventIaCCheckRunFailed,
+				Payload: map[string]any{
+					"pr_url": "https://github.com/octo/widgets/pull/142",
+				},
+			},
+			wantOK: false,
+		},
+
 		// --- nil-safe + unknown event type ---
 		{
 			name:   "nil event falls through",

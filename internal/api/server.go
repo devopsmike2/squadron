@@ -174,6 +174,15 @@ type Server struct {
 	//     lookup off the connection row.
 	iacWebhookChecksClient handlers.WebhookChecksAPI
 	iacWebhookChecksPAT    string
+	// v0.89.44 (#665 Stream 63, slice 1 chunk 4) — deployment-wide PAT
+	// used by the discovery exclusion handler's PATCH-to-neutral
+	// follow-up. The discovery handler does not unseal the IaC
+	// credstore (it lives in a different connection model), so the
+	// chunk-4 follow-up uses an explicit PAT wired at deployment
+	// startup. Per design doc §3 option A this is the same Checks-API-
+	// scoped PAT the IaC connection's open-PR path consumes. Empty
+	// value keeps the chunk-4 follow-up dormant (fail-open posture).
+	iacChecksPAT string
 	// accessAuditMiddleware records an api.request audit event for
 	// every authenticated mutating request. Wired by the build-edition
 	// layer in cmd/all-in-one: OSS leaves it nil (middleware unmounted,
@@ -582,6 +591,16 @@ func (s *Server) SetIaCWebhookChecksPAT(pat string) {
 	s.iacWebhookChecksPAT = pat
 }
 
+// SetIaCChecksPAT wires the v0.89.44 (#665 Stream 63, slice 1 chunk
+// 4) deployment-wide PAT the discovery exclusion handler uses to
+// PATCH the in-flight check run to neutral on operator exclude.
+// Empty value leaves the chunk-4 follow-up dormant (matches the
+// nil-client posture). Production wiring sources the PAT from the
+// same secret-manager pipeline as the IaC PR-open path.
+func (s *Server) SetIaCChecksPAT(pat string) {
+	s.iacChecksPAT = pat
+}
+
 // iacGitHubTrampoline late-binds an IaC-GitHub handler call. Mirrors
 // discoveryTrampoline: 503s when the substrate is unwired so the
 // test_server.go path stays unaffected.
@@ -675,6 +694,27 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		// 503s with a clear "not wired" message.
 		if s.appStore != nil {
 			h.WithExclusionStore(s.appStore)
+		}
+		// v0.89.44 (#665 Stream 63, slice 1 chunk 4 of the GitHub Checks
+		// API back-signal arc). Wire the chunk-4 PATCH-to-neutral
+		// follow-up surfaces onto the exclusion handler. All four are
+		// optional — when any one is unwired the helper short-circuits
+		// silently per design doc §5 fail-open posture. The application
+		// store satisfies the slim CheckRunStore interface directly
+		// (it already exposes Get + Set check-run methods from chunk 1);
+		// production wires iacChecksClient against a shared
+		// *iacgithub.PATClient.
+		if s.iacChecksClient != nil {
+			h.WithChecksClient(s.iacChecksClient)
+		}
+		if s.appStore != nil {
+			h.WithCheckRunStore(s.appStore)
+		}
+		if strings.TrimSpace(s.iacChecksPAT) != "" {
+			h.WithChecksPAT(s.iacChecksPAT)
+		}
+		if strings.TrimSpace(s.squadronHost) != "" {
+			h.WithSquadronHost(s.squadronHost)
 		}
 		fn(h, c)
 	}
