@@ -183,6 +183,19 @@ type Server struct {
 	discoveryTraceCoverageHandler *handlers.DiscoveryTraceCoverageHandlers
 	traceCoverageHandlerOnce      sync.Once
 	traceIndexForDiscovery        handlers.TraceIndex
+	// v0.89.86 (#717 Stream 115, Span quality slice 1 chunk 2) — the
+	// span-quality dashboard + per-resource detail handler. Same
+	// lazily-constructed pattern as discoveryTraceCoverageHandler so
+	// the 30s aggregate cache lives across requests rather than being
+	// rebuilt per call. qualitySnapshotIndexForDiscovery /
+	// resourceKeyProjectorForDiscovery are wired post-construction
+	// via SetQualitySnapshotIndexForDiscovery /
+	// SetResourceKeyProjectorForDiscovery — nil leaves the endpoints
+	// serving cold-start zeros / 404 respectively.
+	discoverySpanQualityHandler        *handlers.DiscoverySpanQualityHandlers
+	spanQualityHandlerOnce             sync.Once
+	qualitySnapshotIndexForDiscovery   handlers.QualitySnapshotIndex
+	resourceKeyProjectorForDiscovery   handlers.ResourceKeyProjector
 	// traceIndexLookupForDiscovery — v0.89.77 (#708 Stream 106,
 	// Trace integration slice 1 chunk 4) — the LastSeenAt-shaped
 	// slice of the traceindex consumed by the per-provider scan
@@ -1186,6 +1199,64 @@ func (s *Server) discoveryTraceCoverageTrampoline(fn func(*handlers.DiscoveryTra
 			)
 		})
 		fn(s.discoveryTraceCoverageHandler, c)
+	}
+}
+
+// SetQualitySnapshotIndexForDiscovery wires the v0.89.86 (#717 Stream
+// 115, Span quality slice 1 chunk 2) Quality snapshot index onto the
+// API server so the new /api/v1/discovery/span_quality handler can
+// project per-provider aggregates. The same *traceindex.Quality the
+// chunk-1 OTLP receiver dispatches Observe to satisfies the
+// handlers.QualitySnapshotIndex interface directly via SnapshotAll +
+// SnapshotKey.
+//
+// Optional in the same posture as SetTraceIndexForDiscovery: a nil
+// index leaves the aggregate endpoint serving all-zero counts for
+// every provider and the per-resource detail endpoint 404ing every
+// lookup — the correct cold-start posture for a deployment that
+// hasn't observed any spans yet.
+func (s *Server) SetQualitySnapshotIndexForDiscovery(idx handlers.QualitySnapshotIndex) {
+	s.qualitySnapshotIndexForDiscovery = idx
+}
+
+// SetResourceKeyProjectorForDiscovery wires the v0.89.86 (#717 Stream
+// 115) per-resource key projector onto the API server so the
+// /api/v1/discovery/:provider/inventory/:kind/:id/span_quality
+// handler can resolve path params to a quality key. Production wires
+// an inventory-store-aware projector that runs the same
+// ComputeResourceKey projection the OTLP receiver does, against the
+// stored inventory row.
+//
+// Optional; nil leaves the per-resource endpoint 404ing every lookup
+// (the cold-start posture for a deployment that hasn't wired the
+// inventory projection yet).
+func (s *Server) SetResourceKeyProjectorForDiscovery(p handlers.ResourceKeyProjector) {
+	s.resourceKeyProjectorForDiscovery = p
+}
+
+// discoverySpanQualityTrampoline late-binds the v0.89.86 (#717
+// Stream 115) span-quality handler call so the route table can be
+// registered before SetQualitySnapshotIndexForDiscovery /
+// SetResourceKeyProjectorForDiscovery run. Same posture as
+// discoveryTraceCoverageTrampoline: ALWAYS serves — a deployment
+// that hasn't wired the Quality index or the key projector gets
+// either zero-counts (aggregate) or 404 (detail), never 503.
+//
+// The trampoline builds the handler once on first call and reuses it
+// thereafter so the cache lives on the Server struct.
+func (s *Server) discoverySpanQualityTrampoline(fn func(*handlers.DiscoverySpanQualityHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.spanQualityHandlerOnce.Do(func() {
+			s.discoverySpanQualityHandler = handlers.NewDiscoverySpanQualityHandlers(
+				s.qualitySnapshotIndexForDiscovery,
+				s.resourceKeyProjectorForDiscovery,
+				s.auditService,
+				handlers.DefaultSpanQualityCacheTTL,
+				nil, // production clock
+				s.logger,
+			)
+		})
+		fn(s.discoverySpanQualityHandler, c)
 	}
 }
 
@@ -2268,6 +2339,26 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/trace_coverage",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTraceCoverageTrampoline(func(h *handlers.DiscoveryTraceCoverageHandlers, c *gin.Context) { h.HandleTraceCoverage(c) }))
+
+		// v0.89.86 (#717 Stream 115, Span quality slice 1 chunk 2) —
+		// span quality aggregate + per-resource detail endpoints.
+		// Mirrors trace_coverage's nil-tolerant posture: a deployment
+		// that hasn't observed any spans yet sees a 200 with every
+		// provider key populated as zero-counts on the aggregate, and
+		// 404 on the per-resource detail. Same ScopeAgentsRead gate as
+		// the rest of the discovery read surface.
+		//
+		// HandleSpanQuality emits AuditEventSpanQualityRequested on
+		// cache MISS only (the 30s cache window short-circuits the
+		// emission to avoid drowning the timeline in dashboard polls);
+		// HandleResourceSpanQuality does NOT emit (operator-clicked
+		// drill-down, low timeline value).
+		v1.GET("/discovery/span_quality",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoverySpanQualityTrampoline(func(h *handlers.DiscoverySpanQualityHandlers, c *gin.Context) { h.HandleSpanQuality(c) }))
+		v1.GET("/discovery/:provider/inventory/:kind/:id/span_quality",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoverySpanQualityTrampoline(func(h *handlers.DiscoverySpanQualityHandlers, c *gin.Context) { h.HandleResourceSpanQuality(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight

@@ -571,4 +571,22 @@ const (
 	// events) and §9 contract item 5.
 	AuditEventTraceIndexBackgroundFlushed = "trace_index.background_flushed"
 	AuditEventTraceCoverageRequested      = "discovery.trace_coverage.requested"
+
+	// v0.89.86 (#717 Stream 115, Span quality slice 1 chunk 2) — the
+	// /api/v1/discovery/span_quality dashboard endpoint emits this
+	// on cache MISS only. Mirrors AuditEventTraceCoverageRequested's
+	// cache-miss-only posture so the timeline doesn't drown in 30s-
+	// poll noise; cache hits return the cached payload with no audit
+	// row. The per-resource detail endpoint
+	// /api/v1/discovery/{provider}/inventory/{kind}/{id}/span_quality
+	// does NOT emit — its read pattern is operator-clicked drill-down,
+	// not dashboard poll, and the timeline value is lower than the
+	// payload-size cost.
+	//
+	// Payload contract: cache_status ("miss"), total_resource_count,
+	// total_resources_with_issues, recorded_at. The percentages are
+	// intentionally NOT in the payload — they're high-cardinality
+	// floats that bloat the audit timeline without adding signal
+	// (the resources_with_issues count answers "is anything wrong").
+	AuditEventSpanQualityRequested = "discovery.span_quality.requested"
 )
