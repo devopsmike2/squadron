@@ -385,6 +385,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`inline_config_snippet is Terraform the operator runs through their ` +
 	`own IaC pipeline.` + "\n\n" +
 
+	traceEmissionKindsPromptSection +
+
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
 	`level — the operator approves the whole plan at step 0 and the engine sequences the ` +
@@ -968,6 +970,106 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 func BuildDiscoveryUserMessageForTest(in DiscoveryScanContext) string {
 	return buildDiscoveryUserMessage(in)
 }
+
+// DiscoverySystemPromptForTest is a test-only export of the discovery
+// proposer's system prompt const. Trace integration slice 2 chunk 1
+// (v0.89.80, #711 Stream 109) — cross-package tests in
+// internal/proposer assert the 12 new trace-emission-* kind strings
+// appear in the system prompt, and that the §11-style reasoning
+// template is pinned. Re-declaring the const in the test file would
+// drift; this exported helper keeps the substrate single-sourced.
+func DiscoverySystemPromptForTest() string {
+	return proposeFromDiscoveryScanSystem
+}
+
+// traceEmissionKindsPromptSection — trace integration slice 2 chunk 1
+// (v0.89.80, #711 Stream 109). Twelve new recommendation kinds — one
+// per (provider, tier) — fire when a resource has its observability
+// primitive enabled but Squadron's traceindex has seen no spans from
+// it in the last 24 hours. Section is appended to the discovery system
+// prompt between the per-cloud kind list and the per-step rules so the
+// model reads it alongside the other kinds.
+//
+// COLD-START PARITY INVARIANT: when the discovery scan context carries
+// no inventory rows that trigger trace-emission kinds, the rendered
+// user message stays byte-identical to v0.89.78 because this section
+// lives ONLY in the system prompt and the detection branch on the
+// proposer bridge controls when to surface the kinds via inventory
+// rows. The 4-provider cold-start parity tests pin this invariant.
+const traceEmissionKindsPromptSection = `TRACE EMISSION KINDS (slice 2 of trace integration):
+
+These kinds fire when a resource has its observability primitive
+enabled but Squadron's traceindex has seen no spans from it in
+the last 24 hours. Always pair with iacpicker.Pick output for
+the Terraform pattern.
+
+For AWS:
+- trace-emission-aws-compute: EC2 instance with otel-collector
+  tag but no recent spans. Terraform pattern: aws_ssm_association
+  with AWS-ConfigureAWSPackage installing the CloudWatch Agent
+  (which includes the ADOT collector binary).
+- trace-emission-aws-db: RDS instance with PerformanceInsights
+  enabled but no spans from connecting workloads. Terraform:
+  performance_insights_retention_period = 731 (LTR tier).
+- trace-emission-aws-k8s: EKS cluster with ADOT addon active but
+  no workload spans. Terraform: aws_eks_addon adot.
+
+For GCP:
+- trace-emission-gcp-compute: GCE instance with otel-collector
+  label but no recent spans. Terraform: metadata enabling
+  enable-osconfig + google-logging-enabled + google-monitoring-enabled.
+- trace-emission-gcp-db: Cloud SQL with Query Insights but no
+  application correlation. Terraform: record_application_tags +
+  record_client_address.
+- trace-emission-gcp-k8s: GKE with Managed Prometheus but no
+  workload spans. Terraform: google_gke_hub_feature service mesh.
+
+For Azure:
+- trace-emission-azure-compute: VM with otel-collector tag but
+  no recent spans. Terraform: AzureMonitorLinuxAgent extension.
+- trace-emission-azure-db: Azure SQL with SQLInsights routing
+  but no application correlation. Terraform:
+  extended_auditing_policy log_monitoring_enabled.
+- trace-emission-azure-k8s: AKS with Azure Monitor enabled but
+  no workload spans. Terraform: monitor_metrics.annotations_allowed.
+
+For OCI:
+- trace-emission-oci-compute: Instance with otel tag but no
+  recent spans. Terraform: cloud-init script in user_data
+  (note: only runs on first boot — flag as
+  upgrade-during-maintenance).
+- trace-emission-oci-db: Autonomous DB with Database Management
+  but no application correlation. Terraform:
+  oci_database_management_managed_database_group.
+- trace-emission-oci-k8s: OKE with Operations Insights tag but
+  no workload spans. Terraform: OCI Service Operator via
+  kubernetes_manifest.
+
+REASONING TEMPLATE for trace-emission recommendations:
+
+"This resource has the observability primitive enabled but
+Squadron's traceindex has received no spans from it in the last
+24 hours. Three failure modes are possible:
+1. SDK not deployed: the most common cause. This Terraform PR
+   targets this case by installing the cloud-native
+   auto-instrumentation agent.
+2. SDK deployed but exporter misconfigured: less common.
+   Check the agent's endpoint configuration.
+3. Resource attribute mismatch: the agent is emitting but with
+   identifiers that don't match Squadron's expectation.
+
+If case (2) or (3) applies, decline this PR and note the actual
+case in the decline reason — the verdict learning loop will
+record it for future recommendations."
+
+The proposer should:
+- Pick the matching trace-emission-* kind based on the
+  (provider, tier) the inventory row belongs to.
+- Include the picker's PrimaryTerraform as the patch contents.
+- Include the picker's Reasoning + the failure mode template
+  in the recommendation reasoning field.
+
+` + "\n"
 
 // writeAcceptedRecommendationsBlock — v0.89.28 (#643 slice 1) §6 prompt
 // block. Verbatim wording from the spec including the load-bearing
