@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -158,6 +159,16 @@ type Server struct {
 	// Azure SP client_secret, AND OCI API Signing Key private key.
 	discoveryOCIStore          ociconnstore.Store
 	discoveryOCIScannerFactory handlers.OCIScannerFactory
+	// v0.89.61 (#688 Stream 86, Unified Discovery dashboard slice 1
+	// chunk 1) — unified summary handler. Lazily constructed by the
+	// summary trampoline on first request so the cache lives across
+	// requests rather than being reset per call. The summary handler
+	// nil-tolerantly wraps every per-provider store (a deployment
+	// that hasn't wired any provider still serves the welcome
+	// empty-state response). Per design doc §5.1 the cache TTL is
+	// 30s; the constructor pins that via DefaultSummaryCacheTTL.
+	discoverySummaryHandler *handlers.DiscoverySummaryHandlers
+	summaryHandlerOnce      sync.Once
 	// v0.89.23 Stream 40 (#639) — GitHub webhook listener secret.
 	// Cached at startup from os.Getenv(SQUADRON_GITHUB_WEBHOOK_SECRET);
 	// an empty value leaves the /api/v1/webhooks/github route mounted
@@ -1021,6 +1032,42 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 			h.WithOCIScannerFactory(s.discoveryOCIScannerFactory)
 		}
 		fn(h, c)
+	}
+}
+
+// discoverySummaryTrampoline late-binds the unified Discovery
+// dashboard handler call so the route table can be registered before
+// any of the four provider stores are wired. v0.89.61 (#688 Stream
+// 86, Unified Discovery dashboard slice 1 chunk 1). Unlike the
+// per-provider trampolines, this one ALWAYS serves — a deployment
+// that hasn't wired any provider gets a 200 with every provider card
+// in the enabled=false empty state. That's the right answer for the
+// fresh-install welcome view (per design doc §6 "Empty state").
+//
+// Per design doc §5.1 the handler caches the SummaryResponse for 30s.
+// The trampoline builds a new handler per request, so the cache lives
+// on the Server struct (s.discoverySummaryHandler) rather than in the
+// trampoline closure — otherwise every request would get its own
+// cache and the TTL would be meaningless. Lazy construction: the
+// handler is built on first call, reused thereafter; reads of
+// s.discoverySummaryHandler are guarded by the handler's internal
+// mutex through the cache.
+func (s *Server) discoverySummaryTrampoline(fn func(*handlers.DiscoverySummaryHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.summaryHandlerOnce.Do(func() {
+			s.discoverySummaryHandler = handlers.NewDiscoverySummaryHandlers(
+				handlers.NewAWSSummaryStore(s.discoveryCredStore),
+				handlers.NewGCPSummaryStore(s.discoveryGCPStore),
+				handlers.NewAzureSummaryStore(s.discoveryAzureStore),
+				handlers.NewOCISummaryStore(s.discoveryOCIStore),
+				s.auditService,
+				handlers.NewApplicationStoreAuditQuery(s.appStore),
+				handlers.DefaultSummaryCacheTTL,
+				nil, // production clock
+				s.logger,
+			)
+		})
+		fn(s.discoverySummaryHandler, c)
 	}
 }
 
@@ -2059,6 +2106,29 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/oci/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleRecommendationsForOCIScan(c) }))
+
+		// v0.89.61 (#688 Stream 86, Unified Discovery dashboard slice 1
+		// chunk 1) — cross-provider summary endpoint. Aggregates the
+		// per-provider connection counts, last-scan timestamps, instance
+		// inventory, and recent recommendations into one JSON shape so
+		// the unified /discovery dashboard renders in a single round-
+		// trip. Per design doc §7 contract item 5 the route sits under
+		// the existing auth middleware; agents:read is the right scope
+		// because the endpoint mutates nothing (audit cache-miss emit
+		// aside, which mirrors the read-side audit posture every other
+		// list endpoint already has).
+		//
+		// The summary trampoline tolerates ALL FOUR provider stores
+		// being nil — a fresh-install Squadron with no clouds connected
+		// still serves a 200 with the welcome empty state (every
+		// provider card enabled=false). This is by design per §6
+		// "Empty state". The per-provider trampolines 503 in the same
+		// posture because their endpoints REQUIRE the per-provider
+		// store to do anything useful; the summary handler can
+		// legitimately return zero-counts.
+		v1.GET("/discovery/summary",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoverySummaryTrampoline(func(h *handlers.DiscoverySummaryHandlers, c *gin.Context) { h.HandleSummary(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
