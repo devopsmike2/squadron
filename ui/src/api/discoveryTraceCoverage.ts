@@ -41,6 +41,16 @@ export type ProviderTraceCoverage = {
   strong_match_pct: number;
   weak_match_pct: number;
   last_index_update_at?: string;
+  /**
+   * v0.89.82 (#713 Stream 111, Trace integration slice 2 chunk 3) —
+   * count of inventory rows for this provider where primitive_enabled
+   * is true AND last_seen_at is null or older than 24h. Surfaces the
+   * slice-2 "instrumented but not emitting" gap; the dashboard sub-
+   * indicator renders when the fleet-wide sum is non-zero and hides
+   * otherwise (design doc §10 acceptance test 10). Required field —
+   * the backend always populates it (0 on cold start).
+   */
+  pending_trace_emission_count: number;
 };
 
 // --- Cross-provider totals -----------------------------------------

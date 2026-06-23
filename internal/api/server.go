@@ -1172,6 +1172,13 @@ func (s *Server) discoveryTraceCoverageTrampoline(fn func(*handlers.DiscoveryTra
 				handlers.NewOCISummaryStore(s.discoveryOCIStore),
 				s.traceIndexForDiscovery,
 				handlers.NewAuditInventoryCountQuery(audit),
+				// v0.89.82 (#713 Stream 111) — slice-2 pending-emission
+				// projection. nil today: the inventory store wiring
+				// that exposes primitive_enabled + last_seen_at lands
+				// in a follow-on chunk. The handler treats nil as
+				// "everything is zero" so the sub-indicator stays
+				// hidden until the projection is wired.
+				nil,
 				s.auditService,
 				handlers.DefaultTraceCoverageCacheTTL,
 				nil, // production clock

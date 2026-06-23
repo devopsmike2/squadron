@@ -69,6 +69,37 @@ type stubInventoryQuery struct {
 	calls  int64
 }
 
+// stubPendingQuery — v0.89.82 (#713 Stream 111) — returns canned
+// "primitive_enabled but no recent emission" counts per (provider,
+// scope) pair. Mirrors stubInventoryQuery's shape so the slice-2
+// chunk-3 tests stay structurally adjacent to the slice-1 tests.
+//
+// IMPORTANT: the production InventoryStore performs the actual
+// primitive_enabled + last_seen_at axis logic; this stub just returns
+// pre-decided counts. The handler-level tests below verify the
+// summing + wiring path, not the axis logic itself (which lives in
+// the inventory store and is covered by its own tests in a later
+// chunk).
+type stubPendingQuery struct {
+	mu     sync.Mutex
+	counts map[string]int // key: provider + "|" + scope
+	err    error
+	calls  int64
+}
+
+func (s *stubPendingQuery) PendingTraceEmissionCount(_ context.Context, provider, scopeID string, _ time.Duration) (int, error) {
+	atomic.AddInt64(&s.calls, 1)
+	if s.err != nil {
+		return 0, s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v, ok := s.counts[provider+"|"+scopeID]; ok {
+		return v, nil
+	}
+	return 0, nil
+}
+
 func (s *stubInventoryQuery) InventoryCountForScope(_ context.Context, provider, scopeID string) (int, error) {
 	atomic.AddInt64(&s.calls, 1)
 	if s.err != nil {
@@ -126,7 +157,7 @@ func TestTraceCoverage_AggregatesAllFourProviders(t *testing.T) {
 		"oci|oci-conn-1":   {EmittingCount: 5, CoveragePct: 50, StrongMatchPct: 100},
 	}}
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, az, oci, idx, inv, nil, time.Second, nil, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, az, oci, idx, inv, nil /*pending*/, nil /*audit*/, time.Second, nil, nil)
 	w := traceCoverageDoRequest(h)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -174,7 +205,7 @@ func TestTraceCoverage_DisabledProvider_ReturnsZero(t *testing.T) {
 		"azure|az-1": {EmittingCount: 5},
 	}}
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, az, nil, idx, inv, nil, time.Second, nil, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, az, nil, idx, inv, nil /*pending*/, nil /*audit*/, time.Second, nil, nil)
 	w := traceCoverageDoRequest(h)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -206,7 +237,7 @@ func TestTraceCoverage_CacheTTLBehavior(t *testing.T) {
 	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, spy, 30*time.Second, clock, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil /*pending*/, spy, 30*time.Second, clock, nil)
 
 	w1 := traceCoverageDoRequest(h)
 	w2 := traceCoverageDoRequest(h)
@@ -238,7 +269,7 @@ func TestTraceCoverage_CacheExpires_AfterTTL(t *testing.T) {
 	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
 	clock := fixedClock(&now)
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, spy, 30*time.Second, clock, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil /*pending*/, spy, 30*time.Second, clock, nil)
 
 	if w := traceCoverageDoRequest(h); w.Code != http.StatusOK {
 		t.Fatalf("first call status = %d", w.Code)
@@ -272,7 +303,7 @@ func TestTraceCoverage_EmitsAuditOnCacheMiss(t *testing.T) {
 	spy := &spyAuditService{}
 	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, spy, 30*time.Second, func() time.Time { return now }, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil /*pending*/, spy, 30*time.Second, func() time.Time { return now }, nil)
 
 	if w := traceCoverageDoRequest(h); w.Code != http.StatusOK {
 		t.Fatalf("miss call status = %d", w.Code)
@@ -315,7 +346,7 @@ func TestTraceCoverage_CoveragePctZeroSafe(t *testing.T) {
 	inv := &stubInventoryQuery{counts: map[string]int{}} // empty
 	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{}}
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, az, oci, idx, inv, nil, time.Second, nil, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, az, oci, idx, inv, nil /*pending*/, nil /*audit*/, time.Second, nil, nil)
 	w := traceCoverageDoRequest(h)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
@@ -354,7 +385,7 @@ func TestTraceCoverage_StrongAndWeakMatchPctsAggregate(t *testing.T) {
 		"gcp|gcp-1":  {EmittingCount: 5, StrongMatchPct: 50.0, WeakMatchPct: 50.0},
 	}}
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, nil, nil, idx, inv, nil, time.Second, nil, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, nil, nil, idx, inv, nil /*pending*/, nil /*audit*/, time.Second, nil, nil)
 	w := traceCoverageDoRequest(h)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
@@ -380,7 +411,7 @@ func TestTraceCoverage_StrongAndWeakMatchPctsAggregate(t *testing.T) {
 func TestTraceCoverage_AllStoresNil_ReturnsEmpty(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	h := NewDiscoveryTraceCoverageHandlers(nil, nil, nil, nil, nil, nil, nil, time.Second, nil, nil)
+	h := NewDiscoveryTraceCoverageHandlers(nil, nil, nil, nil, nil, nil, nil /*pending*/, nil /*audit*/, time.Second, nil, nil)
 	w := traceCoverageDoRequest(h)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
@@ -410,7 +441,7 @@ func TestTraceCoverage_LastIndexUpdateAt_SurfacedFromMaxScope(t *testing.T) {
 		"aws|acct-2": {EmittingCount: 5, LastIndexUpdateAt: later},
 	}}
 
-	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, time.Second, nil, nil)
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil /*pending*/, nil /*audit*/, time.Second, nil, nil)
 	w := traceCoverageDoRequest(h)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
@@ -423,5 +454,156 @@ func TestTraceCoverage_LastIndexUpdateAt_SurfacedFromMaxScope(t *testing.T) {
 	if !r.Providers["aws"].LastIndexUpdateAt.Equal(later) {
 		t.Errorf("aws.last_index_update_at = %v, want %v (max across scopes)",
 			r.Providers["aws"].LastIndexUpdateAt, later)
+	}
+}
+
+// --- 10. PendingTraceEmissionCount_IncludesUnemittingInstrumented ------
+//
+// v0.89.82 (#713 Stream 111, Trace integration slice 2 chunk 3). The
+// stub returns the count the production InventoryStore would project
+// for the slice-2 "primitive_enabled AND last_seen_at null-or-stale"
+// rule; the handler test just verifies the wiring + per-provider
+// sum. See docs/proposals/trace-integration-slice2.md §3.
+
+func TestTraceCoverage_PendingTraceEmissionCount_IncludesUnemittingInstrumented(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+	// Stub returns 3 — the production projection would have filtered
+	// inventory rows to primitive_enabled=true AND last_seen_at older
+	// than 24h (or null). The handler just sums.
+	pending := &stubPendingQuery{counts: map[string]int{"aws|acct-1": 3}}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, pending, nil, time.Second, nil, nil)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].PendingTraceEmissionCount, 3; got != want {
+		t.Errorf("aws.pending_trace_emission_count = %d, want %d", got, want)
+	}
+}
+
+// --- 11. PendingTraceEmissionCount_ExcludesPrimitiveDisabledRows -------
+//
+// Stub semantics: a row with primitive_enabled=false is never counted
+// by the production projection, so the stub returns 0. This test pins
+// that the handler doesn't somehow inject a non-zero pending count
+// when the underlying query returns 0.
+
+func TestTraceCoverage_PendingTraceEmissionCount_ExcludesPrimitiveDisabledRows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 10},
+	}}
+	// Empty counts map → stub returns 0 for every (provider, scope).
+	pending := &stubPendingQuery{counts: map[string]int{}}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, pending, nil, time.Second, nil, nil)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].PendingTraceEmissionCount, 0; got != want {
+		t.Errorf("aws.pending_trace_emission_count = %d, want %d (no primitive_enabled rows)", got, want)
+	}
+}
+
+// --- 12. PendingTraceEmissionCount_ExcludesRecentEmission --------------
+//
+// Mirrors the previous test: "recent emission" filtering is the
+// production projection's responsibility (not the handler's). The
+// stub abstracts the axis logic; here we just confirm that when the
+// query reports 0 — because every primitive_enabled row has a recent
+// last_seen_at — the handler surfaces 0.
+
+func TestTraceCoverage_PendingTraceEmissionCount_ExcludesRecentEmission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 10},
+	}}
+	// All primitive_enabled rows have last_seen_at within 24h → stub
+	// returns 0. Recent-emission filtering is the production
+	// InventoryStore's responsibility, not the handler's.
+	pending := &stubPendingQuery{counts: map[string]int{"aws|acct-1": 0}}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, pending, nil, time.Second, nil, nil)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].PendingTraceEmissionCount, 0; got != want {
+		t.Errorf("aws.pending_trace_emission_count = %d, want %d (every row recent)", got, want)
+	}
+}
+
+// --- 13. PendingTraceEmissionCount_AcrossProvidersAggregates ----------
+//
+// All four providers wired with one scope each, distinct pending
+// counts. Per-provider PendingTraceEmissionCount surfaces unchanged
+// for the single-scope path; the cross-provider sum is the operator-
+// visible number the dashboard sub-indicator renders.
+
+func TestTraceCoverage_PendingTraceEmissionCount_AcrossProvidersAggregates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	gcp := &stubGCPStore{ids: []string{"gcp-1"}}
+	az := &stubAzureStore{ids: []string{"az-1"}}
+	oci := &stubOCIStore{ids: []string{"oci-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{
+		"aws|acct-1": 10, "gcp|gcp-1": 10, "azure|az-1": 10, "oci|oci-1": 10,
+	}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+		"gcp|gcp-1":  {EmittingCount: 5},
+		"azure|az-1": {EmittingCount: 5},
+		"oci|oci-1":  {EmittingCount: 5},
+	}}
+	pending := &stubPendingQuery{counts: map[string]int{
+		"aws|acct-1": 2,
+		"gcp|gcp-1":  4,
+		"azure|az-1": 1,
+		"oci|oci-1":  3,
+	}}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, gcp, az, oci, idx, inv, pending, nil, time.Second, nil, nil)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].PendingTraceEmissionCount, 2; got != want {
+		t.Errorf("aws.pending = %d, want %d", got, want)
+	}
+	if got, want := r.Providers["gcp"].PendingTraceEmissionCount, 4; got != want {
+		t.Errorf("gcp.pending = %d, want %d", got, want)
+	}
+	if got, want := r.Providers["azure"].PendingTraceEmissionCount, 1; got != want {
+		t.Errorf("azure.pending = %d, want %d", got, want)
+	}
+	if got, want := r.Providers["oci"].PendingTraceEmissionCount, 3; got != want {
+		t.Errorf("oci.pending = %d, want %d", got, want)
+	}
+	// Cross-provider sum — what the dashboard sub-indicator renders.
+	sum := r.Providers["aws"].PendingTraceEmissionCount +
+		r.Providers["gcp"].PendingTraceEmissionCount +
+		r.Providers["azure"].PendingTraceEmissionCount +
+		r.Providers["oci"].PendingTraceEmissionCount
+	if got, want := sum, 10; got != want {
+		t.Errorf("cross-provider pending sum = %d, want %d", got, want)
 	}
 }

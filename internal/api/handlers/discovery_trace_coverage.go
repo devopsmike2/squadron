@@ -34,13 +34,23 @@ import (
 // directly without recomputing.
 
 // ProviderTraceCoverage is the per-provider trace coverage aggregate.
+//
+// PendingTraceEmissionCount — v0.89.82 (#713 Stream 111, Trace
+// integration slice 2 chunk 3) — counts inventory rows for this
+// provider that have primitive_enabled=true AND
+// (last_seen_at IS NULL OR last_seen_at is older than 24h). It surfaces
+// the slice-2 "instrumented but not emitting" gap — resources the
+// scanner believes are wired but whose traces aren't actually flowing.
+// Zero on cold start; the dashboard hides the sub-indicator when the
+// fleet-wide sum is 0 (design doc §10 acceptance test 10).
 type ProviderTraceCoverage struct {
-	InventoryCount    int        `json:"inventory_count"`
-	EmittingCount     int        `json:"emitting_count"`
-	CoveragePct       float64    `json:"coverage_pct"`
-	StrongMatchPct    float64    `json:"strong_match_pct"`
-	WeakMatchPct      float64    `json:"weak_match_pct"`
-	LastIndexUpdateAt *time.Time `json:"last_index_update_at,omitempty"`
+	InventoryCount            int        `json:"inventory_count"`
+	EmittingCount             int        `json:"emitting_count"`
+	CoveragePct               float64    `json:"coverage_pct"`
+	StrongMatchPct            float64    `json:"strong_match_pct"`
+	WeakMatchPct              float64    `json:"weak_match_pct"`
+	LastIndexUpdateAt         *time.Time `json:"last_index_update_at,omitempty"`
+	PendingTraceEmissionCount int        `json:"pending_trace_emission_count"`
 }
 
 // TraceCoverageTotals is the cross-provider roll-up.
@@ -79,6 +89,19 @@ type TraceCoverageResponse struct {
 // (no scan_completed event yet) — zero-safe by design.
 type InventoryCountQuery interface {
 	InventoryCountForScope(ctx context.Context, provider, scopeID string) (int, error)
+}
+
+// PendingTraceEmissionCountQuery answers "how many inventory rows for
+// this (provider, scopeID) have primitive_enabled=true AND last_seen_at
+// null-or-stale." Returns 0 on cold start. Nil implementation short-
+// circuits to 0 the same way InventoryCountQuery does.
+//
+// staleAfter is the cutoff age above which a last_seen_at counts as
+// "no recent emission" — production passes pendingTraceEmissionStaleAfter
+// (24h per docs/proposals/trace-integration-slice2.md §3); tests are
+// free to inject any duration.
+type PendingTraceEmissionCountQuery interface {
+	PendingTraceEmissionCount(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (int, error)
 }
 
 // TraceIndex is the slim surface DiscoveryTraceCoverageHandlers uses to
@@ -155,6 +178,12 @@ const DefaultTraceCoverageCacheTTL = 30 * time.Second
 // the four provider stores so a slow store can't hang the dashboard.
 const traceCoverageAggregationTimeout = 10 * time.Second
 
+// pendingTraceEmissionStaleAfter is the cutoff for the slice-2
+// "primitive_enabled but no recent emission" detection rule per
+// docs/proposals/trace-integration-slice2.md §3: a row counts as
+// pending when last_seen_at is null or older than 24h.
+const pendingTraceEmissionStaleAfter = 24 * time.Hour
+
 // DiscoveryTraceCoverageHandlers serves
 // GET /api/v1/discovery/trace_coverage. Each per-provider store is
 // OPTIONAL — a nil store yields a zero-count ProviderTraceCoverage so
@@ -170,6 +199,7 @@ type DiscoveryTraceCoverageHandlers struct {
 	ociStore       OCISummaryStore
 	traceIndex     TraceIndex
 	inventoryQuery InventoryCountQuery
+	pendingQuery   PendingTraceEmissionCountQuery
 	auditService   services.AuditService
 	cache          *traceCoverageCache
 	logger         *zap.Logger
@@ -188,6 +218,7 @@ func NewDiscoveryTraceCoverageHandlers(
 	oci OCISummaryStore,
 	traceIndex TraceIndex,
 	inventoryQuery InventoryCountQuery,
+	pendingQuery PendingTraceEmissionCountQuery,
 	auditService services.AuditService,
 	ttl time.Duration,
 	clock func() time.Time,
@@ -206,6 +237,7 @@ func NewDiscoveryTraceCoverageHandlers(
 		ociStore:       oci,
 		traceIndex:     traceIndex,
 		inventoryQuery: inventoryQuery,
+		pendingQuery:   pendingQuery,
 		auditService:   auditService,
 		cache:          newTraceCoverageCache(ttl, clock),
 		logger:         logger,
@@ -365,6 +397,21 @@ func (h *DiscoveryTraceCoverageHandlers) aggregateProvider(
 
 		out.InventoryCount += invCount
 		out.EmittingCount += sum.EmittingCount
+		// v0.89.82 (#713 Stream 111) — slice-2 pending-emission roll
+		// up. Same nil-tolerant posture as inventoryQuery: a nil
+		// pendingQuery short-circuits to 0 so a deployment that hasn't
+		// wired the projection sees the sub-indicator hidden.
+		if h.pendingQuery != nil {
+			n, err := h.pendingQuery.PendingTraceEmissionCount(ctx, provider, scope, pendingTraceEmissionStaleAfter)
+			if err != nil {
+				h.logger.Warn("trace coverage: pending lookup failed",
+					zap.String("provider", provider),
+					zap.String("scope", scope),
+					zap.Error(err))
+			} else {
+				out.PendingTraceEmissionCount += n
+			}
+		}
 		// Weight the strong / weak split by emitting count so a scope
 		// with 1 emitter doesn't drown out a scope with 100 emitters.
 		if sum.EmittingCount > 0 {
