@@ -387,6 +387,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	traceEmissionKindsPromptSection +
 
+	spanQualityKindsPromptSection +
+
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
 	`level — the operator approves the whole plan at step 0 and the engine sequences the ` +
@@ -1068,6 +1070,62 @@ The proposer should:
 - Include the picker's PrimaryTerraform as the patch contents.
 - Include the picker's Reasoning + the failure mode template
   in the recommendation reasoning field.
+
+` + "\n"
+
+// spanQualityKindsPromptSection — span quality slice 1 chunk 2
+// (v0.89.86, #717 Stream 115). Three new recommendation kinds that
+// fire when Squadron's traceindex Quality observer detects a
+// pathology in incoming spans from a resource. Detection runs on the
+// existing OTLP receiver hot path; no new data collection.
+//
+// COLD-START PARITY INVARIANT: same as the trace-emission section
+// above, this lives ONLY in the system prompt; the user-message
+// renderer is unchanged. When the discovery scan context carries no
+// inventory rows that trigger span-quality kinds (because no Quality
+// observations are present yet, or all per-resource snapshots are
+// below the §3 thresholds), the rendered user message stays byte-
+// identical to v0.89.85. The 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostSpanQualitySlice1
+// pins this invariant.
+const spanQualityKindsPromptSection = `SPAN QUALITY KINDS (slice 3 of trace integration):
+
+These kinds fire when Squadron's traceindex Quality observer
+detects a pathology in incoming spans from a resource. The
+detection runs on the existing OTLP receiver hot path; no new
+data collection.
+
+- span-quality-orphan-trace: > 10% of spans from this resource
+  in the last hour have parent_span_id values that don't
+  resolve to any span in the same trace. Cause: broken W3C
+  trace context propagation. Terraform pattern: enable
+  tracecontext + baggage propagators on the SDK config.
+
+- span-quality-missing-resource-attrs: > 25% of spans missing
+  one or more required resource attributes (service.name,
+  cloud.provider, cloud.account.id, cloud.region, and
+  tier-specific identifiers). Cause: resource detector running
+  with insufficient permissions or before metadata service
+  reachable. Terraform pattern: IAM permission adjustment +
+  env var to wait for metadata.
+
+- span-quality-attribute-mismatch: > 5% of spans with
+  placeholder values in required attributes (host.name=localhost,
+  cloud.account.id=000000000000, service.name=unknown_service,
+  etc.). Cause: SDK fell back to defaults when resource detector
+  failed silently. Terraform pattern: explicit
+  OTEL_RESOURCE_ATTRIBUTES env var injection hardcoding the
+  correct values from the inventory row.
+
+REASONING TEMPLATE for span-quality recommendations:
+
+"Squadron's traceindex Quality observer has observed N% of
+spans from this resource in the last hour with [pathology].
+The most common cause is [cause]. This Terraform PR targets
+[case] by [intervention].
+
+If the actual cause is different, decline this PR — the
+verdict learning loop will record the decline."
 
 ` + "\n"
 
