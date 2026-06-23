@@ -382,4 +382,46 @@ const (
 	// per-account events' TargetIDs are the individual account_ids
 	// — the two views correlate via the scan_all_id payload field.
 	AuditTargetDiscoveryScanAll = "discovery_scan_all"
+
+	// v0.89.46 (#667 Stream 65, GCP discovery slice 1 chunk 1) —
+	// audit event types for the first non-AWS discovery arc. Chunk 1
+	// adds the constants only; chunks 2 / 3 / 5 (scanner, API
+	// handlers, proposer integration) wire the call sites to actually
+	// emit these events. The six events mirror the AWS discovery
+	// arc's lifecycle one-for-one with the project_id field replacing
+	// the AWS account_id field — SIEM consumers that read
+	// discovery.aws.* rows can apply the same shape to
+	// discovery.gcp.* rows.
+	//
+	// Payload contract (per design doc §11, §13 acceptance test 8):
+	//
+	//   - .connection_created: connection_id, display_name, project_id,
+	//     region (empty="scan all"). SealedSA bytes NEVER in payload —
+	//     the credstore-sealed posture extends to the audit surface.
+	//   - .connection_deleted: connection_id, project_id. SealedSA
+	//     bytes NEVER in payload (the delete path doesn't touch them
+	//     anyway).
+	//   - .scan_started: connection_id, project_id, region, scan_id.
+	//   - .scan_completed: connection_id, project_id, region, scan_id,
+	//     total_resources, instrumented_count, partial (bool),
+	//     partial_reason (string, omitempty), failed_services
+	//     ([]string of GCP service names like "gce").
+	//   - .scan_failed: connection_id, project_id, region, scan_id,
+	//     error_kind ("permission_denied" | "project_not_found" |
+	//     "network" | "credentials_invalid" | "project_mismatch"),
+	//     humanized_message. Plaintext SA JSON NEVER in payload or
+	//     error message.
+	//   - .recommendations_generated: connection_id, project_id,
+	//     region, scan_id, recommendation_count, verdict_examples_used
+	//     ([]string of PR URLs — mirrors the AWS proposer's payload
+	//     shape so chunk 5's proposer integration slots into the
+	//     existing verdict-learning loop without schema changes).
+	//
+	// See docs/proposals/gcp-discovery-slice1.md §10 contract item 6.
+	AuditEventDiscoveryGCPConnectionCreated      = "discovery.gcp.connection_created"
+	AuditEventDiscoveryGCPConnectionDeleted      = "discovery.gcp.connection_deleted"
+	AuditEventDiscoveryGCPScanStarted            = "discovery.gcp.scan_started"
+	AuditEventDiscoveryGCPScanCompleted          = "discovery.gcp.scan_completed"
+	AuditEventDiscoveryGCPScanFailed             = "discovery.gcp.scan_failed"
+	AuditEventDiscoveryGCPRecommendationsGenerated = "discovery.gcp.recommendations_generated"
 )

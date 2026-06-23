@@ -200,3 +200,35 @@ func TestAuditEventConstants_CheckRunPresent(t *testing.T) {
 	assert.Equal(t, "iac.check_run.updated", AuditEventIaCCheckRunUpdated)
 	assert.Equal(t, "iac.check_run.failed", AuditEventIaCCheckRunFailed)
 }
+
+// TestAuditEventConstants_GCPDiscoveryPresent — v0.89.46 (#667
+// Stream 65, GCP discovery slice 1 chunk 1). Defensive: pins the six
+// GCP-discovery audit-event constants so a future refactor that
+// accidentally deletes one lands here rather than in a SIEM
+// dashboard that silently stops receiving GCP-side events. Chunks
+// 2 / 3 / 5 (scanner, API handlers, proposer integration) reference
+// these constants by name; the constant strings are the contract
+// SIEM consumers fan out on. The six events mirror the AWS discovery
+// arc's lifecycle one-for-one with project_id replacing account_id —
+// see docs/proposals/gcp-discovery-slice1.md §10 contract item 6.
+func TestAuditEventConstants_GCPDiscoveryPresent(t *testing.T) {
+	checks := map[string]string{
+		"AuditEventDiscoveryGCPConnectionCreated":        AuditEventDiscoveryGCPConnectionCreated,
+		"AuditEventDiscoveryGCPConnectionDeleted":        AuditEventDiscoveryGCPConnectionDeleted,
+		"AuditEventDiscoveryGCPScanStarted":              AuditEventDiscoveryGCPScanStarted,
+		"AuditEventDiscoveryGCPScanCompleted":            AuditEventDiscoveryGCPScanCompleted,
+		"AuditEventDiscoveryGCPScanFailed":               AuditEventDiscoveryGCPScanFailed,
+		"AuditEventDiscoveryGCPRecommendationsGenerated": AuditEventDiscoveryGCPRecommendationsGenerated,
+	}
+	for name, value := range checks {
+		assert.NotEmpty(t, value, "%s must be a non-empty string", name)
+	}
+	// Pin the canonical dotted-name values so a future rename lands
+	// here too. The strings are the SIEM-side contract.
+	assert.Equal(t, "discovery.gcp.connection_created", AuditEventDiscoveryGCPConnectionCreated)
+	assert.Equal(t, "discovery.gcp.connection_deleted", AuditEventDiscoveryGCPConnectionDeleted)
+	assert.Equal(t, "discovery.gcp.scan_started", AuditEventDiscoveryGCPScanStarted)
+	assert.Equal(t, "discovery.gcp.scan_completed", AuditEventDiscoveryGCPScanCompleted)
+	assert.Equal(t, "discovery.gcp.scan_failed", AuditEventDiscoveryGCPScanFailed)
+	assert.Equal(t, "discovery.gcp.recommendations_generated", AuditEventDiscoveryGCPRecommendationsGenerated)
+}
