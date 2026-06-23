@@ -1944,6 +1944,14 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 // id) and vice versa, so cross-provider leakage is structurally
 // impossible at the query layer. See
 // docs/proposals/gcp-discovery-slice1.md §9.
+//
+// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — the
+// WHERE predicate extends to a third OR-branch on
+// `payload->>'subscription_id' = ?` so Azure callers find the
+// parallel subscription_id-keyed rows. Same cross-provider isolation
+// invariant: AWS payloads carry subscription_id="" (or absent), GCP
+// payloads same, so structurally no leakage at the query layer. See
+// docs/proposals/azure-discovery-slice1.md §10.
 // Returns the unioned DiscoveryVerdict projection per row, newest-
 // first. State is derived from the event_type column:
 // recommendation.pr_merged → "merged" (verdictsel.StateMerged);
@@ -1979,15 +1987,20 @@ func (s *Storage) ListDiscoveryVerdicts(
 	}
 	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) — the
 	// scope predicate OR-matches account_id (AWS shape) or project_id
-	// (GCP shape). The scopeID parameter is bound twice. SQLite's
-	// JSON1 extension handles both extracts as a single ranged scan
+	// (GCP shape). v0.89.53 (#678 Stream 76, Azure discovery slice 1
+	// chunk 5) extends the predicate with a third OR-branch on
+	// subscription_id (Azure shape). The scopeID parameter is bound
+	// three times — the caller doesn't know the provider, the storage
+	// layer matches whichever populated field exists. SQLite's JSON1
+	// extension handles all three extracts as a single ranged scan
 	// thanks to the v7 partial index on (event_type, timestamp DESC).
 	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
 		WHERE event_type IN (?, ?)
 		  AND timestamp >= ?
 		  AND json_extract(payload, '$.connection_id') = ?
 		  AND (json_extract(payload, '$.account_id') = ?
-		       OR json_extract(payload, '$.project_id') = ?)
+		       OR json_extract(payload, '$.project_id') = ?
+		       OR json_extract(payload, '$.subscription_id') = ?)
 		  AND json_extract(payload, '$.region') = ?
 		ORDER BY timestamp DESC
 		LIMIT ?`
@@ -1995,7 +2008,7 @@ func (s *Storage) ListDiscoveryVerdicts(
 		"recommendation.pr_merged",
 		"recommendation.pr_closed_not_merged",
 		since,
-		connectionID, scopeID, scopeID, region,
+		connectionID, scopeID, scopeID, scopeID, region,
 		limit,
 	)
 	if err != nil {

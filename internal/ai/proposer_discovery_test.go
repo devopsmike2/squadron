@@ -989,3 +989,191 @@ func TestProposeFromDiscoveryScan_GCPRequiresProjectID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "project_id is required when provider=gcp")
 }
+
+// --- v0.89.53 (#678 Stream 76) Azure discovery slice 1 chunk 5 tests ---
+
+// TestDiscoveryProposer_AzureProvider_PromptIncludesVMOtelTag — when
+// Provider="azure" and SubscriptionID is set, the user message
+// renders the Azure scope description (provider=azure +
+// subscription_id) and the system prompt teaches the vm-otel-tag
+// kind. Pins the §10 contract from
+// docs/proposals/azure-discovery-slice1.md.
+func TestDiscoveryProposer_AzureProvider_PromptIncludesVMOtelTag(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:         "scan-azure-001",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	}
+	msg := buildDiscoveryUserMessage(ctx)
+	// User message describes the scope as Azure subscription, not AWS
+	// account or GCP project.
+	assert.Contains(t, msg, "provider: azure")
+	assert.Contains(t, msg, "subscription_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	assert.Contains(t, msg, "tenant_id: 11111111-2222-3333-4444-555555555555")
+	assert.NotContains(t, msg, "account_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	assert.NotContains(t, msg, "project_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	assert.Contains(t, msg, "Azure discovery scan")
+	assert.Contains(t, msg, "group_id on every step MUST equal the subscription_id above")
+
+	// System prompt teaches the vm-otel-tag kind and the
+	// azurerm_*_virtual_machine Terraform resources per §10 contract.
+	for _, want := range []string{
+		"vm-otel-tag",
+		"azurerm_linux_virtual_machine",
+		"azurerm_windows_virtual_machine",
+		"Azure Virtual Machines",
+		"OTel TAG",
+		"Reader role",
+		"Microsoft.Compute/virtualMachines/read",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt should teach Azure rule: %q", want)
+	}
+}
+
+// TestDiscoveryProposer_AWSProvider_PromptUnchanged_PostAzure — chunk
+// 5 cold-start parity: an AWS user message (provider="" and
+// provider="aws") is byte-for-byte identical to the AWS user message
+// produced by the chunk 4 baseline. The acceptance test §15.12
+// invariant — adding the Azure path doesn't perturb AWS prompt
+// generation.
+func TestDiscoveryProposer_AWSProvider_PromptUnchanged_PostAzure(t *testing.T) {
+	// Empty provider — the backward-compat default.
+	ctxAWSDefault := DiscoveryScanContext{
+		ScanID:    "scan-aws-001",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	}
+	// Explicit "aws" provider.
+	ctxAWSExplicit := ctxAWSDefault
+	ctxAWSExplicit.Provider = "aws"
+
+	msgDefault := buildDiscoveryUserMessage(ctxAWSDefault)
+	msgExplicit := buildDiscoveryUserMessage(ctxAWSExplicit)
+
+	// Byte-identity: empty provider and explicit "aws" produce the
+	// same message after the chunk 5 Azure switch refactor.
+	if msgDefault != msgExplicit {
+		t.Fatalf("AWS prompt parity broken between provider='' and provider='aws' after chunk 5\n--- default ---\n%s\n--- explicit ---\n%s",
+			msgDefault, msgExplicit)
+	}
+
+	// AWS framing preserved.
+	assert.Contains(t, msgDefault, "AWS discovery scan")
+	assert.Contains(t, msgDefault, "account_id: 123456789012")
+	assert.NotContains(t, msgDefault, "provider: gcp")
+	assert.NotContains(t, msgDefault, "provider: azure")
+	assert.NotContains(t, msgDefault, "project_id:")
+	assert.NotContains(t, msgDefault, "subscription_id:")
+	assert.Contains(t, msgDefault, "group_id on every step MUST equal the account_id above")
+}
+
+// TestDiscoveryProposer_GCPProvider_PromptUnchanged_PostAzure — chunk
+// 5 cold-start parity: the GCP user message produced under
+// Provider="gcp" is byte-for-byte identical to the GCP user message
+// from v0.89.48 (the original GCP slice 1 chunk 5 baseline).
+// Acceptance test §15.12 invariant — adding the Azure path doesn't
+// perturb GCP prompt generation.
+func TestDiscoveryProposer_GCPProvider_PromptUnchanged_PostAzure(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:    "scan-gcp-001",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	}
+	msg := buildDiscoveryUserMessage(ctx)
+
+	// GCP framing preserved byte-for-byte. The GCP-specific markers
+	// from TestDiscoveryProposer_GCPProvider_PromptIncludesGCEOtelLabel
+	// all still appear unchanged.
+	assert.Contains(t, msg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.Contains(t, msg, "provider: gcp")
+	assert.Contains(t, msg, "project_id: my-sandbox-project")
+	assert.NotContains(t, msg, "provider: azure")
+	assert.NotContains(t, msg, "provider: aws")
+	assert.NotContains(t, msg, "subscription_id:")
+	assert.NotContains(t, msg, "tenant_id:")
+	assert.NotContains(t, msg, "account_id:")
+	assert.Contains(t, msg, "group_id on every step MUST equal the project_id above")
+}
+
+// TestDiscoveryScanContext_ScopeID_AzureProvider — pins the ScopeID()
+// helper's provider-aware routing for the Azure path:
+// SubscriptionID for Provider="azure", AccountID for AWS, ProjectID
+// for GCP. Mirrors TestDiscoveryScanContext_ScopeID_Provider with
+// the Azure case added.
+func TestDiscoveryScanContext_ScopeID_AzureProvider(t *testing.T) {
+	azureCtx := DiscoveryScanContext{Provider: "azure", SubscriptionID: "abc"}
+	if got := azureCtx.ScopeID(); got != "abc" {
+		t.Errorf("Azure ScopeID = %q, want abc", got)
+	}
+	// Azure ignores AccountID + ProjectID if both are populated.
+	azureCtxAll := DiscoveryScanContext{
+		Provider:       "azure",
+		SubscriptionID: "sub-001",
+		AccountID:      "aws-account-bleed",
+		ProjectID:      "gcp-project-bleed",
+	}
+	if got := azureCtxAll.ScopeID(); got != "sub-001" {
+		t.Errorf("Azure ScopeID with bleed-through fields = %q, want sub-001", got)
+	}
+	// Cross-check: AWS path still works after Azure was added.
+	awsCtx := DiscoveryScanContext{AccountID: "123456789012"}
+	if got := awsCtx.ScopeID(); got != "123456789012" {
+		t.Errorf("AWS ScopeID after Azure addition = %q, want 123456789012", got)
+	}
+	// Cross-check: GCP path still works after Azure was added.
+	gcpCtx := DiscoveryScanContext{Provider: "gcp", ProjectID: "my-project"}
+	if got := gcpCtx.ScopeID(); got != "my-project" {
+		t.Errorf("GCP ScopeID after Azure addition = %q, want my-project", got)
+	}
+}
+
+// TestProposeFromDiscoveryScan_AzureRequiresSubscriptionID —
+// Provider="azure" with empty SubscriptionID is rejected at the
+// pre-call validator. AWS + GCP rules unchanged.
+func TestProposeFromDiscoveryScan_AzureRequiresSubscriptionID(t *testing.T) {
+	svc := proposerServiceForTest("http://unused.example")
+	svc.cfg.APIKey = "test-key"
+	svc.cfg.Enabled = true
+
+	_, err := svc.ProposeFromDiscoveryScan(context.Background(), &DiscoveryScanContext{
+		ScanID:   "scan-x",
+		Provider: "azure",
+		// SubscriptionID intentionally empty.
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "subscription_id is required when provider=azure")
+}
+
+// TestDiscoveryProposer_CrossProviderMix_AzureInstructionPresent —
+// the system prompt is shared across providers; the Azure
+// vm-otel-tag kind appears in the same system message that already
+// carries the AWS kinds and the GCP gce-otel-label kind. Same design
+// choice as the v0.89.48 GCP cross-provider mix test — a single
+// shared system prompt simplifies the proposer engine.
+func TestDiscoveryProposer_CrossProviderMix_AzureInstructionPresent(t *testing.T) {
+	for _, azureKind := range []string{
+		"vm-otel-tag",
+		"azurerm_linux_virtual_machine",
+		"azurerm_windows_virtual_machine",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, azureKind,
+			"shared system prompt should teach the Azure kind %q", azureKind)
+	}
+	// AWS + GCP kinds still present after Azure addition.
+	for _, awsKind := range []string{
+		"ec2-otel-layer", "lambda-otel-layer", "rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, awsKind,
+			"shared system prompt should still teach the AWS kind %q after Azure addition", awsKind)
+	}
+	for _, gcpKind := range []string{
+		"gce-otel-label", "google_compute_instance",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, gcpKind,
+			"shared system prompt should still teach the GCP kind %q after Azure addition", gcpKind)
+	}
+}

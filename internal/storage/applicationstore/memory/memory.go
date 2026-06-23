@@ -965,6 +965,12 @@ func (s *Store) ListAIVerdictsForGroup(ctx context.Context, groupID string, sinc
 // audit rows carry it under project_id (with account_id empty or
 // absent). The OR predicate keeps both round-trips clean without
 // requiring a Provider parameter on the lookup.
+//
+// v0.89.53 (#678 Stream 76, Azure discovery slice 1 chunk 5) — the OR
+// predicate extends to subscription_id (Azure shape). Azure-shaped
+// audit rows carry the scope under subscription_id (with account_id
+// and project_id empty or absent). All three provider shapes
+// round-trip through one call.
 func (s *Store) ListDiscoveryVerdicts(
 	ctx context.Context,
 	connectionID, scopeID, region string,
@@ -1004,15 +1010,19 @@ func (s *Store) ListDiscoveryVerdicts(
 			continue
 		}
 		// Predicate: connection_id + scope_id + region all match. The
-		// scope_id is matched against account_id OR project_id so AWS
-		// and GCP audit shapes both round-trip through one call. See
-		// v0.89.48 (#671 Stream 69) — GCP discovery slice 1 chunk 5.
+		// scope_id is matched against account_id OR project_id OR
+		// subscription_id so AWS, GCP, and Azure audit shapes all
+		// round-trip through one call. See v0.89.48 (#671 Stream 69) —
+		// GCP discovery slice 1 chunk 5 — and v0.89.53 (#678 Stream
+		// 76) — Azure discovery slice 1 chunk 5 — for the broader
+		// substrate.
 		if v, _ := e.Payload["connection_id"].(string); v != connectionID {
 			continue
 		}
 		acct, _ := e.Payload["account_id"].(string)
 		proj, _ := e.Payload["project_id"].(string)
-		if acct != scopeID && proj != scopeID {
+		sub, _ := e.Payload["subscription_id"].(string)
+		if acct != scopeID && proj != scopeID && sub != scopeID {
 			continue
 		}
 		if v, _ := e.Payload["region"].(string); v != region {
