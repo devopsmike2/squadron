@@ -18,8 +18,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	cloudfunctions "google.golang.org/api/cloudfunctions/v1"
 	compute "google.golang.org/api/compute/v1"
 	container "google.golang.org/api/container/v1beta1"
+	run "google.golang.org/api/run/v1"
 	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -87,11 +89,59 @@ type fakeGCP struct {
 	// body).
 	GKEListStatus int
 
+	// Cloud Run (serverless tier slice 1 chunk 2) test surface.
+	//
+	// CloudRunServicesByRegion maps region → services list returned
+	// by the /v1/projects/.../locations/{region}/services endpoint.
+	// When unset for a region, the mock returns an empty list (the
+	// scanner's per-region walker still records the empty result).
+	CloudRunServicesByRegion map[string][]*run.Service
+
+	// CloudRunPagesByRegion, when set for a region, makes the
+	// Cloud Run List endpoint paginate via Knative continuation
+	// tokens. Each page returns its services and a Metadata.Continue
+	// pointing at the next page. The mock pulls the page by index
+	// based on the inbound "continue" query param.
+	CloudRunPagesByRegion map[string][][]*run.Service
+
+	// CloudRunLocations is the list of locations the
+	// Projects.Locations.List call returns when the scanner needs
+	// to enumerate regions (s.Region empty). When nil the mock
+	// returns an empty list.
+	CloudRunLocations []*run.Location
+
+	// CloudRunListStatus, when non-zero, makes the next Cloud Run
+	// Services.List call return this status.
+	CloudRunListStatus int
+
+	// CloudRunLocationsStatus, when non-zero, makes the next
+	// Projects.Locations.List call (run/v1) return this status.
+	CloudRunLocationsStatus int
+
+	// Cloud Functions (serverless tier slice 1 chunk 2) test surface.
+	//
+	// CloudFunctions is the static list returned by the
+	// /v1/projects/.../locations/-/functions endpoint. Tests seed
+	// fn.Name with the canonical "projects/{p}/locations/{r}/functions/{n}"
+	// shape so the scanner's region projection lands honestly.
+	CloudFunctions []*cloudfunctions.CloudFunction
+
+	// CloudFunctionsPages, when non-nil, makes the Cloud Functions
+	// list endpoint paginate via the standard nextPageToken.
+	CloudFunctionsPages [][]*cloudfunctions.CloudFunction
+
+	// CloudFunctionsListStatus, when non-zero, makes the next
+	// Cloud Functions list call return this status.
+	CloudFunctionsListStatus int
+
 	// Call counters for assertions.
-	ZonesListCalls     int
-	InstancesListCalls map[string]int
-	CloudSQLListCalls  int
-	GKEListCalls       int
+	ZonesListCalls          int
+	InstancesListCalls      map[string]int
+	CloudSQLListCalls       int
+	GKEListCalls            int
+	CloudRunListCalls       map[string]int
+	CloudRunLocationsCalls  int
+	CloudFunctionsListCalls int
 }
 
 func newFakeGCP() *fakeGCP {
@@ -99,6 +149,9 @@ func newFakeGCP() *fakeGCP {
 		InstancesByZone:           map[string][]*compute.Instance{},
 		InstancesListStatusByZone: map[string]int{},
 		InstancesListCalls:        map[string]int{},
+		CloudRunServicesByRegion:  map[string][]*run.Service{},
+		CloudRunPagesByRegion:     map[string][][]*run.Service{},
+		CloudRunListCalls:         map[string]int{},
 	}
 }
 
@@ -199,6 +252,64 @@ func (f *fakeGCP) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
 			return
+
+		case strings.Contains(path, "/v1/projects/") && strings.Contains(path, "/locations/") && strings.HasSuffix(path, "/services"):
+			// Cloud Run Admin API path shape (REST, v1):
+			//   /v1/projects/{project}/locations/{region}/services
+			// The per-region walker hits this once per region; the
+			// fake honors per-region seed lists and per-region paging.
+			region := parseRegionFromServicesPath(path)
+			f.CloudRunListCalls[region]++
+			if f.CloudRunListStatus != 0 {
+				writeAPIError(w, f.CloudRunListStatus, statusReason(f.CloudRunListStatus), statusName(f.CloudRunListStatus))
+				return
+			}
+			items, nextToken := f.cloudRunPage(region, r.URL.Query().Get("continue"))
+			resp := run.ListServicesResponse{
+				Items: items,
+				Kind:  "ServiceList",
+			}
+			if nextToken != "" {
+				resp.Metadata = &run.ListMeta{Continue: nextToken}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+
+		case strings.HasPrefix(path, "/v1/projects/") && strings.HasSuffix(path, "/locations"):
+			// Cloud Run Projects.Locations.List path shape (REST, v1):
+			//   /v1/projects/{project}/locations
+			// The scanner calls this when s.Region is empty to
+			// enumerate locations before fanning Services.List per
+			// region. The fake honors CloudRunLocations directly.
+			f.CloudRunLocationsCalls++
+			if f.CloudRunLocationsStatus != 0 {
+				writeAPIError(w, f.CloudRunLocationsStatus, statusReason(f.CloudRunLocationsStatus), statusName(f.CloudRunLocationsStatus))
+				return
+			}
+			resp := run.ListLocationsResponse{Locations: f.CloudRunLocations}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+
+		case strings.Contains(path, "/v1/projects/") && strings.HasSuffix(path, "/functions"):
+			// Cloud Functions API path shape (REST, v1):
+			//   /v1/projects/{project}/locations/-/functions
+			// The scanner uses the "-" location wildcard; the fake
+			// honors the flat list or the paged-list seed.
+			f.CloudFunctionsListCalls++
+			if f.CloudFunctionsListStatus != 0 {
+				writeAPIError(w, f.CloudFunctionsListStatus, statusReason(f.CloudFunctionsListStatus), statusName(f.CloudFunctionsListStatus))
+				return
+			}
+			items, nextToken := f.cloudFunctionsPage(r.URL.Query().Get("pageToken"))
+			resp := cloudfunctions.ListFunctionsResponse{
+				Functions:     items,
+				NextPageToken: nextToken,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
 		}
 
 		// Unmatched path — surface as 404 so test failures are
@@ -206,6 +317,63 @@ func (f *fakeGCP) handler() http.Handler {
 		// empty body).
 		writeAPIError(w, http.StatusNotFound, fmt.Sprintf("unhandled mock path: %s", path), "NOT_FOUND")
 	})
+}
+
+// parseRegionFromServicesPath extracts the region segment from a Cloud
+// Run services-list URL of shape ".../locations/{region}/services".
+func parseRegionFromServicesPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		if p == "locations" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// cloudRunPage resolves the inbound "continue" token into the (items,
+// nextToken) pair the mock should return for the given region.
+func (f *fakeGCP) cloudRunPage(region, continueToken string) ([]*run.Service, string) {
+	pages, ok := f.CloudRunPagesByRegion[region]
+	if !ok || len(pages) == 0 {
+		return f.CloudRunServicesByRegion[region], ""
+	}
+	idx := 0
+	if continueToken != "" {
+		var n int
+		_, _ = fmt.Sscanf(continueToken, "page-%d", &n)
+		idx = n
+	}
+	if idx >= len(pages) {
+		return nil, ""
+	}
+	items := pages[idx]
+	if idx+1 < len(pages) {
+		return items, fmt.Sprintf("page-%d", idx+1)
+	}
+	return items, ""
+}
+
+// cloudFunctionsPage resolves the inbound pageToken into the (items,
+// nextToken) pair the mock should return.
+func (f *fakeGCP) cloudFunctionsPage(pageToken string) ([]*cloudfunctions.CloudFunction, string) {
+	if len(f.CloudFunctionsPages) == 0 {
+		return f.CloudFunctions, ""
+	}
+	idx := 0
+	if pageToken != "" {
+		var n int
+		_, _ = fmt.Sscanf(pageToken, "page-%d", &n)
+		idx = n
+	}
+	if idx >= len(f.CloudFunctionsPages) {
+		return nil, ""
+	}
+	items := f.CloudFunctionsPages[idx]
+	if idx+1 < len(f.CloudFunctionsPages) {
+		return items, fmt.Sprintf("page-%d", idx+1)
+	}
+	return items, ""
 }
 
 // cloudSQLPage resolves the inbound pageToken into the (items, nextToken)
@@ -1281,4 +1449,141 @@ func TestExtractMajorMinor_Standalone(t *testing.T) {
 	assert.Equal(t, "1.30", extractMajorMinor("1.30.1-gke.500"))
 	assert.Equal(t, "1.28", extractMajorMinor("1.28"))
 	assert.Equal(t, "", extractMajorMinor(""))
+}
+
+// --- Serverless dispatcher tests --------------------------------------
+//
+// Serverless tier slice 1 chunk 2 (v0.89.91, #722 Stream 120) — the
+// ScanServerless dispatcher fans to both Cloud Run + Cloud Functions
+// in sequence. The two walks populate result.Serverless from disjoint
+// surfaces ("cloudrun" vs "cloudfunc"); a failure on one surface
+// must NOT contaminate the other.
+
+// TestScanServerless_DispatchesToBothCloudRunAndCloudFunctions
+// confirms the dispatcher fans to both walks in a single Scan call
+// when both surfaces have inventory. The result must carry one row
+// per surface row, each stamped with its own Surface discriminator.
+func TestScanServerless_DispatchesToBothCloudRunAndCloudFunctions(t *testing.T) {
+	fake := newFakeGCP()
+	// Cloud Run seed: one service with the trace annotation.
+	fake.CloudRunServicesByRegion["us-central1"] = []*run.Service{
+		makeCloudRunService("api", "us-central1",
+			map[string]string{CloudRunTraceAnnotation: "on"}, nil),
+	}
+	// Cloud Functions seed: one function with the OTel layer env.
+	fake.CloudFunctions = []*cloudfunctions.CloudFunction{
+		makeCloudFunction("etl", "us-central1", "python311",
+			map[string]string{CloudFunctionsOTelLayerEnv: "true"}),
+	}
+
+	s := newScannerWithFake(t, fake, "p", "us-central1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	cloudRun := serverlessBySurface(res.Serverless, cloudRunServerlessSurface)
+	cloudFunc := serverlessBySurface(res.Serverless, cloudFuncServerlessSurface)
+	require.Len(t, cloudRun, 1, "exactly one Cloud Run row expected")
+	require.Len(t, cloudFunc, 1, "exactly one Cloud Functions row expected")
+
+	assert.Equal(t, "api", cloudRun[0].ResourceName)
+	assert.True(t, cloudRun[0].HasTraceAxis)
+
+	assert.Equal(t, "etl", cloudFunc[0].ResourceName)
+	assert.True(t, cloudFunc[0].HasOTelDistro)
+
+	// Both rows count as instrumented under the OR rule, contributing
+	// to the Result-level instrumented tally.
+	assert.Equal(t, 2, res.InstrumentedCount)
+	assert.False(t, res.Partial)
+}
+
+// TestScanServerless_PartialFailureOnCloudRunStillReturnsCloudFunc
+// confirms the two walks are independent — a Cloud Run failure
+// records the partial-failure entry but does NOT short-circuit the
+// Cloud Functions walk. The operator still sees the Cloud Functions
+// rows.
+func TestScanServerless_PartialFailureOnCloudRunStillReturnsCloudFunc(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudRunListStatus = http.StatusForbidden
+	fake.CloudFunctions = []*cloudfunctions.CloudFunction{
+		makeCloudFunction("etl", "us-central1", "python311",
+			map[string]string{CloudFunctionsOTelLayerEnv: "true"}),
+		makeCloudFunction("workers", "us-central1", "nodejs20",
+			map[string]string{GoogleCloudTraceEnv: "true"}),
+	}
+
+	s := newScannerWithFake(t, fake, "p", "us-central1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err, "cloudrun 403 is partial, not hard")
+
+	// Cloud Run failure recorded.
+	assert.True(t, res.Partial)
+	assert.Contains(t, res.FailedServices, ServiceIDCloudRun)
+	// Cloud Functions surface NOT in the failed list.
+	assert.NotContains(t, res.FailedServices, ServiceIDCloudFunctions)
+
+	// Cloud Functions rows survived.
+	cloudFunc := serverlessBySurface(res.Serverless, cloudFuncServerlessSurface)
+	require.Len(t, cloudFunc, 2)
+	// Cloud Run rows: none survived (the list call failed before
+	// any service was projected).
+	cloudRun := serverlessBySurface(res.Serverless, cloudRunServerlessSurface)
+	assert.Empty(t, cloudRun)
+}
+
+// TestScanServerless_PartialFailureOnCloudFuncStillReturnsCloudRun —
+// the symmetric inverse: a Cloud Functions failure records the
+// partial-failure entry but the Cloud Run walk still produces its
+// rows. Pins the "no contamination" invariant the dispatcher
+// commits to.
+func TestScanServerless_PartialFailureOnCloudFuncStillReturnsCloudRun(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudFunctionsListStatus = http.StatusForbidden
+	fake.CloudRunServicesByRegion["us-central1"] = []*run.Service{
+		makeCloudRunService("api", "us-central1",
+			map[string]string{CloudRunTraceAnnotation: "on"}, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "p", "us-central1")
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, res.Partial)
+	assert.Contains(t, res.FailedServices, ServiceIDCloudFunctions)
+	assert.NotContains(t, res.FailedServices, ServiceIDCloudRun)
+
+	cloudRun := serverlessBySurface(res.Serverless, cloudRunServerlessSurface)
+	require.Len(t, cloudRun, 1)
+	assert.True(t, cloudRun[0].HasTraceAxis)
+}
+
+// TestScanServerless_LocationEnumerationWhenRegionEmpty — when
+// s.Region is empty the Cloud Run walk calls Locations.List first,
+// then fans Services.List per location. The Cloud Functions walk
+// uses the "-" wildcard so no separate location enumeration runs
+// for that surface. Pins the location-discovery posture documented
+// in cloudrun.go::cloudRunRegions godoc.
+func TestScanServerless_LocationEnumerationWhenRegionEmpty(t *testing.T) {
+	fake := newFakeGCP()
+	fake.CloudRunLocations = []*run.Location{
+		{LocationId: "us-central1"},
+		{LocationId: "europe-west1"},
+	}
+	fake.CloudRunServicesByRegion["us-central1"] = []*run.Service{
+		makeCloudRunService("svc-a", "us-central1", nil, nil),
+	}
+	fake.CloudRunServicesByRegion["europe-west1"] = []*run.Service{
+		makeCloudRunService("svc-b", "europe-west1", nil, nil),
+	}
+
+	s := newScannerWithFake(t, fake, "p", "" /* no region pin */)
+	res, err := s.Scan(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, fake.CloudRunLocationsCalls)
+	assert.Equal(t, 1, fake.CloudRunListCalls["us-central1"])
+	assert.Equal(t, 1, fake.CloudRunListCalls["europe-west1"])
+
+	cloudRun := serverlessBySurface(res.Serverless, cloudRunServerlessSurface)
+	require.Len(t, cloudRun, 2)
 }
