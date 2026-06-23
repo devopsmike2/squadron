@@ -102,7 +102,10 @@ type DiscoveryOCIHandlers struct {
 	credstoreKey   *credstore.Key
 	auditService   services.AuditService
 	scannerFactory OCIScannerFactory
-	logger         *zap.Logger
+	// traceIndex — v0.89.77 trace integration slice 1 chunk 4.
+	// Optional; see DiscoveryHandlers.traceIndex godoc for posture.
+	traceIndex TraceIndexLookup
+	logger     *zap.Logger
 }
 
 // NewDiscoveryOCIHandlers builds the handler struct. Optional
@@ -139,6 +142,15 @@ func (h *DiscoveryOCIHandlers) WithOCICredstoreKey(k *credstore.Key) *DiscoveryO
 // (chunk 2 type, lives in a parallel worktree); tests substitute a
 // fake that returns a pre-canned scanner.Scanner. A nil factory
 // leaves Validate / Scan 500ing with a humanized error.
+// WithOCITraceIndex wires the v0.89.77 trace integration slice 1
+// chunk 4 traceindex lookup. Nil leaves scan responses
+// un-annotated; production wires the same Index chunk 3 wired into
+// the Discovery dashboard.
+func (h *DiscoveryOCIHandlers) WithOCITraceIndex(idx TraceIndexLookup) *DiscoveryOCIHandlers {
+	h.traceIndex = idx
+	return h
+}
+
 func (h *DiscoveryOCIHandlers) WithOCIScannerFactory(f OCIScannerFactory) *DiscoveryOCIHandlers {
 	h.scannerFactory = f
 	return h
@@ -1000,6 +1012,16 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 			Action:     "scan_completed",
 			Payload:    payload,
 		})
+	}
+
+	// Trace integration slice 1 chunk 4 (v0.89.77) — annotate the
+	// per-resource last_seen_at in-place against the traceindex
+	// before the response is serialized. The scope_id projection
+	// uses the OCI tenancy_ocid per design doc §6.
+	if h.traceIndex != nil {
+		AnnotateComputeWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Compute, h.logger)
+		AnnotateDatabaseWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Databases, h.logger)
+		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Clusters, h.logger)
 	}
 
 	c.JSON(http.StatusOK, ociScanResponse{

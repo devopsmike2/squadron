@@ -144,6 +144,8 @@ export interface ComputeInstanceSnapshot {
   has_otel: boolean;
   os_family: string;
   region: string;
+  // last_seen_at — v0.89.77 trace integration slice 1 chunk 4.
+  last_seen_at?: string;
 }
 
 // DatabaseInstanceSnapshot mirrors scanner.DatabaseInstanceSnapshot —
@@ -172,6 +174,9 @@ export interface DatabaseInstanceSnapshot {
   query_insights_enabled?: boolean;       // GCP Cloud SQL (slice 2)
   sql_insights_diag_enabled?: boolean;    // Azure SQL (slice 2)
   database_management_enabled?: boolean;  // OCI DB (slice 2)
+
+  // last_seen_at — v0.89.77 trace integration slice 1 chunk 4.
+  last_seen_at?: string;
 }
 
 // ClusterSnapshot mirrors scanner.ClusterSnapshot — the shared
@@ -205,6 +210,9 @@ export interface ClusterSnapshot {
   managed_prometheus_enabled?: boolean;     // GCP GKE
   azure_monitor_enabled?: boolean;          // Azure AKS
   operations_insights_enabled?: boolean;    // OCI OKE
+
+  // last_seen_at — v0.89.77 trace integration slice 1 chunk 4.
+  last_seen_at?: string;
 }
 
 // ScanGCPResponse mirrors gcpScanResponse on the wire. Note that

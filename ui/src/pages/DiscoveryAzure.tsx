@@ -88,6 +88,7 @@ import {
   substituteSubscription,
   validateErrorRemediation,
 } from "@/data/azureDiscoveryWizard";
+import { relativeTime } from "@/lib/relativeTime";
 
 // Tab values — stable string literals double as both the Radix Tabs
 // `value` and the test selector key. Mirrors the GCP page's
@@ -1157,6 +1158,7 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
             <th className="px-3 py-2 font-medium">OS</th>
             <th className="px-3 py-2 font-medium">Location</th>
             <th className="px-3 py-2 font-medium">OTel?</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
             <th className="px-3 py-2 font-medium">Tags</th>
           </tr>
         </thead>
@@ -1177,6 +1179,9 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
                     No
                   </Badge>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
               </td>
               <td className="px-3 py-2 font-mono text-xs">
                 {Object.keys(row.tags ?? {}).length === 0
@@ -1217,6 +1222,7 @@ function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) 
             <th className="px-3 py-2 font-medium">Engine Version</th>
             <th className="px-3 py-2 font-medium">Size</th>
             <th className="px-3 py-2 font-medium">SQLInsights routed?</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
             <th className="px-3 py-2 font-medium">Region</th>
             <th className="px-3 py-2 font-medium">Tags</th>
           </tr>
@@ -1238,6 +1244,9 @@ function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) 
                     No
                   </Badge>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
               </td>
               <td className="px-3 py-2 text-xs">{row.region}</td>
               <td className="px-3 py-2 font-mono text-xs">
@@ -1281,6 +1290,7 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
             <th className="px-3 py-2 font-medium">Kubernetes Version</th>
             <th className="px-3 py-2 font-medium">Status</th>
             <th className="px-3 py-2 font-medium">Azure Monitor?</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
             <th className="px-3 py-2 font-medium">Region</th>
             <th className="px-3 py-2 font-medium">Tags</th>
           </tr>
@@ -1302,6 +1312,9 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
                     No
                   </Badge>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
               </td>
               <td className="px-3 py-2 text-xs">{row.region}</td>
               <td className="px-3 py-2 font-mono text-xs">
@@ -1334,5 +1347,28 @@ function RecommendationsTab() {
         the same generate-recommendations flow the AWS / GCP pages use.
       </p>
     </div>
+  );
+}
+
+// LastSeenCell — v0.89.77 trace integration slice 1 chunk 4. See
+// DiscoveryGCP.tsx::LastSeenCell for the shared rendering rule.
+function LastSeenCell({ value }: { value?: string }) {
+  const rel = relativeTime(value);
+  if (rel.isNever) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-amber-600"
+        title="No spans observed for this resource"
+        data-testid="last-seen-never"
+      >
+        <AlertTriangle className="h-3 w-3" aria-hidden />
+        {rel.text}
+      </span>
+    );
+  }
+  return (
+    <span className="text-muted-foreground" title={value}>
+      {rel.text}
+    </span>
   );
 }

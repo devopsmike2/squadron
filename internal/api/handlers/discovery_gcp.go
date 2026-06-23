@@ -89,7 +89,10 @@ type DiscoveryGCPHandlers struct {
 	credstoreKey   *credstore.Key
 	auditService   services.AuditService
 	scannerFactory GCPScannerFactory
-	logger         *zap.Logger
+	// traceIndex — v0.89.77 trace integration slice 1 chunk 4.
+	// Optional; see DiscoveryHandlers.traceIndex godoc for posture.
+	traceIndex TraceIndexLookup
+	logger     *zap.Logger
 }
 
 // NewDiscoveryGCPHandlers builds the handler struct. Optional
@@ -125,6 +128,15 @@ func (h *DiscoveryGCPHandlers) WithGCPCredstoreKey(k *credstore.Key) *DiscoveryG
 // (chunk 2 type, lives in a parallel worktree); tests substitute a
 // fake that returns a pre-canned scanner.Scanner. A nil factory
 // leaves Validate / Scan 500ing with a humanized error.
+// WithGCPTraceIndex wires the v0.89.77 trace integration slice 1
+// chunk 4 traceindex lookup. Nil leaves scan responses
+// un-annotated; production wires the same Index chunk 3 wired into
+// the Discovery dashboard.
+func (h *DiscoveryGCPHandlers) WithGCPTraceIndex(idx TraceIndexLookup) *DiscoveryGCPHandlers {
+	h.traceIndex = idx
+	return h
+}
+
 func (h *DiscoveryGCPHandlers) WithGCPScannerFactory(f GCPScannerFactory) *DiscoveryGCPHandlers {
 	h.scannerFactory = f
 	return h
@@ -944,6 +956,16 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 			Action:     "scan_completed",
 			Payload:    payload,
 		})
+	}
+
+	// Trace integration slice 1 chunk 4 (v0.89.77) — annotate the
+	// per-resource last_seen_at in-place against the traceindex
+	// before the response is serialized. The scope_id projection
+	// uses the GCP project_id per design doc §6.
+	if h.traceIndex != nil {
+		AnnotateComputeWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Compute, h.logger)
+		AnnotateDatabaseWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Databases, h.logger)
+		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Clusters, h.logger)
 	}
 
 	c.JSON(http.StatusOK, gcpScanResponse{

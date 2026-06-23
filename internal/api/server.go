@@ -183,6 +183,18 @@ type Server struct {
 	discoveryTraceCoverageHandler *handlers.DiscoveryTraceCoverageHandlers
 	traceCoverageHandlerOnce      sync.Once
 	traceIndexForDiscovery        handlers.TraceIndex
+	// traceIndexLookupForDiscovery — v0.89.77 (#708 Stream 106,
+	// Trace integration slice 1 chunk 4) — the LastSeenAt-shaped
+	// slice of the traceindex consumed by the per-provider scan
+	// handlers' annotation step. Production wires the same
+	// *traceindex.Index this struct's traceIndexForDiscovery field
+	// holds (the type satisfies both Coverage and LastSeenAt
+	// interfaces); keeping it as a separate field keeps the chunk-3
+	// stubTraceIndex test type unchanged (it only implements
+	// Coverage). A nil lookup leaves every scan response's rows with
+	// LastSeenAt unset — the UI then renders "never" for every
+	// resource, matching the cold-start posture.
+	traceIndexLookupForDiscovery handlers.TraceIndexLookup
 	// v0.89.23 Stream 40 (#639) — GitHub webhook listener secret.
 	// Cached at startup from os.Getenv(SQUADRON_GITHUB_WEBHOOK_SECRET);
 	// an empty value leaves the /api/v1/webhooks/github route mounted
@@ -850,6 +862,12 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		if s.discoveryAIService != nil {
 			h.WithAIProposer(s.discoveryAIService)
 		}
+		// v0.89.77 — wire the same traceindex the chunk-3 Discovery
+		// dashboard reads Coverage from so the per-row last_seen_at
+		// annotation flows through every AWS scan response.
+		if s.traceIndexLookupForDiscovery != nil {
+			h.WithTraceIndex(s.traceIndexLookupForDiscovery)
+		}
 		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — wire the
 		// operator-set exclusion store. The application store satisfies
 		// the slim DiscoveryExclusionStore interface directly so the
@@ -974,6 +992,11 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 		if s.discoveryGCPScannerFactory != nil {
 			h.WithGCPScannerFactory(s.discoveryGCPScannerFactory)
 		}
+		// v0.89.77 — wire the traceindex lookup for per-row
+		// last_seen_at annotation on GCP scan responses.
+		if s.traceIndexLookupForDiscovery != nil {
+			h.WithGCPTraceIndex(s.traceIndexLookupForDiscovery)
+		}
 		fn(h, c)
 	}
 }
@@ -1008,6 +1031,11 @@ func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandle
 		}
 		if s.discoveryAzureScannerFactory != nil {
 			h.WithAzureScannerFactory(s.discoveryAzureScannerFactory)
+		}
+		// v0.89.77 — wire the traceindex lookup for per-row
+		// last_seen_at annotation on Azure scan responses.
+		if s.traceIndexLookupForDiscovery != nil {
+			h.WithAzureTraceIndex(s.traceIndexLookupForDiscovery)
 		}
 		fn(h, c)
 	}
@@ -1044,6 +1072,11 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 		}
 		if s.discoveryOCIScannerFactory != nil {
 			h.WithOCIScannerFactory(s.discoveryOCIScannerFactory)
+		}
+		// v0.89.77 — wire the traceindex lookup for per-row
+		// last_seen_at annotation on OCI scan responses.
+		if s.traceIndexLookupForDiscovery != nil {
+			h.WithOCITraceIndex(s.traceIndexLookupForDiscovery)
 		}
 		fn(h, c)
 	}
@@ -1099,6 +1132,21 @@ func (s *Server) discoverySummaryTrampoline(fn func(*handlers.DiscoverySummaryHa
 // to so the dashboard and the receiver share one index.
 func (s *Server) SetTraceIndexForDiscovery(idx handlers.TraceIndex) {
 	s.traceIndexForDiscovery = idx
+}
+
+// SetTraceIndexLookupForDiscovery wires the v0.89.77 (#708 Stream
+// 106, Trace integration slice 1 chunk 4) per-resource LastSeenAt
+// lookup onto the four per-provider discovery scan handlers. The
+// real *traceindex.Index satisfies the handlers.TraceIndexLookup
+// interface directly through its LastSeenAt method; production
+// passes the same instance SetTraceIndexForDiscovery already
+// received so the receiver, the dashboard, and the inventory
+// annotation all share one index.
+//
+// Optional; nil leaves the scan response un-annotated (every row
+// surfaces "never" in the UI), matching the cold-start posture.
+func (s *Server) SetTraceIndexLookupForDiscovery(idx handlers.TraceIndexLookup) {
+	s.traceIndexLookupForDiscovery = idx
 }
 
 // discoveryTraceCoverageTrampoline late-binds the v0.89.76 (#707 Stream

@@ -89,6 +89,7 @@ import {
   validateErrorRemediation,
   type ParsedServiceAccount,
 } from "@/data/gcpDiscoveryWizard";
+import { relativeTime } from "@/lib/relativeTime";
 
 // Tab values — stable string literals double as both the Radix Tabs
 // `value` and the test selector key.
@@ -1090,6 +1091,7 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
             <th className="px-3 py-2 font-medium">OS Family</th>
             <th className="px-3 py-2 font-medium">Region</th>
             <th className="px-3 py-2 font-medium">OTel?</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
             <th className="px-3 py-2 font-medium">Labels</th>
           </tr>
         </thead>
@@ -1110,6 +1112,9 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
                     No
                   </Badge>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
               </td>
               <td className="px-3 py-2 font-mono text-xs">
                 {Object.keys(row.tags ?? {}).length === 0
@@ -1150,6 +1155,7 @@ function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) 
             <th className="px-3 py-2 font-medium">Engine Version</th>
             <th className="px-3 py-2 font-medium">Instance Class</th>
             <th className="px-3 py-2 font-medium">Query Insights enabled?</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
             <th className="px-3 py-2 font-medium">Region</th>
             <th className="px-3 py-2 font-medium">Labels</th>
           </tr>
@@ -1171,6 +1177,9 @@ function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) 
                     No
                   </Badge>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
               </td>
               <td className="px-3 py-2 text-xs">{row.region}</td>
               <td className="px-3 py-2 font-mono text-xs">
@@ -1212,6 +1221,7 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
             <th className="px-3 py-2 font-medium">Kubernetes Version</th>
             <th className="px-3 py-2 font-medium">Status</th>
             <th className="px-3 py-2 font-medium">Managed Prometheus?</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
             <th className="px-3 py-2 font-medium">Region</th>
             <th className="px-3 py-2 font-medium">Tags</th>
           </tr>
@@ -1233,6 +1243,9 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
                     No
                   </Badge>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
               </td>
               <td className="px-3 py-2 text-xs">{row.region}</td>
               <td className="px-3 py-2 font-mono text-xs">
@@ -1265,5 +1278,31 @@ function RecommendationsTab() {
         same generate-recommendations flow the AWS page uses.
       </p>
     </div>
+  );
+}
+
+// LastSeenCell — v0.89.77 trace integration slice 1 chunk 4. Renders
+// the per-row Last seen value as a compact relative time string,
+// falling back to "never" with an amber warning icon when the
+// traceindex has no observation for the projected resource key.
+// Shared across Compute / Databases / Kubernetes sub-tabs.
+function LastSeenCell({ value }: { value?: string }) {
+  const rel = relativeTime(value);
+  if (rel.isNever) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-amber-600"
+        title="No spans observed for this resource"
+        data-testid="last-seen-never"
+      >
+        <AlertTriangle className="h-3 w-3" aria-hidden />
+        {rel.text}
+      </span>
+    );
+  }
+  return (
+    <span className="text-muted-foreground" title={value}>
+      {rel.text}
+    </span>
   );
 }

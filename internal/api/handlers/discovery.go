@@ -140,6 +140,19 @@ type DiscoveryHandlers struct {
 	checkRunStore CheckRunStore
 	checksPAT     string
 	squadronHost  string
+
+	// traceIndex — v0.89.77 (#708 Stream 106, Trace integration
+	// slice 1 chunk 4). Optional: nil leaves the scan response
+	// LastSeenAt-unannotated (every row renders "never" in the UI),
+	// which is the correct cold-start posture for a deployment that
+	// hasn't observed any spans yet. Production wires the same
+	// *traceindex.Index the chunk-2 OTLP receiver dispatches Observe
+	// to and the chunk-3 Discovery dashboard reads Coverage from —
+	// one index per Squadron process. A flaky index logs warnings
+	// but never breaks the scan endpoint (see
+	// AnnotateComputeWithLastSeen).
+	traceIndex TraceIndexLookup
+
 	logger        *zap.Logger
 }
 
@@ -372,6 +385,17 @@ func (h *DiscoveryHandlers) WithCheckRunStore(s CheckRunStore) *DiscoveryHandler
 // the iacgithub.PATClient already uses. Tests pass a fixture string.
 func (h *DiscoveryHandlers) WithChecksPAT(pat string) *DiscoveryHandlers {
 	h.checksPAT = pat
+	return h
+}
+
+// WithTraceIndex — v0.89.77 (#708 Stream 106, Trace integration
+// slice 1 chunk 4) — wires the traceindex lookup used to annotate
+// scan responses with per-resource last_seen_at. Nil leaves the
+// scan response un-annotated. Production wires the same Index
+// chunk 3 wired into the Discovery dashboard; tests substitute a
+// stub returning canned timestamps.
+func (h *DiscoveryHandlers) WithTraceIndex(idx TraceIndexLookup) *DiscoveryHandlers {
+	h.traceIndex = idx
 	return h
 }
 
@@ -884,6 +908,11 @@ type awsComputeInstanceRow struct {
 	HasOTel      bool              `json:"has_otel"`
 	OSFamily     string            `json:"os_family"`
 	Region       string            `json:"region"`
+	// LastSeenAt — v0.89.77 trace integration slice 1 chunk 4. ISO
+	// timestamp of the most recent span the receiver observed for
+	// this resource. Omitted on the wire when nil (the row renders
+	// "never" in the UI).
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 type awsFunctionRuntimeRow struct {
@@ -920,6 +949,10 @@ type awsDatabaseInstanceRow struct {
 	QueryInsightsEnabled      bool   `json:"query_insights_enabled,omitempty"`
 	SQLInsightsDiagEnabled    bool   `json:"sql_insights_diag_enabled,omitempty"`
 	DatabaseManagementEnabled bool   `json:"database_management_enabled,omitempty"`
+
+	// LastSeenAt — v0.89.77 trace integration slice 1 chunk 4. See
+	// awsComputeInstanceRow.LastSeenAt godoc.
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // awsObjectStoreRow is the snake_case wire shape for one S3 row.
@@ -969,6 +1002,9 @@ type awsClusterRow struct {
 	FargateProfileCount int                  `json:"fargate_profile_count"`
 	Region              string               `json:"region"`
 	Tags                map[string]string    `json:"tags"`
+	// LastSeenAt — v0.89.77 trace integration slice 1 chunk 4. See
+	// awsComputeInstanceRow.LastSeenAt godoc.
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // awsClusterAddonRow is the snake_case wire shape for one EKS add-on
@@ -1064,6 +1100,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			HasOTel:      ci.HasOTel,
 			OSFamily:     ci.OSFamily,
 			Region:       ci.Region,
+			LastSeenAt:   ci.LastSeenAt,
 		})
 	}
 	for _, fn := range r.Functions {
@@ -1094,6 +1131,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			QueryInsightsEnabled:       db.QueryInsightsEnabled,
 			SQLInsightsDiagEnabled:     db.SQLInsightsDiagEnabled,
 			DatabaseManagementEnabled:  db.DatabaseManagementEnabled,
+			LastSeenAt:                 db.LastSeenAt,
 		})
 	}
 	for _, o := range r.ObjectStores {
@@ -1129,6 +1167,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			FargateProfileCount: c.FargateProfileCount,
 			Region:              c.Region,
 			Tags:                c.Tags,
+			LastSeenAt:          c.LastSeenAt,
 		}
 		for _, a := range c.Addons {
 			row.Addons = append(row.Addons, awsClusterAddonRow{
@@ -1468,6 +1507,19 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 			Action:     "scan_completed",
 			Payload:    payload,
 		})
+	}
+
+	// Trace integration slice 1 chunk 4 (v0.89.77) — annotate the
+	// per-resource last_seen_at in-place against the traceindex
+	// before the response is serialized. Nil traceIndex short-
+	// circuits the call entirely; a flaky index logs warnings but
+	// never breaks the scan endpoint. The annotation MUST run after
+	// scan_completed audit emits so the audit payload's counts are
+	// unaffected by the join (slice 1 contract item 7).
+	if h.traceIndex != nil && result != nil {
+		AnnotateComputeWithLastSeen(ctx, h.traceIndex, "aws", accountID, result.Compute, h.logger)
+		AnnotateDatabaseWithLastSeen(ctx, h.traceIndex, "aws", accountID, result.Databases, h.logger)
+		AnnotateClusterWithLastSeen(ctx, h.traceIndex, "aws", accountID, result.Clusters, h.logger)
 	}
 
 	return result, nil, 0
