@@ -61,16 +61,19 @@ jump straight to that page.
   in v0.89.54.** Squadron's positioning is now "the universal
   observability control plane that scans AWS, GCP, AND Azure
   fleets" — the three-cloud claim is concretely defensible.
-- [OCI (Oracle Cloud) discovery — slice 1](./proposals/oci-discovery-slice1.md)
-  (design DOC LOCKED in v0.89.55). Third non-AWS discovery
-  arc. Adds Oracle Cloud Compute Instance scanning via API
-  signing key credentials (RSA private key sealed via
-  credstore). Mirrors the AWS / GCP / Azure slice 1 wizard /
-  inventory / recommendations structure at `/discovery/oci`.
-  Slice 1 implementation pending across 6 chunks. After slice
-  1 ships, Squadron covers 4 clouds: AWS + GCP + Azure + OCI.
-  The horizontal breadth moat is materially deeper at four
-  clouds than at three.
+- [OCI (Oracle Cloud) discovery — first-time setup](./discovery-oci-first-time-setup.md) —
+  v0.89.55 through v0.89.59 operator runbook for the OCI arc
+  (design at [proposals/oci-discovery-slice1.md](./proposals/oci-discovery-slice1.md)).
+  Third non-AWS discovery arc. Adds Oracle Cloud Compute
+  Instance scanning via API signing key credentials (RSA
+  private key sealed via credstore). Mirrors the AWS / GCP /
+  Azure slice 1 wizard / inventory / recommendations structure
+  at `/discovery/oci`. Same proposer feedback loop, same Checks
+  API integration, same Don't propose this again affordance.
+  **Slice 1 SHIPPED in v0.89.59.** Squadron now covers 4
+  clouds — the strongest universal observability claim a
+  single OSS control plane can defensibly support: "scans
+  AWS, GCP, Azure, AND Oracle Cloud fleets."
 - [GitHub webhook listener](./webhook-listener.md) — v0.89.23 +
   v0.89.24 operator runbook for the PR-merged webhook that closes
   the recommendation lifecycle in audit. Covers generating the
