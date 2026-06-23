@@ -280,6 +280,18 @@ export function AppSidebar() {
           icon: Cloud,
         },
         {
+          // v0.89.48 #670 Stream 68 (slice-1 chunk 4) — GCP discovery
+          // page. Sits next to AWS under Discovery so the operator's
+          // muscle memory for "where I wire up cloud providers" stays
+          // in one place. Reuses the Cloud icon — slice 1 doesn't
+          // ship per-provider iconography to keep the sidebar visual
+          // weight even.
+          key: "discovery-gcp",
+          title: "GCP",
+          url: "/discovery/gcp",
+          icon: Cloud,
+        },
+        {
           // v0.89.3 Stream 19 — #603 Connect-IaC-repo. Sits next to
           // AWS under Discovery so the operator's muscle memory for
           // "where I wire things up" stays in one place. Slice 1
