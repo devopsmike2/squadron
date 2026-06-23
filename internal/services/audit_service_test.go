@@ -177,3 +177,26 @@ func TestAuditService_Record_PublishesToBroker(t *testing.T) {
 	// it indirectly via NewAuditService.
 	t.Skip("broker round-trip is covered in internal/events tests; this skip documents the integration is wired in NewAuditService")
 }
+
+// TestAuditEventConstants_CheckRunPresent — v0.89.42 (#662 Stream 60,
+// slice 1 chunk 1 of the GitHub Checks API back-signal arc).
+// Defensive: pins the three check-run audit-event constants so a
+// future refactor that accidentally deletes them lands here rather
+// than in a SIEM dashboard that silently stops receiving events.
+// The chunks-2/3/4 emit paths reference these constants by name;
+// the constant strings are the contract SIEM consumers fan out on.
+func TestAuditEventConstants_CheckRunPresent(t *testing.T) {
+	checks := map[string]string{
+		"AuditEventIaCCheckRunCreated": AuditEventIaCCheckRunCreated,
+		"AuditEventIaCCheckRunUpdated": AuditEventIaCCheckRunUpdated,
+		"AuditEventIaCCheckRunFailed":  AuditEventIaCCheckRunFailed,
+	}
+	for name, value := range checks {
+		assert.NotEmpty(t, value, "%s must be a non-empty string", name)
+	}
+	// Pin the canonical dotted-name values so a future rename lands
+	// here too. The strings are the SIEM-side contract.
+	assert.Equal(t, "iac.check_run.created", AuditEventIaCCheckRunCreated)
+	assert.Equal(t, "iac.check_run.updated", AuditEventIaCCheckRunUpdated)
+	assert.Equal(t, "iac.check_run.failed", AuditEventIaCCheckRunFailed)
+}
