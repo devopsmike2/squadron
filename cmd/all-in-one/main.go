@@ -54,6 +54,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/silentagents"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/telemetrystore"
+	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/devopsmike2/squadron/internal/utils"
 	"github.com/devopsmike2/squadron/internal/worker"
 )
@@ -344,9 +345,33 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	grpcPort := parseOTLPPort(config.OTLP.GRPCEndpoint, 4317)
 	httpPort := parseOTLPPort(config.OTLP.HTTPEndpoint, 4318)
 
+	// v0.89.75 (#706 Stream 104) — Trace integration slice 1 chunk 2.
+	// Construct the in-memory traceindex Index BEFORE the OTLP
+	// receivers so the SetTraceIndex calls below can hand the same
+	// instance to both transports. The Index is fronted by appStore
+	// (which satisfies traceindex.Store via the chunk-1
+	// trace_resource_seen ApplicationStore methods); maxRows=0
+	// selects the defaultMaxRows ceiling (100K — design doc §12),
+	// overridable by SQUADRON_TRACEINDEX_MAX_ROWS in a later chunk.
+	//
+	// Disabled-mode escape hatch: SQUADRON_TRACEINDEX_DISABLED=true
+	// skips Index construction entirely. The receivers' nil-check
+	// guard in handleOTLPTraces / TraceService.Export handles the
+	// disabled case without any extra branching on the hot path.
+	var traceIndex *traceindex.Index
+	if strings.EqualFold(os.Getenv("SQUADRON_TRACEINDEX_DISABLED"), "true") {
+		logger.Info("Trace index disabled via SQUADRON_TRACEINDEX_DISABLED")
+	} else {
+		traceIndex = traceindex.NewIndex(appStore, 0, nil)
+		logger.Info("Trace index enabled", zap.Int("max_rows", 100_000))
+	}
+
 	grpcServer, err := receiver.NewGRPCServer(grpcPort, otlpMetrics, workerPool, logger)
 	if err != nil {
 		logger.Fatal("Failed to create gRPC server", zap.Error(err))
+	}
+	if traceIndex != nil {
+		grpcServer.SetTraceIndex(traceIndex)
 	}
 	if err := grpcServer.Start(); err != nil {
 		logger.Fatal("Failed to start gRPC server", zap.Error(err))
@@ -361,6 +386,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		logger.Fatal("Failed to create HTTP server", zap.Error(err))
 	}
+	if traceIndex != nil {
+		httpServer.SetTraceIndex(traceIndex)
+	}
 	if err := httpServer.Start(); err != nil {
 		logger.Fatal("Failed to start HTTP server", zap.Error(err))
 	}
@@ -369,6 +397,21 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		defer cancel()
 		_ = httpServer.Stop(ctx)
 	}()
+
+	// Trace index background flush goroutine. Bound to a cancellable
+	// context the shutdown path cancels so the loop exits cleanly on
+	// signal. The audit adapter shims the rich services.AuditService
+	// interface down to the minimal AuditEmitter shape the traceindex
+	// package consumes — keeps the traceindex package free of a
+	// services import that would create a cycle with the storage
+	// layer.
+	traceFlushCtx, traceFlushCancel := context.WithCancel(context.Background())
+	defer traceFlushCancel()
+	if traceIndex != nil {
+		flushAudit := &traceIndexAuditAdapter{audit: auditService}
+		flusher := traceindex.NewBackgroundFlusher(traceIndex, 30*time.Second, flushAudit, logger)
+		go flusher.Start(traceFlushCtx)
+	}
 
 	// Initialize HTTP API server.
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
@@ -1015,6 +1058,30 @@ func (a *selftelAdapter) PublishAuditEvent(ctx context.Context, entry services.S
 		TargetID:   entry.TargetID,
 		Action:     entry.Action,
 		Payload:    entry.Payload,
+	})
+}
+
+// traceIndexAuditAdapter bridges the rich services.AuditService
+// interface down to the minimal traceindex.AuditEmitter shape. The
+// shim exists because internal/traceindex cannot import
+// internal/services without creating a cycle (services depends on
+// the application store which depends on traceindex.ResourceRow).
+// Each Record call lands an AuditEntry shaped per design doc §8 —
+// actor "system", TargetType empty (fleet-wide), Action
+// "flushed" (the verb the timeline humanizer renders).
+type traceIndexAuditAdapter struct {
+	audit services.AuditService
+}
+
+func (a *traceIndexAuditAdapter) Record(ctx context.Context, eventType, actor string, payload map[string]any) {
+	if a == nil || a.audit == nil {
+		return
+	}
+	_ = a.audit.Record(ctx, services.AuditEntry{
+		Actor:     actor,
+		EventType: eventType,
+		Action:    "flushed",
+		Payload:   payload,
 	})
 }
 

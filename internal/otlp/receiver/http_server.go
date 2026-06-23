@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/metrics"
+	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/devopsmike2/squadron/internal/worker"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -18,6 +19,17 @@ import (
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 )
 
+// TraceObserver is the minimal surface the receiver needs from the
+// traceindex Index for the slice-1 chunk-2 wiring. The full Index
+// type satisfies it; tests inject a recording fake. Keeping the
+// interface local to the receiver (rather than reaching into
+// traceindex.Index directly everywhere) means a future evolution of
+// the Index — additional return values on Observe, batching, etc. —
+// doesn't ripple through the receiver test suite.
+type TraceObserver interface {
+	Observe(ctx context.Context, obs traceindex.ResourceObservation)
+}
+
 // HTTPServer represents the HTTP OTLP receiver server
 type HTTPServer struct {
 	server     *http.Server
@@ -25,6 +37,14 @@ type HTTPServer struct {
 	metrics    *metrics.OTLPMetrics
 	port       int
 	workerPool *worker.Pool
+	// traceIndex is the slice-1 chunk-2 wire-up. Nil is the
+	// disabled-mode sentinel — handleOTLPTraces guards on it so the
+	// SQUADRON_TRACEINDEX_DISABLED=true deployment path runs the
+	// receiver unchanged. The hot-path Observe call must NOT block on
+	// IO (design doc §5 + the chunk-2 prompt's constraint): the Index
+	// is in-memory only, the background flusher handles the SQLite
+	// transaction.
+	traceIndex TraceObserver
 }
 
 // NewHTTPServer creates a new HTTP server instance
@@ -58,6 +78,18 @@ func NewHTTPServer(port int, metricsInstance *metrics.OTLPMetrics, workerPool *w
 	}
 
 	return s, nil
+}
+
+// SetTraceIndex wires the slice-1 chunk-2 traceindex Observer so the
+// HTTP trace handler can fan out ResourceSpan-level observations to
+// the in-memory index after unmarshal. A nil argument disables the
+// dispatch path cleanly — the handler's existing nil-check keeps the
+// SQUADRON_TRACEINDEX_DISABLED=true deployment shape working without
+// special-casing in the constructor. The setter style (rather than a
+// new constructor parameter) preserves binary compat with existing
+// callers and matches the SetX accessor pattern the api server uses.
+func (s *HTTPServer) SetTraceIndex(idx TraceObserver) {
+	s.traceIndex = idx
 }
 
 // setupRoutes configures the HTTP server with routes
@@ -119,6 +151,24 @@ func (s *HTTPServer) handleOTLPTraces(c *gin.Context) {
 		s.logger.Error("Failed to unmarshal traces request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid OTLP traces data"})
 		return
+	}
+
+	// Slice 1 chunk 2 (#706 Stream 104) — fan the per-ResourceSpan
+	// observation out to the traceindex BEFORE dispatching to the
+	// worker pool. Two reasons for the ordering:
+	//   - A worker-pool queue-full failure (the next block) returns
+	//     503 to the sender; the index observation should still land
+	//     because the receiver did successfully unmarshal the batch.
+	//     "Did Squadron see spans from this resource?" is independent
+	//     of "did Squadron get them into long-term storage?".
+	//   - The Observe call is O(1) under an Index-internal lock and
+	//     does no IO, so it adds ~microseconds per ResourceSpan —
+	//     fine to land before the queue submit. (Design doc §5 +
+	//     chunk-2 prompt: hot path MUST NOT block on IO.)
+	// nil traceIndex is the disabled-mode sentinel; the existing
+	// receiver path is unchanged in that mode.
+	if s.traceIndex != nil {
+		observeResourceSpans(c.Request.Context(), s.traceIndex, req.ResourceSpans, time.Now())
 	}
 
 	// Submit raw bytes to worker pool for async processing

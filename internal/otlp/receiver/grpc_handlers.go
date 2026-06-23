@@ -22,6 +22,16 @@ type TraceService struct {
 	logger     *zap.Logger
 	metrics    *metrics.OTLPMetrics
 	workerPool *worker.Pool
+	// traceIndex is the slice-1 chunk-2 wire-up — same shape as the
+	// HTTPServer field. Nil disables the dispatch path cleanly.
+	traceIndex TraceObserver
+}
+
+// SetTraceIndex wires the traceindex Observer onto the gRPC trace
+// service. Mirrors HTTPServer.SetTraceIndex so the chunk-2 wiring
+// in cmd/all-in-one can hand the same Index to both transports.
+func (s *TraceService) SetTraceIndex(idx TraceObserver) {
+	s.traceIndex = idx
 }
 
 // MetricsService implements the OTLP Metrics Service gRPC interface
@@ -76,6 +86,15 @@ func (s *TraceService) Export(ctx context.Context, req *coltracepb.ExportTraceSe
 	// Track gRPC request
 	if s.metrics != nil {
 		s.metrics.GRPCRequestsTotal.Inc(1)
+	}
+
+	// Slice 1 chunk 2 (#706 Stream 104) — fan the per-ResourceSpan
+	// observation out to the traceindex BEFORE the worker pool
+	// dispatch, matching the HTTP handler's ordering. See
+	// http_server.go::handleOTLPTraces for the rationale (observation
+	// should land even when the queue submit subsequently fails).
+	if s.traceIndex != nil {
+		observeResourceSpans(ctx, s.traceIndex, req.ResourceSpans, start)
 	}
 
 	// Serialize the request to protobuf bytes

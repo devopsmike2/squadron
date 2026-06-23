@@ -21,10 +21,11 @@ import (
 
 // GRPCServer represents the gRPC OTLP receiver server
 type GRPCServer struct {
-	server   *grpc.Server
-	listener net.Listener
-	logger   *zap.Logger
-	port     int
+	server       *grpc.Server
+	listener     net.Listener
+	logger       *zap.Logger
+	port         int
+	traceService *TraceService
 }
 
 // NewGRPCServer creates a new gRPC server instance
@@ -54,10 +55,21 @@ func NewGRPCServer(port int, metricsInstance *metrics.OTLPMetrics, workerPool *w
 	reflection.Register(server)
 
 	return &GRPCServer{
-		server: server,
-		logger: logger,
-		port:   port,
+		server:       server,
+		logger:       logger,
+		port:         port,
+		traceService: traceService,
 	}, nil
+}
+
+// SetTraceIndex wires the slice-1 chunk-2 traceindex Observer onto
+// the underlying TraceService. The GRPCServer holds the reference
+// so cmd/all-in-one can set the index from a single call site
+// regardless of which transport (HTTP / gRPC) it's wiring.
+func (s *GRPCServer) SetTraceIndex(idx TraceObserver) {
+	if s.traceService != nil {
+		s.traceService.SetTraceIndex(idx)
+	}
 }
 
 // Start starts the gRPC server
