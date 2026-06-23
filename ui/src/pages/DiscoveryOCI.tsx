@@ -54,6 +54,7 @@ import {
   listOCIConnections,
   scanOCIConnection,
   validateOCIConnection,
+  type ClusterSnapshot,
   type ComputeInstanceSnapshot,
   type DatabaseInstanceSnapshot,
   type OCIConnection,
@@ -107,8 +108,14 @@ const RECS_TAB = "recommendations";
 // The Databases sub-tab surfaces the OCI DB Systems + Autonomous
 // Database inventory from the chunk 4 scanner extension with the
 // Database Management enrollment axis rendered per row.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100) adds a third
+// Kubernetes sub-tab surfacing the OKE cluster inventory from the
+// v0.89.70 chunk 4 OKE scanner extension with the Operations
+// Insights enrollment axis rendered per row.
 const INVENTORY_SUBTAB_COMPUTE = "compute";
 const INVENTORY_SUBTAB_DATABASES = "databases";
+const INVENTORY_SUBTAB_KUBERNETES = "kubernetes";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1174,12 +1181,18 @@ function InventoryTab({
           <TabsTrigger value={INVENTORY_SUBTAB_DATABASES}>
             Databases
           </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_KUBERNETES}>
+            Kubernetes
+          </TabsTrigger>
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
           <InventoryTable rows={scan.computes} />
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_DATABASES} className="mt-3">
           <DatabaseInventoryTable rows={scan.databases ?? []} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_KUBERNETES} className="mt-3">
+          <ClusterInventoryTable rows={scan.clusters ?? []} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1301,6 +1314,70 @@ function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) 
               <td className="px-3 py-2 text-xs">{row.instance_class || "-"}</td>
               <td className="px-3 py-2 text-xs">
                 {row.database_management_enabled ? (
+                  <Badge variant="outline" className="text-emerald-600">
+                    Yes
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    No
+                  </Badge>
+                )}
+              </td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 font-mono text-xs">
+                {Object.keys(row.tags ?? {}).length === 0
+                  ? "-"
+                  : Object.entries(row.tags ?? {})
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ")}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ClusterInventoryTable — Kubernetes tier slice 2 (v0.89.71, #702
+// Stream 100). Renders the OKE cluster inventory from the v0.89.70
+// chunk 4 scanner extension. The instrumentation column reads from
+// operations_insights_enabled (the OCI single-axis observability
+// lever — Operations Insights enrollment via the
+// operations-insights-enabled=true freeform tag convention); rows
+// where the field is undefined render "No" because absence is the
+// uncovered signal per design doc §3.3.
+function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
+        No Kubernetes clusters discovered. Run a scan to refresh.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Resource ID</th>
+            <th className="px-3 py-2 font-medium">Cluster Name</th>
+            <th className="px-3 py-2 font-medium">Kubernetes Version</th>
+            <th className="px-3 py-2 font-medium">Status</th>
+            <th className="px-3 py-2 font-medium">Operations Insights?</th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">Tags</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.resource_id} className="border-t">
+              <td className="px-3 py-2 font-mono text-xs">{row.resource_id}</td>
+              <td className="px-3 py-2 text-xs">{row.name || "-"}</td>
+              <td className="px-3 py-2 text-xs">{row.kubernetes_version || "-"}</td>
+              <td className="px-3 py-2 text-xs">{row.status || "-"}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.operations_insights_enabled ? (
                   <Badge variant="outline" className="text-emerald-600">
                     Yes
                   </Badge>

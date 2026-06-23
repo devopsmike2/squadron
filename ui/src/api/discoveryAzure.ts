@@ -190,6 +190,32 @@ export interface DatabaseInstanceSnapshot {
   database_management_enabled?: boolean;  // OCI DB (slice 2)
 }
 
+// ClusterSnapshot mirrors scanner.ClusterSnapshot — the shared
+// cross-cloud Kubernetes cluster row shape. See discoveryGCP.ts for
+// the full per-axis documentation.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100).
+export interface ClusterSnapshot {
+  resource_id: string;
+  name: string;
+  kubernetes_version: string;
+  status: string;
+  region: string;
+  tags?: Record<string, string>;
+  provider?: string;
+
+  // AWS EKS slice 1.
+  control_plane_logging?: string[];
+  addons?: Array<{ name: string; status: string; version?: string }>;
+  nodegroup_count?: number;
+  fargate_profile_count?: number;
+
+  // Slice 2 per-cloud managed-observability axes.
+  managed_prometheus_enabled?: boolean;     // GCP GKE
+  azure_monitor_enabled?: boolean;          // Azure AKS
+  operations_insights_enabled?: boolean;    // OCI OKE
+}
+
 // ScanAzureResponse mirrors azureScanResponse on the wire. The
 // handler emits instance_count, instrumented_count, uninstrumented_count
 // directly so the UI doesn't have to derive them — symmetric with the
@@ -200,12 +226,20 @@ export interface DatabaseInstanceSnapshot {
 // (omitempty Go JSON tag) so older scan rows from before the chunk
 // 3 scanner extension don't render an undefined array; the
 // Inventory tab's Databases sub-tab treats undefined as empty.
+//
+// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100) — `clusters`
+// carries the AKS cluster inventory the v0.89.70 chunk 3 scanner
+// populates. Optional on the wire (omitempty Go JSON tag) so older
+// scan rows from before the scanner extension don't render an
+// undefined array; the Inventory tab's Kubernetes sub-tab treats
+// undefined as empty.
 export interface ScanAzureResponse {
   connection_id: string;
   subscription_id: string;
   location: string;
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
+  clusters?: ClusterSnapshot[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

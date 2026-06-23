@@ -1650,3 +1650,256 @@ func TestDiscoveryProposer_DatabasesInScanResult_AppendedToUserMessage(t *testin
 	assert.Contains(t, awsMsg, "arn:aws:rds:us-east-1:123:db:em-only (engine=mysql 8.0, class=db.t3.medium, us-east-1, em-only)")
 	assert.Contains(t, awsMsg, "arn:aws:rds:us-east-1:123:db:uncovered (engine=postgres 15, class=db.r6g.large, us-east-1, uncovered)")
 }
+
+// TestDiscoveryProposer_K8sTierKindsInSystemPrompt — Kubernetes tier
+// slice 2 chunk 5 (v0.89.71, #702 Stream 100). The three new
+// per-cloud Kubernetes recommendation kinds (gke-mp-enable for GCP,
+// aks-monitor-enable for Azure, oke-ops-insights-enable for OCI)
+// must appear in the shared system prompt so the model can route
+// findings to the right kind when the scan inventory carries
+// cluster rows. Slice 1 compute kinds + database tier slice 2 kinds
+// must remain present after the K8s extension — the same shared-
+// system-prompt invariant the prior chunk 5 tests pin.
+func TestDiscoveryProposer_K8sTierKindsInSystemPrompt(t *testing.T) {
+	for _, k8sKind := range []string{
+		"gke-mp-enable",
+		"aks-monitor-enable",
+		"oke-ops-insights-enable",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, k8sKind,
+			"shared system prompt should teach the Kubernetes tier slice 2 kind %q", k8sKind)
+	}
+	// Slice 1 compute kinds still present after the K8s tier
+	// addition — defends against an accidental rewrite of the
+	// compute-kind paragraphs.
+	for _, computeKind := range []string{
+		"gce-otel-label", "vm-otel-tag", "compute-otel-tag",
+		"ec2-otel-layer", "lambda-otel-layer", "rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, computeKind,
+			"shared system prompt should still teach the slice 1 kind %q after Kubernetes tier slice 2", computeKind)
+	}
+	// Database tier slice 2 kinds still present.
+	for _, dbKind := range []string{
+		"cloudsql-pi-enable", "azsql-diag-enable", "ocidb-perfhub-enable",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, dbKind,
+			"shared system prompt should still teach the database tier slice 2 kind %q after Kubernetes tier slice 2", dbKind)
+	}
+	// Terraform shape hints make it into the prompt body so the
+	// model's Terraform snippet emits the right resource type.
+	for _, marker := range []string{
+		"google_container_cluster.monitoring_config",
+		"azurerm_kubernetes_cluster.monitor_metrics",
+		"oci_containerengine_cluster.freeform_tags",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, marker,
+			"shared system prompt should mention Terraform resource %q for the Kubernetes tier", marker)
+	}
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostK8sTier —
+// Kubernetes tier slice 2 chunk 5 (v0.89.71, #702 Stream 100)
+// cold-start parity invariant: across all four providers, the
+// compute-only user message produced by buildDiscoveryUserMessage
+// must remain byte-identical to v0.89.70 when the scan context
+// carries no cluster rows. Acceptance test §11.9 invariant —
+// adding the Kubernetes tier kinds must not perturb compute-only
+// prompt generation for any provider.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostK8sTier(t *testing.T) {
+	// AWS cold start.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	assert.Contains(t, awsMsg, "account_id: 123456789012")
+	assert.Contains(t, awsMsg, "Clusters (0 total):")
+	assert.NotContains(t, awsMsg, "gke-mp-enable")
+	assert.NotContains(t, awsMsg, "aks-monitor-enable")
+	assert.NotContains(t, awsMsg, "oke-ops-insights-enable")
+	assert.Contains(t, awsMsg, "group_id on every step MUST equal the account_id above")
+
+	// GCP cold start.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.Contains(t, gcpMsg, "project_id: my-sandbox-project")
+	assert.Contains(t, gcpMsg, "Clusters (0 total):")
+	assert.Contains(t, gcpMsg, "group_id on every step MUST equal the project_id above")
+
+	// Azure cold start.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.Contains(t, azureMsg, "subscription_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	assert.Contains(t, azureMsg, "Clusters (0 total):")
+	assert.Contains(t, azureMsg, "group_id on every step MUST equal the subscription_id above")
+
+	// OCI cold start.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	assert.Contains(t, ociMsg, "tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaa")
+	assert.Contains(t, ociMsg, "Clusters (0 total):")
+	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
+}
+
+// TestDiscoveryProposer_ClustersInScanResult_AppendedToUserMessage —
+// Kubernetes tier slice 2 chunk 5 (v0.89.71, #702 Stream 100). When
+// the scan context carries cluster rows with the new per-cloud
+// axis flags populated, the user message renders each row with the
+// correct coverage shorthand:
+//   - GCP rows with ManagedPrometheusEnabled=true → "covered"; else "uncovered"
+//   - Azure rows with AzureMonitorEnabled=true → "covered"; else "uncovered"
+//   - OCI rows with OperationsInsightsEnabled=true → "covered"; else "uncovered"
+//   - AWS rows continue to render the v0.89.70 covered / logs-only /
+//     addon-only / uncovered shorthand based on ControlPlaneLogging +
+//     AddonNames (cold-start parity).
+func TestDiscoveryProposer_ClustersInScanResult_AppendedToUserMessage(t *testing.T) {
+	// GCP — a covered + uncovered GKE row.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-k8s",
+		Provider:  "gcp",
+		ProjectID: "my-prod-project",
+		Regions:   []string{"us-central1"},
+		Clusters: []ClusterCandidate{
+			{
+				ResourceID:               "projects/p/locations/us-central1/clusters/gke-covered",
+				Name:                     "gke-covered",
+				KubernetesVersion:        "1.29",
+				Region:                   "us-central1",
+				Provider:                 "gcp",
+				ManagedPrometheusEnabled: true,
+			},
+			{
+				ResourceID:               "projects/p/locations/us-central1/clusters/gke-uncovered",
+				Name:                     "gke-uncovered",
+				KubernetesVersion:        "1.29",
+				Region:                   "us-central1",
+				Provider:                 "gcp",
+				ManagedPrometheusEnabled: false,
+			},
+		},
+	})
+	assert.Contains(t, gcpMsg, "Clusters (2 total):")
+	assert.Contains(t, gcpMsg, "gke-covered (name=gke-covered, k8s=1.29, region=us-central1, logging=none, addons=none, covered)")
+	assert.Contains(t, gcpMsg, "gke-uncovered (name=gke-uncovered, k8s=1.29, region=us-central1, logging=none, addons=none, uncovered)")
+
+	// Azure — a covered + uncovered AKS row.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-k8s",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+		Clusters: []ClusterCandidate{
+			{
+				ResourceID:          "/subscriptions/s/.../managedClusters/aks-covered",
+				Name:                "aks-covered",
+				KubernetesVersion:   "1.29",
+				Region:              "eastus",
+				Provider:            "azure",
+				AzureMonitorEnabled: true,
+			},
+			{
+				ResourceID:          "/subscriptions/s/.../managedClusters/aks-uncovered",
+				Name:                "aks-uncovered",
+				KubernetesVersion:   "1.29",
+				Region:              "eastus",
+				Provider:            "azure",
+				AzureMonitorEnabled: false,
+			},
+		},
+	})
+	assert.Contains(t, azureMsg, "Clusters (2 total):")
+	assert.Contains(t, azureMsg, "aks-covered, k8s=1.29, region=eastus, logging=none, addons=none, covered)")
+	assert.Contains(t, azureMsg, "aks-uncovered, k8s=1.29, region=eastus, logging=none, addons=none, uncovered)")
+
+	// OCI — a covered + uncovered OKE row.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-k8s",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+		Clusters: []ClusterCandidate{
+			{
+				ResourceID:                "ocid1.cluster.oc1.phx.covered",
+				Name:                      "oke-covered",
+				KubernetesVersion:         "1.29",
+				Region:                    "us-phoenix-1",
+				Provider:                  "oci",
+				OperationsInsightsEnabled: true,
+			},
+			{
+				ResourceID:                "ocid1.cluster.oc1.phx.uncovered",
+				Name:                      "oke-uncovered",
+				KubernetesVersion:         "1.29",
+				Region:                    "us-phoenix-1",
+				Provider:                  "oci",
+				OperationsInsightsEnabled: false,
+			},
+		},
+	})
+	assert.Contains(t, ociMsg, "Clusters (2 total):")
+	assert.Contains(t, ociMsg, "oke-covered, k8s=1.29, region=us-phoenix-1, logging=none, addons=none, covered)")
+	assert.Contains(t, ociMsg, "oke-uncovered, k8s=1.29, region=us-phoenix-1, logging=none, addons=none, uncovered)")
+
+	// AWS — the v0.89.70 composite coverage shorthand must survive
+	// the new switch so the cold-start invariant holds for
+	// inventories that DO carry EKS cluster rows.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-k8s",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+		Clusters: []ClusterCandidate{
+			{
+				ResourceID:          "arn:aws:eks:us-east-1:123:cluster/eks-covered",
+				Name:                "eks-covered",
+				KubernetesVersion:   "1.29",
+				ControlPlaneLogging: []string{"api", "audit"},
+				AddonNames:          []string{"adot"},
+				Region:              "us-east-1",
+			},
+			{
+				ResourceID:          "arn:aws:eks:us-east-1:123:cluster/eks-logs-only",
+				Name:                "eks-logs-only",
+				KubernetesVersion:   "1.29",
+				ControlPlaneLogging: []string{"api", "audit"},
+				Region:              "us-east-1",
+			},
+			{
+				ResourceID:        "arn:aws:eks:us-east-1:123:cluster/eks-addon-only",
+				Name:              "eks-addon-only",
+				KubernetesVersion: "1.29",
+				AddonNames:        []string{"amazon-cloudwatch-observability"},
+				Region:            "us-east-1",
+			},
+			{
+				ResourceID:        "arn:aws:eks:us-east-1:123:cluster/eks-uncovered",
+				Name:              "eks-uncovered",
+				KubernetesVersion: "1.29",
+				Region:            "us-east-1",
+			},
+		},
+	})
+	assert.Contains(t, awsMsg, "Clusters (4 total):")
+	assert.Contains(t, awsMsg, "eks-covered, k8s=1.29, region=us-east-1, logging=api,audit, addons=adot, covered)")
+	assert.Contains(t, awsMsg, "eks-logs-only, k8s=1.29, region=us-east-1, logging=api,audit, addons=none, logs-only)")
+	assert.Contains(t, awsMsg, "eks-addon-only, k8s=1.29, region=us-east-1, logging=none, addons=amazon-cloudwatch-observability, addon-only)")
+	assert.Contains(t, awsMsg, "eks-uncovered, k8s=1.29, region=us-east-1, logging=none, addons=none, uncovered)")
+}

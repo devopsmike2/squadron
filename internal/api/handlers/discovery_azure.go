@@ -784,12 +784,20 @@ func (h *DiscoveryAzureHandlers) HandleValidateAzureConnection(c *gin.Context) {
 // chunk 3 scanner extension populates. The omitempty tag preserves
 // the cold-start wire shape for handlers that ran before the chunk
 // 3 scanner extension (the Databases slice is nil on those paths).
+//
+// v0.89.71 (#702 Stream 100, Kubernetes tier slice 2 chunk 5) —
+// adds the Clusters field carrying the AKS cluster inventory the
+// v0.89.70 chunk 3 AKS scanner populates on result.Clusters. The
+// omitempty tag preserves the cold-start wire shape for handlers
+// that ran before the v0.89.70 scanner extension (the Clusters
+// slice is nil on those paths).
 type azureScanResponse struct {
 	ConnectionID        string                             `json:"connection_id"`
 	SubscriptionID      string                             `json:"subscription_id"`
 	Location            string                             `json:"location"`
 	Compute             []scanner.ComputeInstanceSnapshot  `json:"compute"`
 	Databases           []scanner.DatabaseInstanceSnapshot `json:"databases,omitempty"`
+	Clusters            []scanner.ClusterSnapshot          `json:"clusters,omitempty"`
 	InstrumentedCount   int                                `json:"instrumented_count"`
 	UninstrumentedCount int                                `json:"uninstrumented_count"`
 	Partial             bool                               `json:"partial"`
@@ -984,6 +992,7 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		Location:            conn.Location,
 		Compute:             result.Compute,
 		Databases:           result.Databases,
+		Clusters:            result.Clusters,
 		InstrumentedCount:   instrumentedCount,
 		UninstrumentedCount: uninstrumentedCount,
 		Partial:             result.Partial,

@@ -557,6 +557,115 @@ describe("DiscoveryGCP", () => {
     ).toBeInTheDocument();
   });
 
+  // Kubernetes tier slice 2 chunk 5 (v0.89.71, #702 Stream 100) —
+  // Inventory tab gains a Kubernetes sub-tab rendering the GKE
+  // cluster inventory from the v0.89.70 chunk 2 scanner extension.
+  // The instrumentation column reads from managed_prometheus_enabled
+  // (the GCP single-axis observability lever).
+  it("TestDiscoveryGCP_InventoryTab_KubernetesSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue({
+      ...sampleScan,
+      clusters: [
+        {
+          resource_id: "projects/my-prod-project/locations/us-central1/clusters/gke-covered",
+          name: "gke-covered",
+          kubernetes_version: "1.29",
+          status: "RUNNING",
+          region: "us-central1",
+          provider: "gcp",
+          managed_prometheus_enabled: true,
+          tags: { env: "prod" },
+        },
+        {
+          resource_id: "projects/my-prod-project/locations/us-central1/clusters/gke-uncovered",
+          name: "gke-uncovered",
+          kubernetes_version: "1.29",
+          status: "RUNNING",
+          region: "us-central1",
+          provider: "gcp",
+          managed_prometheus_enabled: false,
+          tags: {},
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
+    await user.click(kubernetesTab);
+    expect(kubernetesTab).toHaveAttribute("data-state", "active");
+
+    // Both cluster rows render. The covered row's instrumentation
+    // column reads "Yes"; the uncovered row reads "No". The
+    // instrumentation column header reads "Managed Prometheus?".
+    expect(
+      screen.getByText("projects/my-prod-project/locations/us-central1/clusters/gke-covered"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("projects/my-prod-project/locations/us-central1/clusters/gke-uncovered"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Managed Prometheus\?/i)).toBeInTheDocument();
+  });
+
+  // Kubernetes tier slice 2 chunk 5 — empty-state UX: scans without
+  // clusters (or older scan rows from before the v0.89.70 chunk 2
+  // scanner extension where the wire field is undefined) render the
+  // empty message rather than an empty table or a crash.
+  it("TestDiscoveryGCP_InventoryTab_KubernetesSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
+    await user.click(kubernetesTab);
+    expect(
+      screen.getByText(/No Kubernetes clusters discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // advanceToKeyPasteStep walks the wizard from step 1 (project) to

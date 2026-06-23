@@ -899,13 +899,23 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 // kinds. The string-prefix dispatch stays — the per-cloud catalog
 // is still small enough that an OR of HasPrefix checks beats a
 // registry indirection.
+//
+// v0.89.71 (#702 Stream 100, Kubernetes tier slice 2 chunk 5) —
+// per-cloud catalog grows again to three kinds each with the new
+// managed-Kubernetes recommendation kinds (gke-mp-enable for GCP
+// GKE, aks-monitor-enable for Azure AKS, oke-ops-insights-enable
+// for OCI OKE). The same string-prefix dispatch handles them — the
+// per-cloud catalog is still small enough that an OR of HasPrefix
+// checks beats a registry indirection. AWS EKS continues to use
+// the slice 1 generic kinds (no eks- prefix on the new arc since
+// EKS already shipped at slice 1).
 func providerFromRecommendationKind(kind string) string {
 	switch {
-	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-"):
+	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-"):
 		return "gcp"
-	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-"):
+	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-"):
 		return "azure"
-	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-"):
+	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-") || strings.HasPrefix(kind, "oke-"):
 		return "oci"
 	default:
 		return "aws"

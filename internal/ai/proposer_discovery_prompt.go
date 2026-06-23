@@ -327,7 +327,63 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`the OCI Database Management enable API — the discovery IAM scope for ` +
 	`OCI Databases is read-only (read database-family in tenancy). Each OCI ` +
 	`Database plan step's inline_config_snippet is Terraform the operator ` +
-	`runs through their own IaC pipeline.` + "\n\n" +
+	`runs through their own IaC pipeline.` + "\n" +
+	`  - GCP GKE clusters (Kubernetes tier slice 2): the single ` +
+	`observability lever is MANAGED PROMETHEUS. A google_container_cluster ` +
+	`is covered when monitoringConfig.managedPrometheusConfig.enabled == ` +
+	`true; when false (or managedPrometheusConfig is absent), recommend ` +
+	`enabling. Recommendation kind: gke-mp-enable. The Terraform updates ` +
+	`google_container_cluster.monitoring_config[0].managed_prometheus[0].enabled = true. ` +
+	`Group multiple uncovered clusters INTO ONE plan step per region (each ` +
+	`cluster is its own Terraform target, but the snippet emits one ` +
+	`google_container_cluster block per cluster inside the same step so ` +
+	`the operator's PR review covers the whole batch). SQUADRON DOES NOT ` +
+	`EXECUTE container.projects.locations.clusters.update — the discovery ` +
+	`IAM scope for GKE is read-only (roles/container.viewer). Each GKE ` +
+	`plan step's inline_config_snippet is Terraform the operator runs ` +
+	`through their own IaC pipeline.` + "\n" +
+	`  - Azure AKS clusters (Kubernetes tier slice 2): the single ` +
+	`observability lever is AZURE MONITOR (Container Insights, Managed ` +
+	`Prometheus, or the legacy omsagent addon — a three-way disjunction ` +
+	`mirroring EKS's "ADOT OR CloudWatch observability" pattern so ` +
+	`operators on either the legacy or newer addon get credit). An ` +
+	`azurerm_kubernetes_cluster is covered when ANY of ` +
+	`addonProfiles.omsagent.enabled, azureMonitorProfile.metrics.enabled, ` +
+	`or azureMonitorProfile.containerInsights.enabled is true; when all ` +
+	`three observability flags are false, recommend enabling. ` +
+	`Recommendation kind: aks-monitor-enable. The Terraform adds the ` +
+	`azurerm_kubernetes_cluster.monitor_metrics block (for Managed ` +
+	`Prometheus) or the oms_agent block (for legacy Container Insights ` +
+	`on operators still on the older addon). Group multiple uncovered ` +
+	`clusters INTO ONE plan step per subscription (each cluster is its ` +
+	`own Terraform target, but the snippet emits one ` +
+	`azurerm_kubernetes_cluster block per cluster inside the same step so ` +
+	`the operator's PR review covers the whole batch). SQUADRON DOES NOT ` +
+	`EXECUTE the Microsoft.ContainerService managedClusters PUT API — the ` +
+	`discovery RBAC scope for AKS is read-only (Reader role at ` +
+	`subscription scope). Each AKS plan step's inline_config_snippet is ` +
+	`Terraform the operator runs through their own IaC pipeline.` + "\n" +
+	`  - OCI OKE clusters (Kubernetes tier slice 2): the single ` +
+	`observability lever is the OPERATIONS INSIGHTS FREEFORM TAG. An ` +
+	`oci_containerengine_cluster is covered when its freeform_tags map ` +
+	`contains a key matching the case-insensitive name ` +
+	`"operations-insights-enabled" with value "true"; when the tag is ` +
+	`missing or any other value, recommend adding it. Recommendation ` +
+	`kind: oke-ops-insights-enable. The Terraform updates the ` +
+	`oci_containerengine_cluster.freeform_tags map ` +
+	"(e.g. `freeform_tags = { \"operations-insights-enabled\" = \"true\" }`)" + `. ` +
+	`Slice 2 uses the tag convention because OCI does not expose a ` +
+	`single "cluster enrolled in Operations Insights" boolean as cleanly ` +
+	`as GCP/Azure; slice 3 may move to a direct Operations Insights API ` +
+	`call. Group multiple uncovered clusters INTO ONE plan step per ` +
+	`region (each cluster is its own Terraform target, but the snippet ` +
+	`emits one oci_containerengine_cluster block per cluster inside the ` +
+	`same step so the operator's PR review covers the whole batch). ` +
+	`SQUADRON DOES NOT EXECUTE the OCI Container Engine UpdateCluster ` +
+	`API — the discovery IAM scope for OKE is read-only (read ` +
+	`cluster-family in tenancy). Each OKE plan step's ` +
+	`inline_config_snippet is Terraform the operator runs through their ` +
+	`own IaC pipeline.` + "\n\n" +
 
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
@@ -714,38 +770,65 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	// (or whether both are). The "covered" / "logs-only" / "addon-only"
 	// / "uncovered" shorthand matches the prompt body's instructions
 	// for the four cases the model must distinguish.
+	//
+	// Kubernetes tier slice 2 (v0.89.71, #702 Stream 100) — the
+	// coverage shorthand is provider-specific. The AWS path
+	// (Provider="" or "aws") stays byte-identical to v0.89.70 because
+	// the row format string is unchanged and only the coverage
+	// selector branches on Provider before reading the new fields.
+	// GCP / Azure / OCI rows use the matching per-cloud axis:
+	// ManagedPrometheusEnabled, AzureMonitorEnabled,
+	// OperationsInsightsEnabled. Each renders as "covered" or
+	// "uncovered" — single-axis, no logs-only / addon-only
+	// intermediate state because the three new providers only expose
+	// one observability lever each at slice 2.
 	fmt.Fprintf(&b, "Clusters (%d total):\n", len(in.Clusters))
 	csample := in.Clusters
 	if len(csample) > 20 {
 		csample = csample[:20]
 	}
 	for _, c := range csample {
-		hasAPI, hasAudit := false, false
-		for _, t := range c.ControlPlaneLogging {
-			switch strings.ToLower(t) {
-			case "api":
-				hasAPI = true
-			case "audit":
-				hasAudit = true
-			}
-		}
-		hasObsAddon := false
-		for _, n := range c.AddonNames {
-			lower := strings.ToLower(n)
-			if lower == "adot" || lower == "amazon-cloudwatch-observability" {
-				hasObsAddon = true
-				break
-			}
-		}
-		logsOn := hasAPI && hasAudit
 		coverage := "uncovered"
-		switch {
-		case logsOn && hasObsAddon:
-			coverage = "covered"
-		case logsOn:
-			coverage = "logs-only"
-		case hasObsAddon:
-			coverage = "addon-only"
+		switch c.Provider {
+		case "gcp":
+			if c.ManagedPrometheusEnabled {
+				coverage = "covered"
+			}
+		case "azure":
+			if c.AzureMonitorEnabled {
+				coverage = "covered"
+			}
+		case "oci":
+			if c.OperationsInsightsEnabled {
+				coverage = "covered"
+			}
+		default: // "" or "aws" — cold-start parity preserved.
+			hasAPI, hasAudit := false, false
+			for _, t := range c.ControlPlaneLogging {
+				switch strings.ToLower(t) {
+				case "api":
+					hasAPI = true
+				case "audit":
+					hasAudit = true
+				}
+			}
+			hasObsAddon := false
+			for _, n := range c.AddonNames {
+				lower := strings.ToLower(n)
+				if lower == "adot" || lower == "amazon-cloudwatch-observability" {
+					hasObsAddon = true
+					break
+				}
+			}
+			logsOn := hasAPI && hasAudit
+			switch {
+			case logsOn && hasObsAddon:
+				coverage = "covered"
+			case logsOn:
+				coverage = "logs-only"
+			case hasObsAddon:
+				coverage = "addon-only"
+			}
 		}
 		logs := strings.Join(c.ControlPlaneLogging, ",")
 		if logs == "" {
