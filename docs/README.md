@@ -177,6 +177,30 @@ jump straight to that page.
   verifies telemetry is actually flowing, validates the
   spans Squadron receives are healthy, AND drafts the IaC
   PRs that close the gaps it finds."
+- [Workload Health panel — operator guide](./workload-health-panel-operator-guide.md) —
+  v0.89.131 through v0.89.133 operator runbook for the
+  Workload Health dashboard panel arc (design at
+  [proposals/workload-health-panel-slice1.md](./proposals/workload-health-panel-slice1.md)).
+  Polish arc that consolidates the substrate's three
+  serverless diagnostics (cold-start latency + sampling
+  rate + error rate) into a single dashboard panel between
+  TRACE COVERAGE and SPAN QUALITY at `/discovery`. 3-column
+  health grid with `Cold-start P95 exceeded` /
+  `Sampling too aggressive` / `Error rate spike`. Each
+  column is clickable, deep-linking to the per-provider
+  Recommendations tab filtered by the corresponding kind
+  prefix. Footer line shows the UNION any-issue count
+  (resource firing 2 of 3 diagnostics counts as 1).
+  Backend endpoint at
+  `GET /api/v1/discovery/workload_health` with 30s
+  in-memory cache mirroring the v0.89.61 summary pattern;
+  cache miss emits `discovery.workload_health.requested`
+  audit. No new substrate, metrics, or recommendation
+  kinds. Hides when serverless_resource_count is zero OR
+  all 3 percentages are zero. **Slice 1 SHIPPED in
+  v0.89.133.** The dashboard's primary entrypoint now
+  reads top-to-bottom: coverage → workload health →
+  span quality.
 - [Error rate correlation — operator guide](./error-rate-correlation-operator-guide.md) —
   v0.89.126 through v0.89.130 operator runbook for the error
   rate correlation slice 1 arc (design at
