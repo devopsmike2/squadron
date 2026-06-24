@@ -149,10 +149,23 @@ jump straight to that page.
   sqs- → aws. ScanEventSources dispatcher extends from
   two-way (EB+SNS) to three-way (EB+SNS+SQS) with partial-scan
   posture across all three. **Slice 4 SHIPPED in v0.89.142.**
-  Slices 5-7 will add GCP Cloud Tasks, Azure Event Grid +
-  Event Hubs, OCI Notification Service in turn — keeping
-  the per-arc cap honest while
-  compounding the event source claim. Squadron's claim
+  **Slice 5 (v0.89.143-v0.89.145)** continues the widening pass
+  by adding GCP Cloud Tasks as the second GCP event source
+  surface. Architectural parity with the slice 4 AWS SQS
+  pattern — both serve guaranteed delivery with retry
+  semantics. 2 new recommendation kinds:
+  cloudtasks-retry-policy-enable (Terraform: retry_config block
+  with exponential backoff) catches the canonical Cloud Tasks
+  production failure (silent task drop on HTTP target failure); +
+  cloudtasks-logging-enable (Terraform: stackdriver_logging_config
+  with sampling_ratio = 1.0). 1 new webhook prefix: cloudtasks-
+  → gcp. ScanEventSources dispatcher extends from one-way
+  (Pub/Sub only) to two-way (Pub/Sub + Cloud Tasks) with
+  partial-scan posture both directions. **Slice 5 SHIPPED in
+  v0.89.145.** AWS now has 3 event source surfaces (EventBridge
+  + SNS + SQS); GCP now has 2 (Pub/Sub + Cloud Tasks); slices
+  6-7 will catch up Azure + OCI.
+  Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,
   ORCHESTRATION, AND EVENT SOURCES for observability gaps,

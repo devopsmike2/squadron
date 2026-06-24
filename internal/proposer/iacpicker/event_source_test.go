@@ -216,3 +216,149 @@ func TestPickSQSRedrivePolicyPattern_EmptyResourceName_FallsBack(t *testing.T) {
 		t.Errorf("expected fallback redrive policy DLQ reference, got:\n%s", tf)
 	}
 }
+
+// --- Event source tier slice 5 chunk 2 (v0.89.145, #785 Stream 183) -
+
+// TestPickCloudTasksRetryPolicyPattern_IncludesRetryConfigBlock — event
+// source tier slice 5 chunk 2. The Terraform snippet MUST emit the
+// retry_config nested block on the google_cloud_tasks_queue resource
+// per §8 of the design doc (docs/proposals/event-source-tier-slice5.md).
+// Without retry_config, the Cloud Tasks queue silently drops tasks on
+// HTTP target failure — the GCP equivalent of an SQS queue without a
+// redrive policy.
+func TestPickCloudTasksRetryPolicyPattern_IncludesRetryConfigBlock(t *testing.T) {
+	tf, _ := PickCloudTasksRetryPolicyPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "webhook_dispatch",
+	})
+	if !strings.Contains(tf, `resource "google_cloud_tasks_queue" "webhook_dispatch"`) {
+		t.Errorf("expected google_cloud_tasks_queue resource block for webhook_dispatch, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, "retry_config {") {
+		t.Errorf("expected retry_config nested block, got:\n%s", tf)
+	}
+	for _, attr := range []string{"min_backoff", "max_backoff", "max_doublings", "max_retry_duration"} {
+		if !strings.Contains(tf, attr) {
+			t.Errorf("expected %q in retry_config, got:\n%s", attr, tf)
+		}
+	}
+}
+
+// TestPickCloudTasksRetryPolicyPattern_MaxAttemptsDefaultIs5 — the
+// snippet MUST set max_attempts = 5 as the default ("retry a few times
+// with exponential backoff before giving up" semantics). Operators
+// tune based on consumer retry tolerance per §8 of the design doc.
+func TestPickCloudTasksRetryPolicyPattern_MaxAttemptsDefaultIs5(t *testing.T) {
+	tf, _ := PickCloudTasksRetryPolicyPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "tasks",
+	})
+	if !strings.Contains(tf, "max_attempts       = 5") {
+		t.Errorf("expected max_attempts = 5 default, got:\n%s", tf)
+	}
+}
+
+// TestPickCloudTasksRetryPolicyPattern_ReasoningMentionsDeclinePath —
+// the reasoning string MUST surface the slice 5 honest-framing pattern:
+// operators intentionally configuring fire-and-forget semantics
+// (single attempt, drop on failure) should decline. The verdict
+// learning loop records the decline so the per-resource exclusion
+// table can suppress repeat drafts.
+func TestPickCloudTasksRetryPolicyPattern_ReasoningMentionsDeclinePath(t *testing.T) {
+	_, reasoning := PickCloudTasksRetryPolicyPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "tasks",
+	})
+	for _, token := range []string{
+		"Decline",
+		"fire-and-forget",
+		"verdict learning loop",
+		"exponential backoff",
+	} {
+		if !strings.Contains(reasoning, token) {
+			t.Errorf("reasoning missing %q, got: %s", token, reasoning)
+		}
+	}
+}
+
+// TestPickCloudTasksRetryPolicyPattern_EmptyResourceName_FallsBack —
+// when the proposer cannot recover the Terraform resource name from
+// the operator's repo, the snippet falls back to "<name>" so the
+// operator can substitute it during review.
+func TestPickCloudTasksRetryPolicyPattern_EmptyResourceName_FallsBack(t *testing.T) {
+	tf, _ := PickCloudTasksRetryPolicyPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "",
+	})
+	if !strings.Contains(tf, `resource "google_cloud_tasks_queue" "<name>"`) {
+		t.Errorf("expected fallback google_cloud_tasks_queue <name> block, got:\n%s", tf)
+	}
+}
+
+// TestPickCloudTasksLoggingPattern_IncludesStackdriverLoggingConfig —
+// event source tier slice 5 chunk 2. The Terraform snippet MUST emit
+// the stackdriver_logging_config nested block on the
+// google_cloud_tasks_queue resource per §8 of the design doc. Without
+// Stackdriver Logging the operator has no per-task delivery audit
+// trail.
+func TestPickCloudTasksLoggingPattern_IncludesStackdriverLoggingConfig(t *testing.T) {
+	tf, _ := PickCloudTasksLoggingPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "tasks",
+	})
+	if !strings.Contains(tf, `resource "google_cloud_tasks_queue" "tasks"`) {
+		t.Errorf("expected google_cloud_tasks_queue resource block for tasks, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, "stackdriver_logging_config {") {
+		t.Errorf("expected stackdriver_logging_config nested block, got:\n%s", tf)
+	}
+}
+
+// TestPickCloudTasksLoggingPattern_SamplingRatioDefaultIs1 — the
+// snippet MUST set sampling_ratio = 1.0 (full sampling) as the
+// default. Operators tune downward for very-high-throughput queues
+// where full sampling is expensive.
+func TestPickCloudTasksLoggingPattern_SamplingRatioDefaultIs1(t *testing.T) {
+	tf, _ := PickCloudTasksLoggingPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "tasks",
+	})
+	if !strings.Contains(tf, "sampling_ratio = 1.0") {
+		t.Errorf("expected sampling_ratio = 1.0 default, got:\n%s", tf)
+	}
+}
+
+// TestPickCloudTasksLoggingPattern_ReasoningMentionsDeclinePath — the
+// reasoning string MUST surface the slice 5 honest-framing pattern:
+// operators using a non-Stackdriver destination for task audit (custom
+// HTTP logger sidecar, etc.) should decline. The verdict learning loop
+// records.
+func TestPickCloudTasksLoggingPattern_ReasoningMentionsDeclinePath(t *testing.T) {
+	_, reasoning := PickCloudTasksLoggingPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "tasks",
+	})
+	for _, token := range []string{
+		"Decline",
+		"non-Stackdriver destination",
+		"verdict learning loop",
+		"full sampling",
+	} {
+		if !strings.Contains(reasoning, token) {
+			t.Errorf("reasoning missing %q, got: %s", token, reasoning)
+		}
+	}
+}
+
+// TestPickCloudTasksLoggingPattern_EmptyResourceName_FallsBack — when
+// the proposer cannot recover the Terraform resource name, the snippet
+// falls back to "<name>".
+func TestPickCloudTasksLoggingPattern_EmptyResourceName_FallsBack(t *testing.T) {
+	tf, _ := PickCloudTasksLoggingPattern(RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: "",
+	})
+	if !strings.Contains(tf, `resource "google_cloud_tasks_queue" "<name>"`) {
+		t.Errorf("expected fallback google_cloud_tasks_queue <name> block, got:\n%s", tf)
+	}
+}

@@ -934,6 +934,123 @@ Per §13 of the design doc:
   substrate, message filter inspection, multi-account fan-out
   coordination
 
+## Slice 5 SHIPPED in v0.89.143-v0.89.145 — GCP Cloud Tasks
+
+Slice 5 continues the widening pass by adding GCP Cloud Tasks
+as the second GCP event source surface alongside Pub/Sub.
+After slice 5, GCP comes into architectural parity with AWS
+on the event source tier — both have a fan-out primitive
+(EventBridge/SNS, Pub/Sub) and a queue-based primitive (SQS,
+Cloud Tasks).
+
+The canonical GCP pub/sub-with-retry architecture is
+`Pub/Sub → Cloud Tasks → HTTP target`: a Pub/Sub topic fans
+out to many subscribers; each subscriber adds work items to a
+Cloud Tasks queue; the queue drives an HTTP endpoint with
+retry-on-failure semantics.
+
+### The new GCP surface — Cloud Tasks
+
+| Cloud | Surface     | Trace axis                                                    | Log axis                                          |
+|-------|-------------|---------------------------------------------------------------|----------------------------------------------------|
+| GCP   | Cloud Tasks | `retryConfig.maxAttempts > 0` OR `-1` (unlimited)             | `stackdriverLoggingConfig.samplingRatio > 0`      |
+
+Like SNS/SQS, Cloud Tasks doesn't have a direct OTel
+integration. Squadron uses the operational signals (retry
+config presence + Stackdriver Logging sampling ratio) as the
+canonical "is task delivery being audited?" signal.
+
+### The 2 new recommendation kinds
+
+```
+cloudtasks-retry-policy-enable          cloudtasks-logging-enable
+```
+
+Webhook routing: `cloudtasks- → gcp`.
+
+### cloudtasks-retry-policy-enable
+
+Fires on Cloud Tasks queues with `retryConfig.maxAttempts = 0`
+(or retry config unset entirely). The Terraform PR configures
+retry with exponential backoff (max_attempts = 5, doubling
+backoff from 10s to 300s).
+
+This catches the **canonical Cloud Tasks production failure**:
+a queue without retry policy silently drops tasks when the
+HTTP target returns non-2xx. Equivalent to SQS without a
+redrive policy.
+
+Decline if your team intentionally wants single-attempt
+fire-and-forget semantics. The verdict learning loop records.
+
+### cloudtasks-logging-enable
+
+Fires on Cloud Tasks queues with
+`stackdriverLoggingConfig.samplingRatio = 0` (or unset).
+Configures full sampling (1.0); operators tune for
+high-throughput queues.
+
+Decline if your team uses a non-Stackdriver destination for
+task audit (custom HTTP logger sidecar, etc.).
+
+### The maxAttempts = -1 sentinel
+
+Cloud Tasks returns `maxAttempts = -1` for unlimited retry
+semantics. Slice 5 treats this as CONFIGURED retry
+(HasTraceAxis = true). The recommendation doesn't fire.
+
+If you'd rather see a bounded retry count, decline the
+recommendation (the per-resource exclusion table records
+the preference).
+
+### Two-way dispatcher partial-scan posture
+
+Slice 5 extends `ScanEventSources` to fan out across Pub/Sub +
+Cloud Tasks. If Pub/Sub fails (IAM lag from connections that
+predate v0.89.46) AND Cloud Tasks succeeds (slice 5 IAM
+update applied), the operator still sees Cloud Tasks queues.
+Same in the other direction.
+
+The IAM template extends with two new permissions:
+
+```
+cloudtasks.queues.list
+cloudtasks.queues.get
+```
+
+### Cost surface
+
+Cloud Tasks API queries are free for read operations. No new
+operator-facing cost decisions per the no-money brief.
+
+### The canonical GCP queue-based failure chain — fully visible
+
+After slice 5, the GCP queue-based failure chain is fully
+covered:
+
+1. **Pub/Sub topic** without delivery integration (slice 1
+   `pubsub-trace-enable`)
+2. **Cloud Tasks queue** without retry config (this slice
+   `cloudtasks-retry-policy-enable`)
+3. **Cloud Tasks queue** without Stackdriver Logging (this
+   slice `cloudtasks-logging-enable`)
+4. **HTTP target / Cloud Run / Cloud Functions** without
+   trace primitive (serverless tier)
+5. **Cloud Run / Cloud Functions cold-start regression**
+   (substrate's three diagnostics)
+
+Five layers. One control plane.
+
+### Slice 6+ deferrals
+
+Per §13 of the design doc:
+- **Slice 6: Azure Event Grid + Event Hubs** — second + third
+  Azure surfaces
+- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 8+: GCP Eventarc**, per-queue depth anomaly
+  detection via MetricQuerier substrate, per-task execution-
+  time analysis, multi-project fan-out coordination
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —
@@ -953,6 +1070,11 @@ Per §13 of the design doc:
   surface and 2 new recommendation kinds
   (sqs-redrive-policy-enable + sqs-deadletter-queue-attach)
   routed via the new sqs- webhook prefix.
+- [Event source tier slice 5 design doc](./proposals/event-source-tier-slice5.md) —
+  the slice 5 spec that adds GCP Cloud Tasks as the second
+  GCP surface and 2 new recommendation kinds
+  (cloudtasks-retry-policy-enable + cloudtasks-logging-enable)
+  routed via the new cloudtasks- webhook prefix.
 - [Orchestration tier slice 1](./proposals/orchestration-tier-slice1.md) —
   the prior tier-expansion arc this composes with.
 - [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —

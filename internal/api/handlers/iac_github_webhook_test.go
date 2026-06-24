@@ -3351,6 +3351,88 @@ func TestWebhook_SQSKinds_RouteToAWS(t *testing.T) {
 	}
 }
 
+// --- Event source tier slice 5 chunk 2 (v0.89.145, #785 Stream 183) -
+
+// TestWebhook_CloudTasksKinds_RouteToGCP — event source tier slice 5
+// chunk 2. The 2 new Cloud Tasks recommendation kinds
+// (cloudtasks-retry-policy-enable + cloudtasks-logging-enable) must
+// route through the webhook receiver as provider=gcp with the parsed
+// project_id surfaced on the audit payload. Table-driven to cover
+// BOTH kinds — same shape as the slice 4 SQS routing test.
+// Pins design doc §11 acceptance tests 14 + 15.
+func TestWebhook_CloudTasksKinds_RouteToGCP(t *testing.T) {
+	for _, kind := range []string{
+		"cloudtasks-retry-policy-enable",
+		"cloudtasks-logging-enable",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+
+			branch := "squadron/rec/" + kind + "/my-sandbox-project/us-central1/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-24T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], kind)
+			}
+			if pay["provider"] != "gcp" {
+				t.Errorf("payload.provider = %v, want gcp", pay["provider"])
+			}
+			if pay["project_id"] != "my-sandbox-project" {
+				t.Errorf("payload.project_id = %v, want my-sandbox-project", pay["project_id"])
+			}
+		})
+	}
+}
+
+// TestProviderFromRecommendationKind_EventSourceSlice5Extension —
+// pins the dispatch table for the 2 new Cloud Tasks kinds and
+// reasserts prior-tier routing remains green. Same shape as the slice
+// 4 SQS extension test.
+func TestProviderFromRecommendationKind_EventSourceSlice5Extension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{kind: "cloudtasks-retry-policy-enable", want: "gcp"},
+		{kind: "cloudtasks-logging-enable", want: "gcp"},
+		// Prior-tier sanity — slice 1-4 event source kinds, orchestration,
+		// and serverless kinds still route correctly.
+		{kind: "sqs-redrive-policy-enable", want: "aws"},
+		{kind: "sns-subscriptions-attach", want: "aws"},
+		{kind: "eventbridge-xray-enable", want: "aws"},
+		{kind: "pubsub-trace-enable", want: "gcp"},
+		{kind: "servicebus-diagnostics-enable", want: "azure"},
+		{kind: "streaming-logging-enable", want: "oci"},
+		{kind: "resmgr-logging-enable", want: "oci"},
+		{kind: "stepfunc-xray-active", want: "aws"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		// Boundary case — bare prefix without trailing hyphen falls
+		// through to AWS via the switch default.
+		{kind: "cloudtasks", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}
+
 // TestProviderFromRecommendationKind_EventSourceSlice4Extension —
 // pins the dispatch table for the 2 new SQS kinds and reasserts
 // prior-tier routing remains green. Same shape as the slice 3
