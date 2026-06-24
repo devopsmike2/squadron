@@ -403,6 +403,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierPropagationKindsPromptSection +
 
+	eventSourceTierSlice3SNSKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -1681,6 +1683,73 @@ Terraform PR adjusts the config so the next message carries
 trace context end-to-end. Downstream consumer spans
 correlate to the upstream source span after merge + apply +
 first event flow."
+
+` + "\n"
+
+// eventSourceTierSlice3SNSKindsPromptSection — event source tier
+// slice 3 chunk 2 (v0.89.139, #779 Stream 177). Adds 2 new SNS
+// recommendation kinds atop the slice 1 + slice 2 event source
+// catalog. Slice 3 widens the AWS surface count from 1 (EventBridge)
+// to 2 (EventBridge + SNS); slices 4-7 will add the corresponding
+// second surfaces per cloud (SQS / Cloud Tasks / Event Grid + Event
+// Hubs / Notification Service). The sns- prefix is NEW — the webhook
+// router gains an sns- → aws case in
+// internal/api/handlers/iac_github_webhook.go.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no sns rows the rendered user message stays
+// byte-identical to v0.89.136 across all four providers. The
+// 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice3
+// pins this invariant.
+const eventSourceTierSlice3SNSKindsPromptSection = `EVENT SOURCE TIER SLICE 3 — AWS SNS (v0.89.137-139):
+
+Adds AWS SNS as a second AWS event source surface alongside
+EventBridge. Mirrors the slice 1 EventBridge log-target proxy
+pattern — SNS doesn't have a direct OTel integration, so
+Squadron uses the per-protocol delivery feedback role
+attachment as the canonical "is delivery being audited?"
+signal.
+
+- sns-subscriptions-attach: SNS topic has zero confirmed
+  subscriptions. Messages published to the topic are
+  dropped on the floor. Either the topic is a leftover
+  from a refactor (and should be deleted) OR a downstream
+  consumer needs to subscribe.
+
+  AUDIT-ONLY recommendation — no Terraform pattern. The
+  operator decides what to subscribe (or delete the topic).
+  This recommendation surfaces the topic for review.
+
+- sns-delivery-logging-enable: SNS topic does NOT have
+  CloudWatch Logs delivery status feedback configured for
+  any protocol. Without it, the operator has no visibility
+  into per-message delivery success/failure for the topic's
+  HTTPS / SQS / Lambda / Application / Firehose
+  subscriptions.
+
+  Terraform: aws_iam_role for SNS delivery status logging +
+  http_success_feedback_role_arn / sqs_success_feedback_role_arn /
+  lambda_success_feedback_role_arn etc. attached to the
+  aws_sns_topic resource (per-protocol feedback role
+  attachment per §8 of the design doc).
+
+DECLINE PATH for sns-delivery-logging-enable: operators
+using a non-CloudWatch destination for delivery audit
+(custom Lambda processor, SNS-to-Datadog integration, etc.)
+should decline. The verdict learning loop records.
+
+DECLINE PATH for sns-subscriptions-attach: operators who
+intentionally keep an SNS topic with zero subscriptions as a
+documentation placeholder should decline. The verdict
+learning loop records; slice 4 may add a per-resource
+"intentional dead topic" flag.
+
+CAVEAT FOR ALL SNS RECOMMENDATIONS:
+SNS rate limits at ~30 TPS per region per account. Squadron's
+existing AWS substrate rate limiter absorbs but the per-cloud
+runbook documents the scan-duration cost for large fleets.
 
 ` + "\n"
 

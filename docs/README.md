@@ -126,13 +126,26 @@ jump straight to that page.
   on all four provider pages. Trace coverage endpoint
   gains `propagation_pct`; dashboard EVT chip gains a
   `(prop N%)` suffix when event sources exist. **Slice 2
-  SHIPPED in v0.89.107.** Squadron's claim grows a sixth
-  tier: "scans AWS, GCP, Azure, AND Oracle Cloud across
-  COMPUTE, DATABASE, KUBERNETES, SERVERLESS, ORCHESTRATION,
-  AND EVENT SOURCES for observability gaps, verifies
-  telemetry is actually flowing, validates the spans
-  Squadron receives are healthy, AND drafts the IaC PRs
-  that close the gaps it finds."
+  SHIPPED in v0.89.107.** **Slice 3 (v0.89.137-v0.89.139)**
+  widens AWS event source coverage by adding SNS as a
+  second AWS surface alongside EventBridge. 2 new
+  recommendation kinds: sns-subscriptions-attach
+  (audit-only — fires on orphan topics with zero confirmed
+  subscriptions) + sns-delivery-logging-enable (Terraform:
+  per-protocol IAM delivery feedback role attachment).
+  1 new webhook prefix: sns- → aws. ScanEventSources
+  dispatcher extends with partial-scan posture (EventBridge
+  failure no longer blocks SNS surfacing, and vice versa).
+  **Slice 3 SHIPPED in v0.89.139.** Slices 4-7 will add
+  SQS, Cloud Tasks, Event Grid + Event Hubs, Notification
+  Service in turn — keeping the per-arc cap honest while
+  compounding the event source claim. Squadron's claim
+  grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
+  Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,
+  ORCHESTRATION, AND EVENT SOURCES for observability gaps,
+  verifies telemetry is actually flowing, validates the
+  spans Squadron receives are healthy, AND drafts the IaC
+  PRs that close the gaps it finds."
 - [Orchestration tier — operator guide](./orchestration-tier-operator-guide.md) —
   v0.89.94 through v0.89.136 operator runbook for the
   orchestration tier arc. Slice 1 (design at
