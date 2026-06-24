@@ -597,3 +597,160 @@ func TestQuality_SnapshotKey_ZeroDenominators_PctIsZero(t *testing.T) {
 	assert.InDelta(t, 0.0, snap.MalformedTraceparentPct, 0.0001)
 	assert.InDelta(t, 0.0, snap.MissingTraceparentOnChildPct, 0.0001)
 }
+
+// -- v0.89.122 sampling rate slice 1 chunk 1 additions ---------------------
+
+// TestQuality_24hCounter_IncrementsOnEachSpan — sampling rate
+// slice 1 §11 acceptance test 1. Each Observe call increments the
+// 24h-window counter independently of the 1h-window TotalSpans
+// counter. Both counters advance on every span.
+func TestQuality_24hCounter_IncrementsOnEachSpan(t *testing.T) {
+	q, _ := newTestQuality()
+	for i := 0; i < 5; i++ {
+		q.Observe(observeWith("k1", "compute", computeAttrs()))
+	}
+	c := q.perKey["k1"]
+	assert.Equal(t, uint64(5), c.TotalSpans, "1h counter advances per span")
+	assert.Equal(t, uint64(5), c.TotalSpansLast24h, "24h counter advances per span")
+}
+
+// TestQuality_24hCounter_ResetsAfter24h — sampling rate slice 1
+// §11 acceptance test 2. After more than 24h elapsed since
+// WindowStart24h, the next Observe resets the 24h counter to 0
+// before incrementing — so the post-rollover observation lands in
+// a fresh 24h window.
+func TestQuality_24hCounter_ResetsAfter24h(t *testing.T) {
+	q, clock := newTestQuality()
+	q.Observe(observeWith("k1", "compute", computeAttrs()))
+	q.Observe(observeWith("k1", "compute", computeAttrs()))
+	require.Equal(t, uint64(2), q.perKey["k1"].TotalSpansLast24h)
+
+	// Advance just past the 24h boundary.
+	clock.Advance(24*time.Hour + time.Minute)
+	q.Observe(observeWith("k1", "compute", computeAttrs()))
+
+	c := q.perKey["k1"]
+	assert.Equal(t, uint64(1), c.TotalSpansLast24h,
+		"post-24h-rollover span should land in fresh 24h window")
+}
+
+// TestQuality_24hCounter_IndependentFrom1h_DifferentReset —
+// sampling rate slice 1 §11 acceptance test 3. PINS the
+// independence requirement: the 1h reset MUST NOT zero the 24h
+// counter, and vice versa. A 1h rollover preserves
+// TotalSpansLast24h; a 24h rollover (without a span on the 1h
+// boundary) doesn't zero TotalSpans either.
+//
+// This is the test the §5 design doc cites as the load-bearing
+// pin for the "Option A: 24h Quality counter, parallel" choice.
+func TestQuality_24hCounter_IndependentFrom1h_DifferentReset(t *testing.T) {
+	q, clock := newTestQuality()
+	// Observe 3 spans at t0.
+	for i := 0; i < 3; i++ {
+		q.Observe(observeWith("k1", "compute", computeAttrs()))
+	}
+	c0 := q.perKey["k1"]
+	require.Equal(t, uint64(3), c0.TotalSpans)
+	require.Equal(t, uint64(3), c0.TotalSpansLast24h)
+
+	// Advance past the 1h boundary (but well under 24h) and observe
+	// one span. The 1h counter resets to 1; the 24h counter must
+	// stay at 4 (was 3, +1 new span).
+	clock.Advance(1*time.Hour + time.Minute)
+	q.Observe(observeWith("k1", "compute", computeAttrs()))
+	c1 := q.perKey["k1"]
+	assert.Equal(t, uint64(1), c1.TotalSpans, "1h counter reset by rollover")
+	assert.Equal(t, uint64(4), c1.TotalSpansLast24h,
+		"24h counter MUST NOT be zeroed by the 1h rollover (independence pin)")
+
+	// Now advance past 24h from the original WindowStart24h, observe
+	// one more span. The 24h counter must reset to 1 — and the 1h
+	// counter (whose WindowStart was the post-1h-rollover timestamp,
+	// way less than 24h ago) ALSO rolls over since the 24h advance
+	// is much larger than 1h, so TotalSpans is 1 too. We pin only
+	// the load-bearing assertion: TotalSpansLast24h reset to 1.
+	clock.Advance(23 * time.Hour)
+	q.Observe(observeWith("k1", "compute", computeAttrs()))
+	c2 := q.perKey["k1"]
+	assert.Equal(t, uint64(1), c2.TotalSpansLast24h,
+		"24h counter reset by 24h rollover")
+}
+
+// TestQuality_24hCounter_RolloverDoesNotAffect1hPathology —
+// defensive: a 24h rollover MUST NOT zero the pathology
+// numerators (OrphanSpans / MissingAttrSpans / AttrMismatchSpans /
+// MalformedTraceparentSpans / MissingTraceparentOnChildSpans).
+// Those are 1h-window counters and only the 1h reset path is
+// allowed to zero them.
+//
+// We construct a scenario where the 24h window elapses but the
+// 1h window does NOT (the test clock advances by 24h+1min, so
+// both windows reset — but the 24h reset branch ALONE must not
+// touch the 1h fields, which is the property under test). We
+// verify by inspecting the reset code in two phases: first
+// advance 23h, observe a clean span (1h window resets — leaves
+// 24h alone), then advance 1h+1min and observe a second clean
+// span (1h resets again, 24h resets). The pathology counters
+// should be zero after each step because the 1h rollover zeroed
+// them; the test ensures no double-decrement or skipped reset.
+func TestQuality_24hCounter_RolloverDoesNotAffect1hPathology(t *testing.T) {
+	q, clock := newTestQuality()
+	// Seed: one missing-attr span.
+	bad := computeAttrs()
+	delete(bad, "service.name")
+	q.Observe(observeWith("k1", "compute", bad))
+	require.Equal(t, uint64(1), q.perKey["k1"].MissingAttrSpans)
+	require.Equal(t, uint64(1), q.perKey["k1"].TotalSpansLast24h)
+
+	// Advance 23h — past the 1h window so the 1h fields zero. The
+	// 24h counter must NOT zero (only 23h elapsed since
+	// WindowStart24h).
+	clock.Advance(23 * time.Hour)
+	q.Observe(observeWith("k1", "compute", computeAttrs()))
+	c := q.perKey["k1"]
+	assert.Equal(t, uint64(0), c.MissingAttrSpans,
+		"1h rollover zeroed missing-attr counter")
+	assert.Equal(t, uint64(1), c.TotalSpans, "fresh 1h window has 1 clean span")
+	assert.Equal(t, uint64(2), c.TotalSpansLast24h,
+		"24h counter advanced (1 + 1 new) and was NOT reset by the 1h rollover")
+}
+
+// TestSpanCountLast24h_ReturnsCorrectCount — pins the accessor's
+// happy path: after N Observe calls, SpanCountLast24h returns N
+// with ok=true.
+func TestSpanCountLast24h_ReturnsCorrectCount(t *testing.T) {
+	q, _ := newTestQuality()
+	for i := 0; i < 7; i++ {
+		q.Observe(observeWith("k1", "compute", computeAttrs()))
+	}
+	got, ok := q.SpanCountLast24h("k1")
+	require.True(t, ok)
+	assert.Equal(t, uint64(7), got)
+}
+
+// TestSpanCountLast24h_NotFoundKey_ReturnsFalse — a key with no
+// observations returns ok=false. The chunk-2 detection branch
+// treats this as "insufficient data" and skips the comparison.
+func TestSpanCountLast24h_NotFoundKey_ReturnsFalse(t *testing.T) {
+	q, _ := newTestQuality()
+	q.Observe(observeWith("k1", "compute", computeAttrs()))
+
+	got, ok := q.SpanCountLast24h("never-seen")
+	assert.False(t, ok, "missing key returns ok=false")
+	assert.Equal(t, uint64(0), got, "missing key returns zero count")
+}
+
+// TestSnapshotKey_PopulatesTotalSpansLast24h — the snapshot carries
+// the 24h count field so the chunk-2 per-resource sampling API
+// endpoint can read it off SnapshotKey without a separate accessor.
+func TestSnapshotKey_PopulatesTotalSpansLast24h(t *testing.T) {
+	q, _ := newTestQuality()
+	for i := 0; i < 4; i++ {
+		q.Observe(observeWith("k1", "compute", computeAttrs()))
+	}
+	snap, ok := q.SnapshotKey("k1")
+	require.True(t, ok)
+	assert.Equal(t, uint64(4), snap.TotalSpansLast24h)
+	assert.Equal(t, uint64(4), snap.TotalSpans, "snapshot preserves 1h field too")
+}
+

@@ -452,3 +452,141 @@ func TestParseGCPResourceName_InvalidFormat_Errors(t *testing.T) {
 		}
 	}
 }
+
+// -- v0.89.122 sampling rate slice 1 chunk 1 additions ---------------------
+
+// TestCloudRunRequestCountMetricType_Constant pins the metric type
+// for Cloud Run request count — the sampling-rate denominator
+// (§4.2). Future SDK rename would silently break the
+// observed/expected ratio detection without this pin.
+func TestCloudRunRequestCountMetricType_Constant(t *testing.T) {
+	if CloudRunRequestCountMetricType != "run.googleapis.com/request_count" {
+		t.Fatalf("CloudRunRequestCountMetricType = %q, want run.googleapis.com/request_count",
+			CloudRunRequestCountMetricType)
+	}
+}
+
+// TestCloudFunctionsExecutionCountMetricType_Constant pins the metric
+// type for Cloud Functions execution count (§4.3).
+func TestCloudFunctionsExecutionCountMetricType_Constant(t *testing.T) {
+	if CloudFunctionsExecutionCountMetricType != "cloudfunctions.googleapis.com/function/execution_count" {
+		t.Fatalf("CloudFunctionsExecutionCountMetricType = %q, want cloudfunctions.googleapis.com/function/execution_count",
+			CloudFunctionsExecutionCountMetricType)
+	}
+}
+
+// TestGCPQueryAggregate_RequestCount_ReturnsSumOverWindow —
+// acceptance test 5a (sampling rate slice 1 §11). Multi-point
+// response; QueryAggregate sums across periods (not MAX like the
+// latency path) and returns the total. Mirrors the AWS Invocations
+// SUM-rollup contract for cross-cloud parity.
+func TestGCPQueryAggregate_RequestCount_ReturnsSumOverWindow(t *testing.T) {
+	f := &metricsFake{
+		respondWith: []TimeSeriesPoint{
+			{Value: 1200.0, SampleCount: 1},
+			{Value: 800.0, SampleCount: 1},
+			{Value: 3000.0, SampleCount: 1},
+		},
+	}
+	s := newMetricsTestScannerWithFake(t, f)
+	const arn = "projects/test-project/locations/us-central1/services/checkout"
+	res, err := s.QueryAggregate(
+		context.Background(),
+		arn,
+		CloudRunRequestCountMetricType,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 5000.0 {
+		t.Errorf("Value = %v, want SUM across points (5000.0), NOT MAX (3000.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != CloudRunRequestCountMetricType {
+		t.Errorf("MetricName = %q, want %q", res.MetricName, CloudRunRequestCountMetricType)
+	}
+	// Count metrics use ALIGN_DELTA so each per-period value is the
+	// per-period delta — not the percentile aligner the latency path
+	// uses.
+	if f.receivedStat[0] != "ALIGN_DELTA" {
+		t.Errorf("aligner = %q, want ALIGN_DELTA", f.receivedStat[0])
+	}
+}
+
+// TestGCPQueryAggregate_ExecutionCount_ReturnsSumOverWindow —
+// acceptance test 5b. Cloud Functions execution_count path. Same
+// SUM rollup as the Cloud Run request_count case.
+func TestGCPQueryAggregate_ExecutionCount_ReturnsSumOverWindow(t *testing.T) {
+	f := &metricsFake{
+		respondWith: []TimeSeriesPoint{
+			{Value: 250.0, SampleCount: 1},
+			{Value: 750.0, SampleCount: 1},
+		},
+	}
+	s := newMetricsTestScannerWithFake(t, f)
+	const arn = "projects/test-project/locations/us-central1/functions/report-builder"
+	res, err := s.QueryAggregate(
+		context.Background(),
+		arn,
+		CloudFunctionsExecutionCountMetricType,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 1000.0 {
+		t.Errorf("Value = %v, want SUM (1000.0)", res.Value)
+	}
+	if res.SampleCount != 2 {
+		t.Errorf("SampleCount = %d, want 2", res.SampleCount)
+	}
+	// Function-side filter applies status="ok" rather than the
+	// response_code_class filter the Cloud Run path uses.
+	flt := f.receivedFilter[0]
+	if !strings.Contains(flt, `status = "ok"`) {
+		t.Errorf("filter %q missing status=ok", flt)
+	}
+	if !strings.Contains(flt, "function_name") || !strings.Contains(flt, `"report-builder"`) {
+		t.Errorf("filter %q missing function_name=report-builder", flt)
+	}
+	if !strings.Contains(flt, CloudFunctionsExecutionCountMetricType) {
+		t.Errorf("filter %q missing metric type", flt)
+	}
+}
+
+// TestGCPQueryAggregate_RequestCount_FiltersByResponseCodeClass pins
+// the §4.2 filter choice: response_code_class != "5xx" (exclude
+// only server errors; 4xx requests still reflect a real invocation
+// the sampler observed).
+func TestGCPQueryAggregate_RequestCount_FiltersByResponseCodeClass(t *testing.T) {
+	f := &metricsFake{respondWith: []TimeSeriesPoint{}}
+	s := newMetricsTestScannerWithFake(t, f)
+	const arn = "projects/test-project/locations/us-central1/services/checkout"
+	_, err := s.QueryAggregate(
+		context.Background(),
+		arn,
+		CloudRunRequestCountMetricType,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.receivedFilter) != 1 {
+		t.Fatalf("calls = %d, want 1", len(f.receivedFilter))
+	}
+	flt := f.receivedFilter[0]
+	if !strings.Contains(flt, `response_code_class != "5xx"`) {
+		t.Errorf("filter %q missing response_code_class!=5xx", flt)
+	}
+	// Must NOT accidentally use the latency path's =2xx filter.
+	if strings.Contains(flt, `response_code_class = "2xx"`) {
+		t.Errorf("filter %q uses latency-path =2xx filter; sampling rate wants !=5xx", flt)
+	}
+}
+

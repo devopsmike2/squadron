@@ -63,6 +63,23 @@ const AzureFunctionsExecutionDurationMetric = "FunctionExecutionDuration"
 // Pinned by metrics_test.go::TestAzureFunctionsIsAfterColdStartDimension_Constant.
 const AzureFunctionsIsAfterColdStartDimension = "IsAfterColdStart"
 
+// AzureFunctionsInvocationsMetric is the Azure Monitor metric name
+// for Azure Functions per-function invocation count. Sampling rate
+// analysis slice 1 chunk 1 (v0.89.122) uses this as the denominator
+// for the observed_span_count / expected_invocation_count ratio per
+// docs/proposals/sampling-rate-analysis-slice1.md §4.4.
+//
+// Aggregation is "Total" (sum) rather than the "Maximum"
+// approximation the FunctionExecutionDuration path uses — Azure
+// Monitor natively supports Sum/Total on this counter. The
+// QueryAggregate routing branches on the metric name to pick the
+// appropriate aggregation; IAM stays unchanged (the existing Azure
+// Reader role covers both metrics).
+//
+// Pinned to "FunctionInvocations" by
+// metrics_test.go::TestAzureFunctionsInvocationsMetric_Constant.
+const AzureFunctionsInvocationsMetric = "FunctionInvocations"
+
 // azureMonitorMetricsAPIBase is the Azure Resource Manager path
 // segment under which microsoft.insights/metrics is exposed against
 // a Microsoft.Web/sites resource. The full URL is:
@@ -176,12 +193,24 @@ func (s *Scanner) QueryAggregate(
 		}, scanner.ErrMetricNotImplemented
 	}
 
+	// Sampling rate slice 1 chunk 1 (v0.89.122): FunctionInvocations
+	// is the second supported Azure Functions metric. The
+	// QueryAggregate routing branches on the metric name to pick
+	// the correct Azure Monitor aggregation parameter — Total
+	// (sum) for the counter vs. Maximum for the duration metric —
+	// and skips the IsAfterColdStart dimension filter (the
+	// invocation count denominator wants ALL invocations, not just
+	// cold-start ones).
+	if metricName == AzureFunctionsInvocationsMetric {
+		return s.queryAzureFunctionInvocations(ctx, resourceARN, window, stat)
+	}
+
 	if metricName != AzureFunctionsExecutionDurationMetric {
-		// Slice 2 substrate scope: FunctionExecutionDuration only.
-		// Other names short-circuit to an empty result with no error
-		// so the interface contract distinguishes "metric not
-		// supported in slice 2" (empty result) from "API call failed"
-		// (non-nil error). Slice 3 may broaden the routing.
+		// Slice 2 substrate scope: FunctionExecutionDuration +
+		// FunctionInvocations only. Other names short-circuit to
+		// an empty result with no error so the interface contract
+		// distinguishes "metric not supported in slice 1" (empty
+		// result) from "API call failed" (non-nil error).
 		return scanner.AggregateMetricResult{
 			ResourceARN: resourceARN,
 			MetricName:  metricName,
@@ -230,6 +259,94 @@ func (s *Scanner) QueryAggregate(
 	}
 
 	return result, nil
+}
+
+// queryAzureFunctionInvocations is the sampling-rate-slice-1
+// sibling of the duration code path inside QueryAggregate. It
+// reuses the rate limiter + the doAzureMonitorMetricsCall helper
+// but uses aggregation="Total" rather than "Maximum" and does NOT
+// apply the IsAfterColdStart dimension filter (the
+// invocation-count denominator wants every invocation in the
+// window, cold-start or warm). The cross-period rollup also
+// switches from MAX (latency) to SUM (counter).
+//
+// Empty datapoint handling matches the duration path: zero
+// invocations in the window returns Value=0 / SampleCount=0 with
+// no error. The chunk-2 detection branch's MIN_INVOCATION_COUNT
+// (1000) gate trips and the detection skips.
+//
+// See docs/proposals/sampling-rate-analysis-slice1.md §4.4.
+func (s *Scanner) queryAzureFunctionInvocations(
+	ctx context.Context,
+	resourceARN string,
+	window time.Duration,
+	stat scanner.MetricStatistic,
+) (scanner.AggregateMetricResult, error) {
+	if s.metricsLimiter != nil {
+		if err := s.metricsLimiter.Wait(ctx); err != nil {
+			return scanner.AggregateMetricResult{}, fmt.Errorf("rate limit: %w", err)
+		}
+	}
+
+	endTime := time.Now().UTC()
+	startTime := endTime.Add(-window)
+
+	// "Total" = sum across the timespan per Azure Monitor docs.
+	// Different aggregation than mapMetricStatisticToAzureAggregation
+	// returns (which always maps percentiles to "Maximum" for the
+	// duration metric); for the counter, "Total" is the native
+	// fit.
+	const aggregation = "Total"
+
+	out, callErr := s.doAzureMonitorMetricsCall(
+		ctx, resourceARN, AzureFunctionsInvocationsMetric,
+		startTime, endTime, aggregation, "",
+	)
+	if callErr != nil {
+		return scanner.AggregateMetricResult{}, fmt.Errorf("azure monitor metrics: %w", callErr)
+	}
+
+	result := aggregateAzureTimeseriesSum(out, aggregation)
+	result.ResourceARN = resourceARN
+	result.MetricName = AzureFunctionsInvocationsMetric
+	result.Window = window
+	result.Statistic = stat
+	result.ObservedAt = endTime
+	return result, nil
+}
+
+// aggregateAzureTimeseriesSum rolls up the value[0].timeseries[].data[]
+// datapoints into a single AggregateMetricResult via SUM rather
+// than MAX. Used by the sampling-rate-slice-1 invocation-count
+// path — the per-5-minute Total values add up to the total
+// invocations across the window, which is the denominator the
+// detection branch compares against the observed_span_count from
+// traceindex.
+//
+// Counters are unitless on the sampling-rate side; this helper
+// leaves Unit empty rather than stamping the Azure-reported "Count"
+// so the cross-cloud detection branch can treat the value
+// dimensionlessly.
+func aggregateAzureTimeseriesSum(out *armMetricsResponse, aggregation string) scanner.AggregateMetricResult {
+	result := scanner.AggregateMetricResult{}
+	if out == nil || len(out.Value) == 0 {
+		return result
+	}
+	totalVal := 0.0
+	sampleCount := 0
+	for _, ts := range out.Value[0].Timeseries {
+		for _, dp := range ts.Data {
+			v, ok := extractAggregateValue(dp, aggregation)
+			if !ok {
+				continue
+			}
+			sampleCount++
+			totalVal += v
+		}
+	}
+	result.Value = totalVal
+	result.SampleCount = sampleCount
+	return result
 }
 
 // queryAzureMetricWithFallback issues the metric query with the

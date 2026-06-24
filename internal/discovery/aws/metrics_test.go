@@ -487,3 +487,127 @@ func TestQueryAggregate_NilCloudWatchClient_ReturnsNotImplemented(t *testing.T) 
 		t.Errorf("error %q must resolve to scanner.ErrMetricNotImplemented", err)
 	}
 }
+
+// -- v0.89.122 sampling rate slice 1 chunk 1 additions ---------------------
+
+// TestLambdaInvocationsMetricName_Constant pins the CloudWatch
+// metric name for Lambda Invocations — the sampling-rate-slice-1
+// denominator. A future SDK rename would silently break the
+// observed/expected ratio detection without this pin.
+func TestLambdaInvocationsMetricName_Constant(t *testing.T) {
+	if LambdaInvocationsMetricName != "Invocations" {
+		t.Fatalf("LambdaInvocationsMetricName = %q, want \"Invocations\"", LambdaInvocationsMetricName)
+	}
+}
+
+// TestAWSQueryAggregate_Invocations_ReturnsSumOverWindow —
+// acceptance test 4 (sampling rate slice 1 §11). Multi-datapoint
+// response with per-period sums; QueryAggregate sums across periods
+// (not MAX like the init-duration path) and returns the total.
+func TestAWSQueryAggregate_Invocations_ReturnsSumOverWindow(t *testing.T) {
+	cw := &cwFake{
+		respondWith: &cloudwatch.GetMetricStatisticsOutput{
+			Datapoints: []cwtypes.Datapoint{
+				{Sum: awssdk.Float64(1200.0), SampleCount: awssdk.Float64(1), Unit: cwtypes.StandardUnitCount},
+				{Sum: awssdk.Float64(800.0), SampleCount: awssdk.Float64(1), Unit: cwtypes.StandardUnitCount},
+				{Sum: awssdk.Float64(3000.0), SampleCount: awssdk.Float64(1), Unit: cwtypes.StandardUnitCount},
+			},
+		},
+	}
+	s := newMetricsTestScannerWithCW(t, cw)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"arn:aws:lambda:us-east-1:123456789012:function:order-processor",
+		LambdaInvocationsMetricName,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 5000.0 {
+		t.Errorf("Value = %v, want SUM across periods (5000.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != LambdaInvocationsMetricName {
+		t.Errorf("MetricName = %q, want %q", res.MetricName, LambdaInvocationsMetricName)
+	}
+}
+
+// TestAWSQueryAggregate_Invocations_EmptyResponseReturnsZero —
+// empty Datapoints → Value=0, SampleCount=0, no error. The
+// detection branch's MIN_INVOCATION_COUNT gate trips on SampleCount=0
+// and the per-resource sampling-rate detection skips.
+func TestAWSQueryAggregate_Invocations_EmptyResponseReturnsZero(t *testing.T) {
+	cw := &cwFake{
+		respondWith: &cloudwatch.GetMetricStatisticsOutput{
+			Datapoints: []cwtypes.Datapoint{},
+		},
+	}
+	s := newMetricsTestScannerWithCW(t, cw)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"arn:aws:lambda:us-east-1:123456789012:function:idle-fn",
+		LambdaInvocationsMetricName,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 0 {
+		t.Errorf("Value = %v, want 0 on empty response", res.Value)
+	}
+	if res.SampleCount != 0 {
+		t.Errorf("SampleCount = %d, want 0 on empty response", res.SampleCount)
+	}
+}
+
+// TestAWSQueryAggregate_Invocations_AggregatedAsSumNotMax pins the
+// rollup choice: per-period Sum values add up rather than reducing
+// to MAX. A regression that swapped to MAX would silently
+// underreport the denominator and the detection branch would flag
+// healthy functions as oversampled.
+func TestAWSQueryAggregate_Invocations_AggregatedAsSumNotMax(t *testing.T) {
+	cw := &cwFake{
+		respondWith: &cloudwatch.GetMetricStatisticsOutput{
+			Datapoints: []cwtypes.Datapoint{
+				{Sum: awssdk.Float64(100.0), SampleCount: awssdk.Float64(1)},
+				{Sum: awssdk.Float64(50.0), SampleCount: awssdk.Float64(1)},
+			},
+		},
+	}
+	s := newMetricsTestScannerWithCW(t, cw)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"arn:aws:lambda:us-east-1:123456789012:function:sum-not-max",
+		LambdaInvocationsMetricName,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 150.0 {
+		t.Fatalf("Value = %v, want 150 (sum), NOT 100 (max)", res.Value)
+	}
+	// Also verify CloudWatch was called with Statistics=["Sum"] (not
+	// ExtendedStatistics=["p95"]). The Invocations path must NOT
+	// reuse the init-duration percentile aggregation.
+	if cw.calls != 1 {
+		t.Fatalf("calls = %d, want 1", cw.calls)
+	}
+	in := cw.receivedInputs[0]
+	if len(in.ExtendedStatistics) != 0 {
+		t.Errorf("ExtendedStatistics = %v, want empty (Invocations must use Statistics, not percentiles)", in.ExtendedStatistics)
+	}
+	if len(in.Statistics) != 1 || in.Statistics[0] != cwtypes.StatisticSum {
+		t.Errorf("Statistics = %v, want [Sum]", in.Statistics)
+	}
+	if in.MetricName == nil || *in.MetricName != LambdaInvocationsMetricName {
+		t.Errorf("MetricName = %v, want %q", in.MetricName, LambdaInvocationsMetricName)
+	}
+}
+
