@@ -94,10 +94,14 @@ func AnnotateServerlessWithColdStart(
 	floorMs := thresholds.FloorMs()
 
 	for i := range snapshots {
-		// Slice 1 AWS Lambda only — leave nil pointers on
-		// non-Lambda surfaces so the per-cloud Serverless tables on
-		// GCP / Azure / OCI render the canonical "—" everywhere.
-		if snapshots[i].Surface != "lambda" {
+		// Cold-start latency analysis slice 2 chunk 4 (v0.89.119,
+		// #759 Stream 157) — extend coverage to all four
+		// serverless surfaces. Slice 1 handled only "lambda";
+		// slice 2 adds the GCP / Azure / OCI surfaces so per-
+		// provider Discovery tabs surface the Cold-start P95 cell
+		// when the cold_start_observation table carries a row for
+		// the resource_arn.
+		if !isColdStartAnnotatableSurface(snapshots[i].Surface) {
 			continue
 		}
 		if snapshots[i].ResourceARN == "" {
@@ -160,6 +164,27 @@ func AnnotateServerlessWithColdStart(
 			exceeds = r >= ratio && current.P95Ms >= floorMs
 		}
 		snapshots[i].ColdStartExceedsThreshold = &exceeds
+	}
+}
+
+// isColdStartAnnotatableSurface is the surface-discriminator gate the
+// chunk-4 annotator uses. Cold-start latency analysis slice 2 chunk 4
+// (v0.89.119, #759 Stream 157) — the four per-cloud surfaces
+// (lambda / cloudrun / cloudfunc / azfunc / ocifunc) ALL participate.
+// Unknown surfaces (future slice-3+ surfaces) skip silently so the
+// annotator stays forward-compatible — the new field would just
+// remain nil on rendered rows until this constant is updated.
+//
+// Lifted into a named helper so the per-provider Discovery handlers
+// can sanity-check whether an upstream caller passed a slice with
+// rows that should be annotated; today the only call site is
+// AnnotateServerlessWithColdStart itself.
+func isColdStartAnnotatableSurface(surface string) bool {
+	switch surface {
+	case "lambda", "cloudrun", "cloudfunc", "azfunc", "ocifunc":
+		return true
+	default:
+		return false
 	}
 }
 

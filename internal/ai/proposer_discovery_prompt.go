@@ -1525,12 +1525,13 @@ first event flow."
 // 4-provider cold-start parity test
 // TestDiscoveryProposer_ColdStart_PromptUnchanged_PostColdStartSlice1
 // pins this invariant.
-const coldStartKindsPromptSection = `SERVERLESS COLD-START KINDS (cold-start latency analysis slice 1):
+const coldStartKindsPromptSection = `SERVERLESS COLD-START KINDS (cold-start latency analysis slice 1 + slice 2):
 
 These kinds fire when Squadron's metric correlation substrate
 detects cold-start latency regressions on serverless
-resources. Slice 1 covers AWS Lambda only; GCP / Azure / OCI
-serverless cold-start ships in slice 2.
+resources. Slice 1 covered AWS Lambda; slice 2 extends to
+GCP Cloud Run, GCP Cloud Functions, Azure Functions, OCI
+Functions.
 
 - lambda-cold-start-baseline: Lambda function with current
   24-hour P95 InitDuration that exceeds the 7-day baseline
@@ -1555,6 +1556,47 @@ serverless cold-start ships in slice 2.
   floor based on their traffic). Decline if the cause is (1)
   or (3) and trace the regression in deployment history /
   architecture change intent.
+
+- cloudrun-cold-start-baseline: Cloud Run service with
+  24-hour P95 request_latency exceeding the 7-day baseline
+  by >= 1.5x AND above 500ms. CAVEAT: Cloud Run's
+  request_latencies includes warm-path invocations;
+  permanently-warm services may show false positives.
+  Decline if your service uses min-instances and stays warm.
+  Terraform: google_cloud_run_service annotations
+  autoscaling.knative.dev/minScale = 1.
+
+- cloudfunc-cold-start-baseline: Cloud Functions execution
+  time exceeds baseline + floor. Same warm-path caveat as
+  Cloud Run. Terraform: google_cloudfunctions2_function
+  service_config min_instance_count = 1.
+
+- azfunc-cold-start-baseline: Azure Function P95 execution
+  duration exceeds baseline + floor. When the function
+  runtime emits the IsAfterColdStart dimension (2023+
+  runtimes), Squadron filters to cold-start invocations.
+  Older runtimes get an unfiltered query with an
+  informational note. Terraform: Premium Plan migration
+  (azurerm_service_plan sku_name = "EP1") OR disable
+  placeholder mode (WEBSITE_USE_PLACEHOLDER = "0").
+
+- ocifunc-cold-start-baseline: OCI Function P95
+  function_duration exceeds baseline + floor AND
+  cold_start_count > 0 in the current window. Squadron
+  skips detection when no cold starts happened in the
+  window. Terraform: WARMUP_DELAY adjustment;
+  provisioned_concurrent_executions when OCI exits preview.
+
+3-FAILURE-MODE REASONING applies to all 4 kinds (same as
+slice 1 lambda-cold-start-baseline):
+(1) Init script regression — decline + fix in app layer
+(2) Cold-start frequency increase — merge the PR
+(3) Architecture change — decline + accept new baseline
+
+Per-cloud caveats applied to the reasoning text:
+- Cloud Run + Cloud Functions: warm-path inclusion
+- Azure Functions: fallback when runtime doesn't emit IsAfterColdStart
+- OCI Functions: function_duration not cold-start-isolated
 
 REASONING TEMPLATE for cold-start recommendations:
 

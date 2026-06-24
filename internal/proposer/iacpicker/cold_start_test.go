@@ -85,3 +85,171 @@ func TestPickColdStartProvisionedConcurrency_ReasoningMentionsDeclinePath(t *tes
 		}
 	}
 }
+
+// Cold-start latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream
+// 157) — per-cloud Terraform pattern emitter tests. One per emitter,
+// pinning the shape against the §8 spec wording.
+
+// TestPickCloudRunColdStartPattern_IncludesMinScaleAnnotation — pins
+// the Cloud Run emitter's Terraform snippet against the §3.1 +
+// §8 reference shape. The minScale annotation appears with the
+// operator-tunes comment.
+func TestPickCloudRunColdStartPattern_IncludesMinScaleAnnotation(t *testing.T) {
+	picked := PickCloudRunColdStartPattern(RecommendationContext{
+		Provider:       "gcp",
+		Tier:           "serverless",
+		ResourceTFName: "checkout_svc",
+	})
+	if picked.PrimaryTerraform == "" {
+		t.Fatalf("PrimaryTerraform empty; want a snippet")
+	}
+	for _, want := range []string{
+		`google_cloud_run_service" "checkout_svc"`,
+		`"autoscaling.knative.dev/minScale" = "1"`,
+		"# operator tunes",
+	} {
+		if !strings.Contains(picked.PrimaryTerraform, want) {
+			t.Errorf("Terraform missing %q; got:\n%s", want, picked.PrimaryTerraform)
+		}
+	}
+	for _, want := range []string{
+		"Cloud Run minScale",
+		"warm",
+		"decline",
+		"init script regression",
+	} {
+		if !strings.Contains(picked.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, picked.Reasoning)
+		}
+	}
+	if picked.FallbackUsed {
+		t.Errorf("FallbackUsed = true; want false")
+	}
+}
+
+// TestPickCloudFunctionsColdStartPattern_IncludesMinInstanceCount —
+// pins the Cloud Functions Gen 2 emitter's Terraform snippet against
+// the §3.2 + §8 reference shape.
+func TestPickCloudFunctionsColdStartPattern_IncludesMinInstanceCount(t *testing.T) {
+	picked := PickCloudFunctionsColdStartPattern(RecommendationContext{
+		Provider:       "gcp",
+		Tier:           "serverless",
+		ResourceTFName: "image_resize",
+	})
+	if picked.PrimaryTerraform == "" {
+		t.Fatalf("PrimaryTerraform empty; want a snippet")
+	}
+	for _, want := range []string{
+		`google_cloudfunctions2_function" "image_resize"`,
+		"min_instance_count = 1",
+		"# operator tunes",
+	} {
+		if !strings.Contains(picked.PrimaryTerraform, want) {
+			t.Errorf("Terraform missing %q; got:\n%s", want, picked.PrimaryTerraform)
+		}
+	}
+	for _, want := range []string{
+		"min_instance_count",
+		"warm-path",
+		"Decline",
+	} {
+		if !strings.Contains(picked.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, picked.Reasoning)
+		}
+	}
+}
+
+// TestPickAzureFunctionsColdStartPattern_OffersBothPremiumAndPlaceholder
+// — pins the Azure Functions emitter's two-path Terraform snippet
+// against §3.3 + §8. Both Premium Plan (EP1) and placeholder mode
+// (WEBSITE_USE_PLACEHOLDER) appear so the operator can pick by cost
+// tolerance.
+func TestPickAzureFunctionsColdStartPattern_OffersBothPremiumAndPlaceholder(t *testing.T) {
+	picked := PickAzureFunctionsColdStartPattern(RecommendationContext{
+		Provider:       "azure",
+		Tier:           "serverless",
+		ResourceTFName: "payments_func",
+	})
+	if picked.PrimaryTerraform == "" {
+		t.Fatalf("PrimaryTerraform empty; want a snippet")
+	}
+	for _, want := range []string{
+		`azurerm_service_plan" "payments_func"`,
+		`sku_name = "EP1"`,
+		`azurerm_linux_function_app" "payments_func"`,
+		`WEBSITE_USE_PLACEHOLDER = "0"`,
+		"OR (lighter-weight)",
+	} {
+		if !strings.Contains(picked.PrimaryTerraform, want) {
+			t.Errorf("Terraform missing %q; got:\n%s", want, picked.PrimaryTerraform)
+		}
+	}
+	for _, want := range []string{
+		"Premium Plan",
+		"WEBSITE_USE_PLACEHOLDER",
+		"cost tolerance",
+		"Decline",
+	} {
+		if !strings.Contains(picked.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, picked.Reasoning)
+		}
+	}
+}
+
+// TestPickOCIFunctionsColdStartPattern_NotesProvisionedConcurrencyPreview
+// — pins the OCI Functions emitter's WARMUP_DELAY snippet + the
+// reasoning's preview note for the not-yet-GA
+// provisioned_concurrent_executions field, per §3.4.
+func TestPickOCIFunctionsColdStartPattern_NotesProvisionedConcurrencyPreview(t *testing.T) {
+	picked := PickOCIFunctionsColdStartPattern(RecommendationContext{
+		Provider:       "oci",
+		Tier:           "serverless",
+		ResourceTFName: "ingest_worker",
+	})
+	if picked.PrimaryTerraform == "" {
+		t.Fatalf("PrimaryTerraform empty; want a snippet")
+	}
+	for _, want := range []string{
+		`oci_functions_function" "ingest_worker"`,
+		`"WARMUP_DELAY" = "100"`,
+		"# operator tunes",
+	} {
+		if !strings.Contains(picked.PrimaryTerraform, want) {
+			t.Errorf("Terraform missing %q; got:\n%s", want, picked.PrimaryTerraform)
+		}
+	}
+	for _, want := range []string{
+		"provisioned concurrency",
+		"GA",
+		"WARMUP_DELAY",
+		"preview",
+		"Decline",
+	} {
+		if !strings.Contains(picked.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, picked.Reasoning)
+		}
+	}
+}
+
+// TestAllFourPerCloudPickers_FallBackToNamePlaceholder — when the
+// operator's IaC repo introspection didn't classify a TF name, each
+// of the four new pickers falls back to "<name>" so the snippet
+// still parses and the operator sees an obvious placeholder.
+func TestAllFourPerCloudPickers_FallBackToNamePlaceholder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   func(RecommendationContext) PickedPattern
+	}{
+		{"cloudrun", PickCloudRunColdStartPattern},
+		{"cloudfunc", PickCloudFunctionsColdStartPattern},
+		{"azfunc", PickAzureFunctionsColdStartPattern},
+		{"ocifunc", PickOCIFunctionsColdStartPattern},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			picked := tc.fn(RecommendationContext{Tier: "serverless"})
+			if !strings.Contains(picked.PrimaryTerraform, `"<name>"`) {
+				t.Errorf("expected <name> placeholder for %s; got:\n%s", tc.name, picked.PrimaryTerraform)
+			}
+		})
+	}
+}

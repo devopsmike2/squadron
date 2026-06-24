@@ -236,6 +236,12 @@ export interface ServerlessRow {
   has_trace_axis: boolean;
   has_otel_distro: boolean;
   last_seen_at?: string;
+  // cold_start_p95_ms / cold_start_exceeds_threshold — Cold-start
+  // latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream 157).
+  // See discoveryGCP.ts ServerlessRow godoc for the field semantics
+  // — the shape is identical across the four per-provider helpers.
+  cold_start_p95_ms?: number;
+  cold_start_exceeds_threshold?: boolean;
   detail?: Record<string, unknown>;
 }
 
