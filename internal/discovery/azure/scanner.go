@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -75,6 +76,36 @@ type Scanner struct {
 	// OAuth flow is exercised against a mock that returns a fake
 	// access token.
 	tokenEndpoint string
+
+	// accessToken is an OAuth2 bearer token wired by the chunk-2
+	// MetricQuerier wiring (v0.89.118). Set externally via
+	// WithAccessToken so the cold-start detection branch (which runs
+	// outside a Scan() lifecycle, e.g. via the per-resource
+	// cold_start API endpoint) can issue Azure Monitor calls without
+	// re-acquiring a token. The Scan() path acquires its own token
+	// internally and does NOT persist it on the Scanner — the
+	// accessToken field is exclusively for callers that have already
+	// acquired a token externally.
+	//
+	// Empty by default. QueryAggregate treats an empty accessToken
+	// as the chunk-1 skeleton path (returns
+	// scanner.ErrMetricNotImplemented) for backward compatibility
+	// with the v0.89.113 surface.
+	accessToken string
+
+	// metricsLimiter is the per-Scanner-instance rate limiter the
+	// chunk-2 MetricQuerier implementation consults before every
+	// Azure Monitor /metrics call (v0.89.118). Caps the per-
+	// subscription RPH at AzureMonitorRateLimitRPH (12,000 RPH =
+	// 200 RPM = ~3.33 RPS). Per-Scanner-instance is the equivalent
+	// of per-subscription in the slice 2 substrate (one Scanner per
+	// CloudConnection per scan); the chunk-5 runbook documents the
+	// contract.
+	//
+	// Nil-tolerant: QueryAggregate skips the Wait call when the
+	// limiter is nil, which is the chunk-1 skeleton path (no real
+	// Azure Monitor calls being made).
+	metricsLimiter *rate.Limiter
 }
 
 // Provider satisfies the (future) scanner.Scanner interface. The
