@@ -168,6 +168,35 @@ type Result struct {
 	// surfaces) and §11 (acceptance tests).
 	Serverless []ServerlessInstanceSnapshot `json:"serverless"`
 
+	// Orchestrations is the workflow / state-machine orchestrator
+	// inventory. Added in slice 1 chunk 1 of the orchestration-tier
+	// arc (v0.89.95, #728 Stream 126). Covers AWS Step Functions in
+	// chunk 1; chunk 2 adds GCP Workflows and chunk 3 adds Azure
+	// Logic Apps. OCI does not have a first-class orchestration
+	// surface in slice 1 and contributes nothing here. The
+	// proposer's recommendation surface for orchestration reasons
+	// about a TWO-axis detection rule:
+	//
+	//  1. HasTraceAxis — the cloud-native trace primitive is on
+	//     (X-Ray active tracing for Step Functions, the workflow's
+	//     own trace export for GCP Workflows, App Insights trace
+	//     routing for Logic Apps).
+	//  2. HasLogAxis — a structured-logging destination is wired
+	//     (Step Functions LoggingConfiguration.Level != OFF,
+	//     Workflows callLogLevel != UNSPECIFIED, Logic Apps
+	//     WorkflowRuntime diagnostic-setting routes to a sink).
+	//
+	// Either axis presence is informationally surfaced; neither axis
+	// gates Result.InstrumentedCount on its own — slice 1 chunk 1
+	// dispatches via the standalone ScanOrchestrations method on the
+	// per-cloud scanners rather than the existing per-region walk
+	// inside Scan(), so the tier-level counts are computed by the
+	// handler after the dispatch returns.
+	//
+	// See docs/proposals/orchestration-tier-slice1.md §3 (detection
+	// surfaces) and §11 (acceptance tests).
+	Orchestrations []OrchestrationInstanceSnapshot `json:"orchestrations"`
+
 	// ECSClusters is the ECS (and future Cloud Run / AKS-style
 	// container-orchestration) cluster inventory. Added in slice 5
 	// of the universal-observation arc (v0.89.10). The proposer's
@@ -1137,6 +1166,154 @@ type ScanScope struct {
 // reference the same predicate.
 func (s ServerlessInstanceSnapshot) IsInstrumented() bool {
 	return s.HasTraceAxis || s.HasOTelDistro
+}
+
+// OrchestrationInstanceSnapshot is the category-typed view of a
+// workflow / state-machine orchestrator inventory row. v0.89.95 (#728
+// Stream 126, slice 1 chunk 1 of the Orchestration tier arc). Per-cloud
+// scanners populate this from AWS Step Functions ListStateMachines /
+// GCP Workflows projects.locations.workflows.list / Azure Resource
+// Graph (Microsoft.Logic/workflows). The proposer reasons about
+// category-level levers (trace primitive enabled, structured-logging
+// destination wired) rather than provider-specific feature names.
+//
+// Slice 1 chunk 1 ships the AWS Step Functions scanner only; the GCP
+// Workflows scanner lands in chunk 2 and the Azure Logic Apps scanner
+// lands in chunk 3. OCI does not have a first-class orchestration
+// surface in slice 1 and returns nil from any future ScanOrchestrations
+// call until slice 2.
+//
+// The two axes the proposer reasons about per surface
+// (docs/proposals/orchestration-tier-slice1.md §3):
+//
+//  1. HasTraceAxis — the cloud-native distributed trace primitive is on
+//     for the workflow. AWS Step Functions: TracingConfiguration.Enabled
+//     == true (X-Ray active tracing). GCP Workflows: callLogLevel
+//     includes the trace export (slice 2 chunk 2). Azure Logic Apps:
+//     diagnostic-settings exports the WorkflowRuntime category to App
+//     Insights (slice 2 chunk 3).
+//  2. HasLogAxis — a structured-logging destination is wired. AWS Step
+//     Functions: LoggingConfiguration.Level != OFF and != "". GCP
+//     Workflows: callLogLevel != CALL_LOG_LEVEL_UNSPECIFIED. Azure Logic
+//     Apps: at least one diagnostic-setting routes the WorkflowRuntime
+//     category to a log sink.
+//
+// The two axes are surfaced as independent booleans; the proposer's
+// per-surface recommendation kinds (stepfunc-xray-active,
+// stepfunc-logging-enabled, ...) key off whichever axis is missing.
+// Slice 1 does NOT collapse the two into a single "instrumented"
+// predicate at the Result level — the per-surface rules differ enough
+// that a composite predicate would either over- or under-count.
+//
+// Surface-specific detail (Step Functions' workflow_type discriminating
+// STANDARD vs EXPRESS, Logic Apps' sku / consumption posture, Workflows'
+// region-projection) lives in the Detail bag so the per-cloud Inventory
+// tabs can render provider-specific context without forcing a universal
+// struct shape.
+//
+// Squadron does NOT execute any modify call — discovery is strictly
+// read-only; the operator runs the enablement Terraform through their
+// own IaC pipeline. Same posture as the compute / database / cluster /
+// serverless tiers.
+//
+// EXPRESS coverage caveat (design doc §12): Step Functions EXPRESS
+// workflows surface the same TracingConfiguration + LoggingConfiguration
+// fields as STANDARD workflows, but in practice EXPRESS shops route logs
+// through CloudWatch metrics rather than per-execution log groups. The
+// slice 1 detection rule treats EXPRESS identically to STANDARD; if
+// operator feedback shows EXPRESS workflows are under-counted as
+// "unlogged", slice 2 can introduce a surface-type-aware variant.
+//
+// See docs/proposals/orchestration-tier-slice1.md §3 (per-cloud
+// detection axes), §4 (storage schema), §5 (scanner contract), §12
+// (EXPRESS coverage caveat + threat model).
+type OrchestrationInstanceSnapshot struct {
+	// Provider is the cloud name — "aws" / "gcp" / "azure".
+	// Discriminator for the Detail bag's shape. OCI is unsupported
+	// in slice 1.
+	Provider string `json:"provider"`
+
+	// Surface is the per-cloud orchestration surface identifier —
+	// "stepfunc" / "workflows" / "logicapps". Drives the proposer's
+	// recommendation-kind prefix routing (stepfunc-* → AWS,
+	// workflows-* → GCP, logicapps-* → Azure).
+	Surface string `json:"surface"`
+
+	// AccountID is the provider-native primary identifier of the
+	// owning connection (account_id / project_id / subscription_id).
+	AccountID string `json:"account_id"`
+
+	// Region is where the state machine / workflow lives. All three
+	// supported clouds expose orchestrators as per-region resources.
+	Region string `json:"region"`
+
+	// ResourceName is the operator-readable name. For Step Functions
+	// this is the state-machine name; for Workflows the workflow id;
+	// for Logic Apps the workflow's resource name.
+	ResourceName string `json:"resource_name"`
+
+	// ResourceARN is the provider-native fully-qualified resource
+	// identifier. Step Functions state-machine ARN / Workflows
+	// resource path / Logic Apps resource ID. Carries the canonical
+	// handle the proposer's evidence list and the recommendation
+	// envelope's AffectedResources field both reference.
+	ResourceARN string `json:"resource_arn"`
+
+	// WorkflowType is the per-surface subtype string. Step Functions:
+	// "STANDARD" or "EXPRESS". Logic Apps: "Standard" (App Service
+	// hosted) or "Consumption" (multi-tenant). Workflows: the API
+	// has a single workflow type; this field stays empty there.
+	WorkflowType string `json:"workflow_type,omitempty"`
+
+	// HasTraceAxis signals the cloud-native trace primitive is on
+	// for this workflow (see type godoc for per-cloud detection).
+	// One of the two axes the proposer's recommendation kinds key
+	// off.
+	HasTraceAxis bool `json:"has_trace_axis"`
+
+	// HasLogAxis signals a structured-logging destination is wired
+	// for this workflow. The other axis.
+	HasLogAxis bool `json:"has_log_axis"`
+
+	// LastSeenAt — slice 1 trace integration parity (see
+	// ComputeInstanceSnapshot.LastSeenAt godoc for the join
+	// semantics). Most recent timestamp at which Squadron's
+	// traceindex saw any span tagged for this workflow. Nil means
+	// "no traces ever observed" (rendered as "never" in the UI).
+	// Set at scan-response time by joining against the traceindex
+	// on the per-surface projection key; empty on the scanner-
+	// produced result. Slice 1 chunk 1 leaves the join unwired
+	// (chunk 4 of the arc adds it).
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+
+	// Detail is the per-surface bag the per-cloud Inventory tabs
+	// render alongside the universal columns. Step Functions
+	// populates {"workflow_type": "STANDARD"/"EXPRESS"}; Workflows
+	// populates {"call_log_level": "..."}; Logic Apps populates a
+	// slim diagnostic-settings subset. Empty when no surface-
+	// specific context applies.
+	Detail map[string]any `json:"detail,omitempty"`
+}
+
+// IsInstrumented implements the slice 1 OR-rule for orchestration
+// resources: a workflow counts as instrumented when at least one of the
+// two axes (HasTraceAxis OR HasLogAxis) is true.
+//
+// Rationale: like the serverless tier (and unlike compute / database /
+// cluster), the cloud-native trace primitive (X-Ray for Step Functions,
+// the workflow's own log export, App Insights for Logic Apps) is itself
+// a meaningful observability signal — operators frequently ship to the
+// cloud's native observability surface and do NOT layer OTel on top. A
+// composite "both axes" rule would over-count uninstrumented workflows;
+// a single-axis rule would under-count operators on the native trace
+// primitive. Slice 1 lands the OR rule and reserves slice 2 to tighten
+// it per surface if operator feedback warrants.
+//
+// Kept as a method on the snapshot so the scanner-side tally, the
+// proposer-side reasoning, and the per-cloud Inventory tab all reference
+// the same predicate.
+func (s OrchestrationInstanceSnapshot) IsInstrumented() bool {
+	return s.HasTraceAxis || s.HasLogAxis
 }
 
 // ValidationResult is the response shape for Scanner.Validate. The

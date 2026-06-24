@@ -287,16 +287,18 @@ func TestMigration_v10_to_v11_Idempotent(t *testing.T) {
 	})
 }
 
-// TestMigration_SchemaVersionConstant — the SchemaVersion constant
-// in migrations.go bumps to v11 alongside the
-// ServerlessInstanceSchema addition. Pins the version stamp so a
-// future migration appended to the Migrations slice without bumping
-// the constant trips this test.
+// TestMigration_SchemaVersionConstant — the SchemaVersion constant in
+// migrations.go advances alongside every migration appended to the
+// Migrations slice. The serverless tier slice 1 chunk 1 bump was to
+// v11; the orchestration tier slice 1 chunk 1 bump (v0.89.95, #728
+// Stream 126) further bumped it to v12. The lower-bound assertion
+// pins the version stamp so a future migration appended to the
+// Migrations slice without bumping the constant trips this test.
 func TestMigration_SchemaVersionConstant(t *testing.T) {
-	if SchemaVersion < 11 {
-		t.Errorf("SchemaVersion = %d, want >= 11 (slice 1 chunk 1 bumps to 11)", SchemaVersion)
+	if SchemaVersion < 12 {
+		t.Errorf("SchemaVersion = %d, want >= 12 (orchestration slice 1 chunk 1 bumps to 12)", SchemaVersion)
 	}
-	if len(Migrations) < 11 {
-		t.Errorf("Migrations length = %d, want >= 11 (slice 1 chunk 1 appends ServerlessInstanceSchema)", len(Migrations))
+	if len(Migrations) < 12 {
+		t.Errorf("Migrations length = %d, want >= 12 (orchestration slice 1 chunk 1 appends OrchestrationInstanceSchema)", len(Migrations))
 	}
 }

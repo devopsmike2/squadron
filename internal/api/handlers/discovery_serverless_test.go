@@ -15,17 +15,20 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )
 
-// TestParseTiersOrDefault_EmptyFallsBackToDefault — the slice 1
-// chunk 1 default tier list includes "serverless". An empty request
-// yields the full DefaultScanTiers slice.
+// TestParseTiersOrDefault_EmptyFallsBackToDefault — the orchestration-
+// tier slice 1 chunk 1 default tier list includes "serverless" and
+// "orchestration" alongside the historical compute / database /
+// kubernetes entries. An empty request yields the full
+// DefaultScanTiers slice.
 func TestParseTiersOrDefault_EmptyFallsBackToDefault(t *testing.T) {
 	got := parseTiersOrDefault(nil)
-	if len(got) != 4 {
-		t.Fatalf("default tiers length = %d, want 4", len(got))
+	if len(got) != 5 {
+		t.Fatalf("default tiers length = %d, want 5", len(got))
 	}
 	wantSet := map[string]bool{
 		TierCompute: true, TierDatabase: true,
 		TierKubernetes: true, TierServerless: true,
+		TierOrchestration: true,
 	}
 	for _, tier := range got {
 		if !wantSet[tier] {
@@ -69,8 +72,8 @@ func TestParseTiersOrDefault_DropsUnknownTiers(t *testing.T) {
 // nothing.
 func TestParseTiersOrDefault_AllUnknownFallsBackToDefault(t *testing.T) {
 	got := parseTiersOrDefault([]string{"bogus", "alsobogus"})
-	if len(got) != 4 {
-		t.Errorf("expected 4 fallback tiers, got %d: %v", len(got), got)
+	if len(got) != 5 {
+		t.Errorf("expected 5 fallback tiers, got %d: %v", len(got), got)
 	}
 }
 

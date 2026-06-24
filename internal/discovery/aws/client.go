@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -206,6 +207,24 @@ type STSClient interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
+// SFNClient is the narrow AWS Step Functions surface the orchestration
+// scanner depends on. Added in v0.89.95 (#728 Stream 126, slice 1 chunk
+// 1 of the Orchestration tier arc). The real *sfn.Client satisfies it.
+//
+// The two methods cover the slice 1 detection contract: ListStateMachines
+// surfaces every state machine the assumed-role principal can see in a
+// region (paginated via NextToken); DescribeStateMachine pulls the per-
+// machine TracingConfiguration + LoggingConfiguration the scanner reads
+// for the HasTraceAxis / HasLogAxis axes. Both APIs are read-only.
+//
+// IAM contract per docs/proposals/orchestration-tier-slice1.md §3.1:
+// states:ListStateMachines + states:DescribeStateMachine. Squadron does
+// NOT call any state-machine mutation API.
+type SFNClient interface {
+	ListStateMachines(ctx context.Context, params *sfn.ListStateMachinesInput, optFns ...func(*sfn.Options)) (*sfn.ListStateMachinesOutput, error)
+	DescribeStateMachine(ctx context.Context, params *sfn.DescribeStateMachineInput, optFns ...func(*sfn.Options)) (*sfn.DescribeStateMachineOutput, error)
+}
+
 // ClientFactory hands out region-scoped service clients backed by an
 // already-assumed STS session. Production code wires the real SDK
 // factory (see newSDKClientFactory below); tests inject fakes that
@@ -269,6 +288,15 @@ type ClientFactory interface {
 	// Container Insights is a per-cluster setting, not a
 	// per-launch-type one.
 	ECS(ctx context.Context, region string) (ECSClient, error)
+
+	// SFN returns a Step Functions client for the supplied region.
+	// Added in slice 1 chunk 1 of the orchestration-tier arc
+	// (v0.89.95, #728 Stream 126). Step Functions is a per-region
+	// API — the supplied region is where ListStateMachines walks.
+	// Covers both STANDARD and EXPRESS workflow types; the per-
+	// machine WorkflowType is recorded so the proposer can route to
+	// the appropriate recommendation kind.
+	SFN(ctx context.Context, region string) (SFNClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -425,6 +453,13 @@ func (f *sdkClientFactory) DynamoDB(_ context.Context, region string) (DynamoDBC
 
 func (f *sdkClientFactory) ECS(_ context.Context, region string) (ECSClient, error) {
 	return ecs.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) SFN(_ context.Context, region string) (SFNClient, error) {
+	return sfn.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil

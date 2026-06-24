@@ -26,6 +26,8 @@ import (
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
+	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -450,6 +452,7 @@ type fakeFactory struct {
 	eks      EKSClient
 	dynamodb DynamoDBClient
 	ecs      ECSClient
+	sfn      SFNClient
 	sts      STSClient
 }
 
@@ -513,6 +516,18 @@ func (f *fakeFactory) ECS(_ context.Context, _ string) (ECSClient, error) {
 		return &fakeECS{}, nil
 	}
 	return f.ecs, nil
+}
+
+// SFN returns the configured fake Step Functions client. Same
+// zero-output fallback as the other services so tests that don't
+// exercise the Step Functions path get an empty-inventory fake rather
+// than nil-panicking. Slice 1 chunk 1 of the orchestration-tier arc
+// (v0.89.95, #728 Stream 126).
+func (f *fakeFactory) SFN(_ context.Context, _ string) (SFNClient, error) {
+	if f.sfn == nil {
+		return &fakeSFN{}, nil
+	}
+	return f.sfn, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake
@@ -2096,6 +2111,67 @@ func (f *fakeECS) ListTagsForResource(_ context.Context, in *ecs.ListTagsForReso
 	}
 	return out, nil
 }
+
+// fakeSFN is the Step Functions test double for the orchestration-tier
+// slice 1 chunk 1 scanner tests. Mirrors the fakeECS / fakeEKS shape:
+// a queued slice of ListStateMachines responses (one per page) and a
+// per-ARN map of DescribeStateMachine responses so a test can pin the
+// exact describe payload it wants to assert against.
+//
+// Failure injection: listErr surfaces from the list pass; describeErr
+// surfaces from EVERY describe call (the slice 1 acceptance test 8
+// scenario — the loop must continue past per-machine describe
+// failures rather than aborting the whole scan).
+type fakeSFN struct {
+	listPages      []*sfn.ListStateMachinesOutput
+	listCallIdx    int
+	listErr        error
+	describeByARN  map[string]*sfn.DescribeStateMachineOutput
+	describeErr    error
+	describeCalls  int
+	lastListInput  *sfn.ListStateMachinesInput
+}
+
+func (f *fakeSFN) ListStateMachines(_ context.Context, in *sfn.ListStateMachinesInput, _ ...func(*sfn.Options)) (*sfn.ListStateMachinesOutput, error) {
+	f.lastListInput = in
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if f.listCallIdx >= len(f.listPages) {
+		return &sfn.ListStateMachinesOutput{}, nil
+	}
+	out := f.listPages[f.listCallIdx]
+	f.listCallIdx++
+	if out == nil {
+		return &sfn.ListStateMachinesOutput{}, nil
+	}
+	return out, nil
+}
+
+func (f *fakeSFN) DescribeStateMachine(_ context.Context, in *sfn.DescribeStateMachineInput, _ ...func(*sfn.Options)) (*sfn.DescribeStateMachineOutput, error) {
+	f.describeCalls++
+	if f.describeErr != nil {
+		return nil, f.describeErr
+	}
+	if in == nil || in.StateMachineArn == nil {
+		return &sfn.DescribeStateMachineOutput{}, nil
+	}
+	if out, ok := f.describeByARN[*in.StateMachineArn]; ok && out != nil {
+		return out, nil
+	}
+	// Default empty-shape output so a test that didn't pre-populate
+	// the map still returns a non-nil result the mapper can fold into
+	// the snapshot without panicking on a nil pointer dereference.
+	return &sfn.DescribeStateMachineOutput{StateMachineArn: in.StateMachineArn}, nil
+}
+
+// Compile-time check that fakeSFN satisfies the SFNClient interface.
+var _ SFNClient = (*fakeSFN)(nil)
+
+// Keep the sfntypes import live — the production fakeSFN body only
+// touches the sfn types (not sfntypes) directly; the stepfunctions_test.go
+// file references sfntypes through the per-fixture builders.
+var _ = sfntypes.StateMachineTypeStandard
 
 // TestScanRegionECS_HappyPath_TwoClusters_OneInstrumented_OneNot
 // drives the mapping happy path: two clusters surface through
