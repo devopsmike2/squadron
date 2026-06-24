@@ -1834,6 +1834,13 @@ function ServerlessSection({
                         Serverless tables as "—" everywhere since
                         slice 1 ships AWS Lambda only. */}
                     <th className="px-3 py-2 font-medium">Cold-start P95 (24h)</th>
+                    {/* Sampling rate analysis slice 1 chunk 3 (v0.89.124,
+                        #764 Stream 162) — new "Sampling rate (24h)"
+                        column between Cold-start P95 and Last seen.
+                        Mirrored on the GCP / Azure / OCI Serverless
+                        tables per the slice 1 contract — all 5
+                        serverless surfaces participate. */}
+                    <th className="px-3 py-2 font-medium">Sampling rate (24h)</th>
                     <th className="px-3 py-2 font-medium">Last seen</th>
                     <th className="px-3 py-2 font-medium">Quality</th>
                   </tr>
@@ -1855,6 +1862,9 @@ function ServerlessSection({
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <ColdStartCell row={s} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <SamplingRateCell row={s} />
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <LastSeenCell value={s.last_seen_at} />
@@ -1950,6 +1960,58 @@ function ColdStartCell({ row }: { row: ServerlessRow }) {
       data-value={isAmber ? "amber" : "ok"}
     >
       {ms}ms
+    </span>
+  );
+}
+
+// SamplingRateCell — Sampling rate analysis slice 1 chunk 3
+// (v0.89.124, #764 Stream 162). Renders the per-row 24h sampling ratio
+// surfaced on ServerlessRow. Three render states matching the
+// ColdStartCell pattern:
+//
+//   - undefined / null sampling_ratio: render "—" at the muted color.
+//     Covers the "no observation persisted yet" case (resource too new,
+//     scan didn't run, invocation count below the 1000 minimum, or
+//     the per-cloud MetricQuerier substrate isn't wired).
+//   - sampling_exceeds_floor === true: render the percentage amber.
+//     Hover tooltip names the 5% floor + 1000-invocation minimum so
+//     the operator can confirm without drilling into the per-resource
+//     /sampling endpoint.
+//   - sampling_exceeds_floor === false / undefined: render the
+//     percentage at the default slate color.
+//
+// All 5 serverless surfaces participate per slice 1 contract — the
+// component is exported so the GCP / Azure / OCI pages can share one
+// implementation. Mirrors the AWS / GCP / Azure / OCI ColdStartCell
+// duplication pattern, but as a single shared export to keep the
+// chunk-3 line count down.
+export function SamplingRateCell({ row }: { row: ServerlessRow }) {
+  if (row.sampling_ratio === undefined || row.sampling_ratio === null) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="No sampling observation yet"
+        data-testid="sampling-rate-cell"
+        data-value="none"
+      >
+        —
+      </span>
+    );
+  }
+  const pct = row.sampling_ratio * 100;
+  const isAmber = row.sampling_exceeds_floor === true;
+  return (
+    <span
+      className={isAmber ? "text-amber-600" : "text-foreground"}
+      title={
+        isAmber
+          ? `Sampling ratio ${pct.toFixed(1)}% — below 5% floor with >= 1000 invocations`
+          : `Sampling ratio ${pct.toFixed(1)}%`
+      }
+      data-testid="sampling-rate-cell"
+      data-value={isAmber ? "amber" : "ok"}
+    >
+      {pct.toFixed(1)}%
     </span>
   );
 }
@@ -3411,17 +3473,21 @@ export function QualityDot({
     );
   }
   // Slice 2 (v0.89.110) extends the "issues" count to include the two
-  // W3C trace context percentages. Older scan responses omit the new
+  // W3C trace context percentages. Sampling rate slice 1 chunk 3
+  // (v0.89.124, #764 Stream 162) extends again to include the sampling-
+  // too-aggressive percentage. Older scan responses omit the new
   // fields; treat undefined as 0 so a graceful upgrade rollout shows
   // unchanged dot colors until the backend ships the new counters.
   const malformedTp = quality.malformed_traceparent_pct ?? 0;
   const missingTpOnChild = quality.missing_traceparent_on_child_pct ?? 0;
+  const samplingTooAggressive = quality.sampling_too_aggressive_pct ?? 0;
   const issues = [
     quality.orphan_pct > 0,
     quality.missing_attr_pct > 0,
     quality.attr_mismatch_pct > 0,
     malformedTp > 0,
     missingTpOnChild > 0,
+    samplingTooAggressive > 0,
   ].filter(Boolean).length;
   let colorClass = "bg-emerald-500";
   let colorTag = "green";
@@ -3437,7 +3503,8 @@ export function QualityDot({
     `Missing attrs ${quality.missing_attr_pct.toFixed(1)}%, ` +
     `Mismatch ${quality.attr_mismatch_pct.toFixed(1)}%, ` +
     `Malformed traceparent ${malformedTp.toFixed(1)}%, ` +
-    `Missing on child ${missingTpOnChild.toFixed(1)}%`;
+    `Missing on child ${missingTpOnChild.toFixed(1)}%, ` +
+    `Sampling too aggressive ${samplingTooAggressive.toFixed(1)}%`;
   return (
     <span
       className={`inline-block h-2 w-2 rounded-full align-middle ${colorClass}`}

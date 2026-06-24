@@ -530,3 +530,126 @@ func TestSpanQuality_PerResourceEndpoint_HasIssuesExtendsToNewFields(t *testing.
 		})
 	}
 }
+
+// --- Sampling rate slice 1 (v0.89.124, #764 Stream 162) ---------------
+
+// stubSamplingInventoryReader returns a fixed per-provider count map.
+// Used by the sampling-rate aggregation tests to drive deterministic
+// SamplingTooAggressivePct math without standing up a real inventory.
+type stubSamplingInventoryReader struct {
+	counts map[string]SamplingProviderCount
+}
+
+func (s *stubSamplingInventoryReader) SamplingQualifyingCounts(_ context.Context) map[string]SamplingProviderCount {
+	return s.counts
+}
+
+// TestSpanQuality_IncludesSamplingTooAggressivePct — the response
+// shape carries SamplingTooAggressivePct on every per-provider row
+// and on the totals row. Nil inventory reader leaves every value
+// at 0 (cold-start posture); a wired reader populates the percentage
+// from the per-provider qualifying / too-aggressive counts.
+func TestSpanQuality_IncludesSamplingTooAggressivePct(t *testing.T) {
+	idx := newStubQualityIndex()
+	reader := &stubSamplingInventoryReader{counts: map[string]SamplingProviderCount{
+		// AWS: 2 of 10 qualifying serverless resources fire the
+		// sampling-too-aggressive recommendation → 20%.
+		"aws": {QualifyingCount: 10, TooAggressiveCount: 2},
+		// GCP: 1 of 5 → 20%.
+		"gcp": {QualifyingCount: 5, TooAggressiveCount: 1},
+		// Azure: no qualifying resources → 0% (denominator zero, not
+		// included in totals).
+		"azure": {QualifyingCount: 0, TooAggressiveCount: 0},
+		// OCI: 0 of 3 fire → 0%.
+		"oci": {QualifyingCount: 3, TooAggressiveCount: 0},
+	}}
+	r, h := newSpanQualityRouter(t, idx, nil, nil, 0, nil)
+	h.SetSamplingInventoryReader(reader)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/discovery/span_quality", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var got SpanQualityResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Per-provider percentages.
+	if got.Providers["aws"].SamplingTooAggressivePct != 20.0 {
+		t.Errorf("aws.SamplingTooAggressivePct = %v, want 20.0", got.Providers["aws"].SamplingTooAggressivePct)
+	}
+	if got.Providers["gcp"].SamplingTooAggressivePct != 20.0 {
+		t.Errorf("gcp.SamplingTooAggressivePct = %v, want 20.0", got.Providers["gcp"].SamplingTooAggressivePct)
+	}
+	if got.Providers["azure"].SamplingTooAggressivePct != 0 {
+		t.Errorf("azure.SamplingTooAggressivePct = %v, want 0 (no qualifying)", got.Providers["azure"].SamplingTooAggressivePct)
+	}
+	if got.Providers["oci"].SamplingTooAggressivePct != 0 {
+		t.Errorf("oci.SamplingTooAggressivePct = %v, want 0 (none fire)", got.Providers["oci"].SamplingTooAggressivePct)
+	}
+	// Totals: (2 + 1 + 0 + 0) / (10 + 5 + 0 + 3) = 3 / 18 ≈ 16.7%.
+	if got.Totals.SamplingTooAggressivePct != 16.7 {
+		t.Errorf("Totals.SamplingTooAggressivePct = %v, want 16.7", got.Totals.SamplingTooAggressivePct)
+	}
+}
+
+// TestSpanQuality_AggregationCountsOnlyResourcesAboveMinimumInvocations
+// — the inventory reader's QualifyingCount is the §3 minimum
+// invocation gate (>= 1000 invocations); resources below the
+// minimum don't enter either side of the ratio. A deployment where
+// 1 of 1 below-minimum resources fires the recommendation surfaces
+// 0% (the recommendation is suppressed by the statistical noise
+// floor anyway). This test pins that contract — the percentage
+// math doesn't double-count noise.
+func TestSpanQuality_AggregationCountsOnlyResourcesAboveMinimumInvocations(t *testing.T) {
+	idx := newStubQualityIndex()
+	reader := &stubSamplingInventoryReader{counts: map[string]SamplingProviderCount{
+		// AWS: 5 qualifying resources, 1 fires → 20%.
+		// The reader filters out below-minimum resources before
+		// reporting; the handler trusts the reader's gate.
+		"aws":   {QualifyingCount: 5, TooAggressiveCount: 1},
+		"gcp":   {},
+		"azure": {},
+		"oci":   {},
+	}}
+	r, h := newSpanQualityRouter(t, idx, nil, nil, 0, nil)
+	h.SetSamplingInventoryReader(reader)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/discovery/span_quality", nil))
+	var got SpanQualityResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Providers["aws"].SamplingTooAggressivePct != 20.0 {
+		t.Errorf("aws.SamplingTooAggressivePct = %v, want 20.0", got.Providers["aws"].SamplingTooAggressivePct)
+	}
+	// Totals reflect the same — only AWS contributes to the
+	// denominator (the other three providers have zero qualifying).
+	if got.Totals.SamplingTooAggressivePct != 20.0 {
+		t.Errorf("Totals.SamplingTooAggressivePct = %v, want 20.0", got.Totals.SamplingTooAggressivePct)
+	}
+}
+
+// TestSpanQuality_NoSamplingInventoryReader_SamplingPctZero — cold-
+// start posture for deployments that haven't wired the per-cloud
+// MetricQuerier substrate. Nil reader leaves every sampling
+// percentage at 0; the existing quality-derived percentages still
+// flow through unchanged.
+func TestSpanQuality_NoSamplingInventoryReader_SamplingPctZero(t *testing.T) {
+	idx := newStubQualityIndex(
+		traceindex.QualityCountersSnapshot{Key: "aws:1:a", Provider: "aws", TotalSpans: 100, OrphanPct: 4.0},
+	)
+	r, _ := newSpanQualityRouter(t, idx, nil, nil, 0, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/discovery/span_quality", nil))
+	var got SpanQualityResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Providers["aws"].SamplingTooAggressivePct != 0 {
+		t.Errorf("aws.SamplingTooAggressivePct = %v, want 0 (no reader wired)", got.Providers["aws"].SamplingTooAggressivePct)
+	}
+	if got.Totals.SamplingTooAggressivePct != 0 {
+		t.Errorf("Totals.SamplingTooAggressivePct = %v, want 0", got.Totals.SamplingTooAggressivePct)
+	}
+	// Existing quality-derived pct unchanged.
+	if got.Providers["aws"].OrphanPct != 4.0 {
+		t.Errorf("aws.OrphanPct = %v, want 4.0", got.Providers["aws"].OrphanPct)
+	}
+}

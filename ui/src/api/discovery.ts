@@ -149,6 +149,12 @@ export interface RowSpanQuality {
   attr_mismatch_pct: number;
   malformed_traceparent_pct?: number;
   missing_traceparent_on_child_pct?: number;
+  // Sampling rate analysis slice 1 (v0.89.124, #764 Stream 162) — the
+  // per-row equivalent of the SPAN QUALITY panel's sixth column. The
+  // QualityDot extends its tooltip + issue tally to include this
+  // field; undefined renders as 0.0% (a graceful upgrade from a
+  // pre-v0.89.124 backend stays at unchanged dot colors).
+  sampling_too_aggressive_pct?: number;
 }
 
 // ComputeInstanceSnapshot mirrors scanner.ComputeInstanceSnapshot. The
@@ -334,6 +340,28 @@ export interface ServerlessRow {
   // UI keeps a single definition of "amber" across both this column
   // and the per-resource cold-start drill-down endpoint.
   cold_start_exceeds_threshold?: boolean;
+  // sampling_ratio — Sampling rate analysis slice 1 chunk 2
+  // (v0.89.123, #763 Stream 161). Most recent 24-hour sampling ratio
+  // (observed_span_count / expected_invocation_count) for this
+  // serverless resource, populated by the sampling annotation pass at
+  // scan-response time. Undefined / null when no observation has been
+  // persisted yet, the resource has no invocations in the window, or
+  // the per-cloud MetricQuerier substrate isn't wired — the
+  // SamplingRateCell renders "—" in those cases. All 5 serverless
+  // surfaces participate (lambda / cloudrun / cloudfunc / azfunc /
+  // ocifunc).
+  sampling_ratio?: number | null;
+  // sampling_exceeds_floor — Sampling rate analysis slice 1 chunk 2
+  // (v0.89.123). Pre-computed amber-color predicate the UI's
+  // SamplingRateCell reads: true when the chunk-2 detection's
+  // ShouldFireRecommendation predicate held (ratio below the 5% floor
+  // AND invocation count at or above the 1000 statistical minimum).
+  // Undefined / null when sampling_ratio is also undefined / null.
+  // Wire field is sampling_exceeds_floor (matches the Go
+  // ServerlessInstanceSnapshot tag); semantically equivalent to
+  // "below floor" — the recommendation fires when the ratio is below
+  // the 5% floor.
+  sampling_exceeds_floor?: boolean | null;
   // detail — surface-specific bag. Slice 1 surfaces it as raw JSON in
   // the row's drill-down tooltip; not rendered in the columns.
   detail?: Record<string, unknown>;

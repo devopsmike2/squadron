@@ -885,6 +885,114 @@ describe("DiscoveryGCP", () => {
     expect(cell.textContent).toMatch(/1800ms/);
   });
 
+  // --- Sampling rate slice 1 chunk 3 (v0.89.124, #764 Stream 162) ---
+
+  it("TestDiscoveryGCP_Serverless_SamplingRateColumnRenders", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "gcp",
+          surface: "cloudrun",
+          account_id: "my-prod-project",
+          region: "us-central1",
+          resource_name: "sampling-svc",
+          resource_arn:
+            "projects/my-prod-project/locations/us-central1/services/sampling-svc",
+          runtime: "go1.21",
+          has_trace_axis: true,
+          has_otel_distro: true,
+          sampling_ratio: 0.041,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(screen.getByText(/Sampling rate \(24h\)/i)).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryGCP_Serverless_SamplingRateCell_AmberWhenBelowFloor", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "gcp",
+          surface: "cloudrun",
+          account_id: "my-prod-project",
+          region: "us-central1",
+          resource_name: "below-floor-svc",
+          resource_arn:
+            "projects/my-prod-project/locations/us-central1/services/below-floor-svc",
+          runtime: "go1.21",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.025,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+
+    const cells = screen.getAllByTestId("sampling-rate-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/2.5%/);
+  });
+
   // --- helpers ---
 
   // advanceToKeyPasteStep walks the wizard from step 1 (project) to

@@ -2643,6 +2643,249 @@ describe("DiscoveryAWSPage", () => {
     expect(calmTitle).not.toMatch(/exceeds baseline threshold/);
   });
 
+  // --- Sampling rate slice 1 chunk 3 (v0.89.124, #764 Stream 162) ---
+  //
+  // The Serverless table gains a "Sampling rate (24h)" column between
+  // Cold-start P95 and Last seen. The cell renders as:
+  //   - "—" when sampling_ratio is undefined / null
+  //   - amber percentage when sampling_exceeds_floor === true
+  //   - slate percentage otherwise
+
+  it("TestDiscoveryAWS_QualityDot_TooltipShowsAllSixPercentages", async () => {
+    const { QualityDot } = await import("./DiscoveryAWS");
+    render(
+      <QualityDot
+        quality={{
+          orphan_pct: 3.2,
+          missing_attr_pct: 8.1,
+          attr_mismatch_pct: 1.7,
+          malformed_traceparent_pct: 0.8,
+          missing_traceparent_on_child_pct: 4.1,
+          sampling_too_aggressive_pct: 12.5,
+        }}
+      />,
+    );
+    const dot = screen.getByTestId("quality-dot");
+    const tip = dot.getAttribute("title") ?? "";
+    expect(tip).toContain("Orphan 3.2%");
+    expect(tip).toContain("Missing attrs 8.1%");
+    expect(tip).toContain("Mismatch 1.7%");
+    expect(tip).toContain("Malformed traceparent 0.8%");
+    expect(tip).toContain("Missing on child 4.1%");
+    expect(tip).toContain("Sampling too aggressive 12.5%");
+    // Six non-zero pathologies → red dot (>= 2 issues).
+    expect(dot).toHaveAttribute("data-color", "red");
+  });
+
+  it("TestDiscoveryAWS_Serverless_SamplingRateColumnRenders", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "sampling-lambda",
+          resource_arn:
+            "arn:aws:lambda:us-east-1:123:function:sampling-lambda",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.041,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Sampling rate \(24h\)/i)).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAWS_Serverless_SamplingRateCell_AmberWhenBelowFloor", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "below-floor",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:below-floor",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.041,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("sampling-rate-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/4.1%/);
+    const tip = cell.getAttribute("title") ?? "";
+    expect(tip).toMatch(/below 5% floor/);
+    expect(tip).toMatch(/1000 invocations/);
+  });
+
+  it("TestDiscoveryAWS_Serverless_SamplingRateCell_SlateWhenAboveFloor", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "above-floor",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:above-floor",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.5,
+          sampling_exceeds_floor: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("sampling-rate-cell");
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "ok");
+    expect(cell.className).not.toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/50.0%/);
+  });
+
+  it("TestDiscoveryAWS_Serverless_SamplingRateCell_DashWhenNullRatio", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "no-sampling-obs",
+          resource_arn:
+            "arn:aws:lambda:us-east-1:123:function:no-sampling-obs",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          // sampling_ratio intentionally undefined.
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("sampling-rate-cell");
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "none");
+    expect(cell.textContent).toBe("—");
+  });
+
   // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
   // the Inventory tab gains an Orchestration section rendering the
   // Step Functions inventory from the v0.89.95 chunk 1 scanner. The

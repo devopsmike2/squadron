@@ -957,6 +957,110 @@ describe("DiscoveryOCI", () => {
     expect(cell.textContent).toMatch(/2100ms/);
   });
 
+  // --- Sampling rate slice 1 chunk 3 (v0.89.124, #764 Stream 162) ---
+
+  it("TestDiscoveryOCI_Serverless_SamplingRateColumnRenders", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "oci",
+          surface: "ocifunc",
+          account_id: "ocid1.tenancy.oc1..aaaa",
+          region: "us-ashburn-1",
+          resource_name: "sampling-fn",
+          resource_arn: "ocid1.fnfunc.oc1.iad.bbbb",
+          runtime: "java17",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.041,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(screen.getByText(/Sampling rate \(24h\)/i)).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryOCI_Serverless_SamplingRateCell_AmberWhenBelowFloor", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "oci",
+          surface: "ocifunc",
+          account_id: "ocid1.tenancy.oc1..aaaa",
+          region: "us-ashburn-1",
+          resource_name: "below-floor-fn",
+          resource_arn: "ocid1.fnfunc.oc1.iad.cccc",
+          runtime: "java17",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.02,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+
+    const cells = screen.getAllByTestId("sampling-rate-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/2.0%/);
+  });
+
   // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
   // slice 1 contract: the Orchestration sub-tab MUST be hidden when
   // the orchestrations[] array is empty. OCI orchestration coverage

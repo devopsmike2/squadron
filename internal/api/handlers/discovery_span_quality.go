@@ -55,6 +55,18 @@ type ProviderSpanQuality struct {
 	// missing-on-child rate.
 	MalformedTraceparentPct      float64 `json:"malformed_traceparent_pct"`
 	MissingTraceparentOnChildPct float64 `json:"missing_traceparent_on_child_pct"`
+
+	// SamplingTooAggressivePct — Sampling rate slice 1 (v0.89.124).
+	// Per-provider percentage of serverless resources whose latest
+	// sampling-rate detection result fires the
+	// span-quality-sampling-too-aggressive recommendation (ratio below
+	// the 5% floor AND invocation count at or above the 1000 statistical
+	// minimum). Denominator: total serverless resource count contributed
+	// by the SamplingInventoryReader (resources without sufficient
+	// invocations don't dilute — they're not statistically meaningful).
+	// Zero when no SamplingInventoryReader is wired (the cold-start
+	// posture before the per-cloud MetricQuerier substrate runs).
+	SamplingTooAggressivePct float64 `json:"sampling_too_aggressive_pct"`
 }
 
 // SpanQualityTotals is the cross-provider roll-up. Sums ResourceCount
@@ -73,6 +85,13 @@ type SpanQualityTotals struct {
 	// ProviderSpanQuality.
 	MalformedTraceparentPct      float64 `json:"malformed_traceparent_pct"`
 	MissingTraceparentOnChildPct float64 `json:"missing_traceparent_on_child_pct"`
+
+	// Sampling rate slice 1 (v0.89.124). Cross-provider sum of
+	// per-provider sampling-too-aggressive counts divided by the
+	// cross-provider sum of qualifying serverless resource counts.
+	// Honest denominator semantics: resources below the minimum
+	// invocation count don't enter either side of the ratio.
+	SamplingTooAggressivePct float64 `json:"sampling_too_aggressive_pct"`
 }
 
 // SpanQualityResponse is the JSON wire shape for GET
@@ -144,6 +163,36 @@ type ResourceKeyProjector interface {
 	ProjectKey(ctx context.Context, provider, kind, id string) (string, bool)
 }
 
+// SamplingInventoryReader is the slim, optional surface the compose
+// pass uses to populate ProviderSpanQuality.SamplingTooAggressivePct
+// (Sampling rate slice 1, v0.89.124). Production wires a reader that
+// walks the in-memory serverless inventory (the same one
+// AnnotateServerlessWithSampling fills) and counts, per provider:
+//
+//   - QualifyingCount: serverless resources with SamplingRatio set AND
+//     ExpectedInvocationCount at or above the 1000 statistical
+//     minimum. This is the honest denominator — resources with
+//     insufficient invocations don't enter either side of the ratio.
+//   - TooAggressiveCount: subset of QualifyingCount whose detection
+//     fires (SamplingExceedsFloor true).
+//
+// Cold-start posture: a nil reader leaves
+// SamplingTooAggressivePct at zero across every provider + totals,
+// which matches the "panel hides when all 6 zero" UI contract on a
+// deployment that hasn't wired the per-cloud MetricQuerier substrate.
+type SamplingInventoryReader interface {
+	SamplingQualifyingCounts(ctx context.Context) map[string]SamplingProviderCount
+}
+
+// SamplingProviderCount is the per-provider tuple SamplingInventoryReader
+// returns. TooAggressiveCount must always be <= QualifyingCount;
+// compose silently clamps if it isn't (defensive against an
+// out-of-sync inventory snapshot).
+type SamplingProviderCount struct {
+	QualifyingCount    int
+	TooAggressiveCount int
+}
+
 // --- cache --------------------------------------------------------------
 //
 // spanQualityCache mirrors the v0.89.61 summaryCache / v0.89.76
@@ -210,11 +259,12 @@ const DefaultSpanQualityCacheTTL = 30 * time.Second
 //     endpoint still serves SnapshotAll-derived totals.
 //   - auditService nil → no audit row on cache miss.
 type DiscoverySpanQualityHandlers struct {
-	qualityIndex QualitySnapshotIndex
-	keyProjector ResourceKeyProjector
-	auditService services.AuditService
-	cache        *spanQualityCache
-	logger       *zap.Logger
+	qualityIndex      QualitySnapshotIndex
+	keyProjector      ResourceKeyProjector
+	samplingInventory SamplingInventoryReader
+	auditService      services.AuditService
+	cache             *spanQualityCache
+	logger            *zap.Logger
 }
 
 // NewDiscoverySpanQualityHandlers builds the handler. ttl <= 0 falls
@@ -244,6 +294,22 @@ func NewDiscoverySpanQualityHandlers(
 	}
 }
 
+// SetSamplingInventoryReader wires the optional Sampling rate slice 1
+// reader (v0.89.124). The reader contributes
+// SamplingTooAggressivePct on both the per-provider and the totals
+// rows of the SpanQualityResponse. Nil reader leaves the new field at
+// zero across the board — the cold-start posture for a deployment
+// without the per-cloud MetricQuerier substrate.
+//
+// Late-bound on purpose: the per-cloud serverless inventory + the
+// MetricQuerier substrate land via separate wire-throughs from
+// Server, so the handler is constructed first and the reader is
+// attached afterwards (mirrors the SetResourceKeyProjectorForDiscovery
+// pattern on Server).
+func (h *DiscoverySpanQualityHandlers) SetSamplingInventoryReader(r SamplingInventoryReader) {
+	h.samplingInventory = r
+}
+
 // HandleSpanQuality serves GET /api/v1/discovery/span_quality.
 //
 // Cache hit: return the cached response immediately (no audit emit).
@@ -255,7 +321,7 @@ func (h *DiscoverySpanQualityHandlers) HandleSpanQuality(c *gin.Context) {
 		return
 	}
 
-	resp := h.compose()
+	resp := h.compose(c.Request.Context())
 
 	if h.auditService != nil {
 		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
@@ -281,7 +347,7 @@ func (h *DiscoverySpanQualityHandlers) HandleSpanQuality(c *gin.Context) {
 // tier-6 / verbatim-ARN keys that didn't carry the attribute). The
 // Providers map is pre-populated with the four cloud keys so the wire
 // shape stays stable across deployments.
-func (h *DiscoverySpanQualityHandlers) compose() *SpanQualityResponse {
+func (h *DiscoverySpanQualityHandlers) compose(ctx context.Context) *SpanQualityResponse {
 	resp := &SpanQualityResponse{
 		Providers: map[string]ProviderSpanQuality{
 			"aws":   {},
@@ -290,7 +356,17 @@ func (h *DiscoverySpanQualityHandlers) compose() *SpanQualityResponse {
 			"oci":   {},
 		},
 	}
+	// Sampling rate slice 1 (v0.89.124): walk the sampling inventory
+	// FIRST so the per-provider counts are ready to overlay onto the
+	// quality-derived shape. A nil reader leaves every entry at zero
+	// — the panel hides itself in that case.
+	samplingCounts := h.gatherSamplingCounts(ctx)
 	if h.qualityIndex == nil {
+		// Without quality observations we still want the sampling
+		// totals to surface — the panel may still appear if at least
+		// one provider has a non-zero sampling pct even when no spans
+		// have been observed yet.
+		applySamplingCounts(resp, samplingCounts)
 		return resp
 	}
 
@@ -389,7 +465,78 @@ func (h *DiscoverySpanQualityHandlers) compose() *SpanQualityResponse {
 		MalformedTraceparentPct:      meanPct(totals.malformedSum, totals.malformedDenom),
 		MissingTraceparentOnChildPct: meanPct(totals.missingChildSum, totals.missingChildDenom),
 	}
+	applySamplingCounts(resp, samplingCounts)
 	return resp
+}
+
+// gatherSamplingCounts pulls per-provider sampling counts from the
+// optional inventory reader. Returns a zero-value map (all four
+// providers keyed with zero counts) when the reader is nil OR when
+// the reader panics — defensive against an in-progress wire-through
+// that hasn't fully landed.
+func (h *DiscoverySpanQualityHandlers) gatherSamplingCounts(ctx context.Context) map[string]SamplingProviderCount {
+	out := map[string]SamplingProviderCount{
+		"aws":   {},
+		"gcp":   {},
+		"azure": {},
+		"oci":   {},
+	}
+	if h.samplingInventory == nil {
+		return out
+	}
+	counts := h.samplingInventory.SamplingQualifyingCounts(ctx)
+	for p, v := range counts {
+		// Clamp the too-aggressive count to the qualifying count so
+		// an out-of-sync inventory snapshot can't surface > 100%.
+		if v.TooAggressiveCount > v.QualifyingCount {
+			v.TooAggressiveCount = v.QualifyingCount
+		}
+		if v.QualifyingCount < 0 {
+			v.QualifyingCount = 0
+		}
+		if v.TooAggressiveCount < 0 {
+			v.TooAggressiveCount = 0
+		}
+		out[p] = v
+	}
+	return out
+}
+
+// applySamplingCounts mutates the response in-place, populating
+// SamplingTooAggressivePct on each provider row + the totals row.
+// Per-provider pct: TooAggressiveCount / QualifyingCount * 100.
+// Totals pct: sum(TooAggressiveCount) / sum(QualifyingCount) * 100
+// over the four canonical providers — the cross-provider mean uses
+// raw counts (not a re-mean of per-provider pcts) so a deployment
+// with 1 of 1 too-aggressive Lambdas in AWS doesn't drown out 5 of
+// 100 too-aggressive Cloud Run services in GCP.
+//
+// Honest denominator: a provider with QualifyingCount == 0
+// contributes zero to BOTH sides of the totals ratio, so an
+// all-zero deployment surfaces 0% (and the panel stays hidden).
+func applySamplingCounts(resp *SpanQualityResponse, counts map[string]SamplingProviderCount) {
+	var totalQualifying, totalTooAggressive int
+	for _, p := range []string{"aws", "gcp", "azure", "oci"} {
+		c := counts[p]
+		row := resp.Providers[p]
+		row.SamplingTooAggressivePct = samplingPct(c.TooAggressiveCount, c.QualifyingCount)
+		resp.Providers[p] = row
+		totalQualifying += c.QualifyingCount
+		totalTooAggressive += c.TooAggressiveCount
+	}
+	resp.Totals.SamplingTooAggressivePct = samplingPct(totalTooAggressive, totalQualifying)
+}
+
+// samplingPct returns numerator/denominator * 100, rounded to one
+// decimal. Zero-safe on denominator=0 (returns 0 rather than NaN),
+// matching meanPct's contract so all percentages on the response
+// share one rounding rule.
+func samplingPct(numerator, denominator int) float64 {
+	if denominator <= 0 {
+		return 0
+	}
+	pct := float64(numerator) / float64(denominator) * 100
+	return math.Round(pct*10) / 10
 }
 
 // HandleResourceSpanQuality serves

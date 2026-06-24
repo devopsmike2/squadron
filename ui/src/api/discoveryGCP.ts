@@ -247,6 +247,13 @@ export interface ServerlessRow {
   // so the UI keeps a single definition of "amber" across columns
   // and the per-resource cold-start drill-down endpoint.
   cold_start_exceeds_threshold?: boolean;
+  // sampling_ratio + sampling_exceeds_floor — Sampling rate analysis
+  // slice 1 chunk 3 (v0.89.124, #764 Stream 162). See discovery.ts
+  // ServerlessRow godoc for the join + amber-color semantics. Cloud
+  // Run + Cloud Functions both participate (the slice 1 contract
+  // covers all 5 serverless surfaces).
+  sampling_ratio?: number | null;
+  sampling_exceeds_floor?: boolean | null;
   detail?: Record<string, unknown>;
 }
 
