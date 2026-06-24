@@ -364,6 +364,55 @@ export interface OrchestrationRow {
   detail?: Record<string, unknown>;
 }
 
+// EventSourceRow — event source tier slice 1 chunk 5 (v0.89.102,
+// #738 Stream 136). Mirrors scanner.EventSourceInstanceSnapshot. The
+// per-provider Inventory tab's Event sources sub-tab renders one row
+// per entry with the columns documented in
+// docs/proposals/event-source-tier-slice1.md §7:
+//
+//   - resource_name + surface + source_type + region
+//   - has_trace_axis as a check / cross (Schemas Discoverer / log-target
+//     proxy for EventBridge, tracingConfig.samplingRatio > 0 for
+//     Pub/Sub, diagnostic settings for Service Bus, OCI Logging for
+//     Streaming)
+//   - has_log_axis as a check / cross (log-target rule for
+//     EventBridge, schemaSettings for Pub/Sub, diagnostic settings
+//     routing to Log Analytics for Service Bus, Logging log group for
+//     Streaming)
+//   - last_seen_at as a relative-time column
+//   - span_quality (AWS only, per the v0.89.92 / v0.89.97 slice 1
+//     constraint)
+//
+// surface is one of "eventbridge" | "pubsub" | "servicebus" |
+// "streaming". source_type carries the per-surface subtype string
+// (bus / topic / queue / namespace / stream).
+//
+// Unlike OrchestrationRow which excluded OCI from the provider union,
+// EventSourceRow includes all four providers because OCI Streaming
+// ships as a real surface in slice 1 (see design doc §3.4).
+export interface EventSourceRow {
+  provider: "aws" | "gcp" | "azure" | "oci";
+  surface: "eventbridge" | "pubsub" | "servicebus" | "streaming";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn?: string;
+  // source_type — per-surface subtype: bus / topic / queue / namespace
+  // / stream.
+  source_type?: string;
+  has_trace_axis: boolean;
+  has_log_axis: boolean;
+  // last_seen_at — joined from the traceindex; undefined when the
+  // index has no observation for this resource.
+  last_seen_at?: string;
+  // span_quality — same posture as ServerlessRow.span_quality. AWS
+  // only in slice 1 per the established pattern.
+  span_quality?: RowSpanQuality;
+  // detail — per-surface bag the per-cloud Inventory tab can render
+  // as a per-row drill-down.
+  detail?: Record<string, unknown>;
+}
+
 // ScanResult is the typed payload the scan endpoint returns. Mirrors
 // scanner.Result via the marshalScanResult wire shape on the Go side.
 // scan_started_at / scan_completed_at are ISO-8601 strings; partial
@@ -405,6 +454,14 @@ export interface ScanResult {
   // `.length === 0` check. Always empty in OCI inventory responses
   // in slice 1; the OCI page hides the sub-tab when empty.
   orchestrations?: OrchestrationRow[];
+  // event_sources — event source tier slice 1 chunk 5 (v0.89.102,
+  // #738 Stream 136). The per-provider Inventory tab's Event sources
+  // sub-tab reads from this field. The Go handler emits an array
+  // (never null) so the UI's empty-state branch is a single
+  // `.length === 0` check. Unlike orchestrations, OCI inventory
+  // responses populate this field in slice 1 since OCI Streaming
+  // ships as a real surface.
+  event_sources?: EventSourceRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

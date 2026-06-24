@@ -775,3 +775,88 @@ func TestTraceCoverage_ServerlessPct_ZeroOnColdStart(t *testing.T) {
 		t.Errorf("aws.serverless_pct = %v, want 0 (no serverless query wired)", got)
 	}
 }
+
+// --- Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) -
+//
+// stubEventSourceQuery mirrors stubOrchestrationQuery. The production
+// query performs the actual event_source_instance table walk and the
+// per-row last_seen_at < 24h check.
+
+type stubEventSourceQuery struct {
+	mu        sync.Mutex
+	inventory map[string]int
+	emitting  map[string]int
+	err       error
+	calls     int64
+}
+
+func (s *stubEventSourceQuery) EventSourceCoverageForScope(_ context.Context, provider, scopeID string, _ time.Duration) (inv, emit int, err error) {
+	atomic.AddInt64(&s.calls, 1)
+	if s.err != nil {
+		return 0, 0, s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := provider + "|" + scopeID
+	return s.inventory[key], s.emitting[key], nil
+}
+
+// TestTraceCoverage_IncludesEventSourcePct — §11 acceptance test 14
+// for the event source tier: seeding the event source coverage query
+// with 2 inventory + 1 emitting for one scope must surface
+// EventSourcePct=50.0 on the matching ProviderTraceCoverage. All four
+// providers populate (including OCI) since OCI Streaming ships in
+// slice 1.
+func TestTraceCoverage_IncludesEventSourcePct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+	evt := &stubEventSourceQuery{
+		inventory: map[string]int{"aws|acct-1": 2},
+		emitting:  map[string]int{"aws|acct-1": 1},
+	}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil).
+		WithEventSourceQuery(evt)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].EventSourcePct, 50.0; got != want {
+		t.Errorf("aws.event_source_pct = %v, want %v", got, want)
+	}
+	// Other providers contribute zero — no scopes seeded.
+	if got := r.Providers["gcp"].EventSourcePct; got != 0 {
+		t.Errorf("gcp.event_source_pct = %v, want 0", got)
+	}
+}
+
+// TestTraceCoverage_EventSourcePct_ZeroOnColdStart — when the
+// EventSourceCoverageQuery is nil, every provider's EventSourcePct
+// stays 0. Pins the nil-tolerant posture documented on
+// WithEventSourceQuery.
+func TestTraceCoverage_EventSourcePct_ZeroOnColdStart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+
+	// No WithEventSourceQuery call — nil eventSourceQuery on the handler.
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got := r.Providers["aws"].EventSourcePct; got != 0 {
+		t.Errorf("aws.event_source_pct = %v, want 0 (no event source query wired)", got)
+	}
+}

@@ -2866,3 +2866,218 @@ func TestProviderFromRecommendationKind_OrchestrationTierExtension(t *testing.T)
 		}
 	}
 }
+
+// --- Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) -
+
+// TestWebhook_EventBridgeKinds_RouteToAWS — §11 acceptance test 15.
+// The three AWS EventBridge kinds (eventbridge-xray-enable,
+// eventbridge-schemas-discover, eventbridge-logging-enable) must
+// route through the webhook receiver as provider=aws with the parsed
+// account_id surfaced on the audit payload.
+func TestWebhook_EventBridgeKinds_RouteToAWS(t *testing.T) {
+	for _, kind := range []string{
+		"eventbridge-xray-enable",
+		"eventbridge-schemas-discover",
+		"eventbridge-logging-enable",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+			branch := "squadron/rec/" + kind + "/123456789012/us-east-1/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-22T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], kind)
+			}
+			if pay["provider"] != "aws" {
+				t.Errorf("payload.provider = %v, want aws", pay["provider"])
+			}
+			if pay["account_id"] != "123456789012" {
+				t.Errorf("payload.account_id = %v, want 123456789012", pay["account_id"])
+			}
+		})
+	}
+}
+
+// TestWebhook_PubSubKinds_RouteToGCP — §11 acceptance test 16.
+// The two GCP Pub/Sub kinds (pubsub-trace-enable, pubsub-schema-attach)
+// route through the webhook receiver as provider=gcp with the parsed
+// project_id surfaced on the audit payload.
+func TestWebhook_PubSubKinds_RouteToGCP(t *testing.T) {
+	for _, kind := range []string{
+		"pubsub-trace-enable",
+		"pubsub-schema-attach",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+			branch := "squadron/rec/" + kind + "/my-prod-project/us-central1/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-22T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], kind)
+			}
+			if pay["provider"] != "gcp" {
+				t.Errorf("payload.provider = %v, want gcp", pay["provider"])
+			}
+			if pay["project_id"] != "my-prod-project" {
+				t.Errorf("payload.project_id = %v, want my-prod-project", pay["project_id"])
+			}
+			if pay["account_id"] != "" {
+				t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+			}
+		})
+	}
+}
+
+// TestWebhook_ServiceBusKinds_RouteToAzure — §11 acceptance test 17.
+// The Azure Service Bus kind (servicebus-diagnostics-enable) routes
+// through the webhook receiver as provider=azure with the parsed
+// subscription_id surfaced.
+func TestWebhook_ServiceBusKinds_RouteToAzure(t *testing.T) {
+	for _, kind := range []string{
+		"servicebus-diagnostics-enable",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+			branch := "squadron/rec/" + kind + "/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/eastus/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-22T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], kind)
+			}
+			if pay["provider"] != "azure" {
+				t.Errorf("payload.provider = %v, want azure", pay["provider"])
+			}
+			if pay["subscription_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+				t.Errorf("payload.subscription_id = %v, want aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+					pay["subscription_id"])
+			}
+		})
+	}
+}
+
+// TestWebhook_StreamingKinds_RouteToOCI — §11 acceptance test 18.
+// The OCI Streaming kind (streaming-logging-enable) routes through
+// the webhook receiver as provider=oci with the parsed tenancy_ocid
+// surfaced.
+func TestWebhook_StreamingKinds_RouteToOCI(t *testing.T) {
+	for _, kind := range []string{
+		"streaming-logging-enable",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+			branch := "squadron/rec/" + kind + "/ocid1.tenancy.oc1..aaaaaaaa/us-phoenix-1/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-22T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], kind)
+			}
+			if pay["provider"] != "oci" {
+				t.Errorf("payload.provider = %v, want oci", pay["provider"])
+			}
+			if pay["tenancy_ocid"] != "ocid1.tenancy.oc1..aaaaaaaa" {
+				t.Errorf("payload.tenancy_ocid = %v, want ocid1.tenancy.oc1..aaaaaaaa", pay["tenancy_ocid"])
+			}
+		})
+	}
+}
+
+// TestProviderFromRecommendationKind_EventSourceTierExtension — pins
+// the dispatch table for the 7 new event source kinds and reasserts
+// prior-tier routing remains green. Same shape as the orchestration
+// extension test.
+func TestProviderFromRecommendationKind_EventSourceTierExtension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{kind: "eventbridge-xray-enable", want: "aws"},
+		{kind: "eventbridge-schemas-discover", want: "aws"},
+		{kind: "eventbridge-logging-enable", want: "aws"},
+		{kind: "pubsub-trace-enable", want: "gcp"},
+		{kind: "pubsub-schema-attach", want: "gcp"},
+		{kind: "servicebus-diagnostics-enable", want: "azure"},
+		{kind: "streaming-logging-enable", want: "oci"},
+		// Prior-tier sanity — orchestration / serverless / trace
+		// emission kinds still route correctly.
+		{kind: "stepfunc-xray-active", want: "aws"},
+		{kind: "workflows-trace-enable", want: "gcp"},
+		{kind: "logicapps-appinsights-enable", want: "azure"},
+		{kind: "ocifunc-apm-enable", want: "oci"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		// Boundary cases — bare prefixes without trailing hyphen fall
+		// through to AWS via the switch default.
+		{kind: "eventbridge", want: "aws"},
+		{kind: "pubsub", want: "aws"},
+		{kind: "servicebus", want: "aws"},
+		{kind: "streaming", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}

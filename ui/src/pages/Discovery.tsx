@@ -646,11 +646,14 @@ function TierCoverageChipRow({
   providers: TraceCoverage["providers"];
 }) {
   const orchPct = computeTierWeightedAverage(providers, (p) => p.orchestration_pct);
+  // Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) —
+  // EVT column extends the per-tier chip row. Same hide-when-zero
+  // pattern as ORCH.
+  const evtPct = computeTierWeightedAverage(providers, (p) => p.event_source_pct);
   const showOrch = orchPct !== null;
-  // Hide the whole line when no tier chip has any signal. Slice 1
-  // surfaces only ORCH; when the SERVERLESS column lands the
-  // condition broadens.
-  if (!showOrch) {
+  const showEvt = evtPct !== null;
+  // Hide the whole line when no tier chip has any signal.
+  if (!showOrch && !showEvt) {
     return null;
   }
   return (
@@ -660,6 +663,9 @@ function TierCoverageChipRow({
     >
       {showOrch && (
         <TierCoverageChip label="ORCH" pct={orchPct ?? 0} testId="trace-coverage-tier-chip-orch" />
+      )}
+      {showEvt && (
+        <TierCoverageChip label="EVT" pct={evtPct ?? 0} testId="trace-coverage-tier-chip-evt" />
       )}
     </div>
   );

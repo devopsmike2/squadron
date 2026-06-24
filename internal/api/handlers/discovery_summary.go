@@ -54,8 +54,15 @@ type ProviderSummary struct {
 	// provider. Mirrors the serverless_count pattern from v0.89.92. For
 	// OCI it stays 0 in slice 1 — the OCI inventory never populates
 	// orchestrations until slice 2.
-	OrchestrationCount int  `json:"orchestration_count"`
-	Enabled            bool `json:"enabled"`
+	OrchestrationCount int `json:"orchestration_count"`
+	// EventSourceCount — event source tier slice 1 chunk 5 (v0.89.102,
+	// #738 Stream 136) — counts the event source inventory rows the
+	// most recent scan_completed event surfaced for this provider.
+	// Mirrors the orchestration_count pattern but populates for ALL
+	// four providers (including OCI) since OCI Streaming ships in
+	// slice 1 — see docs/proposals/event-source-tier-slice1.md §6.3.
+	EventSourceCount int  `json:"event_source_count"`
+	Enabled          bool `json:"enabled"`
 }
 
 // SummaryTotals is the cross-provider roll-up.
@@ -73,8 +80,12 @@ type SummaryTotals struct {
 	// OrchestrationCount — orchestration tier slice 1 chunk 4
 	// (v0.89.97, #731 Stream 129). Cross-provider sum of
 	// ProviderSummary.OrchestrationCount. Zero on cold start.
-	OrchestrationCount int     `json:"orchestration_count"`
-	CoveragePct        float64 `json:"coverage_pct"`
+	OrchestrationCount int `json:"orchestration_count"`
+	// EventSourceCount — event source tier slice 1 chunk 5 (v0.89.102,
+	// #738 Stream 136). Cross-provider sum of
+	// ProviderSummary.EventSourceCount. Zero on cold start.
+	EventSourceCount int     `json:"event_source_count"`
+	CoveragePct      float64 `json:"coverage_pct"`
 }
 
 // RecentRecommendation is one row of the cross-provider recent table.
@@ -149,6 +160,12 @@ type ScanSummary struct {
 	// orchestration_count payload field from scan_completed audit
 	// rows. Zero on older scans that pre-date the orchestration tier.
 	OrchestrationCount int
+	// EventSourceCount — event source tier slice 1 chunk 5 (v0.89.102,
+	// #738 Stream 136) — projects the optional event_source_count
+	// payload field from scan_completed audit rows. Zero on older
+	// scans that pre-date the event source tier. Populated for all
+	// four providers including OCI.
+	EventSourceCount int
 }
 
 // ProposalEvent is one row from discovery_proposal.created projected
@@ -397,6 +414,8 @@ func (h *DiscoverySummaryHandlers) aggregate(ctx context.Context) *SummaryRespon
 		resp.Totals.ServerlessCount += p.ServerlessCount
 		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129).
 		resp.Totals.OrchestrationCount += p.OrchestrationCount
+		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136).
+		resp.Totals.EventSourceCount += p.EventSourceCount
 	}
 	resp.Totals.CoveragePct = computeCoveragePct(resp.Totals.InstrumentedCount, resp.Totals.InstanceCount)
 
@@ -474,6 +493,11 @@ func (h *DiscoverySummaryHandlers) aggregateProvider(
 		// projection. OCI rows always carry zero in slice 1 because the
 		// OCI scanner returns no orchestrations.
 		ps.OrchestrationCount += s.OrchestrationCount
+		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136)
+		// — roll up the optional per-scan event_source_count projection.
+		// All four providers populate (including OCI) since OCI Streaming
+		// ships in slice 1.
+		ps.EventSourceCount += s.EventSourceCount
 		if latest == nil || s.CompletedAt.After(*latest) {
 			t := s.CompletedAt
 			latest = &t

@@ -196,6 +196,12 @@ func (a *applicationStoreAuditQuery) ListRecentScanCompletedByProvider(
 			// zero-safe. OCI scan_completed events never set the field
 			// in slice 1.
 			OrchestrationCount: intFromPayload(e.Payload, "orchestration_count"),
+			// Event source tier slice 1 chunk 5 (v0.89.102, #738
+			// Stream 136) — project the optional event_source_count
+			// payload field. Older scans pre-date the field;
+			// intFromPayload returns 0 so the cold-start posture stays
+			// zero-safe. All four providers populate (OCI included).
+			EventSourceCount: intFromPayload(e.Payload, "event_source_count"),
 		}
 	}
 	return out, nil

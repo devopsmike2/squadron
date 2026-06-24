@@ -58,6 +58,7 @@ import {
   type ScanAzureResponse,
   type ServerlessRow,
   type OrchestrationRow,
+  type EventSourceRow,
   type ValidateAzureResponse,
 } from "@/api/discoveryAzure";
 import { Badge } from "@/components/ui/badge";
@@ -120,6 +121,9 @@ const INVENTORY_SUBTAB_SERVERLESS = "serverless";
 // fifth Inventory sub-tab carrying Azure Logic Apps rows from the
 // chunk 3 Azure Logic Apps scanner extension.
 const INVENTORY_SUBTAB_ORCHESTRATION = "orchestration";
+// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) — all
+// 4 providers render this sub-tab.
+const INVENTORY_SUBTAB_EVENT_SOURCES = "event_sources";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1120,6 +1124,9 @@ function InventoryTab({
           <TabsTrigger value={INVENTORY_SUBTAB_ORCHESTRATION}>
             Orchestration
           </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_EVENT_SOURCES}>
+            Event sources
+          </TabsTrigger>
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
           <InventoryTable rows={scan.compute} />
@@ -1135,6 +1142,9 @@ function InventoryTab({
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_ORCHESTRATION} className="mt-3">
           <OrchestrationInventoryTable rows={scan.orchestrations ?? []} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_EVENT_SOURCES} className="mt-3">
+          <EventSourcesInventoryTable rows={scan.event_sources ?? []} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1466,6 +1476,70 @@ function OrchestrationInventoryTable({ rows }: { rows: OrchestrationRow[] }) {
               </td>
               <td className="px-3 py-2 text-xs">{row.surface}</td>
               <td className="px-3 py-2 text-xs">{row.workflow_type || "—"}</td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_trace_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_log_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// EventSourcesInventoryTable — event source tier slice 1 chunk 5
+// (v0.89.102, #738 Stream 136). Renders the per-row Service Bus
+// inventory the chunk 3 Azure scanner produced. Columns follow §7 of
+// the design doc: Resource Name, Surface, Type, Region, Trace axis,
+// Log axis, Last seen. The Quality column is AWS-only per the slice 1
+// constraint mirroring v0.89.92 / v0.89.97.
+function EventSourcesInventoryTable({ rows }: { rows: EventSourceRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div
+        className="rounded-md border p-6 text-center text-sm text-muted-foreground"
+        data-testid="event-sources-empty"
+      >
+        No event sources discovered. Run a scan to refresh.
+      </div>
+    );
+  }
+  return (
+    <div
+      className="overflow-x-auto rounded-md border"
+      data-testid="event-sources-table"
+    >
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Resource Name</th>
+            <th className="px-3 py-2 font-medium">Surface</th>
+            <th className="px-3 py-2 font-medium">Type</th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">Trace axis</th>
+            <th className="px-3 py-2 font-medium">Log axis</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.resource_arn || row.resource_name}
+              className="border-t"
+              data-testid="event-sources-row"
+            >
+              <td className="px-3 py-2 font-mono text-xs">
+                {row.resource_name}
+              </td>
+              <td className="px-3 py-2 text-xs">{row.surface}</td>
+              <td className="px-3 py-2 text-xs">{row.source_type || "—"}</td>
               <td className="px-3 py-2 text-xs">{row.region}</td>
               <td className="px-3 py-2 text-xs">
                 <OrchestrationAxisCheck ok={row.has_trace_axis} />
