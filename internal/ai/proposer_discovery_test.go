@@ -2906,3 +2906,130 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostWorkloadHealthPanel(t *
 			"OCI user message should NOT include workload-health dashboard content: %q", kind)
 	}
 }
+
+// --- Orchestration tier slice 2 chunk 2 (v0.89.136, #776 Stream 174) -
+
+// TestDiscoveryProposer_ResmgrKindInSystemPrompt — orchestration tier
+// slice 2 chunk 2 (v0.89.136, #776 Stream 174). The new
+// resmgr-logging-enable kind must appear in the shared system prompt
+// so the model can route findings to the right kind when the OCI
+// scanner surfaces Resource Manager Stacks with has_log_axis=false.
+// Slice 1 orchestration kinds (stepfunc-/workflows-/logicapps-) must
+// remain present after the OCI extension — same shared-system-prompt
+// invariant the prior chunk tests pin.
+func TestDiscoveryProposer_ResmgrKindInSystemPrompt(t *testing.T) {
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"resmgr-logging-enable",
+		"shared system prompt should teach the orchestration tier slice 2 kind")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"ORCHESTRATION TIER OCI EXTENSION (slice 2",
+		"shared system prompt should include the slice 2 section header")
+	// Honest-framing tokens from the design doc.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"Resource Manager (Stacks + Jobs)",
+		"shared system prompt should carry the RM framing")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"deferred to slice 3",
+		"shared system prompt should carry the Process Automation deferral")
+	// Terraform shape cues the picker emits.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"oci_logging_log_group",
+		"shared system prompt should name the Terraform resource the picker emits")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"\"resourcemanager\"",
+		"shared system prompt should name the OCI Logging source service")
+	// Decline path framing.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"DECLINE PATH for resmgr-logging-enable",
+		"shared system prompt should carry the slice 2 decline-path framing")
+	// Compartment-level caveat.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"COMPARTMENT-LEVEL",
+		"shared system prompt should carry the compartment-level caveat")
+	// Slice 1 orchestration kinds still present.
+	for _, priorKind := range []string{
+		"stepfunc-xray-active",
+		"stepfunc-logging-enable",
+		"workflows-trace-enable",
+		"workflows-logging-enable",
+		"logicapps-appinsights-enable",
+		"logicapps-diagnostics-enable",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorKind,
+			"shared system prompt should still teach the slice 1 orchestration kind %q after the OCI extension", priorKind)
+	}
+	// Prior-tier kinds still present.
+	for _, priorKind := range []string{
+		"lambda-xray-active",
+		"cloudrun-otel-sidecar",
+		"ocifunc-apm-enable",
+		"gce-otel-label",
+		"vm-otel-tag",
+		"compute-otel-tag",
+		"streaming-logging-enable",
+		"ec2-otel-layer",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorKind,
+			"shared system prompt should still teach the prior-tier kind %q after the OCI orchestration extension", priorKind)
+	}
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostOrchestrationSlice2
+// — orchestration tier slice 2 chunk 2 (v0.89.136, #776 Stream 174)
+// cold-start parity invariant: across all four providers, the
+// compute-only user message produced by buildDiscoveryUserMessage
+// must remain byte-identical to v0.89.133 when the scan context
+// carries no resmgr rows. The new kind lives ONLY in the system
+// prompt; the user message has no orchestration section, so a
+// cold-start scan renders the same body the prior chunk extensions
+// pinned. Pins design doc §11 acceptance test 9.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostOrchestrationSlice2(t *testing.T) {
+	// AWS cold start.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	assert.NotContains(t, awsMsg, "resmgr-logging-enable")
+	assert.NotContains(t, awsMsg, "ORCHESTRATION TIER OCI EXTENSION")
+	assert.Contains(t, awsMsg, "group_id on every step MUST equal the account_id above")
+
+	// GCP cold start.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.NotContains(t, gcpMsg, "resmgr-logging-enable")
+	assert.NotContains(t, gcpMsg, "ORCHESTRATION TIER OCI EXTENSION")
+	assert.Contains(t, gcpMsg, "group_id on every step MUST equal the project_id above")
+
+	// Azure cold start.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.NotContains(t, azureMsg, "resmgr-logging-enable")
+	assert.NotContains(t, azureMsg, "ORCHESTRATION TIER OCI EXTENSION")
+	assert.Contains(t, azureMsg, "group_id on every step MUST equal the subscription_id above")
+
+	// OCI cold start. The slice 2 kind for OCI must NOT leak into
+	// the user message — it belongs to the system prompt only.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	assert.NotContains(t, ociMsg, "resmgr-logging-enable")
+	assert.NotContains(t, ociMsg, "ORCHESTRATION TIER OCI EXTENSION")
+	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
+}

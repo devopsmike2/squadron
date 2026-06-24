@@ -3175,3 +3175,77 @@ func TestProviderFromRecommendationKind_EventSourceTierExtension(t *testing.T) {
 		}
 	}
 }
+
+// --- Orchestration tier slice 2 chunk 2 (v0.89.136, #776 Stream 174) -
+
+// TestWebhook_ResmgrKind_RoutesToOCI — orchestration tier slice 2
+// chunk 2 (v0.89.136, #776 Stream 174). The new
+// resmgr-logging-enable kind must route through the webhook receiver
+// as provider=oci with the parsed tenancy_ocid surfaced on the audit
+// payload (and account_id explicitly empty per the v0.89.48 stable
+// schema invariant for non-AWS providers). Pins design doc §11
+// acceptance test 6.
+func TestWebhook_ResmgrKind_RoutesToOCI(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/resmgr-logging-enable/ocid1.tenancy.oc1..aaaaaaaa/us-phoenix-1/abc123",
+		"2026-06-24T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "resmgr-logging-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want resmgr-logging-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "oci" {
+		t.Errorf("payload.provider = %v, want oci", pay["provider"])
+	}
+	if pay["tenancy_ocid"] != "ocid1.tenancy.oc1..aaaaaaaa" {
+		t.Errorf("payload.tenancy_ocid = %v, want ocid1.tenancy.oc1..aaaaaaaa", pay["tenancy_ocid"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+}
+
+// TestProviderFromRecommendationKind_OrchestrationSlice2Extension —
+// pins the dispatch table for the new resmgr-logging-enable kind and
+// reasserts prior-tier routing remains green. Same shape as the
+// event source tier extension test.
+func TestProviderFromRecommendationKind_OrchestrationSlice2Extension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{kind: "resmgr-logging-enable", want: "oci"},
+		// Prior-tier sanity — orchestration slice 1, event source, and
+		// serverless kinds still route correctly.
+		{kind: "stepfunc-xray-active", want: "aws"},
+		{kind: "workflows-trace-enable", want: "gcp"},
+		{kind: "logicapps-appinsights-enable", want: "azure"},
+		{kind: "streaming-logging-enable", want: "oci"},
+		{kind: "ocifunc-apm-enable", want: "oci"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		// Boundary case — bare prefix without trailing hyphen falls
+		// through to AWS via the switch default.
+		{kind: "resmgr", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}

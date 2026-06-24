@@ -985,7 +985,15 @@ func providerFromRecommendationKind(kind string) string {
 		strings.HasPrefix(kind, "ocifunc-") ||
 		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136)
 		// — OCI Streaming kinds (streaming-logging-enable) route to OCI.
-		strings.HasPrefix(kind, "streaming-"):
+		strings.HasPrefix(kind, "streaming-") ||
+		// Orchestration tier slice 2 chunk 2 (v0.89.136, #776 Stream 174)
+		// — OCI Resource Manager kinds (resmgr-logging-enable) route to
+		// OCI. Closes the qualification on the universal claim's
+		// orchestration tier — after slice 2, all four clouds carry
+		// orchestration coverage. The resmgr- prefix is positioned
+		// alongside compute-/ocidb-/oke-/ocifunc-/streaming- so the OCI
+		// family stays grouped.
+		strings.HasPrefix(kind, "resmgr-"):
 		return "oci"
 	default:
 		return "aws"
