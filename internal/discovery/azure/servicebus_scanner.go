@@ -97,33 +97,114 @@ const (
 // ScanEventSources is the Azure scanner's event-source-tier entry point
 // and satisfies the optional handlers.EventSourceDiscoveryScanner
 // interface (see internal/api/handlers/discovery.go). Slice 1 chunk 3
-// covers Microsoft.ServiceBus/namespaces only — mirrors the AWS
-// scanner's ScanEventSources → ScanEventBridge layout from chunk 1 and
-// the orchestration tier's ScanOrchestrations → ScanLogicApps layout
-// from chunk 3 (v0.89.96).
+// (v0.89.101) shipped Service Bus alone; slice 6 chunk 1 (v0.89.147,
+// #787 Stream 185) extends the dispatcher to two-way (Service Bus +
+// Event Grid) with a partial-scan posture that lets either surface
+// fail independently without aborting the other — see docs/proposals/
+// event-source-tier-slice6.md §5 (scanner contract) and §11
+// acceptance tests 10-13.
 //
-// Scope semantics: scope.Regions is ignored — Service Bus namespaces are
-// subscription-scope on the ARM list endpoint. scope.AccountID overrides
-// the per-row AccountID stamped on every snapshot; empty falls back to
-// s.SubscriptionID.
+// Scope semantics: scope.Regions is ignored — both Service Bus
+// namespaces and Event Grid topics are subscription-scope on the ARM
+// list endpoint. scope.AccountID overrides the per-row AccountID
+// stamped on every snapshot; empty falls back to s.SubscriptionID.
 //
-// IAM contract per docs/proposals/event-source-tier-slice1.md §12: the
-// existing Reader role at subscription scope covers BOTH the
-// Microsoft.ServiceBus/namespaces list AND the per-namespace
-// microsoft.insights/diagnosticSettings sub-resource read.
+// Partial-scan posture per docs/proposals/event-source-tier-slice6.md
+// §5: when ONE of the surfaces fails (e.g. an IAM-gap on Service Bus
+// while Event Grid's broader read-only RBAC succeeds, or vice versa)
+// the REMAINING surface still surfaces. Only when BOTH surfaces fail
+// does the dispatcher return a non-nil error wrapping every
+// per-surface cause. The §12 threat model treats this as load-bearing:
+// the dispatcher's both-directions partial-scan posture is pinned by
+// acceptance tests 11 + 12 of the slice 6 design doc.
+//
+// IAM contract per docs/proposals/event-source-tier-slice1.md §12 +
+// event-source-tier-slice6.md §12: the existing Reader role at
+// subscription scope covers BOTH the Microsoft.ServiceBus/namespaces
+// + Microsoft.EventGrid/topics list calls AND the shared
+// microsoft.insights/diagnosticSettings sub-resource read across
+// both surfaces. No IAM extension beyond what slice 1 provided.
 func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
 	token, err := s.acquireAccessToken(ctx)
 	if err != nil {
+		// Token-endpoint failure is the ONE substrate-level hard
+		// failure where neither surface is reachable; surface as a
+		// non-nil error so the caller's audit emit path fires
+		// scan_failed rather than the partial-scan posture below.
+		// Tag the error under Service Bus for backward compat with
+		// the slice 1 chunk 3 error-string contract — the
+		// dispatcher's both-surfaces failure path (below) is the
+		// only place a slice 6 chunk 1 error mentions Event Grid.
 		return nil, fmt.Errorf("azure: %s: %w", ServiceIDServiceBus, err)
 	}
-	result := &scanner.Result{}
 	accountID := scope.AccountID
 	if accountID == "" {
 		accountID = s.SubscriptionID
 	}
-	result.AccountID = accountID
-	s.ScanServiceBus(ctx, token, result)
-	return result.EventSources, nil
+
+	var all []scanner.EventSourceInstanceSnapshot
+
+	namespaces, sbErr := s.scanServiceBusForDispatcher(ctx, token, accountID)
+	if sbErr == nil {
+		all = append(all, namespaces...)
+	}
+
+	topics, egErr := s.scanEventGridForDispatcher(ctx, token, accountID)
+	if egErr == nil {
+		all = append(all, topics...)
+	}
+
+	// Two-way partial-scan posture: only return an error when BOTH
+	// surfaces failed. Any single-surface failure is silenced at this
+	// layer so an IAM gap on one surface doesn't drop the inventory
+	// the operator actually CAN see on the other. Tests 11 + 12 of
+	// the slice 6 design doc pin both single-failure directions; test
+	// 13 pins the both-fail path's error string mentioning both
+	// surface identifiers.
+	if sbErr != nil && egErr != nil {
+		return all, fmt.Errorf("all azure event source surfaces failed: servicebus=%v eventgrid=%w", sbErr, egErr)
+	}
+
+	return all, nil
+}
+
+// scanServiceBusForDispatcher is the slice 6 chunk 1 dispatcher-
+// friendly wrapper around the slice 1 chunk 3 ScanServiceBus result-
+// accumulator path. Returns (rows, nil) when the subscription-wide
+// list call succeeded (even when per-namespace probes failed —
+// those leave HasTraceAxis / HasLogAxis false but still surface the
+// row); returns (nil, err) only when the list call itself failed,
+// signaling the dispatcher that the Service Bus surface is offline
+// and the partial-scan posture should trip if Event Grid also fails.
+//
+// ScanServiceBus (the slice 1 chunk 3 entry point) stays unchanged
+// for backward compat with the slice 1 + slice 2 tests that call it
+// directly with a *scanner.Result accumulator. This wrapper reuses
+// ScanServiceBus's helpers without changing its signature — the
+// list-failure detection rides on the same listServiceBusNamespaces
+// helper the slice 1 walker already exercises.
+func (s *Scanner) scanServiceBusForDispatcher(ctx context.Context, accessToken, accountID string) ([]scanner.EventSourceInstanceSnapshot, error) {
+	namespaces, listErr := s.listServiceBusNamespaces(ctx, accessToken)
+	if listErr != nil {
+		return nil, fmt.Errorf("%s: %w", ServiceIDServiceBus, listErr)
+	}
+	if len(namespaces) == 0 {
+		return nil, nil
+	}
+	out := make([]scanner.EventSourceInstanceSnapshot, 0, len(namespaces))
+	for _, ns := range namespaces {
+		hasTrace, hasLog, _ := s.probeServiceBusDiagnostics(ctx, accessToken, ns.ID)
+		propPreserved, propNote, rulesErr := s.probeServiceBusPropagation(ctx, accessToken, ns.ID)
+		if rulesErr != nil {
+			// Mirrors the slice 1 chunk 3 ScanServiceBus posture: a
+			// failing authorizationRules list defaults propagation
+			// to preserved with the list-error informational note.
+			propPreserved = true
+			propNote = servicebusPropagationNoteListAPIError
+		}
+		out = append(out, projectServiceBusNamespace(ns, hasTrace, hasLog, propPreserved, propNote, accountID))
+	}
+	return out, nil
 }
 
 // ScanServiceBus walks Microsoft.ServiceBus/namespaces at subscription
