@@ -17,12 +17,31 @@ import (
 // Memory: 4 uint64 + a time.Time per resource = ~40 bytes per key. At
 // the traceindex 100K key cap (design doc §12), worst case ~4MB for
 // quality counters — acceptable.
+//
+// Slice 2 (v0.89.109) adds four uint64 fields for W3C trace context
+// parsing — see docs/proposals/span-quality-slice2.md §3.3.
+// MalformedTraceparentSpans and MissingTraceparentOnChildSpans are the
+// numerator counters; SpansWithTraceparent and ChildSpans are the
+// separate denominators per §3.3 "honest framing" — a root span can't
+// be missing-on-child, and a span without traceparent can't be
+// malformed, so neither belongs in the shared TotalSpans denominator.
+// Memory cost: +32 bytes per key, ~3.2MB at full cap.
 type QualityCounters struct {
 	OrphanSpans       uint64
 	MissingAttrSpans  uint64
 	AttrMismatchSpans uint64
 	TotalSpans        uint64
-	WindowStart       time.Time
+
+	// Slice 2 (v0.89.109): W3C trace context parsing.
+	// See docs/proposals/span-quality-slice2.md §3.3 for denominator
+	// semantics — note the separate SpansWithTraceparent + ChildSpans
+	// denominators (rather than reusing TotalSpans).
+	MalformedTraceparentSpans      uint64
+	MissingTraceparentOnChildSpans uint64
+	SpansWithTraceparent           uint64 // denominator for malformed_pct
+	ChildSpans                     uint64 // denominator for missing_on_child_pct
+
+	WindowStart time.Time
 }
 
 // PlaceholderObservation records a specific placeholder value seen on
@@ -164,13 +183,19 @@ func (q *Quality) Observe(obs SpanObservation) {
 		}
 	}
 	// Rolling 1h window per resource (§3.4 step 5). Reset zeros the
-	// four counters in place rather than reallocating — keeps the hot
-	// path allocation-free on the window-rollover tick.
+	// counters in place rather than reallocating — keeps the hot
+	// path allocation-free on the window-rollover tick. The slice 2
+	// counters (MalformedTraceparentSpans + MissingTraceparentOnChildSpans
+	// + their denominators) reset alongside the slice 1 fields.
 	if now.Sub(counters.WindowStart) > q.window {
 		counters.OrphanSpans = 0
 		counters.MissingAttrSpans = 0
 		counters.AttrMismatchSpans = 0
 		counters.TotalSpans = 0
+		counters.MalformedTraceparentSpans = 0
+		counters.MissingTraceparentOnChildSpans = 0
+		counters.SpansWithTraceparent = 0
+		counters.ChildSpans = 0
 		counters.WindowStart = now
 	}
 	counters.TotalSpans++
@@ -181,7 +206,12 @@ func (q *Quality) Observe(obs SpanObservation) {
 	// from the trace's map if it's aged out, so a "parent seen but
 	// expired" case is counted as orphan and won't double-count on
 	// subsequent children.
-	if isNonRootSpan(obs.ParentSpanID) {
+	//
+	// isChild is computed once here and reused by the slice 2 W3C
+	// detection below — keeps the per-span isNonRootSpan call count
+	// at one even when both slice 1 and slice 2 care about the answer.
+	isChild := isNonRootSpan(obs.ParentSpanID)
+	if isChild {
 		if !q.parentSpanSeen(obs.TraceID, obs.ParentSpanID, now) {
 			counters.OrphanSpans++
 		}
@@ -210,6 +240,31 @@ func (q *Quality) Observe(obs SpanObservation) {
 	if attr, placeholder := firstPlaceholder(obs.Attrs); attr != "" {
 		counters.AttrMismatchSpans++
 		q.recordPlaceholder(obs.Key, attr, placeholder, now)
+	}
+
+	// Slice 2 §3.1/§3.2: W3C trace context parsing. Three counter
+	// updates fan out from one lookup + one (optional) parse:
+	//   - ChildSpans (denominator for missing-on-child) increments
+	//     when the span is a child, regardless of traceparent state.
+	//   - SpansWithTraceparent (denominator for malformed) increments
+	//     when the span carries a traceparent attribute.
+	//   - MalformedTraceparentSpans (numerator) increments when the
+	//     traceparent value fails the W3C format check.
+	//   - MissingTraceparentOnChildSpans (numerator) increments when
+	//     the span is a child but carries no traceparent attribute.
+	// The two numerators are mutually exclusive (a single span has
+	// either a traceparent or no traceparent — never both states).
+	if isChild {
+		counters.ChildSpans++
+	}
+	traceparent := lookupTraceparent(obs.Attrs)
+	if traceparent != "" {
+		counters.SpansWithTraceparent++
+		if !isWellFormedTraceparent(traceparent) {
+			counters.MalformedTraceparentSpans++
+		}
+	} else if isChild {
+		counters.MissingTraceparentOnChildSpans++
 	}
 }
 
@@ -344,6 +399,15 @@ func (q *Quality) EvictExpired() (countersEvicted, tracesEvicted int) {
 // OrphanPct / MissingAttrPct / AttrMismatchPct are 0.0 when
 // TotalSpans is 0 (not NaN). The same zero-safety pattern Index.Coverage
 // follows for the cold-start case.
+//
+// Slice 2 additions (v0.89.109): MalformedTraceparentPct and
+// MissingTraceparentOnChildPct each compute against their own
+// denominator per §3.3 — a root span can't be missing-on-child, and
+// a span without traceparent can't be malformed, so the shared
+// TotalSpans denominator would underweight both rates. The
+// SpansWithTraceparent + ChildSpans fields are exposed too so the
+// chunk-2 API handler + dashboard can render honest "N of M" framing
+// alongside the percentage.
 type QualityCountersSnapshot struct {
 	Key             string
 	Provider        string
@@ -353,6 +417,13 @@ type QualityCountersSnapshot struct {
 	TotalSpans      uint64
 	WindowStart     time.Time
 	Placeholders    []PlaceholderObservation
+
+	// Slice 2 additions. Both percentages use their own denominators
+	// per §3.3 of the design doc.
+	MalformedTraceparentPct      float64
+	MissingTraceparentOnChildPct float64
+	SpansWithTraceparent         uint64 // exposed for honest framing
+	ChildSpans                   uint64 // same
 }
 
 // SnapshotKey returns the snapshot for a single key. ok=false when no
@@ -395,21 +466,39 @@ func (q *Quality) SnapshotAll() []QualityCountersSnapshot {
 }
 
 // snapshotFromCounters projects raw counters into the percentage-
-// based snapshot shape. Zero-safe on TotalSpans=0 (returns 0.0% for
-// all three rates rather than NaN).
+// based snapshot shape. Zero-safe on every denominator (returns 0.0%
+// rather than NaN when the relevant denominator is zero) — the slice
+// 2 fields follow the same zero-safety pattern as the slice 1 fields.
 //
 // The caller holds q.mu.
 func snapshotFromCounters(key string, c *QualityCounters) QualityCountersSnapshot {
 	snap := QualityCountersSnapshot{
-		Key:         key,
-		TotalSpans:  c.TotalSpans,
-		WindowStart: c.WindowStart,
+		Key:                  key,
+		TotalSpans:           c.TotalSpans,
+		WindowStart:          c.WindowStart,
+		SpansWithTraceparent: c.SpansWithTraceparent,
+		ChildSpans:           c.ChildSpans,
 	}
 	if c.TotalSpans > 0 {
 		total := float64(c.TotalSpans)
 		snap.OrphanPct = float64(c.OrphanSpans) / total * 100
 		snap.MissingAttrPct = float64(c.MissingAttrSpans) / total * 100
 		snap.AttrMismatchPct = float64(c.AttrMismatchSpans) / total * 100
+	}
+	// Slice 2 §3.3: malformed_pct uses SpansWithTraceparent as
+	// denominator, not TotalSpans. A resource with 1000 spans,
+	// 200 carrying a traceparent, 8 malformed → pct = 4% (8/200),
+	// not 0.8% (8/1000). The latter would understate the rate of
+	// malformed-among-spans-that-claim-to-have-context.
+	if c.SpansWithTraceparent > 0 {
+		snap.MalformedTraceparentPct = float64(c.MalformedTraceparentSpans) / float64(c.SpansWithTraceparent) * 100
+	}
+	// Slice 2 §3.3: missing_on_child_pct uses ChildSpans as
+	// denominator, not TotalSpans. A root span without traceparent
+	// is correctly-rooted, not missing-on-child, so it shouldn't
+	// land in this rate's denominator.
+	if c.ChildSpans > 0 {
+		snap.MissingTraceparentOnChildPct = float64(c.MissingTraceparentOnChildSpans) / float64(c.ChildSpans) * 100
 	}
 	return snap
 }
