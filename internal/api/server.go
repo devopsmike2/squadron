@@ -203,6 +203,18 @@ type Server struct {
 	discoveryServerlessColdStartHandler   *handlers.DiscoveryServerlessColdStartHandlers
 	coldStartHandlerOnce                  sync.Once
 	coldStartObservationReader            handlers.ColdStartObservationReader
+
+	// discoveryServerlessSamplingHandler — v0.89.123 (#763 Stream 161,
+	// Sampling rate analysis slice 1 chunk 2). Per-resource sampling
+	// endpoint handler. Built lazily by
+	// discoveryServerlessSamplingTrampoline the first time the route
+	// is hit; nil lookup OR nil detector at construction time
+	// short-circuits to 404. Same degrade-when-substrate-not-wired
+	// posture as the cold-start handler from v0.89.114.
+	discoveryServerlessSamplingHandler *handlers.DiscoveryServerlessSamplingHandlers
+	samplingHandlerOnce                sync.Once
+	samplingResourceLookup             handlers.SamplingResourceLookup
+	samplingDetector                   handlers.SamplingDetector
 	qualitySnapshotIndexForDiscovery   handlers.QualitySnapshotIndex
 	resourceKeyProjectorForDiscovery   handlers.ResourceKeyProjector
 	// traceIndexLookupForDiscovery — v0.89.77 (#708 Stream 106,
@@ -1324,6 +1336,43 @@ func (s *Server) SetColdStartObservationReader(reader handlers.ColdStartObservat
 	s.coldStartObservationReader = reader
 }
 
+// discoveryServerlessSamplingTrampoline — v0.89.123 (#763 Stream 161,
+// Sampling rate analysis slice 1 chunk 2). Mirrors the cold-start
+// trampoline from v0.89.114: builds the per-resource sampling
+// handler once on first request and reuses thereafter. Nil lookup
+// OR nil detector at construction time means the handler returns
+// 404 unconditionally — matching the "no sampling observations
+// recorded for resource" 404 the handler would emit for any
+// specific resource that hasn't been observed yet.
+func (s *Server) discoveryServerlessSamplingTrampoline(fn func(*handlers.DiscoveryServerlessSamplingHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.samplingHandlerOnce.Do(func() {
+			s.discoveryServerlessSamplingHandler = handlers.NewDiscoveryServerlessSamplingHandlers(
+				s.samplingResourceLookup,
+				s.samplingDetector,
+				s.logger,
+			)
+		})
+		fn(s.discoveryServerlessSamplingHandler, c)
+	}
+}
+
+// SetSamplingResourceLookup — v0.89.123 (#763 Stream 161). Wires
+// the per-cloud serverless inventory lookup into the Server.
+// Mirrors SetColdStartObservationReader posture — production
+// calls this after the inventory adapter is constructed; tests
+// pass nil to exercise the unwired 404 path.
+func (s *Server) SetSamplingResourceLookup(lookup handlers.SamplingResourceLookup) {
+	s.samplingResourceLookup = lookup
+}
+
+// SetSamplingDetector — v0.89.123. Wires the per-cloud sampling
+// detector (closure holding MetricQuerier + traceindex Quality)
+// into the Server. Same posture as SetSamplingResourceLookup.
+func (s *Server) SetSamplingDetector(detector handlers.SamplingDetector) {
+	s.samplingDetector = detector
+}
+
 // discoveryAcceptedAssemblerAdapter — v0.89.28 (#643 slice 1) —
 // resolves the (account_id, region) scope to a per-connection lookup
 // by iterating the iacconnstore.Store. The discovery handler doesn't
@@ -2439,6 +2488,19 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/:provider/inventory/serverless/:id/cold_start",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryServerlessColdStartTrampoline(func(h *handlers.DiscoveryServerlessColdStartHandlers, c *gin.Context) { h.HandleColdStart(c) }))
+
+		// v0.89.123 (#763 Stream 161, Sampling rate analysis slice 1
+		// chunk 2) — per-resource sampling endpoint. Returns the
+		// composed observed_span_count / expected_invocation_count
+		// ratio + would_fire shape per design doc §6.1. Same
+		// ScopeAgentsRead gate as the cold-start sibling. 404 when no
+		// observations exist yet for the resource (matching the
+		// cold-start posture). The kind segment is fixed at
+		// "serverless" — chunk 3 may extend to other kinds in future
+		// slices without a breaking URL change.
+		v1.GET("/discovery/:provider/inventory/serverless/:id/sampling",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryServerlessSamplingTrampoline(func(h *handlers.DiscoveryServerlessSamplingHandlers, c *gin.Context) { h.HandleSampling(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
