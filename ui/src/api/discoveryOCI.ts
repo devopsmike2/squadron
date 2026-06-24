@@ -222,6 +222,23 @@ export interface ClusterSnapshot {
   last_seen_at?: string;
 }
 
+// ServerlessRow mirrors scanner.ServerlessInstanceSnapshot. Serverless
+// tier slice 1 chunk 5 (v0.89.92, #725 Stream 123). On OCI the
+// surface is always "ocifunc".
+export interface ServerlessRow {
+  provider: "aws" | "gcp" | "azure" | "oci";
+  surface: "lambda" | "cloudrun" | "cloudfunc" | "azfunc" | "ocifunc";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn: string;
+  runtime?: string;
+  has_trace_axis: boolean;
+  has_otel_distro: boolean;
+  last_seen_at?: string;
+  detail?: Record<string, unknown>;
+}
+
 // ScanOCIResponse mirrors ociScanResponse on the wire. Unlike the
 // Azure response which carries subscription_id + location, the OCI
 // response carries tenancy_ocid + region — the OCI substrate scopes
@@ -256,6 +273,10 @@ export interface ScanOCIResponse {
   computes: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
+  // serverless — serverless tier slice 1 chunk 5 (v0.89.92, #725
+  // Stream 123). OCI Functions inventory from the chunk 4 OCI
+  // scanner extension. Optional on the wire.
+  serverless?: ServerlessRow[];
   scan_id: string;
 }
 
@@ -272,6 +293,7 @@ interface scanOCIConnectionWireResponse {
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
+  serverless?: ServerlessRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;
@@ -300,6 +322,7 @@ export async function scanOCIConnection(
     computes,
     databases: wire.databases,
     clusters: wire.clusters,
+    serverless: wire.serverless,
     scan_id: wire.scan_id,
   };
 }

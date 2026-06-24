@@ -224,6 +224,24 @@ export interface ClusterSnapshot {
   last_seen_at?: string;
 }
 
+// ServerlessRow mirrors scanner.ServerlessInstanceSnapshot. Serverless
+// tier slice 1 chunk 5 (v0.89.92, #725 Stream 123). On Azure the
+// surface is always "azfunc"; the field is part of the shared row
+// shape so cross-cloud helpers can reuse the discriminator.
+export interface ServerlessRow {
+  provider: "aws" | "gcp" | "azure" | "oci";
+  surface: "lambda" | "cloudrun" | "cloudfunc" | "azfunc" | "ocifunc";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn: string;
+  runtime?: string;
+  has_trace_axis: boolean;
+  has_otel_distro: boolean;
+  last_seen_at?: string;
+  detail?: Record<string, unknown>;
+}
+
 // ScanAzureResponse mirrors azureScanResponse on the wire. The
 // handler emits instance_count, instrumented_count, uninstrumented_count
 // directly so the UI doesn't have to derive them — symmetric with the
@@ -248,6 +266,11 @@ export interface ScanAzureResponse {
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
+  // serverless — serverless tier slice 1 chunk 5 (v0.89.92, #725
+  // Stream 123). Azure Functions inventory from the chunk 3 Azure
+  // scanner extension. Optional on the wire; the Inventory tab's
+  // Serverless sub-tab treats undefined as empty.
+  serverless?: ServerlessRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

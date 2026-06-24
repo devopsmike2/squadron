@@ -60,6 +60,7 @@ import {
   type GenerateRecommendationsResponse,
   type RowSpanQuality,
   type ScanResult,
+  type ServerlessRow,
 } from "@/api/discovery";
 import {
   IaCGitHubOpenPRError,
@@ -1253,6 +1254,10 @@ function ScanResultPanel({
 
       {/* Clusters section (slice 3b — v0.89.0) */}
       <ClustersSection clusters={result.clusters ?? []} />
+
+      {/* Serverless section (serverless tier slice 1 chunk 5 —
+          v0.89.92, #725 Stream 123). */}
+      <ServerlessSection serverless={result.serverless ?? []} />
     </div>
   );
 }
@@ -1758,6 +1763,125 @@ function ClustersSection({
         </CardContent>
       )}
     </Card>
+  );
+}
+
+// ServerlessSection — serverless tier slice 1 chunk 5 (v0.89.92, #725
+// Stream 123). Renders the per-row Lambda inventory the chunk 1 AWS
+// Lambda scanner produced. The columns follow §7 of the design doc:
+// Resource Name, Surface, Runtime, Region, Trace axis (X-Ray active?),
+// OTel distro (ADOT layer / wrapper detected?), Last seen, and the
+// span-quality dot from v0.89.87. The section collapses when empty
+// (same pattern as the other AWS sections) so an account with no
+// Lambda still gets a header but no row noise.
+function ServerlessSection({
+  serverless,
+}: {
+  serverless: ServerlessRow[];
+}) {
+  const [open, setOpen] = useState(serverless.length > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+        >
+          <CardTitle className="text-base">
+            Serverless ({serverless.length})
+          </CardTitle>
+          {open ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {serverless.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No serverless functions visible in the scanned regions.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40">
+                  <tr className="text-left">
+                    <th className="px-3 py-2 font-medium">Resource Name</th>
+                    <th className="px-3 py-2 font-medium">Surface</th>
+                    <th className="px-3 py-2 font-medium">Runtime</th>
+                    <th className="px-3 py-2 font-medium">Region</th>
+                    <th className="px-3 py-2 font-medium">Trace axis</th>
+                    <th className="px-3 py-2 font-medium">OTel distro</th>
+                    <th className="px-3 py-2 font-medium">Last seen</th>
+                    <th className="px-3 py-2 font-medium">Quality</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {serverless.map((s) => (
+                    <tr key={s.resource_arn || s.resource_name} className="border-t">
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {s.resource_name}
+                      </td>
+                      <td className="px-3 py-2 text-xs">{s.surface}</td>
+                      <td className="px-3 py-2 text-xs">{s.runtime || "-"}</td>
+                      <td className="px-3 py-2 text-xs">{s.region}</td>
+                      <td className="px-3 py-2 text-xs">
+                        <AxisCheck ok={s.has_trace_axis} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <AxisCheck ok={s.has_otel_distro} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <LastSeenCell value={s.last_seen_at} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <QualityDot quality={s.span_quality} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// AxisCheck — serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream
+// 123). A minimal check / cross indicator for the two per-row
+// serverless observability axes (Trace axis, OTel distro). Kept
+// alongside ServerlessSection so the visual vocabulary is co-located
+// with the table that consumes it.
+function AxisCheck({ ok }: { ok: boolean }) {
+  if (ok) {
+    return (
+      <span
+        className="text-emerald-600"
+        title="enabled"
+        aria-label="enabled"
+        data-testid="axis-check"
+        data-value="yes"
+      >
+        ✓
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-muted-foreground"
+      title="disabled"
+      aria-label="disabled"
+      data-testid="axis-check"
+      data-value="no"
+    >
+      ✗
+    </span>
   );
 }
 

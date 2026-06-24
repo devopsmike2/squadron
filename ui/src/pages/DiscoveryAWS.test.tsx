@@ -2278,4 +2278,99 @@ describe("DiscoveryAWSPage", () => {
     expect(tip).toContain("Missing attrs 8.1%");
     expect(tip).toContain("Mismatch 1.7%");
   });
+
+  // Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+  // the Inventory tab gains a ServerlessSection rendering the Lambda
+  // inventory from the v0.89.90 scanner extension. The Surface column
+  // shows "lambda" per row; Trace axis + OTel distro render as
+  // check/cross. Empty data renders "No serverless functions" copy.
+  it("TestDiscoveryAWS_Inventory_ServerlessSection_RendersTable", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "hello",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:hello",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    // The Lambda row's resource name renders; surface column reads
+    // "lambda". The trace axis cell renders a ✓ via AxisCheck.
+    expect(
+      screen.getByText("hello", { selector: "td" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("lambda")).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAWS_Inventory_ServerlessSection_EmptyState", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue(sampleScan);
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(0\)/i)).toBeInTheDocument();
+    });
+    // Expand the collapsed section (sections default to closed when
+    // empty in the AWS page's section pattern, mirroring the existing
+    // Functions / Databases sections).
+    await user.click(screen.getByRole("button", { name: /Serverless \(0\)/i }));
+    expect(
+      screen.getByText(/No serverless functions visible in the scanned regions/i),
+    ).toBeInTheDocument();
+  });
 });

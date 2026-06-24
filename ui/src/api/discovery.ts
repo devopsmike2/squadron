@@ -276,6 +276,46 @@ export interface ClusterSnapshot {
   span_quality?: RowSpanQuality;
 }
 
+// ServerlessRow — serverless tier slice 1 chunk 5 (v0.89.92, #725
+// Stream 123). Mirrors scanner.ServerlessInstanceSnapshot. The
+// per-provider Inventory tab's Serverless sub-tab renders one row per
+// entry with the universal columns documented in
+// docs/proposals/serverless-tier-slice1.md §7:
+//
+//   - resource_name + surface + runtime + region
+//   - has_trace_axis as a check / cross (the cloud-native trace
+//     primitive — X-Ray for Lambda, Cloud Trace for Cloud Run /
+//     Functions, App Insights for Azure, APM for OCI)
+//   - has_otel_distro as a check / cross (the OpenTelemetry
+//     distribution / layer / sidecar / wrapper)
+//   - last_seen_at as a relative-time column (per the v0.89.77 column
+//     pattern); undefined when traces have never been seen
+//   - span_quality as a QualityDot (per the v0.89.87 column pattern)
+//
+// surface is one of "lambda" | "cloudrun" | "cloudfunc" | "azfunc" |
+// "ocifunc". GCP rows can be either cloudrun OR cloudfunc; AWS / Azure
+// / OCI rows are always a single surface per provider.
+export interface ServerlessRow {
+  provider: "aws" | "gcp" | "azure" | "oci";
+  surface: "lambda" | "cloudrun" | "cloudfunc" | "azfunc" | "ocifunc";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn: string;
+  runtime?: string;
+  has_trace_axis: boolean;
+  has_otel_distro: boolean;
+  // last_seen_at — joined from the traceindex (v0.89.77). Undefined
+  // when no spans have been observed; the table renders "never".
+  last_seen_at?: string;
+  // span_quality — span quality slice 1 chunk 3 (v0.89.87). See
+  // RowSpanQuality godoc. Undefined renders the QualityDot gray.
+  span_quality?: RowSpanQuality;
+  // detail — surface-specific bag. Slice 1 surfaces it as raw JSON in
+  // the row's drill-down tooltip; not rendered in the columns.
+  detail?: Record<string, unknown>;
+}
+
 // ScanResult is the typed payload the scan endpoint returns. Mirrors
 // scanner.Result via the marshalScanResult wire shape on the Go side.
 // scan_started_at / scan_completed_at are ISO-8601 strings; partial
@@ -303,6 +343,13 @@ export interface ScanResult {
   // clusters joins the wire shape in slice 3b (v0.89.0). Same
   // non-optional posture as the other category arrays.
   clusters: ClusterSnapshot[];
+  // serverless — serverless tier slice 1 chunk 5 (v0.89.92, #725
+  // Stream 123). The per-provider Inventory tab's Serverless sub-tab
+  // reads from this field; empty array on cold start and on
+  // deployments scanning before the v0.89.90 scanner extension. The
+  // Go handler emits an array (never null) so the UI's empty-state
+  // branch is a single `.length === 0` check.
+  serverless?: ServerlessRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

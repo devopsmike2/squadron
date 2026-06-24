@@ -607,3 +607,89 @@ func TestTraceCoverage_PendingTraceEmissionCount_AcrossProvidersAggregates(t *te
 		t.Errorf("cross-provider pending sum = %d, want %d", got, want)
 	}
 }
+
+// --- Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) ----
+//
+// stubServerlessQuery returns canned (inventory, emitting) counts per
+// (provider, scope) pair. Mirrors stubPendingQuery's shape; the
+// production query performs the actual serverless_instance table walk
+// and the per-row last_seen_at < 24h check.
+
+type stubServerlessQuery struct {
+	mu        sync.Mutex
+	inventory map[string]int // key: provider + "|" + scope
+	emitting  map[string]int // key: provider + "|" + scope
+	err       error
+	calls     int64
+}
+
+func (s *stubServerlessQuery) ServerlessCoverageForScope(_ context.Context, provider, scopeID string, _ time.Duration) (inv, emit int, err error) {
+	atomic.AddInt64(&s.calls, 1)
+	if s.err != nil {
+		return 0, 0, s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := provider + "|" + scopeID
+	return s.inventory[key], s.emitting[key], nil
+}
+
+// TestTraceCoverage_IncludesServerlessPct — §11 acceptance test 12.
+// Seeding the serverless coverage query with 2 inventory + 1 emitting
+// for one scope must surface ServerlessPct=50.0 on the matching
+// ProviderTraceCoverage.
+func TestTraceCoverage_IncludesServerlessPct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+	srv := &stubServerlessQuery{
+		inventory: map[string]int{"aws|acct-1": 2},
+		emitting:  map[string]int{"aws|acct-1": 1},
+	}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil).
+		WithServerlessQuery(srv)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].ServerlessPct, 50.0; got != want {
+		t.Errorf("aws.serverless_pct = %v, want %v", got, want)
+	}
+	// Other providers (with no serverless query data for those scopes,
+	// AND those provider stores nil) stay at 0 — cold-start posture.
+	if got := r.Providers["gcp"].ServerlessPct; got != 0 {
+		t.Errorf("gcp.serverless_pct = %v, want 0", got)
+	}
+}
+
+// TestTraceCoverage_ServerlessPct_ZeroOnColdStart — when the
+// ServerlessCoverageQuery is nil (deployments that haven't wired the
+// new substrate), every provider's ServerlessPct stays 0 and the
+// response shape carries the field unconditionally. Pins the
+// nil-tolerant posture documented on the WithServerlessQuery setter.
+func TestTraceCoverage_ServerlessPct_ZeroOnColdStart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+
+	// No WithServerlessQuery call — nil serverlessQuery on the handler.
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got := r.Providers["aws"].ServerlessPct; got != 0 {
+		t.Errorf("aws.serverless_pct = %v, want 0 (no serverless query wired)", got)
+	}
+}

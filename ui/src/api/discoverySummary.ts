@@ -36,6 +36,15 @@ export type ProviderSummary = {
   instrumented_count: number;
   uninstrumented_count: number;
   recommendation_count: number;
+  // serverless_count — serverless tier slice 1 chunk 5 (v0.89.92,
+  // #725 Stream 123). Per-provider count of serverless functions /
+  // services the most recent scan_completed event surfaced. Zero on
+  // cold start and on deployments that haven't yet observed a
+  // scan_completed audit row carrying the serverless_count payload
+  // field; the dashboard's per-provider card shows the count
+  // unconditionally so an operator sees "0" instead of an absent
+  // chip when the tier is wired but empty.
+  serverless_count: number;
   enabled: boolean;
 };
 
@@ -51,6 +60,10 @@ export type SummaryTotals = {
   instrumented_count: number;
   uninstrumented_count: number;
   recommendation_count: number;
+  // serverless_count — serverless tier slice 1 chunk 5 (v0.89.92,
+  // #725 Stream 123). Cross-provider sum of ProviderSummary
+  // serverless_count.
+  serverless_count: number;
   coverage_pct: number;
 };
 

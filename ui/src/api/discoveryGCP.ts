@@ -215,6 +215,28 @@ export interface ClusterSnapshot {
   last_seen_at?: string;
 }
 
+// ServerlessRow mirrors scanner.ServerlessInstanceSnapshot — the
+// shared cross-cloud serverless row shape. Serverless tier slice 1
+// chunk 5 (v0.89.92, #725 Stream 123). Surface is one of "cloudrun" or
+// "cloudfunc" on GCP; AWS / Azure / OCI per-cloud helpers reuse this
+// same shape with their own surface values. has_trace_axis is the
+// cloud-native trace primitive (Cloud Trace annotation / env for GCP);
+// has_otel_distro is the OpenTelemetry distribution / sidecar / layer.
+export interface ServerlessRow {
+  provider: "aws" | "gcp" | "azure" | "oci";
+  surface: "lambda" | "cloudrun" | "cloudfunc" | "azfunc" | "ocifunc";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn: string;
+  runtime?: string;
+  has_trace_axis: boolean;
+  has_otel_distro: boolean;
+  // last_seen_at — v0.89.77 trace integration slice 1 chunk 4.
+  last_seen_at?: string;
+  detail?: Record<string, unknown>;
+}
+
 // ScanGCPResponse mirrors gcpScanResponse on the wire. Note that
 // unlike the AWS ScanResult there is no top-level instance_count —
 // the page computes it client-side as compute.length. Same posture
@@ -239,6 +261,12 @@ export interface ScanGCPResponse {
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
+  // serverless — serverless tier slice 1 chunk 5 (v0.89.92, #725
+  // Stream 123). Cloud Run + Cloud Functions inventory from the
+  // chunk 2 GCP scanner extension. Optional on the wire (omitempty
+  // Go JSON tag); the Inventory tab's Serverless sub-tab treats
+  // undefined as empty.
+  serverless?: ServerlessRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

@@ -762,6 +762,90 @@ describe("DiscoveryOCI", () => {
     ).toBeInTheDocument();
   });
 
+  // Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+  // Inventory tab gains a Serverless sub-tab rendering the OCI
+  // Functions inventory from the chunk 4 scanner extension.
+  it("TestDiscoveryOCI_InventoryTab_ServerlessSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "oci",
+          surface: "ocifunc",
+          account_id: "ocid1.tenancy.oc1..aaaaaaaa",
+          region: "us-phoenix-1",
+          resource_name: "img-resize",
+          resource_arn: "ocid1.fnfunc.oc1.phx.aaaaaaaa",
+          runtime: "node20",
+          has_trace_axis: true,
+          has_otel_distro: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(serverlessTab).toHaveAttribute("data-state", "active");
+    expect(screen.getByText("img-resize")).toBeInTheDocument();
+    expect(screen.getByText("ocifunc")).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryOCI_InventoryTab_ServerlessSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(
+      screen.getByText(/No serverless functions discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // selectRegion picks the canonical test region from the Radix

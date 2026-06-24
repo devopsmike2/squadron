@@ -30,6 +30,16 @@ import (
 // instance * 100 (zero-safe, rounded to one decimal).
 
 // ProviderSummary is the per-provider aggregate.
+//
+// ServerlessCount — serverless tier slice 1 chunk 5 (v0.89.92,
+// #725 Stream 123) — counts the serverless inventory rows the most
+// recent scan_completed event surfaced for this provider. Mirrors the
+// existing instance_count rollup pattern but at the per-tier
+// granularity per docs/proposals/serverless-tier-slice1.md §6.3.
+// Zero on cold start and on deployments that haven't yet observed a
+// scan_completed audit row carrying the serverless_count field — the
+// audit projection treats the field as optional so older scans don't
+// regress.
 type ProviderSummary struct {
 	ConnectionCount     int        `json:"connection_count"`
 	LastScanAt          *time.Time `json:"last_scan_at,omitempty"`
@@ -37,16 +47,22 @@ type ProviderSummary struct {
 	InstrumentedCount   int        `json:"instrumented_count"`
 	UninstrumentedCount int        `json:"uninstrumented_count"`
 	RecommendationCount int        `json:"recommendation_count"`
+	ServerlessCount     int        `json:"serverless_count"`
 	Enabled             bool       `json:"enabled"`
 }
 
 // SummaryTotals is the cross-provider roll-up.
+//
+// ServerlessCount — serverless tier slice 1 chunk 5 (v0.89.92,
+// #725 Stream 123) — cross-provider sum of ProviderSummary
+// ServerlessCount. Zero on cold start.
 type SummaryTotals struct {
 	ConnectionCount     int     `json:"connection_count"`
 	InstanceCount       int     `json:"instance_count"`
 	InstrumentedCount   int     `json:"instrumented_count"`
 	UninstrumentedCount int     `json:"uninstrumented_count"`
 	RecommendationCount int     `json:"recommendation_count"`
+	ServerlessCount     int     `json:"serverless_count"`
 	CoveragePct         float64 `json:"coverage_pct"`
 }
 
@@ -111,6 +127,12 @@ type ScanSummary struct {
 	InstanceCount       int
 	InstrumentedCount   int
 	UninstrumentedCount int
+	// ServerlessCount — serverless tier slice 1 chunk 5 (v0.89.92,
+	// #725 Stream 123) — projects the optional serverless_count
+	// payload field from scan_completed audit rows. Zero on older
+	// scans that pre-date the serverless tier; the summary handler
+	// surfaces zero in that case without a separate cold-start branch.
+	ServerlessCount int
 }
 
 // ProposalEvent is one row from discovery_proposal.created projected
@@ -355,6 +377,8 @@ func (h *DiscoverySummaryHandlers) aggregate(ctx context.Context) *SummaryRespon
 		resp.Totals.InstrumentedCount += p.InstrumentedCount
 		resp.Totals.UninstrumentedCount += p.UninstrumentedCount
 		resp.Totals.RecommendationCount += p.RecommendationCount
+		// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123).
+		resp.Totals.ServerlessCount += p.ServerlessCount
 	}
 	resp.Totals.CoveragePct = computeCoveragePct(resp.Totals.InstrumentedCount, resp.Totals.InstanceCount)
 
@@ -424,6 +448,9 @@ func (h *DiscoverySummaryHandlers) aggregateProvider(
 		ps.InstanceCount += s.InstanceCount
 		ps.InstrumentedCount += s.InstrumentedCount
 		ps.UninstrumentedCount += s.UninstrumentedCount
+		// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+		// roll up the optional per-scan serverless_count projection.
+		ps.ServerlessCount += s.ServerlessCount
 		if latest == nil || s.CompletedAt.After(*latest) {
 			t := s.CompletedAt
 			latest = &t

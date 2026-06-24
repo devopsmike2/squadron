@@ -2498,3 +2498,220 @@ func TestWebhook_PreExistingKinds_StillRouteCorrectly(t *testing.T) {
 		})
 	}
 }
+
+// --- Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) ----
+//
+// The four routing tests below pin the §11 acceptance tests 14-17:
+//   14. webhook routes lambda-xray-active to provider=aws
+//   15. webhook routes cloudrun-otel-sidecar to provider=gcp
+//   16. webhook routes azfunc-appinsights-enable to provider=azure
+//   17. webhook routes ocifunc-apm-enable to provider=oci
+//
+// Plus a kind-prefix dispatch table extension test asserting that the
+// 11 new serverless kinds route to the expected provider AND the prior
+// tiers (slice 1, database tier, k8s tier, trace-emission) remain
+// green.
+
+// TestWebhook_LambdaXrayActiveKind_RoutesToAWS — §11 acceptance test 14.
+func TestWebhook_LambdaXrayActiveKind_RoutesToAWS(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/lambda-xray-active/123456789012/us-east-1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "lambda-xray-active" {
+		t.Errorf("payload.recommendation_kind = %v, want lambda-xray-active", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "aws" {
+		t.Errorf("payload.provider = %v, want aws", pay["provider"])
+	}
+	if pay["account_id"] != "123456789012" {
+		t.Errorf("payload.account_id = %v, want 123456789012", pay["account_id"])
+	}
+	if pay["region"] != "us-east-1" {
+		t.Errorf("payload.region = %v, want us-east-1", pay["region"])
+	}
+}
+
+// TestWebhook_CloudRunOTelSidecarKind_RoutesToGCP — §11 acceptance test 15.
+func TestWebhook_CloudRunOTelSidecarKind_RoutesToGCP(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/cloudrun-otel-sidecar/my-prod-project/us-central1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "cloudrun-otel-sidecar" {
+		t.Errorf("payload.recommendation_kind = %v, want cloudrun-otel-sidecar", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "gcp" {
+		t.Errorf("payload.provider = %v, want gcp", pay["provider"])
+	}
+	if pay["project_id"] != "my-prod-project" {
+		t.Errorf("payload.project_id = %v, want my-prod-project", pay["project_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["region"] != "us-central1" {
+		t.Errorf("payload.region = %v, want us-central1", pay["region"])
+	}
+}
+
+// TestWebhook_AzFuncAppInsightsKind_RoutesToAzure — §11 acceptance test 16.
+func TestWebhook_AzFuncAppInsightsKind_RoutesToAzure(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/azfunc-appinsights-enable/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/eastus/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "azfunc-appinsights-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want azfunc-appinsights-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "azure" {
+		t.Errorf("payload.provider = %v, want azure", pay["provider"])
+	}
+	if pay["subscription_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Errorf("payload.subscription_id = %v, want aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pay["subscription_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+	if pay["region"] != "eastus" {
+		t.Errorf("payload.region = %v, want eastus", pay["region"])
+	}
+}
+
+// TestWebhook_OCIFuncAPMKind_RoutesToOCI — §11 acceptance test 17.
+func TestWebhook_OCIFuncAPMKind_RoutesToOCI(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/ocifunc-apm-enable/ocid1.tenancy.oc1..aaaaaaaa/us-phoenix-1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "ocifunc-apm-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want ocifunc-apm-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "oci" {
+		t.Errorf("payload.provider = %v, want oci", pay["provider"])
+	}
+	if pay["tenancy_ocid"] != "ocid1.tenancy.oc1..aaaaaaaa" {
+		t.Errorf("payload.tenancy_ocid = %v, want ocid1.tenancy.oc1..aaaaaaaa", pay["tenancy_ocid"])
+	}
+}
+
+// TestProviderFromRecommendationKind_ServerlessTierExtension — pins
+// the dispatch table for the 11 new serverless kinds and reasserts the
+// prior-tier routing remains green. Boundary cases ("lambda" / "azfunc"
+// / "ocifunc" / "cloudrun" / "cloudfunc" alone, no trailing hyphen)
+// fall through to the default (aws) because the substrate requires the
+// literal hyphenated prefix.
+func TestProviderFromRecommendationKind_ServerlessTierExtension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		// AWS Lambda — three new kinds.
+		{kind: "lambda-xray-active", want: "aws"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		{kind: "lambda-otel-wrapper", want: "aws"},
+		// GCP Cloud Run — three new kinds.
+		{kind: "cloudrun-trace-enable", want: "gcp"},
+		{kind: "cloudrun-otel-sidecar", want: "gcp"},
+		{kind: "cloudrun-otel-export-endpoint", want: "gcp"},
+		// GCP Cloud Functions — two new kinds.
+		{kind: "cloudfunc-trace-enable", want: "gcp"},
+		{kind: "cloudfunc-otel-layer", want: "gcp"},
+		// Azure Functions — two new kinds.
+		{kind: "azfunc-appinsights-enable", want: "azure"},
+		{kind: "azfunc-otel-distro", want: "azure"},
+		// OCI Functions — two new kinds.
+		{kind: "ocifunc-apm-enable", want: "oci"},
+		{kind: "ocifunc-otel-distro", want: "oci"},
+		// Prior tiers — must stay green.
+		{kind: "gce-otel-label", want: "gcp"},
+		{kind: "vm-otel-tag", want: "azure"},
+		{kind: "compute-otel-tag", want: "oci"},
+		{kind: "cloudsql-pi-enable", want: "gcp"},
+		{kind: "azsql-diag-enable", want: "azure"},
+		{kind: "ocidb-perfhub-enable", want: "oci"},
+		{kind: "gke-mp-enable", want: "gcp"},
+		{kind: "aks-monitor-enable", want: "azure"},
+		{kind: "oke-ops-insights-enable", want: "oci"},
+		// Boundary cases — bare keywords without the trailing hyphen
+		// fall through to AWS.
+		{kind: "lambda", want: "aws"},
+		{kind: "cloudrun", want: "aws"},
+		{kind: "cloudfunc", want: "aws"},
+		{kind: "azfunc", want: "aws"},
+		{kind: "ocifunc", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}

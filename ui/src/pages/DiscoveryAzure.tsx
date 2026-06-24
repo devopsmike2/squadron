@@ -56,6 +56,7 @@ import {
   type ComputeInstanceSnapshot,
   type DatabaseInstanceSnapshot,
   type ScanAzureResponse,
+  type ServerlessRow,
   type ValidateAzureResponse,
 } from "@/api/discoveryAzure";
 import { Badge } from "@/components/ui/badge";
@@ -110,6 +111,10 @@ const RECS_TAB = "recommendations";
 const INVENTORY_SUBTAB_COMPUTE = "compute";
 const INVENTORY_SUBTAB_DATABASES = "databases";
 const INVENTORY_SUBTAB_KUBERNETES = "kubernetes";
+// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+// fourth Inventory sub-tab carrying Azure Functions rows from the
+// chunk 3 scanner extension. Same opt-in posture as the others.
+const INVENTORY_SUBTAB_SERVERLESS = "serverless";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1104,6 +1109,9 @@ function InventoryTab({
           <TabsTrigger value={INVENTORY_SUBTAB_KUBERNETES}>
             Kubernetes
           </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_SERVERLESS}>
+            Serverless
+          </TabsTrigger>
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
           <InventoryTable rows={scan.compute} />
@@ -1113,6 +1121,9 @@ function InventoryTab({
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_KUBERNETES} className="mt-3">
           <ClusterInventoryTable rows={scan.clusters ?? []} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_SERVERLESS} className="mt-3">
+          <ServerlessInventoryTable rows={scan.serverless ?? []} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1323,6 +1334,80 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
                   : Object.entries(row.tags ?? {})
                       .map(([k, v]) => `${k}=${v}`)
                       .join(", ")}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ServerlessInventoryTable — serverless tier slice 1 chunk 5
+// (v0.89.92, #725 Stream 123). Renders the per-row Azure Functions
+// inventory the chunk 3 Azure scanner extension produced. Same column
+// shape as the GCP / OCI Serverless sub-tabs: Resource Name, Surface
+// (always "azfunc" on Azure), Runtime, Region, Trace axis (App
+// Insights connection string set?), OTel distro (OTEL_DOTNET_AUTO_HOME
+// / OTEL_PYTHON_DISTRO set?), Last seen.
+function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
+        No serverless functions discovered. Run a scan to refresh.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Resource Name</th>
+            <th className="px-3 py-2 font-medium">Surface</th>
+            <th className="px-3 py-2 font-medium">Runtime</th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">Trace axis</th>
+            <th className="px-3 py-2 font-medium">OTel distro</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.resource_arn || row.resource_name}
+              className="border-t"
+            >
+              <td className="px-3 py-2 font-mono text-xs">
+                {row.resource_name}
+              </td>
+              <td className="px-3 py-2 text-xs">{row.surface}</td>
+              <td className="px-3 py-2 text-xs">{row.runtime || "-"}</td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.has_trace_axis ? (
+                  <Badge variant="outline" className="text-emerald-600">
+                    Yes
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    No
+                  </Badge>
+                )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                {row.has_otel_distro ? (
+                  <Badge variant="outline" className="text-emerald-600">
+                    Yes
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    No
+                  </Badge>
+                )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
               </td>
             </tr>
           ))}
