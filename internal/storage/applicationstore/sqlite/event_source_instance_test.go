@@ -236,23 +236,53 @@ func TestEventSourceInstance_RoundtripsPropagationNotes(t *testing.T) {
 	})
 }
 
-// TestEventSourceInstance_SchemaVersionStaysAtV13 — slice 2 chunk 1
-// contract: NO schema migration. The new HasPropagationConfig +
-// PropagationNotes fields sit inside the snapshot_json blob (see the
-// two roundtrip tests above); the SchemaVersion constant stays at 13.
-// This test pins the contract — if a future change accidentally bumps
-// the version for slice 2 chunk 1, this assertion catches it. The
+// TestEventSourceInstance_SchemaIsAdditiveJSON — slice 2 chunk 1
+// contract (originally pinned the SchemaVersion to 13): the
+// HasPropagationConfig + PropagationNotes fields sit inside the
+// snapshot_json blob (see the two roundtrip tests above); the
 // table-level event_source_instance schema is left unchanged from
-// v0.89.100; ListEventSourceInstances continues to return the same
+// v0.89.100. ListEventSourceInstances continues to return the same
 // column set.
-func TestEventSourceInstance_SchemaVersionStaysAtV13(t *testing.T) {
-	assert.Equal(t, 13, SchemaVersion,
-		"slice 2 chunk 1 must NOT bump SchemaVersion; new fields are additive JSON only")
-	// The Migrations slice (migrations.go) tops out at the v13
-	// migration; slice 2 chunk 1 must not append a v14 entry.
-	if got := len(Migrations); got != 13 {
-		t.Errorf("Migrations length = %d, want 13 (slice 2 chunk 1 must NOT append v14)", got)
-	}
+//
+// The original assertion pinned SchemaVersion==13. v0.89.113 (#751
+// Stream 149, cold-start latency slice 1 chunk 1) bumped the schema
+// to 14 to add the cold_start_observation table — that bump is for a
+// different arc and does NOT alter the event_source_instance table
+// shape, so the additive-JSON contract for event source slice 2
+// chunk 1 still holds. The test now asserts the latter contract
+// directly (the column set on event_source_instance, NOT the global
+// version constant).
+func TestEventSourceInstance_SchemaIsAdditiveJSON(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		// PRAGMA table_info returns the column set; pin the names
+		// against the v0.89.100 (slice 1 chunk 1) shape.
+		rows, err := store.db.QueryContext(ctx, `PRAGMA table_info(event_source_instance)`)
+		require.NoError(t, err)
+		defer rows.Close()
+		var cols []string
+		for rows.Next() {
+			var (
+				cid     int
+				name    string
+				ctype   string
+				notnull int
+				dflt    *string
+				pk      int
+			)
+			require.NoError(t, rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk))
+			cols = append(cols, name)
+		}
+		want := []string{
+			"id", "connection_id", "scan_id", "provider", "surface",
+			"account_id", "region", "resource_name", "resource_arn",
+			"source_type", "has_trace_axis", "has_log_axis",
+			"last_seen_at", "snapshot_json", "created_at",
+		}
+		assert.Equal(t, want, cols,
+			"event_source_instance column set must match v0.89.100 (additive-JSON contract)")
+	})
 }
 
 // TestMigration_v12_to_v13_Idempotent — running the migration twice is a
