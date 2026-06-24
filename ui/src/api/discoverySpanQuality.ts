@@ -41,6 +41,15 @@ export type ProviderSpanQuality = {
   attr_mismatch_pct: number;
   malformed_traceparent_pct: number;
   missing_traceparent_on_child_pct: number;
+  // Sampling rate analysis slice 1 (v0.89.124, #764 Stream 162) —
+  // per-provider percentage of serverless resources whose latest
+  // sampling-rate detection result fires the
+  // span-quality-sampling-too-aggressive recommendation (ratio below
+  // the 5% floor AND invocation count at or above the 1000
+  // statistical minimum). Honest denominator: resources without
+  // sufficient invocations don't enter either side of the ratio. The
+  // backend reports 0 when no SamplingInventoryReader is wired.
+  sampling_too_aggressive_pct: number;
 };
 
 // SpanQualityTotals mirrors the Go SpanQualityTotals struct. Computed

@@ -90,6 +90,14 @@ const SPAN_QUALITY_KIND_MALFORMED_TRACEPARENT =
   "span-quality-traceparent-malformed";
 const SPAN_QUALITY_KIND_MISSING_TRACEPARENT =
   "span-quality-traceparent-missing";
+// Sampling rate analysis slice 1 chunk 3 (v0.89.124, #764 Stream 162)
+// — sixth column on the SPAN QUALITY panel. The kind constant matches
+// proposer.SamplingRateRecommendationKind so the per-provider
+// Recommendations tab's filter chip can read the deep-link hash and
+// pre-apply the filter. Reuses the existing span-quality- webhook
+// prefix from v0.89.86 — no new webhook routing.
+const SPAN_QUALITY_KIND_SAMPLING_TOO_AGGRESSIVE =
+  "span-quality-sampling-too-aggressive";
 
 // Threshold above which a provider's weak_match_pct triggers a caveat
 // icon next to its chip per design doc §6. 20% is the slice-1 floor —
@@ -803,17 +811,20 @@ function computeTierWeightedAverage(
 
 function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
   const t = quality.totals;
-  // §10 test 12 — hide entirely when all five percentages are zero.
-  // Slice 2 (v0.89.110) extends the zero-check to cover the two new
-  // W3C traceparent percentages: a clean fleet still has nothing to
-  // surface, but a fleet that's only missing traceparent attributes
-  // should still see the panel appear.
+  // §10 test 12 — hide entirely when all percentages are zero.
+  // Slice 2 (v0.89.110) extended the zero-check to cover the two W3C
+  // traceparent percentages. Sampling rate slice 1 chunk 3 (v0.89.124,
+  // #764 Stream 162) extends again to cover the sampling-too-
+  // aggressive percentage. A clean fleet still has nothing to
+  // surface; a fleet whose only issue is aggressive sampling now sees
+  // the panel appear with just the sixth column populated.
   if (
     t.orphan_pct === 0 &&
     t.missing_attr_pct === 0 &&
     t.attr_mismatch_pct === 0 &&
     t.malformed_traceparent_pct === 0 &&
-    t.missing_traceparent_on_child_pct === 0
+    t.missing_traceparent_on_child_pct === 0 &&
+    t.sampling_too_aggressive_pct === 0
   ) {
     return null;
   }
@@ -830,14 +841,20 @@ function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
           </p>
         </div>
       </div>
-      {/* Slice 2 (v0.89.110) grows the grid from 3 to 5 columns. On
-          narrow viewports the columns stack 1-up (grid-cols-1), then
-          jump to a 5-column grid at the sm breakpoint. The previous
-          sm:grid-cols-3 stop is removed — squeezing 5 numeric columns
-          into a ~640px breakpoint is tight but workable: each tile
-          renders the label / pct / count stacked, so a 128px column
-          is enough to read the 2.xl% headline. */}
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-5">
+      {/* Sampling rate slice 1 chunk 3 (v0.89.124) grows the grid from
+          5 to 6 columns. On narrow viewports the columns stack 1-up
+          (grid-cols-1), then jump to 2 at the sm breakpoint, then to
+          3 at the md breakpoint, then to the full 6-column row at the
+          lg breakpoint. Six numeric columns at the sm ~640px width
+          would compress the 2xl% headlines uncomfortably (each tile
+          would get ~100px — the "Sampling too aggressive" label
+          wraps on the longer labels at that width), so the lg
+          breakpoint at ~1024px is where the full 6-up row lands.
+          Below lg the labels stay legible at the cost of vertical
+          stacking. Documenting the wrapping behavior here per the
+          chunk 3 brief — the slice 2 sub-agent noted the same
+          compression posture when growing 3 → 5. */}
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         <SpanQualityColumn
           label="Orphan trace"
           pct={t.orphan_pct}
@@ -887,6 +904,24 @@ function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
           )}
           kind={SPAN_QUALITY_KIND_MISSING_TRACEPARENT}
           testIdSuffix="missing-traceparent"
+        />
+        {/* Sampling rate slice 1 chunk 3 (v0.89.124, #764 Stream 162)
+            — sixth column. Deep-links to the per-provider
+            Recommendations tab with the
+            span-quality-sampling-too-aggressive kind seeded, mirroring
+            the existing five columns' AWS-target deep-link pattern.
+            The count below the percentage uses the same per-provider
+            walk: how many providers reported a non-zero sampling
+            percentage. */}
+        <SpanQualityColumn
+          label="Sampling too aggressive"
+          pct={t.sampling_too_aggressive_pct}
+          count={countResourcesWith(
+            quality.providers,
+            (p) => p.sampling_too_aggressive_pct > 0,
+          )}
+          kind={SPAN_QUALITY_KIND_SAMPLING_TOO_AGGRESSIVE}
+          testIdSuffix="sampling-too-aggressive"
         />
       </div>
     </div>

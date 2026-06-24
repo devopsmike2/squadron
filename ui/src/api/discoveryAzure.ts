@@ -245,6 +245,11 @@ export interface ServerlessRow {
   // — the shape is identical across the four per-provider helpers.
   cold_start_p95_ms?: number;
   cold_start_exceeds_threshold?: boolean;
+  // sampling_ratio + sampling_exceeds_floor — Sampling rate analysis
+  // slice 1 chunk 3 (v0.89.124, #764 Stream 162). See discovery.ts
+  // ServerlessRow godoc for the join + amber-color semantics.
+  sampling_ratio?: number | null;
+  sampling_exceeds_floor?: boolean | null;
   detail?: Record<string, unknown>;
 }
 

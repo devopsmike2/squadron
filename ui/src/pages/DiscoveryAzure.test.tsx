@@ -932,6 +932,124 @@ describe("DiscoveryAzure", () => {
     expect(cell.textContent).toMatch(/3200ms/);
   });
 
+  // --- Sampling rate slice 1 chunk 3 (v0.89.124, #764 Stream 162) ---
+
+  it("TestDiscoveryAzure_Serverless_SamplingRateColumnRenders", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "azure",
+          surface: "azfunc",
+          account_id: "sub1",
+          region: "eastus",
+          resource_name: "sampling-fn",
+          resource_arn:
+            "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Web/sites/sampling-fn",
+          runtime: "dotnet6",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.041,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(screen.getByText(/Sampling rate \(24h\)/i)).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAzure_Serverless_SamplingRateCell_AmberWhenBelowFloor", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "azure",
+          surface: "azfunc",
+          account_id: "sub1",
+          region: "eastus",
+          resource_name: "below-floor-fn",
+          resource_arn:
+            "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Web/sites/below-floor-fn",
+          runtime: "dotnet6",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          sampling_ratio: 0.03,
+          sampling_exceeds_floor: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+
+    const cells = screen.getAllByTestId("sampling-rate-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/3.0%/);
+  });
+
   // --- helpers ---
 
   // advanceToServicePrincipalStep walks the wizard from step 1

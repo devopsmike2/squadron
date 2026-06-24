@@ -212,6 +212,10 @@ function makeProviderSpanQuality(
     // tests opt in explicitly.
     malformed_traceparent_pct: 0,
     missing_traceparent_on_child_pct: 0,
+    // Sampling rate slice 1 chunk 3 (v0.89.124, #764 Stream 162) —
+    // sixth percentage. Default zero so the panel stays hidden in
+    // tests that don't explicitly opt in.
+    sampling_too_aggressive_pct: 0,
     ...over,
   };
 }
@@ -239,6 +243,7 @@ function makeSpanQuality(
       attr_mismatch_pct: 0,
       malformed_traceparent_pct: 0,
       missing_traceparent_on_child_pct: 0,
+      sampling_too_aggressive_pct: 0,
     },
   };
   for (const k of Object.keys(providersOver) as Array<
@@ -1043,6 +1048,7 @@ describe("DiscoveryDashboard", () => {
             attr_mismatch_pct: 2.0,
             malformed_traceparent_pct: 0,
             missing_traceparent_on_child_pct: 0,
+            sampling_too_aggressive_pct: 0,
           },
         },
         {
@@ -1116,6 +1122,7 @@ describe("DiscoveryDashboard", () => {
           attr_mismatch_pct: 3.0,
           malformed_traceparent_pct: 0,
           missing_traceparent_on_child_pct: 0,
+          sampling_too_aggressive_pct: 0,
         },
       }),
     );
@@ -1155,6 +1162,7 @@ describe("DiscoveryDashboard", () => {
           attr_mismatch_pct: 2.0,
           malformed_traceparent_pct: 0.8,
           missing_traceparent_on_child_pct: 4.1,
+          sampling_too_aggressive_pct: 0,
         },
       }),
     );
@@ -1215,6 +1223,7 @@ describe("DiscoveryDashboard", () => {
           attr_mismatch_pct: 0,
           malformed_traceparent_pct: 1.5,
           missing_traceparent_on_child_pct: 0,
+          sampling_too_aggressive_pct: 0,
         },
       }),
     );
@@ -1247,6 +1256,7 @@ describe("DiscoveryDashboard", () => {
           attr_mismatch_pct: 0,
           malformed_traceparent_pct: 0,
           missing_traceparent_on_child_pct: 5.7,
+          sampling_too_aggressive_pct: 0,
         },
       }),
     );
@@ -1264,6 +1274,108 @@ describe("DiscoveryDashboard", () => {
     expect(col).toHaveAttribute(
       "href",
       "/discovery/aws#recommendations:span-quality-traceparent-missing",
+    );
+  });
+
+  // --- Sampling rate slice 1 chunk 3 (v0.89.124, #764 Stream 162) ---
+  //
+  // Acceptance tests 14 + 15 — SPAN QUALITY panel grows from 5 to 6
+  // columns. The new sampling-too-aggressive column renders when the
+  // backend reports a non-zero sampling_too_aggressive_pct, and the
+  // panel hides entirely when all six percentages are zero.
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_SixColumnsRenderWhenNonZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality({
+        totals: {
+          resource_count: 142,
+          resources_with_issues: 50,
+          orphan_pct: 3.2,
+          missing_attr_pct: 6.3,
+          attr_mismatch_pct: 2.0,
+          malformed_traceparent_pct: 0.8,
+          missing_traceparent_on_child_pct: 4.1,
+          sampling_too_aggressive_pct: 12.5,
+        },
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
+    });
+    // All six percentage tiles render.
+    expect(screen.getByTestId("span-quality-pct-orphan")).toHaveTextContent(
+      "3.2%",
+    );
+    expect(
+      screen.getByTestId("span-quality-pct-missing-attrs"),
+    ).toHaveTextContent("6.3%");
+    expect(
+      screen.getByTestId("span-quality-pct-mismatch"),
+    ).toHaveTextContent("2.0%");
+    expect(
+      screen.getByTestId("span-quality-pct-malformed-traceparent"),
+    ).toHaveTextContent("0.8%");
+    expect(
+      screen.getByTestId("span-quality-pct-missing-traceparent"),
+    ).toHaveTextContent("4.1%");
+    expect(
+      screen.getByTestId("span-quality-pct-sampling-too-aggressive"),
+    ).toHaveTextContent("12.5%");
+  });
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_HiddenWhenAllSixZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Default makeSpanQuality() carries all-zero on every slice-1 +
+    // slice-2 + sampling-rate-slice-1 percentage; the panel must stay
+    // out of the DOM.
+    mockedFetchSpanQuality.mockResolvedValue(makeSpanQuality());
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("provider-grid")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("span-quality-panel")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("span-quality-pct-sampling-too-aggressive"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_SamplingColumnDeepLinks", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Only the new sampling-too-aggressive percentage is non-zero —
+    // the panel must still appear (extended hide-check) and the
+    // sampling column must deep-link to the matching kind.
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality({
+        totals: {
+          resource_count: 24,
+          resources_with_issues: 4,
+          orphan_pct: 0,
+          missing_attr_pct: 0,
+          attr_mismatch_pct: 0,
+          malformed_traceparent_pct: 0,
+          missing_traceparent_on_child_pct: 0,
+          sampling_too_aggressive_pct: 12.5,
+        },
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
+    });
+    const col = screen.getByTestId("span-quality-column-sampling-too-aggressive");
+    expect(col.tagName).toBe("A");
+    expect(col).toHaveAttribute(
+      "data-kind",
+      "span-quality-sampling-too-aggressive",
+    );
+    expect(col).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-sampling-too-aggressive",
     );
   });
 });

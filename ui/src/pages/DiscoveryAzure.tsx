@@ -1406,6 +1406,11 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
                 unfiltered P95 with the fallback note shown in the
                 detection branch reasoning. */}
             <th className="px-3 py-2 font-medium">Cold-start P95 (24h)</th>
+            {/* Sampling rate analysis slice 1 chunk 3 (v0.89.124,
+                #764 Stream 162) — new "Sampling rate (24h)" column
+                between Cold-start P95 and Last seen. Azure Functions
+                participate per slice 1. */}
+            <th className="px-3 py-2 font-medium">Sampling rate (24h)</th>
             <th className="px-3 py-2 font-medium">Last seen</th>
           </tr>
         </thead>
@@ -1445,6 +1450,9 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
               </td>
               <td className="px-3 py-2 text-xs">
                 <ColdStartCell row={row} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <SamplingRateCell row={row} />
               </td>
               <td className="px-3 py-2 text-xs">
                 <LastSeenCell value={row.last_seen_at} />
@@ -1804,6 +1812,40 @@ function ColdStartCell({ row }: { row: ServerlessRow }) {
       data-value={isAmber ? "amber" : "ok"}
     >
       {ms}ms
+    </span>
+  );
+}
+
+// SamplingRateCell — Sampling rate analysis slice 1 chunk 3
+// (v0.89.124, #764 Stream 162). Mirrors the AWS DiscoveryAWS
+// SamplingRateCell exactly. See AWS SamplingRateCell godoc.
+function SamplingRateCell({ row }: { row: ServerlessRow }) {
+  if (row.sampling_ratio === undefined || row.sampling_ratio === null) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="No sampling observation yet"
+        data-testid="sampling-rate-cell"
+        data-value="none"
+      >
+        —
+      </span>
+    );
+  }
+  const pct = row.sampling_ratio * 100;
+  const isAmber = row.sampling_exceeds_floor === true;
+  return (
+    <span
+      className={isAmber ? "text-amber-600" : "text-foreground"}
+      title={
+        isAmber
+          ? `Sampling ratio ${pct.toFixed(1)}% — below 5% floor with >= 1000 invocations`
+          : `Sampling ratio ${pct.toFixed(1)}%`
+      }
+      data-testid="sampling-rate-cell"
+      data-value={isAmber ? "amber" : "ok"}
+    >
+      {pct.toFixed(1)}%
     </span>
   );
 }
