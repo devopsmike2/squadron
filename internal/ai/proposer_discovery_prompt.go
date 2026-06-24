@@ -405,6 +405,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice3SNSKindsPromptSection +
 
+	eventSourceTierSlice4SQSKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -1748,6 +1750,75 @@ learning loop records; slice 4 may add a per-resource
 
 CAVEAT FOR ALL SNS RECOMMENDATIONS:
 SNS rate limits at ~30 TPS per region per account. Squadron's
+existing AWS substrate rate limiter absorbs but the per-cloud
+runbook documents the scan-duration cost for large fleets.
+
+` + "\n"
+
+// eventSourceTierSlice4SQSKindsPromptSection — event source tier
+// slice 4 chunk 2 (v0.89.142, #782 Stream 180). Adds 2 new SQS
+// recommendation kinds atop the slice 1 + slice 2 + slice 3 event
+// source catalog. Slice 4 widens the AWS surface count from 2
+// (EventBridge + SNS) to 3 (EventBridge + SNS + SQS); slices 5-7 will
+// add the corresponding second surfaces per cloud (Cloud Tasks /
+// Event Grid + Event Hubs / Notification Service). The sqs- prefix is
+// NEW — the webhook router gains an sqs- → aws case in
+// internal/api/handlers/iac_github_webhook.go.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no sqs rows the rendered user message stays
+// byte-identical to v0.89.139 across all four providers. The
+// 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice4
+// pins this invariant.
+const eventSourceTierSlice4SQSKindsPromptSection = `EVENT SOURCE TIER SLICE 4 — AWS SQS (v0.89.140-142):
+
+Adds AWS SQS as the third AWS event source surface alongside
+EventBridge + SNS. SQS completes the canonical AWS pub/sub
+fan-out architecture: EventBridge | SNS → SQS → consumer.
+
+The detection axes mirror the slice 1 log-target proxy
+pattern. SQS doesn't have a direct OTel integration — Squadron
+uses the operational signal (redrive policy → DLQ) as the
+trace primitive proxy. A queue with a redrive policy +
+reachable DLQ means failed messages get captured for
+post-mortem; without the redrive policy, failures vanish
+silently.
+
+- sqs-redrive-policy-enable: SQS queue has NO RedrivePolicy
+  configured. When a message fails processing (consumer
+  throws / times out), the message gets retried until it
+  expires from the queue's retention window and vanishes
+  silently — the SINGLE MOST COMMON AWS messaging production
+  failure.
+
+  Terraform: aws_sqs_queue resource for the DLQ + redrive_policy
+  jsonencode block on the source queue with deadLetterTargetArn
+  + maxReceiveCount per §8 of the design doc.
+
+- sqs-deadletter-queue-attach: SQS queue has RedrivePolicy
+  set with deadLetterTargetArn pointing at a queue ARN
+  Squadron could NOT resolve in the same account+region.
+  The DLQ may be cross-account/region (verify the source
+  queue's IAM policy permits send) OR the DLQ doesn't exist
+  (policy is dangling).
+
+  AUDIT-ONLY recommendation — no Terraform pattern. The
+  operator needs to confirm the intent (cross-account
+  intentional vs DLQ deleted by mistake).
+
+DECLINE PATH for sqs-redrive-policy-enable: operators using
+a custom retry coordinator (Step Functions retry handler,
+EventBridge Pipes with error handling, etc.) should decline.
+The verdict learning loop records.
+
+DECLINE PATH for sqs-deadletter-queue-attach: operators with
+intentional cross-account DLQ setups should decline. Slice
+5 may add a per-resource "cross-account intentional" flag.
+
+CAVEAT FOR ALL SQS RECOMMENDATIONS:
+SQS rate limits at ~30 TPS per region per account. Squadron's
 existing AWS substrate rate limiter absorbs but the per-cloud
 runbook documents the scan-duration cost for large fleets.
 

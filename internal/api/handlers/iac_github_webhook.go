@@ -969,6 +969,18 @@ func providerFromRecommendationKind(kind string) string {
 	// source family stays grouped.
 	case strings.HasPrefix(kind, "sns-"):
 		return "aws"
+	// Event source tier slice 4 chunk 2 (v0.89.142, #782 Stream 180) —
+	// AWS SQS kinds (sqs-redrive-policy-enable,
+	// sqs-deadletter-queue-attach) route to AWS. Slice 4 widens the
+	// AWS event source surface count from 2 (EventBridge + SNS) to 3
+	// (EventBridge + SNS + SQS), completing the canonical AWS pub/sub
+	// fan-out architecture (EventBridge | SNS → SQS → consumer).
+	// Slices 5-7 will add Cloud Tasks / Event Grid + Event Hubs /
+	// Notification Service. The sqs- prefix is positioned alongside
+	// eventbridge- and sns- so the AWS event source family stays
+	// grouped.
+	case strings.HasPrefix(kind, "sqs-"):
+		return "aws"
 	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-") ||
 		strings.HasPrefix(kind, "cloudrun-") || strings.HasPrefix(kind, "cloudfunc-") ||
 		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)

@@ -113,3 +113,106 @@ func TestPickSNSDeliveryLoggingPattern_EmptyResourceName_FallsBack(t *testing.T)
 		t.Errorf("expected fallback aws_sns_topic <name> block, got:\n%s", tf)
 	}
 }
+
+// --- Event source tier slice 4 chunk 2 (v0.89.142, #782 Stream 180) -
+
+// TestPickSQSRedrivePolicyPattern_IncludesDLQResource — event source
+// tier slice 4 chunk 2. The Terraform snippet MUST include a separate
+// aws_sqs_queue resource block for the dead-letter queue (named
+// "<source>_dlq") with the 14-day (1209600s) message retention and
+// the alias/aws/sqs KMS master key per §8 of the design doc
+// (docs/proposals/event-source-tier-slice4.md). The DLQ is what
+// captures messages once consumer retries are exhausted; without it,
+// the redrive_policy on the source queue has nowhere to send them.
+func TestPickSQSRedrivePolicyPattern_IncludesDLQResource(t *testing.T) {
+	tf, _ := PickSQSRedrivePolicyPattern(RecommendationContext{
+		Provider:       "aws",
+		ResourceTFName: "order_processing",
+	})
+	if !strings.Contains(tf, `resource "aws_sqs_queue" "order_processing_dlq"`) {
+		t.Errorf("expected aws_sqs_queue dead-letter queue resource block for order_processing, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, "message_retention_seconds  = 1209600") {
+		t.Errorf("expected 14-day retention (1209600s) on the DLQ, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, `kms_master_key_id          = "alias/aws/sqs"`) {
+		t.Errorf("expected alias/aws/sqs KMS master key on the DLQ, got:\n%s", tf)
+	}
+	// The source queue's redrive policy must reference the DLQ's ARN.
+	if !strings.Contains(tf, "deadLetterTargetArn = aws_sqs_queue.order_processing_dlq.arn") {
+		t.Errorf("expected source queue's redrive policy to reference the DLQ arn, got:\n%s", tf)
+	}
+}
+
+// TestPickSQSRedrivePolicyPattern_IncludesRedrivePolicyJSONEncode — the
+// Terraform snippet MUST emit the redrive_policy attribute on the
+// source queue using jsonencode({...}) per §8 of the design doc. The
+// jsonencode wrapper is the standard Terraform shape for the AWS
+// provider's aws_sqs_queue.redrive_policy attribute — it expects a
+// JSON-encoded string, NOT a native HCL object. The maxReceiveCount
+// defaults to 5 (operator-tunable per the comment).
+func TestPickSQSRedrivePolicyPattern_IncludesRedrivePolicyJSONEncode(t *testing.T) {
+	tf, _ := PickSQSRedrivePolicyPattern(RecommendationContext{
+		Provider:       "aws",
+		ResourceTFName: "events",
+	})
+	if !strings.Contains(tf, "redrive_policy = jsonencode({") {
+		t.Errorf("expected redrive_policy with jsonencode wrapper, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, "maxReceiveCount     = 5") {
+		t.Errorf("expected maxReceiveCount = 5 default in the redrive policy, got:\n%s", tf)
+	}
+	// The aws_sqs_queue source block itself must be present.
+	if !strings.Contains(tf, `resource "aws_sqs_queue" "events"`) {
+		t.Errorf("expected source aws_sqs_queue resource block for events, got:\n%s", tf)
+	}
+}
+
+// TestPickSQSRedrivePolicyPattern_ReasoningMentionsDeclinePath — the
+// reasoning string MUST surface the slice 4 honest-framing pattern:
+// operators using a custom retry coordinator (Step Functions retry
+// handler, EventBridge Pipes with error handling, etc.) should
+// decline. The verdict learning loop records the decline so the
+// per-resource exclusion table can suppress repeat drafts. The
+// reasoning also flags the framing that motivates the recommendation
+// — silent message drop is the single most common AWS messaging
+// production failure.
+func TestPickSQSRedrivePolicyPattern_ReasoningMentionsDeclinePath(t *testing.T) {
+	_, reasoning := PickSQSRedrivePolicyPattern(RecommendationContext{
+		Provider:       "aws",
+		ResourceTFName: "topic_a",
+	})
+	for _, token := range []string{
+		"Decline",
+		"custom retry coordinator",
+		"Step Functions",
+		"EventBridge Pipes",
+		"verdict learning loop",
+		"single most common AWS messaging production failure",
+	} {
+		if !strings.Contains(reasoning, token) {
+			t.Errorf("reasoning missing %q, got: %s", token, reasoning)
+		}
+	}
+}
+
+// TestPickSQSRedrivePolicyPattern_EmptyResourceName_FallsBack — when
+// the proposer cannot recover the Terraform resource name from the
+// operator's repo, the snippet falls back to "<name>" so the operator
+// can substitute it during review. Mirrors the slice 3 chunk 2
+// PickSNSDeliveryLoggingPattern fallback shape.
+func TestPickSQSRedrivePolicyPattern_EmptyResourceName_FallsBack(t *testing.T) {
+	tf, _ := PickSQSRedrivePolicyPattern(RecommendationContext{
+		Provider:       "aws",
+		ResourceTFName: "",
+	})
+	if !strings.Contains(tf, `resource "aws_sqs_queue" "<name>_dlq"`) {
+		t.Errorf("expected fallback aws_sqs_queue <name>_dlq DLQ block, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, `resource "aws_sqs_queue" "<name>"`) {
+		t.Errorf("expected fallback aws_sqs_queue <name> source block, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, "deadLetterTargetArn = aws_sqs_queue.<name>_dlq.arn") {
+		t.Errorf("expected fallback redrive policy DLQ reference, got:\n%s", tf)
+	}
+}

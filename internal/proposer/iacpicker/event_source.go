@@ -87,3 +87,59 @@ resource "aws_sns_topic" "%s" {
 
 	return
 }
+
+// PickSQSRedrivePolicyPattern emits the Terraform snippet for a
+// sqs-redrive-policy-enable recommendation per event source tier
+// slice 4 chunk 2 (v0.89.142, #782 Stream 180). Configures a
+// dead-letter queue + redrive_policy on the source queue per §8 of
+// docs/proposals/event-source-tier-slice4.md.
+//
+// The DLQ retention is 14 days (1209600s) — maximum SQS retention —
+// to give operators the longest window for post-mortem. The
+// maxReceiveCount defaults to 5; operators tune based on consumer
+// retry tolerance.
+//
+// Slice 4 widens the AWS event source surface count from 2
+// (EventBridge + SNS) to 3 (EventBridge + SNS + SQS). The redrive
+// policy + DLQ pair is the canonical "failed messages get captured
+// for post-mortem" signal; a queue without it silently drops messages
+// once the retention window expires — the single most common AWS
+// messaging production failure.
+//
+// row.ResourceTFName is the best-effort Terraform resource name the
+// proposer extracted from the operator's repo. When empty, the
+// snippet falls back to "<name>" so the operator can substitute the
+// real queue name during review (matches the slice 3 chunk 2
+// PickSNSDeliveryLoggingPattern fallback shape).
+//
+// There's NO Terraform pattern for sqs-deadletter-queue-attach — it's
+// an audit-only recommendation per §8 of the design doc. The operator
+// confirms intent (cross-account intentional vs DLQ deleted by
+// mistake). The proposer prompt extension documents this; no iacpicker
+// entry needed.
+func PickSQSRedrivePolicyPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "aws_sqs_queue" "%s_dlq" {
+  name                       = "${aws_sqs_queue.%s.name}-dlq"
+  message_retention_seconds  = 1209600  # 14 days
+  kms_master_key_id          = "alias/aws/sqs"
+}
+
+resource "aws_sqs_queue" "%s" {
+  # ... existing fields ...
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.%s_dlq.arn
+    maxReceiveCount     = 5  # operator tunes
+  })
+}
+`, name, name, name, name)
+
+	reasoning = "AWS SQS queues without a RedrivePolicy + dead-letter queue silently drop messages on consumer failure (after the queue's retention window expires). This is the single most common AWS messaging production failure. The PR configures a DLQ + redrive policy. Decline if your team uses a custom retry coordinator (Step Functions, EventBridge Pipes with error handling, etc.) — the verdict learning loop records."
+
+	return
+}
