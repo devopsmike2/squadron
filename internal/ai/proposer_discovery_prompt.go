@@ -407,6 +407,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice4SQSKindsPromptSection +
 
+	eventSourceTierSlice5CloudTasksKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -1821,6 +1823,73 @@ CAVEAT FOR ALL SQS RECOMMENDATIONS:
 SQS rate limits at ~30 TPS per region per account. Squadron's
 existing AWS substrate rate limiter absorbs but the per-cloud
 runbook documents the scan-duration cost for large fleets.
+
+` + "\n"
+
+// eventSourceTierSlice5CloudTasksKindsPromptSection — event source
+// tier slice 5 chunk 2 (v0.89.145, #785 Stream 183). Adds 2 new GCP
+// Cloud Tasks recommendation kinds atop the slice 1-4 event source
+// catalog. Slice 5 widens the GCP surface count from 1 (Pub/Sub) to 2
+// (Pub/Sub + Cloud Tasks); slices 6-7 will add the corresponding
+// second + third surfaces per Azure / OCI. The cloudtasks- prefix is
+// NEW — the webhook router gains a cloudtasks- → gcp case in
+// internal/api/handlers/iac_github_webhook.go.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no cloudtasks rows the rendered user message stays
+// byte-identical to v0.89.142 across all four providers. The
+// 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice5
+// pins this invariant.
+const eventSourceTierSlice5CloudTasksKindsPromptSection = `EVENT SOURCE TIER SLICE 5 — GCP CLOUD TASKS (v0.89.143-145):
+
+Adds GCP Cloud Tasks as the second GCP event source surface
+alongside Pub/Sub. Architectural parity with the slice 4 SQS
+pattern — Cloud Tasks is the GCP equivalent of SQS for
+guaranteed delivery with retry semantics on HTTP failures.
+
+The canonical GCP pub/sub-with-retry architecture:
+Pub/Sub → Cloud Tasks → HTTP target.
+
+- cloudtasks-retry-policy-enable: Cloud Tasks queue has
+  retryConfig.maxAttempts = 0 (or retry config unset). When
+  a task's HTTP target returns non-2xx, the task is dropped
+  SILENTLY after the first attempt — no retry, no
+  operator-visible audit signal. Equivalent to an SQS queue
+  without a redrive policy.
+
+  Terraform: google_cloud_tasks_queue retry_config block
+  with max_attempts = 5 + min_backoff/max_backoff + max_doublings
+  per §8 of the design doc. Operator tunes max_attempts based
+  on consumer retry tolerance.
+
+- cloudtasks-logging-enable: Cloud Tasks queue has
+  stackdriverLoggingConfig.samplingRatio = 0 (or unset).
+  Without Stackdriver Logging, the operator has no per-task
+  delivery audit trail — successful AND failed dispatches
+  both flow into the void.
+
+  Terraform: google_cloud_tasks_queue stackdriver_logging_config
+  block with sampling_ratio = 1.0 (full sampling). Operator
+  tunes for high-throughput queues.
+
+DECLINE PATH for cloudtasks-retry-policy-enable: operators
+intentionally configuring fire-and-forget semantics (single
+attempt, drop on failure) should decline. The verdict learning
+loop records.
+
+DECLINE PATH for cloudtasks-logging-enable: operators using a
+non-Stackdriver destination for task audit (custom HTTP logger
+sidecar, etc.) should decline.
+
+CAVEAT FOR ALL CLOUD TASKS RECOMMENDATIONS:
+The maxAttempts = -1 sentinel means unlimited retry; slice 5
+treats this as configured retry (HasTraceAxis = true).
+
+Cloud Tasks rate limits at ~10 RPS for listQueues per project;
+substrate's existing GCP rate limiter absorbs the per-region
+scan iteration.
 
 ` + "\n"
 

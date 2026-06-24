@@ -143,3 +143,82 @@ resource "aws_sqs_queue" "%s" {
 
 	return
 }
+
+// PickCloudTasksRetryPolicyPattern emits the Terraform snippet for a
+// cloudtasks-retry-policy-enable recommendation per event source tier
+// slice 5 chunk 2 (v0.89.145, #785 Stream 183). Configures a retry_config
+// block on the google_cloud_tasks_queue resource per §8 of
+// docs/proposals/event-source-tier-slice5.md.
+//
+// max_attempts defaults to 5 — typical "retry a few times with
+// exponential backoff before giving up" semantics. Operators tune
+// based on consumer retry tolerance. The backoff doubles from 10s up
+// to 300s; max_retry_duration is 0s (unlimited duration, bounded by
+// max_attempts).
+//
+// Slice 5 widens the GCP event source surface count from 1 (Pub/Sub)
+// to 2 (Pub/Sub + Cloud Tasks). A queue without retry config silently
+// drops tasks when the HTTP target returns non-2xx — the GCP
+// equivalent of an SQS queue without a redrive policy (slice 4).
+//
+// row.ResourceTFName is the best-effort Terraform resource name the
+// proposer extracted from the operator's repo. When empty, the
+// snippet falls back to "<name>" so the operator can substitute the
+// real queue name during review (matches the slice 4 chunk 2
+// PickSQSRedrivePolicyPattern fallback shape).
+func PickCloudTasksRetryPolicyPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "google_cloud_tasks_queue" "%s" {
+  # ... existing fields ...
+
+  retry_config {
+    max_attempts       = 5     # operator tunes
+    min_backoff        = "10s"
+    max_backoff        = "300s"
+    max_retry_duration = "0s"  # unlimited duration; bounded by max_attempts
+    max_doublings      = 5
+  }
+}
+`, name)
+
+	reasoning = "Cloud Tasks queues without a retry_config silently drop tasks when the HTTP target returns non-2xx. The PR configures retry with exponential backoff (max_attempts = 5, doubling backoff from 10s to 300s). Decline if your team intentionally wants single-attempt fire-and-forget semantics — the verdict learning loop records."
+
+	return
+}
+
+// PickCloudTasksLoggingPattern emits the Terraform snippet for a
+// cloudtasks-logging-enable recommendation per event source tier
+// slice 5 chunk 2 (v0.89.145, #785 Stream 183). Configures a
+// stackdriver_logging_config block on the google_cloud_tasks_queue
+// resource per §8 of docs/proposals/event-source-tier-slice5.md.
+//
+// sampling_ratio defaults to 1.0 (full sampling). Operators tune
+// downward for very-high-throughput queues where full sampling is
+// expensive. Without Stackdriver Logging, the operator has no per-task
+// delivery audit trail — successful AND failed dispatches both flow
+// into the void.
+//
+// row.ResourceTFName fallback shape mirrors PickCloudTasksRetryPolicyPattern.
+func PickCloudTasksLoggingPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "google_cloud_tasks_queue" "%s" {
+  # ... existing fields ...
+
+  stackdriver_logging_config {
+    sampling_ratio = 1.0  # full sampling; operator tunes for high-throughput
+  }
+}
+`, name)
+
+	reasoning = "Cloud Tasks queues without Stackdriver Logging have no per-task audit trail. The PR configures full sampling (1.0). For very-high-throughput queues where full sampling is expensive, tune the ratio downward. Decline if your team uses a non-Stackdriver destination for task audit — the verdict learning loop records."
+
+	return
+}

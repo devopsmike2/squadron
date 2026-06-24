@@ -990,7 +990,16 @@ func providerFromRecommendationKind(kind string) string {
 		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136)
 		// — GCP Pub/Sub kinds (pubsub-trace-enable, pubsub-schema-attach)
 		// route to GCP.
-		strings.HasPrefix(kind, "pubsub-"):
+		strings.HasPrefix(kind, "pubsub-") ||
+		// Event source tier slice 5 chunk 2 (v0.89.145, #785 Stream 183)
+		// — GCP Cloud Tasks kinds (cloudtasks-retry-policy-enable,
+		// cloudtasks-logging-enable) route to GCP. Slice 5 widens the
+		// GCP event source surface count from 1 (Pub/Sub) to 2
+		// (Pub/Sub + Cloud Tasks); slices 6-7 will add Azure Event Grid +
+		// Event Hubs / OCI Notification Service. The cloudtasks- prefix
+		// is positioned alongside pubsub- so the GCP event source family
+		// stays grouped.
+		strings.HasPrefix(kind, "cloudtasks-"):
 		return "gcp"
 	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-") ||
 		strings.HasPrefix(kind, "azfunc-") ||
