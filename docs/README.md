@@ -95,6 +95,32 @@ jump straight to that page.
   secret, configuring the GitHub repo webhook, verifying the
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
+- [Event source tier — operator guide](./event-source-tier-operator-guide.md) —
+  v0.89.99 through v0.89.103 operator runbook for the event
+  source tier slice 1 arc (design at
+  [proposals/event-source-tier-slice1.md](./proposals/event-source-tier-slice1.md)).
+  Sixth tier alongside compute / database / kubernetes /
+  serverless / orchestration. Four surfaces across four
+  clouds: AWS EventBridge, GCP Pub/Sub, Azure Service Bus,
+  OCI Streaming. Per-cloud detection of trace axis + log
+  axis primitives at the event source level (per-message
+  propagation analysis deferred to slice 2). New Event
+  sources Inventory sub-tab on all four per-provider
+  Discovery pages. 7 new recommendation kinds:
+  `eventbridge-{xray-enable,schemas-discover,logging-enable}`,
+  `pubsub-{trace-enable,schema-attach}`,
+  `servicebus-diagnostics-enable`,
+  `streaming-logging-enable`. Discovery summary +
+  trace_coverage endpoints gain `event_source_count` and
+  `event_source_pct`. Dashboard TRACE COVERAGE chip
+  breakdown adds EVT column. **Slice 1 SHIPPED in
+  v0.89.103.** Squadron's claim grows a sixth tier: "scans
+  AWS, GCP, Azure, AND Oracle Cloud across COMPUTE,
+  DATABASE, KUBERNETES, SERVERLESS, ORCHESTRATION, AND
+  EVENT SOURCES for observability gaps, verifies telemetry
+  is actually flowing, validates the spans Squadron
+  receives are healthy, AND drafts the IaC PRs that close
+  the gaps it finds."
 - [Orchestration tier — operator guide](./orchestration-tier-operator-guide.md) —
   v0.89.94 through v0.89.98 operator runbook for the
   orchestration tier slice 1 arc (design at
