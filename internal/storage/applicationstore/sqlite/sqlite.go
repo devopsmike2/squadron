@@ -834,6 +834,51 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_event_source_scan ON event_source_instance(scan_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_event_source_conn ON event_source_instance(connection_id)`,
+
+		// v0.89.113 (#751 Stream 149, slice 1 chunk 1 of the Cold-start
+		// latency analysis arc) — cold_start_observation carries one row
+		// per (connection_id, resource_arn, observed_at, window_hours)
+		// cold-start P95 observation Squadron's per-cloud MetricQuerier
+		// substrate records. Universal columns (provider / surface /
+		// account_id / region / resource_arn / window_hours / p95_ms /
+		// sample_count) carry the cross-cloud detection shape; the slice
+		// 1 detection rule (per design doc §3) compares the 24h-window
+		// row's p95_ms against the 168h (7d) row's p95_ms multiplied by
+		// 1.5x. The snapshot_json column carries the full
+		// scanner.AggregateMetricResult serialization so the chunk-2
+		// per-resource cold_start API endpoint can return the raw shape
+		// without a re-query.
+		//
+		// The (connection_id, resource_arn, observed_at, window_hours)
+		// UNIQUE constraint distinguishes the 24h + 168h windows at the
+		// same observed_at — both rows land but neither violates
+		// uniqueness because window_hours differs. The keying lets a
+		// single observed_at point carry both the current-window and
+		// the baseline rows for cheap detection-time joins.
+		//
+		// idx_coldstart_resource backs the per-resource read (the
+		// chunk-2 per-resource cold_start endpoint's filter by
+		// resource_arn). idx_coldstart_observed backs the slice 2
+		// (deferred) retention policy sweep.
+		//
+		// See docs/proposals/cold-start-latency-slice1.md §4.
+		`CREATE TABLE IF NOT EXISTS cold_start_observation (
+			id TEXT PRIMARY KEY,
+			connection_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			surface TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			region TEXT NOT NULL,
+			resource_arn TEXT NOT NULL,
+			observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			window_hours INTEGER NOT NULL,
+			p95_ms REAL NOT NULL,
+			sample_count INTEGER NOT NULL,
+			snapshot_json TEXT NOT NULL,
+			UNIQUE (connection_id, resource_arn, observed_at, window_hours)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_coldstart_resource ON cold_start_observation(resource_arn)`,
+		`CREATE INDEX IF NOT EXISTS idx_coldstart_observed ON cold_start_observation(observed_at)`,
 	}
 
 	for _, migration := range migrations {

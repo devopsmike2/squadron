@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 13
+const SchemaVersion = 14
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -595,6 +595,64 @@ CREATE INDEX IF NOT EXISTS idx_event_source_conn ON event_source_instance(connec
 INSERT OR IGNORE INTO schema_version (version) VALUES (13);
 `
 
+// ColdStartObservationSchema bumps the database to schema v14.
+// v0.89.113 (#751 Stream 149, slice 1 chunk 1 of the Cold-start latency
+// analysis arc) — adds the cold_start_observation table that the new
+// internal/discovery/scanner MetricQuerier substrate persists per-Lambda
+// cold-start P95 observations into.
+//
+// One row per (connection_id, resource_arn, observed_at, window_hours)
+// observation Squadron's per-cloud MetricQuerier records. The universal
+// columns (provider / surface / account_id / region / resource_arn /
+// window_hours / p95_ms / sample_count) carry the cross-cloud detection
+// shape; the slice 1 detection rule (per design doc §3) compares the
+// 24h-window row's p95_ms against the 168h (7d) row's p95_ms multiplied
+// by 1.5x. The snapshot_json column carries the full
+// scanner.AggregateMetricResult serialization so the per-resource
+// cold_start API endpoint (chunk 2) can return the raw shape without a
+// re-query.
+//
+// The (connection_id, resource_arn, observed_at, window_hours) UNIQUE
+// constraint distinguishes the two windows (24h + 168h) at the same
+// observed_at — both rows land but neither violates uniqueness because
+// window_hours differs. The keying lets a single observed_at point
+// carry both the current-window and the baseline rows for cheap
+// detection-time joins.
+//
+// idx_coldstart_resource backs the per-resource read (the chunk 2
+// per-resource cold_start endpoint's filter by resource_arn).
+// idx_coldstart_observed backs the slice 2 (deferred) retention policy
+// sweep — DELETE WHERE observed_at < ? stays a single ranged scan.
+//
+// Migration adds the table without backfilling — pre-slice-1
+// observations don't exist. The chunk-1 v0.89.113 migration is
+// idempotent (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS);
+// running it twice is a no-op.
+//
+// See docs/proposals/cold-start-latency-slice1.md §4 (storage schema)
+// and §11 acceptance tests 9 (migration idempotence) and 10
+// (round-trip persistence).
+const ColdStartObservationSchema = `
+CREATE TABLE IF NOT EXISTS cold_start_observation (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    region TEXT NOT NULL,
+    resource_arn TEXT NOT NULL,
+    observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    window_hours INTEGER NOT NULL,
+    p95_ms REAL NOT NULL,
+    sample_count INTEGER NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    UNIQUE (connection_id, resource_arn, observed_at, window_hours)
+);
+CREATE INDEX IF NOT EXISTS idx_coldstart_resource ON cold_start_observation(resource_arn);
+CREATE INDEX IF NOT EXISTS idx_coldstart_observed ON cold_start_observation(observed_at);
+INSERT OR IGNORE INTO schema_version (version) VALUES (14);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -610,4 +668,5 @@ var Migrations = []string{
 	ServerlessInstanceSchema,
 	OrchestrationInstanceSchema,
 	EventSourceInstanceSchema,
+	ColdStartObservationSchema,
 }
