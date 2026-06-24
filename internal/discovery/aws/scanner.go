@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithy "github.com/aws/smithy-go"
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -63,6 +64,18 @@ type Scanner struct {
 	creds     credstore.AWSCredentials
 	accountID string
 
+	// connectionID is the credstore.CloudConnection identifier this
+	// Scanner was constructed from. v0.89.114 (slice 1 chunk 2 of
+	// the cold-start latency arc) added this so per-resource
+	// observations persisted to cold_start_observation can be
+	// scoped to the connection that produced them, without leaking
+	// rows across operators in a multi-tenant deployment. Empty
+	// when the Scanner was built via NewScannerForValidation (the
+	// validate-only path doesn't persist anything) — the chunk-2
+	// detection branch skips persistence when connectionID is
+	// empty rather than writing rows attributed to no owner.
+	connectionID string
+
 	// factory hands out per-region service clients backed by the
 	// assumed-role session. In production this is built lazily on
 	// the first Scan/Validate call; tests substitute a stub
@@ -72,6 +85,36 @@ type Scanner struct {
 	// factoryBuilder constructs the factory on demand. Indirected so
 	// tests can inject a stub factory without touching the network.
 	factoryBuilder func(ctx context.Context, creds credstore.AWSCredentials, region string) (ClientFactory, error)
+
+	// cwClient is the CloudWatch SDK adapter the chunk-2 MetricQuerier
+	// implementation uses. v0.89.114 — nil-tolerant for backward
+	// compatibility with the chunk-1 skeleton path and the validation
+	// constructors that don't need metric queries. When nil,
+	// QueryAggregate returns scanner.ErrMetricNotImplemented mirroring
+	// the v0.89.113 chunk-1 surface. Tests inject a fake satisfying
+	// CloudWatchClient; production wires the real
+	// cloudwatch.NewFromConfig client via WithCloudWatchClient.
+	cwClient CloudWatchClient
+
+	// cwRateLimiter is the per-Scanner-instance rate limiter that
+	// caps CloudWatch GetMetricStatistics RPS at
+	// AWSCloudWatchRateLimitRPS. Per-Scanner-instance is the
+	// equivalent of per-AWS-account in the slice 1 substrate (one
+	// Scanner per CloudConnection per scan); the chunk-4 runbook
+	// documents the contract. Nil-tolerant: QueryAggregate skips
+	// the Wait call when the limiter is nil, which is the chunk-1
+	// skeleton path (no real CloudWatch calls being made).
+	cwRateLimiter *rate.Limiter
+
+	// coldStartStore is the storage adapter for persisting
+	// cold-start observations the chunk-2 detection branch
+	// produces. v0.89.114 — nil-tolerant so a Scanner constructed
+	// via the validation-only path doesn't have to wire a real
+	// store. When nil, RunColdStartDetection still runs the
+	// CloudWatch + ratio math (so callers can inspect the
+	// detection result programmatically) but skips the
+	// SaveColdStartObservation call.
+	coldStartStore ColdStartStore
 }
 
 // NewScannerForValidation builds a Scanner suitable for the connector
@@ -85,6 +128,15 @@ func NewScannerForValidation(creds credstore.AWSCredentials, accountID string) *
 		creds:          creds,
 		accountID:      accountID,
 		factoryBuilder: defaultFactoryBuilder,
+		// Pre-arm the CloudWatch rate limiter even on the
+		// validation path so tests that adopt the validation
+		// constructor and then inject a CloudWatch fake (via
+		// WithCloudWatchClient) immediately get the 10-RPS
+		// throttle behaviour the substrate contract specifies.
+		// Limiter is cheap to allocate; burst=1 forces every
+		// request to acquire a token rather than coalescing
+		// into a burst window.
+		cwRateLimiter: rate.NewLimiter(rate.Limit(AWSCloudWatchRateLimitRPS), 1),
 	}
 }
 
@@ -112,7 +164,14 @@ func NewScannerFromConnection(conn *credstore.CloudConnection, key *credstore.Ke
 	return &Scanner{
 		creds:          *creds,
 		accountID:      conn.AccountID,
+		connectionID:   conn.AccountID,
 		factoryBuilder: defaultFactoryBuilder,
+		// Same rationale as NewScannerForValidation — pre-arm
+		// the limiter so the production path (this constructor)
+		// always carries the 10-RPS substrate contract whether
+		// or not the caller subsequently wires a CloudWatch
+		// client via WithCloudWatchClient.
+		cwRateLimiter: rate.NewLimiter(rate.Limit(AWSCloudWatchRateLimitRPS), 1),
 	}, nil
 }
 
@@ -546,6 +605,19 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 			recordPartialFailure(result, "lambda_serverless", fmt.Sprintf("lambda serverless scan failed in %s: %s", region, err.Error()))
 		}
 	}
+
+	// Cold-start latency analysis slice 1 chunk 2 (v0.89.114,
+	// #752 Stream 150) — per-Lambda cold-start regression detection.
+	// Runs AFTER the per-region serverless walk so the snapshot list
+	// is complete; the detection branch is nil-tolerant on both the
+	// CloudWatch client and the cold-start store, so deployments that
+	// haven't wired chunk 2 see this loop as a no-op. Per-function
+	// failures record into FailedServices ("lambda_cold_start"
+	// sentinel) without halting the per-row iteration — partial-scan
+	// posture mirrors scanRegionLambdaServerless.
+	//
+	// See docs/proposals/cold-start-latency-slice1.md §3 + §5.
+	s.runColdStartDetectionForServerless(ctx, result)
 
 	for _, c := range result.Compute {
 		if c.HasOTel {

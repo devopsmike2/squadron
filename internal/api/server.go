@@ -194,6 +194,15 @@ type Server struct {
 	// serving cold-start zeros / 404 respectively.
 	discoverySpanQualityHandler        *handlers.DiscoverySpanQualityHandlers
 	spanQualityHandlerOnce             sync.Once
+	// discoveryServerlessColdStartHandler — v0.89.114 (#752 Stream 150,
+	// Cold-start latency slice 1 chunk 2). The per-resource cold-start
+	// endpoint handler. Built lazily by discoveryServerlessColdStartTrampoline
+	// the first time the route is hit; nil store at construction time
+	// short-circuits to 404 the same way the trace-coverage handler
+	// degrades when its substrate isn't wired.
+	discoveryServerlessColdStartHandler   *handlers.DiscoveryServerlessColdStartHandlers
+	coldStartHandlerOnce                  sync.Once
+	coldStartObservationReader            handlers.ColdStartObservationReader
 	qualitySnapshotIndexForDiscovery   handlers.QualitySnapshotIndex
 	resourceKeyProjectorForDiscovery   handlers.ResourceKeyProjector
 	// traceIndexLookupForDiscovery — v0.89.77 (#708 Stream 106,
@@ -1258,6 +1267,46 @@ func (s *Server) discoverySpanQualityTrampoline(fn func(*handlers.DiscoverySpanQ
 		})
 		fn(s.discoverySpanQualityHandler, c)
 	}
+}
+
+// discoveryServerlessColdStartTrampoline late-binds the v0.89.114
+// (#752 Stream 150) per-resource cold-start endpoint handler so the
+// caller composes the deferred wire-through against the optional
+// SetColdStartObservationReader call. Same lazy-construction pattern
+// as discoverySpanQualityTrampoline — the handler builds once on
+// first call and reuses thereafter so the wired store reference
+// stays stable across requests.
+//
+// Wiring posture: nil store at construction time means the
+// per-resource endpoint returns 404 unconditionally — matching the
+// "no cold-start observations recorded for resource" 404 the
+// handler would emit for any specific resource that hasn't been
+// observed yet. Deployments that haven't wired chunk 1 see the
+// chunk-1 storage migration land but the endpoint return 404 until
+// chunk 2's persistence path runs at least once.
+func (s *Server) discoveryServerlessColdStartTrampoline(fn func(*handlers.DiscoveryServerlessColdStartHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.coldStartHandlerOnce.Do(func() {
+			s.discoveryServerlessColdStartHandler = handlers.NewDiscoveryServerlessColdStartHandlers(
+				s.coldStartObservationReader,
+				nil, // default constants — 24h / 168h / 1.5x / 500ms
+				s.logger,
+			)
+		})
+		fn(s.discoveryServerlessColdStartHandler, c)
+	}
+}
+
+// SetColdStartObservationReader — v0.89.114 (#752 Stream 150). Wires
+// the cold-start observation store into the Server. The setter
+// posture mirrors SetActionStoreAndSigner — production calls this
+// after the sqlite store is constructed; tests pass nil to exercise
+// the unwired 404 path. Safe to call before or after the trampoline
+// builds the handler so long as the call happens before the first
+// route hit (the once.Do captures whatever value is set at that
+// point).
+func (s *Server) SetColdStartObservationReader(reader handlers.ColdStartObservationReader) {
+	s.coldStartObservationReader = reader
 }
 
 // discoveryAcceptedAssemblerAdapter — v0.89.28 (#643 slice 1) —
@@ -2359,6 +2408,22 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/:provider/inventory/:kind/:id/span_quality",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoverySpanQualityTrampoline(func(h *handlers.DiscoverySpanQualityHandlers, c *gin.Context) { h.HandleResourceSpanQuality(c) }))
+
+		// v0.89.114 (#752 Stream 150, Cold-start latency slice 1 chunk
+		// 2) — per-resource cold-start observation endpoint. Returns the
+		// composed current-window + baseline-window + ratio shape per
+		// design doc §6.1. Same ScopeAgentsRead gate as the rest of the
+		// discovery read surface. 404 when no observations exist yet for
+		// the resource (matching the cold-start posture of the trace
+		// coverage and span quality per-resource detail endpoints).
+		// The kind segment is fixed at "serverless" in slice 1 — the
+		// route shape preserves the per-provider /:provider/inventory/
+		// :kind/:id/... convention so chunk 3 can extend other kinds
+		// (compute / database / orchestration / event_source) without a
+		// breaking URL change.
+		v1.GET("/discovery/:provider/inventory/serverless/:id/cold_start",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryServerlessColdStartTrampoline(func(h *handlers.DiscoveryServerlessColdStartHandlers, c *gin.Context) { h.HandleColdStart(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
