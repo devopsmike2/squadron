@@ -46,6 +46,52 @@ const (
 	// string for Service Bus namespace rows. Slice 1 chunk 3 surfaces
 	// namespaces only; per-namespace queues / topics are slice-2.
 	serviceBusSourceTypeNamespace = "namespace"
+
+	// ServiceBusAuthorizationRulesAPIVersion pins the ARM API version
+	// used for the per-namespace authorizationRules list call. Slice
+	// 2 chunk 3 of the Event source tier arc (v0.89.106, #743 Stream
+	// 141) uses the same 2022-10-01-preview surface as the slice 1
+	// namespaces list — the authorizationRules sub-resource is part
+	// of the Microsoft.ServiceBus resource provider's preview
+	// surface; switching to a stable GA version is reserved for
+	// slice 3 once the surface promotes.
+	ServiceBusAuthorizationRulesAPIVersion = "2022-10-01-preview"
+
+	// ServiceBusRightSend / ServiceBusRightListen / ServiceBusRightManage
+	// are the three Service Bus authorization rule rights. A rule
+	// must include Send to permit publishing messages (which is
+	// where ApplicationProperties / traceparent attaches). Slice 2
+	// chunk 3 detection treats Send as the load-bearing right; the
+	// other two are surfaced as informational context only.
+	ServiceBusRightSend   = "Send"
+	ServiceBusRightListen = "Listen"
+	ServiceBusRightManage = "Manage"
+
+	// servicebusPropagationNoteNoSendRule is the informational note
+	// recorded against namespaces with no Send-capable authorization
+	// rule. The proposer's chunk 5 reasoning text consumes this
+	// string verbatim — keep the wording stable so the recommendation
+	// envelope's reasoning field doesn't drift between releases.
+	servicebusPropagationNoteNoSendRule = "namespace has no Send-capable authorization rule; publishers can't attach traceparent to ApplicationProperties"
+
+	// servicebusPropagationNoteNoRules is the informational note
+	// recorded against namespaces with zero authorization rules.
+	// This is the canonical "RBAC-only namespace" shape — operators
+	// who skip SAS rules entirely and rely on Azure RBAC for
+	// publisher / consumer permissions hit this branch. The slice 2
+	// chunk 3 heuristic cannot prove or disprove propagation in this
+	// case (RBAC role-based property restrictions are a slice 3
+	// concern per the design doc §3.3), so propagation defaults to
+	// preserved with an informational note rather than emitting a
+	// false-positive broken recommendation.
+	servicebusPropagationNoteNoRules = "namespace has no SAS authorizationRules; relying on RBAC for publish/consume rights (slice 2 cannot inspect RBAC role property restrictions)"
+
+	// servicebusPropagationNoteListAPIError is the informational
+	// note recorded against namespaces whose authorizationRules list
+	// call failed with a non-fatal error. Propagation defaults to
+	// preserved per the "don't emit false-positive broken
+	// recommendations against unknown configs" stance.
+	servicebusPropagationNoteListAPIError = "namespace authorizationRules list call failed; propagation status unknown"
 )
 
 // ScanEventSources is the Azure scanner's event-source-tier entry point
@@ -127,15 +173,142 @@ func (s *Scanner) ScanServiceBus(ctx context.Context, accessToken string, result
 	}
 	for _, ns := range namespaces {
 		hasTrace, hasLog, probeErr := s.probeServiceBusDiagnostics(ctx, accessToken, ns.ID)
+		propPreserved, propNote, rulesErr := s.probeServiceBusPropagation(ctx, accessToken, ns.ID)
+		if rulesErr != nil {
+			// Non-fatal: the operator should see the namespace
+			// inventory even when the authorizationRules list call
+			// fails. Propagation defaults to preserved per the
+			// "don't emit false-positive broken recommendations
+			// against unknown configs" stance; the informational
+			// note carries the explanation forward to the side panel.
+			recordPartialFailure(result, ServiceIDServiceBus, classifyServiceBusError(rulesErr))
+			propPreserved = true
+			propNote = servicebusPropagationNoteListAPIError
+		}
 		if probeErr != nil {
 			recordPartialFailure(result, ServiceIDServiceBus, classifyServiceBusError(probeErr))
 			result.EventSources = append(result.EventSources,
-				projectServiceBusNamespace(ns, false, false, result.AccountID))
+				projectServiceBusNamespace(ns, false, false, propPreserved, propNote, result.AccountID))
 			continue
 		}
 		result.EventSources = append(result.EventSources,
-			projectServiceBusNamespace(ns, hasTrace, hasLog, result.AccountID))
+			projectServiceBusNamespace(ns, hasTrace, hasLog, propPreserved, propNote, result.AccountID))
 	}
+}
+
+// inspectAuthorizationRules implements the slice 2 chunk 3 detection
+// rule. Returns (preserved, note). preserved is true when at least
+// one rule has Send rights (the minimum required for a publisher to
+// attach ApplicationProperties — where traceparent rides on Service
+// Bus messages). note is empty when preserved or carries an
+// informational string when not.
+//
+// Note: Azure RBAC role-based property restrictions are out of scope
+// for slice 2 chunk 3 per the design doc §3.3 simplification — the
+// chunk-3 heuristic reads authorizationRules only. A namespace with
+// zero authorizationRules (RBAC-only) defaults to preserved with an
+// informational note, NOT broken — the chunk-3 detection cannot
+// prove the RBAC role lacks property restrictions, so the
+// false-positive recommendation cost outweighs the missed-detection
+// cost. Slice 3 may add direct RBAC role scanning per §3.3.
+//
+// Rule-level evaluation: a rule with Send → preserved. A rule with
+// Manage also satisfies in practice (Manage implies Send + Listen)
+// but the chunk-3 rule checks for Send directly — operators with
+// Manage-only rules are vanishingly rare on Service Bus and the
+// chunk-3 detection prefers a literal-string match over an
+// implication tree. Slice 3 may broaden if operator feedback warrants.
+func inspectAuthorizationRules(rules []ServiceBusAuthorizationRule) (bool, string) {
+	if len(rules) == 0 {
+		// Canonical "RBAC-only namespace" shape — operators who skip
+		// SAS rules entirely. Default to preserved with informational
+		// note per the no-false-positives stance.
+		return true, servicebusPropagationNoteNoRules
+	}
+	hasSendCapable := false
+	for _, rule := range rules {
+		for _, right := range rule.Properties.Rights {
+			if right == ServiceBusRightSend {
+				hasSendCapable = true
+				break
+			}
+		}
+		if hasSendCapable {
+			break
+		}
+	}
+	if !hasSendCapable {
+		return false, servicebusPropagationNoteNoSendRule
+	}
+	return true, ""
+}
+
+// probeServiceBusPropagation fetches the namespace's authorizationRules
+// list and applies inspectAuthorizationRules. Returns (preserved,
+// note, err). A nil err means the call succeeded; a non-nil err is
+// the wrapped *armCallError from the underlying ARM GET (the caller
+// records a partial failure and defaults propagation to preserved
+// with the list-error note).
+//
+// 404 on the authorizationRules list is the canonical "no rules
+// configured" shape — Service Bus returns an empty Value array for
+// namespaces with zero rules in practice, but defensive 404 handling
+// matches the diagnostic-settings probe pattern.
+func (s *Scanner) probeServiceBusPropagation(ctx context.Context, accessToken, namespaceARMID string) (bool, string, error) {
+	rules, err := s.listServiceBusAuthorizationRules(ctx, accessToken, namespaceARMID)
+	if err != nil {
+		var ace *armCallError
+		if errors.As(err, &ace) && ace.StatusCode == http.StatusNotFound {
+			// Canonical "no rules / RBAC-only namespace" shape.
+			preserved, note := inspectAuthorizationRules(nil)
+			return preserved, note, nil
+		}
+		return true, "", err
+	}
+	preserved, note := inspectAuthorizationRules(rules)
+	return preserved, note, nil
+}
+
+// listServiceBusAuthorizationRules walks the per-namespace
+// authorizationRules sub-resource and follows nextLink for
+// pagination. Returns the accumulated rule list on success or a
+// wrapped *armCallError on any non-200 / transport failure.
+//
+// URL shape:
+//
+//	GET {arm}/{namespaceARMID}/authorizationRules?api-version=...
+//
+// namespaceARMID arrives as the full ARM id with a leading slash;
+// the path build mirrors probeServiceBusDiagnostics (TrimPrefix on
+// the leading slash to avoid the double-slash that would otherwise
+// land in the URL).
+func (s *Scanner) listServiceBusAuthorizationRules(ctx context.Context, accessToken, namespaceARMID string) ([]ServiceBusAuthorizationRule, error) {
+	endpoint := s.armEndpoint
+	if endpoint == "" {
+		endpoint = armManagementEndpoint
+	}
+	resourceID := strings.TrimPrefix(namespaceARMID, "/")
+	pageURL := fmt.Sprintf(
+		"%s/%s/authorizationRules?api-version=%s",
+		strings.TrimRight(endpoint, "/"),
+		resourceID,
+		ServiceBusAuthorizationRulesAPIVersion,
+	)
+
+	var out []ServiceBusAuthorizationRule
+	for pageURL != "" {
+		body, callErr := s.doARMGet(ctx, accessToken, pageURL)
+		if callErr != nil {
+			return nil, callErr
+		}
+		var page ServiceBusAuthorizationRulesResponse
+		if jerr := json.Unmarshal(body, &page); jerr != nil {
+			return nil, &armCallError{Wrapped: fmt.Errorf("service bus authorization rules parse: %w", jerr)}
+		}
+		out = append(out, page.Value...)
+		pageURL = page.NextLink
+	}
+	return out, nil
 }
 
 // listServiceBusNamespaces walks Microsoft.ServiceBus/namespaces at
@@ -228,11 +401,19 @@ func (s *Scanner) probeServiceBusDiagnostics(ctx context.Context, accessToken, n
 	return hasTrace, hasLog, nil
 }
 
-// projectServiceBusNamespace maps a (namespace, hasTrace, hasLog) triple
-// into an EventSourceInstanceSnapshot per the slice-1 contract:
+// projectServiceBusNamespace maps a (namespace, hasTrace, hasLog,
+// propagationPreserved, propagationNote) tuple into an
+// EventSourceInstanceSnapshot per the slice-1 contract:
 // Provider="azure", Surface="servicebus", SourceType="namespace",
 // ResourceARN=namespace.ID (ARM id is the canonical handle).
-func projectServiceBusNamespace(ns armServiceBusNamespace, hasTrace, hasLog bool, accountID string) scanner.EventSourceInstanceSnapshot {
+//
+// Slice 2 chunk 3 (v0.89.106, #743 Stream 141) adds the trailing
+// (propagationPreserved, propagationNote) pair — the per-namespace
+// authorizationRules detection result. propagationPreserved maps
+// directly onto HasPropagationConfig; a non-empty propagationNote is
+// appended to PropagationNotes (the slice-2 axis is a list-of-notes
+// shape; chunk 3 emits at most one note per namespace).
+func projectServiceBusNamespace(ns armServiceBusNamespace, hasTrace, hasLog, propagationPreserved bool, propagationNote, accountID string) scanner.EventSourceInstanceSnapshot {
 	detail := map[string]any{
 		"source_type": serviceBusSourceTypeNamespace,
 		"has_trace":   hasTrace,
@@ -241,18 +422,23 @@ func projectServiceBusNamespace(ns armServiceBusNamespace, hasTrace, hasLog bool
 	if ns.SKU.Name != "" {
 		detail["sku"] = ns.SKU.Name
 	}
-	return scanner.EventSourceInstanceSnapshot{
-		Provider:     azureProviderID,
-		Surface:      serviceBusEventSourceSurface,
-		AccountID:    accountID,
-		Region:       ns.Location,
-		ResourceName: ns.Name,
-		ResourceARN:  ns.ID,
-		SourceType:   serviceBusSourceTypeNamespace,
-		HasTraceAxis: hasTrace,
-		HasLogAxis:   hasLog,
-		Detail:       detail,
+	snap := scanner.EventSourceInstanceSnapshot{
+		Provider:             azureProviderID,
+		Surface:              serviceBusEventSourceSurface,
+		AccountID:            accountID,
+		Region:               ns.Location,
+		ResourceName:         ns.Name,
+		ResourceARN:          ns.ID,
+		SourceType:           serviceBusSourceTypeNamespace,
+		HasTraceAxis:         hasTrace,
+		HasLogAxis:           hasLog,
+		HasPropagationConfig: propagationPreserved,
+		Detail:               detail,
 	}
+	if propagationNote != "" {
+		snap.PropagationNotes = []string{propagationNote}
+	}
+	return snap
 }
 
 // classifyServiceBusError maps a walk failure into the operator-visible
