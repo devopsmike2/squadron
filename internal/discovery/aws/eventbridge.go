@@ -170,24 +170,59 @@ func rulePreservesTracePropagation(ruleName string, inputPath *string, inputTran
 }
 
 // ScanEventSources is the AWS scanner's event-source-tier entry point.
-// Slice 1 chunk 1 only covers EventBridge; future slices may add other
-// AWS event source primitives (SNS, SQS, IoT events). The method is
-// kept narrow so chunk-1 callers see a single dispatch point even as
-// the per-surface coverage grows. Mirrors the orchestration tier's
-// ScanOrchestrations / ScanStepFunctions layout.
+// Slice 1 chunk 1 (v0.89.100) shipped EventBridge alone; slice 3 chunk
+// 1 (v0.89.138, #778 Stream 176) extends the dispatcher to fan out
+// across BOTH EventBridge AND SNS topics, with a partial-scan posture
+// that lets either surface fail independently without aborting the
+// other.
 //
 // Scope semantics: the scope's Regions[0] (when set) selects the target
 // region; an empty Regions list falls back to the scanner's configured
 // first region (slice 1 ships single-region scans). The scope's
 // AccountID overrides the per-snapshot AccountID stamped on every row;
-// empty falls back to the scanner's configured account.
+// empty falls back to the scanner's configured account. Both surfaces
+// receive the identical scope.
 //
-// IAM contract per docs/proposals/event-source-tier-slice1.md §12:
-// events:ListEventBuses + events:ListRules + events:ListTargetsByRule.
-// All three read-only; Squadron never executes an EventBridge mutation
-// API.
+// Partial-scan posture per docs/proposals/event-source-tier-slice3.md
+// §5: when ONE surface fails (e.g. an IAM gap on the SNS read
+// permissions while the EventBridge permissions are already wired)
+// the OTHER surface's results still surface. Only when BOTH surfaces
+// fail does the dispatcher return a non-nil error — wrapping both
+// per-surface errors so the operator can see the full failure
+// envelope. The §12 threat model treats this as load-bearing: the
+// dispatcher's both-directions partial-scan posture is pinned by
+// acceptance tests 7 / 8 / 9 of the slice 3 design doc.
+//
+// IAM contract per docs/proposals/event-source-tier-slice1.md §12 +
+// event-source-tier-slice3.md §12:
+//   - events:ListEventBuses + events:ListRules + events:ListTargetsByRule
+//   - sns:ListTopics + sns:GetTopicAttributes
+//
+// All five read-only. Squadron never executes an EventBridge or SNS
+// mutation API.
 func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
-	return s.ScanEventBridge(ctx, scope)
+	var all []scanner.EventSourceInstanceSnapshot
+
+	buses, ebErr := s.ScanEventBridge(ctx, scope)
+	if ebErr == nil {
+		all = append(all, buses...)
+	}
+
+	topics, snsErr := s.ScanSNSTopics(ctx, scope)
+	if snsErr == nil {
+		all = append(all, topics...)
+	}
+
+	// Partial-scan posture: only return an error when BOTH surfaces
+	// failed. Either-direction-failure is silenced at this layer so a
+	// single-surface IAM gap doesn't drop the inventory the operator
+	// actually CAN see. Tests 8 + 9 of the slice 3 design doc pin
+	// both directions.
+	if ebErr != nil && snsErr != nil {
+		return all, fmt.Errorf("event sources scan failures: eventbridge=%w sns=%v", ebErr, snsErr)
+	}
+
+	return all, nil
 }
 
 // ScanEventBridge walks the supplied region's EventBridge event buses

@@ -353,8 +353,12 @@ func TestEventSourceInstanceSnapshot_IsInstrumented(t *testing.T) {
 	}
 }
 
-// TestScanEventSources_DelegatesToScanEventBridge — the canonical
-// dispatcher just forwards to ScanEventBridge.
+// TestScanEventSources_DelegatesToScanEventBridge — pre-slice-3
+// regression coverage: when only EventBridge has data (SNS factory
+// fallback returns an empty inventory), the dispatcher surfaces the
+// bus result without error. Slice 3 chunk 1 (v0.89.138) extended the
+// dispatcher to fan out across BOTH EventBridge AND SNS; this test
+// still pins the single-surface path.
 func TestScanEventSources_DelegatesToScanEventBridge(t *testing.T) {
 	const (
 		busName = "default"
