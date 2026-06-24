@@ -648,6 +648,151 @@ trace context end-to-end? After slice 2, an operator running
 Squadron's Discovery scan gets an honest answer at TWO
 levels for every inbound event source surface.
 
+## Slice 3 SHIPPED in v0.89.137-v0.89.139 — AWS SNS
+
+Slice 3 starts the widening pass on the event source tier
+by adding AWS SNS as a second AWS surface alongside
+EventBridge. Subsequent slices (4-7) will add the
+corresponding second surfaces per cloud.
+
+Honest scope: ONE new surface per arc keeps the
+verification gate quality high. A 6-surface arc would
+push past the soft cap multiple times.
+
+### The new AWS surface — SNS
+
+| Cloud | Surface | Trace axis                                                | Log axis                                          |
+|-------|---------|-----------------------------------------------------------|----------------------------------------------------|
+| AWS   | SNS     | `SubscriptionsConfirmed > 0` (has active downstream consumers; orphan-topic detection) | Per-protocol delivery feedback role ARN configured (http/sqs/lambda/application/firehose) |
+
+Like the EventBridge log-target proxy from slice 1, SNS
+doesn't have a direct OTel integration — Squadron uses the
+per-protocol delivery feedback role attachment as the
+canonical "is delivery being audited?" signal.
+
+### The 2 new recommendation kinds
+
+```
+sns-subscriptions-attach           sns-delivery-logging-enable
+```
+
+Webhook routing: `sns- → aws`.
+
+### sns-subscriptions-attach (audit-only)
+
+Fires on SNS topics with zero confirmed subscriptions —
+messages published get dropped on the floor. This is an
+audit-only recommendation; there's NO Terraform pattern
+because the operator decides:
+
+1. **Delete the topic** if it's a leftover from a refactor
+2. **Add a subscription** if a downstream consumer should
+   exist but hasn't been wired up
+
+If you intentionally keep a zero-sub topic as a placeholder,
+decline. Slice 4 may add a per-resource "intentional dead
+topic" flag.
+
+### sns-delivery-logging-enable
+
+Fires on SNS topics with active subscriptions but NO
+per-protocol delivery feedback role configured. The
+Terraform pattern configures all 5 protocols
+(http/sqs/lambda/application/firehose) — prune the protocols
+you don't use.
+
+If you use a non-CloudWatch destination for delivery audit
+(custom Lambda processor, SNS-to-Datadog integration, etc.),
+decline.
+
+### The Terraform pattern
+
+Verbatim from §8 of the design doc — IAM role +
+assume_role_policy + AmazonSNSRole policy attachment +
+per-protocol feedback role ARN attachments on the
+`aws_sns_topic` resource:
+
+```hcl
+data "aws_iam_policy_document" "sns_delivery_logging_<name>_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["sns.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "sns_delivery_logging_<name>" {
+  name               = "sns-delivery-logging-${aws_sns_topic.<name>.name}"
+  assume_role_policy = data.aws_iam_policy_document.sns_delivery_logging_<name>_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "sns_delivery_logging_<name>" {
+  role       = aws_iam_role.sns_delivery_logging_<name>.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonSNSRole"
+}
+
+resource "aws_sns_topic" "<name>" {
+  # ... existing fields ...
+
+  http_success_feedback_role_arn        = aws_iam_role.sns_delivery_logging_<name>.arn
+  http_failure_feedback_role_arn        = aws_iam_role.sns_delivery_logging_<name>.arn
+  sqs_success_feedback_role_arn         = aws_iam_role.sns_delivery_logging_<name>.arn
+  sqs_failure_feedback_role_arn         = aws_iam_role.sns_delivery_logging_<name>.arn
+  lambda_success_feedback_role_arn      = aws_iam_role.sns_delivery_logging_<name>.arn
+  lambda_failure_feedback_role_arn      = aws_iam_role.sns_delivery_logging_<name>.arn
+  application_success_feedback_role_arn = aws_iam_role.sns_delivery_logging_<name>.arn
+  application_failure_feedback_role_arn = aws_iam_role.sns_delivery_logging_<name>.arn
+  firehose_success_feedback_role_arn    = aws_iam_role.sns_delivery_logging_<name>.arn
+  firehose_failure_feedback_role_arn    = aws_iam_role.sns_delivery_logging_<name>.arn
+}
+```
+
+### Dispatcher partial-scan posture
+
+Slice 3 extends `ScanEventSources` to fan out across
+EventBridge + SNS. If EventBridge fails (IAM lag from a
+connection that predates v0.89.100) AND SNS succeeds
+(slice 3 IAM update applied), the operator still sees SNS
+topics in the inventory. The dispatcher returns partial
+results with an honest error sum.
+
+The IAM template extends with two new actions:
+
+```
+sns:ListTopics
+sns:GetTopicAttributes
+```
+
+### Cost surface
+
+SNS API queries are free for read operations. No new
+operator-facing cost decisions per the no-money brief.
+
+### Scan duration impact
+
+SNS rate limits at ~30 TPS per region per account.
+Squadron's existing AWS substrate rate limiter absorbs.
+For a fleet of 1000 topics in one region:
+
+- ~33 seconds added to scan duration (1000 topics × 1
+  GetTopicAttributes per topic / 30 TPS)
+
+### Slice 4+ deferrals
+
+Per §13 of the design doc:
+
+- **Slice 4: AWS SQS** — third AWS event source surface
+- **Slice 5: GCP Cloud Tasks** — second GCP surface
+- **Slice 6: Azure Event Grid + Event Hubs** — second + third
+  Azure surfaces
+- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 8+: subscription-level propagation analysis**,
+  message filter inspection, multi-account fan-out
+  coordination
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —
@@ -657,6 +802,11 @@ levels for every inbound event source surface.
   surfaces and 5 new recommendation kinds reusing the
   slice 1 webhook prefixes.
   the locked spec this runbook operationalizes.
+- [Event source tier slice 3 design doc](./proposals/event-source-tier-slice3.md) —
+  the slice 3 spec that adds AWS SNS as the second AWS
+  surface and 2 new recommendation kinds
+  (sns-subscriptions-attach + sns-delivery-logging-enable)
+  routed via the new sns- webhook prefix.
 - [Orchestration tier slice 1](./proposals/orchestration-tier-slice1.md) —
   the prior tier-expansion arc this composes with.
 - [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —

@@ -959,6 +959,16 @@ func providerFromRecommendationKind(kind string) string {
 	// to AWS. Grouped with the other AWS prefixes.
 	case strings.HasPrefix(kind, "eventbridge-"):
 		return "aws"
+	// Event source tier slice 3 chunk 2 (v0.89.139, #779 Stream 177) —
+	// AWS SNS kinds (sns-subscriptions-attach,
+	// sns-delivery-logging-enable) route to AWS. Slice 3 widens the
+	// AWS event source surface count from 1 (EventBridge) to 2
+	// (EventBridge + SNS); slices 4-7 will add SQS / Cloud Tasks /
+	// Event Grid + Event Hubs / Notification Service. The sns-
+	// prefix is positioned alongside eventbridge- so the AWS event
+	// source family stays grouped.
+	case strings.HasPrefix(kind, "sns-"):
+		return "aws"
 	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-") ||
 		strings.HasPrefix(kind, "cloudrun-") || strings.HasPrefix(kind, "cloudfunc-") ||
 		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)
