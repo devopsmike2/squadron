@@ -355,29 +355,286 @@ provider from there.
   resource's detail panel; the dot color refreshes from
   there.
 
-## What slice 2 will add
+## Slice 2 SHIPPED in v0.89.108-v0.89.111
 
-Per §12 of the design doc:
+Slice 2 closes the explicit slice 1 deferral above
+(W3C trace context header parsing). The full design doc is
+at [proposals/span-quality-slice2.md](./proposals/span-quality-slice2.md).
 
-- W3C trace context header parsing — catches "parent_span_id
-  is zero but should not be" by inspecting traceparent on
-  inbound spans.
-- Sampling rate analysis — compares observed span throughput
-  against expected throughput from cloud-native metrics;
-  detects "you set the sampler to 1% but you should be at
-  5%."
-- Per-language semantic convention validation — checks
-  incoming spans against the OpenTelemetry semantic
-  conventions YAML for the tier + language.
-- Span event content quality — PII redaction policy, stack
-  trace truncation policy. Higher threat surface; deferred
-  to its own slice.
-- Span quality history table — durable trend analysis,
-  diffing two windows over a 7-day range.
-- Auto-fix for low-risk pathologies — env var injection that
-  doesn't change application semantics may eventually be
-  safe to apply automatically; slice 1 explicitly does not
-  do this.
+# Slice 2 — W3C trace context parsing (v0.89.108-v0.89.111)
+
+Slice 1 shipped three pathology detectors at the OTLP receiver
+hot path: orphan spans, missing required resource attributes,
+attribute placeholders. Slice 2 adds two more at the same hot
+path: malformed traceparent and missing traceparent on child.
+
+## The two new pathologies
+
+### Malformed traceparent
+
+Defined as: a span carries a `traceparent` attribute, but its
+value doesn't conform to the W3C trace context spec format
+`00-{32hex}-{16hex}-{2hex}`.
+
+Detection rule:
+- length 55
+- hyphens at positions 2, 35, 52
+- version segment "00" (slice 2 only; future versions like
+  "01" or "ff" are rejected per spec reserved values)
+- 32-char trace_id segment: hex (lowercase 0-9 a-f), non-zero
+- 16-char parent_id segment: hex, non-zero
+- 2-char trace_flags segment: hex
+
+Threshold: > 1% of spans with a traceparent attribute. The 1%
+is intentionally low — ANY malformed traceparent is unusual.
+A correctly-instrumented fleet either has 0% malformed or
+~100% malformed depending on whether the upstream SDK is
+broken.
+
+The denominator is `spans_with_traceparent`, NOT `total_spans`.
+A span with no traceparent attribute can't be malformed.
+
+### Missing traceparent on child
+
+Defined as: a span has a non-zero `parent_span_id` (it's a
+child span) AND no `traceparent` attribute. This suggests the
+SDK either didn't extract the W3C context propagator on the
+inbound request, OR the resource is a worker/background-job
+context where child spans are intra-process and never
+received an inbound traceparent.
+
+Threshold: > 5% of CHILD spans. The 5% is between the slice 1
+orphan (10%) and the slice 2 malformed (1%) thresholds — SDK
+propagation is mostly all-or-nothing but some legitimate cases
+(pure internal spans) lack traceparent.
+
+The denominator is `child_spans`, NOT `total_spans`. A root
+span (zero parent_span_id) can't be missing-on-child.
+
+## The three failure modes per kind
+
+Just like slice 1's trace-emission and slice 1's first three
+pathologies, the slice 2 kinds acknowledge three possible
+causes. The PR drafts target the most common cause; declining
+the PR records the actual cause for the verdict learning loop.
+
+### span-quality-traceparent-missing
+
+1. **SDK middleware not enabled.** The OTel SDK is installed
+   but the W3C context propagator middleware isn't enabled in
+   the HTTP server config. Squadron's PR drafts add
+   `OTEL_PROPAGATORS=tracecontext,baggage` env var injection
+   (same pattern as the slice 1 orphan-trace recommendation).
+2. **Custom middleware consumes the header first.** Some
+   teams have custom logging or rate-limiting middleware in
+   front of the SDK that pops the traceparent header before
+   the SDK reads it. The PR's env var won't help; the team
+   needs to reorder middleware.
+3. **Worker pod with no inbound HTTP.** A pod that processes
+   queue messages or runs cron jobs has child spans that are
+   intra-process, not from external HTTP. Squadron's PR will
+   produce no behavior change. Decline.
+
+### span-quality-traceparent-malformed
+
+1. **Upstream emits custom-format trace ID.** Some legacy SDKs
+   emit non-W3C trace IDs (e.g. 64-bit DataDog IDs in the W3C
+   slot). Squadron's PR drafts pin the upstream SDK to a
+   W3C-compliant version.
+2. **SDK version mismatch.** The upstream emits a "next-version"
+   (01) traceparent because it shipped against a future spec
+   revision; the downstream rejects it because slice 2 only
+   accepts version 00. Pin to a matched SDK version pair.
+3. **Proxy / load balancer rewriting.** Some ALBs and CDNs
+   rewrite the X-Amzn-Trace-Id header in transit; downstream
+   sees a malformed value. Check the AWS X-Ray header
+   handling config on the ALB.
+
+## The denominator semantics
+
+This catches operators reading the dashboard percentages.
+
+The slice 1 percentages (orphan / missing attrs / mismatch)
+use `total_spans` as denominator — every span is eligible.
+
+The slice 2 percentages use HONEST denominators:
+
+| Pathology                       | Denominator             |
+|---------------------------------|-------------------------|
+| Orphan spans                    | total_spans (slice 1)   |
+| Missing required attrs          | total_spans (slice 1)   |
+| Attribute placeholders          | total_spans (slice 1)   |
+| Malformed traceparent           | spans_with_traceparent  |
+| Missing traceparent on child    | child_spans             |
+
+A resource with 1000 spans, 200 of which carry traceparent,
+8 of which are malformed: malformed_pct = 4% (8/200), NOT
+0.8% (8/1000). The honest framing matters because the 1%
+threshold would otherwise misfire.
+
+The per-resource detail endpoint exposes the denominators
+(`spans_with_traceparent` and `child_spans`) so consumers can
+re-derive if needed.
+
+## The 5-column SPAN QUALITY dashboard panel
+
+The dashboard panel grows from 3 columns to 5:
+
+```
+  Orphan trace      Missing attrs    Attribute mismatch    Malformed traceparent    Missing on child
+       3.2%              6.3%             2.0%                 0.8%                       4.1%
+   12 resources      18 resources       6 resources         3 resources                14 resources
+```
+
+The panel hides when all 5 percentages are zero (extended
+condition from slice 1).
+
+Each column is clickable, deep-linking to the per-provider
+Recommendations tab filtered by the corresponding kind. The
+two new columns deep-link to the
+`span-quality-traceparent-{missing,malformed}` filter.
+
+## Per-Inventory-row Quality dot tooltip
+
+The per-row Quality dot from slice 1 stays. The hover tooltip
+extends to show all 5 percentages:
+
+> Orphan 3.2%, Missing attrs 6.3%, Mismatch 2.0%, Malformed
+> traceparent 0.8%, Missing on child 4.1%
+
+The dot color logic stays the same (green if all zero, yellow
+if one issue class, red if 2+).
+
+## The minimum-sample-size guards
+
+In addition to the slice 1 minimum (100 total spans / hour),
+slice 2 adds two more:
+
+- **`span-quality-traceparent-malformed`** requires at least
+  50 spans with a traceparent attribute in the window. Below
+  that, the percentage is statistically meaningless.
+- **`span-quality-traceparent-missing`** requires at least 50
+  child spans. Same rationale.
+
+A resource with only 30 spans-with-traceparent (and 8
+malformed → 26.7% malformed_pct) does NOT fire the
+recommendation. Wait for more traffic OR run a load test to
+push the sample size over the threshold.
+
+## Workflow — first traceparent recommendation
+
+1. Open the Discovery dashboard at `/discovery`.
+2. Look at the SPAN QUALITY panel — it now has 5 columns.
+3. If "Malformed traceparent" or "Missing on child" shows a
+   non-zero percentage, click the column.
+4. You're deep-linked to the AWS Recommendations tab with the
+   span-quality filter chip active.
+5. Review the recommendation. The Reasoning text names the
+   three failure modes; pick yours.
+6. For the SDK-side fix: click Open PR. The webhook listener
+   records the open. When you merge, the verdict learning
+   loop records.
+7. For false positives (worker pod with intra-process child
+   spans, etc.): click Don't propose this again.
+8. Wait 1h+ and reload. If your fix worked, the relevant
+   percentage drops.
+
+## Reading the audit
+
+No new audit event types. The recommendation lifecycle
+(recommendation.created / pr_opened / pr_merged / pr_closed)
+carries the new kind values.
+
+SIEM consumers can filter:
+
+```
+recommendation_kind ~= "^span-quality-traceparent-"
+```
+
+## Slice 2 troubleshooting
+
+- **Malformed traceparent shows 100% but my SDK should be
+  W3C-compliant.** Check the SDK version — some 2022-era OTel
+  SDK releases ship a non-W3C compliant traceparent format on
+  certain HTTP frameworks. Pin to the latest SDK release.
+- **Missing traceparent on child shows 100% on a worker pod
+  that processes Pub/Sub messages.** The pod's spans are
+  intra-process; there's no inbound HTTP carrying a
+  traceparent header. Decline the recommendation. Slice 3
+  may add per-resource-type detection to suppress this
+  automatically.
+- **The dashboard panel suddenly shows "Missing on child" at
+  85%.** Likely cause: the upstream service was deployed
+  without the W3C propagator middleware. Check the upstream
+  deployment's env vars; the slice 1 trace-emission arc may
+  have already drafted a `*-otel-*` recommendation for the
+  upstream resource.
+- **Malformed traceparent percentage is high but the
+  recommendation doesn't fire.** Check the `spans_with_traceparent`
+  count in the per-resource detail endpoint — if it's < 50,
+  the minimum-sample-size guard suppresses the recommendation.
+- **My team uses B3 propagation (not W3C).** Slice 2 currently
+  treats B3-only fleets as 100% missing-traceparent-on-child.
+  Click Don't propose this again on the recommendations;
+  slice 3 may add format-agnostic detection.
+- **A specific kind shows up in the recommendation list but
+  the SPAN QUALITY dashboard shows 0% for that kind.** Check
+  the cache — the dashboard endpoint has a 30s cache; the
+  recommendation may have fired from a more recent in-memory
+  observation. Refresh the dashboard.
+
+## What slice 3 will add (slice 2 deferrals)
+
+Per §13 of the slice 2 design doc:
+
+- tracestate parsing (per-vendor metadata validation).
+- Sampling decision propagation analysis.
+- B3 / Jaeger / DataDog / Zipkin context detection.
+- Per-language SDK fingerprinting.
+- HTTP header inspection (when SDK doesn't attach to
+  attributes).
+- Per-vendor traceparent format extensions (some SDKs use
+  non-canonical 32-char trace_id).
+- Auto-fix for trivial cases (SDK version pin update).
+
+## Slice 2 strategic frame
+
+Slice 2 doesn't grow Squadron's universal claim — it makes
+the existing span quality claim more rigorous. After this
+arc, the "where did my trace go?" diagnostic surface has
+three layers:
+
+1. **Is the cloud-native trace primitive enabled at the
+   event source?** (event source slice 1)
+2. **Does the event source's CONFIG preserve trace context
+   end-to-end?** (event source slice 2)
+3. **Does the trace context that DOES arrive at Squadron's
+   OTLP receiver conform to the W3C spec?** (span quality
+   slice 2 — this arc)
+
+These three diagnostic layers cover the full "request →
+orchestration → execution" chain. An operator who sees
+orphan spans on the consumer side can now walk the diagnostic
+chain:
+
+- Check event source slice 1: was the trace primitive on?
+- Check event source slice 2: was the propagation config
+  preserved?
+- Check span quality slice 2: did the traceparent arrive
+  malformed or absent?
+- Check span quality slice 1: any other resource attribute
+  pathologies?
+
+Each step has its own recommendation kind and IaC PR. The
+verdict learning loop teaches the proposer from every decline.
+
+## What slice 3+ may add (slice 1 deferrals re-stated)
+
+The slice 1 deferral list above stays accurate — slice 2
+covered W3C trace context parsing. The remaining deferrals
+include sampling rate analysis, per-language semantic
+convention validation, span event content quality, span
+quality history table, and auto-fix patterns.
 
 ## The universal claim grows a fourth verb
 
