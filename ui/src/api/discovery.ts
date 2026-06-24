@@ -362,6 +362,23 @@ export interface ServerlessRow {
   // "below floor" — the recommendation fires when the ratio is below
   // the 5% floor.
   sampling_exceeds_floor?: boolean | null;
+  // current_error_rate — Error rate correlation slice 1 chunk 3
+  // (v0.89.129, #769 Stream 167). Most recent 24-hour current
+  // error rate (current_error_count / current_invocation_count)
+  // for this serverless resource, populated by the error-rate
+  // annotation pass at scan-response time. Undefined / null when
+  // no observation has been persisted yet, or when the per-cloud
+  // MetricQuerier substrate isn't wired — the ErrorRateCell
+  // renders "—" in those cases. All 5 serverless surfaces
+  // participate.
+  current_error_rate?: number | null;
+  // error_rate_exceeds_threshold — Error rate correlation slice 1
+  // chunk 3 (v0.89.129). Pre-computed amber-color predicate the
+  // UI's ErrorRateCell reads: true when the server-side detection
+  // gate held (current/baseline ratio > 2.0x AND current
+  // invocations >= 1000 AND current errors >= 50). Undefined /
+  // null when current_error_rate is also undefined / null.
+  error_rate_exceeds_threshold?: boolean | null;
   // detail — surface-specific bag. Slice 1 surfaces it as raw JSON in
   // the row's drill-down tooltip; not rendered in the columns.
   detail?: Record<string, unknown>;

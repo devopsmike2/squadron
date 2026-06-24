@@ -124,6 +124,13 @@ type Scanner struct {
 	// no owner don't leak across operators in a multi-tenant
 	// deployment.
 	connectionID string
+
+	// errorRateStore — Error rate correlation slice 1 chunk 3
+	// (v0.89.129). Storage adapter for persisting
+	// error_rate_observation rows the chunk-3 detection branch
+	// (runErrorRateDetectionForServerless) produces. Nil-tolerant
+	// — same posture as coldStartStore.
+	errorRateStore ErrorRateStore
 }
 
 // Provider satisfies the (future) scanner.Scanner interface. The
@@ -322,6 +329,15 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// the matching surface identifier (cloudrun_cold_start /
 	// cloudfunc_cold_start) but does NOT halt the per-row loop.
 	s.runColdStartDetectionForServerless(ctx, &result)
+
+	// Error rate correlation slice 1 chunk 3 (v0.89.129, #769
+	// Stream 167) — per-Cloud Run + Cloud Functions error-rate
+	// detection. Mirrors the cold-start branch above: nil-tolerant
+	// on metricsClient / errorRateStore / connectionID; per-row
+	// failures land in FailedServices under the per-surface
+	// identifier ("cloudrun_error_rate" / "cloudfunc_error_rate")
+	// and the loop continues. Non-fatal.
+	s.runErrorRateDetectionForServerless(ctx, &result)
 
 	// Denormalize the walked-region list into Result.Regions. Order is
 	// not stable across runs (map iteration); the field is documented

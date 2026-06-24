@@ -115,6 +115,13 @@ type Scanner struct {
 	// detection result programmatically) but skips the
 	// SaveColdStartObservation call.
 	coldStartStore ColdStartStore
+
+	// errorRateStore is the storage adapter for persisting
+	// error-rate observations the slice-1-chunk-3 detection branch
+	// (v0.89.129) produces. Nil-tolerant: when nil, the
+	// runErrorRateDetectionForServerless branch short-circuits.
+	// Same posture as coldStartStore.
+	errorRateStore ErrorRateStore
 }
 
 // NewScannerForValidation builds a Scanner suitable for the connector
@@ -618,6 +625,18 @@ func (s *Scanner) Scan(ctx context.Context, conn *credstore.CloudConnection, reg
 	//
 	// See docs/proposals/cold-start-latency-slice1.md §3 + §5.
 	s.runColdStartDetectionForServerless(ctx, result)
+
+	// Error rate correlation slice 1 chunk 3 (v0.89.129,
+	// #769 Stream 167) — per-Lambda error-rate detection. Mirrors
+	// the cold-start branch above: nil-tolerant on cwClient /
+	// errorRateStore / connectionID; per-row failures land in
+	// FailedServices under the "lambda_error_rate" sentinel and
+	// the loop continues. The error-rate metric query failures
+	// are non-fatal — partial-scan posture matches
+	// scanRegionLambdaServerless + runColdStartDetectionForServerless.
+	//
+	// See docs/proposals/error-rate-correlation-slice1.md §6.2.
+	s.runErrorRateDetectionForServerless(ctx, result)
 
 	for _, c := range result.Compute {
 		if c.HasOTel {

@@ -1136,6 +1136,26 @@ type ServerlessInstanceSnapshot struct {
 	// chunk-3 tooltip alongside the underlying invocation count.
 	SamplingExceedsFloor *bool `json:"sampling_exceeds_floor,omitempty"`
 
+	// CurrentErrorRate — Error rate correlation slice 1 chunk 3
+	// (v0.89.129, #769 Stream 167). Most recent 24-hour current
+	// error rate (current_error_count / current_invocation_count)
+	// for this serverless resource, populated by the error-rate
+	// annotation pass at scan-response time. Nil means "no
+	// observation persisted yet" (rendered as "—" in the UI). The
+	// chunk-3 UI renders this as an "Error rate (24h)" column
+	// between Sampling rate and Last seen on all 4 provider
+	// Serverless tables.
+	CurrentErrorRate *float64 `json:"current_error_rate,omitempty"`
+
+	// ErrorRateExceedsThreshold — Error rate correlation slice 1
+	// chunk 3 (v0.89.129). Pre-computed amber-color predicate the
+	// UI reads to color the Error rate cell: true when the
+	// chunk-2 detection's ShouldFireRecommendation predicate held
+	// (current/baseline ratio > 2.0x AND current invocations >=
+	// 1000 AND current errors >= 50). Nil when the field above is
+	// also nil (no observation).
+	ErrorRateExceedsThreshold *bool `json:"error_rate_exceeds_threshold,omitempty"`
+
 	// Detail is the per-surface bag the per-cloud Inventory tabs
 	// render alongside the universal columns. Lambda populates
 	// {"x_ray_mode": "Active"/"PassThrough"/"", "layer_count": N};

@@ -1050,6 +1050,115 @@ describe("DiscoveryAzure", () => {
     expect(cell.textContent).toMatch(/3.0%/);
   });
 
+  // --- Error rate slice 1 chunk 3 (v0.89.129, #769 Stream 167) ---
+
+  it("TestDiscoveryAzure_Serverless_ErrorRateColumnRenders", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "azure",
+          surface: "azfunc",
+          account_id: "sub1",
+          region: "eastus",
+          resource_name: "er-render-fn",
+          resource_arn:
+            "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Web/sites/er-render-fn",
+          runtime: "dotnet6",
+          has_trace_axis: true,
+          has_otel_distro: false,
+        },
+      ],
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(screen.getByText(/Error rate \(24h\)/i)).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAzure_Serverless_ErrorRateCell_AmberWhenExceedsThreshold", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "azure",
+          surface: "azfunc",
+          account_id: "sub1",
+          region: "eastus",
+          resource_name: "er-amber-fn",
+          resource_arn:
+            "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Web/sites/er-amber-fn",
+          runtime: "dotnet6",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          current_error_rate: 0.042,
+          error_rate_exceeds_threshold: true,
+        },
+      ],
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    const cells = screen.getAllByTestId("error-rate-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/4.20%/);
+  });
+
   // --- helpers ---
 
   // advanceToServicePrincipalStep walks the wizard from step 1

@@ -204,6 +204,14 @@ type DiscoveryHandlers struct {
 	coldStartStore     ColdStartObservationReader
 	coldStartConstants ColdStartAnnotationThresholds
 
+	// errorRateStore — Error rate correlation slice 1 chunk 3
+	// (v0.89.129, #769 Stream 167). Optional: nil store skips the
+	// AnnotateServerlessWithErrorRate pass entirely, leaving the
+	// per-row current_error_rate + error_rate_exceeds_threshold
+	// fields nil (rendered as "—" in the UI). Same nil-tolerant
+	// posture as coldStartStore.
+	errorRateStore ErrorRateObservationStore
+
 	logger        *zap.Logger
 }
 
@@ -464,6 +472,18 @@ func (h *DiscoveryHandlers) WithTraceIndex(idx TraceIndexLookup) *DiscoveryHandl
 func (h *DiscoveryHandlers) WithColdStartObservationStore(store ColdStartObservationReader, thresholds ColdStartAnnotationThresholds) *DiscoveryHandlers {
 	h.coldStartStore = store
 	h.coldStartConstants = thresholds
+	return h
+}
+
+// WithErrorRateObservationStore — Error rate correlation slice 1
+// chunk 3 (v0.89.129, #769 Stream 167) — wires the storage adapter
+// the AnnotateServerlessWithErrorRate pass uses to populate the
+// per-Serverless current_error_rate +
+// error_rate_exceeds_threshold fields. Nil leaves the fields
+// unannotated ("—" in the UI). Production wires the chunk-1
+// *sqlite.Storage; tests substitute a fake.
+func (h *DiscoveryHandlers) WithErrorRateObservationStore(store ErrorRateObservationStore) *DiscoveryHandlers {
+	h.errorRateStore = store
 	return h
 }
 
@@ -1993,6 +2013,17 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 	// passes' output before marshalScanResult serializes.
 	if h.coldStartStore != nil && h.coldStartConstants != nil && result != nil {
 		AnnotateServerlessWithColdStart(ctx, h.coldStartStore, h.coldStartConstants, result.Serverless, h.logger)
+	}
+
+	// Error rate correlation slice 1 chunk 3 (v0.89.129, #769
+	// Stream 167) — annotate the per-Serverless current_error_rate
+	// + error_rate_exceeds_threshold fields in-place against the
+	// persisted error_rate_observation table. Runs AFTER the
+	// cold-start annotation so the per-row JSON shape gathers all
+	// three annotation passes' output before marshalScanResult
+	// serializes. Nil store short-circuits.
+	if h.errorRateStore != nil && result != nil {
+		AnnotateServerlessWithErrorRate(ctx, h.errorRateStore, result.Serverless, h.logger)
 	}
 
 	return result, nil, 0
