@@ -2714,3 +2714,111 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostSamplingSlice1(t *testi
 			"OCI user message should NOT include sampling system-prompt content: %q", kind)
 	}
 }
+
+// TestDiscoveryProposer_ErrorRateKindInSystemPrompt — error rate
+// correlation slice 1 chunk 2 (v0.89.128). The new
+// span-quality-error-rate-spike kind + its 3-failure-mode reasoning
+// framing must appear in the discovery system prompt alongside the
+// existing kind catalog. Pinning the section presence prevents
+// accidental removal during future edits.
+func TestDiscoveryProposer_ErrorRateKindInSystemPrompt(t *testing.T) {
+	prompt := DiscoverySystemPromptForTest()
+	for _, want := range []string{
+		"ERROR RATE CORRELATION KIND",
+		"span-quality-error-rate-spike",
+		"Recent deploy regression",
+		"Downstream dependency failure",
+		"Resource exhaustion under load",
+		"Near-zero baseline guard",
+		"MORE COMMON",
+		// Per-cloud error metric names — the section MUST enumerate
+		// them so the model knows which metric the detection branch
+		// reads for each surface.
+		"Lambda Errors",
+		"request_count{5xx}",
+		"execution_count{error}",
+		"FunctionErrors",
+		"function_invocation_count{error}",
+	} {
+		assert.Contains(t, prompt, want,
+			"system prompt missing error-rate content: %q", want)
+	}
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostErrorRateSlice1
+// — Cold-start parity invariant per §11 acceptance test 15. Across
+// all four providers, the user message produced by
+// buildDiscoveryUserMessage must remain byte-identical to v0.89.125
+// when the scan context carries no error-rate observations. The new
+// error rate kind lives ONLY in the system prompt; the user
+// message has no error-rate section, so a cold-start scan renders
+// the same body the prior tier extensions pinned.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostErrorRateSlice1(t *testing.T) {
+	// AWS.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-errorrate-s1",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	for _, kind := range []string{
+		"ERROR RATE CORRELATION KIND",
+		"span-quality-error-rate-spike",
+		"Resource exhaustion under load",
+	} {
+		assert.NotContains(t, awsMsg, kind,
+			"AWS user message should NOT include error-rate system-prompt content: %q", kind)
+	}
+
+	// GCP.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-errorrate-s1",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	for _, kind := range []string{
+		"ERROR RATE CORRELATION KIND",
+		"span-quality-error-rate-spike",
+		"Resource exhaustion under load",
+	} {
+		assert.NotContains(t, gcpMsg, kind,
+			"GCP user message should NOT include error-rate system-prompt content: %q", kind)
+	}
+
+	// Azure.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-errorrate-s1",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	for _, kind := range []string{
+		"ERROR RATE CORRELATION KIND",
+		"span-quality-error-rate-spike",
+		"Resource exhaustion under load",
+	} {
+		assert.NotContains(t, azureMsg, kind,
+			"Azure user message should NOT include error-rate system-prompt content: %q", kind)
+	}
+
+	// OCI.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-errorrate-s1",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	for _, kind := range []string{
+		"ERROR RATE CORRELATION KIND",
+		"span-quality-error-rate-spike",
+		"Resource exhaustion under load",
+	} {
+		assert.NotContains(t, ociMsg, kind,
+			"OCI user message should NOT include error-rate system-prompt content: %q", kind)
+	}
+}

@@ -393,6 +393,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	samplingRateKindsPromptSection +
 
+	errorRateKindsPromptSection +
+
 	serverlessTierKindsPromptSection +
 
 	orchestrationTierKindsPromptSection +
@@ -1266,6 +1268,88 @@ The exclusion table from #531 slice 2 chunk 4 handles operators
 who deliberately run aggressive sampling for cost reasons.
 The verdict learning loop records declines for tail-sampling
 and adaptive-sampling cases.
+
+` + "\n"
+
+// errorRateKindsPromptSection — error rate correlation slice 1
+// chunk 2 (v0.89.128, #768 Stream 166). One new recommendation
+// kind — span-quality-error-rate-spike — fires when the per-resource
+// current/baseline error rate ratio exceeds 2.0x AND the resource
+// processed at least 1000 invocations AND at least 50 errors in the
+// 24h window. Reuses the existing span-quality- webhook prefix from
+// v0.89.86 (NO new webhook routing) and the cold-start-style
+// 3-failure-mode reasoning framing.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no error-rate rows that trigger the kind (because
+// no resource has crossed the §3 ratio + minimum thresholds), the
+// rendered user message stays byte-identical to v0.89.127 across
+// all four providers. The 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostErrorRateSlice1
+// pins this invariant.
+const errorRateKindsPromptSection = `ERROR RATE CORRELATION KIND (slice 1 of error rate analysis):
+
+- span-quality-error-rate-spike: per-resource current/baseline
+  error rate ratio exceeds 2.0x AND the resource processed at
+  least 1000 invocations AND at least 50 errors in the 24h
+  window. Baseline is 168h (7d). Reuses the span-quality-
+  webhook prefix from v0.89.86 — NO new webhook routing.
+
+  Per-cloud error metrics: AWS Lambda Errors, GCP Cloud Run
+  request_count{5xx}, GCP Cloud Functions execution_count{error},
+  Azure Functions FunctionErrors, OCI Functions
+  function_invocation_count{error}.
+
+  3-FAILURE-MODE REASONING (uniform across all 5 surfaces):
+  (1) Recent deploy regression — MORE COMMON. Check the
+      function's deployment timeline. If errors started after
+      a deploy, revert or fix the regression at the application
+      layer. This Terraform PR does NOT fix application bugs.
+      DECLINE if your cause is (1).
+  (2) Downstream dependency failure — MORE COMMON. If the
+      function calls a database / API / queue that's failing,
+      errors propagate. Investigate the downstream first.
+      DECLINE if your cause is (2).
+  (3) Resource exhaustion under load — throttling, memory
+      pressure, connection-pool exhaustion. The Terraform PR
+      raises memory + concurrency limits to give the function
+      headroom. MERGE if your cause is (3).
+
+  CASES (1) AND (2) ARE THE MORE COMMON CAUSES. The Terraform
+  PR targets case (3). Operators whose actual cause is (1) or
+  (2) decline the PR; the verdict learning loop records the
+  decline so Squadron's future runs learn the distribution
+  for the fleet.
+
+  Terraform per-cloud (slice 1 ships case (3) only):
+  - AWS Lambda: aws_lambda_function memory_size = 1024,
+    reserved_concurrent_executions = 100.
+  - GCP Cloud Run: google_cloud_run_service
+    template.spec.container_concurrency = 80,
+    resources.limits.memory = "1Gi".
+  - GCP Cloud Functions: google_cloudfunctions2_function
+    service_config.available_memory = "1Gi".
+  - Azure Functions: azurerm_service_plan sku_name = "EP2"
+    (Premium plan tier bump from EP1).
+  - OCI Functions: oci_functions_function memory_in_mbs = 1024.
+
+  Near-zero baseline guard: when the baseline error rate is
+  below the 0.01% floor (essentially zero — no errors in the
+  168h window), Squadron substitutes the floor as the
+  comparison denominator to avoid spurious large ratios on
+  tiny absolute counts. The per-resource API endpoint surfaces
+  the substitution via baseline_adjusted = true so operators
+  know the ratio is computed against a floor, not the raw
+  baseline.
+
+CAVEAT FOR ALL ERROR RATE RECOMMENDATIONS:
+The exclusion table from #531 slice 2 chunk 4 handles
+operators running chaos engineering tests who intentionally
+spike errors. The verdict learning loop records declines for
+deploy-regression and downstream-failure cases — those are
+the MORE COMMON causes and the substrate counts on operators
+declining the PR when the actual cause is (1) or (2).
 
 ` + "\n"
 
