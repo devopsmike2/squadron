@@ -177,6 +177,41 @@ jump straight to that page.
   verifies telemetry is actually flowing, validates the
   spans Squadron receives are healthy, AND drafts the IaC
   PRs that close the gaps it finds."
+- [Cold-start latency — operator guide](./cold-start-latency-operator-guide.md) —
+  v0.89.112 through v0.89.116 operator runbook for the
+  cold-start latency analysis slice 1 arc (design at
+  [proposals/cold-start-latency-slice1.md](./proposals/cold-start-latency-slice1.md)).
+  First arc on a NEW substrate dimension (metric correlation)
+  alongside the existing presence + correctness dimensions.
+  Introduces the `MetricQuerier` interface in the scanner
+  package; slice 1 ships the AWS CloudWatch
+  GetMetricStatistics implementation for the Lambda
+  `InitDuration` metric. New `cold_start_observation` storage
+  table (v13 → v14 migration) tracks rolling 24h + 7d windows
+  per function. Detection rule: ratio >= 1.5x AND current_p95
+  >= 500ms AND baseline samples >= 50. New recommendation
+  kind `lambda-cold-start-baseline` reuses the existing
+  `lambda-` webhook prefix; iacpicker emits an
+  `aws_lambda_provisioned_concurrency_config` Terraform
+  pattern with a documented decline path for init-script
+  regression / architecture change. Serverless inventory rows
+  gain a `cold_start_p95_ms` field; DiscoveryAWS Serverless
+  section gains a "Cold-start P95 (24h)" column that renders
+  amber when exceeds_threshold. New per-resource endpoint
+  `GET /api/v1/discovery/{provider}/inventory/serverless/{id}/cold_start`
+  exposes current + baseline windows + ratio. 10 RPS rate
+  limiter per AWS account protects shared CloudWatch TPS.
+  Runbook documents cost surface (~free for 1K-function
+  fleets, ~\$20/month for 50K-function fleets), seasonal
+  traffic shift caveat, and the 3-failure-mode decline path.
+  **Slice 1 SHIPPED in v0.89.116.** Squadron's universal
+  claim grows a fifth verb: "scans, verifies telemetry is
+  flowing, validates the spans are healthy, MEASURES
+  cold-start latency against expected baselines, AND drafts
+  the IaC PRs that close the gaps." Honestly qualified —
+  MEASURES is 1-cloud (AWS Lambda) in slice 1; grows to
+  4-cloud through slice 2 + slice 3 as the substrate
+  generalizes.
 - [Span quality — operator guide](./span-quality-operator-guide.md) —
   v0.89.84 through v0.89.111 operator runbook for the span
   quality arc. Slice 1 (design at
