@@ -395,6 +395,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierKindsPromptSection +
 
+	eventSourceTierPropagationKindsPromptSection +
+
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
 	`level — the operator approves the whole plan at step 0 and the engine sequences the ` +
@@ -1347,6 +1349,87 @@ inbound request. This Terraform PR enables the missing
 primitive. After merge + apply + first event flow, Squadron's
 last_seen_at column populates for this event source within
 ~5 minutes."
+
+` + "\n"
+
+// eventSourceTierPropagationKindsPromptSection — event source tier
+// slice 2 chunk 5 (v0.89.107, #745 Stream 143). Adds the 5 per-message
+// propagation recommendation kinds atop the slice 1 source-level axis
+// kinds. These kinds fire when the slice 2 scanners (chunks 1-4,
+// v0.89.105-v0.89.106) determine that an event source's CONFIG would
+// drop trace context end-to-end even though the source-level trace
+// axis is on. The kinds reuse the slice 1 prefixes
+// (eventbridge-/pubsub-/servicebus-/streaming-) so the webhook
+// routing in iac_github_webhook.go does not need new prefix matchers.
+//
+// Cold-start invariant: the user-message renderer is unchanged, so
+// when the scan context carries no event source rows the rendered
+// user message stays byte-identical to v0.89.103 across all four
+// providers. The 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice2
+// pins this invariant.
+const eventSourceTierPropagationKindsPromptSection = `EVENT SOURCE TIER PROPAGATION KINDS (slice 2):
+
+These kinds fire when an inventory row in the event source
+tier has its source-level trace axis enabled BUT the
+control-plane config would strip the trace context before
+the downstream consumer receives it. Slice 1 detected the
+SOURCE-LEVEL primitive; slice 2 detects the per-message
+propagation config gap. Reuse the slice 1 prefixes — no new
+webhook routing prefixes are introduced.
+
+For AWS EventBridge:
+- eventbridge-rule-preserves-trace: bus has at least one
+  rule whose InputPath narrows past the X-Ray trace header
+  (e.g. "$.detail") OR whose InputTransformer template omits
+  the x-amzn-trace-id / traceparent literal. Terraform:
+  aws_cloudwatch_event_target with input_path removed (or
+  input_path = "$") and input_transformer including the
+  x-amzn-trace-id header in its input_template.
+
+For GCP Pub/Sub:
+- pubsub-schema-includes-traceparent: topic with
+  schema_settings.schema attached whose schema definition
+  omits a traceparent / googclient_OpenTelemetryTraceparent
+  field. Terraform: google_pubsub_schema definition adding
+  the traceparent field (string, optional) at the topic's
+  schema reference.
+- pubsub-subscription-preserves-attrs: subscription with
+  push delivery configured AND an attribute filter excluding
+  the traceparent attribute key. Terraform:
+  google_pubsub_subscription removing the offending filter
+  or extending it to include traceparent.
+
+For Azure Service Bus:
+- servicebus-policy-preserves-traceparent: namespace whose
+  authorization rules restrict ApplicationProperties via a
+  property-restricting RBAC role assignment, blocking
+  publishers from attaching traceparent. Terraform:
+  azurerm_servicebus_namespace_authorization_rule rights =
+  ["Listen", "Send"] without the property restriction, OR
+  azurerm_role_assignment removing the restrictive custom
+  role at the namespace scope.
+
+For OCI Streaming:
+- streaming-config-preserves-headers: stream with
+  retentionInHours < 24, which may truncate Kafka headers
+  carrying traceparent in some OCI Streaming versions.
+  Terraform: oci_streaming_stream retention_in_hours = 24
+  (or operator-tuned floor at or above 24).
+
+REASONING TEMPLATE for event source tier propagation
+recommendations:
+
+"This event source has its source-level trace axis enabled,
+but the propagation config would drop trace context before
+the downstream consumer receives it: [specific note]. Even
+though the cloud-native primitive is on, the
+publisher-to-consumer trace correlation breaks at the
+[rule / schema / policy / retention] boundary. This
+Terraform PR adjusts the config so the next message carries
+trace context end-to-end. Downstream consumer spans
+correlate to the upstream source span after merge + apply +
+first event flow."
 
 ` + "\n"
 

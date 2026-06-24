@@ -2004,6 +2004,14 @@ function EventSourcesSection({
   eventSources: EventSourceRow[];
 }) {
   const [open, setOpen] = useState(eventSources.length > 0);
+  // propagationDialog — event source tier slice 2 chunk 5 (v0.89.107,
+  // #745 Stream 143). Drives the side panel that surfaces all
+  // propagation_notes for a row clicking the ✗ cell. Null when no
+  // row is selected; the dialog stays unmounted in that case.
+  const [propagationDialog, setPropagationDialog] = useState<{
+    row: EventSourceRow;
+    notes: string[];
+  } | null>(null);
   return (
     <Card>
       <CardHeader>
@@ -2044,6 +2052,7 @@ function EventSourcesSection({
                     <th className="px-3 py-2 font-medium">Region</th>
                     <th className="px-3 py-2 font-medium">Trace axis</th>
                     <th className="px-3 py-2 font-medium">Log axis</th>
+                    <th className="px-3 py-2 font-medium">Propagation</th>
                     <th className="px-3 py-2 font-medium">Last seen</th>
                     <th className="px-3 py-2 font-medium">Quality</th>
                   </tr>
@@ -2070,6 +2079,14 @@ function EventSourcesSection({
                         <AxisCheck ok={s.has_log_axis} />
                       </td>
                       <td className="px-3 py-2 text-xs">
+                        <PropagationCell
+                          row={s}
+                          onOpen={(row, notes) =>
+                            setPropagationDialog({ row, notes })
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
                         <LastSeenCell value={s.last_seen_at} />
                       </td>
                       <td className="px-3 py-2 text-xs">
@@ -2083,7 +2100,125 @@ function EventSourcesSection({
           )}
         </CardContent>
       )}
+      <PropagationNotesDialog
+        state={propagationDialog}
+        onClose={() => setPropagationDialog(null)}
+      />
     </Card>
+  );
+}
+
+// PropagationCell — event source tier slice 2 chunk 5 (v0.89.107,
+// #745 Stream 143). Renders the per-row Propagation column on the
+// Event sources table. Three states:
+//   - undefined: nothing to evaluate → em dash
+//   - true:      config preserves trace context end-to-end → ✓
+//   - false:     config breaks propagation → ✗ button that opens
+//                the notes side panel (matches the slice 1 palette —
+//                amber for "primitive on but config gap").
+function PropagationCell({
+  row,
+  onOpen,
+}: {
+  row: EventSourceRow;
+  onOpen: (row: EventSourceRow, notes: string[]) => void;
+}) {
+  if (row.has_propagation_config === undefined) {
+    return (
+      <span
+        aria-label="not evaluated"
+        title="Propagation not evaluated for this row"
+        data-testid="propagation-cell"
+        data-value="unknown"
+      >
+        —
+      </span>
+    );
+  }
+  if (row.has_propagation_config) {
+    return (
+      <span
+        className="text-emerald-600"
+        aria-label="propagation preserved"
+        title="Config preserves trace context end-to-end"
+        data-testid="propagation-cell"
+        data-value="yes"
+      >
+        ✓
+      </span>
+    );
+  }
+  const notes = row.propagation_notes ?? [];
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(row, notes)}
+      className="text-amber-500 hover:text-amber-600"
+      aria-label="propagation broken — click for details"
+      title={notes[0] ?? "Propagation broken"}
+      data-testid="propagation-cell"
+      data-value="no"
+    >
+      ✗
+    </button>
+  );
+}
+
+// PropagationNotesDialog — event source tier slice 2 chunk 5
+// (v0.89.107, #745 Stream 143). Side panel surfaced from the
+// Propagation column ✗ button. Lists every propagation_notes entry
+// for the row so the operator can read the full set of config gaps
+// without leaving the Inventory tab. Uses the same Dialog primitive
+// as the AWS connect flow for visual consistency.
+function PropagationNotesDialog({
+  state,
+  onClose,
+}: {
+  state: { row: EventSourceRow; notes: string[] } | null;
+  onClose: () => void;
+}) {
+  const isOpen = state !== null;
+  return (
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent
+        className="max-w-lg"
+        data-testid="propagation-notes-dialog"
+      >
+        <DialogHeader>
+          <DialogTitle>Propagation notes</DialogTitle>
+          <DialogDescription>
+            {state
+              ? `${state.row.surface} · ${state.row.resource_name}`
+              : ""}
+          </DialogDescription>
+        </DialogHeader>
+        {state && state.notes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Propagation broken; no specific notes recorded for this row.
+          </p>
+        ) : null}
+        {state && state.notes.length > 0 ? (
+          <ul
+            className="space-y-2 text-sm"
+            data-testid="propagation-notes-list"
+          >
+            {state.notes.map((note, i) => (
+              <li
+                key={i}
+                className="rounded-md border border-amber-500/40 bg-amber-50/40 px-3 py-2 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200"
+              >
+                {note}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 

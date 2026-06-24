@@ -2698,4 +2698,220 @@ describe("DiscoveryAWSPage", () => {
     // multiple cells.
     expect(screen.getAllByText("bus").length).toBeGreaterThanOrEqual(1);
   });
+
+  // --- Event sources Propagation column (slice 2 chunk 5 /
+  // v0.89.107 #745 Stream 143) -----------------------------------
+  //
+  // Event source tier slice 2 ships a new Propagation column on the
+  // Event sources table. Three states: ✓ when has_propagation_config
+  // is true, ✗ button when false (opens a side panel with notes), em
+  // dash when undefined (nothing to evaluate). The ✗ button is amber
+  // matching the slice 1 palette.
+
+  it("TestDiscoveryAWS_EventSourcesTable_PropagationColumnRenders", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      event_sources: [
+        {
+          provider: "aws",
+          surface: "eventbridge",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "propagation-bus",
+          resource_arn:
+            "arn:aws:events:us-east-1:123456789012:event-bus/propagation-bus",
+          source_type: "bus",
+          has_trace_axis: true,
+          has_log_axis: true,
+          has_propagation_config: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Event sources \(1\)/i)).toBeInTheDocument();
+    });
+    // Propagation column header is present.
+    expect(screen.getByText("Propagation")).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAWS_EventSourcesTable_PropagationCheckmarkWhenTrue", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      event_sources: [
+        {
+          provider: "aws",
+          surface: "eventbridge",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "clean-bus",
+          resource_arn:
+            "arn:aws:events:us-east-1:123456789012:event-bus/clean-bus",
+          source_type: "bus",
+          has_trace_axis: true,
+          has_log_axis: true,
+          has_propagation_config: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Event sources \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("propagation-cell");
+    expect(cells).toHaveLength(1);
+    expect(cells[0]).toHaveAttribute("data-value", "yes");
+    expect(cells[0]).toHaveAttribute("aria-label", "propagation preserved");
+  });
+
+  it("TestDiscoveryAWS_EventSourcesTable_PropagationXMarkWhenFalseOpensDialog", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      event_sources: [
+        {
+          provider: "aws",
+          surface: "eventbridge",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "leaky-bus",
+          resource_arn:
+            "arn:aws:events:us-east-1:123456789012:event-bus/leaky-bus",
+          source_type: "bus",
+          has_trace_axis: true,
+          has_log_axis: true,
+          has_propagation_config: false,
+          propagation_notes: [
+            "rule 'order-events' has InputPath '$.detail' that strips trace header",
+            "rule 'shipping-events' has InputTransformer template omitting x-amzn-trace-id",
+          ],
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Event sources \(1\)/i)).toBeInTheDocument();
+    });
+    const cell = screen.getByTestId("propagation-cell");
+    expect(cell).toHaveAttribute("data-value", "no");
+    expect(cell.tagName).toBe("BUTTON");
+    // Click the ✗ button → side panel opens with all notes.
+    await user.click(cell);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("propagation-notes-dialog"),
+      ).toBeInTheDocument();
+    });
+    const list = screen.getByTestId("propagation-notes-list");
+    expect(list).toHaveTextContent(/InputPath/);
+    expect(list).toHaveTextContent(/InputTransformer/);
+  });
+
+  it("TestDiscoveryAWS_EventSourcesTable_PropagationDashWhenUndefined", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      event_sources: [
+        {
+          provider: "aws",
+          surface: "eventbridge",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "unevaluated-bus",
+          resource_arn:
+            "arn:aws:events:us-east-1:123456789012:event-bus/unevaluated-bus",
+          source_type: "bus",
+          has_trace_axis: true,
+          has_log_axis: true,
+          // has_propagation_config intentionally omitted to drive the
+          // em-dash branch.
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Event sources \(1\)/i)).toBeInTheDocument();
+    });
+    const cell = screen.getByTestId("propagation-cell");
+    expect(cell).toHaveAttribute("data-value", "unknown");
+    expect(cell).toHaveTextContent("—");
+  });
 });

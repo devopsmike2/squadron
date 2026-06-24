@@ -91,6 +91,10 @@ function makeProviderTrace(
     // — default to zero so EVT chip stays hidden in tests that don't
     // explicitly opt in.
     event_source_pct: 0,
+    // v0.89.107 (#745 Stream 143, Event source tier slice 2 chunk 5)
+    // — default to zero so the EVT chip propagation suffix stays
+    // hidden in tests that don't explicitly opt in.
+    propagation_pct: 0,
     ...over,
   };
 }
@@ -914,6 +918,98 @@ describe("DiscoveryDashboard", () => {
     });
     expect(
       screen.queryByTestId("trace-coverage-tier-chip-evt"),
+    ).not.toBeInTheDocument();
+  });
+
+  // --- EVT chip propagation suffix (v0.89.107 #745 Stream 143) ------
+  //
+  // Event source tier slice 2 chunk 5 extends the EVT chip with a
+  // "(prop N%)" suffix sourced from the per-provider propagation_pct
+  // weighted average. The suffix hides when the fleet-wide
+  // event_source_count is zero — per the spec §7 hide-when-no-events
+  // rule.
+
+  it("TestDiscoveryDashboard_EVTColumnGainsPropagationSuffix", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(
+      makeSummary(
+        {
+          totals: {
+            connection_count: 6,
+            instance_count: 198,
+            instrumented_count: 132,
+            uninstrumented_count: 66,
+            recommendation_count: 66,
+            serverless_count: 0,
+            orchestration_count: 0,
+            // Non-zero fleet-wide event_source_count drives the
+            // propagation suffix on the EVT chip.
+            event_source_count: 4,
+            coverage_pct: 66.7,
+          },
+        },
+        {
+          aws: { event_source_count: 4 },
+        },
+      ),
+    );
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {},
+        {
+          aws: makeProviderTrace({
+            coverage_pct: 67,
+            emitting_count: 10,
+            event_source_pct: 8,
+            propagation_pct: 23,
+          }),
+        },
+      ),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("trace-coverage-tier-chip-evt"),
+      ).toBeInTheDocument();
+    });
+    const suffix = screen.getByTestId(
+      "trace-coverage-tier-chip-evt-suffix",
+    );
+    expect(suffix).toHaveTextContent(/prop/);
+    expect(suffix).toHaveTextContent(/23%/);
+  });
+
+  it("TestDiscoveryDashboard_PropagationSuffixHiddenWhenEventSourceCountZero", async () => {
+    // event_source_count = 0 fleet-wide → the propagation suffix on
+    // the EVT chip stays hidden even when at least one provider has a
+    // non-zero propagation_pct (defensive — backend shouldn't emit
+    // non-zero propagation_pct without underlying event sources, but
+    // the UI gates on the inventory count for the operator-facing
+    // "(prop N%)" surface).
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {},
+        {
+          aws: makeProviderTrace({
+            coverage_pct: 67,
+            emitting_count: 10,
+            event_source_pct: 8,
+            propagation_pct: 23,
+          }),
+        },
+      ),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("trace-coverage-tier-chip-evt"),
+      ).toBeInTheDocument();
+    });
+    // The EVT chip itself renders (event_source_pct = 8 keeps it
+    // visible), but the propagation suffix must NOT render since the
+    // fleet-wide event_source_count is zero.
+    expect(
+      screen.queryByTestId("trace-coverage-tier-chip-evt-suffix"),
     ).not.toBeInTheDocument();
   });
 
