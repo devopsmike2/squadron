@@ -455,6 +455,7 @@ type fakeFactory struct {
 	ecs         ECSClient
 	sfn         SFNClient
 	eventbridge EventBridgeClient
+	sns         SNSClient
 	sts         STSClient
 }
 
@@ -542,6 +543,17 @@ func (f *fakeFactory) EventBridge(_ context.Context, _ string) (EventBridgeClien
 		return &fakeEventBridge{}, nil
 	}
 	return f.eventbridge, nil
+}
+
+// SNS returns the configured fake SNS client. Same zero-output
+// fallback as the other services so tests that don't exercise the SNS
+// path get an empty-inventory fake rather than nil-panicking. Slice 3
+// chunk 1 of the event-source-tier arc (v0.89.138, #778 Stream 176).
+func (f *fakeFactory) SNS(_ context.Context, _ string) (SNSClient, error) {
+	if f.sns == nil {
+		return &fakeSNS{}, nil
+	}
+	return f.sns, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake

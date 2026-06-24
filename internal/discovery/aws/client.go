@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
+	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -242,6 +243,28 @@ type EventBridgeClient interface {
 	ListTargetsByRule(ctx context.Context, params *eventbridge.ListTargetsByRuleInput, optFns ...func(*eventbridge.Options)) (*eventbridge.ListTargetsByRuleOutput, error)
 }
 
+// SNSClient is the narrow AWS SNS surface the event source scanner
+// depends on. Added in v0.89.138 (#778 Stream 176, slice 3 chunk 1 of
+// the Event source tier arc — AWS SNS as the second AWS event source
+// surface alongside EventBridge). The real *sns.Client satisfies it.
+//
+// The two methods cover the slice 3 chunk 1 detection contract:
+// ListTopics surfaces every topic the assumed-role principal can see
+// in a region (paginated via NextToken); GetTopicAttributes returns
+// the per-topic attribute map the scanner reads for the
+// SubscriptionsConfirmed (HasTraceAxis) + per-protocol delivery
+// feedback role ARN attributes (HasLogAxis) per
+// docs/proposals/event-source-tier-slice3.md §3. Both APIs are
+// read-only.
+//
+// IAM contract per docs/proposals/event-source-tier-slice3.md §12:
+// sns:ListTopics + sns:GetTopicAttributes. Both read-only. Squadron
+// does NOT call any SNS mutation API.
+type SNSClient interface {
+	ListTopics(ctx context.Context, params *sns.ListTopicsInput, optFns ...func(*sns.Options)) (*sns.ListTopicsOutput, error)
+	GetTopicAttributes(ctx context.Context, params *sns.GetTopicAttributesInput, optFns ...func(*sns.Options)) (*sns.GetTopicAttributesOutput, error)
+}
+
 // SFNClient is the narrow AWS Step Functions surface the orchestration
 // scanner depends on. Added in v0.89.95 (#728 Stream 126, slice 1 chunk
 // 1 of the Orchestration tier arc). The real *sfn.Client satisfies it.
@@ -340,6 +363,14 @@ type ClientFactory interface {
 	// plus any custom event buses the account has provisioned in the
 	// region.
 	EventBridge(ctx context.Context, region string) (EventBridgeClient, error)
+
+	// SNS returns an SNS client for the supplied region. Added in slice
+	// 3 chunk 1 of the event-source-tier arc (v0.89.138, #778 Stream
+	// 176). SNS is a per-region API — the supplied region is where
+	// ListTopics walks. The scanner reuses the same per-Scanner
+	// assumed-role session as every other surface; SNS shares the
+	// substrate's existing AWS rate limiter posture.
+	SNS(ctx context.Context, region string) (SNSClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -510,6 +541,13 @@ func (f *sdkClientFactory) SFN(_ context.Context, region string) (SFNClient, err
 
 func (f *sdkClientFactory) EventBridge(_ context.Context, region string) (EventBridgeClient, error) {
 	return eventbridge.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) SNS(_ context.Context, region string) (SNSClient, error) {
+	return sns.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil
