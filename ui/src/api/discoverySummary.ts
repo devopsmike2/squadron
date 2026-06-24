@@ -51,6 +51,12 @@ export type ProviderSummary = {
   // surfaced. Zero on cold start and always zero for OCI in slice 1
   // (OCI orchestration is deferred to slice 2).
   orchestration_count: number;
+  // event_source_count — event source tier slice 1 chunk 5 (v0.89.102,
+  // #738 Stream 136). Per-provider count of event sources the most
+  // recent scan_completed event surfaced. Zero on cold start.
+  // Populates for ALL four providers (including OCI) since OCI
+  // Streaming ships in slice 1.
+  event_source_count: number;
   enabled: boolean;
 };
 
@@ -74,6 +80,10 @@ export type SummaryTotals = {
   // (v0.89.97, #731 Stream 129). Cross-provider sum of
   // ProviderSummary.orchestration_count.
   orchestration_count: number;
+  // event_source_count — event source tier slice 1 chunk 5 (v0.89.102,
+  // #738 Stream 136). Cross-provider sum of
+  // ProviderSummary.event_source_count.
+  event_source_count: number;
   coverage_pct: number;
 };
 

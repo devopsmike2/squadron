@@ -953,22 +953,39 @@ func providerFromRecommendationKind(kind string) string {
 	// lambda- case so the AWS family stays grouped.
 	case strings.HasPrefix(kind, "stepfunc-"):
 		return "aws"
+	// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) —
+	// AWS EventBridge kinds (eventbridge-xray-enable,
+	// eventbridge-schemas-discover, eventbridge-logging-enable) route
+	// to AWS. Grouped with the other AWS prefixes.
+	case strings.HasPrefix(kind, "eventbridge-"):
+		return "aws"
 	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-") ||
 		strings.HasPrefix(kind, "cloudrun-") || strings.HasPrefix(kind, "cloudfunc-") ||
 		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)
 		// — GCP Workflows kinds (workflows-trace-enable,
 		// workflows-logging-enable) route to GCP.
-		strings.HasPrefix(kind, "workflows-"):
+		strings.HasPrefix(kind, "workflows-") ||
+		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136)
+		// — GCP Pub/Sub kinds (pubsub-trace-enable, pubsub-schema-attach)
+		// route to GCP.
+		strings.HasPrefix(kind, "pubsub-"):
 		return "gcp"
 	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-") ||
 		strings.HasPrefix(kind, "azfunc-") ||
 		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)
 		// — Azure Logic Apps kinds (logicapps-appinsights-enable,
 		// logicapps-diagnostics-enable) route to Azure.
-		strings.HasPrefix(kind, "logicapps-"):
+		strings.HasPrefix(kind, "logicapps-") ||
+		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136)
+		// — Azure Service Bus kinds (servicebus-diagnostics-enable)
+		// route to Azure.
+		strings.HasPrefix(kind, "servicebus-"):
 		return "azure"
 	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-") || strings.HasPrefix(kind, "oke-") ||
-		strings.HasPrefix(kind, "ocifunc-"):
+		strings.HasPrefix(kind, "ocifunc-") ||
+		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136)
+		// — OCI Streaming kinds (streaming-logging-enable) route to OCI.
+		strings.HasPrefix(kind, "streaming-"):
 		return "oci"
 	default:
 		return "aws"

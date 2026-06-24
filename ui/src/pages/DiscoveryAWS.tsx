@@ -62,6 +62,7 @@ import {
   type ScanResult,
   type ServerlessRow,
   type OrchestrationRow,
+  type EventSourceRow,
 } from "@/api/discovery";
 import {
   IaCGitHubOpenPRError,
@@ -1263,6 +1264,11 @@ function ScanResultPanel({
       {/* Orchestration section (orchestration tier slice 1 chunk 4
           — v0.89.97, #731 Stream 129). */}
       <OrchestrationSection orchestrations={result.orchestrations ?? []} />
+
+      {/* Event sources section (event source tier slice 1 chunk 5
+          — v0.89.102, #738 Stream 136). All 4 providers render this
+          tab (including OCI, unlike Orchestration which hid OCI). */}
+      <EventSourcesSection eventSources={result.event_sources ?? []} />
     </div>
   );
 }
@@ -1970,6 +1976,104 @@ function OrchestrationSection({
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <QualityDot quality={o.span_quality} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// EventSourcesSection — event source tier slice 1 chunk 5 (v0.89.102,
+// #738 Stream 136). Renders the per-row AWS EventBridge inventory the
+// chunk 1 scanner produced. Columns per §7 of the design doc: Resource
+// Name, Surface, Type (source_type — bus/topic/queue/namespace/stream),
+// Region, Trace axis, Log axis, Last seen, Quality. AWS gets the
+// Quality column per the slice 1 constraint mirroring v0.89.92 /
+// v0.89.97 — GCP / Azure / OCI parity for QualityDot is a slice 2
+// candidate. The section collapses when empty so an account with no
+// event sources still gets a header but no row noise.
+function EventSourcesSection({
+  eventSources,
+}: {
+  eventSources: EventSourceRow[];
+}) {
+  const [open, setOpen] = useState(eventSources.length > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+          data-testid="event-sources-section-toggle"
+        >
+          <CardTitle className="text-base">
+            Event sources ({eventSources.length})
+          </CardTitle>
+          {open ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {eventSources.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No event sources visible in the scanned regions.
+            </p>
+          ) : (
+            <div
+              className="overflow-x-auto rounded-md border"
+              data-testid="event-sources-table"
+            >
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40">
+                  <tr className="text-left">
+                    <th className="px-3 py-2 font-medium">Resource Name</th>
+                    <th className="px-3 py-2 font-medium">Surface</th>
+                    <th className="px-3 py-2 font-medium">Type</th>
+                    <th className="px-3 py-2 font-medium">Region</th>
+                    <th className="px-3 py-2 font-medium">Trace axis</th>
+                    <th className="px-3 py-2 font-medium">Log axis</th>
+                    <th className="px-3 py-2 font-medium">Last seen</th>
+                    <th className="px-3 py-2 font-medium">Quality</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eventSources.map((s) => (
+                    <tr
+                      key={s.resource_arn || s.resource_name}
+                      className="border-t"
+                      data-testid="event-sources-row"
+                    >
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {s.resource_name}
+                      </td>
+                      <td className="px-3 py-2 text-xs">{s.surface}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {s.source_type || "—"}
+                      </td>
+                      <td className="px-3 py-2 text-xs">{s.region}</td>
+                      <td className="px-3 py-2 text-xs">
+                        <AxisCheck ok={s.has_trace_axis} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <AxisCheck ok={s.has_log_axis} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <LastSeenCell value={s.last_seen_at} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <QualityDot quality={s.span_quality} />
                       </td>
                     </tr>
                   ))}

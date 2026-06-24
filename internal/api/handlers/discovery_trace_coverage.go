@@ -71,6 +71,16 @@ type ProviderTraceCoverage struct {
 	// to slice 2 per the design doc §2). The dashboard hides the
 	// ORCH chip line when fleet-wide inventory is 0.
 	OrchestrationPct float64 `json:"orchestration_pct"`
+	// EventSourcePct — event source tier slice 1 chunk 5 (v0.89.102,
+	// #738 Stream 136) — per-provider event source coverage rendered
+	// as emitting / inventory * 100 over the event-source-only
+	// sub-counts. An event source counts as "emitting" when
+	// last_seen_at is within 24h (docs/proposals/
+	// event-source-tier-slice1.md §6.4). Zero on cold start. Unlike
+	// OrchestrationPct, all four providers populate (including OCI)
+	// since OCI Streaming ships in slice 1. The dashboard hides the
+	// EVT chip line when fleet-wide inventory is 0.
+	EventSourcePct float64 `json:"event_source_pct"`
 }
 
 // TraceCoverageTotals is the cross-provider roll-up.
@@ -146,6 +156,20 @@ type ServerlessCoverageQuery interface {
 // because the OCI scanner returns no orchestrations.
 type OrchestrationCoverageQuery interface {
 	OrchestrationCoverageForScope(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (inventory, emitting int, err error)
+}
+
+// EventSourceCoverageQuery — event source tier slice 1 chunk 5
+// (v0.89.102, #738 Stream 136). Returns per-scope event source
+// inventory + emitting counts so the per-provider EventSourcePct
+// chip can be computed alongside the existing coverage_pct. A row
+// counts as "emitting" when its last_seen_at is within staleAfter
+// (24h per design doc §6.4). Zero counts on cold start; nil
+// implementation short-circuits to (0, 0) the same way
+// OrchestrationCoverageQuery does. Unlike orchestration, OCI is
+// expected to return real counts in slice 1 — OCI Streaming ships
+// as a real surface alongside the other three clouds.
+type EventSourceCoverageQuery interface {
+	EventSourceCoverageForScope(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (inventory, emitting int, err error)
 }
 
 // TraceIndex is the slim surface DiscoveryTraceCoverageHandlers uses to
@@ -246,6 +270,7 @@ type DiscoveryTraceCoverageHandlers struct {
 	pendingQuery       PendingTraceEmissionCountQuery
 	serverlessQuery    ServerlessCoverageQuery
 	orchestrationQuery OrchestrationCoverageQuery
+	eventSourceQuery   EventSourceCoverageQuery
 	auditService       services.AuditService
 	cache           *traceCoverageCache
 	logger          *zap.Logger
@@ -312,6 +337,16 @@ func (h *DiscoveryTraceCoverageHandlers) WithServerlessQuery(q ServerlessCoverag
 // signature churn.
 func (h *DiscoveryTraceCoverageHandlers) WithOrchestrationQuery(q OrchestrationCoverageQuery) *DiscoveryTraceCoverageHandlers {
 	h.orchestrationQuery = q
+	return h
+}
+
+// WithEventSourceQuery — event source tier slice 1 chunk 5
+// (v0.89.102, #738 Stream 136). Optional setter for the per-scope
+// event source coverage query. nil short-circuits the EventSourcePct
+// column to 0 for every provider. Same setter-only extension pattern
+// as WithOrchestrationQuery.
+func (h *DiscoveryTraceCoverageHandlers) WithEventSourceQuery(q EventSourceCoverageQuery) *DiscoveryTraceCoverageHandlers {
+	h.eventSourceQuery = q
 	return h
 }
 
@@ -564,6 +599,32 @@ func (h *DiscoveryTraceCoverageHandlers) aggregateProvider(
 			ocEmit += emit
 		}
 		out.OrchestrationPct = computeTraceCoveragePct(ocEmit, ocInv)
+	}
+
+	// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) —
+	// roll up per-scope event source coverage when the optional
+	// EventSourceCoverageQuery is wired. Mirrors the orchestrationQuery
+	// nil-tolerant posture. All four providers (including OCI) are
+	// expected to surface real counts in slice 1 since OCI Streaming
+	// ships as a real surface alongside the other three clouds.
+	if h.eventSourceQuery != nil {
+		var esInv, esEmit int
+		for _, scope := range scopes {
+			if scope == "" {
+				continue
+			}
+			inv, emit, err := h.eventSourceQuery.EventSourceCoverageForScope(ctx, provider, scope, pendingTraceEmissionStaleAfter)
+			if err != nil {
+				h.logger.Warn("trace coverage: event source lookup failed",
+					zap.String("provider", provider),
+					zap.String("scope", scope),
+					zap.Error(err))
+				continue
+			}
+			esInv += inv
+			esEmit += emit
+		}
+		out.EventSourcePct = computeTraceCoveragePct(esEmit, esInv)
 	}
 
 	return out

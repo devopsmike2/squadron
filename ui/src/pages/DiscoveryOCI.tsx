@@ -62,6 +62,7 @@ import {
   type ScanOCIResponse,
   type ServerlessRow,
   type OrchestrationRow,
+  type EventSourceRow,
   type ValidateOCIResponse,
 } from "@/api/discoveryOCI";
 import { Badge } from "@/components/ui/badge";
@@ -129,6 +130,11 @@ const INVENTORY_SUBTAB_SERVERLESS = "serverless";
 // orchestrations: []" and the sub-tab MUST be hidden when the rows
 // array is empty (design doc §7 + §11 acceptance test 17).
 const INVENTORY_SUBTAB_ORCHESTRATION = "orchestration";
+// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) —
+// sixth Inventory sub-tab. Unlike Orchestration (which is hidden when
+// empty for OCI), Event sources renders for OCI because OCI Streaming
+// ships as a real surface in slice 1 (design doc §3.4 + §7).
+const INVENTORY_SUBTAB_EVENT_SOURCES = "event_sources";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1213,6 +1219,11 @@ function InventoryTab({
               Orchestration
             </TabsTrigger>
           )}
+          {/* Event sources sub-tab renders for OCI in slice 1, unlike
+              Orchestration which is hidden — see design doc §7. */}
+          <TabsTrigger value={INVENTORY_SUBTAB_EVENT_SOURCES}>
+            Event sources
+          </TabsTrigger>
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
           <InventoryTable rows={scan.computes} />
@@ -1231,6 +1242,9 @@ function InventoryTab({
             <OrchestrationInventoryTable rows={scan.orchestrations ?? []} />
           </TabsContent>
         )}
+        <TabsContent value={INVENTORY_SUBTAB_EVENT_SOURCES} className="mt-3">
+          <EventSourcesInventoryTable rows={scan.event_sources ?? []} />
+        </TabsContent>
       </Tabs>
     </div>
   );
@@ -1565,6 +1579,72 @@ function OrchestrationInventoryTable({ rows }: { rows: OrchestrationRow[] }) {
               </td>
               <td className="px-3 py-2 text-xs">{row.surface}</td>
               <td className="px-3 py-2 text-xs">{row.workflow_type || "—"}</td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_trace_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_log_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// EventSourcesInventoryTable — event source tier slice 1 chunk 5
+// (v0.89.102, #738 Stream 136). Renders the per-row OCI Streaming
+// inventory the chunk 4 scanner produced. Columns follow §7 of the
+// design doc: Resource Name, Surface, Type, Region, Trace axis, Log
+// axis, Last seen. The Quality column is AWS-only per the slice 1
+// constraint. OCI populates this sub-tab unlike Orchestration which
+// is hidden when empty — OCI Streaming ships as a real surface in
+// slice 1 (design doc §3.4).
+function EventSourcesInventoryTable({ rows }: { rows: EventSourceRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div
+        className="rounded-md border p-6 text-center text-sm text-muted-foreground"
+        data-testid="event-sources-empty"
+      >
+        No event sources discovered. Run a scan to refresh.
+      </div>
+    );
+  }
+  return (
+    <div
+      className="overflow-x-auto rounded-md border"
+      data-testid="event-sources-table"
+    >
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Resource Name</th>
+            <th className="px-3 py-2 font-medium">Surface</th>
+            <th className="px-3 py-2 font-medium">Type</th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">Trace axis</th>
+            <th className="px-3 py-2 font-medium">Log axis</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.resource_arn || row.resource_name}
+              className="border-t"
+              data-testid="event-sources-row"
+            >
+              <td className="px-3 py-2 font-mono text-xs">
+                {row.resource_name}
+              </td>
+              <td className="px-3 py-2 text-xs">{row.surface}</td>
+              <td className="px-3 py-2 text-xs">{row.source_type || "—"}</td>
               <td className="px-3 py-2 text-xs">{row.region}</td>
               <td className="px-3 py-2 text-xs">
                 <OrchestrationAxisCheck ok={row.has_trace_axis} />

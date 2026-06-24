@@ -87,6 +87,10 @@ function makeProviderTrace(
     // — default to zero so ORCH chip stays hidden in tests that
     // don't explicitly opt in.
     orchestration_pct: 0,
+    // v0.89.102 (#738 Stream 136, Event source tier slice 1 chunk 5)
+    // — default to zero so EVT chip stays hidden in tests that don't
+    // explicitly opt in.
+    event_source_pct: 0,
     ...over,
   };
 }
@@ -145,6 +149,8 @@ function makeProvider(over: Partial<ProviderSummary> = {}): ProviderSummary {
     serverless_count: 0,
     // v0.89.97 (#731 Stream 129, Orchestration tier slice 1 chunk 4).
     orchestration_count: 0,
+    // v0.89.102 (#738 Stream 136, Event source tier slice 1 chunk 5).
+    event_source_count: 0,
     ...over,
   };
 }
@@ -171,6 +177,7 @@ function makeSummary(
       recommendation_count: 66,
       serverless_count: 0,
       orchestration_count: 0,
+      event_source_count: 0,
       coverage_pct: 66.7,
     },
     recent_recommendations: [],
@@ -859,6 +866,54 @@ describe("DiscoveryDashboard", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByTestId("trace-coverage-tier-chip-row"),
+    ).not.toBeInTheDocument();
+  });
+
+  // --- EVT chip column (v0.89.102 #738 Stream 136) ------------------
+  //
+  // Event source tier slice 1 chunk 5 extends the per-tier chip row
+  // with an EVT column. Same hide-when-zero pattern as ORCH; the
+  // chip line stays hidden when no tier reports a non-zero pct.
+
+  it("TestDiscoveryDashboard_TraceCoveragePanel_EVTColumnRendersWhenNonZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {},
+        {
+          aws: makeProviderTrace({
+            coverage_pct: 67,
+            emitting_count: 10,
+            event_source_pct: 8,
+          }),
+        },
+      ),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("trace-coverage-tier-chip-evt"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId("trace-coverage-tier-chip-evt"),
+    ).toHaveTextContent(/EVT/);
+    expect(
+      screen.getByTestId("trace-coverage-tier-chip-evt"),
+    ).toHaveTextContent(/8%/);
+  });
+
+  it("TestDiscoveryDashboard_TraceCoveragePanel_EVTColumnHiddenWhenZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Default makeTraceCoverage() carries event_source_pct = 0 on every
+    // provider, so the EVT chip must stay hidden.
+    mockedGetTraceCoverage.mockResolvedValue(makeTraceCoverage());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-panel")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("trace-coverage-tier-chip-evt"),
     ).not.toBeInTheDocument();
   });
 

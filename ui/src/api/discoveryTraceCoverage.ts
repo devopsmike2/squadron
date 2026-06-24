@@ -73,6 +73,18 @@ export type ProviderTraceCoverage = {
    * Required field — the backend always populates it.
    */
   orchestration_pct: number;
+  /**
+   * event_source_pct — event source tier slice 1 chunk 5 (v0.89.102,
+   * #738 Stream 136). Per-provider event source coverage rendered as
+   * emitting / inventory * 100 over the event-source-only sub-counts.
+   * A source counts as emitting when last_seen_at is within 24h
+   * (design doc §6.4). Zero on cold start. Unlike orchestration_pct,
+   * all four providers (including OCI) populate this field since OCI
+   * Streaming ships in slice 1. The dashboard hides the EVT chip line
+   * when fleet-wide inventory is 0. Required field — the backend
+   * always populates it.
+   */
+  event_source_pct: number;
 };
 
 // --- Cross-provider totals -----------------------------------------

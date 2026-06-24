@@ -780,3 +780,118 @@ func TestDiscoverySummary_ServerlessCountZeroOnColdStart(t *testing.T) {
 		t.Errorf("totals.serverless_count = %d, want 0 (cold start)", got)
 	}
 }
+
+// --- Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) -
+//
+// TestDiscoverySummary_IncludesEventSourceCount — §11 acceptance test
+// 13 for the event source tier: seeding the audit projection with an
+// event_source_count per provider must surface on each
+// ProviderSummary.EventSourceCount field and roll up to
+// Totals.EventSourceCount. Unlike orchestration where OCI was always
+// zero, the event source tier ships all four providers in slice 1 —
+// OCI Streaming is a real surface.
+func TestDiscoverySummary_IncludesEventSourceCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"111122223333"}}
+	gcp := &stubGCPStore{ids: []string{"gcp-conn-1"}}
+	az := &stubAzureStore{ids: []string{"az-conn-1"}}
+	oci := &stubOCIStore{ids: []string{"oci-conn-1"}}
+
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	audit := &stubAuditQuery{
+		scans: map[string]map[string]ScanSummary{
+			"aws": {
+				"111122223333": {ScopeID: "111122223333", CompletedAt: now,
+					InstanceCount: 10, InstrumentedCount: 6, UninstrumentedCount: 4,
+					EventSourceCount: 4},
+			},
+			"gcp": {
+				"gcp-conn-1": {ScopeID: "gcp-conn-1", CompletedAt: now,
+					InstanceCount: 20, InstrumentedCount: 12, UninstrumentedCount: 8,
+					EventSourceCount: 3},
+			},
+			"azure": {
+				"az-conn-1": {ScopeID: "az-conn-1", CompletedAt: now,
+					InstanceCount: 30, InstrumentedCount: 18, UninstrumentedCount: 12,
+					EventSourceCount: 2},
+			},
+			"oci": {
+				"oci-conn-1": {ScopeID: "oci-conn-1", CompletedAt: now,
+					InstanceCount: 40, InstrumentedCount: 24, UninstrumentedCount: 16,
+					EventSourceCount: 1},
+			},
+		},
+	}
+	h := NewDiscoverySummaryHandlers(aws, gcp, az, oci, nil, audit, time.Second, nil, nil)
+	w := summaryDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	r := parseSummary(t, w)
+
+	cases := []struct {
+		name string
+		want int
+	}{
+		{"aws", 4}, {"gcp", 3}, {"azure", 2}, {"oci", 1},
+	}
+	for _, tc := range cases {
+		if got := r.Providers[tc.name].EventSourceCount; got != tc.want {
+			t.Errorf("%s.event_source_count = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	if got, want := r.Totals.EventSourceCount, 10; got != want {
+		t.Errorf("totals.event_source_count = %d, want %d", got, want)
+	}
+}
+
+// TestDiscoverySummary_TotalsAggregateEventSourceAcrossProviders —
+// confirms the cross-provider rollup sums correctly across enabled
+// providers and skips disabled ones. Seeds nonzero counts in two of
+// four providers; asserts the third + fourth contribute zero.
+func TestDiscoverySummary_TotalsAggregateEventSourceAcrossProviders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"111122223333"}}
+	gcp := &stubGCPStore{ids: []string{"gcp-conn-1"}}
+	az := &stubAzureStore{ids: []string{"az-conn-1"}}
+	oci := &stubOCIStore{ids: []string{"oci-conn-1"}}
+
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	audit := &stubAuditQuery{
+		scans: map[string]map[string]ScanSummary{
+			"aws": {
+				"111122223333": {ScopeID: "111122223333", CompletedAt: now,
+					InstanceCount: 10, EventSourceCount: 5},
+			},
+			"gcp": {
+				"gcp-conn-1": {ScopeID: "gcp-conn-1", CompletedAt: now,
+					InstanceCount: 20, EventSourceCount: 7},
+			},
+			// azure + oci scans have no event_source_count field set —
+			// cold-start posture: contribute 0 to the totals.
+			"azure": {
+				"az-conn-1": {ScopeID: "az-conn-1", CompletedAt: now, InstanceCount: 30},
+			},
+			"oci": {
+				"oci-conn-1": {ScopeID: "oci-conn-1", CompletedAt: now, InstanceCount: 40},
+			},
+		},
+	}
+	h := NewDiscoverySummaryHandlers(aws, gcp, az, oci, nil, audit, time.Second, nil, nil)
+	w := summaryDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	r := parseSummary(t, w)
+	if got, want := r.Totals.EventSourceCount, 12; got != want {
+		t.Errorf("totals.event_source_count = %d, want %d", got, want)
+	}
+	if got := r.Providers["azure"].EventSourceCount; got != 0 {
+		t.Errorf("azure.event_source_count = %d, want 0 (cold-start projection)", got)
+	}
+	if got := r.Providers["oci"].EventSourceCount; got != 0 {
+		t.Errorf("oci.event_source_count = %d, want 0 (cold-start projection)", got)
+	}
+}

@@ -393,6 +393,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	orchestrationTierKindsPromptSection +
 
+	eventSourceTierKindsPromptSection +
+
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
 	`level — the operator approves the whole plan at step 0 and the engine sequences the ` +
@@ -1274,6 +1276,76 @@ no spans correlating the workflow execution back to its
 per-state resource invocations. This Terraform PR enables
 the missing primitive. After merge + apply + first execution,
 the Last seen column populates for this orchestration within
+~5 minutes."
+
+` + "\n"
+
+// eventSourceTierKindsPromptSection — event source tier slice 1
+// chunk 5 (v0.89.102, #738 Stream 136). Seven new recommendation
+// kinds across four surfaces (EventBridge / Pub/Sub / Service Bus /
+// Streaming). Unlike orchestration where OCI was deferred, the event
+// source tier ships all four clouds in slice 1 because OCI Streaming
+// is shape-compatible with the cross-cloud detection (a log-group
+// proxy for the trace axis). Section is appended to the discovery
+// system prompt alongside the trace-emission, span-quality, serverless,
+// and orchestration tier sections so the model reads it as part of
+// the universal kind catalog.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no event source rows the rendered user message
+// stays byte-identical to v0.89.98 across all four providers. The
+// 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice1
+// pins this invariant.
+const eventSourceTierKindsPromptSection = `EVENT SOURCE TIER KINDS (slice 1):
+
+These kinds fire when an inventory row in the event source
+tier has its observability axis disabled. Event sources are
+the root of trace continuity — the layer where the trace ID
+is created or fails to be created. Slice 1 detects at the
+SOURCE level only; per-message propagation analysis is slice 2.
+
+For AWS EventBridge:
+- eventbridge-xray-enable: event bus with EventBridge Schemas
+  Discoverer disabled (slice 1 uses log-target rules as a proxy
+  for trace readiness; Schemas Discoverer detection is slice 2).
+  Terraform: aws_schemas_discoverer description = "Squadron-recommended discoverer for bus X".
+- eventbridge-schemas-discover: event bus without a Schemas
+  Discoverer attached. Same Terraform pattern as eventbridge-xray-enable.
+- eventbridge-logging-enable: event bus without any rule whose
+  target points at a CloudWatch Logs log group. Terraform:
+  aws_cloudwatch_event_target with arn = aws_cloudwatch_log_group.bus.arn.
+
+For GCP Pub/Sub:
+- pubsub-trace-enable: topic with tracingConfig.samplingRatio
+  absent or set to 0. Terraform: google_pubsub_topic
+  tracing_config { sampling_ratio = 1.0 } (or operator-tuned floor).
+- pubsub-schema-attach: topic without a schema_settings.schema
+  reference. Terraform: google_pubsub_topic schema_settings {
+  schema = google_pubsub_schema.<name>.id encoding = "JSON" }.
+
+For Azure Service Bus:
+- servicebus-diagnostics-enable: namespace without diagnostic
+  settings routing to App Insights OR Log Analytics workspace.
+  Terraform: azurerm_monitor_diagnostic_setting target_resource_id =
+  azurerm_servicebus_namespace.<name>.id with workspace_id OR
+  application_insights_id set.
+
+For OCI Streaming:
+- streaming-logging-enable: stream without Logging service
+  log group attached. Terraform: oci_logging_log resource with
+  configuration.source.resource = stream.id and
+  configuration.source.service = "streaming".
+
+REASONING TEMPLATE for event source tier recommendations:
+
+"This event source has [axis] disabled. Event sources are the
+root of trace continuity — without this axis on, Squadron's
+traceindex can't correlate the workflow execution back to the
+inbound request. This Terraform PR enables the missing
+primitive. After merge + apply + first event flow, Squadron's
+last_seen_at column populates for this event source within
 ~5 minutes."
 
 ` + "\n"
