@@ -1333,6 +1333,12 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
             <th className="px-3 py-2 font-medium">Region</th>
             <th className="px-3 py-2 font-medium">Trace axis</th>
             <th className="px-3 py-2 font-medium">OTel distro</th>
+            {/* Cold-start latency analysis slice 1 chunk 3 (v0.89.115,
+                #753 Stream 151) — mirrored column on GCP Serverless
+                table; slice 1 covers AWS Lambda only, so every row
+                renders "—" here. Slice 2 will populate Cloud Run /
+                Cloud Functions cold-start observations. */}
+            <th className="px-3 py-2 font-medium">Cold-start P95 (24h)</th>
             <th className="px-3 py-2 font-medium">Last seen</th>
           </tr>
         </thead>
@@ -1369,6 +1375,16 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
                     No
                   </Badge>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <span
+                  className="text-muted-foreground"
+                  title="Cold-start observation not available on this surface (AWS-only in slice 1)"
+                  data-testid="cold-start-cell"
+                  data-value="none"
+                >
+                  —
+                </span>
               </td>
               <td className="px-3 py-2 text-xs">
                 <LastSeenCell value={row.last_seen_at} />

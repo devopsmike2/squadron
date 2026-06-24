@@ -2349,3 +2349,112 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice2(t *te
 	assert.NotContains(t, ociMsg, "EVENT SOURCE TIER PROPAGATION KINDS")
 	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
 }
+
+// TestDiscoveryProposer_ColdStartKindInSystemPrompt — Cold-start
+// latency analysis slice 1 chunk 3 (v0.89.115, #753 Stream 151). The
+// new lambda-cold-start-baseline recommendation kind must appear in
+// the shared system prompt so the model can route cold-start findings
+// to the right kind when the scan inventory carries Lambda rows that
+// crossed the 1.5x ratio + 500ms floor predicates. Prior-tier kinds
+// must remain present after the extension.
+func TestDiscoveryProposer_ColdStartKindInSystemPrompt(t *testing.T) {
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"lambda-cold-start-baseline",
+		"shared system prompt should teach the cold-start slice 1 kind")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"SERVERLESS COLD-START KINDS",
+		"shared system prompt should include the cold-start section header")
+	// Three-failure-mode framing from §8.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"Init script regression",
+		"shared system prompt should carry the cold-start cause 1 framing")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"Cold-start frequency increase",
+		"shared system prompt should carry the cold-start cause 2 framing")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"Architecture change",
+		"shared system prompt should carry the cold-start cause 3 framing")
+	// Terraform shape cue.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"aws_lambda_provisioned_concurrency_config",
+		"shared system prompt should name the Terraform resource the picker emits")
+	// REASONING TEMPLATE block.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"REASONING TEMPLATE for cold-start recommendations",
+		"shared system prompt should include the cold-start reasoning template header")
+	// Prior-tier kinds still present after the cold-start extension.
+	for _, priorKind := range []string{
+		"lambda-xray-active",
+		"lambda-otel-layer",
+		"lambda-otel-wrapper",
+		"eventbridge-rule-preserves-trace",
+		"streaming-config-preserves-headers",
+		"ec2-otel-layer",
+		"rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorKind,
+			"shared system prompt should still teach the prior-tier kind %q after the cold-start extension", priorKind)
+	}
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostColdStartSlice1
+// — Cold-start latency analysis slice 1 chunk 3 (v0.89.115, #753
+// Stream 151) cold-start parity invariant: across all four providers,
+// the user message produced by buildDiscoveryUserMessage must remain
+// byte-identical to v0.89.111 when the scan context carries no
+// cold-start observations. The new kind lives ONLY in the system
+// prompt; the user message has no cold-start section, so a cold-start
+// scan renders the same body the prior chunk-5 tier extensions
+// pinned. This pins design doc §11 acceptance test 15.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostColdStartSlice1(t *testing.T) {
+	// AWS cold start. The slice 1 chunk 3 cold-start kind must NOT
+	// leak into the user message — it belongs to the system prompt
+	// only.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	assert.NotContains(t, awsMsg, "lambda-cold-start-baseline")
+	assert.NotContains(t, awsMsg, "SERVERLESS COLD-START KINDS")
+	assert.NotContains(t, awsMsg, "aws_lambda_provisioned_concurrency_config")
+	assert.Contains(t, awsMsg, "group_id on every step MUST equal the account_id above")
+
+	// GCP cold start.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.NotContains(t, gcpMsg, "lambda-cold-start-baseline")
+	assert.NotContains(t, gcpMsg, "SERVERLESS COLD-START KINDS")
+	assert.Contains(t, gcpMsg, "group_id on every step MUST equal the project_id above")
+
+	// Azure cold start.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.NotContains(t, azureMsg, "lambda-cold-start-baseline")
+	assert.NotContains(t, azureMsg, "SERVERLESS COLD-START KINDS")
+	assert.Contains(t, azureMsg, "group_id on every step MUST equal the subscription_id above")
+
+	// OCI cold start.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	assert.NotContains(t, ociMsg, "lambda-cold-start-baseline")
+	assert.NotContains(t, ociMsg, "SERVERLESS COLD-START KINDS")
+	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
+}

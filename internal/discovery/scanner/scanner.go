@@ -1096,6 +1096,26 @@ type ServerlessInstanceSnapshot struct {
 	// result.
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 
+	// ColdStartP95Ms — Cold-start latency analysis slice 1 chunk 3
+	// (v0.89.115, #753 Stream 151). Most recent 24-hour P95
+	// InitDuration observation for this Lambda function, sourced
+	// from the cold_start_observation table at scan-response time.
+	// Nil means "no observation persisted yet" (rendered as "—" in
+	// the UI). Set by the cold-start annotation pass that runs
+	// AFTER the trace-emission LastSeenAt annotation; empty on the
+	// scanner-produced result. Slice 1 ships AWS Lambda only —
+	// GCP / Azure / OCI rows leave the field nil through slice 2.
+	ColdStartP95Ms *float64 `json:"cold_start_p95_ms,omitempty"`
+
+	// ColdStartExceedsThreshold — Cold-start latency analysis slice 1
+	// chunk 3 (v0.89.115). Pre-computed amber-color predicate the UI
+	// reads to color the Cold-start P95 cell: true when the chunk-2
+	// detection's ShouldFireRecommendation predicate held for the
+	// most recent observation pair (24h vs. 7d baseline). Nil when
+	// the field above is also nil (no observation). Slice 1 ships
+	// AWS Lambda only.
+	ColdStartExceedsThreshold *bool `json:"cold_start_exceeds_threshold,omitempty"`
+
 	// Detail is the per-surface bag the per-cloud Inventory tabs
 	// render alongside the universal columns. Lambda populates
 	// {"x_ray_mode": "Active"/"PassThrough"/"", "layer_count": N};

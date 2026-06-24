@@ -890,6 +890,21 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		if s.traceIndexLookupForDiscovery != nil {
 			h.WithTraceIndex(s.traceIndexLookupForDiscovery)
 		}
+		// v0.89.115 (#753 Stream 151, Cold-start latency analysis
+		// slice 1 chunk 3) — wire the same cold-start observation
+		// reader the chunk-2 per-resource endpoint uses so the
+		// AnnotateServerlessWithColdStart pass populates the new
+		// cold_start_p95_ms + cold_start_exceeds_threshold fields on
+		// every AWS Lambda row of every scan response. Constants are
+		// the substrate defaults (24h current / 168h baseline / 1.5x
+		// ratio / 500ms floor). Nil reader short-circuits the
+		// annotation; rows render "—" in the UI.
+		if s.coldStartObservationReader != nil {
+			h.WithColdStartObservationStore(
+				s.coldStartObservationReader,
+				handlers.NewStaticColdStartDetectionConstants(24, 168, 1.5, 500.0),
+			)
+		}
 		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — wire the
 		// operator-set exclusion store. The application store satisfies
 		// the slim DiscoveryExclusionStore interface directly so the

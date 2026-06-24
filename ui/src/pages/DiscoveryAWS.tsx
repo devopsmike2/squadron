@@ -1827,6 +1827,13 @@ function ServerlessSection({
                     <th className="px-3 py-2 font-medium">Region</th>
                     <th className="px-3 py-2 font-medium">Trace axis</th>
                     <th className="px-3 py-2 font-medium">OTel distro</th>
+                    {/* Cold-start latency analysis slice 1 chunk 3
+                        (v0.89.115, #753 Stream 151) — new Cold-start
+                        P95 (24h) column between OTel distro and Last
+                        seen. Mirrored on the GCP / Azure / OCI
+                        Serverless tables as "—" everywhere since
+                        slice 1 ships AWS Lambda only. */}
+                    <th className="px-3 py-2 font-medium">Cold-start P95 (24h)</th>
                     <th className="px-3 py-2 font-medium">Last seen</th>
                     <th className="px-3 py-2 font-medium">Quality</th>
                   </tr>
@@ -1845,6 +1852,9 @@ function ServerlessSection({
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <AxisCheck ok={s.has_otel_distro} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <ColdStartCell row={s} />
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <LastSeenCell value={s.last_seen_at} />
@@ -1892,6 +1902,54 @@ function AxisCheck({ ok }: { ok: boolean }) {
       data-value="no"
     >
       ✗
+    </span>
+  );
+}
+
+// ColdStartCell — Cold-start latency analysis slice 1 chunk 3
+// (v0.89.115, #753 Stream 151). Renders the per-Lambda 24h P95
+// cold-start observation surfaced on ServerlessRow. Three render
+// states:
+//
+//   - undefined / null cold_start_p95_ms: render "—" (no observation
+//     persisted yet — Lambda younger than the first scan window, or
+//     non-AWS surface in slice 1).
+//   - cold_start_exceeds_threshold === true: render the value amber.
+//     The hover tooltip names the baseline-vs-current ratio so the
+//     operator can confirm without drilling into the per-resource
+//     endpoint.
+//   - cold_start_exceeds_threshold === false / undefined: render the
+//     value at the default slate color.
+//
+// Slice 1 ships AWS Lambda only — the column shows "—" on GCP /
+// Azure / OCI Serverless tables.
+function ColdStartCell({ row }: { row: ServerlessRow }) {
+  if (row.cold_start_p95_ms === undefined || row.cold_start_p95_ms === null) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="No cold-start observation yet"
+        data-testid="cold-start-cell"
+        data-value="none"
+      >
+        —
+      </span>
+    );
+  }
+  const isAmber = row.cold_start_exceeds_threshold === true;
+  const ms = Math.round(row.cold_start_p95_ms);
+  return (
+    <span
+      className={isAmber ? "text-amber-600" : "text-foreground"}
+      title={
+        isAmber
+          ? `Cold-start P95 ${ms}ms exceeds baseline threshold (>= 1.5x baseline AND >= 500ms)`
+          : `Cold-start P95 ${ms}ms`
+      }
+      data-testid="cold-start-cell"
+      data-value={isAmber ? "amber" : "ok"}
+    >
+      {ms}ms
     </span>
   );
 }
