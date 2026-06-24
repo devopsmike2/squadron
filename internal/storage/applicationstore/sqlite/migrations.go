@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 14
+const SchemaVersion = 15
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -653,6 +653,75 @@ CREATE INDEX IF NOT EXISTS idx_coldstart_observed ON cold_start_observation(obse
 INSERT OR IGNORE INTO schema_version (version) VALUES (14);
 `
 
+// ErrorRateObservationSchema bumps the database to schema v15.
+// v0.89.127 (#767 Stream 165, slice 1 chunk 1 of the Error rate
+// correlation arc) — adds the error_rate_observation table that the
+// chunk-2 detection branch persists per-resource error-rate
+// observations into. Mirrors the v14 cold_start_observation table
+// shape almost verbatim: the substrate's storage pattern is now
+// proven three ways (cold-start, sampling rate reuses the same
+// AggregateMetricResult plumbing without its own table, and now
+// error rate). The design doc §5 explicitly chose a new table over
+// reusing cold_start_observation so the per-resource error_rate
+// endpoint's snapshot shape stays clean and the retention sweep can
+// gate on the diagnostic kind without parsing snapshot_json.
+//
+// One row per (connection_id, resource_arn, observed_at,
+// window_hours) error-rate observation. Universal columns (provider
+// / surface / account_id / region / resource_arn / window_hours)
+// carry the cross-cloud detection shape; the
+// (error_count, invocation_count, error_rate) trio carries the
+// signal — slice 1's detection rule (§3) compares
+// current.error_rate against baseline.error_rate * 2.0 with absolute
+// floors on invocation_count (>= 1000) and error_count (>= 50). The
+// snapshot_json column carries the canonical
+// scanner.AggregateMetricResult serialization (current + baseline +
+// rate ratio) so the chunk-2 per-resource error_rate API endpoint
+// can return the raw shape without a re-query.
+//
+// The (connection_id, resource_arn, observed_at, window_hours)
+// UNIQUE constraint distinguishes the 24h + 168h windows at the
+// same observed_at — both rows land but neither violates uniqueness
+// because window_hours differs. The keying lets a single observed_at
+// point carry both the current-window and the baseline rows for
+// cheap detection-time joins.
+//
+// idx_errorrate_resource backs the per-resource read (the chunk-2
+// per-resource error_rate endpoint's filter by resource_arn).
+// idx_errorrate_observed backs the slice 2 (deferred) retention
+// policy sweep — DELETE WHERE observed_at < ? stays a single ranged
+// scan.
+//
+// Migration adds the table without backfilling — pre-slice-1
+// observations don't exist. The chunk-1 v0.89.127 migration is
+// idempotent (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT
+// EXISTS); running it twice is a no-op.
+//
+// See docs/proposals/error-rate-correlation-slice1.md §5 (storage
+// schema) and §11 acceptance tests 10 (migration idempotence) and
+// 11 (round-trip persistence).
+const ErrorRateObservationSchema = `
+CREATE TABLE IF NOT EXISTS error_rate_observation (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    region TEXT NOT NULL,
+    resource_arn TEXT NOT NULL,
+    observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    window_hours INTEGER NOT NULL,
+    error_count INTEGER NOT NULL,
+    invocation_count INTEGER NOT NULL,
+    error_rate REAL NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    UNIQUE (connection_id, resource_arn, observed_at, window_hours)
+);
+CREATE INDEX IF NOT EXISTS idx_errorrate_resource ON error_rate_observation(resource_arn);
+CREATE INDEX IF NOT EXISTS idx_errorrate_observed ON error_rate_observation(observed_at);
+INSERT OR IGNORE INTO schema_version (version) VALUES (15);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -669,4 +738,5 @@ var Migrations = []string{
 	OrchestrationInstanceSchema,
 	EventSourceInstanceSchema,
 	ColdStartObservationSchema,
+	ErrorRateObservationSchema,
 }

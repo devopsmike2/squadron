@@ -98,6 +98,45 @@ const CloudRunRequestCountMetricType = "run.googleapis.com/request_count"
 // by metrics_test.go::TestCloudFunctionsExecutionCountMetricType_Constant.
 const CloudFunctionsExecutionCountMetricType = "cloudfunctions.googleapis.com/function/execution_count"
 
+// CloudRunRequestCount5xxMetricType is the Squadron-internal
+// synthetic-suffix variant of CloudRunRequestCountMetricType that
+// the error-rate-correlation slice 1 chunk 1 (v0.89.127) routes
+// through with a response_code_class = "5xx" filter (the inverse of
+// the sampling-rate path's response_code_class != "5xx"). The base
+// metric.type sent to Cloud Monitoring is the suffix-stripped form
+// (CloudRunRequestCountMetricType); the "#5xx" suffix is consumed
+// by the Squadron router and never appears on the wire.
+//
+// Why a synthetic-suffix constant rather than a new
+// QueryAggregate parameter for dimension filtering: keeping the
+// scanner.MetricQuerier interface stable across the
+// cold-start / sampling-rate / error-rate arcs is a contract per
+// the slice 1 design doc §4 — the substrate now supports 5+ metric
+// variants per cloud and a per-filter parameter would force every
+// caller (and every existing test) to thread it through. Encoding
+// the filter intent in the metric name string keeps the interface
+// at four arguments and routes through the existing per-metric
+// switch.
+//
+// See docs/proposals/error-rate-correlation-slice1.md §4.2.
+//
+// Pinned by metrics_test.go::TestCloudRunRequestCount5xxMetricType_Constant.
+const CloudRunRequestCount5xxMetricType = "run.googleapis.com/request_count#5xx"
+
+// CloudFunctionsExecutionCountErrorMetricType is the
+// Squadron-internal synthetic-suffix variant of
+// CloudFunctionsExecutionCountMetricType that the error-rate
+// correlation slice 1 routes through with a status != "ok" filter
+// (the inverse of the sampling-rate path's status = "ok"). Same
+// suffix-stripping convention as
+// CloudRunRequestCount5xxMetricType — the "#error" suffix is a
+// Squadron router signal and never reaches Cloud Monitoring.
+//
+// See docs/proposals/error-rate-correlation-slice1.md §4.3.
+//
+// Pinned by metrics_test.go::TestCloudFunctionsExecutionCountErrorMetricType_Constant.
+const CloudFunctionsExecutionCountErrorMetricType = "cloudfunctions.googleapis.com/function/execution_count#error"
+
 // cloudMonitoringMetricUnit is the unit string the slice 2
 // substrate stamps on the AggregateMetricResult.Unit field for
 // Cloud Run / Cloud Functions latency metrics. Both surfaces emit
@@ -281,6 +320,51 @@ func (s *Scanner) QueryAggregate(
 		}
 		filter = fmt.Sprintf(
 			`metric.type = %q AND resource.labels.function_name = %q AND metric.labels.status = "ok"`,
+			CloudFunctionsExecutionCountMetricType, name)
+		isCountMetric = true
+	case CloudRunRequestCount5xxMetricType:
+		// Error rate correlation slice 1 (v0.89.127) §4.2. The
+		// Squadron-internal "#5xx" suffix variant of
+		// CloudRunRequestCountMetricType — the base metric.type
+		// going on the wire is the suffix-stripped form; the
+		// dimension filter inverts the sampling-rate path (5xx
+		// only rather than != 5xx). The detection branch uses
+		// this metric as the error-rate numerator; the existing
+		// CloudRunRequestCountMetricType (with the != "5xx"
+		// filter) reused as the denominator. Same MetricQuerier
+		// interface; only the metric name string changes — no
+		// new parameter required.
+		if kind != "services" {
+			return scanner.AggregateMetricResult{
+				ResourceARN: resourceARN,
+				MetricName:  metricName,
+				Window:      window,
+				Statistic:   stat,
+			}, nil
+		}
+		filter = fmt.Sprintf(
+			`metric.type = %q AND resource.labels.service_name = %q AND metric.labels.response_code_class = "5xx"`,
+			CloudRunRequestCountMetricType, name)
+		isCountMetric = true
+	case CloudFunctionsExecutionCountErrorMetricType:
+		// Error rate correlation slice 1 (v0.89.127) §4.3.
+		// Squadron-internal "#error" suffix variant of
+		// CloudFunctionsExecutionCountMetricType — sibling of the
+		// sampling-rate path's status = "ok" filter (status != "ok"
+		// catches every non-success status the Cloud Functions
+		// runtime emits: error, timeout, crash, etc.). Same
+		// suffix-stripping convention as the Cloud Run #5xx
+		// variant.
+		if kind != "functions" {
+			return scanner.AggregateMetricResult{
+				ResourceARN: resourceARN,
+				MetricName:  metricName,
+				Window:      window,
+				Statistic:   stat,
+			}, nil
+		}
+		filter = fmt.Sprintf(
+			`metric.type = %q AND resource.labels.function_name = %q AND metric.labels.status != "ok"`,
 			CloudFunctionsExecutionCountMetricType, name)
 		isCountMetric = true
 	default:
