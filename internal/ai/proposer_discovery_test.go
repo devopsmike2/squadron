@@ -2475,6 +2475,136 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice3(t *te
 	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
 }
 
+// --- Event source tier slice 4 chunk 2 (v0.89.142, #782 Stream 180) -
+
+// TestDiscoveryProposer_SQSKindsInSystemPrompt — event source tier
+// slice 4 chunk 2. The 2 new AWS SQS recommendation kinds must
+// appear in the shared system prompt so the model can route findings
+// to the right kind when the scan inventory carries SQS queue rows.
+// Prior-tier kinds (including slice 1 + slice 2 + slice 3 event
+// source kinds) must remain present after the extension — same
+// shared-system-prompt invariant the prior chunk tests pin.
+func TestDiscoveryProposer_SQSKindsInSystemPrompt(t *testing.T) {
+	for _, sqsKind := range []string{
+		"sqs-redrive-policy-enable",
+		"sqs-deadletter-queue-attach",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, sqsKind,
+			"shared system prompt should teach the event source tier slice 4 SQS kind %q", sqsKind)
+	}
+	// Slice 1 + slice 2 + slice 3 event source kinds still present
+	// after the slice 4 extension.
+	for _, priorEvtKind := range []string{
+		"eventbridge-xray-enable",
+		"eventbridge-schemas-discover",
+		"eventbridge-logging-enable",
+		"pubsub-trace-enable",
+		"pubsub-schema-attach",
+		"servicebus-diagnostics-enable",
+		"streaming-logging-enable",
+		"eventbridge-rule-preserves-trace",
+		"pubsub-schema-includes-traceparent",
+		"pubsub-subscription-preserves-attrs",
+		"servicebus-policy-preserves-traceparent",
+		"streaming-config-preserves-headers",
+		"sns-subscriptions-attach",
+		"sns-delivery-logging-enable",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorEvtKind,
+			"shared system prompt should still teach the prior event source kind %q after the slice 4 extension", priorEvtKind)
+	}
+	// Prior-tier kinds still present.
+	for _, priorKind := range []string{
+		"stepfunc-xray-active",
+		"workflows-trace-enable",
+		"logicapps-appinsights-enable",
+		"resmgr-logging-enable",
+		"lambda-xray-active",
+		"cloudrun-otel-sidecar",
+		"ocifunc-apm-enable",
+		"rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorKind,
+			"shared system prompt should still teach the prior-tier kind %q after the slice 4 SQS extension", priorKind)
+	}
+	// Reasoning template tokens for the slice 4 SQS section.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"EVENT SOURCE TIER SLICE 4 — AWS SQS",
+		"shared system prompt should include the slice 4 SQS section header")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"redrive policy",
+		"shared system prompt should describe the canonical SQS redrive policy signal")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"AUDIT-ONLY recommendation",
+		"shared system prompt should mark the audit-only SQS DLQ kind")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"SINGLE MOST COMMON AWS messaging production",
+		"shared system prompt should carry the slice 4 framing for sqs-redrive-policy-enable")
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice4
+// — event source tier slice 4 chunk 2 cold-start parity invariant:
+// across all four providers, the compute-only user message produced
+// by buildDiscoveryUserMessage must remain byte-identical to v0.89.139
+// when the scan context carries no SQS rows. The new kinds live ONLY
+// in the system prompt; the user message has no SQS section, so a
+// cold-start scan renders the same body the prior chunk extensions
+// pinned. Pins design doc §11 acceptance test 15.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice4(t *testing.T) {
+	// AWS cold start. The slice 4 SQS kinds must NOT leak into the
+	// user message — they belong to the system prompt only.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	assert.NotContains(t, awsMsg, "sqs-redrive-policy-enable")
+	assert.NotContains(t, awsMsg, "sqs-deadletter-queue-attach")
+	assert.NotContains(t, awsMsg, "EVENT SOURCE TIER SLICE 4")
+	assert.Contains(t, awsMsg, "group_id on every step MUST equal the account_id above")
+
+	// GCP cold start.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.NotContains(t, gcpMsg, "sqs-redrive-policy-enable")
+	assert.NotContains(t, gcpMsg, "sqs-deadletter-queue-attach")
+	assert.NotContains(t, gcpMsg, "EVENT SOURCE TIER SLICE 4")
+	assert.Contains(t, gcpMsg, "group_id on every step MUST equal the project_id above")
+
+	// Azure cold start.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.NotContains(t, azureMsg, "sqs-redrive-policy-enable")
+	assert.NotContains(t, azureMsg, "sqs-deadletter-queue-attach")
+	assert.NotContains(t, azureMsg, "EVENT SOURCE TIER SLICE 4")
+	assert.Contains(t, azureMsg, "group_id on every step MUST equal the subscription_id above")
+
+	// OCI cold start.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	assert.NotContains(t, ociMsg, "sqs-redrive-policy-enable")
+	assert.NotContains(t, ociMsg, "sqs-deadletter-queue-attach")
+	assert.NotContains(t, ociMsg, "EVENT SOURCE TIER SLICE 4")
+	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
+}
+
 // TestDiscoveryProposer_ColdStartKindInSystemPrompt — Cold-start
 // latency analysis slice 1 chunk 3 (v0.89.115, #753 Stream 151). The
 // new lambda-cold-start-baseline recommendation kind must appear in

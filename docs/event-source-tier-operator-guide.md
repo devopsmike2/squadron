@@ -793,6 +793,147 @@ Per §13 of the design doc:
   message filter inspection, multi-account fan-out
   coordination
 
+## Slice 4 SHIPPED in v0.89.140-v0.89.142 — AWS SQS
+
+Slice 4 continues the widening pass on the event source tier
+by adding AWS SQS as the third AWS surface alongside
+EventBridge + SNS. After slice 4, AWS has the most-complete
+event source coverage of any cloud (3 surfaces); other clouds
+catch up in slices 5-7.
+
+Honest scope: ONE new surface per arc keeps the verification
+gate quality high. SQS completes the canonical AWS pub/sub
+fan-out architecture: `EventBridge | SNS → SQS → consumer`.
+
+### The new AWS surface — SQS
+
+| Cloud | Surface | Trace axis                                                | Log axis                                          |
+|-------|---------|-----------------------------------------------------------|----------------------------------------------------|
+| AWS   | SQS     | `RedrivePolicy` attribute set with `deadLetterTargetArn` (operational signal proxy) | DLQ ARN resolves to a queue in the same account+region (two-pass walk) |
+
+Like SNS, SQS doesn't have a direct OTel integration. Squadron
+uses the redrive policy + DLQ reachability as the canonical
+"is failed-message capture configured?" signal.
+
+### The 2 new recommendation kinds
+
+```
+sqs-redrive-policy-enable          sqs-deadletter-queue-attach
+```
+
+Webhook routing: `sqs- → aws`.
+
+### sqs-redrive-policy-enable
+
+Fires on SQS queues with NO RedrivePolicy configured. The
+Terraform PR creates a dead-letter queue + redrive policy
+targeting it with `maxReceiveCount = 5` (operator tunes).
+
+This catches the **single most common AWS messaging
+production failure**: a queue without DLQ silently drops
+messages after consumer failure exhausts retries within the
+queue's retention window.
+
+Decline if your team uses a custom retry coordinator (Step
+Functions retry handler, EventBridge Pipes with error
+handling, etc.). The verdict learning loop records.
+
+### sqs-deadletter-queue-attach (audit-only)
+
+Fires on SQS queues with a RedrivePolicy set but the
+`deadLetterTargetArn` doesn't resolve to a queue Squadron can
+see in the same account+region. Two possibilities:
+
+1. **Cross-account/region DLQ** — your DLQ is in a different
+   account or region. Verify the source queue's IAM policy
+   permits send to the DLQ ARN; declare the intent by
+   declining this recommendation.
+2. **Dangling reference** — the DLQ was deleted but the
+   source queue's redrive policy wasn't updated. Recreate the
+   DLQ OR update the redrive policy.
+
+NO Terraform pattern — the operator confirms intent.
+
+### The Terraform pattern (case 1: missing RedrivePolicy)
+
+Verbatim from §8 of the design doc — `aws_sqs_queue` DLQ
+resource + `redrive_policy` jsonencode block:
+
+```hcl
+resource "aws_sqs_queue" "<name>_dlq" {
+  name                       = "${aws_sqs_queue.<name>.name}-dlq"
+  message_retention_seconds  = 1209600  # 14 days
+  kms_master_key_id          = "alias/aws/sqs"
+}
+
+resource "aws_sqs_queue" "<name>" {
+  # ... existing fields ...
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.<name>_dlq.arn
+    maxReceiveCount     = 5  # operator tunes
+  })
+}
+```
+
+### Three-way dispatcher partial-scan posture
+
+Slice 4 extends `ScanEventSources` to fan out across
+EventBridge + SNS + SQS. If two of the three surfaces fail
+(IAM lag from connections that predate v0.89.100 /
+v0.89.138 / v0.89.141), the third still surfaces.
+
+The IAM template extends with two new actions:
+
+```
+sqs:ListQueues
+sqs:GetQueueAttributes
+```
+
+### Cost surface
+
+SQS API queries are free for read operations. No new
+operator-facing cost decisions per the no-money brief.
+
+### Scan duration impact
+
+SQS rate limits at ~30 TPS per region per account.
+Squadron's existing AWS substrate rate limiter absorbs.
+For a fleet of 1000 queues in one region:
+- ~33 seconds added to scan duration (1 GetQueueAttributes
+  per queue + the two-pass DLQ resolution walk in-memory)
+
+### The canonical pub/sub failure chain — fully visible
+
+After slice 4, the AWS pub/sub failure chain is fully covered:
+
+1. **SNS topic** without delivery logging (slice 3
+   `sns-delivery-logging-enable`) — operator can't see
+   per-message fan-out success/failure
+2. **SQS queue** without redrive policy (slice 4
+   `sqs-redrive-policy-enable`) — failed messages vanish
+   silently
+3. **Lambda consumer** without trace primitive (serverless
+   tier) — even if traces flow, the consumer doesn't emit
+4. **Lambda cold-start regression / error rate spike**
+   (substrate's three diagnostics) — workload-health view
+   shows where it broke
+
+Four layers. One control plane. Each layer gets its own
+recommendation kind + IaC PR.
+
+### Slice 5+ deferrals
+
+Per §13 of the design doc:
+- **Slice 5: GCP Cloud Tasks** — second GCP surface
+- **Slice 6: Azure Event Grid + Event Hubs** — second + third
+  Azure surfaces
+- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 8+: subscription-level propagation analysis**,
+  per-queue depth anomaly detection using the MetricQuerier
+  substrate, message filter inspection, multi-account fan-out
+  coordination
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —
@@ -807,6 +948,11 @@ Per §13 of the design doc:
   surface and 2 new recommendation kinds
   (sns-subscriptions-attach + sns-delivery-logging-enable)
   routed via the new sns- webhook prefix.
+- [Event source tier slice 4 design doc](./proposals/event-source-tier-slice4.md) —
+  the slice 4 spec that adds AWS SQS as the third AWS
+  surface and 2 new recommendation kinds
+  (sqs-redrive-policy-enable + sqs-deadletter-queue-attach)
+  routed via the new sqs- webhook prefix.
 - [Orchestration tier slice 1](./proposals/orchestration-tier-slice1.md) —
   the prior tier-expansion arc this composes with.
 - [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —

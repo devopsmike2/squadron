@@ -136,9 +136,22 @@ jump straight to that page.
   1 new webhook prefix: sns- → aws. ScanEventSources
   dispatcher extends with partial-scan posture (EventBridge
   failure no longer blocks SNS surfacing, and vice versa).
-  **Slice 3 SHIPPED in v0.89.139.** Slices 4-7 will add
-  SQS, Cloud Tasks, Event Grid + Event Hubs, Notification
-  Service in turn — keeping the per-arc cap honest while
+  **Slice 3 SHIPPED in v0.89.139.**
+  **Slice 4 (v0.89.140-v0.89.142)** continues the widening
+  pass by adding AWS SQS as the third AWS event source
+  surface. Completes the canonical AWS pub/sub fan-out
+  architecture: EventBridge | SNS → SQS → consumer. 2 new
+  recommendation kinds: sqs-redrive-policy-enable (Terraform:
+  DLQ + redrive policy targeting it) catches the single most
+  common AWS messaging production failure; +
+  sqs-deadletter-queue-attach (audit-only — fires on queues
+  with dangling DLQ ARN references). 1 new webhook prefix:
+  sqs- → aws. ScanEventSources dispatcher extends from
+  two-way (EB+SNS) to three-way (EB+SNS+SQS) with partial-scan
+  posture across all three. **Slice 4 SHIPPED in v0.89.142.**
+  Slices 5-7 will add GCP Cloud Tasks, Azure Event Grid +
+  Event Hubs, OCI Notification Service in turn — keeping
+  the per-arc cap honest while
   compounding the event source claim. Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,
