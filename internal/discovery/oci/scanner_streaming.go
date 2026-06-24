@@ -62,6 +62,23 @@ const loggingListAPIVersion = "20200531"
 // Event source tier arc.
 const streamingEventSourceSurface = "streaming"
 
+// OCIStreamingRetentionPropagationThresholdHours is the minimum
+// retentionInHours value at which Squadron considers OCI Streaming's
+// Kafka header preservation reliable. Streams with shorter retention
+// may truncate headers in some OCI Streaming versions per the
+// per-message metadata budget — the design doc §3.4 of
+// event-source-tier-slice2.md describes the heuristic.
+//
+// Slice 2 chunk 4 (v0.89.106, #744 Stream 142) uses 24h as the
+// threshold per §3.4 of the design doc. Operators with deliberately
+// shorter retention for cost reasons can decline the recommendation;
+// the verdict learning loop records the decline so the recommender
+// surfaces the operator's preference back on next scan.
+//
+// See docs/proposals/event-source-tier-slice2.md §3.4 (detection
+// surface) and §12 (threat model — 24h threshold tuning).
+const OCIStreamingRetentionPropagationThresholdHours = 24
+
 // streamingSourceTypeStream is the SourceType discriminator string for
 // OCI Streaming streams. Mirrors the per-cloud "bus" / "topic" /
 // "queue" / "namespace" / "stream" SourceType convention documented
@@ -81,6 +98,15 @@ const providerOCIEventSource = "oci"
 // LifecycleState (surfaced raw via the Detail bag so the Inventory
 // tab can dim non-ACTIVE rows the same way other tiers do).
 //
+// Slice 2 chunk 4 (v0.89.106, #744 Stream 142) adds RetentionInHours
+// — the OCI Streaming /streams response includes this field on every
+// StreamSummary, so chunk 4 reads it from the existing list call
+// without an additional per-stream GetStream round trip. A missing or
+// zero value (the JSON omitempty + Go zero-value combination is the
+// only signal OCI provides; the API does not echo a sentinel) is
+// treated as "below threshold" — see streamPreservesPropagation for
+// the defensive default.
+//
 // OCI Streaming API path:
 //
 //	GET https://streaming.<region>.oci.oraclecloud.com/20180418/streams
@@ -89,10 +115,11 @@ const providerOCIEventSource = "oci"
 // Pagination follows the opc-next-page response header (see
 // listStreamsAll below).
 type ociStream struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	CompartmentID  string `json:"compartmentId"`
-	LifecycleState string `json:"lifecycleState"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	CompartmentID     string `json:"compartmentId"`
+	LifecycleState    string `json:"lifecycleState"`
+	RetentionInHours  int    `json:"retentionInHours"`
 }
 
 // ociStreamList is the JSON envelope returned by the Streaming
@@ -149,6 +176,42 @@ type ociLogSource struct {
 // ociLogResourceList is the JSON envelope returned by the Logging
 // /logs list call. OCI returns the list directly as a JSON array.
 type ociLogResourceList = []ociLogResource
+
+// streamPreservesPropagation applies the slice 2 chunk 4 single-axis
+// retention threshold detection rule. Returns (preserved, note).
+// preserved is true when retentionInHours is at or above the
+// OCIStreamingRetentionPropagationThresholdHours threshold; note is
+// empty when preserved or a human-readable per-issue string when not.
+//
+// Detection rule (docs/proposals/event-source-tier-slice2.md §3.4):
+//
+//   - retentionInHours >= 24 → standard retention; Kafka headers
+//     (including traceparent / x-amzn-trace-id) preserved for the
+//     retention window. PROPAGATION PRESERVED.
+//   - retentionInHours < 24 → short retention may truncate headers
+//     in some OCI Streaming versions (the per-message metadata budget
+//     shrinks with shorter retention). PROPAGATION POTENTIALLY BROKEN.
+//   - retentionInHours == 0 → defensive default: a zero value is
+//     either a deliberately-tiny retention or the API response omitted
+//     the field on a legacy stream. Either way Squadron cannot prove
+//     the threshold is met, so the rule treats zero as below-threshold
+//     and surfaces an informational note. The exclusion table absorbs
+//     false positives for streams that have a missing-field response
+//     shape on a particular tenancy.
+//
+// This is a per-stream detection — the OCI Streaming surface has no
+// per-rule / per-schema / per-policy sub-resources to AND across, so
+// the stream-level HasPropagationConfig axis maps 1:1 to this
+// helper's output. Slice 3 may add consumer-group-level detection.
+func streamPreservesPropagation(retentionInHours int) (bool, string) {
+	if retentionInHours >= OCIStreamingRetentionPropagationThresholdHours {
+		return true, ""
+	}
+	return false, fmt.Sprintf(
+		"stream retentionInHours=%d below threshold %d; Kafka headers may truncate",
+		retentionInHours, OCIStreamingRetentionPropagationThresholdHours,
+	)
+}
 
 // ScanEventSources is the OCI scanner's event-source-tier entry
 // point. Slice 1 chunk 4 only covers OCI Streaming; future slices may
@@ -415,17 +478,33 @@ func (s *Scanner) loggingEndpoint() string {
 //     proxy rule (design doc §3.4). Slice 2 separates the two axes
 //     when OCI exposes APM integration for streams.
 //   - Detail: {"lifecycle_state": stream.LifecycleState,
-//     "compartment_id": compartmentID, "has_log_group": <bool>}.
+//     "compartment_id": compartmentID, "has_log_group": <bool>,
+//     "retention_in_hours": stream.RetentionInHours}.
 //     LifecycleState lets the Inventory tab dim non-ACTIVE rows;
 //     compartment_id supports debugging multi-compartment walks;
 //     has_log_group denormalizes the detection result so callers
 //     reading the snapshot from JSON don't have to recompute the
-//     axis from the boolean fields above.
+//     axis from the boolean fields above; retention_in_hours
+//     surfaces the slice 2 propagation input for the Inventory tab
+//     side panel.
 //
-// A failure on the per-stream Logging call leaves both axes false
-// and stamps an empty Detail["has_log_group"] entry (false). The
-// row still surfaces — the operator sees the stream in their
-// inventory; only the observability detection axis is lost.
+// Slice 2 chunk 4 (v0.89.106, #744 Stream 142): HasPropagationConfig
+// + PropagationNotes are populated from streamPreservesPropagation
+// applied to stream.RetentionInHours. A stream with retentionInHours
+// at or above the OCIStreamingRetentionPropagationThresholdHours
+// (24h) threshold has the axis flipped true with no note; a stream
+// below the threshold (including the zero/missing-field defensive
+// case) has the axis false with a human-readable note. The
+// propagation detection runs unconditionally — it does not depend on
+// the Logging proxy axis above, and a stream with no log group can
+// still be propagation-preserved if its retention is sufficient.
+//
+// A failure on the per-stream Logging call leaves both observability
+// axes false and stamps an empty Detail["has_log_group"] entry
+// (false). The row still surfaces — the operator sees the stream in
+// their inventory; only the observability detection axis is lost.
+// The propagation axis is computed from the list-call response shape
+// alone and is unaffected by Logging call failures.
 func (s *Scanner) projectOCIStream(ctx context.Context, sk *SigningKey, stream ociStream, compartmentID, accountID string) scanner.EventSourceInstanceSnapshot {
 	snap := scanner.EventSourceInstanceSnapshot{
 		Provider:     providerOCIEventSource,
@@ -446,10 +525,19 @@ func (s *Scanner) projectOCIStream(ctx context.Context, sk *SigningKey, stream o
 		// in slice 2 and will separate this from HasLogAxis.
 		snap.HasTraceAxis = true
 	}
+	// Slice 2 chunk 4: per-stream propagation detection driven by the
+	// retentionInHours threshold. See streamPreservesPropagation godoc
+	// for the per-rule logic + the zero/missing-field defensive case.
+	preserved, note := streamPreservesPropagation(stream.RetentionInHours)
+	snap.HasPropagationConfig = preserved
+	if note != "" {
+		snap.PropagationNotes = append(snap.PropagationNotes, note)
+	}
 	snap.Detail = map[string]any{
-		"lifecycle_state": stream.LifecycleState,
-		"compartment_id":  compartmentID,
-		"has_log_group":   snap.HasLogAxis,
+		"lifecycle_state":    stream.LifecycleState,
+		"compartment_id":     compartmentID,
+		"has_log_group":      snap.HasLogAxis,
+		"retention_in_hours": stream.RetentionInHours,
 	}
 	return snap
 }
