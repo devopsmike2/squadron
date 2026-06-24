@@ -391,6 +391,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	spanQualityTraceparentKindsPromptSection +
 
+	samplingRateKindsPromptSection +
+
 	serverlessTierKindsPromptSection +
 
 	orchestrationTierKindsPromptSection +
@@ -1210,6 +1212,60 @@ Terraform PR targets the SDK-side fix.
 If your actual case is different (the runbook describes the
 three failure modes), decline this PR — the verdict learning
 loop will record the decline."
+
+` + "\n"
+
+// samplingRateKindsPromptSection — sampling rate analysis slice 1
+// chunk 2 (v0.89.123, #763 Stream 161). One new recommendation kind —
+// span-quality-sampling-too-aggressive — fires when the per-resource
+// ratio of observed_span_count / expected_invocation_count is below
+// 5% AND the resource processed at least 1000 invocations in the 24h
+// window. Reuses the existing span-quality- webhook prefix from
+// v0.89.86 (NO new webhook routing) and the cold-start-style
+// 3-failure-mode reasoning framing.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no sampling rows that trigger the kind (because
+// no resource has crossed the §3 ratio + minimum thresholds), the
+// rendered user message stays byte-identical to v0.89.122 across
+// all four providers. The 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostSamplingSlice1
+// pins this invariant.
+const samplingRateKindsPromptSection = `SAMPLING RATE KIND (slice 1 of sampling rate analysis):
+
+- span-quality-sampling-too-aggressive: per-resource
+  ratio of observed_span_count (Squadron traceindex 24h) /
+  expected_invocation_count (cloud-native metric 24h) is
+  below 5% AND the resource processed at least 1000
+  invocations in the window. Reuses the span-quality-
+  webhook prefix from v0.89.86 — NO new webhook routing.
+
+  3-FAILURE-MODE REASONING (uniform across all 5 surfaces):
+  (1) Default sampler too aggressive — many OTel SDKs default
+      to TRACEIDRATIO_BASED at 0.1; check SDK config.
+  (2) Adaptive sampling throttling — Application Insights and
+      some OTel exporters throttle under load. The ratio is
+      operator-experienced, not configured. Decline if intentional.
+  (3) Tail-sampling collector — if a collector in front of
+      Squadron selectively keeps spans, observed_span_count
+      legitimately undercounts. Decline if intentional.
+
+  Terraform per-cloud: OTEL_TRACES_SAMPLER_ARG=0.5 env var
+  injection (default raise target; OPERATOR TUNES from there).
+  Same pattern across AWS Lambda / Cloud Run / Cloud Functions /
+  Azure Functions / OCI Functions — each cloud's env
+  injection mechanism. The 0.5 starting point is a suggestion,
+  not a prescription; operators tune based on cost tolerance
+  + signal-to-noise. State this in the PR body so the operator
+  reading the recommendation knows the value is an opening
+  position.
+
+CAVEAT FOR ALL SAMPLING RECOMMENDATIONS:
+The exclusion table from #531 slice 2 chunk 4 handles operators
+who deliberately run aggressive sampling for cost reasons.
+The verdict learning loop records declines for tail-sampling
+and adaptive-sampling cases.
 
 ` + "\n"
 

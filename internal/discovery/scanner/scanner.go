@@ -1116,6 +1116,26 @@ type ServerlessInstanceSnapshot struct {
 	// AWS Lambda only.
 	ColdStartExceedsThreshold *bool `json:"cold_start_exceeds_threshold,omitempty"`
 
+	// SamplingRatio — Sampling rate analysis slice 1 chunk 2
+	// (v0.89.123, #763 Stream 161). Most recent 24-hour sampling
+	// ratio (observed_span_count / expected_invocation_count) for
+	// this serverless resource, populated by the sampling
+	// annotation pass at scan-response time. Nil means "no
+	// observation persisted yet" (rendered as "—" in the UI). The
+	// chunk-3 UI will render this as a "Sampling rate (24h)"
+	// column between Cold-start P95 and Last seen.
+	SamplingRatio *float64 `json:"sampling_ratio,omitempty"`
+
+	// SamplingExceedsFloor — Sampling rate analysis slice 1 chunk 2
+	// (v0.89.123). Pre-computed amber-color predicate the UI reads
+	// to color the Sampling rate cell: true when the chunk-2
+	// detection's ShouldFireRecommendation predicate held (ratio
+	// below 5% AND invocation count above 1000). Nil when the
+	// field above is also nil (no observation, or invocation count
+	// below the statistical noise minimum). Surfaces in the
+	// chunk-3 tooltip alongside the underlying invocation count.
+	SamplingExceedsFloor *bool `json:"sampling_exceeds_floor,omitempty"`
+
 	// Detail is the per-surface bag the per-cloud Inventory tabs
 	// render alongside the universal columns. Lambda populates
 	// {"x_ray_mode": "Active"/"PassThrough"/"", "layer_count": N};
