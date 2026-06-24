@@ -177,6 +177,41 @@ jump straight to that page.
   verifies telemetry is actually flowing, validates the
   spans Squadron receives are healthy, AND drafts the IaC
   PRs that close the gaps it finds."
+- [Error rate correlation — operator guide](./error-rate-correlation-operator-guide.md) —
+  v0.89.126 through v0.89.130 operator runbook for the error
+  rate correlation slice 1 arc (design at
+  [proposals/error-rate-correlation-slice1.md](./proposals/error-rate-correlation-slice1.md)).
+  Third diagnostic running on the cold-start latency
+  substrate; the architectural bet now demonstrated three
+  ways (cold-start, sampling rate, error rate). Per-resource
+  detection: current 24h error rate vs baseline 7d error
+  rate. Fires `span-quality-error-rate-spike` when ratio >
+  2.0x AND current invocations >= 1000 AND current errors
+  >= 50 AND not excluded. Near-zero baseline guard substitutes
+  0.01% as the comparison baseline when the actual baseline
+  is below it, avoiding spurious large ratios on tiny
+  absolute counts (surfaced via `baseline_adjusted` flag).
+  Per-cloud error metrics: AWS `Errors`, GCP Cloud Run
+  `request_count{5xx}` + Cloud Functions
+  `execution_count{status!=ok}`, Azure `FunctionErrors`,
+  OCI `function_invocation_count{result=error}` — all reuse
+  existing cold-start IAM via the same `MetricQuerier`
+  interface from v0.89.113. Storage v14 → v15 migration adds
+  `error_rate_observation` table mirroring
+  `cold_start_observation`. New per-resource endpoint at
+  `GET /api/v1/discovery/{provider}/inventory/serverless/{id}/error_rate`
+  exposes current + baseline windows + ratio + 3 gate flags.
+  Per-Serverless-row "Error rate (24h)" column on all 4
+  provider tables. iacpicker emits resource-exhaustion case
+  (case 3) Terraform patterns per-cloud (memory + concurrency
+  raise). 3-failure-mode reasoning explicitly notes cases (1)
+  recent deploy regression + (2) downstream dependency
+  failure as the MORE COMMON causes that should be DECLINED;
+  case (3) resource exhaustion is what the PR targets.
+  Together with cold-start latency + sampling rate, completes
+  the natural serverless health diagnostic suite. **Slice 1
+  SHIPPED in v0.89.130.** Universal claim's MEASURES verb
+  gains a third sub-diagnostic.
 - [Sampling rate analysis — operator guide](./sampling-rate-operator-guide.md) —
   v0.89.121 through v0.89.125 operator runbook for the
   sampling rate analysis slice 1 arc (design at
