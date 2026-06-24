@@ -171,35 +171,37 @@ func rulePreservesTracePropagation(ruleName string, inputPath *string, inputTran
 
 // ScanEventSources is the AWS scanner's event-source-tier entry point.
 // Slice 1 chunk 1 (v0.89.100) shipped EventBridge alone; slice 3 chunk
-// 1 (v0.89.138, #778 Stream 176) extends the dispatcher to fan out
-// across BOTH EventBridge AND SNS topics, with a partial-scan posture
-// that lets either surface fail independently without aborting the
-// other.
+// 1 (v0.89.138, #778 Stream 176) extended the dispatcher to fan out
+// across BOTH EventBridge AND SNS topics; slice 4 chunk 1 (v0.89.141,
+// #781 Stream 179) extends to THREE surfaces — EventBridge + SNS + SQS
+// — with a three-way partial-scan posture that lets any one or two of
+// the surfaces fail independently without aborting the others.
 //
 // Scope semantics: the scope's Regions[0] (when set) selects the target
 // region; an empty Regions list falls back to the scanner's configured
 // first region (slice 1 ships single-region scans). The scope's
 // AccountID overrides the per-snapshot AccountID stamped on every row;
-// empty falls back to the scanner's configured account. Both surfaces
-// receive the identical scope.
+// empty falls back to the scanner's configured account. All three
+// surfaces receive the identical scope.
 //
-// Partial-scan posture per docs/proposals/event-source-tier-slice3.md
-// §5: when ONE surface fails (e.g. an IAM gap on the SNS read
-// permissions while the EventBridge permissions are already wired)
-// the OTHER surface's results still surface. Only when BOTH surfaces
-// fail does the dispatcher return a non-nil error — wrapping both
-// per-surface errors so the operator can see the full failure
+// Partial-scan posture per docs/proposals/event-source-tier-slice4.md
+// §5: when ONE OR TWO of the surfaces fail (e.g. an IAM gap on the SQS
+// read permissions while the EventBridge + SNS permissions are already
+// wired) the REMAINING surface(s) still surface. Only when ALL THREE
+// surfaces fail does the dispatcher return a non-nil error — wrapping
+// every per-surface error so the operator can see the full failure
 // envelope. The §12 threat model treats this as load-bearing: the
-// dispatcher's both-directions partial-scan posture is pinned by
-// acceptance tests 7 / 8 / 9 of the slice 3 design doc.
+// dispatcher's all-three-directions partial-scan posture is pinned by
+// acceptance tests 7 / 8 / 9 / 10 / 11 of the slice 4 design doc.
 //
 // IAM contract per docs/proposals/event-source-tier-slice1.md §12 +
-// event-source-tier-slice3.md §12:
+// event-source-tier-slice3.md §12 + event-source-tier-slice4.md §12:
 //   - events:ListEventBuses + events:ListRules + events:ListTargetsByRule
 //   - sns:ListTopics + sns:GetTopicAttributes
+//   - sqs:ListQueues + sqs:GetQueueAttributes
 //
-// All five read-only. Squadron never executes an EventBridge or SNS
-// mutation API.
+// All seven read-only. Squadron never executes an EventBridge / SNS /
+// SQS mutation API.
 func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
 	var all []scanner.EventSourceInstanceSnapshot
 
@@ -213,13 +215,19 @@ func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope)
 		all = append(all, topics...)
 	}
 
-	// Partial-scan posture: only return an error when BOTH surfaces
-	// failed. Either-direction-failure is silenced at this layer so a
-	// single-surface IAM gap doesn't drop the inventory the operator
-	// actually CAN see. Tests 8 + 9 of the slice 3 design doc pin
-	// both directions.
-	if ebErr != nil && snsErr != nil {
-		return all, fmt.Errorf("event sources scan failures: eventbridge=%w sns=%v", ebErr, snsErr)
+	queues, sqsErr := s.ScanSQSQueues(ctx, scope)
+	if sqsErr == nil {
+		all = append(all, queues...)
+	}
+
+	// Three-way partial-scan posture: only return an error when ALL
+	// THREE surfaces failed. Any single-surface or two-surface failure
+	// is silenced at this layer so an IAM gap on one surface doesn't
+	// drop the inventory the operator actually CAN see on the other
+	// two. Tests 8 + 9 + 10 + 11 of the slice 4 design doc pin all
+	// three single-failure directions PLUS the all-three-fail path.
+	if ebErr != nil && snsErr != nil && sqsErr != nil {
+		return all, fmt.Errorf("event sources scan failures: eventbridge=%v sns=%v sqs=%w", ebErr, snsErr, sqsErr)
 	}
 
 	return all, nil

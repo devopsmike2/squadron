@@ -456,6 +456,7 @@ type fakeFactory struct {
 	sfn         SFNClient
 	eventbridge EventBridgeClient
 	sns         SNSClient
+	sqs         SQSClient
 	sts         STSClient
 }
 
@@ -554,6 +555,17 @@ func (f *fakeFactory) SNS(_ context.Context, _ string) (SNSClient, error) {
 		return &fakeSNS{}, nil
 	}
 	return f.sns, nil
+}
+
+// SQS returns the configured fake SQS client. Same zero-output
+// fallback as the other services so tests that don't exercise the SQS
+// path get an empty-inventory fake rather than nil-panicking. Slice 4
+// chunk 1 of the event-source-tier arc (v0.89.141, #781 Stream 179).
+func (f *fakeFactory) SQS(_ context.Context, _ string) (SQSClient, error) {
+	if f.sqs == nil {
+		return &fakeSQS{}, nil
+	}
+	return f.sqs, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake

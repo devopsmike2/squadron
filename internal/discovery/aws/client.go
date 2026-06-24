@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -265,6 +266,14 @@ type SNSClient interface {
 	GetTopicAttributes(ctx context.Context, params *sns.GetTopicAttributesInput, optFns ...func(*sns.Options)) (*sns.GetTopicAttributesOutput, error)
 }
 
+// Note: SQSClient is declared in sqs.go alongside the rest of the SQS
+// scanner surface. Slice 4 chunk 1 of the Event source tier arc
+// (v0.89.141, #781 Stream 179). The real *sqs.Client satisfies it.
+//
+// IAM contract per docs/proposals/event-source-tier-slice4.md §12:
+// sqs:ListQueues + sqs:GetQueueAttributes. Both read-only. Squadron
+// does NOT call any SQS mutation API.
+
 // SFNClient is the narrow AWS Step Functions surface the orchestration
 // scanner depends on. Added in v0.89.95 (#728 Stream 126, slice 1 chunk
 // 1 of the Orchestration tier arc). The real *sfn.Client satisfies it.
@@ -371,6 +380,14 @@ type ClientFactory interface {
 	// assumed-role session as every other surface; SNS shares the
 	// substrate's existing AWS rate limiter posture.
 	SNS(ctx context.Context, region string) (SNSClient, error)
+
+	// SQS returns an SQS client for the supplied region. Added in slice
+	// 4 chunk 1 of the event-source-tier arc (v0.89.141, #781 Stream
+	// 179). SQS is a per-region API — the supplied region is where
+	// ListQueues walks. The scanner reuses the same per-Scanner
+	// assumed-role session as every other surface; SQS shares the
+	// substrate's existing AWS rate limiter posture.
+	SQS(ctx context.Context, region string) (SQSClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -548,6 +565,13 @@ func (f *sdkClientFactory) EventBridge(_ context.Context, region string) (EventB
 
 func (f *sdkClientFactory) SNS(_ context.Context, region string) (SNSClient, error) {
 	return sns.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) SQS(_ context.Context, region string) (SQSClient, error) {
+	return sqs.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil
