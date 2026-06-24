@@ -5,10 +5,12 @@ package aws
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -69,6 +71,103 @@ const cloudWatchLogsARNPrefix = "arn:aws:logs:"
 // HasLogAxis) is documented on scanner.EventSourceInstanceSnapshot
 // and threaded through ScanEventBridge below.
 const SchemasDiscovererStateActive = "ACTIVE"
+
+// EventBridgeXRayTraceHeaderName is the AWS-defined string that names the
+// X-Ray trace ID in EventBridge event metadata. Slice 2 chunk 1 of the
+// Event source tier arc (v0.89.105, #741 Stream 139) detects per-rule
+// trace propagation by inspecting whether an InputTransformer template
+// references this string. The check is case-insensitive — the template
+// authors in the wild sometimes use the upper-case AWS canonical
+// (X-Amzn-Trace-Id) and sometimes the lower-case HTTP-header convention.
+//
+// See docs/proposals/event-source-tier-slice2.md §3.1 for the detection
+// logic and §12 for the false-positive risk note (operators using a
+// different mechanism to preserve trace context won't match the
+// heuristic).
+const EventBridgeXRayTraceHeaderName = "x-amzn-trace-id"
+
+// EventBridgeTraceparentHeaderName is the W3C trace context header name
+// some operators use INSTEAD of the AWS X-Ray header for
+// OpenTelemetry-native flows. Slice 2 chunk 1 detects either header
+// substring in an InputTransformer template — the proposer's
+// recommendation kind (chunk 5) covers both posture conventions without
+// forcing operators onto one or the other.
+const EventBridgeTraceparentHeaderName = "traceparent"
+
+// rulePreservesTracePropagation applies the slice 2 chunk 1 per-target
+// propagation detection rule. Returns (preserved, note). preserved is
+// true when the target's InputPath / InputTransformer config preserves
+// trace context end-to-end; note is empty when preserved or a
+// human-readable per-issue string when broken.
+//
+// Detection rules (docs/proposals/event-source-tier-slice2.md §3.1):
+//
+//  1. No InputPath AND no InputTransformer → the full event flows
+//     including the X-Ray trace header. PROPAGATION PRESERVED.
+//  2. InputPath == "$" → same as no path; full event flows.
+//     PROPAGATION PRESERVED.
+//  3. InputPath set to anything other than "$" (e.g. "$.detail") →
+//     a narrowed projection that strips the top-level X-Ray trace
+//     header. PROPAGATION BROKEN.
+//  4. InputTransformer present → check the InputTemplate for a
+//     literal substring match against either the X-Ray header
+//     (x-amzn-trace-id) or the W3C traceparent header. Match →
+//     PRESERVED; no match → BROKEN. The substring match is the
+//     heuristic the design doc §3.1 names; §12 documents the
+//     false-positive risk for transformers that preserve trace
+//     context via a different (e.g. JSON-encoded <traceparent>)
+//     mechanism — the chunk-5 exclusion table absorbs those.
+//
+// The check is per-target. A rule with multiple targets is preserved
+// when EVERY target is preserved; a single broken target on a rule
+// produces a broken note for that rule. The bus-level
+// HasPropagationConfig axis (computed by the caller) is the AND across
+// every target of every rule — propagation is a worst-case axis.
+func rulePreservesTracePropagation(ruleName string, inputPath *string, inputTransformer *ebtypes.InputTransformer) (bool, string) {
+	// Case 1: no InputPath and no InputTransformer → full event flows.
+	if inputPath == nil && inputTransformer == nil {
+		return true, ""
+	}
+
+	// Case 2: InputPath = "$" → same as no path; full event flows.
+	if inputPath != nil && awssdk.ToString(inputPath) == "$" {
+		// An InputTransformer may still be set alongside — but the
+		// EventBridge API documents these as mutually exclusive in
+		// practice (the rule's input config picks one). Treat the
+		// dollar-path as authoritative when both are set; the
+		// transformer pathway below would re-apply if it weren't.
+		if inputTransformer == nil {
+			return true, ""
+		}
+		// Defensive: both are set. Fall through to the transformer
+		// check below; the transformer's template is the load-bearing
+		// shape when AWS evaluates the rule.
+	}
+
+	// Case 3: InputPath set to anything other than "$" → strips the
+	// top-level event metadata (where the X-Ray header lives).
+	if inputPath != nil && awssdk.ToString(inputPath) != "$" && inputTransformer == nil {
+		return false, fmt.Sprintf("rule %q has InputPath %q that strips trace header",
+			ruleName, awssdk.ToString(inputPath))
+	}
+
+	// Case 4: InputTransformer present → heuristic substring match.
+	if inputTransformer != nil {
+		template := awssdk.ToString(inputTransformer.InputTemplate)
+		lowerTemplate := strings.ToLower(template)
+		if strings.Contains(lowerTemplate, EventBridgeXRayTraceHeaderName) ||
+			strings.Contains(lowerTemplate, EventBridgeTraceparentHeaderName) {
+			return true, ""
+		}
+		return false, fmt.Sprintf("rule %q has InputTransformer template omitting trace header",
+			ruleName)
+	}
+
+	// Defensive fallback: should not reach here given the cases above,
+	// but if any path slips through, default to preserved (don't emit
+	// a false-positive recommendation against an unrecognized config).
+	return true, ""
+}
 
 // ScanEventSources is the AWS scanner's event-source-tier entry point.
 // Slice 1 chunk 1 only covers EventBridge; future slices may add other
@@ -225,7 +324,7 @@ func (s *Scanner) describeEventBus(ctx context.Context, client EventBridgeClient
 		snap.ResourceName = *name
 	}
 
-	ruleCount, hasLogTarget := scanBusRulesForLogTargets(ctx, client, name)
+	ruleCount, hasLogTarget, propagationOK, propagationNotes := scanBusRulesForLogTargets(ctx, client, name)
 	if hasLogTarget {
 		snap.HasLogAxis = true
 		// Slice 1 chunk 1 fallback: a bus with a log target is the
@@ -235,6 +334,17 @@ func (s *Scanner) describeEventBus(ctx context.Context, client EventBridgeClient
 		// separate this from HasLogAxis.
 		snap.HasTraceAxis = true
 	}
+	// Slice 2 chunk 1 (v0.89.105, #741 Stream 139): per-rule propagation
+	// detection. The bus-level axis is the AND across every target of
+	// every rule — propagation is a worst-case axis (any broken target
+	// fails the whole bus). A bus with no rules / no targets defaults
+	// to true (vacuously preserved — there's nothing to break
+	// propagation), which is what scanBusRulesForLogTargets returns
+	// when the per-rule walk finds no broken cases.
+	snap.HasPropagationConfig = propagationOK
+	if len(propagationNotes) > 0 {
+		snap.PropagationNotes = propagationNotes
+	}
 	snap.Detail = map[string]any{
 		"rule_count": ruleCount,
 	}
@@ -242,25 +352,45 @@ func (s *Scanner) describeEventBus(ctx context.Context, client EventBridgeClient
 }
 
 // scanBusRulesForLogTargets walks every rule on the supplied bus and
-// returns the total rule count plus whether any rule has a CloudWatch
-// Logs target. Extracted as a free function so the inner detection
-// logic is straightforward to test in isolation.
+// returns (1) the total rule count, (2) whether any rule has a
+// CloudWatch Logs target (the slice-1 log-axis proxy), (3) whether
+// every target on every rule preserves trace propagation (the slice-2
+// chunk-1 propagation axis), and (4) the per-issue propagation notes
+// accumulated across broken targets.
 //
 // Per-rule ListTargetsByRule failures short-circuit to the next rule —
 // a single failing target list must not abort the whole bus walk.
-// Pagination follows out.NextToken on the ListRules pass; the
-// per-rule target walk does NOT paginate (the detection short-circuits
-// on the first log-target hit, so pagination of the targets surface
-// is unnecessary work in chunk 1).
+// Pagination follows out.NextToken on the ListRules pass; the per-rule
+// target walk does NOT paginate (slice 1's first-log-target-hit short-
+// circuit is preserved on the log axis; slice 2's propagation check
+// still iterates every target on the page, but the chunk-1 budget
+// keeps target-list pagination as slice-3 work).
 //
-// Returns (ruleCount, hasLogTarget). When the ListRules call itself
-// fails, returns (0, false) — the bus snapshot still surfaces with its
-// universal columns and the axes default to false.
-func scanBusRulesForLogTargets(ctx context.Context, client EventBridgeClient, busName *string) (int, bool) {
+// Returns (ruleCount, hasLogTarget, propagationOK, propagationNotes).
+// When the ListRules call itself fails, returns
+// (0, false, true, nil) — the bus snapshot still surfaces with its
+// universal columns; the log axis stays false; the propagation axis
+// defaults to true (vacuously preserved, no rules observed).
+//
+// SLICE 2 COMPOSITION NOTE: the log-target short-circuit (once
+// hasLogTarget flips true, the LogAxis is proven) is preserved on the
+// log axis only — the slice 2 propagation pass DOES iterate every
+// rule's targets even after the log axis flips, because per-target
+// propagation is a worst-case AND across the whole bus. The previous
+// chunk-1 implementation skipped the ListTargetsByRule call entirely
+// for subsequent rules once hasLogTarget proved true; slice 2 has to
+// remove that short-circuit because propagation cannot be proven
+// without inspecting every target. The cost is one extra API call per
+// rule per bus per scan — measured in the design doc §12 threat model
+// as acceptable (EventBridge rule counts in production deployments
+// rarely exceed low double-digits per bus).
+func scanBusRulesForLogTargets(ctx context.Context, client EventBridgeClient, busName *string) (int, bool, bool, []string) {
 	var (
-		ruleCount    int
-		hasLogTarget bool
-		nextToken    *string
+		ruleCount        int
+		hasLogTarget     bool
+		propagationOK    = true // vacuously true; flips false on first broken target
+		propagationNotes []string
+		nextToken        *string
 	)
 	for {
 		in := &eventbridge.ListRulesInput{
@@ -276,16 +406,10 @@ func scanBusRulesForLogTargets(ctx context.Context, client EventBridgeClient, bu
 			return e
 		})
 		if callErr != nil {
-			return ruleCount, hasLogTarget
+			return ruleCount, hasLogTarget, propagationOK, propagationNotes
 		}
 		for _, rule := range rulesOut.Rules {
 			ruleCount++
-			if hasLogTarget {
-				// Short-circuit: we already proved the axis; keep
-				// counting rules for the Detail bag but skip the
-				// per-rule target call.
-				continue
-			}
 			targetsOut, terr := client.ListTargetsByRule(ctx, &eventbridge.ListTargetsByRuleInput{
 				Rule:         rule.Name,
 				EventBusName: busName,
@@ -293,13 +417,29 @@ func scanBusRulesForLogTargets(ctx context.Context, client EventBridgeClient, bu
 			if terr != nil {
 				continue
 			}
+			ruleName := awssdk.ToString(rule.Name)
 			for _, target := range targetsOut.Targets {
-				if target.Arn == nil {
-					continue
-				}
-				if strings.HasPrefix(*target.Arn, cloudWatchLogsARNPrefix) {
+				// Slice-1 log-axis check: any target on any rule with
+				// a CloudWatch Logs ARN flips the axis. Cheap string
+				// prefix match; no SDK call needed.
+				if !hasLogTarget && target.Arn != nil &&
+					strings.HasPrefix(*target.Arn, cloudWatchLogsARNPrefix) {
 					hasLogTarget = true
-					break
+				}
+				// Slice-2 propagation check: per-target inspection of
+				// InputPath / InputTransformer. The bus-level axis is
+				// the AND across every target of every rule, so each
+				// broken target contributes a note AND flips the bus
+				// axis to false. Multiple broken targets on the same
+				// rule each emit their own note (the proposer's chunk
+				// 5 reasoning text walks the full notes list).
+				preserved, note := rulePreservesTracePropagation(
+					ruleName, target.InputPath, target.InputTransformer)
+				if !preserved {
+					propagationOK = false
+					if note != "" {
+						propagationNotes = append(propagationNotes, note)
+					}
 				}
 			}
 		}
@@ -308,5 +448,5 @@ func scanBusRulesForLogTargets(ctx context.Context, client EventBridgeClient, bu
 		}
 		nextToken = rulesOut.NextToken
 	}
-	return ruleCount, hasLogTarget
+	return ruleCount, hasLogTarget, propagationOK, propagationNotes
 }

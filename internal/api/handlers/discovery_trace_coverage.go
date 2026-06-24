@@ -81,6 +81,28 @@ type ProviderTraceCoverage struct {
 	// since OCI Streaming ships in slice 1. The dashboard hides the
 	// EVT chip line when fleet-wide inventory is 0.
 	EventSourcePct float64 `json:"event_source_pct"`
+	// PropagationPct — event source tier slice 2 chunk 1 (v0.89.105,
+	// #741 Stream 139) — % of inventoried event sources whose
+	// has_propagation_config bool is true. Numerator is the count of
+	// per-provider event_source_instance rows where
+	// has_propagation_config = true; denominator is the per-provider
+	// event source inventory total. 0 when there are no event
+	// sources in this provider's inventory. Computed alongside the
+	// existing EventSourcePct so the dashboard's chip can render
+	// "EVT N% (prop M%)" in one round-trip (chunk 5 wires the chip
+	// suffix; this chunk just ships the numeric value).
+	//
+	// All four providers populate (including OCI for slice 2 chunks
+	// 4) when the per-cloud scanners set has_propagation_config. In
+	// slice 2 chunk 1, only AWS EventBridge populates the bool;
+	// chunks 2-4 follow. Until then, GCP / Azure / OCI snapshots
+	// default has_propagation_config to false, so their
+	// PropagationPct stays at 0 even when event sources are present.
+	//
+	// See docs/proposals/event-source-tier-slice2.md §6 for the API
+	// surface and §11 acceptance test 15 (TestTraceCoverage_
+	// IncludesPropagationPct).
+	PropagationPct float64 `json:"propagation_pct"`
 }
 
 // TraceCoverageTotals is the cross-provider roll-up.
@@ -170,6 +192,26 @@ type OrchestrationCoverageQuery interface {
 // as a real surface alongside the other three clouds.
 type EventSourceCoverageQuery interface {
 	EventSourceCoverageForScope(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (inventory, emitting int, err error)
+}
+
+// EventSourcePropagationQuery — event source tier slice 2 chunk 1
+// (v0.89.105, #741 Stream 139). Returns per-scope (inventory,
+// propagating) counts for the PropagationPct rollup. The numerator
+// (propagating) counts event_source_instance rows whose
+// has_propagation_config bool inside snapshot_json is true; the
+// denominator (inventory) is the full event source row count. The
+// production InventoryStore performs the per-row JSON projection;
+// tests substitute a stub returning canned counts the same way
+// EventSourceCoverageQuery does.
+//
+// Zero counts on cold start; nil implementation short-circuits to
+// (0, 0). All four providers (including OCI) are expected to return
+// real counts once the per-cloud slice-2 chunks (2-4) land — the
+// chunk-1 query interface is provider-agnostic so the per-scope walk
+// composes against any provider's event_source_instance rows
+// uniformly.
+type EventSourcePropagationQuery interface {
+	EventSourcePropagationForScope(ctx context.Context, provider, scopeID string) (inventory, propagating int, err error)
 }
 
 // TraceIndex is the slim surface DiscoveryTraceCoverageHandlers uses to
@@ -271,7 +313,12 @@ type DiscoveryTraceCoverageHandlers struct {
 	serverlessQuery    ServerlessCoverageQuery
 	orchestrationQuery OrchestrationCoverageQuery
 	eventSourceQuery   EventSourceCoverageQuery
-	auditService       services.AuditService
+	// propagationQuery — event source tier slice 2 chunk 1 (v0.89.105,
+	// #741 Stream 139). Optional per-scope query feeding
+	// PropagationPct. nil short-circuits the column to 0 for every
+	// provider — same nil-tolerant posture as eventSourceQuery.
+	propagationQuery EventSourcePropagationQuery
+	auditService     services.AuditService
 	cache           *traceCoverageCache
 	logger          *zap.Logger
 }
@@ -347,6 +394,19 @@ func (h *DiscoveryTraceCoverageHandlers) WithOrchestrationQuery(q OrchestrationC
 // as WithOrchestrationQuery.
 func (h *DiscoveryTraceCoverageHandlers) WithEventSourceQuery(q EventSourceCoverageQuery) *DiscoveryTraceCoverageHandlers {
 	h.eventSourceQuery = q
+	return h
+}
+
+// WithEventSourcePropagationQuery — event source tier slice 2 chunk 1
+// (v0.89.105, #741 Stream 139). Optional setter for the per-scope
+// event source propagation query. nil short-circuits the
+// PropagationPct column to 0 for every provider — the slice-2 chunks
+// 2-4 add per-cloud propagation detection scanners; this query reads
+// the persisted has_propagation_config bool from snapshot_json. Same
+// setter-only extension pattern as WithEventSourceQuery so existing
+// call sites don't churn.
+func (h *DiscoveryTraceCoverageHandlers) WithEventSourcePropagationQuery(q EventSourcePropagationQuery) *DiscoveryTraceCoverageHandlers {
+	h.propagationQuery = q
 	return h
 }
 
@@ -625,6 +685,37 @@ func (h *DiscoveryTraceCoverageHandlers) aggregateProvider(
 			esEmit += emit
 		}
 		out.EventSourcePct = computeTraceCoveragePct(esEmit, esInv)
+	}
+
+	// Event source tier slice 2 chunk 1 (v0.89.105, #741 Stream 139) —
+	// roll up per-scope event source propagation counts when the
+	// optional EventSourcePropagationQuery is wired. Numerator is the
+	// per-provider sum of rows whose has_propagation_config is true;
+	// denominator is the per-provider event source inventory. nil
+	// query short-circuits to 0; a failed per-scope query logs a
+	// warning and stays at 0 for that scope. Mirrors the
+	// eventSourceQuery nil-tolerant posture so a deployment that
+	// hasn't wired the new query renders the dashboard chip suffix
+	// hidden (chunk 5 wires the suffix; the chip line is hidden when
+	// PropagationPct is 0 and inventory is 0).
+	if h.propagationQuery != nil {
+		var pInv, pProp int
+		for _, scope := range scopes {
+			if scope == "" {
+				continue
+			}
+			inv, prop, err := h.propagationQuery.EventSourcePropagationForScope(ctx, provider, scope)
+			if err != nil {
+				h.logger.Warn("trace coverage: event source propagation lookup failed",
+					zap.String("provider", provider),
+					zap.String("scope", scope),
+					zap.Error(err))
+				continue
+			}
+			pInv += inv
+			pProp += prop
+		}
+		out.PropagationPct = computeTraceCoveragePct(pProp, pInv)
 	}
 
 	return out
