@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 12
+const SchemaVersion = 13
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -537,6 +537,64 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_conn ON orchestration_instance(conn
 INSERT OR IGNORE INTO schema_version (version) VALUES (12);
 `
 
+// EventSourceInstanceSchema bumps the database to schema v13.
+// v0.89.100 (#734 Stream 132, slice 1 chunk 1 of the Event source tier
+// arc) — adds the event_source_instance table that the new
+// internal/discovery/scanner EventSourceInstanceSnapshot persists into.
+//
+// One row per (connection_id, scan_id, resource_arn) inbound event source
+// Squadron's per-cloud scanners detect (AWS EventBridge bus, GCP Pub/Sub
+// topic, Azure Service Bus namespace/queue/topic, OCI Streaming stream).
+// Universal columns (provider / surface / account_id / region /
+// resource_name / resource_arn / source_type / has_trace_axis /
+// has_log_axis / last_seen_at) carry the cross-cloud detection shape;
+// snapshot_json carries the full EventSourceInstanceSnapshot (including
+// the surface-specific Detail bag) so per-cloud Inventory tabs can render
+// provider-specific context without a second join.
+//
+// The (connection_id, scan_id, resource_arn) UNIQUE constraint mirrors
+// the orchestration_instance v12 keying pattern — a re-scan of the same
+// connection on the same scan_id is idempotent on a per-resource basis.
+// Cross-scan history is preserved (each scan_id gets its own row per
+// resource); the chunk-5 dashboard rollup reads through the most-recent
+// scan per connection.
+//
+// idx_event_source_scan backs the per-scan inventory read (the
+// per-provider Inventory tab's filter on a single scan_id).
+// idx_event_source_conn backs the per-connection rollup (the Discovery
+// dashboard's per-card aggregation across all scans).
+//
+// Migration adds the table without backfilling — pre-slice-1 scans
+// don't have event source data. The chunk-1 v0.89.100 migration is
+// idempotent (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS);
+// running it twice is a no-op.
+//
+// See docs/proposals/event-source-tier-slice1.md §4 (storage schema)
+// and §11 acceptance test 12 (migration idempotence).
+const EventSourceInstanceSchema = `
+CREATE TABLE IF NOT EXISTS event_source_instance (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    scan_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    region TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    resource_arn TEXT,
+    source_type TEXT,
+    has_trace_axis INTEGER NOT NULL,
+    has_log_axis INTEGER NOT NULL,
+    last_seen_at TIMESTAMP,
+    snapshot_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (connection_id, scan_id, resource_arn)
+);
+CREATE INDEX IF NOT EXISTS idx_event_source_scan ON event_source_instance(scan_id);
+CREATE INDEX IF NOT EXISTS idx_event_source_conn ON event_source_instance(connection_id);
+INSERT OR IGNORE INTO schema_version (version) VALUES (13);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -551,4 +609,5 @@ var Migrations = []string{
 	TraceResourceSeenSchema,
 	ServerlessInstanceSchema,
 	OrchestrationInstanceSchema,
+	EventSourceInstanceSchema,
 }

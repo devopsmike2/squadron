@@ -15,20 +15,20 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )
 
-// TestParseTiersOrDefault_EmptyFallsBackToDefault — the orchestration-
-// tier slice 1 chunk 1 default tier list includes "serverless" and
-// "orchestration" alongside the historical compute / database /
-// kubernetes entries. An empty request yields the full
-// DefaultScanTiers slice.
+// TestParseTiersOrDefault_EmptyFallsBackToDefault — the event-source-
+// tier slice 1 chunk 1 default tier list includes "serverless",
+// "orchestration", and "event_source" alongside the historical compute
+// / database / kubernetes entries. An empty request yields the full
+// DefaultScanTiers slice. Six tiers as of v0.89.100.
 func TestParseTiersOrDefault_EmptyFallsBackToDefault(t *testing.T) {
 	got := parseTiersOrDefault(nil)
-	if len(got) != 5 {
-		t.Fatalf("default tiers length = %d, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("default tiers length = %d, want 6", len(got))
 	}
 	wantSet := map[string]bool{
 		TierCompute: true, TierDatabase: true,
 		TierKubernetes: true, TierServerless: true,
-		TierOrchestration: true,
+		TierOrchestration: true, TierEventSource: true,
 	}
 	for _, tier := range got {
 		if !wantSet[tier] {
@@ -69,11 +69,11 @@ func TestParseTiersOrDefault_DropsUnknownTiers(t *testing.T) {
 
 // TestParseTiersOrDefault_AllUnknownFallsBackToDefault — every tier
 // being unrecognized falls back to the default rather than scanning
-// nothing.
+// nothing. Six tiers as of v0.89.100 (event-source-tier slice 1 chunk 1).
 func TestParseTiersOrDefault_AllUnknownFallsBackToDefault(t *testing.T) {
 	got := parseTiersOrDefault([]string{"bogus", "alsobogus"})
-	if len(got) != 5 {
-		t.Errorf("expected 5 fallback tiers, got %d: %v", len(got), got)
+	if len(got) != 6 {
+		t.Errorf("expected 6 fallback tiers, got %d: %v", len(got), got)
 	}
 }
 

@@ -796,6 +796,44 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_orchestration_scan ON orchestration_instance(scan_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_orchestration_conn ON orchestration_instance(connection_id)`,
+
+		// v0.89.100 (#734 Stream 132, slice 1 chunk 1 of the Event
+		// source tier arc) — event_source_instance carries one row per
+		// (connection_id, scan_id, resource_arn) inbound event source
+		// Squadron's per-cloud scanners detect (AWS EventBridge bus,
+		// GCP Pub/Sub topic, Azure Service Bus namespace/queue/topic,
+		// OCI Streaming stream). Universal columns (provider / surface
+		// / account_id / region / resource_name / resource_arn /
+		// source_type / has_trace_axis / has_log_axis / last_seen_at)
+		// carry the cross-cloud detection shape; snapshot_json holds
+		// the full per-cloud snapshot including the surface-specific
+		// Detail bag. The (connection_id, scan_id, resource_arn)
+		// UNIQUE constraint makes re-scan idempotent on a per-resource
+		// basis; idx_event_source_scan backs the per-scan inventory
+		// read; idx_event_source_conn backs the per-connection rollup
+		// the Discovery dashboard's per-card aggregation reads.
+		//
+		// See docs/proposals/event-source-tier-slice1.md §4.
+		`CREATE TABLE IF NOT EXISTS event_source_instance (
+			id TEXT PRIMARY KEY,
+			connection_id TEXT NOT NULL,
+			scan_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			surface TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			region TEXT NOT NULL,
+			resource_name TEXT NOT NULL,
+			resource_arn TEXT,
+			source_type TEXT,
+			has_trace_axis INTEGER NOT NULL,
+			has_log_axis INTEGER NOT NULL,
+			last_seen_at TIMESTAMP,
+			snapshot_json TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (connection_id, scan_id, resource_arn)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_event_source_scan ON event_source_instance(scan_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_event_source_conn ON event_source_instance(connection_id)`,
 	}
 
 	for _, migration := range migrations {
