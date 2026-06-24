@@ -95,6 +95,27 @@ jump straight to that page.
   secret, configuring the GitHub repo webhook, verifying the
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
+- [Orchestration tier — operator guide](./orchestration-tier-operator-guide.md) —
+  v0.89.94 through v0.89.98 operator runbook for the
+  orchestration tier slice 1 arc (design at
+  [proposals/orchestration-tier-slice1.md](./proposals/orchestration-tier-slice1.md)).
+  Fifth tier alongside compute / database / kubernetes /
+  serverless. Three surfaces across three clouds: AWS Step
+  Functions, GCP Workflows, Azure Logic Apps (Standard +
+  Consumption tiers). OCI orchestration deferred to slice 2
+  because Resource Manager + Process Automation are
+  shape-different from the AWS/GCP/Azure trio. New
+  Orchestration Inventory sub-tab on AWS/GCP/Azure pages;
+  hidden conditional on OCI. 6 new recommendation kinds:
+  `stepfunc-{xray-active,logging-enable}`,
+  `workflows-{trace-enable,logging-enable}`,
+  `logicapps-{appinsights-enable,diagnostics-enable}`.
+  Discovery summary + trace_coverage endpoints gain
+  `orchestration_count` and `orchestration_pct`. Dashboard
+  TRACE COVERAGE chip breakdown adds ORCH column.
+  **Slice 1 SHIPPED in v0.89.98.** Squadron's claim grows a
+  fifth tier (qualified — 3 clouds in slice 1, full 4-cloud
+  in slice 2 when OCI's primitives get their own treatment).
 - [Serverless tier — operator guide](./serverless-tier-operator-guide.md) —
   v0.89.89 through v0.89.93 operator runbook for the
   serverless tier slice 1 arc (design at
