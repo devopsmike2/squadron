@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -81,6 +82,39 @@ type Scanner struct {
 	// call to keyForSigning. Subsequent Scan invocations reuse the
 	// parsed key without re-decoding the PEM bytes.
 	parsedKey *rsa.PrivateKey
+
+	// monitoringClient is the OCI Monitoring adapter the slice-2
+	// chunk-3 MetricQuerier implementation uses (v0.89.118).
+	// Nil-tolerant for backward compatibility with the chunk-1
+	// skeleton path and the validation constructors that don't
+	// need metric queries. When nil, QueryAggregate returns
+	// scanner.ErrMetricNotImplemented mirroring the v0.89.113
+	// chunk-1 surface. Tests inject a fake satisfying
+	// MonitoringClient; production wires the signed REST client
+	// via WithMonitoringClient + NewSignedMonitoringClient.
+	monitoringClient MonitoringClient
+
+	// metricsLimiter is the per-Scanner-instance rate limiter that
+	// caps OCI Monitoring summarizeMetricsData TPS at
+	// OCIMonitoringRateLimitTPS. Per-Scanner-instance is the
+	// equivalent of per-tenancy in the slice 2 substrate (one
+	// Scanner per CloudConnection per scan). Nil-tolerant:
+	// QueryAggregate skips the Wait call when the limiter is nil.
+	metricsLimiter *rate.Limiter
+
+	// coldStartStore is the storage adapter for persisting cold-start
+	// observations the chunk-4 detection branch produces. v0.89.118 —
+	// nil-tolerant so a Scanner constructed via the validation-only
+	// path doesn't have to wire a real store. When nil,
+	// DetectColdStartRegression still runs the OCI Monitoring + ratio
+	// math (so callers can inspect the detection result
+	// programmatically) but skips the SaveColdStartObservation call.
+	coldStartStore ColdStartStore
+
+	// connectionID is the CloudConnection identifier that scopes
+	// persisted cold-start observations. v0.89.118 — same rationale
+	// as the AWS scanner's connectionID field.
+	connectionID string
 }
 
 // Provider satisfies the (future) scanner.Scanner interface. The
