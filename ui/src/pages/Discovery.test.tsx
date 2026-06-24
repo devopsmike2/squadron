@@ -207,6 +207,11 @@ function makeProviderSpanQuality(
     orphan_pct: 0,
     missing_attr_pct: 0,
     attr_mismatch_pct: 0,
+    // Slice 2 (v0.89.110) — the panel hides when ALL FIVE percentages
+    // are zero; the makeSpanQuality default keeps the panel hidden so
+    // tests opt in explicitly.
+    malformed_traceparent_pct: 0,
+    missing_traceparent_on_child_pct: 0,
     ...over,
   };
 }
@@ -232,6 +237,8 @@ function makeSpanQuality(
       orphan_pct: 0,
       missing_attr_pct: 0,
       attr_mismatch_pct: 0,
+      malformed_traceparent_pct: 0,
+      missing_traceparent_on_child_pct: 0,
     },
   };
   for (const k of Object.keys(providersOver) as Array<
@@ -1034,6 +1041,8 @@ describe("DiscoveryDashboard", () => {
             orphan_pct: 4.1,
             missing_attr_pct: 6.3,
             attr_mismatch_pct: 2.0,
+            malformed_traceparent_pct: 0,
+            missing_traceparent_on_child_pct: 0,
           },
         },
         {
@@ -1105,6 +1114,8 @@ describe("DiscoveryDashboard", () => {
           orphan_pct: 7.0,
           missing_attr_pct: 12.0,
           attr_mismatch_pct: 3.0,
+          malformed_traceparent_pct: 0,
+          missing_traceparent_on_child_pct: 0,
         },
       }),
     );
@@ -1127,6 +1138,132 @@ describe("DiscoveryDashboard", () => {
     ).toHaveAttribute(
       "href",
       "/discovery/aws#recommendations:span-quality-attribute-mismatch",
+    );
+  });
+
+  // --- Slice 2 (v0.89.110) — 5-column grid + traceparent columns --
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_FiveColumnsRenderWhenNonZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality({
+        totals: {
+          resource_count: 142,
+          resources_with_issues: 50,
+          orphan_pct: 3.2,
+          missing_attr_pct: 6.3,
+          attr_mismatch_pct: 2.0,
+          malformed_traceparent_pct: 0.8,
+          missing_traceparent_on_child_pct: 4.1,
+        },
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
+    });
+    // All five percentage tiles render.
+    expect(screen.getByTestId("span-quality-pct-orphan")).toHaveTextContent(
+      "3.2%",
+    );
+    expect(
+      screen.getByTestId("span-quality-pct-missing-attrs"),
+    ).toHaveTextContent("6.3%");
+    expect(
+      screen.getByTestId("span-quality-pct-mismatch"),
+    ).toHaveTextContent("2.0%");
+    expect(
+      screen.getByTestId("span-quality-pct-malformed-traceparent"),
+    ).toHaveTextContent("0.8%");
+    expect(
+      screen.getByTestId("span-quality-pct-missing-traceparent"),
+    ).toHaveTextContent("4.1%");
+  });
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_HiddenWhenAllFiveZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Default makeSpanQuality() carries all-zero on every slice-1 +
+    // slice-2 percentage; the panel must stay out of the DOM.
+    mockedFetchSpanQuality.mockResolvedValue(makeSpanQuality());
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("provider-grid")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("span-quality-panel")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("span-quality-pct-malformed-traceparent"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("span-quality-pct-missing-traceparent"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_MalformedTraceparentColumnDeepLinks", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Only the new malformed-traceparent percentage is non-zero — the
+    // panel must still appear (slice 2 extended hide-check) and the
+    // malformed column must deep-link to the matching kind.
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality({
+        totals: {
+          resource_count: 12,
+          resources_with_issues: 3,
+          orphan_pct: 0,
+          missing_attr_pct: 0,
+          attr_mismatch_pct: 0,
+          malformed_traceparent_pct: 1.5,
+          missing_traceparent_on_child_pct: 0,
+        },
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
+    });
+    const col = screen.getByTestId("span-quality-column-malformed-traceparent");
+    expect(col.tagName).toBe("A");
+    expect(col).toHaveAttribute(
+      "data-kind",
+      "span-quality-traceparent-malformed",
+    );
+    expect(col).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-traceparent-malformed",
+    );
+  });
+
+  it("TestDiscoveryDashboard_SpanQualityPanel_MissingOnChildColumnDeepLinks", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality({
+        totals: {
+          resource_count: 12,
+          resources_with_issues: 3,
+          orphan_pct: 0,
+          missing_attr_pct: 0,
+          attr_mismatch_pct: 0,
+          malformed_traceparent_pct: 0,
+          missing_traceparent_on_child_pct: 5.7,
+        },
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
+    });
+    const col = screen.getByTestId("span-quality-column-missing-traceparent");
+    expect(col.tagName).toBe("A");
+    expect(col).toHaveAttribute(
+      "data-kind",
+      "span-quality-traceparent-missing",
+    );
+    expect(col).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-traceparent-missing",
     );
   });
 });

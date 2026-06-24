@@ -32,28 +32,47 @@ import (
 // ProviderSpanQuality is the per-provider aggregate. ResourceCount is
 // the number of distinct quality keys observed for the provider in the
 // rolling window; ResourcesWithIssues counts keys where AT LEAST ONE of
-// orphan/missing/mismatch is non-zero. The three percentages are mean
+// the five pathology percentages is non-zero. The percentages are mean
 // across keys (not weighted by span count) — a single noisy resource
-// can't dominate a fleet of clean ones. Slice 2 may switch to weighted
-// aggregation per design doc §12.
+// can't dominate a fleet of clean ones. Slice 2 (v0.89.110) extends
+// with MalformedTraceparentPct + MissingTraceparentOnChildPct; their
+// means use honest denominators per span-quality-slice2.md §3.3: only
+// keys with SpansWithTraceparent > 0 contribute to the malformed mean,
+// and only keys with ChildSpans > 0 contribute to the missing-on-child
+// mean. A resource with no child spans can't be missing-on-child, so
+// it shouldn't dilute the rate.
 type ProviderSpanQuality struct {
 	ResourceCount       int     `json:"resource_count"`
 	ResourcesWithIssues int     `json:"resources_with_issues"`
 	OrphanPct           float64 `json:"orphan_pct"`
 	MissingAttrPct      float64 `json:"missing_attr_pct"`
 	AttrMismatchPct     float64 `json:"attr_mismatch_pct"`
+
+	// Slice 2 (v0.89.110) — W3C trace context parsing. Aggregated mean
+	// across resources with > 0 SpansWithTraceparent (for malformed)
+	// and > 0 ChildSpans (for missing-on-child). The denominators stay
+	// honest so a fleet with mostly root spans doesn't dilute the
+	// missing-on-child rate.
+	MalformedTraceparentPct      float64 `json:"malformed_traceparent_pct"`
+	MissingTraceparentOnChildPct float64 `json:"missing_traceparent_on_child_pct"`
 }
 
 // SpanQualityTotals is the cross-provider roll-up. Sums ResourceCount
-// + ResourcesWithIssues; the three percentages re-mean across every
-// observed key (not a re-mean of the per-provider means — that would
-// double-bucket the unknown observations).
+// + ResourcesWithIssues; the percentages re-mean across every observed
+// key (not a re-mean of the per-provider means — that would
+// double-bucket the unknown observations). Slice 2 additions match the
+// honest-denominator semantics of ProviderSpanQuality.
 type SpanQualityTotals struct {
 	ResourceCount       int     `json:"resource_count"`
 	ResourcesWithIssues int     `json:"resources_with_issues"`
 	OrphanPct           float64 `json:"orphan_pct"`
 	MissingAttrPct      float64 `json:"missing_attr_pct"`
 	AttrMismatchPct     float64 `json:"attr_mismatch_pct"`
+
+	// Slice 2 (v0.89.110) additions, same denominator semantics as
+	// ProviderSpanQuality.
+	MalformedTraceparentPct      float64 `json:"malformed_traceparent_pct"`
+	MissingTraceparentOnChildPct float64 `json:"missing_traceparent_on_child_pct"`
 }
 
 // SpanQualityResponse is the JSON wire shape for GET
@@ -70,6 +89,13 @@ type SpanQualityResponse struct {
 // Placeholders is the bounded slice of recent {attr, placeholder}
 // pairs the traceindex Quality observer recorded; the operator can
 // see what specific sentinel value the SDK emitted.
+//
+// Slice 2 (v0.89.110) extends with four W3C trace context fields:
+// MalformedTraceparentPct + MissingTraceparentOnChildPct (the per-
+// resource percentages) plus SpansWithTraceparent + ChildSpans (the
+// raw denominators) so the UI drill-down can render honest "N of M"
+// framing alongside the percentage. HasIssues extends to any of the
+// five percentages being non-zero.
 type ResourceSpanQuality struct {
 	ResourceID      string                              `json:"resource_id"`
 	Provider        string                              `json:"provider"`
@@ -79,8 +105,16 @@ type ResourceSpanQuality struct {
 	OrphanPct       float64                             `json:"orphan_pct"`
 	MissingAttrPct  float64                             `json:"missing_attr_pct"`
 	AttrMismatchPct float64                             `json:"attr_mismatch_pct"`
-	Placeholders    []traceindex.PlaceholderObservation `json:"placeholders"`
-	HasIssues       bool                                `json:"has_issues"`
+
+	// Slice 2 (v0.89.110) — W3C trace context parsing per
+	// span-quality-slice2.md §6.1.
+	MalformedTraceparentPct      float64 `json:"malformed_traceparent_pct"`
+	MissingTraceparentOnChildPct float64 `json:"missing_traceparent_on_child_pct"`
+	SpansWithTraceparent         uint64  `json:"spans_with_traceparent"`
+	ChildSpans                   uint64  `json:"child_spans"`
+
+	Placeholders []traceindex.PlaceholderObservation `json:"placeholders"`
+	HasIssues    bool                                `json:"has_issues"`
 }
 
 // --- store + index interfaces ------------------------------------------
@@ -260,12 +294,25 @@ func (h *DiscoverySpanQualityHandlers) compose() *SpanQualityResponse {
 		return resp
 	}
 
+	// Slice 2 (v0.89.110): the malformed + missing-on-child counts use
+	// their own denominators per span-quality-slice2.md §3.3. A
+	// resource with zero spans-carrying-traceparent shouldn't dilute
+	// the malformed mean (its 0% is artificial — nothing to be
+	// malformed). Same for missing-on-child: a resource with zero
+	// child spans is trivially 0% missing-on-child. The
+	// malformedDenom / missingChildDenom bucket fields track how many
+	// resources actually contributed to those means so meanPct can
+	// divide honestly.
 	type bucket struct {
-		count        int
-		withIssues   int
-		orphanSum    float64
-		missingSum   float64
-		mismatchSum  float64
+		count             int
+		withIssues        int
+		orphanSum         float64
+		missingSum        float64
+		mismatchSum       float64
+		malformedSum      float64
+		malformedDenom    int
+		missingChildSum   float64
+		missingChildDenom int
 	}
 	buckets := map[string]*bucket{
 		"aws":     {},
@@ -287,7 +334,14 @@ func (h *DiscoverySpanQualityHandlers) compose() *SpanQualityResponse {
 		b := buckets[provider]
 		b.count++
 		totals.count++
-		issues := snap.OrphanPct > 0 || snap.MissingAttrPct > 0 || snap.AttrMismatchPct > 0
+		// "Has issues" extends to any of the five percentages being
+		// non-zero so the resource lands in the panel-visible count
+		// when only a traceparent pathology is present.
+		issues := snap.OrphanPct > 0 ||
+			snap.MissingAttrPct > 0 ||
+			snap.AttrMismatchPct > 0 ||
+			snap.MalformedTraceparentPct > 0 ||
+			snap.MissingTraceparentOnChildPct > 0
 		if issues {
 			b.withIssues++
 			totals.withIssues++
@@ -298,24 +352,42 @@ func (h *DiscoverySpanQualityHandlers) compose() *SpanQualityResponse {
 		totals.orphanSum += snap.OrphanPct
 		totals.missingSum += snap.MissingAttrPct
 		totals.mismatchSum += snap.AttrMismatchPct
+
+		// Honest denominators for the two new traceparent rates.
+		if snap.SpansWithTraceparent > 0 {
+			b.malformedSum += snap.MalformedTraceparentPct
+			b.malformedDenom++
+			totals.malformedSum += snap.MalformedTraceparentPct
+			totals.malformedDenom++
+		}
+		if snap.ChildSpans > 0 {
+			b.missingChildSum += snap.MissingTraceparentOnChildPct
+			b.missingChildDenom++
+			totals.missingChildSum += snap.MissingTraceparentOnChildPct
+			totals.missingChildDenom++
+		}
 	}
 
 	for _, p := range []string{"aws", "gcp", "azure", "oci"} {
 		b := buckets[p]
 		resp.Providers[p] = ProviderSpanQuality{
-			ResourceCount:       b.count,
-			ResourcesWithIssues: b.withIssues,
-			OrphanPct:           meanPct(b.orphanSum, b.count),
-			MissingAttrPct:      meanPct(b.missingSum, b.count),
-			AttrMismatchPct:     meanPct(b.mismatchSum, b.count),
+			ResourceCount:                b.count,
+			ResourcesWithIssues:          b.withIssues,
+			OrphanPct:                    meanPct(b.orphanSum, b.count),
+			MissingAttrPct:               meanPct(b.missingSum, b.count),
+			AttrMismatchPct:              meanPct(b.mismatchSum, b.count),
+			MalformedTraceparentPct:      meanPct(b.malformedSum, b.malformedDenom),
+			MissingTraceparentOnChildPct: meanPct(b.missingChildSum, b.missingChildDenom),
 		}
 	}
 	resp.Totals = SpanQualityTotals{
-		ResourceCount:       totals.count,
-		ResourcesWithIssues: totals.withIssues,
-		OrphanPct:           meanPct(totals.orphanSum, totals.count),
-		MissingAttrPct:      meanPct(totals.missingSum, totals.count),
-		AttrMismatchPct:     meanPct(totals.mismatchSum, totals.count),
+		ResourceCount:                totals.count,
+		ResourcesWithIssues:          totals.withIssues,
+		OrphanPct:                    meanPct(totals.orphanSum, totals.count),
+		MissingAttrPct:               meanPct(totals.missingSum, totals.count),
+		AttrMismatchPct:              meanPct(totals.mismatchSum, totals.count),
+		MalformedTraceparentPct:      meanPct(totals.malformedSum, totals.malformedDenom),
+		MissingTraceparentOnChildPct: meanPct(totals.missingChildSum, totals.missingChildDenom),
 	}
 	return resp
 }
@@ -357,16 +429,25 @@ func (h *DiscoverySpanQualityHandlers) HandleResourceSpanQuality(c *gin.Context)
 		return
 	}
 	resp := ResourceSpanQuality{
-		ResourceID:      id,
-		Provider:        provider,
-		Kind:            kind,
-		TotalSpans:      snap.TotalSpans,
-		WindowStart:     snap.WindowStart,
-		OrphanPct:       round1Quality(snap.OrphanPct),
-		MissingAttrPct:  round1Quality(snap.MissingAttrPct),
-		AttrMismatchPct: round1Quality(snap.AttrMismatchPct),
-		Placeholders:    snap.Placeholders,
-		HasIssues:       snap.OrphanPct > 0 || snap.MissingAttrPct > 0 || snap.AttrMismatchPct > 0,
+		ResourceID:                   id,
+		Provider:                     provider,
+		Kind:                         kind,
+		TotalSpans:                   snap.TotalSpans,
+		WindowStart:                  snap.WindowStart,
+		OrphanPct:                    round1Quality(snap.OrphanPct),
+		MissingAttrPct:               round1Quality(snap.MissingAttrPct),
+		AttrMismatchPct:              round1Quality(snap.AttrMismatchPct),
+		MalformedTraceparentPct:      round1Quality(snap.MalformedTraceparentPct),
+		MissingTraceparentOnChildPct: round1Quality(snap.MissingTraceparentOnChildPct),
+		SpansWithTraceparent:         snap.SpansWithTraceparent,
+		ChildSpans:                   snap.ChildSpans,
+		Placeholders:                 snap.Placeholders,
+		// Slice 2 (v0.89.110): any of the five percentages > 0 → issues.
+		HasIssues: snap.OrphanPct > 0 ||
+			snap.MissingAttrPct > 0 ||
+			snap.AttrMismatchPct > 0 ||
+			snap.MalformedTraceparentPct > 0 ||
+			snap.MissingTraceparentOnChildPct > 0,
 	}
 	if resp.Placeholders == nil {
 		// Keep the JSON shape stable: never serialize null for the

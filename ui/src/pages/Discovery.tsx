@@ -83,6 +83,13 @@ const SWR_KEY_SPAN_QUALITY = "/discovery/span_quality";
 const SPAN_QUALITY_KIND_ORPHAN = "span-quality-orphan-trace";
 const SPAN_QUALITY_KIND_MISSING_ATTRS = "span-quality-missing-resource-attrs";
 const SPAN_QUALITY_KIND_MISMATCH = "span-quality-attribute-mismatch";
+// Slice 2 (v0.89.110) — span-quality-slice2.md §8. Two new
+// recommendation kinds both reuse the existing span-quality- webhook
+// prefix; no new webhook routing changes.
+const SPAN_QUALITY_KIND_MALFORMED_TRACEPARENT =
+  "span-quality-traceparent-malformed";
+const SPAN_QUALITY_KIND_MISSING_TRACEPARENT =
+  "span-quality-traceparent-missing";
 
 // Threshold above which a provider's weak_match_pct triggers a caveat
 // icon next to its chip per design doc §6. 20% is the slice-1 floor —
@@ -796,14 +803,17 @@ function computeTierWeightedAverage(
 
 function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
   const t = quality.totals;
-  // §10 test 12 — hide entirely when all three percentages are zero.
-  // The check is on the cross-provider totals; a per-provider non-zero
-  // still surfaces (rolled up into totals via raw span counts on the
-  // server side), but a fleet-wide all-zero hides the panel.
+  // §10 test 12 — hide entirely when all five percentages are zero.
+  // Slice 2 (v0.89.110) extends the zero-check to cover the two new
+  // W3C traceparent percentages: a clean fleet still has nothing to
+  // surface, but a fleet that's only missing traceparent attributes
+  // should still see the panel appear.
   if (
     t.orphan_pct === 0 &&
     t.missing_attr_pct === 0 &&
-    t.attr_mismatch_pct === 0
+    t.attr_mismatch_pct === 0 &&
+    t.malformed_traceparent_pct === 0 &&
+    t.missing_traceparent_on_child_pct === 0
   ) {
     return null;
   }
@@ -820,7 +830,14 @@ function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
           </p>
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {/* Slice 2 (v0.89.110) grows the grid from 3 to 5 columns. On
+          narrow viewports the columns stack 1-up (grid-cols-1), then
+          jump to a 5-column grid at the sm breakpoint. The previous
+          sm:grid-cols-3 stop is removed — squeezing 5 numeric columns
+          into a ~640px breakpoint is tight but workable: each tile
+          renders the label / pct / count stacked, so a 128px column
+          is enough to read the 2.xl% headline. */}
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-5">
         <SpanQualityColumn
           label="Orphan trace"
           pct={t.orphan_pct}
@@ -850,6 +867,26 @@ function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
           )}
           kind={SPAN_QUALITY_KIND_MISMATCH}
           testIdSuffix="mismatch"
+        />
+        <SpanQualityColumn
+          label="Malformed traceparent"
+          pct={t.malformed_traceparent_pct}
+          count={countResourcesWith(
+            quality.providers,
+            (p) => p.malformed_traceparent_pct > 0,
+          )}
+          kind={SPAN_QUALITY_KIND_MALFORMED_TRACEPARENT}
+          testIdSuffix="malformed-traceparent"
+        />
+        <SpanQualityColumn
+          label="Missing on child"
+          pct={t.missing_traceparent_on_child_pct}
+          count={countResourcesWith(
+            quality.providers,
+            (p) => p.missing_traceparent_on_child_pct > 0,
+          )}
+          kind={SPAN_QUALITY_KIND_MISSING_TRACEPARENT}
+          testIdSuffix="missing-traceparent"
         />
       </div>
     </div>

@@ -3352,10 +3352,18 @@ export function QualityDot({
       />
     );
   }
+  // Slice 2 (v0.89.110) extends the "issues" count to include the two
+  // W3C trace context percentages. Older scan responses omit the new
+  // fields; treat undefined as 0 so a graceful upgrade rollout shows
+  // unchanged dot colors until the backend ships the new counters.
+  const malformedTp = quality.malformed_traceparent_pct ?? 0;
+  const missingTpOnChild = quality.missing_traceparent_on_child_pct ?? 0;
   const issues = [
     quality.orphan_pct > 0,
     quality.missing_attr_pct > 0,
     quality.attr_mismatch_pct > 0,
+    malformedTp > 0,
+    missingTpOnChild > 0,
   ].filter(Boolean).length;
   let colorClass = "bg-emerald-500";
   let colorTag = "green";
@@ -3369,7 +3377,9 @@ export function QualityDot({
   const tooltip =
     `Orphan ${quality.orphan_pct.toFixed(1)}%, ` +
     `Missing attrs ${quality.missing_attr_pct.toFixed(1)}%, ` +
-    `Mismatch ${quality.attr_mismatch_pct.toFixed(1)}%`;
+    `Mismatch ${quality.attr_mismatch_pct.toFixed(1)}%, ` +
+    `Malformed traceparent ${malformedTp.toFixed(1)}%, ` +
+    `Missing on child ${missingTpOnChild.toFixed(1)}%`;
   return (
     <span
       className={`inline-block h-2 w-2 rounded-full align-middle ${colorClass}`}

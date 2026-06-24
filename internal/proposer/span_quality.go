@@ -125,6 +125,25 @@ const (
 	SpanQualityOrphanThresholdPct   = 10.0
 	SpanQualityMissingThresholdPct  = 25.0
 	SpanQualityMismatchThresholdPct = 5.0
+
+	// Slice 2 (v0.89.110) — W3C trace context thresholds per
+	// span-quality-slice2.md §3. The 1% malformed threshold is
+	// intentionally low because ANY malformed traceparent is unusual;
+	// the 5% missing-on-child threshold sits between the slice 1
+	// thresholds because SDK propagation is mostly an "always or
+	// never" pattern.
+	SpanQualityMalformedTraceparentThresholdPct      = 1.0
+	SpanQualityMissingTraceparentOnChildThresholdPct = 5.0
+
+	// Minimum denominators for the two new traceparent thresholds.
+	// Below these floors the percentages are too noisy to act on —
+	// a 1-of-10 malformed rate (10%) would trigger the 1% threshold
+	// despite being a single statistical fluke. 50 matches the
+	// slice 1 SpanQualityMinimumSpansThreshold halving — the two
+	// new axes carry their own denominators so we can't reuse
+	// TotalSpans here.
+	SpanQualityMinimumSpansWithTraceparent = 50
+	SpanQualityMinimumChildSpans           = 50
 )
 
 // CheckSpanQualityIssues is the §3 detection branch the discovery
@@ -222,6 +241,52 @@ func CheckSpanQualityIssues(
 				Kind:             kind,
 				RecommendationID: recID,
 				Reasoning:        formatSpanQualityMismatchReasoning(row, qual, picked),
+				Terraform:        picked.PrimaryTerraform,
+				ScopeID:          scope.ScopeID,
+				Region:           scope.Region,
+				ResourceID:       row.ResourceID,
+				PickedPattern:    picked,
+			})
+		}
+	}
+	// Slice 2 (v0.89.110) — malformed traceparent. Honest denominator:
+	// only fire when SpansWithTraceparent is at or above the
+	// minimum-sample-size floor for the denominator that actually
+	// gates this rate. A resource with 0 spans-carrying-traceparent
+	// can't meaningfully be "malformed at X%" — the snapshot's
+	// MalformedTraceparentPct is 0 anyway via the snapshot zero-safety
+	// fallback, but the explicit denominator check pins the intent.
+	if qual.MalformedTraceparentPct >= SpanQualityMalformedTraceparentThresholdPct &&
+		qual.SpansWithTraceparent >= SpanQualityMinimumSpansWithTraceparent {
+		const kind = "span-quality-traceparent-malformed"
+		recID := row.RecommendationID + ".traceparent_malformed"
+		if !isSpanQualityExcluded(excluded, recID, kind) {
+			picked := iacpicker.PickMalformedTraceparentPattern(pickCtx)
+			drafts = append(drafts, SpanQualityRecommendationDraft{
+				Kind:             kind,
+				RecommendationID: recID,
+				Reasoning:        formatSpanQualityMalformedTraceparentReasoning(row, qual, picked),
+				Terraform:        picked.PrimaryTerraform,
+				ScopeID:          scope.ScopeID,
+				Region:           scope.Region,
+				ResourceID:       row.ResourceID,
+				PickedPattern:    picked,
+			})
+		}
+	}
+	// Slice 2 — missing traceparent on child spans. Honest denominator:
+	// only fire when ChildSpans is at or above the minimum. A resource
+	// with 0 child spans can't be missing-on-child.
+	if qual.MissingTraceparentOnChildPct >= SpanQualityMissingTraceparentOnChildThresholdPct &&
+		qual.ChildSpans >= SpanQualityMinimumChildSpans {
+		const kind = "span-quality-traceparent-missing"
+		recID := row.RecommendationID + ".traceparent_missing"
+		if !isSpanQualityExcluded(excluded, recID, kind) {
+			picked := iacpicker.PickMissingTraceparentPattern(pickCtx)
+			drafts = append(drafts, SpanQualityRecommendationDraft{
+				Kind:             kind,
+				RecommendationID: recID,
+				Reasoning:        formatSpanQualityMissingTraceparentReasoning(row, qual, picked),
 				Terraform:        picked.PrimaryTerraform,
 				ScopeID:          scope.ScopeID,
 				Region:           scope.Region,
@@ -365,6 +430,41 @@ func formatSpanQualityMismatchReasoning(row SpanQualityInventoryRow, qual *trace
 	b.WriteString("The most common cause is the OTel SDK falling back to default values when the resource detector failed silently — host.name=localhost, cloud.account.id=000000000000, service.name=unknown_service, etc.\n\n")
 	b.WriteString("This Terraform PR targets that case by injecting an explicit OTEL_RESOURCE_ATTRIBUTES env var hardcoding the correct values from the inventory row Squadron already has.\n\n")
 	b.WriteString("If the actual cause is different, decline this PR. The verdict learning loop will record the decline.\n")
+	appendPickerNote(&b, picked)
+	return b.String()
+}
+
+// formatSpanQualityMalformedTraceparentReasoning composes the
+// operator-facing reasoning for the span-quality-traceparent-malformed
+// kind. Pairs the per-resource percentage with the slice 2 §1
+// "three failure modes" framing so the operator can decline cleanly
+// when their case is one of the alternatives.
+func formatSpanQualityMalformedTraceparentReasoning(row SpanQualityInventoryRow, qual *traceindex.QualityCountersSnapshot, picked iacpicker.PickedPattern) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"Squadron's Quality observer has observed %.1f%% of this resource's spans (%s, provider=%s, tier=%s) carrying a traceparent attribute that doesn't conform to the W3C spec (over %d spans with traceparent in the last hour).\n\n",
+		qual.MalformedTraceparentPct, row.ResourceID, row.Provider, row.Tier, qual.SpansWithTraceparent,
+	)
+	b.WriteString("The most common causes are: (1) an upstream service emitting a CUSTOM trace ID format that doesn't fit W3C constraints (some legacy SDKs); (2) an SDK version mismatch — upstream emits a 'next-version' (01) traceparent and the downstream rejects it; (3) the header being rewritten by a proxy / load balancer in transit (rare).\n\n")
+	b.WriteString("This Terraform PR targets the SDK-side fix by pinning the upstream SDK to the latest W3C-compliant release.\n\n")
+	b.WriteString("If your actual case is different (the runbook describes the three failure modes), decline this PR. The verdict learning loop will record the decline.\n")
+	appendPickerNote(&b, picked)
+	return b.String()
+}
+
+// formatSpanQualityMissingTraceparentReasoning composes the
+// operator-facing reasoning for the span-quality-traceparent-missing
+// kind. Notes the CHILD-spans denominator explicitly because that
+// matters for the worker/background-job decline branch.
+func formatSpanQualityMissingTraceparentReasoning(row SpanQualityInventoryRow, qual *traceindex.QualityCountersSnapshot, picked iacpicker.PickedPattern) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"Squadron's Quality observer has observed %.1f%% of this resource's child spans (%s, provider=%s, tier=%s) arriving without a traceparent attribute (over %d child spans in the last hour).\n\n",
+		qual.MissingTraceparentOnChildPct, row.ResourceID, row.Provider, row.Tier, qual.ChildSpans,
+	)
+	b.WriteString("The most common cause is the SDK's HTTP server instrumentation not extracting the W3C context propagator on the inbound request. Possible causes: (1) SDK deployed but the context propagator middleware wasn't enabled in the application's HTTP server config; (2) custom middleware in front of the SDK consumes the traceparent header before the SDK reads it; (3) the resource is a worker / background-job pod (no inbound HTTP) and child spans here are intra-process.\n\n")
+	b.WriteString("This Terraform PR adds the OpenTelemetry context propagator via the OTEL_PROPAGATORS=tracecontext,baggage env var injection (per-cloud pattern same as span-quality-orphan-trace from v0.89.86).\n\n")
+	b.WriteString("If your actual case is the worker/background-job pattern (no inbound HTTP), decline this PR. The verdict learning loop will record the decline.\n")
 	appendPickerNote(&b, picked)
 	return b.String()
 }

@@ -343,3 +343,190 @@ func TestSpanQuality_ProviderInferredFromKey_WhenSnapshotProviderEmpty(t *testin
 		t.Errorf("aws.ResourceCount = %d, want 2 (key-prefix inference)", got.Providers["aws"].ResourceCount)
 	}
 }
+
+// --- Slice 2 (v0.89.110) tests — W3C trace context fields ---------
+
+// TestSpanQuality_IncludesNewPercentageFields — the cross-provider
+// endpoint exposes the two new W3C percentages in both ProviderSpanQuality
+// and SpanQualityTotals. Mirrors §11 acceptance tests 13/15: the API
+// surface must reflect the per-resource counters.
+func TestSpanQuality_IncludesNewPercentageFields(t *testing.T) {
+	idx := newStubQualityIndex(
+		traceindex.QualityCountersSnapshot{
+			Key:                          "aws:1:a",
+			Provider:                     "aws",
+			TotalSpans:                   1000,
+			SpansWithTraceparent:         200,
+			ChildSpans:                   400,
+			MalformedTraceparentPct:      4.0,
+			MissingTraceparentOnChildPct: 8.0,
+		},
+	)
+	r, _ := newSpanQualityRouter(t, idx, nil, nil, 0, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/discovery/span_quality", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var got SpanQualityResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Providers["aws"].MalformedTraceparentPct != 4.0 {
+		t.Errorf("aws.MalformedTraceparentPct = %v, want 4.0", got.Providers["aws"].MalformedTraceparentPct)
+	}
+	if got.Providers["aws"].MissingTraceparentOnChildPct != 8.0 {
+		t.Errorf("aws.MissingTraceparentOnChildPct = %v, want 8.0", got.Providers["aws"].MissingTraceparentOnChildPct)
+	}
+	if got.Totals.MalformedTraceparentPct != 4.0 {
+		t.Errorf("totals.MalformedTraceparentPct = %v, want 4.0", got.Totals.MalformedTraceparentPct)
+	}
+	if got.Totals.MissingTraceparentOnChildPct != 8.0 {
+		t.Errorf("totals.MissingTraceparentOnChildPct = %v, want 8.0", got.Totals.MissingTraceparentOnChildPct)
+	}
+}
+
+// TestSpanQuality_AggregationUsesHonestDenominators — the per-provider
+// mean for the two new percentages divides by the count of resources
+// that ACTUALLY contributed to the rate (SpansWithTraceparent > 0 for
+// malformed; ChildSpans > 0 for missing-on-child), not the total
+// resource count. A fleet of mostly root spans shouldn't dilute the
+// missing-on-child rate to zero. Pins §11 acceptance test 14's intent
+// extended to the cross-provider aggregation.
+func TestSpanQuality_AggregationUsesHonestDenominators(t *testing.T) {
+	// Two resources contribute to malformed (10% and 6% — mean 8%).
+	// One additional resource has 0 spans-with-traceparent, which
+	// should NOT pull the malformed mean down to (10+6+0)/3 = 5.3%.
+	// Two resources contribute to missing-on-child (12% and 6% —
+	// mean 9%); a third resource has 0 child spans and stays out
+	// of the missing-on-child denominator.
+	idx := newStubQualityIndex(
+		traceindex.QualityCountersSnapshot{
+			Key: "aws:1:a", Provider: "aws", TotalSpans: 1000,
+			SpansWithTraceparent: 200, ChildSpans: 400,
+			MalformedTraceparentPct: 10.0, MissingTraceparentOnChildPct: 12.0,
+		},
+		traceindex.QualityCountersSnapshot{
+			Key: "aws:1:b", Provider: "aws", TotalSpans: 1000,
+			SpansWithTraceparent: 100, ChildSpans: 200,
+			MalformedTraceparentPct: 6.0, MissingTraceparentOnChildPct: 6.0,
+		},
+		traceindex.QualityCountersSnapshot{
+			// No traceparent / no child spans — must NOT count in
+			// either denominator.
+			Key: "aws:1:c", Provider: "aws", TotalSpans: 1000,
+			SpansWithTraceparent: 0, ChildSpans: 0,
+		},
+	)
+	r, _ := newSpanQualityRouter(t, idx, nil, nil, 0, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/discovery/span_quality", nil))
+	var got SpanQualityResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// 10 + 6 = 16 / 2 = 8.0, NOT (10+6+0)/3 = 5.3.
+	if got.Providers["aws"].MalformedTraceparentPct != 8.0 {
+		t.Errorf("aws.MalformedTraceparentPct = %v, want 8.0 (honest denominator)", got.Providers["aws"].MalformedTraceparentPct)
+	}
+	// 12 + 6 = 18 / 2 = 9.0.
+	if got.Providers["aws"].MissingTraceparentOnChildPct != 9.0 {
+		t.Errorf("aws.MissingTraceparentOnChildPct = %v, want 9.0 (honest denominator)", got.Providers["aws"].MissingTraceparentOnChildPct)
+	}
+	// Totals get the same honest-denominator treatment.
+	if got.Totals.MalformedTraceparentPct != 8.0 {
+		t.Errorf("totals.MalformedTraceparentPct = %v, want 8.0", got.Totals.MalformedTraceparentPct)
+	}
+	if got.Totals.MissingTraceparentOnChildPct != 9.0 {
+		t.Errorf("totals.MissingTraceparentOnChildPct = %v, want 9.0", got.Totals.MissingTraceparentOnChildPct)
+	}
+}
+
+// TestSpanQuality_PerResourceEndpoint_IncludesNewFields — the
+// per-resource detail endpoint exposes the four new fields
+// (MalformedTraceparentPct + MissingTraceparentOnChildPct percentages
+// plus their raw denominators SpansWithTraceparent + ChildSpans so the
+// drill-down can render honest "N of M" framing).
+func TestSpanQuality_PerResourceEndpoint_IncludesNewFields(t *testing.T) {
+	idx := newStubQualityIndex(traceindex.QualityCountersSnapshot{
+		Key:                          "aws:123:i-0abc",
+		Provider:                     "aws",
+		TotalSpans:                   500,
+		SpansWithTraceparent:         150,
+		ChildSpans:                   200,
+		MalformedTraceparentPct:      2.7,
+		MissingTraceparentOnChildPct: 4.3,
+	})
+	proj := &stubKeyProjector{keys: map[string]string{
+		"aws/ec2/i-0abc": "aws:123:i-0abc",
+	}}
+	r, _ := newSpanQualityRouter(t, idx, proj, nil, 0, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/discovery/aws/inventory/ec2/i-0abc/span_quality", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var got ResourceSpanQuality
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.MalformedTraceparentPct != 2.7 {
+		t.Errorf("MalformedTraceparentPct = %v, want 2.7", got.MalformedTraceparentPct)
+	}
+	if got.MissingTraceparentOnChildPct != 4.3 {
+		t.Errorf("MissingTraceparentOnChildPct = %v, want 4.3", got.MissingTraceparentOnChildPct)
+	}
+	if got.SpansWithTraceparent != 150 {
+		t.Errorf("SpansWithTraceparent = %d, want 150", got.SpansWithTraceparent)
+	}
+	if got.ChildSpans != 200 {
+		t.Errorf("ChildSpans = %d, want 200", got.ChildSpans)
+	}
+}
+
+// TestSpanQuality_PerResourceEndpoint_HasIssuesExtendsToNewFields —
+// when ONLY a traceparent percentage is non-zero (the three slice-1
+// percentages are all zero), HasIssues still returns true so the
+// drill-down panel surfaces. The previous chunk-1 behavior would have
+// returned false here and hidden the traceparent pathology.
+func TestSpanQuality_PerResourceEndpoint_HasIssuesExtendsToNewFields(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		snap traceindex.QualityCountersSnapshot
+	}{
+		{
+			name: "malformed only",
+			snap: traceindex.QualityCountersSnapshot{
+				Key: "aws:123:i-x", Provider: "aws", TotalSpans: 500,
+				SpansWithTraceparent: 200, MalformedTraceparentPct: 2.0,
+			},
+		},
+		{
+			name: "missing on child only",
+			snap: traceindex.QualityCountersSnapshot{
+				Key: "aws:123:i-x", Provider: "aws", TotalSpans: 500,
+				ChildSpans: 200, MissingTraceparentOnChildPct: 7.0,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := newStubQualityIndex(tc.snap)
+			proj := &stubKeyProjector{keys: map[string]string{
+				"aws/ec2/i-x": "aws:123:i-x",
+			}}
+			r, _ := newSpanQualityRouter(t, idx, proj, nil, 0, nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/discovery/aws/inventory/ec2/i-x/span_quality", nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			var got ResourceSpanQuality
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !got.HasIssues {
+				t.Errorf("HasIssues = false; want true (only traceparent percentage non-zero)")
+			}
+		})
+	}
+}

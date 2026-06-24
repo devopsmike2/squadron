@@ -2279,6 +2279,34 @@ describe("DiscoveryAWSPage", () => {
     expect(tip).toContain("Mismatch 1.7%");
   });
 
+  // Slice 2 (v0.89.110) — tooltip extends to all five percentages when
+  // the new W3C traceparent fields are populated by the backend. The
+  // dot color logic also extends: any of the five > 0 counts toward
+  // the "issues" tally.
+  it("TestDiscoveryAWS_QualityDot_TooltipShowsAllFivePercentages", async () => {
+    const { QualityDot } = await import("./DiscoveryAWS");
+    render(
+      <QualityDot
+        quality={{
+          orphan_pct: 3.2,
+          missing_attr_pct: 8.1,
+          attr_mismatch_pct: 1.7,
+          malformed_traceparent_pct: 0.8,
+          missing_traceparent_on_child_pct: 4.1,
+        }}
+      />,
+    );
+    const dot = screen.getByTestId("quality-dot");
+    const tip = dot.getAttribute("title") ?? "";
+    expect(tip).toContain("Orphan 3.2%");
+    expect(tip).toContain("Missing attrs 8.1%");
+    expect(tip).toContain("Mismatch 1.7%");
+    expect(tip).toContain("Malformed traceparent 0.8%");
+    expect(tip).toContain("Missing on child 4.1%");
+    // Five non-zero pathologies → red dot (>= 2 issues).
+    expect(dot).toHaveAttribute("data-color", "red");
+  });
+
   // Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
   // the Inventory tab gains a ServerlessSection rendering the Lambda
   // inventory from the v0.89.90 scanner extension. The Surface column

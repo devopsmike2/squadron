@@ -21,18 +21,26 @@ import { apiGet, simpleRequest } from "./base";
 
 // ProviderSpanQuality mirrors the Go ProviderSpanQuality struct.
 // resource_count is the number of resources with at least one span
-// observed in the current quality window (default 1h). The three
+// observed in the current quality window (default 1h). The
 // percentages are fleet-rolled-up across that resource set, one
 // decimal place server-side. resources_with_issues counts rows where
-// at least one of the three percentages is non-zero — the dashboard
-// renders that count below each column header. All five fields are
-// required; the backend always populates them (0 on cold start).
+// at least one of the five percentages is non-zero — the dashboard
+// renders that count below each column header.
+//
+// Slice 2 (v0.89.110) — W3C trace context parsing. Two new
+// percentages: malformed_traceparent_pct (denominator: resources with
+// at least one span carrying a traceparent attribute) and
+// missing_traceparent_on_child_pct (denominator: resources with at
+// least one child span). The honest denominators are computed
+// server-side; the UI just renders the floats.
 export type ProviderSpanQuality = {
   resource_count: number;
   resources_with_issues: number;
   orphan_pct: number;
   missing_attr_pct: number;
   attr_mismatch_pct: number;
+  malformed_traceparent_pct: number;
+  missing_traceparent_on_child_pct: number;
 };
 
 // SpanQualityTotals mirrors the Go SpanQualityTotals struct. Computed
@@ -67,7 +75,10 @@ export type PlaceholderObservation = {
 
 // ResourceSpanQuality mirrors the Go ResourceSpanQuality struct.
 // has_issues is a server-side convenience flag — TRUE iff at least
-// one of the three percentages is non-zero.
+// one of the five percentages is non-zero. Slice 2 (v0.89.110) adds
+// the two W3C trace context percentages plus their raw denominators
+// so the drill-down panel can render honest "N of M" framing
+// alongside the percentage.
 export type ResourceSpanQuality = {
   resource_id: string;
   total_spans: number;
@@ -75,6 +86,10 @@ export type ResourceSpanQuality = {
   orphan_pct: number;
   missing_attr_pct: number;
   attr_mismatch_pct: number;
+  malformed_traceparent_pct: number;
+  missing_traceparent_on_child_pct: number;
+  spans_with_traceparent: number;
+  child_spans: number;
   placeholders: PlaceholderObservation[];
   has_issues: boolean;
 };
