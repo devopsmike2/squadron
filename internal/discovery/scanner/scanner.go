@@ -1446,6 +1446,39 @@ type EventSourceInstanceSnapshot struct {
 	// populates a logging-target subset. Empty when no surface-specific
 	// context applies.
 	Detail map[string]any `json:"detail,omitempty"`
+
+	// Slice 2 (v0.89.105, #741 Stream 139): per-message propagation
+	// detection. The slice-1 axes above answer "is the cloud-native
+	// trace primitive enabled on the event source?" The slice-2 axis
+	// goes deeper: does the event source's control-plane CONFIG
+	// preserve trace context end-to-end so a downstream consumer span
+	// can correlate to the upstream publisher span?
+	//
+	// HasPropagationConfig is true when every per-target / per-schema /
+	// per-policy detection on the surface returns "preserved". On
+	// EventBridge: every rule's targets have either no InputPath /
+	// InputTransformer, an InputPath of "$", or an InputTransformer
+	// template that includes the X-Ray (x-amzn-trace-id) or W3C
+	// (traceparent) header string. False if ANY broken target exists
+	// on ANY rule on the bus — propagation is a worst-case axis.
+	//
+	// A surface with NO rules / NO schema / NO subscriptions to inspect
+	// defaults to TRUE (vacuously preserved — there's nothing to break
+	// propagation).
+	//
+	// PropagationNotes carries human-readable per-issue strings, e.g.
+	// "rule 'order-events' has InputPath '$.detail' that strips trace
+	// header". The proposer uses these notes in recommendation
+	// reasoning text in chunk 5; the UI side panel renders them when
+	// the operator clicks the propagation column on the Event sources
+	// sub-tab. Empty when HasPropagationConfig is true.
+	//
+	// See docs/proposals/event-source-tier-slice2.md §3 for the
+	// per-cloud detection logic. Slice 2 chunk 1 (v0.89.105) ships AWS
+	// EventBridge per-rule detection; chunks 2-4 add GCP Pub/Sub,
+	// Azure Service Bus, OCI Streaming.
+	HasPropagationConfig bool     `json:"has_propagation_config"`
+	PropagationNotes     []string `json:"propagation_notes,omitempty"`
 }
 
 // IsInstrumented implements the slice 1 OR-rule for event source

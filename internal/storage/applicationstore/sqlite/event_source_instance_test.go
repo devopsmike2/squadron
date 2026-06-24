@@ -147,6 +147,114 @@ func TestMigration_v12_to_v13_AddsEventSourceTable(t *testing.T) {
 	})
 }
 
+// --- Event source tier slice 2 chunk 1 (v0.89.105, #741 Stream 139) ---
+//
+// These tests pin the new HasPropagationConfig + PropagationNotes fields
+// round-tripping through the snapshot_json blob WITHOUT a schema bump
+// (schema stays at v13). The new fields are additive JSON; the table
+// definition is unchanged. The proposer reads the bool out of
+// snapshot_json at recommendation time; the dashboard reads the notes
+// for the side-panel chunk-5 wires.
+
+// TestEventSourceInstance_RoundtripsHasPropagationConfig — slice 2
+// chunk 1 roundtrip: a row whose SnapshotJSON carries
+// "has_propagation_config":false persists through SaveEventSourceInstances
+// + ListEventSourceInstances byte-identical. Pins the
+// "additive-JSON-field, no schema migration" contract documented on the
+// scanner.EventSourceInstanceSnapshot godoc + design doc §4.
+func TestEventSourceInstance_RoundtripsHasPropagationConfig(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+
+		const arn = "arn:aws:events:us-east-1:123456789012:event-bus/prop-broken"
+		const snapshotJSON = `{"provider":"aws","surface":"eventbridge","resource_arn":"` + arn +
+			`","has_trace_axis":true,"has_log_axis":true,"has_propagation_config":false}`
+		row := EventSourceInstanceRow{
+			ConnectionID: "conn-1",
+			ScanID:       "scan-1",
+			Provider:     "aws",
+			Surface:      "eventbridge",
+			AccountID:    "123456789012",
+			Region:       "us-east-1",
+			ResourceName: "prop-broken",
+			ResourceARN:  arn,
+			SourceType:   "bus",
+			HasTraceAxis: true,
+			HasLogAxis:   true,
+			SnapshotJSON: snapshotJSON,
+		}
+		require.NoError(t, store.SaveEventSourceInstances(ctx, []EventSourceInstanceRow{row}))
+
+		got, err := store.ListEventSourceInstances(ctx, "conn-1", "scan-1")
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, snapshotJSON, got[0].SnapshotJSON,
+			"snapshot_json must round-trip byte-identical including has_propagation_config")
+	})
+}
+
+// TestEventSourceInstance_RoundtripsPropagationNotes — slice 2 chunk 1
+// roundtrip: the propagation_notes JSON array survives the
+// SaveEventSourceInstances + ListEventSourceInstances cycle. The
+// scanner emits a list of strings inside snapshot_json; the proposer's
+// chunk-5 reasoning text quotes the list. Pins that no in-flight JSON
+// normalization drops or re-orders the notes.
+func TestEventSourceInstance_RoundtripsPropagationNotes(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+
+		const arn = "arn:aws:events:us-east-1:123456789012:event-bus/prop-notes"
+		// Two distinct per-issue notes — the proposer's chunk-5
+		// reasoning text walks every entry.
+		const snapshotJSON = `{"provider":"aws","surface":"eventbridge","resource_arn":"` + arn +
+			`","has_propagation_config":false,` +
+			`"propagation_notes":["rule \"order-events\" has InputPath \"$.detail\" that strips trace header",` +
+			`"rule \"shipping-events\" has InputTransformer template omitting trace header"]}`
+		row := EventSourceInstanceRow{
+			ConnectionID: "conn-1",
+			ScanID:       "scan-1",
+			Provider:     "aws",
+			Surface:      "eventbridge",
+			AccountID:    "123456789012",
+			Region:       "us-east-1",
+			ResourceName: "prop-notes",
+			ResourceARN:  arn,
+			SourceType:   "bus",
+			HasTraceAxis: true,
+			HasLogAxis:   true,
+			SnapshotJSON: snapshotJSON,
+		}
+		require.NoError(t, store.SaveEventSourceInstances(ctx, []EventSourceInstanceRow{row}))
+
+		got, err := store.ListEventSourceInstances(ctx, "conn-1", "scan-1")
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, snapshotJSON, got[0].SnapshotJSON,
+			"snapshot_json must round-trip including the propagation_notes array")
+	})
+}
+
+// TestEventSourceInstance_SchemaVersionStaysAtV13 — slice 2 chunk 1
+// contract: NO schema migration. The new HasPropagationConfig +
+// PropagationNotes fields sit inside the snapshot_json blob (see the
+// two roundtrip tests above); the SchemaVersion constant stays at 13.
+// This test pins the contract — if a future change accidentally bumps
+// the version for slice 2 chunk 1, this assertion catches it. The
+// table-level event_source_instance schema is left unchanged from
+// v0.89.100; ListEventSourceInstances continues to return the same
+// column set.
+func TestEventSourceInstance_SchemaVersionStaysAtV13(t *testing.T) {
+	assert.Equal(t, 13, SchemaVersion,
+		"slice 2 chunk 1 must NOT bump SchemaVersion; new fields are additive JSON only")
+	// The Migrations slice (migrations.go) tops out at the v13
+	// migration; slice 2 chunk 1 must not append a v14 entry.
+	if got := len(Migrations); got != 13 {
+		t.Errorf("Migrations length = %d, want 13 (slice 2 chunk 1 must NOT append v14)", got)
+	}
+}
+
 // TestMigration_v12_to_v13_Idempotent — running the migration twice is a
 // no-op. Per the design doc's slice 1 chunk 1 contract: "Run migration
 // twice. Assert: no error, table exists, no data loss on pre-existing

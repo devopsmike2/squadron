@@ -860,3 +860,158 @@ func TestTraceCoverage_EventSourcePct_ZeroOnColdStart(t *testing.T) {
 		t.Errorf("aws.event_source_pct = %v, want 0 (no event source query wired)", got)
 	}
 }
+
+// --- Event source tier slice 2 chunk 1 (v0.89.105, #741 Stream 139) -
+//
+// stubPropagationQuery mirrors stubEventSourceQuery. The production
+// query walks the event_source_instance table and projects the
+// has_propagation_config bool out of each row's snapshot_json blob.
+
+type stubPropagationQuery struct {
+	mu          sync.Mutex
+	inventory   map[string]int
+	propagating map[string]int
+	err         error
+	calls       int64
+}
+
+func (s *stubPropagationQuery) EventSourcePropagationForScope(_ context.Context, provider, scopeID string) (inv, prop int, err error) {
+	atomic.AddInt64(&s.calls, 1)
+	if s.err != nil {
+		return 0, 0, s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := provider + "|" + scopeID
+	return s.inventory[key], s.propagating[key], nil
+}
+
+// TestTraceCoverage_IncludesPropagationPct — §11 acceptance test 15.
+// Seeding the propagation coverage query with 4 inventory + 1
+// propagating for one scope must surface PropagationPct=25.0 on the
+// matching ProviderTraceCoverage.
+func TestTraceCoverage_IncludesPropagationPct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+	prop := &stubPropagationQuery{
+		inventory:   map[string]int{"aws|acct-1": 4},
+		propagating: map[string]int{"aws|acct-1": 1},
+	}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil).
+		WithEventSourcePropagationQuery(prop)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].PropagationPct, 25.0; got != want {
+		t.Errorf("aws.propagation_pct = %v, want %v", got, want)
+	}
+	// Other providers contribute zero — no scopes seeded.
+	if got := r.Providers["gcp"].PropagationPct; got != 0 {
+		t.Errorf("gcp.propagation_pct = %v, want 0", got)
+	}
+}
+
+// TestTraceCoverage_PropagationPctIsZeroWhenNoEventSources — when the
+// query returns zero inventory, PropagationPct stays at 0 (not NaN).
+// Pins the zero-safe shape mirroring CoveragePctZeroSafe so the
+// dashboard never renders NaN% for a fresh deployment.
+func TestTraceCoverage_PropagationPctIsZeroWhenNoEventSources(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+	// Inventory=0, propagating=0 — cold-start posture.
+	prop := &stubPropagationQuery{
+		inventory:   map[string]int{},
+		propagating: map[string]int{},
+	}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil).
+		WithEventSourcePropagationQuery(prop)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got := r.Providers["aws"].PropagationPct; got != 0 {
+		t.Errorf("aws.propagation_pct = %v, want 0 on cold start", got)
+	}
+	if math.IsNaN(r.Providers["aws"].PropagationPct) {
+		t.Errorf("aws.propagation_pct is NaN — zero-safe contract violated")
+	}
+}
+
+// TestTraceCoverage_PropagationPctIsZeroWhenQueryNil — same posture as
+// TestTraceCoverage_EventSourcePct_ZeroOnColdStart but for the
+// propagation query: a deployment that hasn't wired the new query
+// renders PropagationPct = 0 across every provider.
+func TestTraceCoverage_PropagationPctIsZeroWhenQueryNil(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+
+	// No WithEventSourcePropagationQuery call — nil propagationQuery.
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	for _, p := range []string{"aws", "gcp", "azure", "oci"} {
+		if got := r.Providers[p].PropagationPct; got != 0 {
+			t.Errorf("%s.propagation_pct = %v, want 0 (no propagation query wired)", p, got)
+		}
+	}
+}
+
+// TestTraceCoverage_PropagationPctAggregatesPerProvider — multiple
+// scopes inside one provider sum their per-scope counts. Two scopes
+// each with 5 inventory / 3 propagating roll up to 10 / 6 = 60%.
+func TestTraceCoverage_PropagationPctAggregatesPerProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1", "acct-2"}}
+	inv := &stubInventoryQuery{counts: map[string]int{
+		"aws|acct-1": 20, "aws|acct-2": 20,
+	}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 10},
+		"aws|acct-2": {EmittingCount: 10},
+	}}
+	prop := &stubPropagationQuery{
+		inventory: map[string]int{
+			"aws|acct-1": 5, "aws|acct-2": 5,
+		},
+		propagating: map[string]int{
+			"aws|acct-1": 3, "aws|acct-2": 3,
+		},
+	}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil).
+		WithEventSourcePropagationQuery(prop)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	// Per-provider rollup: (3+3)/(5+5) = 60%.
+	if got, want := r.Providers["aws"].PropagationPct, 60.0; got != want {
+		t.Errorf("aws.propagation_pct = %v, want %v", got, want)
+	}
+}
+
