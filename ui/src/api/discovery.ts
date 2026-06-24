@@ -127,20 +127,28 @@ export function listAWSConnections(): Promise<ListConnectionsResponse> {
 // --- Scan endpoint shapes (Stream 2E) -------------------------------
 
 // RowSpanQuality — v0.89.87 span quality slice 1 chunk 3. Compact
-// per-row summary of the three quality percentages the receiver's
-// quality counters expose. Travels on every Inventory row that
-// supports a Quality dot (compute, functions, databases, clusters).
-// The drill-down panel hits the dedicated per-resource endpoint for
+// per-row summary of the quality percentages the receiver's quality
+// counters expose. Travels on every Inventory row that supports a
+// Quality dot (compute, functions, databases, clusters). The
+// drill-down panel hits the dedicated per-resource endpoint for
 // placeholder observations; this row payload is intentionally
 // minimal so the scan response stays small.
 //
 // Chunk 2 (sibling branch, v0.89.86) extends the scan marshalling
 // to populate this field server-side. Until chunk 2 merges this is
 // always undefined and the QualityDot renders gray.
+//
+// Slice 2 (v0.89.110) adds two W3C trace context percentages. Older
+// scan responses (pre-slice-2 backend) omit them; the QualityDot
+// renders the two extra entries as 0.0% in that case rather than
+// crashing — the fields are optional in the TypeScript shape so a
+// graceful upgrade rollout doesn't surface a stale-backend error.
 export interface RowSpanQuality {
   orphan_pct: number;
   missing_attr_pct: number;
   attr_mismatch_pct: number;
+  malformed_traceparent_pct?: number;
+  missing_traceparent_on_child_pct?: number;
 }
 
 // ComputeInstanceSnapshot mirrors scanner.ComputeInstanceSnapshot. The

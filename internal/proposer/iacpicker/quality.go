@@ -272,6 +272,175 @@ func PickMismatchPattern(ctx RecommendationContext) PickedPattern {
 	}
 }
 
+// --- slice 2 (v0.89.110) traceparent patterns ---------------------------
+//
+// Two new pickers for the slice 2 W3C trace context kinds:
+//   - PickMalformedTraceparentPattern: SDK version pin per deployment
+//     shape. The shape varies sharply across deployment forms (Lambda
+//     layer ARN vs Kubernetes image tag vs Azure app_setting), so the
+//     picker emits a generic placeholder that operators tune to their
+//     deployment. The reasoning enumerates the per-cloud knobs the
+//     operator can swap in.
+//   - PickMissingTraceparentPattern: same propagator-injection shape as
+//     PickOrphanTracePattern's compute path — both come down to
+//     OTEL_PROPAGATORS=tracecontext,baggage on the runtime env. We
+//     reuse orphanComputeTerraformFor / the k8s Instrumentation CRD
+//     directly so the two kinds emit byte-identical Terraform when the
+//     same provider+tier combination fires.
+//
+// COLD-START PARITY (v0.89.110): when the detection branch doesn't fire
+// these kinds (no observation crossed the §3 traceparent thresholds),
+// the pickers below are never invoked and no Terraform / reasoning
+// appears in the prompt. Mirrors the slice 1 picker posture.
+
+// PickMalformedTraceparentPattern emits the SDK version pin pattern
+// for the span-quality-traceparent-malformed kind. The specific
+// Terraform shape depends on the deployment form (Lambda layer ARN,
+// Kubernetes image tag, Azure app_setting, OCI Functions image tag);
+// slice 2 chunk 2 ships a generic placeholder + per-cloud reasoning
+// the operator tunes to their deployment.
+func PickMalformedTraceparentPattern(ctx RecommendationContext) PickedPattern {
+	switch ctx.Tier {
+	case "k8s":
+		return PickedPattern{
+			PrimaryTerraform: `# Pin the OpenTelemetry SDK image to the latest W3C-compliant release.
+# Replace <image>:<tag> with the operator's actual workload image
+# and the desired SDK / OTel distro version per the upstream changelog.
+resource "kubernetes_manifest" "otel_sdk_version_pin" {
+  manifest = {
+    apiVersion = "apps/v1"
+    kind       = "Deployment"
+    metadata = {
+      name      = "squadron-target-workload"
+      namespace = "default"
+    }
+    spec = {
+      template = {
+        spec = {
+          containers = [{
+            name  = "app"
+            image = "<image>:<tag>"
+          }]
+        }
+      }
+    }
+  }
+}
+`,
+			Reasoning: "span-quality-traceparent-malformed (k8s): pin the Deployment's image tag to the SDK release that's W3C-compliant for the runtime in use. The operator swaps <image>:<tag> for their actual workload image; the picker can't see the image directly in slice 2 chunk 2.",
+		}
+	case "db":
+		return PickedPattern{
+			PrimaryTerraform: "",
+			Reasoning:        "span-quality-traceparent-malformed (db): databases don't carry an OTel SDK directly; the malformed-traceparent signal indicates the connecting application's SDK emits non-W3C trace IDs. Apply the corresponding application-side recommendation.",
+			FallbackUsed:     true,
+		}
+	default: // compute
+		return PickedPattern{
+			PrimaryTerraform: malformedTraceparentComputeTerraformFor(ctx.Provider),
+			Reasoning:        "span-quality-traceparent-malformed (compute): pin the runtime's SDK version (Lambda layer ARN / Azure app_setting / etc.) to the latest W3C-compliant release. Operator swaps the version literal for their target release.",
+		}
+	}
+}
+
+// malformedTraceparentComputeTerraformFor selects the per-cloud SDK
+// version-pin shape. The slice 2 chunk 2 patterns are generic
+// placeholders — operators tune the version literal to the upstream
+// changelog for their runtime + distro combination.
+func malformedTraceparentComputeTerraformFor(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "aws":
+		return `# Pin the AWS Distro for OpenTelemetry Lambda layer to the latest
+# W3C-compliant release. The operator picks the layer ARN matching
+# the function's runtime; the example below uses the nodejs amd64
+# layer at a placeholder version.
+resource "aws_lambda_function" "target" {
+  # ... existing fields ...
+  layers = [
+    "arn:aws:lambda:${var.region}:901920570463:layer:aws-otel-nodejs-amd64-ver-1-32-0:1",
+  ]
+}
+`
+	case "gcp":
+		return `# Pin the OpenTelemetry GCE metadata key carrying the SDK image / distro
+# version so a fresh boot picks up the W3C-compliant release. The operator
+# tunes the version literal to the upstream changelog.
+resource "google_compute_project_metadata_item" "otel_sdk_version" {
+  key   = "OTEL_SDK_VERSION"
+  value = "1.32.0"
+}
+`
+	case "azure":
+		return `# Pin the OpenTelemetry distro version on the Azure VM extension /
+# App Service app_setting. The operator chooses the carrier per
+# their deployment shape and tunes the version literal.
+resource "azurerm_linux_web_app" "target" {
+  # ... existing fields ...
+  app_settings = {
+    "OTEL_DOTNET_AUTO_HOME"   = "/otel-auto-instrumentation"
+    "OTEL_DOTNET_AUTO_VERSION" = "1.7.0"
+  }
+}
+`
+	case "oci":
+		return `# Pin the OpenTelemetry distro version on the OCI Functions image tag.
+# The operator chooses the image registry + tag matching the W3C-
+# compliant release for their runtime.
+resource "oci_functions_function" "target" {
+  # ... existing fields ...
+  image = "<registry>/squadron-otel-runtime:1.32.0"
+}
+`
+	}
+	return ""
+}
+
+// PickMissingTraceparentPattern emits the OTEL_PROPAGATORS injection
+// pattern for the span-quality-traceparent-missing kind. Same env-var
+// shape as PickOrphanTracePattern's compute path — both kinds come
+// down to enabling tracecontext + baggage on the SDK config. Per-tier
+// dispatch mirrors PickOrphanTracePattern so the two kinds emit
+// byte-identical Terraform when the same provider+tier combination
+// fires (the operator merging one is automatically protected from
+// having to merge a near-duplicate for the other).
+func PickMissingTraceparentPattern(ctx RecommendationContext) PickedPattern {
+	switch ctx.Tier {
+	case "k8s":
+		return PickedPattern{
+			PrimaryTerraform: `resource "kubernetes_manifest" "otel_instrumentation" {
+  manifest = {
+    apiVersion = "opentelemetry.io/v1alpha1"
+    kind       = "Instrumentation"
+    metadata = {
+      name      = "squadron-trace-context"
+      namespace = "observability"
+    }
+    spec = {
+      propagators = ["tracecontext", "baggage"]
+      sampler = {
+        type     = "parentbased_traceidratio"
+        argument = "1.0"
+      }
+    }
+  }
+}
+`,
+			Reasoning: "span-quality-traceparent-missing (k8s): enabling tracecontext + baggage propagators on the OpenTelemetry Operator Instrumentation CRD so child spans inherit the upstream traceparent.",
+		}
+	case "db":
+		return PickedPattern{
+			PrimaryTerraform: "",
+			Reasoning:        "span-quality-traceparent-missing (db): databases don't carry an OTel SDK directly; the missing-on-child signal indicates the connecting application isn't propagating. Apply the corresponding application-side recommendation.",
+			FallbackUsed:     true,
+		}
+	default: // compute
+		return PickedPattern{
+			PrimaryTerraform: orphanComputeTerraformFor(ctx.Provider),
+			Reasoning:        "span-quality-traceparent-missing (compute): injecting OTEL_PROPAGATORS=tracecontext,baggage on the resource's runtime environment so the SDK's HTTP server instrumentation extracts the W3C context propagator on the inbound request.",
+		}
+	}
+}
+
 // mismatchComputeTerraformFor selects the per-cloud compute Terraform
 // shape for OTEL_RESOURCE_ATTRIBUTES injection. The shapes here
 // follow §4.3's "from the inventory row" stance — variables stand in

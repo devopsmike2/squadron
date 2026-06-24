@@ -389,6 +389,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	spanQualityKindsPromptSection +
 
+	spanQualityTraceparentKindsPromptSection +
+
 	serverlessTierKindsPromptSection +
 
 	orchestrationTierKindsPromptSection +
@@ -1134,6 +1136,78 @@ The most common cause is [cause]. This Terraform PR targets
 
 If the actual cause is different, decline this PR — the
 verdict learning loop will record the decline."
+
+` + "\n"
+
+// spanQualityTraceparentKindsPromptSection — span quality slice 2
+// chunk 2 (v0.89.110, #748 Stream 146). Two new recommendation kinds
+// that fire when Squadron's Quality observer detects W3C trace
+// context anomalies on the existing OTLP receiver hot path. Both
+// kinds reuse the existing span-quality- webhook prefix; NO new
+// webhook routing changes are needed.
+//
+// COLD-START PARITY INVARIANT: same as the slice 1 span-quality
+// section above, this lives ONLY in the system prompt; the user-
+// message renderer is unchanged. When the discovery scan context
+// carries no inventory rows that trigger the traceparent kinds
+// (because no Quality observations exceeded the §3 thresholds), the
+// rendered user message stays byte-identical to v0.89.107. The
+// 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostSpanQualitySlice2
+// pins this invariant.
+const spanQualityTraceparentKindsPromptSection = `SPAN QUALITY TRACEPARENT KINDS (slice 2):
+
+These kinds fire when Squadron's Quality observer detects
+W3C trace context anomalies. Both reuse the existing
+span-quality- webhook prefix.
+
+- span-quality-traceparent-missing: > 5% of CHILD spans
+  from this resource arrive without a traceparent
+  attribute. The most common cause is the SDK's HTTP server
+  instrumentation not extracting the W3C context propagator
+  on the inbound request. Possible causes:
+  1. SDK was deployed but the context propagator middleware
+     wasn't enabled in the application's HTTP server config.
+  2. Custom middleware in front of the SDK consumes the
+     traceparent header before the SDK reads it.
+  3. The resource is a worker/background-job pod (no inbound
+     HTTP) and child spans here are intra-process — in that
+     case, decline the recommendation; the verdict learning
+     loop records.
+  Terraform: add OpenTelemetry context propagator middleware
+  to the application via env var OTEL_PROPAGATORS=tracecontext,baggage
+  injection (per-cloud pattern same as
+  span-quality-orphan-trace from v0.89.86).
+
+- span-quality-traceparent-malformed: > 1% of spans with
+  a traceparent attribute carry values that don't conform
+  to the W3C spec (version 00, 32-char trace_id non-zero,
+  16-char parent_id non-zero, hex lowercase only). The 1%
+  threshold is intentionally low — ANY malformed traceparent
+  is unusual. Possible causes:
+  1. Upstream service emits a CUSTOM trace ID format that
+     doesn't fit W3C constraints (some legacy SDKs).
+  2. SDK version mismatch — upstream emits a 'next-version'
+     (01) traceparent and the downstream rejects it.
+  3. The header is being rewritten by a proxy / load
+     balancer in transit (rare; check ALB X-Amzn-Trace-Id
+     handling).
+  Terraform: pin the upstream SDK version to the latest
+  W3C-compliant release. The specific Terraform pattern
+  depends on the deployment shape (Lambda layer version,
+  Kubernetes Deployment image tag, etc.) — the recommendation
+  reasoning explains case-by-case.
+
+REASONING TEMPLATE for traceparent recommendations:
+
+"Squadron's Quality observer has observed N% of this
+resource's [child] spans with [pathology] in the last hour.
+The most common cause is [cause from the 3 above]. This
+Terraform PR targets the SDK-side fix.
+
+If your actual case is different (the runbook describes the
+three failure modes), decline this PR — the verdict learning
+loop will record the decline."
 
 ` + "\n"
 

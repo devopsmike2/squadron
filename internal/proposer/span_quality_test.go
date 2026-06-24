@@ -346,3 +346,237 @@ func TestSpanQualityDetection_RecommendationTimestamp_DeterministicForBatch(t *t
 	) ([]SpanQualityRecommendationDraft, []error) = CheckSpanQualityIssuesBatch
 	_ = time.Now // silence unused-import linter
 }
+
+// --- Slice 2 (v0.89.110) tests — W3C trace context detection ------
+
+// TestSpanQualityDetection_MalformedTraceparentAt2Pct_EmitsRecommendation
+// — §11 acceptance test 15. 2% malformed crosses the 1% threshold and
+// emits a span-quality-traceparent-malformed draft.
+func TestSpanQualityDetection_MalformedTraceparentAt2Pct_EmitsRecommendation(t *testing.T) {
+	row := newSpanQualityRow()
+	qual := &traceindex.QualityCountersSnapshot{
+		TotalSpans:              1000,
+		SpansWithTraceparent:    200,
+		MalformedTraceparentPct: 2.0,
+	}
+	scope := SpanQualityScope{ConnectionID: "conn-1", ScopeID: "123", Region: "us-east-1"}
+	drafts, err := CheckSpanQualityIssues(context.Background(), row, qual, scope, &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckSpanQualityIssues: %v", err)
+	}
+	if len(drafts) != 1 {
+		t.Fatalf("len(drafts) = %d, want 1", len(drafts))
+	}
+	if drafts[0].Kind != "span-quality-traceparent-malformed" {
+		t.Errorf("Kind = %q, want span-quality-traceparent-malformed", drafts[0].Kind)
+	}
+	if !strings.HasSuffix(drafts[0].RecommendationID, ".traceparent_malformed") {
+		t.Errorf("RecommendationID = %q, want .traceparent_malformed suffix", drafts[0].RecommendationID)
+	}
+	if !strings.Contains(drafts[0].Reasoning, "2.0%") {
+		t.Errorf("Reasoning missing 2.0%%; got: %s", drafts[0].Reasoning)
+	}
+}
+
+// TestSpanQualityDetection_MalformedTraceparentAt0Pt5Pct_NoRecommendation
+// — 0.5% malformed falls below the 1% threshold and emits nothing.
+func TestSpanQualityDetection_MalformedTraceparentAt0Pt5Pct_NoRecommendation(t *testing.T) {
+	row := newSpanQualityRow()
+	qual := &traceindex.QualityCountersSnapshot{
+		TotalSpans:              1000,
+		SpansWithTraceparent:    200,
+		MalformedTraceparentPct: 0.5,
+	}
+	scope := SpanQualityScope{ConnectionID: "conn-1", ScopeID: "123", Region: "us-east-1"}
+	drafts, err := CheckSpanQualityIssues(context.Background(), row, qual, scope, &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckSpanQualityIssues: %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Errorf("len(drafts) = %d, want 0 (below 1%% threshold)", len(drafts))
+	}
+}
+
+// TestSpanQualityDetection_MissingTraceparentOnChildAt6Pct_EmitsRecommendation
+// — §11 acceptance test 15 variant. 6% missing-on-child crosses the 5%
+// threshold and emits a span-quality-traceparent-missing draft.
+func TestSpanQualityDetection_MissingTraceparentOnChildAt6Pct_EmitsRecommendation(t *testing.T) {
+	row := newSpanQualityRow()
+	qual := &traceindex.QualityCountersSnapshot{
+		TotalSpans:                   1000,
+		ChildSpans:                   500,
+		MissingTraceparentOnChildPct: 6.0,
+	}
+	scope := SpanQualityScope{ConnectionID: "conn-1", ScopeID: "123", Region: "us-east-1"}
+	drafts, err := CheckSpanQualityIssues(context.Background(), row, qual, scope, &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckSpanQualityIssues: %v", err)
+	}
+	if len(drafts) != 1 {
+		t.Fatalf("len(drafts) = %d, want 1", len(drafts))
+	}
+	if drafts[0].Kind != "span-quality-traceparent-missing" {
+		t.Errorf("Kind = %q, want span-quality-traceparent-missing", drafts[0].Kind)
+	}
+	if !strings.HasSuffix(drafts[0].RecommendationID, ".traceparent_missing") {
+		t.Errorf("RecommendationID = %q, want .traceparent_missing suffix", drafts[0].RecommendationID)
+	}
+	if !strings.Contains(drafts[0].Reasoning, "6.0%") {
+		t.Errorf("Reasoning missing 6.0%%; got: %s", drafts[0].Reasoning)
+	}
+}
+
+// TestSpanQualityDetection_MissingTraceparentOnChildAt4Pct_NoRecommendation
+// — §11 acceptance test 16. 4% missing-on-child falls below the 5%
+// threshold and emits nothing.
+func TestSpanQualityDetection_MissingTraceparentOnChildAt4Pct_NoRecommendation(t *testing.T) {
+	row := newSpanQualityRow()
+	qual := &traceindex.QualityCountersSnapshot{
+		TotalSpans:                   1000,
+		ChildSpans:                   500,
+		MissingTraceparentOnChildPct: 4.0,
+	}
+	scope := SpanQualityScope{ConnectionID: "conn-1", ScopeID: "123", Region: "us-east-1"}
+	drafts, err := CheckSpanQualityIssues(context.Background(), row, qual, scope, &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckSpanQualityIssues: %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Errorf("len(drafts) = %d, want 0 (below 5%% threshold)", len(drafts))
+	}
+}
+
+// TestSpanQualityDetection_SpansWithTraceparentBelowMinimum_NoRecommendation
+// — 5% malformed with only 30 spans-with-traceparent (below the 50
+// minimum) emits nothing. The threshold percentage alone is too
+// noisy when the denominator is small.
+func TestSpanQualityDetection_SpansWithTraceparentBelowMinimum_NoRecommendation(t *testing.T) {
+	row := newSpanQualityRow()
+	qual := &traceindex.QualityCountersSnapshot{
+		TotalSpans:              1000,
+		SpansWithTraceparent:    30, // below SpanQualityMinimumSpansWithTraceparent=50
+		MalformedTraceparentPct: 5.0,
+	}
+	scope := SpanQualityScope{ConnectionID: "conn-1", ScopeID: "123", Region: "us-east-1"}
+	drafts, err := CheckSpanQualityIssues(context.Background(), row, qual, scope, &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckSpanQualityIssues: %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Errorf("len(drafts) = %d, want 0 (below SpansWithTraceparent minimum)", len(drafts))
+	}
+}
+
+// TestSpanQualityDetection_ChildSpansBelowMinimum_NoRecommendation —
+// 10% missing-on-child with only 20 child spans (below the 50 minimum)
+// emits nothing.
+func TestSpanQualityDetection_ChildSpansBelowMinimum_NoRecommendation(t *testing.T) {
+	row := newSpanQualityRow()
+	qual := &traceindex.QualityCountersSnapshot{
+		TotalSpans:                   1000,
+		ChildSpans:                   20, // below SpanQualityMinimumChildSpans=50
+		MissingTraceparentOnChildPct: 10.0,
+	}
+	scope := SpanQualityScope{ConnectionID: "conn-1", ScopeID: "123", Region: "us-east-1"}
+	drafts, err := CheckSpanQualityIssues(context.Background(), row, qual, scope, &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckSpanQualityIssues: %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Errorf("len(drafts) = %d, want 0 (below ChildSpans minimum)", len(drafts))
+	}
+}
+
+// TestSpanQualityDetection_BothTraceparentPathologies_EmitsBothKinds —
+// when both traceparent thresholds trip on the same row (with both
+// denominators above minimum), the branch emits TWO drafts — one per
+// kind.
+func TestSpanQualityDetection_BothTraceparentPathologies_EmitsBothKinds(t *testing.T) {
+	row := newSpanQualityRow()
+	qual := &traceindex.QualityCountersSnapshot{
+		TotalSpans:                   2000,
+		SpansWithTraceparent:         500,
+		ChildSpans:                   800,
+		MalformedTraceparentPct:      3.0,
+		MissingTraceparentOnChildPct: 9.0,
+	}
+	scope := SpanQualityScope{ConnectionID: "conn-1", ScopeID: "123", Region: "us-east-1"}
+	drafts, err := CheckSpanQualityIssues(context.Background(), row, qual, scope, &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckSpanQualityIssues: %v", err)
+	}
+	if len(drafts) != 2 {
+		t.Fatalf("len(drafts) = %d, want 2 (both traceparent kinds)", len(drafts))
+	}
+	kinds := map[string]bool{}
+	for _, d := range drafts {
+		kinds[d.Kind] = true
+	}
+	for _, want := range []string{"span-quality-traceparent-malformed", "span-quality-traceparent-missing"} {
+		if !kinds[want] {
+			t.Errorf("missing kind %q in drafts", want)
+		}
+	}
+}
+
+// TestDiscoveryProposer_TraceparentKindsInSystemPrompt — verifies both
+// new slice 2 kind strings appear verbatim in the system prompt.
+func TestDiscoveryProposer_TraceparentKindsInSystemPrompt(t *testing.T) {
+	systemPrompt := ai.DiscoverySystemPromptForTest()
+	for _, kind := range []string{
+		"span-quality-traceparent-missing",
+		"span-quality-traceparent-malformed",
+	} {
+		if !strings.Contains(systemPrompt, kind) {
+			t.Errorf("system prompt missing span-quality slice 2 kind %q", kind)
+		}
+	}
+	if !strings.Contains(systemPrompt, "SPAN QUALITY TRACEPARENT KINDS") {
+		t.Errorf("system prompt missing SPAN QUALITY TRACEPARENT KINDS section header")
+	}
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostSpanQualitySlice2
+// — span quality slice 2 chunk 2 cold-start parity invariant. Across
+// all four providers, the user message produced by
+// buildDiscoveryUserMessage stays byte-identical when the scan context
+// carries no inventory rows that trigger traceparent kinds. The 2 new
+// kind strings live ONLY in the system prompt; the user-message
+// renderer is unchanged from v0.89.107.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostSpanQualitySlice2(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ai.DiscoveryScanContext
+	}{
+		{
+			name: "aws",
+			in:   ai.DiscoveryScanContext{ScanID: "scan-aws-cold", AccountID: "123456789012", Regions: []string{"us-east-1"}},
+		},
+		{
+			name: "gcp",
+			in:   ai.DiscoveryScanContext{ScanID: "scan-gcp-cold", Provider: "gcp", ProjectID: "my-project", Regions: []string{"us-central1"}},
+		},
+		{
+			name: "azure",
+			in:   ai.DiscoveryScanContext{ScanID: "scan-azure-cold", Provider: "azure", TenantID: "tnt", SubscriptionID: "sub", Regions: []string{"eastus"}},
+		},
+		{
+			name: "oci",
+			in:   ai.DiscoveryScanContext{ScanID: "scan-oci-cold", Provider: "oci", TenancyOCID: "ocid1.tenancy.oc1..aaaa", Regions: []string{"us-phoenix-1"}},
+		},
+	}
+	traceparentKinds := []string{
+		"span-quality-traceparent-missing",
+		"span-quality-traceparent-malformed",
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := ai.BuildDiscoveryUserMessageForTest(tc.in)
+			for _, kind := range traceparentKinds {
+				if strings.Contains(msg, kind) {
+					t.Errorf("cold-start user message must NOT contain traceparent kind %q (provider=%s)", kind, tc.name)
+				}
+			}
+		})
+	}
+}
