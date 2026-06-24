@@ -589,4 +589,22 @@ const (
 	// floats that bloat the audit timeline without adding signal
 	// (the resources_with_issues count answers "is anything wrong").
 	AuditEventSpanQualityRequested = "discovery.span_quality.requested"
+
+	// v0.89.132 (#772 Stream 170, Workload Health dashboard panel
+	// slice 1 chunk 1) — the /api/v1/discovery/workload_health
+	// dashboard endpoint emits this on cache MISS only. Mirrors
+	// AuditEventTraceCoverageRequested + AuditEventSpanQualityRequested
+	// cache-miss-only posture so the timeline doesn't drown in 30s-
+	// poll noise; cache hits return the cached payload with no audit
+	// row.
+	//
+	// Payload contract: cache_status ("miss"),
+	// total_serverless_resources, total_any_issue_count,
+	// total_any_issue_pct, recorded_at. Same payload-size discipline
+	// as AuditEventSpanQualityRequested — the per-diagnostic counts
+	// (cold-start / sampling / error-rate) are intentionally NOT in
+	// the payload; the any_issue rollup answers "is anything wrong
+	// at all" and SIEM consumers can re-fetch the endpoint for the
+	// per-diagnostic breakdown.
+	AuditEventDiscoveryWorkloadHealthRequested = "discovery.workload_health.requested"
 )

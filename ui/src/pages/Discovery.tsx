@@ -52,6 +52,10 @@ import {
   type ProviderTraceCoverage,
   type TraceCoverage,
 } from "@/api/discoveryTraceCoverage";
+import {
+  fetchWorkloadHealth,
+  type WorkloadHealthResponse,
+} from "@/api/discoveryWorkloadHealth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -69,6 +73,29 @@ const SWR_KEY_TRACE_COVERAGE = "/discovery/trace_coverage";
 // quality slice 1 chunk 3). Pairs 1:1 with /discovery/span_quality so
 // the same cache key works for cross-page consumers too.
 const SWR_KEY_SPAN_QUALITY = "/discovery/span_quality";
+
+// SWR cache key for the v0.89.132 #772 Stream 170 workload health
+// endpoint (Workload Health dashboard panel slice 1 chunk 1). Pairs
+// 1:1 with /discovery/workload_health so the same cache key works
+// for cross-page consumers too.
+const SWR_KEY_WORKLOAD_HEALTH = "/discovery/workload_health";
+
+// Workload Health panel deep-link kind constants. The panel renders
+// three column tiles; clicking any column navigates to
+// /discovery/aws#recommendations:<kind> so the per-provider
+// Recommendations tab pre-applies the filter chip on mount.
+//
+// Cold-start uses the AWS Lambda kind constant from the cold-start
+// slice 1 substrate; sampling and error rate both reuse the
+// span-quality- webhook prefix from v0.89.86 (no new webhook routing).
+// Slice 2 may extend the cold-start deep-link to cover the GCP /
+// Azure / OCI surfaces; slice 1 surfaces all serverless via the
+// per-provider recommendations tab filter.
+const WORKLOAD_HEALTH_KIND_COLD_START = "cold-start";
+const WORKLOAD_HEALTH_KIND_SAMPLING =
+  "span-quality-sampling-too-aggressive";
+const WORKLOAD_HEALTH_KIND_ERROR_RATE =
+  "span-quality-error-rate-spike";
 
 // Filter-chip kinds the dashboard panel deep-links into. Three
 // recommendation kinds match 1:1 with the three columns of the
@@ -206,11 +233,29 @@ export default function DiscoveryPage() {
       shouldRetryOnError: false,
     });
 
+  // Workload Health rides the same cadence (v0.89.132 chunk 1). The
+  // WORKLOAD HEALTH panel hides itself when serverless_resource_count
+  // is zero OR all three percentages are zero (design doc §5.3, §8
+  // acceptance tests 8 + 9) so a failed fetch surfaces silently
+  // rather than crowding the dashboard with an error banner —
+  // matching the SpanQualityPanel non-fatal posture from v0.89.87.
+  const { data: workloadHealth, mutate: workloadHealthMutate } =
+    useSWR<WorkloadHealthResponse>(
+      SWR_KEY_WORKLOAD_HEALTH,
+      fetchWorkloadHealth,
+      {
+        revalidateOnFocus: false,
+        revalidateOnReconnect: false,
+        shouldRetryOnError: false,
+      },
+    );
+
   const handleRefresh = useCallback(() => {
     void mutate();
     void traceMutate();
     void spanQualityMutate();
-  }, [mutate, traceMutate, spanQualityMutate]);
+    void workloadHealthMutate();
+  }, [mutate, traceMutate, spanQualityMutate, workloadHealthMutate]);
 
   return (
     <div className="space-y-6 p-6">
@@ -249,6 +294,7 @@ export default function DiscoveryPage() {
           summary={data}
           traceCoverage={traceData}
           spanQuality={spanQuality}
+          workloadHealth={workloadHealth}
         />
       )}
     </div>
@@ -318,10 +364,12 @@ function DashboardBody({
   summary,
   traceCoverage,
   spanQuality,
+  workloadHealth,
 }: {
   summary: DiscoverySummary;
   traceCoverage: TraceCoverage | undefined;
   spanQuality: SpanQualityResponse | undefined;
+  workloadHealth: WorkloadHealthResponse | undefined;
 }) {
   // Welcome state condition: no provider has been wired AND no
   // connection exists anywhere. Either signal alone is enough — a
@@ -346,6 +394,7 @@ function DashboardBody({
           eventSourceCount={summary.totals.event_source_count}
         />
       )}
+      {workloadHealth && <WorkloadHealthPanel health={workloadHealth} />}
       {spanQuality && <SpanQualityPanel quality={spanQuality} />}
       <ProviderGrid providers={summary.providers} />
       <RecentRecommendations rows={summary.recent_recommendations} />
@@ -792,6 +841,155 @@ function computeTierWeightedAverage(
     return null;
   }
   return Math.round((weighted / weightTotal) * 10) / 10;
+}
+
+// --- Workload Health panel -------------------------------------------
+//
+// WorkloadHealthPanel — v0.89.132 (#772 Stream 170, Workload Health
+// dashboard panel slice 1 chunk 1). Renders the substrate's three
+// serverless diagnostics — cold-start exceeded, sampling too
+// aggressive, error rate spike — as a single 3-column health grid
+// BETWEEN the TraceCoveragePanel and the SpanQualityPanel. Vertical
+// narrative flow: "telemetry flowing" → "workloads healthy" →
+// "spans usable" (design doc §5.1).
+//
+// The panel hides entirely when:
+//   1. totals.serverless_resource_count === 0 (no serverless
+//      inventory anywhere — the §8 acceptance test 8 cold-start
+//      posture), OR
+//   2. all three diagnostic percentages are zero on totals
+//      (inventory exists but is healthy — the §8 acceptance test 9
+//      clean-fleet posture).
+//
+// Each column tile is a <button> with onClick navigating to
+// /discovery/aws#recommendations:<kind> so the per-provider
+// Recommendations tab filter chip pre-applies on mount. Same
+// deep-link pattern as the SPAN QUALITY panel's columns. AWS is the
+// only provider with a fully-wired Recommendations tab in slice 1;
+// the slice-2 chunks may extend to per-provider routing.
+//
+// Footer line surfaces the headline "any issue" count + percentage
+// (design doc §5.2). Uses the UNION-semantics any_issue_count from
+// the endpoint (§8 acceptance test 14).
+
+function WorkloadHealthPanel({ health }: { health: WorkloadHealthResponse }) {
+  const t = health.totals;
+  // §8 acceptance test 8 — no serverless inventory means there is
+  // nothing to surface; the panel hides entirely instead of rendering
+  // an empty 3-column grid.
+  if (t.serverless_resource_count === 0) {
+    return null;
+  }
+  // §8 acceptance test 9 — inventory exists but is healthy. All
+  // three diagnostic percentages zero means every detection branch
+  // declined to fire on every serverless row. Same hide posture as
+  // the SPAN QUALITY panel's all-zero check.
+  if (
+    t.cold_start_exceeded_pct === 0 &&
+    t.sampling_too_aggressive_pct === 0 &&
+    t.error_rate_spike_pct === 0
+  ) {
+    return null;
+  }
+  return (
+    <div
+      className="rounded-lg border bg-card p-6"
+      data-testid="workload-health-panel"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold">
+            Workload health (serverless)
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Are your serverless workloads healthy?
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <WorkloadHealthColumn
+          label="Cold-start P95 exceeded"
+          pct={t.cold_start_exceeded_pct}
+          count={t.cold_start_exceeded_count}
+          kind={WORKLOAD_HEALTH_KIND_COLD_START}
+          testIdSuffix="cold-start"
+        />
+        <WorkloadHealthColumn
+          label="Sampling too aggressive"
+          pct={t.sampling_too_aggressive_pct}
+          count={t.sampling_too_aggressive_count}
+          kind={WORKLOAD_HEALTH_KIND_SAMPLING}
+          testIdSuffix="sampling"
+        />
+        <WorkloadHealthColumn
+          label="Error rate spike"
+          pct={t.error_rate_spike_pct}
+          count={t.error_rate_spike_count}
+          kind={WORKLOAD_HEALTH_KIND_ERROR_RATE}
+          testIdSuffix="error-rate"
+        />
+      </div>
+      <div
+        className="mt-4 text-xs text-muted-foreground"
+        data-testid="workload-health-footer"
+      >
+        Total resources with at least one issue:{" "}
+        <span data-testid="workload-health-any-issue-count">
+          {t.any_issue_count}
+        </span>{" "}
+        / {t.serverless_resource_count} ({t.any_issue_pct.toFixed(1)}%)
+      </div>
+    </div>
+  );
+}
+
+// WorkloadHealthColumn — single column tile in the 3-up grid. Mirrors
+// SpanQualityColumn's amber-on-non-zero pattern (design doc §5.4)
+// plus the same uppercase-slate-400 label + slate-500 "N resources"
+// resource-count line. The whole tile is a button so the operator
+// can click anywhere on it; navigation uses the deep-link hash so
+// the per-provider Recommendations tab seeds the filter chip on
+// mount. AWS is the only target provider in slice 1 (matching the
+// SPAN QUALITY panel's deep-link policy).
+function WorkloadHealthColumn({
+  label,
+  pct,
+  count,
+  kind,
+  testIdSuffix,
+}: {
+  label: string;
+  pct: number;
+  count: number;
+  kind: string;
+  testIdSuffix: string;
+}) {
+  const resourceWord = count === 1 ? "resource" : "resources";
+  return (
+    <Link
+      to={`/discovery/aws#recommendations:${kind}`}
+      className="block rounded-md border border-transparent p-3 text-center transition hover:border-amber-400/40 hover:bg-amber-500/5"
+      data-testid={`workload-health-${testIdSuffix}`}
+      data-kind={kind}
+      aria-label={`${label} — ${pct.toFixed(1)}%, ${count} ${resourceWord}`}
+    >
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className="mt-1 text-2xl font-medium tabular-nums text-amber-600 dark:text-amber-300"
+        data-testid={`workload-health-pct-${testIdSuffix}`}
+      >
+        {pct.toFixed(1)}%
+      </div>
+      <div
+        className="mt-1 text-xs text-muted-foreground"
+        data-testid={`workload-health-count-${testIdSuffix}`}
+      >
+        {count} {resourceWord}
+      </div>
+    </Link>
+  );
 }
 
 // --- Span quality panel ----------------------------------------------

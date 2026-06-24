@@ -30,6 +30,11 @@ import {
   type ProviderTraceCoverage,
   type TraceCoverage,
 } from "@/api/discoveryTraceCoverage";
+import {
+  fetchWorkloadHealth,
+  type ProviderWorkloadHealth,
+  type WorkloadHealthResponse,
+} from "@/api/discoveryWorkloadHealth";
 
 vi.mock("@/api/discoverySummary", async () => {
   const actual = await vi.importActual<typeof import("@/api/discoverySummary")>(
@@ -61,9 +66,20 @@ vi.mock("@/api/discoverySpanQuality", async () => {
   };
 });
 
+vi.mock("@/api/discoveryWorkloadHealth", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/api/discoveryWorkloadHealth")
+  >("@/api/discoveryWorkloadHealth");
+  return {
+    ...actual,
+    fetchWorkloadHealth: vi.fn(),
+  };
+});
+
 const mockedGetDiscoverySummary = vi.mocked(getDiscoverySummary);
 const mockedGetTraceCoverage = vi.mocked(getTraceCoverage);
 const mockedFetchSpanQuality = vi.mocked(fetchSpanQuality);
+const mockedFetchWorkloadHealth = vi.mocked(fetchWorkloadHealth);
 
 // makeProviderTrace builds a ProviderTraceCoverage with sensible
 // defaults the per-test partials override.
@@ -257,6 +273,62 @@ function makeSpanQuality(
   return { ...base, ...over };
 }
 
+// --- Workload health factories (v0.89.132 #772 Stream 170) ---------
+
+// makeProviderWorkloadHealth builds a ProviderWorkloadHealth with
+// sensible defaults the per-test partials override. Defaults are
+// all-zero so the WORKLOAD HEALTH panel stays hidden in tests that
+// don't opt in (matching the §8 acceptance tests 8 + 9 hide
+// conditions).
+function makeProviderWorkloadHealth(
+  over: Partial<ProviderWorkloadHealth> = {},
+): ProviderWorkloadHealth {
+  return {
+    serverless_resource_count: 0,
+    cold_start_exceeded_count: 0,
+    cold_start_exceeded_pct: 0,
+    sampling_too_aggressive_count: 0,
+    sampling_too_aggressive_pct: 0,
+    error_rate_spike_count: 0,
+    error_rate_spike_pct: 0,
+    any_issue_count: 0,
+    any_issue_pct: 0,
+    ...over,
+  };
+}
+
+// makeWorkloadHealth builds a fully populated WorkloadHealthResponse
+// with every provider at the all-zero baseline. Tests override
+// per-provider state via the `providers` partial. The totals row is
+// independently overridable since the panel hide check inspects only
+// totals — tests that pin specific behavior want to set totals
+// directly without re-deriving from per-provider counts.
+function makeWorkloadHealth(
+  over: Partial<WorkloadHealthResponse> = {},
+  providersOver: Partial<
+    Record<keyof WorkloadHealthResponse["providers"], Partial<ProviderWorkloadHealth>>
+  > = {},
+): WorkloadHealthResponse {
+  const base: WorkloadHealthResponse = {
+    providers: {
+      aws: makeProviderWorkloadHealth(),
+      gcp: makeProviderWorkloadHealth(),
+      azure: makeProviderWorkloadHealth(),
+      oci: makeProviderWorkloadHealth(),
+    },
+    totals: makeProviderWorkloadHealth(),
+  };
+  for (const k of Object.keys(providersOver) as Array<
+    keyof WorkloadHealthResponse["providers"]
+  >) {
+    base.providers[k] = {
+      ...base.providers[k],
+      ...(providersOver[k] ?? {}),
+    };
+  }
+  return { ...base, ...over };
+}
+
 describe("DiscoveryDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -269,6 +341,11 @@ describe("DiscoveryDashboard", () => {
     // stays hidden in tests that don't opt in (mirrors the trace-
     // coverage benign default).
     mockedFetchSpanQuality.mockResolvedValue(makeSpanQuality());
+    // Default workload health to all-zero so the WORKLOAD HEALTH
+    // panel stays hidden in tests that don't opt in (matches the
+    // §8 acceptance tests 8 + 9 hide conditions). Per-test
+    // overrides land in the workload-health-focused tests below.
+    mockedFetchWorkloadHealth.mockResolvedValue(makeWorkloadHealth());
   });
 
   it("TestDiscoveryDashboard_RendersFourProviderCards", async () => {
@@ -1377,5 +1454,265 @@ describe("DiscoveryDashboard", () => {
       "href",
       "/discovery/aws#recommendations:span-quality-sampling-too-aggressive",
     );
+  });
+
+  // --- Workload Health panel (v0.89.132 #772 Stream 170, chunk 1) ---
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_RendersWhenAnyPercentageNonZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Inventory present, cold-start fires, the other two zero — the
+    // §8 acceptance test 10 contract says the panel still appears.
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 142,
+          cold_start_exceeded_count: 12,
+          cold_start_exceeded_pct: 8.5,
+          any_issue_count: 12,
+          any_issue_pct: 8.5,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("workload-health-panel"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId("workload-health-pct-cold-start"),
+    ).toHaveTextContent("8.5%");
+    expect(
+      screen.getByTestId("workload-health-pct-sampling"),
+    ).toHaveTextContent("0.0%");
+    expect(
+      screen.getByTestId("workload-health-pct-error-rate"),
+    ).toHaveTextContent("0.0%");
+  });
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_HiddenWhenServerlessResourceCountZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // §8 acceptance test 8 — no serverless inventory means the panel
+    // hides entirely even if the per-pct fields would somehow be set
+    // (an out-of-sync server shape). We model the clean case where
+    // serverless_resource_count is zero.
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 0,
+          cold_start_exceeded_pct: 0,
+          sampling_too_aggressive_pct: 0,
+          error_rate_spike_pct: 0,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("provider-grid")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("workload-health-panel"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_HiddenWhenAllThreePctZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // §8 acceptance test 9 — inventory exists but every detection
+    // declined to fire. The panel hides regardless of the
+    // serverless_resource_count value because the operator has
+    // nothing actionable to see.
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 142,
+          cold_start_exceeded_pct: 0,
+          sampling_too_aggressive_pct: 0,
+          error_rate_spike_pct: 0,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("provider-grid")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("workload-health-panel"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_ColdStartButtonDeepLinks", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 142,
+          cold_start_exceeded_count: 12,
+          cold_start_exceeded_pct: 8.5,
+          any_issue_count: 12,
+          any_issue_pct: 8.5,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("workload-health-panel"),
+      ).toBeInTheDocument();
+    });
+    const col = screen.getByTestId("workload-health-cold-start");
+    expect(col).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:cold-start",
+    );
+    expect(col).toHaveAttribute("data-kind", "cold-start");
+  });
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_SamplingButtonDeepLinks", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 142,
+          sampling_too_aggressive_count: 8,
+          sampling_too_aggressive_pct: 5.6,
+          any_issue_count: 8,
+          any_issue_pct: 5.6,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("workload-health-panel"),
+      ).toBeInTheDocument();
+    });
+    const col = screen.getByTestId("workload-health-sampling");
+    expect(col).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-sampling-too-aggressive",
+    );
+  });
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_ErrorRateButtonDeepLinks", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 142,
+          error_rate_spike_count: 5,
+          error_rate_spike_pct: 3.5,
+          any_issue_count: 5,
+          any_issue_pct: 3.5,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("workload-health-panel"),
+      ).toBeInTheDocument();
+    });
+    const col = screen.getByTestId("workload-health-error-rate");
+    expect(col).toHaveAttribute(
+      "href",
+      "/discovery/aws#recommendations:span-quality-error-rate-spike",
+    );
+  });
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_FooterShowsAnyIssueCount", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // §8 acceptance test 14 — footer count must equal the
+    // any_issue_count from the endpoint (UNION rule), not the sum of
+    // the per-diagnostic counts.
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 142,
+          cold_start_exceeded_count: 12,
+          cold_start_exceeded_pct: 8.5,
+          sampling_too_aggressive_count: 8,
+          sampling_too_aggressive_pct: 5.6,
+          error_rate_spike_count: 5,
+          error_rate_spike_pct: 3.5,
+          any_issue_count: 22,
+          any_issue_pct: 15.5,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("workload-health-panel"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId("workload-health-any-issue-count"),
+    ).toHaveTextContent("22");
+    expect(
+      screen.getByTestId("workload-health-footer"),
+    ).toHaveTextContent("22 / 142 (15.5%)");
+  });
+
+  it("TestDiscoveryDashboard_WorkloadHealthPanel_PlacedBetweenTraceCoverageAndSpanQuality", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Pin EVERY panel as visible so the DOM order assertion is
+    // meaningful.
+    mockedGetTraceCoverage.mockResolvedValue(makeTraceCoverage());
+    mockedFetchSpanQuality.mockResolvedValue(
+      makeSpanQuality({
+        totals: {
+          resource_count: 142,
+          resources_with_issues: 12,
+          orphan_pct: 4.0,
+          missing_attr_pct: 0,
+          attr_mismatch_pct: 0,
+          malformed_traceparent_pct: 0,
+          missing_traceparent_on_child_pct: 0,
+          sampling_too_aggressive_pct: 0,
+        },
+      }),
+    );
+    mockedFetchWorkloadHealth.mockResolvedValue(
+      makeWorkloadHealth({
+        totals: makeProviderWorkloadHealth({
+          serverless_resource_count: 142,
+          cold_start_exceeded_count: 12,
+          cold_start_exceeded_pct: 8.5,
+          any_issue_count: 12,
+          any_issue_pct: 8.5,
+        }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("workload-health-panel"),
+      ).toBeInTheDocument();
+    });
+
+    const trace = screen.getByTestId("trace-coverage-panel");
+    const workload = screen.getByTestId("workload-health-panel");
+    const span = screen.getByTestId("span-quality-panel");
+
+    // Use the DOM bitmask to assert TRACE COVERAGE precedes WORKLOAD
+    // HEALTH precedes SPAN QUALITY. compareDocumentPosition returns
+    // Node.DOCUMENT_POSITION_FOLLOWING (4) when the argument is a
+    // later sibling.
+    expect(
+      trace.compareDocumentPosition(workload) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      workload.compareDocumentPosition(span) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
