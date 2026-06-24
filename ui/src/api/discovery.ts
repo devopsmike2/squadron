@@ -319,6 +319,21 @@ export interface ServerlessRow {
   // span_quality — span quality slice 1 chunk 3 (v0.89.87). See
   // RowSpanQuality godoc. Undefined renders the QualityDot gray.
   span_quality?: RowSpanQuality;
+  // cold_start_p95_ms — Cold-start latency analysis slice 1 chunk 3
+  // (v0.89.115, #753 Stream 151). The 24-hour rolling P95 InitDuration
+  // observation for this Lambda function, sourced from the
+  // cold_start_observation table at scan-response time. Undefined when
+  // no observation has been persisted yet — the column renders "—".
+  // Slice 1 ships AWS Lambda only; rows on GCP / Azure / OCI
+  // serverless surfaces leave the field undefined.
+  cold_start_p95_ms?: number;
+  // cold_start_exceeds_threshold — Cold-start latency analysis slice 1
+  // chunk 3 (v0.89.115). Pre-computed amber-color predicate the UI's
+  // ColdStartCell reads to color the Cold-start P95 cell amber when
+  // true. The server applies the 1.5x ratio + 500ms floor rule so the
+  // UI keeps a single definition of "amber" across both this column
+  // and the per-resource cold-start drill-down endpoint.
+  cold_start_exceeds_threshold?: boolean;
   // detail — surface-specific bag. Slice 1 surfaces it as raw JSON in
   // the row's drill-down tooltip; not rendered in the columns.
   detail?: Record<string, unknown>;

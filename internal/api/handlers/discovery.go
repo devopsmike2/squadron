@@ -190,6 +190,20 @@ type DiscoveryHandlers struct {
 	// AnnotateComputeWithLastSeen).
 	traceIndex TraceIndexLookup
 
+	// coldStartStore + coldStartConstants — Cold-start latency
+	// analysis slice 1 chunk 3 (v0.89.115, #753 Stream 151). Both
+	// optional: nil store OR nil constants short-circuits the
+	// AnnotateServerlessWithColdStart pass entirely, leaving the
+	// per-row cold_start_p95_ms + cold_start_exceeds_threshold
+	// fields nil (rendered as "—" in the UI). Production wires the
+	// chunk-1 *sqlite.Storage to the store and a
+	// staticColdStartDetectionConstants pinned to the substrate
+	// defaults (24h current / 168h baseline / 1.5x / 500ms). A
+	// flaky storage layer logs warnings but never breaks the scan
+	// endpoint (mirrors the traceIndex posture above).
+	coldStartStore     ColdStartObservationReader
+	coldStartConstants ColdStartAnnotationThresholds
+
 	logger        *zap.Logger
 }
 
@@ -433,6 +447,23 @@ func (h *DiscoveryHandlers) WithChecksPAT(pat string) *DiscoveryHandlers {
 // stub returning canned timestamps.
 func (h *DiscoveryHandlers) WithTraceIndex(idx TraceIndexLookup) *DiscoveryHandlers {
 	h.traceIndex = idx
+	return h
+}
+
+// WithColdStartObservationStore — Cold-start latency analysis slice 1
+// chunk 3 (v0.89.115, #753 Stream 151) — wires the storage adapter the
+// AnnotateServerlessWithColdStart pass uses to populate the per-Lambda
+// cold_start_p95_ms + cold_start_exceeds_threshold fields on the scan
+// response. Nil leaves the fields unannotated (rendered as "—" in
+// the UI). Production wires the chunk-1 *sqlite.Storage; tests
+// substitute a fake returning canned ColdStartObservationRows. The
+// thresholds adapter pins the four substrate constants (24h current,
+// 168h baseline, 1.5x ratio, 500ms floor) — production threads the
+// staticColdStartDetectionConstants from the AWS substrate so the
+// values stay single-sourced.
+func (h *DiscoveryHandlers) WithColdStartObservationStore(store ColdStartObservationReader, thresholds ColdStartAnnotationThresholds) *DiscoveryHandlers {
+	h.coldStartStore = store
+	h.coldStartConstants = thresholds
 	return h
 }
 
@@ -1240,17 +1271,31 @@ type awsECSClusterRow struct {
 // Azure Functions' app_settings subset; OCI Functions' config subset)
 // the per-cloud Inventory tab renders as a per-row drilldown.
 type awsServerlessRow struct {
-	Provider      string         `json:"provider"`
-	Surface       string         `json:"surface"`
-	AccountID     string         `json:"account_id"`
-	Region        string         `json:"region"`
-	ResourceName  string         `json:"resource_name"`
-	ResourceARN   string         `json:"resource_arn"`
-	Runtime       string         `json:"runtime,omitempty"`
-	HasTraceAxis  bool           `json:"has_trace_axis"`
-	HasOTelDistro bool           `json:"has_otel_distro"`
-	LastSeenAt    *time.Time     `json:"last_seen_at,omitempty"`
-	Detail        map[string]any `json:"detail,omitempty"`
+	Provider      string     `json:"provider"`
+	Surface       string     `json:"surface"`
+	AccountID     string     `json:"account_id"`
+	Region        string     `json:"region"`
+	ResourceName  string     `json:"resource_name"`
+	ResourceARN   string     `json:"resource_arn"`
+	Runtime       string     `json:"runtime,omitempty"`
+	HasTraceAxis  bool       `json:"has_trace_axis"`
+	HasOTelDistro bool       `json:"has_otel_distro"`
+	LastSeenAt    *time.Time `json:"last_seen_at,omitempty"`
+
+	// ColdStartP95Ms / ColdStartExceedsThreshold — Cold-start latency
+	// analysis slice 1 chunk 3 (v0.89.115, #753 Stream 151). Mirror
+	// the new ServerlessInstanceSnapshot fields with the same nil-
+	// elision posture (omitempty pointer) so a Lambda with no
+	// observation yet renders the canonical "—" surface in the UI
+	// and rows on the non-AWS serverless surfaces (where slice 1
+	// has no data) stay nil. The chunk-2 detection result feeds the
+	// threshold predicate so the UI doesn't have to re-apply the
+	// 1.5x / 500ms rule client-side. See
+	// docs/proposals/cold-start-latency-slice1.md §6.2 + §7.
+	ColdStartP95Ms            *float64 `json:"cold_start_p95_ms,omitempty"`
+	ColdStartExceedsThreshold *bool    `json:"cold_start_exceeds_threshold,omitempty"`
+
+	Detail map[string]any `json:"detail,omitempty"`
 }
 
 // awsOrchestrationRow is the snake_case wire shape for one workflow /
@@ -1465,18 +1510,28 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 	// (has_trace_axis + has_otel_distro) pass verbatim through to
 	// the UI alongside the per-surface Detail bag.
 	for _, sv := range r.Serverless {
+		// Cold-start latency analysis slice 1 chunk 3 (v0.89.115,
+		// #753 Stream 151) — forward the two new cold-start fields
+		// through the wire shape. The handler-side annotation pass
+		// (AnnotateServerlessWithColdStart) populated them in-place
+		// against the cold_start_observation latest-row pair before
+		// marshalScanResult ran; rows on non-AWS surfaces or with no
+		// observation yet carry nil pointers, which the awsServerlessRow
+		// omitempty tags elide from the JSON shape.
 		out.Serverless = append(out.Serverless, awsServerlessRow{
-			Provider:      sv.Provider,
-			Surface:       sv.Surface,
-			AccountID:     sv.AccountID,
-			Region:        sv.Region,
-			ResourceName:  sv.ResourceName,
-			ResourceARN:   sv.ResourceARN,
-			Runtime:       sv.Runtime,
-			HasTraceAxis:  sv.HasTraceAxis,
-			HasOTelDistro: sv.HasOTelDistro,
-			LastSeenAt:    sv.LastSeenAt,
-			Detail:        sv.Detail,
+			Provider:                  sv.Provider,
+			Surface:                   sv.Surface,
+			AccountID:                 sv.AccountID,
+			Region:                    sv.Region,
+			ResourceName:              sv.ResourceName,
+			ResourceARN:               sv.ResourceARN,
+			Runtime:                   sv.Runtime,
+			HasTraceAxis:              sv.HasTraceAxis,
+			HasOTelDistro:             sv.HasOTelDistro,
+			LastSeenAt:                sv.LastSeenAt,
+			ColdStartP95Ms:            sv.ColdStartP95Ms,
+			ColdStartExceedsThreshold: sv.ColdStartExceedsThreshold,
+			Detail:                    sv.Detail,
 		})
 	}
 	// Orchestration-tier slice 1 chunk 1 (v0.89.95, #728 Stream 126) —
@@ -1926,6 +1981,18 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 		AnnotateComputeWithLastSeen(ctx, h.traceIndex, "aws", accountID, result.Compute, h.logger)
 		AnnotateDatabaseWithLastSeen(ctx, h.traceIndex, "aws", accountID, result.Databases, h.logger)
 		AnnotateClusterWithLastSeen(ctx, h.traceIndex, "aws", accountID, result.Clusters, h.logger)
+	}
+
+	// Cold-start latency analysis slice 1 chunk 3 (v0.89.115, #753
+	// Stream 151) — annotate the per-Lambda cold_start_p95_ms +
+	// cold_start_exceeds_threshold fields in-place against the
+	// persisted cold_start_observation table. Both nil store + nil
+	// thresholds short-circuit the call. The pass runs AFTER the
+	// trace-emission annotations so the audit emit ordering is
+	// unaffected and the per-row JSON shape gathers both annotation
+	// passes' output before marshalScanResult serializes.
+	if h.coldStartStore != nil && h.coldStartConstants != nil && result != nil {
+		AnnotateServerlessWithColdStart(ctx, h.coldStartStore, h.coldStartConstants, result.Serverless, h.logger)
 	}
 
 	return result, nil, 0

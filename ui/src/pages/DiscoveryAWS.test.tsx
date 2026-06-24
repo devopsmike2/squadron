@@ -2402,6 +2402,247 @@ describe("DiscoveryAWSPage", () => {
     ).toBeInTheDocument();
   });
 
+  // --- Cold-start latency analysis slice 1 chunk 3 (v0.89.115, #753 Stream 151) ---
+
+  // TestDiscoveryAWS_Serverless_ColdStartColumnRenders — §11 acceptance
+  // test 13. The Serverless table's "Cold-start P95 (24h)" column
+  // renders between OTel distro and Last seen, with the per-row value
+  // amber when the server's cold_start_exceeds_threshold flag is true.
+  it("TestDiscoveryAWS_Serverless_ColdStartColumnRenders", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "order-processor",
+          resource_arn:
+            "arn:aws:lambda:us-east-1:123:function:order-processor",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          cold_start_p95_ms: 4230,
+          cold_start_exceeds_threshold: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    // The new column header renders between "OTel distro" and "Last seen".
+    expect(screen.getByText(/Cold-start P95 \(24h\)/i)).toBeInTheDocument();
+  });
+
+  // TestDiscoveryAWS_Serverless_ColdStartCell_AmberWhenExceedsThreshold —
+  // §11 acceptance test 13. When the server's
+  // cold_start_exceeds_threshold flag is true, the cell value renders
+  // in the amber-600 color class.
+  it("TestDiscoveryAWS_Serverless_ColdStartCell_AmberWhenExceedsThreshold", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "hot-lambda",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:hot-lambda",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          cold_start_p95_ms: 4230,
+          cold_start_exceeds_threshold: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("cold-start-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/4230ms/);
+  });
+
+  // TestDiscoveryAWS_Serverless_ColdStartCell_DashWhenNoObservation —
+  // §11 acceptance test 14. When the server omits cold_start_p95_ms
+  // (no observation persisted yet), the cell renders "—" at the
+  // muted-foreground color.
+  it("TestDiscoveryAWS_Serverless_ColdStartCell_DashWhenNoObservation", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "fresh-lambda",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:fresh-lambda",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          // cold_start_p95_ms intentionally undefined.
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("cold-start-cell");
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "none");
+    expect(cell.textContent).toBe("—");
+  });
+
+  // TestDiscoveryAWS_Serverless_ColdStartCell_HoverTooltipShowsValue —
+  // §11 acceptance test 13 (hover tooltip from the design doc §7).
+  // When the cell renders amber, the title attribute names the
+  // threshold rule. When the cell renders at the default color, the
+  // title surfaces the bare ms value.
+  it("TestDiscoveryAWS_Serverless_ColdStartCell_HoverTooltipShowsValue", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "amber-lambda",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:amber-lambda",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          cold_start_p95_ms: 4230,
+          cold_start_exceeds_threshold: true,
+        },
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "calm-lambda",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:calm-lambda",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          cold_start_p95_ms: 180,
+          cold_start_exceeds_threshold: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(2\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("cold-start-cell");
+    expect(cells.length).toBe(2);
+    const amberTitle = cells[0].getAttribute("title") ?? "";
+    expect(amberTitle).toMatch(/4230ms/);
+    expect(amberTitle).toMatch(/exceeds baseline threshold/);
+    const calmTitle = cells[1].getAttribute("title") ?? "";
+    expect(calmTitle).toMatch(/180ms/);
+    expect(calmTitle).not.toMatch(/exceeds baseline threshold/);
+  });
+
   // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
   // the Inventory tab gains an Orchestration section rendering the
   // Step Functions inventory from the v0.89.95 chunk 1 scanner. The

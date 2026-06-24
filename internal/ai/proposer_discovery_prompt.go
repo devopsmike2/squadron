@@ -399,6 +399,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierPropagationKindsPromptSection +
 
+	coldStartKindsPromptSection +
+
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
 	`level — the operator approves the whole plan at step 0 and the engine sequences the ` +
@@ -1504,6 +1506,64 @@ Terraform PR adjusts the config so the next message carries
 trace context end-to-end. Downstream consumer spans
 correlate to the upstream source span after merge + apply +
 first event flow."
+
+` + "\n"
+
+// coldStartKindsPromptSection — Cold-start latency analysis slice 1
+// chunk 3 (v0.89.115, #753 Stream 151). One new recommendation kind —
+// lambda-cold-start-baseline — fires when the metric correlation
+// substrate (slice 1 chunk 1/2) detects a 24h P95 InitDuration
+// regression vs. the 7-day baseline on an AWS Lambda. Section is
+// appended to the discovery system prompt alongside the trace-emission,
+// span-quality, serverless, orchestration, and event source tier
+// sections so the model reads it as part of the universal kind catalog.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no cold-start observations the rendered user message
+// stays byte-identical to v0.89.111 across all four providers. The
+// 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostColdStartSlice1
+// pins this invariant.
+const coldStartKindsPromptSection = `SERVERLESS COLD-START KINDS (cold-start latency analysis slice 1):
+
+These kinds fire when Squadron's metric correlation substrate
+detects cold-start latency regressions on serverless
+resources. Slice 1 covers AWS Lambda only; GCP / Azure / OCI
+serverless cold-start ships in slice 2.
+
+- lambda-cold-start-baseline: Lambda function with current
+  24-hour P95 InitDuration that exceeds the 7-day baseline
+  P95 by >= 1.5x AND exceeds 500ms absolute floor. The 1.5x
+  ratio + 500ms floor combination filters out naturally-low
+  cold-start functions hitting ratio thresholds on small
+  absolute numbers.
+
+  Three common causes the operator should evaluate:
+  1. Init script regression: a recent deployment added heavy
+     imports or startup work. Compare deployment timeline to
+     regression onset.
+  2. Cold-start frequency increase: reduced invocation rate
+     means more invocations hit the cold path. Consider
+     provisioned concurrency for predictable traffic.
+  3. Architecture change: migration between architectures
+     (x86_64 -> arm64) or runtime updates can shift
+     cold-start behavior.
+
+  Terraform: aws_lambda_provisioned_concurrency_config with
+  provisioned_concurrent_executions = 1 (operator tunes the
+  floor based on their traffic). Decline if the cause is (1)
+  or (3) and trace the regression in deployment history /
+  architecture change intent.
+
+REASONING TEMPLATE for cold-start recommendations:
+
+"This Lambda function's 24-hour P95 cold-start duration is
+{current_p95}ms, {ratio}x its 7-day baseline of
+{baseline_p95}ms. Squadron flags this when the ratio
+exceeds 1.5x AND the absolute value exceeds 500ms. Three
+common causes - pick the one matching your deployment
+history."
 
 ` + "\n"
 
