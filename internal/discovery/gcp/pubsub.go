@@ -42,6 +42,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -150,6 +151,136 @@ type pubsubListTopicsResponse struct {
 	NextPageToken string         `json:"nextPageToken,omitempty"`
 }
 
+// PubSubTraceparentSchemaFieldPatterns is the case-insensitive substring
+// set Squadron searches for in attached topic schemas to detect whether
+// the schema includes a traceparent field. Any match → schema preserves
+// trace propagation.
+//
+// See docs/proposals/event-source-tier-slice2.md §3.2.
+//
+// The three patterns cover the three field-name conventions seen in the
+// wild: the W3C "traceparent" header name (the OpenTelemetry-native
+// convention), the snake_case "trace_context" field (an SDK convention
+// used by some publishers when the schema is Protobuf or Avro and the
+// dot in "traceparent" would conflict with field-name validation), and
+// the AWS-style "googclient_OpenTelemetryTraceparent" attribute key
+// that Pub/Sub's client libraries emit when OTel instrumentation is on.
+var PubSubTraceparentSchemaFieldPatterns = []string{
+	"traceparent",
+	"trace_context",
+	"googclient_opentelemetrytraceparent",
+}
+
+// pubsubSchema mirrors the GCP Pub/Sub Schema resource. Slice 2 chunk 2
+// reads Definition to apply schemaIncludesTraceparentField. Type +
+// RevisionID surface in the Detail bag (informational; the slice-2
+// detection rule only consumes Definition).
+type pubsubSchema struct {
+	// Name is the fully-qualified schema resource path
+	// "projects/{project}/schemas/{schema}". Used as the cache key.
+	Name string `json:"name"`
+	// Definition is the raw schema body (Protobuf descriptor / Avro
+	// JSON). Slice 2 detection inspects this string for the
+	// PubSubTraceparentSchemaFieldPatterns substrings.
+	Definition string `json:"definition,omitempty"`
+	// Type is the schema type: "PROTOCOL_BUFFER" or "AVRO".
+	// Informational; the detection rule does not consume it.
+	Type string `json:"type,omitempty"`
+}
+
+// pubsubSubscription mirrors the GCP Pub/Sub Subscription resource.
+// Slice 2 chunk 2 inspects Topic (to match against the discovered
+// topic list) and PushConfig (to apply the subscription delivery axis
+// detection per design doc §3.2).
+type pubsubSubscription struct {
+	// Name is the fully-qualified subscription resource path
+	// "projects/{project}/subscriptions/{sub}". The trailing segment
+	// is used in propagation notes for operator readability.
+	Name string `json:"name"`
+	// Topic is the fully-qualified topic resource path the
+	// subscription is attached to. The scanner matches this against
+	// the discovered topic list to apply per-topic aggregation.
+	Topic string `json:"topic,omitempty"`
+	// PushConfig is populated for push-mode subscriptions. Slice 2
+	// detection inspects the Attributes map for an explicit
+	// attribute filter; when set AND non-empty AND missing every
+	// traceparent variant, propagation is BROKEN.
+	PushConfig *pubsubPushConfig `json:"pushConfig,omitempty"`
+}
+
+// pubsubPushConfig mirrors pushConfig. Slice 2 chunk 2 reads the
+// Attributes map; per design doc §3.2 a non-empty Attributes filter
+// that omits every traceparent variant breaks propagation for the
+// parent topic.
+//
+// Per the GCP API contract, an empty pushEndpoint signals a pull-mode
+// subscription — slice 2 treats those as propagation-preserved because
+// the consumer SDK reads all message attributes verbatim. The
+// push-config attribute axis only matters for push-mode subscriptions.
+type pubsubPushConfig struct {
+	PushEndpoint string            `json:"pushEndpoint,omitempty"`
+	Attributes   map[string]string `json:"attributes,omitempty"`
+}
+
+// pubsubListSubscriptionsResponse mirrors projects.subscriptions.list.
+// NextPageToken drives pagination; the subscription list is project-
+// wide and matched against the discovered topic list at the call site.
+type pubsubListSubscriptionsResponse struct {
+	Subscriptions []*pubsubSubscription `json:"subscriptions,omitempty"`
+	NextPageToken string                `json:"nextPageToken,omitempty"`
+}
+
+// schemaCache is the per-scan cache for Pub/Sub Schema fetches. Slice 2
+// chunk 2 amortizes schema fetches across topics: a single schema
+// referenced by N topics is fetched once. The cache is intentionally
+// PER-SCAN (constructed inside ScanPubSubTopics) rather than long-lived
+// on the Scanner — schemas can be edited between scans, and a stale
+// cache would mask a schema fix the operator just shipped. The chunk-2
+// per-scan scope mirrors the AWS scanner's per-scan rate-limiter
+// posture: short-lived scratchpad state, never carried across scans.
+//
+// fetchedNotFound tracks per-schema fetch failures so the topic-axis
+// computation can emit an informational note (the topic still surfaces
+// with axis=true since the failure is non-fatal). results[name] = true
+// when the fetched definition includes a traceparent field per
+// schemaIncludesTraceparentField; false when the fetch succeeded and
+// the field is absent. Absent map entries mean "not yet fetched".
+type schemaCache struct {
+	mu              sync.Mutex
+	results         map[string]bool   // schemaName → includes-traceparent
+	fetchedNotFound map[string]string // schemaName → fetch error message
+}
+
+// newSchemaCache constructs the per-scan cache. Called once at the top
+// of walkPubSubTopics.
+func newSchemaCache() *schemaCache {
+	return &schemaCache{
+		results:         map[string]bool{},
+		fetchedNotFound: map[string]string{},
+	}
+}
+
+// schemaIncludesTraceparentField returns (included, fieldName).
+// fieldName is the first matching pattern when included is true,
+// or empty when not. The detection is a case-insensitive substring
+// match against the patterns in PubSubTraceparentSchemaFieldPatterns —
+// the design doc §3.2 names substring (not exact-field-name) match so
+// the rule covers Protobuf / Avro / JSON schemas without separate
+// parsers per schema-language.
+//
+// An empty schema definition returns (false, "") — vacuously not
+// included, which the per-topic aggregation treats as a propagation
+// gap when the topic has the schema attached.
+func schemaIncludesTraceparentField(schemaDefinition string) (bool, string) {
+	lower := strings.ToLower(schemaDefinition)
+	for _, pattern := range PubSubTraceparentSchemaFieldPatterns {
+		if strings.Contains(lower, pattern) {
+			return true, pattern
+		}
+	}
+	return false, ""
+}
+
 // ScanEventSources is the GCP scanner's event-source-tier entry
 // point. Slice 1 chunk 2 only covers Pub/Sub; future slices may add
 // other GCP event source primitives (Cloud Tasks, Eventarc).
@@ -218,11 +349,33 @@ func (s *Scanner) ScanPubSubTopics(ctx context.Context, scope scanner.ScanScope)
 // there's no per-region walk to fall through to; the handler-side
 // dispatcher records a partial-failure entry against
 // ServiceIDPubSub.
+//
+// Slice 2 chunk 2 (v0.89.106, #742 Stream 140) extends the walk with
+// two new sub-axes: (1) schema field inspection against attached topic
+// schemas, and (2) subscription delivery inspection across the
+// project's subscription set. The subscription list is fetched once
+// per scan (before the topic walk) and indexed by topic ARN so each
+// topic's per-topic aggregation can read the matching subscriptions
+// without an extra API call per topic. The schema cache (per-scan;
+// see schemaCache godoc) amortizes schema fetches across topics that
+// reference the same schema. Per design doc §3.2 the per-topic
+// HasPropagationConfig is true ONLY when BOTH sub-axes (schema +
+// subscription) are preserved; either axis failing flips it false.
 func (s *Scanner) walkPubSubTopics(ctx context.Context, client *http.Client, accountID string) ([]scanner.EventSourceInstanceSnapshot, error) {
 	var (
 		out       []scanner.EventSourceInstanceSnapshot
 		pageToken string
 	)
+	// Slice 2 chunk 2: list every subscription in the project once,
+	// index by topic ARN. The per-topic aggregation reads the matching
+	// list when computing the subscription axis. A failure here is
+	// non-fatal: the topic walk proceeds with an empty subscription
+	// index (subscription axis defaults to preserved per design doc
+	// §3.2 — no subscriptions observed = nothing to break propagation).
+	subsByTopic := s.listSubscriptionsByTopic(ctx, client)
+	// Slice 2 chunk 2: per-scan schema cache. Each schema is fetched
+	// at most once per scan even when referenced by many topics.
+	cache := newSchemaCache()
 	for {
 		listURL := s.pubsubListTopicsURL(pageToken)
 		resp, err := s.pubsubGet(ctx, client, listURL)
@@ -233,7 +386,9 @@ func (s *Scanner) walkPubSubTopics(ctx context.Context, client *http.Client, acc
 			if topic == nil || topic.Name == "" {
 				continue
 			}
-			out = append(out, projectPubSubTopic(topic, accountID))
+			snap := projectPubSubTopic(topic, accountID)
+			s.applyPubSubPropagation(ctx, client, cache, topic, subsByTopic[topic.Name], &snap)
+			out = append(out, snap)
 		}
 		if resp.NextPageToken == "" {
 			return out, nil
@@ -255,6 +410,36 @@ func (s *Scanner) pubsubListTopicsURL(pageToken string) string {
 		u = u + "?pageToken=" + url.QueryEscape(pageToken)
 	}
 	return u
+}
+
+// pubsubListSubscriptionsURL constructs the full URL for
+// projects.subscriptions.list. Slice 2 chunk 2 (v0.89.106). Mirrors
+// pubsubListTopicsURL's shape.
+func (s *Scanner) pubsubListSubscriptionsURL(pageToken string) string {
+	base := s.endpoint
+	if base == "" {
+		base = pubsubAPIBaseURL
+	}
+	u := fmt.Sprintf("%s/v1/projects/%s/subscriptions", strings.TrimRight(base, "/"), s.ProjectID)
+	if pageToken != "" {
+		u = u + "?pageToken=" + url.QueryEscape(pageToken)
+	}
+	return u
+}
+
+// pubsubGetSchemaURL constructs the full URL for projects.schemas.get.
+// schemaName is the fully-qualified path returned by
+// pubsubTopic.SchemaSettings.Schema ("projects/{p}/schemas/{s}"). The
+// ?view=FULL query param is required to receive the schema Definition
+// — the default BASIC view omits it per the GCP API contract.
+func (s *Scanner) pubsubGetSchemaURL(schemaName string) string {
+	base := s.endpoint
+	if base == "" {
+		base = pubsubAPIBaseURL
+	}
+	return fmt.Sprintf("%s/v1/%s?view=FULL",
+		strings.TrimRight(base, "/"),
+		strings.TrimLeft(schemaName, "/"))
 }
 
 // pubsubGet issues a single GET against the supplied URL and decodes
@@ -435,4 +620,277 @@ func extractPubSubErrorMessage(body []byte) string {
 		return envelope.Error.Message
 	}
 	return string(body)
+}
+
+// listSubscriptionsByTopic fetches every subscription in the project
+// and groups them by their parent topic ARN. Slice 2 chunk 2 of the
+// Event source tier arc (v0.89.106, #742 Stream 140).
+//
+// The map is keyed by the fully-qualified topic resource path
+// (matching pubsubTopic.Name) so the per-topic aggregation in
+// walkPubSubTopics can look up matching subscriptions with a single
+// map read. Subscriptions whose Topic field is empty or pointing at
+// a topic outside the discovered list are still grouped — the
+// per-topic aggregation simply ignores misses.
+//
+// A failure here is non-fatal: the function returns an empty map and
+// swallows the error. The per-topic subscription axis defaults to
+// preserved (no subscriptions observed = nothing to break
+// propagation per design doc §3.2). This keeps the slice-2 walk from
+// blocking the slice-1 topic inventory when the IAM grant has
+// pubsub.topics.list but not pubsub.subscriptions.list — operators
+// see the topic rows even when the subscription axis can't be
+// computed.
+func (s *Scanner) listSubscriptionsByTopic(ctx context.Context, client *http.Client) map[string][]*pubsubSubscription {
+	out := map[string][]*pubsubSubscription{}
+	var pageToken string
+	for {
+		listURL := s.pubsubListSubscriptionsURL(pageToken)
+		resp, err := s.pubsubGetSubscriptions(ctx, client, listURL)
+		if err != nil {
+			return out
+		}
+		for _, sub := range resp.Subscriptions {
+			if sub == nil || sub.Topic == "" {
+				continue
+			}
+			out[sub.Topic] = append(out[sub.Topic], sub)
+		}
+		if resp.NextPageToken == "" {
+			return out
+		}
+		pageToken = resp.NextPageToken
+	}
+}
+
+// pubsubGetSubscriptions issues a single GET against the supplied URL
+// and decodes the subscription list. Slice 2 chunk 2 mirror of
+// pubsubGet but typed for the subscription list response shape.
+func (s *Scanner) pubsubGetSubscriptions(ctx context.Context, client *http.Client, listURL string) (*pubsubListSubscriptionsResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: build request: %s", ServiceIDPubSub, err.Error())
+	}
+	req.Header.Set("Accept", "application/json")
+	httpResp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %s", ServiceIDPubSub, classifyPubSubTransportError(err))
+	}
+	defer httpResp.Body.Close()
+	body, readErr := io.ReadAll(httpResp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("%s: read response body: %s", ServiceIDPubSub, truncate(readErr.Error(), 200))
+	}
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s: %s", ServiceIDPubSub, classifyPubSubListStatus(httpResp.StatusCode, body))
+	}
+	var resp pubsubListSubscriptionsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("%s: decode response: %s", ServiceIDPubSub, truncate(err.Error(), 200))
+	}
+	return &resp, nil
+}
+
+// pubsubGetSchema fetches a single Pub/Sub Schema by fully-qualified
+// resource path. Slice 2 chunk 2. The view=FULL query param is added
+// by pubsubGetSchemaURL so the response body carries the schema
+// Definition the propagation detection rule reads.
+func (s *Scanner) pubsubGetSchema(ctx context.Context, client *http.Client, schemaName string) (*pubsubSchema, error) {
+	schemaURL := s.pubsubGetSchemaURL(schemaName)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, schemaURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: build request: %s", ServiceIDPubSub, err.Error())
+	}
+	req.Header.Set("Accept", "application/json")
+	httpResp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %s", ServiceIDPubSub, classifyPubSubTransportError(err))
+	}
+	defer httpResp.Body.Close()
+	body, readErr := io.ReadAll(httpResp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("%s: read response body: %s", ServiceIDPubSub, truncate(readErr.Error(), 200))
+	}
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s: %s", ServiceIDPubSub, classifyPubSubListStatus(httpResp.StatusCode, body))
+	}
+	var schema pubsubSchema
+	if err := json.Unmarshal(body, &schema); err != nil {
+		return nil, fmt.Errorf("%s: decode response: %s", ServiceIDPubSub, truncate(err.Error(), 200))
+	}
+	return &schema, nil
+}
+
+// schemaCacheLookup returns the cached schemaIncludesTraceparentField
+// result for the supplied schema. Returns (included, fetched, fetchErr)
+// where fetched=false signals "not yet in the cache — caller should
+// fetch and call schemaCacheStore". fetchErr is the previously recorded
+// fetch error when one happened; the caller emits an informational note
+// without re-fetching.
+func (c *schemaCache) lookup(schemaName string) (included bool, fetched bool, fetchErr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if errMsg, ok := c.fetchedNotFound[schemaName]; ok {
+		return false, true, errMsg
+	}
+	if v, ok := c.results[schemaName]; ok {
+		return v, true, ""
+	}
+	return false, false, ""
+}
+
+// schemaCacheStore records the schemaIncludesTraceparentField outcome
+// against the schema name. Subsequent topics referencing the same
+// schema read the cached result via schemaCacheLookup.
+func (c *schemaCache) store(schemaName string, included bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.results[schemaName] = included
+}
+
+// schemaCacheStoreError records a fetch failure against the schema
+// name. The error message is held verbatim so the per-topic note can
+// surface the operator-readable cause.
+func (c *schemaCache) storeError(schemaName, msg string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fetchedNotFound[schemaName] = msg
+}
+
+// applyPubSubPropagation computes the slice-2 chunk-2 per-topic
+// propagation axis and writes the result onto the supplied snapshot.
+// Per design doc §3.2 the per-topic HasPropagationConfig is true ONLY
+// when BOTH sub-axes (schema + subscription) are preserved.
+//
+// Schema axis (design doc §3.2 first detection rule):
+//   - Topic has no schemaSettings.schema → PRESERVED (publisher
+//     controls; no schema enforcement to drop the traceparent attr).
+//   - Topic has schemaSettings.schema set + schema fetch returns
+//     definition that matches one of the
+//     PubSubTraceparentSchemaFieldPatterns → PRESERVED.
+//   - Topic has schemaSettings.schema set + schema fetch returns
+//     definition that matches NO pattern → BROKEN. PropagationNotes
+//     records the schema name + the missing-field reason.
+//   - Topic has schemaSettings.schema set + schema fetch FAILS →
+//     PRESERVED with an informational note (the failure is non-fatal;
+//     the operator sees the topic + the schema-fetch error and can
+//     fix the IAM grant or the schema reference).
+//
+// Subscription axis (design doc §3.2 second detection rule):
+//   - Topic has no subscriptions → PRESERVED (vacuously; nothing to
+//     break propagation).
+//   - Every subscription on the topic preserves propagation →
+//     PRESERVED.
+//   - Any subscription on the topic has a push-mode delivery + a
+//     non-empty Attributes filter that omits every traceparent
+//     variant → BROKEN. PropagationNotes records the subscription
+//     name + the offending filter.
+func (s *Scanner) applyPubSubPropagation(
+	ctx context.Context,
+	client *http.Client,
+	cache *schemaCache,
+	topic *pubsubTopic,
+	subs []*pubsubSubscription,
+	snap *scanner.EventSourceInstanceSnapshot,
+) {
+	preserved := true
+	var notes []string
+
+	// --- Schema axis ---
+	if topic.SchemaSettings != nil && topic.SchemaSettings.Schema != "" {
+		schemaName := topic.SchemaSettings.Schema
+		included, fetched, fetchErr := cache.lookup(schemaName)
+		if !fetched {
+			schema, err := s.pubsubGetSchema(ctx, client, schemaName)
+			if err != nil {
+				// Non-fatal: record the error against the cache and emit
+				// an informational note. The schema axis stays preserved
+				// — Squadron declines to emit a false-positive
+				// recommendation against a schema it couldn't read.
+				cache.storeError(schemaName, truncate(err.Error(), 160))
+				notes = append(notes, fmt.Sprintf(
+					"topic schema %q fetch failed (axis assumed preserved): %s",
+					schemaName, truncate(err.Error(), 160)))
+			} else {
+				def := ""
+				if schema != nil {
+					def = schema.Definition
+				}
+				inc, _ := schemaIncludesTraceparentField(def)
+				cache.store(schemaName, inc)
+				included = inc
+				fetched = true
+			}
+		} else if fetchErr != "" {
+			// Cached fetch failure from an earlier topic on this scan.
+			// Emit the same informational note; axis stays preserved.
+			notes = append(notes, fmt.Sprintf(
+				"topic schema %q fetch failed (axis assumed preserved): %s",
+				schemaName, fetchErr))
+		}
+		// fetched=true with no fetchErr → consume the included verdict.
+		if fetched && fetchErr == "" && !included {
+			preserved = false
+			notes = append(notes, fmt.Sprintf(
+				"topic schema %q missing traceparent field", schemaName))
+		}
+	}
+
+	// --- Subscription axis ---
+	for _, sub := range subs {
+		if sub == nil {
+			continue
+		}
+		ok, note := subscriptionPreservesTraceparent(sub)
+		if !ok {
+			preserved = false
+			if note != "" {
+				notes = append(notes, note)
+			}
+		}
+	}
+
+	snap.HasPropagationConfig = preserved
+	if len(notes) > 0 {
+		snap.PropagationNotes = notes
+	}
+}
+
+// subscriptionPreservesTraceparent applies the slice-2 chunk-2
+// per-subscription detection rule. Returns (preserved, note).
+//
+// Rule (design doc §3.2):
+//   - Pull-mode subscription (no pushConfig OR pushConfig with empty
+//     pushEndpoint) → PRESERVED. The consumer SDK reads all message
+//     attributes verbatim; there's no Pub/Sub-side filter to drop
+//     the traceparent attribute.
+//   - Push-mode subscription with no Attributes filter → PRESERVED.
+//     The push endpoint receives every message attribute.
+//   - Push-mode subscription with a non-empty Attributes filter that
+//     INCLUDES at least one traceparent variant → PRESERVED.
+//   - Push-mode subscription with a non-empty Attributes filter that
+//     OMITS every traceparent variant → BROKEN. Note names the
+//     subscription + the cause for the proposer's reasoning text.
+func subscriptionPreservesTraceparent(sub *pubsubSubscription) (bool, string) {
+	if sub == nil || sub.PushConfig == nil || sub.PushConfig.PushEndpoint == "" {
+		return true, ""
+	}
+	attrs := sub.PushConfig.Attributes
+	if len(attrs) == 0 {
+		return true, ""
+	}
+	for key := range attrs {
+		lowerKey := strings.ToLower(key)
+		for _, pattern := range PubSubTraceparentSchemaFieldPatterns {
+			if strings.Contains(lowerKey, pattern) {
+				return true, ""
+			}
+		}
+	}
+	subName := sub.Name
+	if i := strings.LastIndex(subName, "/"); i >= 0 && i < len(subName)-1 {
+		subName = subName[i+1:]
+	}
+	return false, fmt.Sprintf(
+		"subscription %q has attribute filter excluding traceparent", subName)
 }
