@@ -45,6 +45,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"golang.org/x/time/rate"
 	compute "google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
@@ -85,6 +86,44 @@ type Scanner struct {
 	// production; tests point this at their httptest server so the
 	// scanner exercises the real REST client against a mock.
 	endpoint string
+
+	// metricsClient is the Cloud Monitoring SDK adapter the slice 2
+	// chunk 1 (v0.89.118) MetricQuerier consumes for Cloud Run
+	// request_latencies / Cloud Functions execution_times. The real
+	// SDK-backed adapter ships in a follow-up chunk (mirroring the
+	// AWS slice 1 chunk 1 → chunk 2 split); until then this stays
+	// nil on the production-path Scanner and QueryAggregate returns
+	// scanner.ErrMetricNotImplemented. Tests wire a fake via
+	// WithMetricsClient. See metrics.go::metricsClient for the
+	// interface surface and the godoc for the SDK-wiring rationale.
+	metricsClient metricsClient
+
+	// metricsLimiter is the per-Scanner-instance rate limiter that
+	// the slice 2 chunk 1 (v0.89.118) MetricQuerier consults before
+	// every Cloud Monitoring call. Pre-armed at 60 RPM (the
+	// GCPCloudMonitoringRateLimitRPM substrate constant) by the
+	// constructor helpers; tests can replace it via
+	// WithMetricsRateLimiter when exercising the throttle pin or
+	// when bypassing the limiter entirely.
+	metricsLimiter *rate.Limiter
+
+	// coldStartStore is the storage adapter for persisting
+	// cold_start_observation rows from the slice 2 detection branch.
+	// Nil on the chunk-1 skeleton path; production wires the real
+	// *sqlite.Storage; tests substitute a recording fake. The
+	// detection branch (runColdStartDetectionForServerless) skips
+	// persistence when this is nil — same nil-tolerant posture the
+	// AWS slice 1 chunk 2 detection branch carries.
+	coldStartStore ColdStartStore
+
+	// connectionID is the credstore.CloudConnection identifier this
+	// Scanner was constructed for. Populated by the production-path
+	// constructor (NewScannerFromConnection equivalent); empty on
+	// the chunk-1 skeleton path. The detection branch skips
+	// persistence when connectionID is empty so rows attributed to
+	// no owner don't leak across operators in a multi-tenant
+	// deployment.
+	connectionID string
 }
 
 // Provider satisfies the (future) scanner.Scanner interface. The
@@ -270,6 +309,19 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		// the audit payload reflects what was actually walked.
 		walkedRegions[s.Region] = struct{}{}
 	}
+
+	// Cold-start latency slice 2 chunk 1 (v0.89.118, #756 Stream 154)
+	// — per-row cold-start detection for the Cloud Run +
+	// Cloud Functions snapshots ScanServerless populated. Mirrors the
+	// AWS slice 1 chunk 2 detection branch: nil-tolerant on every
+	// dependency (metricsClient / coldStartStore / connectionID),
+	// runs after the serverless walk completes, persists both the 24h
+	// current-window and 168h baseline-window observations to the
+	// cold_start_observation table. Partial-scan posture: a per-
+	// resource detection failure is logged into FailedServices with
+	// the matching surface identifier (cloudrun_cold_start /
+	// cloudfunc_cold_start) but does NOT halt the per-row loop.
+	s.runColdStartDetectionForServerless(ctx, &result)
 
 	// Denormalize the walked-region list into Result.Regions. Order is
 	// not stable across runs (map iteration); the field is documented
