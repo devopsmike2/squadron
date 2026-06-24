@@ -415,3 +415,67 @@ func TestOCIQueryAggregate_ErrorPropagation(t *testing.T) {
 		t.Errorf("error %q must wrap with 'summarize metrics'", err)
 	}
 }
+
+// -- v0.89.122 sampling rate slice 1 chunk 1 additions ---------------------
+
+// TestOCIFunctionsInvocationCountMetric_Constant pins the OCI
+// Monitoring counter name for function_invocation_count — the
+// sampling-rate-slice-1 denominator (§4.5).
+func TestOCIFunctionsInvocationCountMetric_Constant(t *testing.T) {
+	if OCIFunctionsInvocationCountMetric != "function_invocation_count" {
+		t.Fatalf("OCIFunctionsInvocationCountMetric = %q, want function_invocation_count",
+			OCIFunctionsInvocationCountMetric)
+	}
+}
+
+// TestOCIQueryAggregate_InvocationCount_ReturnsSumOverWindow —
+// acceptance test 7 (sampling rate slice 1 §11). Multi-datapoint
+// response with per-resolution counts; QueryAggregate sums across
+// datapoints and returns the total invocations. Mirrors the
+// cold_start_count path and pins the MQL query carries .sum() and
+// the right metric name.
+func TestOCIQueryAggregate_InvocationCount_ReturnsSumOverWindow(t *testing.T) {
+	mf := &monitoringFake{
+		respondWith: []ociMetricDataPoint{
+			{Timestamp: time.Now().Add(-20 * time.Minute), Value: 1200.0, SampleCount: 1},
+			{Timestamp: time.Now().Add(-15 * time.Minute), Value: 800.0, SampleCount: 1},
+			{Timestamp: time.Now().Add(-10 * time.Minute), Value: 3000.0, SampleCount: 1},
+		},
+	}
+	s := newMetricsTestScanner(t, mf)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"ocid1.fnfunc.oc1.phx.xxx",
+		OCIFunctionsInvocationCountMetric,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 5000.0 {
+		t.Errorf("Value = %v, want SUM across datapoints (5000.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != OCIFunctionsInvocationCountMetric {
+		t.Errorf("MetricName = %q, want %q", res.MetricName, OCIFunctionsInvocationCountMetric)
+	}
+	// MQL query embeds the metric name + .sum() reduction.
+	if len(mf.receivedQuery) != 1 {
+		t.Fatalf("calls = %d, want 1", len(mf.receivedQuery))
+	}
+	q := mf.receivedQuery[0]
+	if !strings.Contains(q, OCIFunctionsInvocationCountMetric) {
+		t.Errorf("query %q missing metric name", q)
+	}
+	if !strings.Contains(q, ".sum()") {
+		t.Errorf("query %q missing .sum() reduction", q)
+	}
+	// Resource id must be quoted in the MQL filter.
+	if !strings.Contains(q, `resourceId = "ocid1.fnfunc.oc1.phx.xxx"`) {
+		t.Errorf("query %q missing quoted resourceId filter", q)
+	}
+}
+

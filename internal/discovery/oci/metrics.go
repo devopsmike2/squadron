@@ -47,6 +47,25 @@ const OCIFunctionsFunctionDurationMetric = "function_duration"
 // DetectColdStartRegression for the gate.
 const OCIFunctionsColdStartCountMetric = "cold_start_count"
 
+// OCIFunctionsInvocationCountMetric is the OCI Monitoring counter
+// for per-function invocation count. Sampling rate analysis slice 1
+// chunk 1 (v0.89.122) uses this as the denominator for the
+// observed_span_count / expected_invocation_count ratio per
+// docs/proposals/sampling-rate-analysis-slice1.md §4.5.
+//
+// The MQL query mirrors the cold_start_count one but reads the
+// invocation counter:
+//
+//	function_invocation_count[<window>]{resourceId = "<ocid>"}.sum()
+//
+// IAM stays unchanged: the existing "read metrics in compartment"
+// permission covers function_invocation_count alongside
+// function_duration + cold_start_count.
+//
+// Pinned to "function_invocation_count" by
+// metrics_test.go::TestOCIFunctionsInvocationCountMetric_Constant.
+const OCIFunctionsInvocationCountMetric = "function_invocation_count"
+
 // ociMonitoringAPIVersion pins the OCI Monitoring
 // summarizeMetricsData API path version. OCI versions live in the
 // path; single-sourced for the same reason as the compute /
@@ -205,8 +224,11 @@ func (s *Scanner) QueryAggregate(
 	}
 
 	switch metricName {
-	case OCIFunctionsFunctionDurationMetric, OCIFunctionsColdStartCountMetric:
-		// Supported — fall through to the real call.
+	case OCIFunctionsFunctionDurationMetric,
+		OCIFunctionsColdStartCountMetric,
+		OCIFunctionsInvocationCountMetric:
+		// Supported — fall through to the real call. Sampling rate
+		// slice 1 chunk 1 (v0.89.122) adds the third entry.
 	default:
 		return scanner.AggregateMetricResult{
 			ResourceARN: resourceARN,
@@ -246,7 +268,10 @@ func (s *Scanner) QueryAggregate(
 			"%s[%s]{resourceId = %q}.percentile(0.95)",
 			metricName, ociWindowQuery(window), functionOCID,
 		)
-	case OCIFunctionsColdStartCountMetric:
+	case OCIFunctionsColdStartCountMetric, OCIFunctionsInvocationCountMetric:
+		// Both counter metrics use .sum() — the per-period
+		// datapoints already carry the per-resolution count, and
+		// the substrate's cross-period rollup below also SUMs.
 		query = fmt.Sprintf(
 			"%s[%s]{resourceId = %q}.sum()",
 			metricName, ociWindowQuery(window), functionOCID,
@@ -288,7 +313,11 @@ func (s *Scanner) QueryAggregate(
 			}
 			totalSamples += p.SampleCount
 		}
-	case OCIFunctionsColdStartCountMetric:
+	case OCIFunctionsColdStartCountMetric, OCIFunctionsInvocationCountMetric:
+		// Counter rollup: SUM across periods = total events
+		// across the window. Mirrors the cold_start_count path —
+		// the invocation count uses the same MQL .sum() reduction
+		// and the same per-period SUM aggregation.
 		for _, p := range points {
 			val += p.Value
 			totalSamples += p.SampleCount

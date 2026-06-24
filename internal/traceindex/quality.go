@@ -42,6 +42,23 @@ type QualityCounters struct {
 	ChildSpans                     uint64 // denominator for missing_on_child_pct
 
 	WindowStart time.Time
+
+	// Slice 1 of sampling rate (v0.89.122): parallel 24h-window
+	// counter for sampling-rate-analysis. Resets when the 24h
+	// window elapses, independently from the 1h-window counters
+	// above — see docs/proposals/sampling-rate-analysis-slice1.md
+	// §5 "Option A: 24h Quality counter".
+	//
+	// The 24h-window count is used by the sampling-rate detection
+	// branch as the numerator of observed_span_count /
+	// expected_invocation_count. The 1h TotalSpans counter is
+	// preserved as-is so the existing quality percentages keep
+	// their semantics.
+	//
+	// Memory cost: +16 bytes per key (uint64 + time.Time), ~1.6MB
+	// at the 100K-key cap per §12 threat model.
+	TotalSpansLast24h uint64
+	WindowStart24h    time.Time
 }
 
 // PlaceholderObservation records a specific placeholder value seen on
@@ -169,7 +186,15 @@ func (q *Quality) Observe(obs SpanObservation) {
 	now := q.now()
 	counters := q.perKey[obs.Key]
 	if counters == nil {
-		counters = &QualityCounters{WindowStart: now}
+		// WindowStart + WindowStart24h are seeded to the same `now`
+		// on first observation. They diverge afterward — the 1h
+		// window resets every hour, the 24h window every 24 hours.
+		// See sampling-rate-analysis-slice1.md §5 for the
+		// independence requirement (test 3 in §11 pins it).
+		counters = &QualityCounters{
+			WindowStart:    now,
+			WindowStart24h: now,
+		}
 		q.perKey[obs.Key] = counters
 	}
 	// Provider bucketing — chunk-2 §6.1 aggregate endpoint reads this
@@ -198,7 +223,20 @@ func (q *Quality) Observe(obs SpanObservation) {
 		counters.ChildSpans = 0
 		counters.WindowStart = now
 	}
+	// Slice 1 of sampling rate (v0.89.122): independent 24h reset.
+	// Kept as a separate branch (not folded into the 1h reset
+	// above) so the two windows roll over on different cadences —
+	// the 1h counter resets every hour for the quality
+	// percentages, the 24h counter resets every 24 hours for
+	// sampling-rate analysis. Hot-path cost: one extra branch-
+	// predictable Sub() + comparison, ~5ns per span (§12 threat
+	// model budget for slice 1 of sampling rate is 10ns).
+	if now.Sub(counters.WindowStart24h) > 24*time.Hour {
+		counters.TotalSpansLast24h = 0
+		counters.WindowStart24h = now
+	}
 	counters.TotalSpans++
+	counters.TotalSpansLast24h++
 
 	// §3.1 orphan detection: a span with a non-root parent_span_id is
 	// orphan when we have NOT seen a span with that span_id on the
@@ -424,6 +462,14 @@ type QualityCountersSnapshot struct {
 	MissingTraceparentOnChildPct float64
 	SpansWithTraceparent         uint64 // exposed for honest framing
 	ChildSpans                   uint64 // same
+
+	// Slice 1 of sampling rate (v0.89.122): 24h-window span count.
+	// Surfaced on the snapshot so the chunk-2 detection branch
+	// (and the chunk-2 per-resource sampling API endpoint) can
+	// reason against the same denominator the SpanCountLast24h
+	// accessor returns. Decoupled from TotalSpans (1h) so the
+	// existing snapshot shape stays backward-compatible.
+	TotalSpansLast24h uint64
 }
 
 // SnapshotKey returns the snapshot for a single key. ok=false when no
@@ -444,6 +490,34 @@ func (q *Quality) SnapshotKey(key string) (QualityCountersSnapshot, bool) {
 		copy(snap.Placeholders, obs)
 	}
 	return snap, true
+}
+
+// SpanCountLast24h returns the count of spans observed for the
+// given resource key over the last 24h. Returns ok=false when the
+// key has no observations — the sampling-rate detection branch
+// treats that as "insufficient data" and skips the comparison per
+// docs/proposals/sampling-rate-analysis-slice1.md §3 step 1.
+//
+// The counter rolls over independently from the 1h-window
+// counters: a key that observed spans 25h ago and nothing since
+// will see TotalSpansLast24h reset to zero on its next Observe
+// call (Observe is the only place the window reset runs). Until
+// that next observation, SpanCountLast24h returns the stale value
+// — the detection branch additionally gates on the
+// expected_invocation_count denominator's MIN_INVOCATION_COUNT
+// threshold (1000) which a stale key won't satisfy in practice.
+//
+// Hot-path posture: same single-mutex contract as SnapshotKey —
+// holds q.mu only long enough to read the counter, never
+// allocates.
+func (q *Quality) SpanCountLast24h(key string) (uint64, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	counters, ok := q.perKey[key]
+	if !ok {
+		return 0, false
+	}
+	return counters.TotalSpansLast24h, true
 }
 
 // SnapshotAll returns one snapshot per observed key. Caller-friendly
@@ -478,6 +552,7 @@ func snapshotFromCounters(key string, c *QualityCounters) QualityCountersSnapsho
 		WindowStart:          c.WindowStart,
 		SpansWithTraceparent: c.SpansWithTraceparent,
 		ChildSpans:           c.ChildSpans,
+		TotalSpansLast24h:    c.TotalSpansLast24h,
 	}
 	if c.TotalSpans > 0 {
 		total := float64(c.TotalSpans)

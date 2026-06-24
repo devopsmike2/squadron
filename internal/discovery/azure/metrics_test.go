@@ -514,3 +514,104 @@ func TestAggregateAzureTimeseries_PrefersResponseUnit(t *testing.T) {
 		t.Errorf("Value = %v, want 42.0", got.Value)
 	}
 }
+
+// -- v0.89.122 sampling rate slice 1 chunk 1 additions ---------------------
+
+// TestAzureFunctionsInvocationsMetric_Constant pins the Azure
+// Monitor metric name for FunctionInvocations — the
+// sampling-rate-slice-1 denominator (§4.4).
+func TestAzureFunctionsInvocationsMetric_Constant(t *testing.T) {
+	if AzureFunctionsInvocationsMetric != "FunctionInvocations" {
+		t.Fatalf("AzureFunctionsInvocationsMetric = %q, want \"FunctionInvocations\"", AzureFunctionsInvocationsMetric)
+	}
+}
+
+// metricsOKTotals builds an armMetricsResponse with per-bucket
+// Total values rather than Maximum — the sampling-rate Invocations
+// path requests aggregation=Total and reads dp.Total instead of
+// dp.Maximum.
+func metricsOKTotals(totals ...float64) armMetricsResponse {
+	dps := make([]armMetricsDatapoint, 0, len(totals))
+	for i, v := range totals {
+		dps = append(dps, armMetricsDatapoint{
+			TimeStamp: fmt.Sprintf("2025-01-01T00:%02d:00Z", i*5),
+			Total:     fpPtr(v),
+		})
+	}
+	return armMetricsResponse{
+		Value: []armMetricsValue{{
+			Timeseries: []armMetricsTimeseries{{Data: dps}},
+		}},
+	}
+}
+
+// TestAzureQueryAggregate_FunctionInvocations_ReturnsSumOverWindow —
+// acceptance test 6 (sampling rate slice 1 §11). Multi-bucket
+// response with per-period Total values; QueryAggregate sums across
+// buckets and returns the total invocations.
+func TestAzureQueryAggregate_FunctionInvocations_ReturnsSumOverWindow(t *testing.T) {
+	fake := &fakeAzureMetrics{
+		cannedResponse: metricsOKTotals(1200.0, 800.0, 3000.0),
+	}
+	s := newMetricsScannerWithFake(t, fake)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		testFunctionAppARN,
+		AzureFunctionsInvocationsMetric,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 5000.0 {
+		t.Errorf("Value = %v, want SUM across buckets (5000.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != AzureFunctionsInvocationsMetric {
+		t.Errorf("MetricName = %q, want %q", res.MetricName, AzureFunctionsInvocationsMetric)
+	}
+}
+
+// TestAzureQueryAggregate_FunctionInvocations_UsesTotalAggregation
+// pins the aggregation parameter to "Total" (the Azure-native sum
+// aggregation) rather than "Maximum" (the duration-path
+// approximation). The detection branch's denominator would be
+// silently wrong if the Invocations path reused the duration
+// aggregation.
+//
+// Also pins that the IsAfterColdStart dimension filter is NOT
+// applied — the invocation count denominator wants every
+// invocation in the window, cold-start or warm.
+func TestAzureQueryAggregate_FunctionInvocations_UsesTotalAggregation(t *testing.T) {
+	fake := &fakeAzureMetrics{
+		cannedResponse: metricsOKTotals(100.0),
+	}
+	s := newMetricsScannerWithFake(t, fake)
+	_, err := s.QueryAggregate(
+		context.Background(),
+		testFunctionAppARN,
+		AzureFunctionsInvocationsMetric,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.receivedReqs) != 1 {
+		t.Fatalf("calls = %d, want 1", len(fake.receivedReqs))
+	}
+	req := fake.receivedReqs[0]
+	if got := req.URL.Query().Get("aggregation"); got != "Total" {
+		t.Errorf("aggregation = %q, want Total", got)
+	}
+	if got := req.URL.Query().Get("metricnames"); got != AzureFunctionsInvocationsMetric {
+		t.Errorf("metricnames = %q, want %q", got, AzureFunctionsInvocationsMetric)
+	}
+	if got := fake.receivedFilters[0]; got != "" {
+		t.Errorf("$filter = %q, want empty (no IsAfterColdStart filter on invocation count)", got)
+	}
+}
+

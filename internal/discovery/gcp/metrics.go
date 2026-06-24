@@ -69,6 +69,35 @@ const CloudRunRequestLatenciesMetricType = "run.googleapis.com/request_latencies
 // by metrics_test.go::TestCloudFunctionsExecutionTimesMetricType_Constant.
 const CloudFunctionsExecutionTimesMetricType = "cloudfunctions.googleapis.com/function/execution_times"
 
+// CloudRunRequestCountMetricType is the Cloud Monitoring metric type
+// for Cloud Run request count per
+// docs/proposals/sampling-rate-analysis-slice1.md §4.2. Sampling
+// rate analysis slice 1 chunk 1 (v0.89.122) filters by
+// response_code_class != "5xx" — the SDK's upstream sampling
+// decision is what matters, not ingress success, so 5xx is the only
+// class we exclude (4xx requests still reflect a real invocation
+// the sampler observed).
+//
+// IAM unchanged from cold-start slice 2: the same
+// monitoring.timeSeries.list permission covers all three Cloud
+// Monitoring metrics the GCP MetricQuerier now routes.
+//
+// Pinned to "run.googleapis.com/request_count" by
+// metrics_test.go::TestCloudRunRequestCountMetricType_Constant.
+const CloudRunRequestCountMetricType = "run.googleapis.com/request_count"
+
+// CloudFunctionsExecutionCountMetricType is the Cloud Monitoring
+// metric type for Cloud Functions execution count per
+// docs/proposals/sampling-rate-analysis-slice1.md §4.3. Filters by
+// status = "ok" — failed invocations may exit before the SDK
+// sampler fires, so a mixed-status denominator would skew the
+// observed/expected ratio toward "Squadron sees no spans" for
+// legitimate reasons.
+//
+// Pinned to "cloudfunctions.googleapis.com/function/execution_count"
+// by metrics_test.go::TestCloudFunctionsExecutionCountMetricType_Constant.
+const CloudFunctionsExecutionCountMetricType = "cloudfunctions.googleapis.com/function/execution_count"
+
 // cloudMonitoringMetricUnit is the unit string the slice 2
 // substrate stamps on the AggregateMetricResult.Unit field for
 // Cloud Run / Cloud Functions latency metrics. Both surfaces emit
@@ -186,6 +215,12 @@ func (s *Scanner) QueryAggregate(
 	}
 
 	var filter string
+	// isCountMetric flips the per-period rollup from MAX (latency
+	// surfaces) to SUM (count surfaces). Sampling rate slice 1
+	// chunk 1 (v0.89.122) adds the two count metrics for Cloud Run
+	// + Cloud Functions; the latency metrics keep their MAX
+	// rollup so cross-cloud comparisons stay honest.
+	isCountMetric := false
 	switch metricName {
 	case CloudRunRequestLatenciesMetricType:
 		if kind != "services" {
@@ -215,6 +250,39 @@ func (s *Scanner) QueryAggregate(
 		filter = fmt.Sprintf(
 			`metric.type = %q AND resource.labels.function_name = %q AND metric.labels.status = "ok"`,
 			CloudFunctionsExecutionTimesMetricType, name)
+	case CloudRunRequestCountMetricType:
+		// Sampling rate slice 1 (v0.89.122) §4.2. Filter excludes
+		// 5xx responses so the denominator reflects the sampler's
+		// upstream decision (4xx requests are still invocations
+		// the sampler observed).
+		if kind != "services" {
+			return scanner.AggregateMetricResult{
+				ResourceARN: resourceARN,
+				MetricName:  metricName,
+				Window:      window,
+				Statistic:   stat,
+			}, nil
+		}
+		filter = fmt.Sprintf(
+			`metric.type = %q AND resource.labels.service_name = %q AND metric.labels.response_code_class != "5xx"`,
+			CloudRunRequestCountMetricType, name)
+		isCountMetric = true
+	case CloudFunctionsExecutionCountMetricType:
+		// Sampling rate slice 1 (v0.89.122) §4.3. Filter restricts
+		// to status="ok" — failed invocations may exit before the
+		// SDK sampler fires, skewing the denominator.
+		if kind != "functions" {
+			return scanner.AggregateMetricResult{
+				ResourceARN: resourceARN,
+				MetricName:  metricName,
+				Window:      window,
+				Statistic:   stat,
+			}, nil
+		}
+		filter = fmt.Sprintf(
+			`metric.type = %q AND resource.labels.function_name = %q AND metric.labels.status = "ok"`,
+			CloudFunctionsExecutionCountMetricType, name)
+		isCountMetric = true
 	default:
 		// Slice 2 substrate scope: Cloud Run + Cloud Functions
 		// only. Other names short-circuit to empty so the interface
@@ -237,6 +305,15 @@ func (s *Scanner) QueryAggregate(
 	endTime := time.Now().UTC()
 	startTime := endTime.Add(-window)
 	statStr := mapStatToGCP(stat)
+	if isCountMetric {
+		// Count metrics aggregate via ALIGN_DELTA at the per-period
+		// alignment so each TimeSeriesPoint.Value carries the
+		// per-period invocation count — the cross-period rollup
+		// below then SUMs across periods to get total invocations.
+		// Mirrors the AWS Statistics=["Sum"] choice for Lambda
+		// Invocations.
+		statStr = "ALIGN_DELTA"
+	}
 
 	points, err := s.metricsClient.QueryTimeSeries(
 		ctx,
@@ -264,20 +341,35 @@ func (s *Scanner) QueryAggregate(
 		return result, nil
 	}
 
-	// Per-period MAX rollup. See QueryAggregate godoc for the
-	// rationale (mirrors the CloudWatch rollup so cross-cloud
-	// comparisons stay honest).
-	maxVal := 0.0
+	// Per-period rollup. Latency surfaces use MAX (mirrors the
+	// CloudWatch rollup so cross-cloud comparisons stay honest);
+	// count surfaces use SUM (total invocations across the window
+	// = sum of per-period deltas).
+	val := 0.0
 	var totalSamples int64
-	for _, p := range points {
-		if p.Value > maxVal {
-			maxVal = p.Value
+	if isCountMetric {
+		for _, p := range points {
+			val += p.Value
+			totalSamples += p.SampleCount
 		}
-		totalSamples += p.SampleCount
+	} else {
+		for _, p := range points {
+			if p.Value > val {
+				val = p.Value
+			}
+			totalSamples += p.SampleCount
+		}
 	}
-	result.Value = maxVal
+	result.Value = val
 	result.SampleCount = int(totalSamples)
-	result.Unit = cloudMonitoringMetricUnit
+	// Latency surfaces report "ms"; count surfaces are unitless
+	// (the chunk-2 detection branch treats the count value as
+	// dimensionless when computing the observed/expected ratio).
+	if isCountMetric {
+		result.Unit = ""
+	} else {
+		result.Unit = cloudMonitoringMetricUnit
+	}
 	return result, nil
 }
 
