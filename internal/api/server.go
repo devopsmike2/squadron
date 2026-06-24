@@ -215,6 +215,17 @@ type Server struct {
 	samplingHandlerOnce                sync.Once
 	samplingResourceLookup             handlers.SamplingResourceLookup
 	samplingDetector                   handlers.SamplingDetector
+
+	// discoveryServerlessErrorRateHandler — v0.89.128 (#768 Stream
+	// 166, Error rate correlation slice 1 chunk 2). The per-resource
+	// error-rate endpoint handler. Built lazily by
+	// discoveryServerlessErrorRateTrampoline the first time the
+	// route is hit; nil store at construction time short-circuits to
+	// 404 the same way the cold-start handler from v0.89.114
+	// degrades when its substrate isn't wired.
+	discoveryServerlessErrorRateHandler *handlers.DiscoveryServerlessErrorRateHandlers
+	errorRateHandlerOnce                sync.Once
+	errorRateObservationReader          handlers.ErrorRateObservationReader
 	qualitySnapshotIndexForDiscovery   handlers.QualitySnapshotIndex
 	resourceKeyProjectorForDiscovery   handlers.ResourceKeyProjector
 	// traceIndexLookupForDiscovery — v0.89.77 (#708 Stream 106,
@@ -1373,6 +1384,38 @@ func (s *Server) SetSamplingDetector(detector handlers.SamplingDetector) {
 	s.samplingDetector = detector
 }
 
+// discoveryServerlessErrorRateTrampoline — v0.89.128 (#768 Stream
+// 166, Error rate correlation slice 1 chunk 2). Mirrors the
+// cold-start trampoline from v0.89.114: builds the per-resource
+// error-rate handler once on first request and reuses thereafter.
+// Nil reader at construction time means the handler returns 404
+// unconditionally — matching the "no error-rate observations
+// recorded for resource" 404 the handler would emit for any
+// specific resource that hasn't been observed yet.
+func (s *Server) discoveryServerlessErrorRateTrampoline(fn func(*handlers.DiscoveryServerlessErrorRateHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.errorRateHandlerOnce.Do(func() {
+			s.discoveryServerlessErrorRateHandler = handlers.NewDiscoveryServerlessErrorRateHandlers(
+				s.errorRateObservationReader,
+				s.logger,
+			)
+		})
+		fn(s.discoveryServerlessErrorRateHandler, c)
+	}
+}
+
+// SetErrorRateObservationReader — v0.89.128 (#768 Stream 166).
+// Wires the error-rate observation store into the Server. Mirrors
+// SetColdStartObservationReader posture — production calls this
+// after the sqlite store is constructed; tests pass nil to
+// exercise the unwired 404 path. Safe to call before or after the
+// trampoline builds the handler so long as the call happens before
+// the first route hit (the once.Do captures whatever value is set
+// at that point).
+func (s *Server) SetErrorRateObservationReader(reader handlers.ErrorRateObservationReader) {
+	s.errorRateObservationReader = reader
+}
+
 // discoveryAcceptedAssemblerAdapter — v0.89.28 (#643 slice 1) —
 // resolves the (account_id, region) scope to a per-connection lookup
 // by iterating the iacconnstore.Store. The discovery handler doesn't
@@ -2501,6 +2544,18 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/:provider/inventory/serverless/:id/sampling",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryServerlessSamplingTrampoline(func(h *handlers.DiscoveryServerlessSamplingHandlers, c *gin.Context) { h.HandleSampling(c) }))
+
+		// v0.89.128 (#768 Stream 166, Error rate correlation slice 1
+		// chunk 2) — per-resource error rate endpoint. Returns the
+		// composed current/baseline error rate ratio + would_fire
+		// shape per design doc §6.1. Same ScopeAgentsRead gate as
+		// the cold-start sibling. 404 when no observations exist yet
+		// for the resource. The kind segment is fixed at "serverless"
+		// — chunk 3 may extend to other kinds in future slices
+		// without a breaking URL change.
+		v1.GET("/discovery/:provider/inventory/serverless/:id/error_rate",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryServerlessErrorRateTrampoline(func(h *handlers.DiscoveryServerlessErrorRateHandlers, c *gin.Context) { h.HandleErrorRate(c) }))
 
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo, slice 1
 		// (GitHub PAT). Validate is a test-before-commit preflight
