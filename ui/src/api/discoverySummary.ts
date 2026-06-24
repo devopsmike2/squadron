@@ -45,6 +45,12 @@ export type ProviderSummary = {
   // unconditionally so an operator sees "0" instead of an absent
   // chip when the tier is wired but empty.
   serverless_count: number;
+  // orchestration_count — orchestration tier slice 1 chunk 4
+  // (v0.89.97, #731 Stream 129). Per-provider count of orchestration
+  // workflows / state machines the most recent scan_completed event
+  // surfaced. Zero on cold start and always zero for OCI in slice 1
+  // (OCI orchestration is deferred to slice 2).
+  orchestration_count: number;
   enabled: boolean;
 };
 
@@ -64,6 +70,10 @@ export type SummaryTotals = {
   // #725 Stream 123). Cross-provider sum of ProviderSummary
   // serverless_count.
   serverless_count: number;
+  // orchestration_count — orchestration tier slice 1 chunk 4
+  // (v0.89.97, #731 Stream 129). Cross-provider sum of
+  // ProviderSummary.orchestration_count.
+  orchestration_count: number;
   coverage_pct: number;
 };
 

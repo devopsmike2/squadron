@@ -846,6 +846,104 @@ describe("DiscoveryOCI", () => {
     ).toBeInTheDocument();
   });
 
+  // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
+  // slice 1 contract: the Orchestration sub-tab MUST be hidden when
+  // the orchestrations[] array is empty. OCI orchestration coverage
+  // is deferred to slice 2; until then the sub-tab is invisible on
+  // the OCI page even though the type substrate carries the row
+  // shape. The cold-start scan response (orchestrations omitted /
+  // empty) drives this assertion.
+  it("TestDiscoveryOCI_OrchestrationSubTab_HiddenWhenEmpty", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    // The Orchestration sub-tab must not be in the DOM at all when
+    // orchestrations is empty. Other sub-tabs (Compute / Databases /
+    // Kubernetes / Serverless) remain visible.
+    expect(
+      screen.queryByRole("tab", { name: /^Orchestration$/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Forward-compatible slice 2 test: when the OCI substrate one day
+  // populates orchestrations[], the sub-tab SHOULD appear and render
+  // the rows. This test pins the conditional render branch so the
+  // slice 2 path doesn't accidentally regress.
+  it("TestDiscoveryOCI_OrchestrationSubTab_ShownWhenPopulated", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      // Slice 2 hypothetical row — the OrchestrationRow shape is the
+      // shared cross-cloud one but with provider restricted to
+      // aws|gcp|azure. The forward-compat test cheats by widening the
+      // provider field via `as any` so the assertion can pin the
+      // visible sub-tab without committing to a future OCI surface
+      // name.
+      orchestrations: [
+        {
+          provider: "aws",
+          surface: "stepfunc",
+          account_id: "ocid1.tenancy.oc1..aaaaaaaa",
+          region: "us-phoenix-1",
+          resource_name: "future-oci-workflow",
+          workflow_type: "STANDARD",
+          has_trace_axis: true,
+          has_log_axis: true,
+        } as never,
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const orchestrationTab = screen.getByRole("tab", {
+      name: /^Orchestration$/i,
+    });
+    await user.click(orchestrationTab);
+    expect(orchestrationTab).toHaveAttribute("data-state", "active");
+    expect(screen.getByText("future-oci-workflow")).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // selectRegion picks the canonical test region from the Radix

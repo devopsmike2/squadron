@@ -668,6 +668,88 @@ func TestTraceCoverage_IncludesServerlessPct(t *testing.T) {
 	}
 }
 
+// --- Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) -
+//
+// stubOrchestrationQuery mirrors stubServerlessQuery. The production
+// query performs the actual orchestration_instance table walk and the
+// per-row last_seen_at < 24h check.
+
+type stubOrchestrationQuery struct {
+	mu        sync.Mutex
+	inventory map[string]int
+	emitting  map[string]int
+	err       error
+	calls     int64
+}
+
+func (s *stubOrchestrationQuery) OrchestrationCoverageForScope(_ context.Context, provider, scopeID string, _ time.Duration) (inv, emit int, err error) {
+	atomic.AddInt64(&s.calls, 1)
+	if s.err != nil {
+		return 0, 0, s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := provider + "|" + scopeID
+	return s.inventory[key], s.emitting[key], nil
+}
+
+// TestTraceCoverage_IncludesOrchestrationPct — §11 acceptance test
+// 12 for the orchestration tier: seeding the orchestration coverage
+// query with 2 inventory + 1 emitting for one scope must surface
+// OrchestrationPct=50.0 on the matching ProviderTraceCoverage.
+func TestTraceCoverage_IncludesOrchestrationPct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"acct-1"}}
+	inv := &stubInventoryQuery{counts: map[string]int{"aws|acct-1": 10}}
+	idx := &stubTraceIndex{summaries: map[string]traceindex.Summary{
+		"aws|acct-1": {EmittingCount: 5},
+	}}
+	orch := &stubOrchestrationQuery{
+		inventory: map[string]int{"aws|acct-1": 2},
+		emitting:  map[string]int{"aws|acct-1": 1},
+	}
+
+	h := NewDiscoveryTraceCoverageHandlers(aws, nil, nil, nil, idx, inv, nil, nil, time.Second, nil, nil).
+		WithOrchestrationQuery(orch)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got, want := r.Providers["aws"].OrchestrationPct, 50.0; got != want {
+		t.Errorf("aws.orchestration_pct = %v, want %v", got, want)
+	}
+	if got := r.Providers["gcp"].OrchestrationPct; got != 0 {
+		t.Errorf("gcp.orchestration_pct = %v, want 0", got)
+	}
+}
+
+// TestTraceCoverage_OCIOrchestrationPctIsZero — slice 1 contract:
+// OCI orchestration coverage is deferred to slice 2 and the OCI
+// substrate is expected to return (0, 0) from its
+// OrchestrationCoverageForScope. The dashboard chip stays at 0 for
+// OCI through slice 1.
+func TestTraceCoverage_OCIOrchestrationPctIsZero(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oci := &stubOCIStore{ids: []string{"oci-scope-1"}}
+	orch := &stubOrchestrationQuery{
+		inventory: map[string]int{}, // empty — OCI returns no rows
+		emitting:  map[string]int{},
+	}
+	h := NewDiscoveryTraceCoverageHandlers(nil, nil, nil, oci, nil, nil, nil, nil, time.Second, nil, nil).
+		WithOrchestrationQuery(orch)
+	w := traceCoverageDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	r := parseTraceCoverage(t, w)
+	if got := r.Providers["oci"].OrchestrationPct; got != 0 {
+		t.Errorf("oci.orchestration_pct = %v, want 0 (slice 1 contract — OCI deferred)", got)
+	}
+}
+
 // TestTraceCoverage_ServerlessPct_ZeroOnColdStart — when the
 // ServerlessCoverageQuery is nil (deployments that haven't wired the
 // new substrate), every provider's ServerlessPct stays 0 and the

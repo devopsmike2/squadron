@@ -60,6 +60,17 @@ type ProviderTraceCoverage struct {
 	// start; the dashboard hides the chip line when fleet-wide
 	// inventory is 0 (design doc §7 + §11 acceptance test 13).
 	ServerlessPct float64 `json:"serverless_pct"`
+	// OrchestrationPct — orchestration tier slice 1 chunk 4
+	// (v0.89.97, #731 Stream 129) — per-provider orchestration
+	// coverage rendered as emitting / inventory * 100 over the
+	// orchestration-only sub-counts. A workflow / state machine
+	// counts as "emitting" when last_seen_at is within 24h, same
+	// rule as the other tiers (docs/proposals/
+	// orchestration-tier-slice1.md §6.4). Zero on cold start and
+	// always zero for OCI in slice 1 (OCI orchestration is deferred
+	// to slice 2 per the design doc §2). The dashboard hides the
+	// ORCH chip line when fleet-wide inventory is 0.
+	OrchestrationPct float64 `json:"orchestration_pct"`
 }
 
 // TraceCoverageTotals is the cross-provider roll-up.
@@ -122,6 +133,19 @@ type PendingTraceEmissionCountQuery interface {
 // (0, 0) the same way InventoryCountQuery does.
 type ServerlessCoverageQuery interface {
 	ServerlessCoverageForScope(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (inventory, emitting int, err error)
+}
+
+// OrchestrationCoverageQuery — orchestration tier slice 1 chunk 4
+// (v0.89.97, #731 Stream 129). Returns per-scope orchestration
+// inventory + emitting counts so the per-provider OrchestrationPct
+// chip can be computed alongside the existing coverage_pct. A row
+// counts as "emitting" when its last_seen_at is within staleAfter
+// (24h per design doc §6.4). Zero counts on cold start; nil
+// implementation short-circuits to (0, 0) the same way
+// ServerlessCoverageQuery does. OCI always reports (0, 0) in slice 1
+// because the OCI scanner returns no orchestrations.
+type OrchestrationCoverageQuery interface {
+	OrchestrationCoverageForScope(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (inventory, emitting int, err error)
 }
 
 // TraceIndex is the slim surface DiscoveryTraceCoverageHandlers uses to
@@ -219,9 +243,10 @@ type DiscoveryTraceCoverageHandlers struct {
 	ociStore        OCISummaryStore
 	traceIndex      TraceIndex
 	inventoryQuery  InventoryCountQuery
-	pendingQuery    PendingTraceEmissionCountQuery
-	serverlessQuery ServerlessCoverageQuery
-	auditService    services.AuditService
+	pendingQuery       PendingTraceEmissionCountQuery
+	serverlessQuery    ServerlessCoverageQuery
+	orchestrationQuery OrchestrationCoverageQuery
+	auditService       services.AuditService
 	cache           *traceCoverageCache
 	logger          *zap.Logger
 }
@@ -275,6 +300,18 @@ func NewDiscoveryTraceCoverageHandlers(
 // the serverless tier landed.
 func (h *DiscoveryTraceCoverageHandlers) WithServerlessQuery(q ServerlessCoverageQuery) *DiscoveryTraceCoverageHandlers {
 	h.serverlessQuery = q
+	return h
+}
+
+// WithOrchestrationQuery — orchestration tier slice 1 chunk 4
+// (v0.89.97, #731 Stream 129). Optional setter for the per-scope
+// orchestration coverage query. nil short-circuits the
+// OrchestrationPct column to 0 for every provider. Same setter-only
+// extension pattern as WithServerlessQuery — deployments that haven't
+// wired the new query stay on cold-start posture, no constructor
+// signature churn.
+func (h *DiscoveryTraceCoverageHandlers) WithOrchestrationQuery(q OrchestrationCoverageQuery) *DiscoveryTraceCoverageHandlers {
+	h.orchestrationQuery = q
 	return h
 }
 
@@ -497,6 +534,36 @@ func (h *DiscoveryTraceCoverageHandlers) aggregateProvider(
 			slEmit += emit
 		}
 		out.ServerlessPct = computeTraceCoveragePct(slEmit, slInv)
+	}
+
+	// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
+	// roll up per-scope orchestration coverage when the optional
+	// OrchestrationCoverageQuery is wired. Sums per-scope counts and
+	// computes OrchestrationPct = emitting / inventory * 100. nil query
+	// short-circuits to 0; a failed per-scope query logs a warning and
+	// stays at 0 for that scope. Mirrors the serverlessQuery
+	// nil-tolerant posture so a deployment that hasn't wired the new
+	// query renders the chip line hidden. OCI scopes still get
+	// queried — the OCI substrate returns (0, 0) in slice 1 so the
+	// rollup naturally stays at zero.
+	if h.orchestrationQuery != nil {
+		var ocInv, ocEmit int
+		for _, scope := range scopes {
+			if scope == "" {
+				continue
+			}
+			inv, emit, err := h.orchestrationQuery.OrchestrationCoverageForScope(ctx, provider, scope, pendingTraceEmissionStaleAfter)
+			if err != nil {
+				h.logger.Warn("trace coverage: orchestration lookup failed",
+					zap.String("provider", provider),
+					zap.String("scope", scope),
+					zap.Error(err))
+				continue
+			}
+			ocInv += inv
+			ocEmit += emit
+		}
+		out.OrchestrationPct = computeTraceCoveragePct(ocEmit, ocInv)
 	}
 
 	return out

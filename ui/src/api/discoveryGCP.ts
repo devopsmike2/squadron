@@ -237,6 +237,29 @@ export interface ServerlessRow {
   detail?: Record<string, unknown>;
 }
 
+// OrchestrationRow — orchestration tier slice 1 chunk 4 (v0.89.97,
+// #731 Stream 129). Mirrors scanner.OrchestrationInstanceSnapshot —
+// the shared cross-cloud orchestration row shape. Surface is one of
+// "stepfunc" (AWS Step Functions), "workflows" (GCP Workflows), or
+// "logicapps" (Azure Logic Apps). OCI orchestration is deferred to
+// slice 2; OCI scan responses always return orchestrations: [].
+//
+// workflow_type carries STANDARD/EXPRESS for stepfunc and
+// Standard/Consumption for logicapps; workflows leaves it empty.
+export interface OrchestrationRow {
+  provider: "aws" | "gcp" | "azure";
+  surface: "stepfunc" | "workflows" | "logicapps";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn?: string;
+  workflow_type?: string;
+  has_trace_axis: boolean;
+  has_log_axis: boolean;
+  last_seen_at?: string;
+  detail?: Record<string, unknown>;
+}
+
 // ScanGCPResponse mirrors gcpScanResponse on the wire. Note that
 // unlike the AWS ScanResult there is no top-level instance_count —
 // the page computes it client-side as compute.length. Same posture
@@ -267,6 +290,12 @@ export interface ScanGCPResponse {
   // Go JSON tag); the Inventory tab's Serverless sub-tab treats
   // undefined as empty.
   serverless?: ServerlessRow[];
+  // orchestrations — orchestration tier slice 1 chunk 4 (v0.89.97,
+  // #731 Stream 129). GCP Workflows inventory from the chunk 2 GCP
+  // Workflows scanner extension. Optional on the wire (omitempty Go
+  // JSON tag); the Inventory tab's Orchestration sub-tab treats
+  // undefined as empty.
+  orchestrations?: OrchestrationRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

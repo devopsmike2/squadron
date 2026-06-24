@@ -316,6 +316,54 @@ export interface ServerlessRow {
   detail?: Record<string, unknown>;
 }
 
+// OrchestrationRow — orchestration tier slice 1 chunk 4 (v0.89.97,
+// #731 Stream 129). Mirrors scanner.OrchestrationInstanceSnapshot. The
+// per-provider Inventory tab's Orchestration sub-tab renders one row
+// per entry with the columns documented in
+// docs/proposals/orchestration-tier-slice1.md §7:
+//
+//   - resource_name + surface + workflow_type + region
+//   - has_trace_axis as a check / cross (X-Ray active tracing for
+//     Step Functions, callLogLevel == LOG_ALL_CALLS for Workflows,
+//     APPLICATIONINSIGHTS_CONNECTION_STRING / diagnostic settings for
+//     Logic Apps)
+//   - has_log_axis as a check / cross (loggingConfiguration for
+//     Step Functions, callLogLevel != UNSPECIFIED for Workflows,
+//     diagnostic settings for Logic Apps)
+//   - last_seen_at as a relative-time column; undefined when traces
+//     have never been seen
+//
+// surface is one of "stepfunc" | "workflows" | "logicapps".
+// workflow_type carries STANDARD/EXPRESS for stepfunc and
+// Standard/Consumption for logicapps; workflows leaves it empty.
+//
+// OCI is intentionally absent from the provider union — slice 1
+// doesn't ship an OCI orchestration scanner, so OCI scan responses
+// always return orchestrations: [] and the OCI page conditionally
+// hides the sub-tab.
+export interface OrchestrationRow {
+  provider: "aws" | "gcp" | "azure";
+  surface: "stepfunc" | "workflows" | "logicapps";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn?: string;
+  // workflow_type — surface subtype. Step Functions: "STANDARD" /
+  // "EXPRESS". Logic Apps: "Standard" / "Consumption". Workflows
+  // leaves it empty (the API has a single workflow type).
+  workflow_type?: string;
+  has_trace_axis: boolean;
+  has_log_axis: boolean;
+  // last_seen_at — joined from the traceindex; undefined when the
+  // index has no observation for this resource.
+  last_seen_at?: string;
+  // span_quality — same posture as ServerlessRow.span_quality.
+  span_quality?: RowSpanQuality;
+  // detail — per-surface bag the per-cloud Inventory tab can render
+  // as a per-row drill-down.
+  detail?: Record<string, unknown>;
+}
+
 // ScanResult is the typed payload the scan endpoint returns. Mirrors
 // scanner.Result via the marshalScanResult wire shape on the Go side.
 // scan_started_at / scan_completed_at are ISO-8601 strings; partial
@@ -350,6 +398,13 @@ export interface ScanResult {
   // Go handler emits an array (never null) so the UI's empty-state
   // branch is a single `.length === 0` check.
   serverless?: ServerlessRow[];
+  // orchestrations — orchestration tier slice 1 chunk 4 (v0.89.97,
+  // #731 Stream 129). The per-provider Inventory tab's Orchestration
+  // sub-tab reads from this field. The Go handler emits an array
+  // (never null) so the UI's empty-state branch is a single
+  // `.length === 0` check. Always empty in OCI inventory responses
+  // in slice 1; the OCI page hides the sub-tab when empty.
+  orchestrations?: OrchestrationRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

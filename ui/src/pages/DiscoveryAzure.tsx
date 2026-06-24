@@ -57,6 +57,7 @@ import {
   type DatabaseInstanceSnapshot,
   type ScanAzureResponse,
   type ServerlessRow,
+  type OrchestrationRow,
   type ValidateAzureResponse,
 } from "@/api/discoveryAzure";
 import { Badge } from "@/components/ui/badge";
@@ -115,6 +116,10 @@ const INVENTORY_SUBTAB_KUBERNETES = "kubernetes";
 // fourth Inventory sub-tab carrying Azure Functions rows from the
 // chunk 3 scanner extension. Same opt-in posture as the others.
 const INVENTORY_SUBTAB_SERVERLESS = "serverless";
+// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
+// fifth Inventory sub-tab carrying Azure Logic Apps rows from the
+// chunk 3 Azure Logic Apps scanner extension.
+const INVENTORY_SUBTAB_ORCHESTRATION = "orchestration";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1112,6 +1117,9 @@ function InventoryTab({
           <TabsTrigger value={INVENTORY_SUBTAB_SERVERLESS}>
             Serverless
           </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_ORCHESTRATION}>
+            Orchestration
+          </TabsTrigger>
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
           <InventoryTable rows={scan.compute} />
@@ -1124,6 +1132,9 @@ function InventoryTab({
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_SERVERLESS} className="mt-3">
           <ServerlessInventoryTable rows={scan.serverless ?? []} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_ORCHESTRATION} className="mt-3">
+          <OrchestrationInventoryTable rows={scan.orchestrations ?? []} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1414,6 +1425,89 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+// OrchestrationInventoryTable — orchestration tier slice 1 chunk 4
+// (v0.89.97, #731 Stream 129). Renders the per-row Azure Logic Apps
+// inventory the chunk 3 scanner extension produced. Columns per §7:
+// Resource Name, Surface, Type, Region, Trace axis, Log axis, Last
+// seen. Empty state mirrors the Serverless sub-tab.
+function OrchestrationInventoryTable({ rows }: { rows: OrchestrationRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
+        No orchestration workflows discovered. Run a scan to refresh.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Resource Name</th>
+            <th className="px-3 py-2 font-medium">Surface</th>
+            <th className="px-3 py-2 font-medium">Type</th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">Trace axis</th>
+            <th className="px-3 py-2 font-medium">Log axis</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.resource_arn || row.resource_name}
+              className="border-t"
+            >
+              <td className="px-3 py-2 font-mono text-xs">
+                {row.resource_name}
+              </td>
+              <td className="px-3 py-2 text-xs">{row.surface}</td>
+              <td className="px-3 py-2 text-xs">{row.workflow_type || "—"}</td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_trace_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_log_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OrchestrationAxisCheck({ ok }: { ok: boolean }) {
+  if (ok) {
+    return (
+      <span
+        className="text-emerald-600"
+        title="enabled"
+        aria-label="enabled"
+        data-testid="orchestration-axis-check"
+        data-value="yes"
+      >
+        ✓
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-muted-foreground"
+      title="disabled"
+      aria-label="disabled"
+      data-testid="orchestration-axis-check"
+      data-value="no"
+    >
+      ✗
+    </span>
   );
 }
 

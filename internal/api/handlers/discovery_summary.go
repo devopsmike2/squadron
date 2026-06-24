@@ -48,7 +48,14 @@ type ProviderSummary struct {
 	UninstrumentedCount int        `json:"uninstrumented_count"`
 	RecommendationCount int        `json:"recommendation_count"`
 	ServerlessCount     int        `json:"serverless_count"`
-	Enabled             bool       `json:"enabled"`
+	// OrchestrationCount — orchestration tier slice 1 chunk 4
+	// (v0.89.97, #731 Stream 129) — counts the orchestration inventory
+	// rows the most recent scan_completed event surfaced for this
+	// provider. Mirrors the serverless_count pattern from v0.89.92. For
+	// OCI it stays 0 in slice 1 — the OCI inventory never populates
+	// orchestrations until slice 2.
+	OrchestrationCount int  `json:"orchestration_count"`
+	Enabled            bool `json:"enabled"`
 }
 
 // SummaryTotals is the cross-provider roll-up.
@@ -57,13 +64,17 @@ type ProviderSummary struct {
 // #725 Stream 123) — cross-provider sum of ProviderSummary
 // ServerlessCount. Zero on cold start.
 type SummaryTotals struct {
-	ConnectionCount     int     `json:"connection_count"`
-	InstanceCount       int     `json:"instance_count"`
-	InstrumentedCount   int     `json:"instrumented_count"`
-	UninstrumentedCount int     `json:"uninstrumented_count"`
-	RecommendationCount int     `json:"recommendation_count"`
-	ServerlessCount     int     `json:"serverless_count"`
-	CoveragePct         float64 `json:"coverage_pct"`
+	ConnectionCount     int `json:"connection_count"`
+	InstanceCount       int `json:"instance_count"`
+	InstrumentedCount   int `json:"instrumented_count"`
+	UninstrumentedCount int `json:"uninstrumented_count"`
+	RecommendationCount int `json:"recommendation_count"`
+	ServerlessCount     int `json:"serverless_count"`
+	// OrchestrationCount — orchestration tier slice 1 chunk 4
+	// (v0.89.97, #731 Stream 129). Cross-provider sum of
+	// ProviderSummary.OrchestrationCount. Zero on cold start.
+	OrchestrationCount int     `json:"orchestration_count"`
+	CoveragePct        float64 `json:"coverage_pct"`
 }
 
 // RecentRecommendation is one row of the cross-provider recent table.
@@ -133,6 +144,11 @@ type ScanSummary struct {
 	// scans that pre-date the serverless tier; the summary handler
 	// surfaces zero in that case without a separate cold-start branch.
 	ServerlessCount int
+	// OrchestrationCount — orchestration tier slice 1 chunk 4
+	// (v0.89.97, #731 Stream 129) — projects the optional
+	// orchestration_count payload field from scan_completed audit
+	// rows. Zero on older scans that pre-date the orchestration tier.
+	OrchestrationCount int
 }
 
 // ProposalEvent is one row from discovery_proposal.created projected
@@ -379,6 +395,8 @@ func (h *DiscoverySummaryHandlers) aggregate(ctx context.Context) *SummaryRespon
 		resp.Totals.RecommendationCount += p.RecommendationCount
 		// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123).
 		resp.Totals.ServerlessCount += p.ServerlessCount
+		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129).
+		resp.Totals.OrchestrationCount += p.OrchestrationCount
 	}
 	resp.Totals.CoveragePct = computeCoveragePct(resp.Totals.InstrumentedCount, resp.Totals.InstanceCount)
 
@@ -451,6 +469,11 @@ func (h *DiscoverySummaryHandlers) aggregateProvider(
 		// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
 		// roll up the optional per-scan serverless_count projection.
 		ps.ServerlessCount += s.ServerlessCount
+		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)
+		// — roll up the optional per-scan orchestration_count
+		// projection. OCI rows always carry zero in slice 1 because the
+		// OCI scanner returns no orchestrations.
+		ps.OrchestrationCount += s.OrchestrationCount
 		if latest == nil || s.CompletedAt.After(*latest) {
 			t := s.CompletedAt
 			latest = &t

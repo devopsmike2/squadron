@@ -947,11 +947,25 @@ func providerFromRecommendationKind(kind string) string {
 	// alongside compute-/ocidb-/oke-.
 	case strings.HasPrefix(kind, "lambda-"):
 		return "aws"
+	// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
+	// AWS Step Functions kinds (stepfunc-xray-active,
+	// stepfunc-logging-enable) route to AWS. Listed alongside the
+	// lambda- case so the AWS family stays grouped.
+	case strings.HasPrefix(kind, "stepfunc-"):
+		return "aws"
 	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-") ||
-		strings.HasPrefix(kind, "cloudrun-") || strings.HasPrefix(kind, "cloudfunc-"):
+		strings.HasPrefix(kind, "cloudrun-") || strings.HasPrefix(kind, "cloudfunc-") ||
+		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)
+		// — GCP Workflows kinds (workflows-trace-enable,
+		// workflows-logging-enable) route to GCP.
+		strings.HasPrefix(kind, "workflows-"):
 		return "gcp"
 	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-") ||
-		strings.HasPrefix(kind, "azfunc-"):
+		strings.HasPrefix(kind, "azfunc-") ||
+		// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)
+		// — Azure Logic Apps kinds (logicapps-appinsights-enable,
+		// logicapps-diagnostics-enable) route to Azure.
+		strings.HasPrefix(kind, "logicapps-"):
 		return "azure"
 	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-") || strings.HasPrefix(kind, "oke-") ||
 		strings.HasPrefix(kind, "ocifunc-"):
