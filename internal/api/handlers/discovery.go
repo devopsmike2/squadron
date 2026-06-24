@@ -69,6 +69,24 @@ type DiscoveryScanner interface {
 	Scan(ctx context.Context, conn *credstore.CloudConnection, regions []string) (*scanner.Result, error)
 }
 
+// OrchestrationDiscoveryScanner is the optional orchestration-tier
+// extension to DiscoveryScanner. Slice 1 chunk 1 of the orchestration-
+// tier arc (v0.89.95, #728 Stream 126). Scanners that implement this
+// interface get dispatched a per-call ScanOrchestrations after the
+// main Scan returns when the request's Tiers include "orchestration";
+// scanners that don't surface no orchestration rows on the response.
+//
+// Kept as a separate interface (rather than appended to DiscoveryScanner)
+// so the GCP / Azure / OCI scanner types that haven't yet grown an
+// orchestration surface continue to satisfy DiscoveryScanner without
+// having to ship a no-op ScanOrchestrations. The handler does a runtime
+// type assertion; failure to satisfy the interface is silently treated
+// as "no orchestration support" — matches the chunk-2/3 staged rollout
+// where each cloud lights up incrementally.
+type OrchestrationDiscoveryScanner interface {
+	ScanOrchestrations(ctx context.Context, scope scanner.ScanScope) ([]scanner.OrchestrationInstanceSnapshot, error)
+}
+
 // AWSScannerFactory builds a DiscoveryScanner from a stored connection.
 // Indirected so the scan handler doesn't import the AWS SDK directly;
 // the production factory (defaultAWSScannerFactory in
@@ -886,27 +904,29 @@ type awsRunScanRequest struct {
 	Tiers []string `json:"tiers,omitempty"`
 }
 
-// TierCompute / TierDatabase / TierKubernetes / TierServerless are
-// the four tier identifiers slice 1 chunk 1 accepts on the scan
-// endpoint's Tiers field. DefaultScanTiers is the implicit value
-// when the field is empty — the full surface, matching the design
-// doc §6.1: "When the scan request omits tiers, the default behavior
-// extends from [compute, database, kubernetes] to [compute, database,
-// kubernetes, serverless]."
+// TierCompute / TierDatabase / TierKubernetes / TierServerless /
+// TierOrchestration are the tier identifiers the scan endpoint's Tiers
+// field accepts. DefaultScanTiers is the implicit value when the field
+// is empty — the full surface, matching the design doc §6.1: the
+// orchestration-tier arc (v0.89.95, #728 Stream 126) widens the default
+// from [compute, database, kubernetes, serverless] to [compute,
+// database, kubernetes, serverless, orchestration].
 const (
-	TierCompute    = "compute"
-	TierDatabase   = "database"
-	TierKubernetes = "kubernetes"
-	TierServerless = "serverless"
+	TierCompute       = "compute"
+	TierDatabase      = "database"
+	TierKubernetes    = "kubernetes"
+	TierServerless    = "serverless"
+	TierOrchestration = "orchestration"
 )
 
 // DefaultScanTiers is the default tier list applied when a scan
-// request omits the Tiers field. Slice 1 chunk 1 widens the default
-// from the historical [compute, database, kubernetes] to include
-// serverless. Operators who passed an explicit list keep their old
-// behavior; default callers get the wider surface.
+// request omits the Tiers field. Orchestration-tier slice 1 chunk 1
+// (v0.89.95, #728 Stream 126) further widens the default from
+// [compute, database, kubernetes, serverless] to include orchestration.
+// Operators who passed an explicit list keep their old behavior;
+// default callers get the wider surface.
 var DefaultScanTiers = []string{
-	TierCompute, TierDatabase, TierKubernetes, TierServerless,
+	TierCompute, TierDatabase, TierKubernetes, TierServerless, TierOrchestration,
 }
 
 // parseTiersOrDefault normalizes the request's Tiers field into the
@@ -926,7 +946,7 @@ func parseTiersOrDefault(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, t := range in {
 		switch strings.ToLower(strings.TrimSpace(t)) {
-		case TierCompute, TierDatabase, TierKubernetes, TierServerless:
+		case TierCompute, TierDatabase, TierKubernetes, TierServerless, TierOrchestration:
 			out = append(out, strings.ToLower(strings.TrimSpace(t)))
 		}
 	}
@@ -937,6 +957,22 @@ func parseTiersOrDefault(in []string) []string {
 		out = append(out, DefaultScanTiers...)
 	}
 	return out
+}
+
+// tierListContains is a tiny helper used by the orchestration-tier
+// dispatch path in runAWSScan: returns true when the canonical tier
+// list contains the supplied tier. Kept as a free function (rather
+// than a method) so the per-tier dispatch sites read naturally —
+// "if tierListContains(tiers, TierOrchestration)" pairs with
+// parseTiersOrDefault. Slice 1 chunk 1 of the orchestration-tier arc
+// (v0.89.95, #728 Stream 126).
+func tierListContains(tiers []string, want string) bool {
+	for _, t := range tiers {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
 
 // awsScanResponse is the snake_case wire shape the React Inventory tab
@@ -976,11 +1012,20 @@ type awsScanResponse struct {
 	// shape (provider / surface / two-axis booleans + LastSeenAt)
 	// alongside a per-surface Detail bag the per-cloud Inventory
 	// tab renders.
-	Serverless          []awsServerlessRow `json:"serverless"`
-	InstrumentedCount   int                `json:"instrumented_count"`
-	UninstrumentedCount int                `json:"uninstrumented_count"`
-	Partial             bool               `json:"partial"`
-	PartialReason       string             `json:"partial_reason,omitempty"`
+	Serverless []awsServerlessRow `json:"serverless"`
+	// Orchestrations joins the wire shape in orchestration-tier
+	// slice 1 chunk 1 (v0.89.95, #728 Stream 126). Same non-null
+	// posture as the other category arrays. Carries the cross-cloud
+	// detection shape (provider / surface / two-axis booleans +
+	// LastSeenAt) alongside a per-surface Detail bag the per-cloud
+	// Inventory tab renders. Slice 1 chunk 1 only populates AWS
+	// Step Functions rows; chunk 2 adds GCP Workflows and chunk 3
+	// adds Azure Logic Apps. Empty for OCI throughout slice 1.
+	Orchestrations      []awsOrchestrationRow `json:"orchestrations"`
+	InstrumentedCount   int                   `json:"instrumented_count"`
+	UninstrumentedCount int                   `json:"uninstrumented_count"`
+	Partial             bool                  `json:"partial"`
+	PartialReason       string                `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -1178,6 +1223,34 @@ type awsServerlessRow struct {
 	Detail        map[string]any `json:"detail,omitempty"`
 }
 
+// awsOrchestrationRow is the snake_case wire shape for one workflow /
+// state-machine row. Orchestration-tier slice 1 chunk 1 (v0.89.95,
+// #728 Stream 126). Mirrors scanner.OrchestrationInstanceSnapshot —
+// the two detection-rule axes (has_trace_axis + has_log_axis) surface
+// as independent booleans so the per-cloud Inventory tab renders them
+// as independent badge columns, matching the proposer prompt's "either
+// axis presence is informationally surfaced" framing.
+//
+// Provider + Surface drive the proposer's recommendation-kind prefix
+// routing (stepfunc-* → AWS, workflows-* → GCP, logicapps-* → Azure).
+// Detail carries surface-specific context (Step Functions'
+// workflow_type, Workflows' call-log-level, Logic Apps' diagnostic-
+// settings subset) the per-cloud Inventory tab renders as a per-row
+// drilldown.
+type awsOrchestrationRow struct {
+	Provider     string         `json:"provider"`
+	Surface      string         `json:"surface"`
+	AccountID    string         `json:"account_id"`
+	Region       string         `json:"region"`
+	ResourceName string         `json:"resource_name"`
+	ResourceARN  string         `json:"resource_arn"`
+	WorkflowType string         `json:"workflow_type,omitempty"`
+	HasTraceAxis bool           `json:"has_trace_axis"`
+	HasLogAxis   bool           `json:"has_log_axis"`
+	LastSeenAt   *time.Time     `json:"last_seen_at,omitempty"`
+	Detail       map[string]any `json:"detail,omitempty"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -1198,6 +1271,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		DynamoDBTables:      make([]awsDynamoDBTableRow, 0, len(r.DynamoDBTables)),
 		ECSClusters:         make([]awsECSClusterRow, 0, len(r.ECSClusters)),
 		Serverless:          make([]awsServerlessRow, 0, len(r.Serverless)),
+		Orchestrations:      make([]awsOrchestrationRow, 0, len(r.Orchestrations)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -1338,6 +1412,30 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			Detail:        sv.Detail,
 		})
 	}
+	// Orchestration-tier slice 1 chunk 1 (v0.89.95, #728 Stream 126) —
+	// orchestration rows surface alongside the other category arrays.
+	// Same non-null posture; the two detection-rule axes
+	// (has_trace_axis + has_log_axis) pass verbatim through to the UI
+	// alongside the per-surface Detail bag. AWS Step Functions is the
+	// only populated surface in chunk 1; chunks 2 + 3 add GCP
+	// Workflows and Azure Logic Apps. The loop iterates over an empty
+	// slice when the orchestration tier is not in the request's Tiers
+	// list (runAWSScan only invokes ScanOrchestrations on that tier).
+	for _, oc := range r.Orchestrations {
+		out.Orchestrations = append(out.Orchestrations, awsOrchestrationRow{
+			Provider:     oc.Provider,
+			Surface:      oc.Surface,
+			AccountID:    oc.AccountID,
+			Region:       oc.Region,
+			ResourceName: oc.ResourceName,
+			ResourceARN:  oc.ResourceARN,
+			WorkflowType: oc.WorkflowType,
+			HasTraceAxis: oc.HasTraceAxis,
+			HasLogAxis:   oc.HasLogAxis,
+			LastSeenAt:   oc.LastSeenAt,
+			Detail:       oc.Detail,
+		})
+	}
 	return out
 }
 
@@ -1409,7 +1507,7 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 	// the orchestrator drives the per-account scan). The third return
 	// value is the HTTP status the handler should emit on failure;
 	// the orchestrator path ignores it.
-	result, herr, status := h.runAWSScan(c.Request.Context(), accountID, req.Regions, "" /* scanAllID */)
+	result, herr, status := h.runAWSScan(c.Request.Context(), accountID, req.Regions, req.Tiers, "" /* scanAllID */)
 	if herr != nil {
 		c.JSON(status, gin.H{"error": herr})
 		return
@@ -1443,7 +1541,7 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 // wiring 500s happen BEFORE scan_started, matching the slice-1
 // posture (TestHandleAWSRunScan_NotFound asserts zero audit entries
 // for a 404).
-func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, requestedRegions []string, scanAllID string) (*scanner.Result, *scanner.HumanizedError, int) {
+func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, requestedRegions []string, requestedTiers []string, scanAllID string) (*scanner.Result, *scanner.HumanizedError, int) {
 	if h.credStore == nil {
 		return nil, &scanner.HumanizedError{
 			Code:          "CredStoreNotWired",
@@ -1535,6 +1633,14 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 	// an indefinite hang if a future regression introduces one.
 	scanCtx, scanCancel := context.WithTimeout(ctx, scanHandlerTimeout)
 	defer scanCancel()
+	// Orchestration-tier slice 1 chunk 1 (v0.89.95, #728 Stream 126):
+	// resolve the tier filter once. Empty / unrecognized fall through
+	// to DefaultScanTiers (which now includes "orchestration"), so the
+	// default path scans every supported tier. parseTiersOrDefault is
+	// the same helper the request handler uses so the per-request
+	// validation contract is preserved through the scan-all dispatch
+	// path too.
+	tiers := parseTiersOrDefault(requestedTiers)
 	result, err := awsScanner.Scan(scanCtx, conn, regions)
 	if err != nil {
 		// Per scanner.Scanner's contract the AWS implementation sets
@@ -1555,6 +1661,41 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 			Message:       "Scan failed unexpectedly: " + err.Error(),
 			SuggestedStep: "validate",
 		}, http.StatusInternalServerError
+	}
+
+	// Orchestration-tier slice 1 chunk 1 (v0.89.95, #728 Stream 126).
+	// When the request's normalized tier list contains "orchestration"
+	// and the underlying scanner satisfies the optional
+	// OrchestrationDiscoveryScanner interface, dispatch a per-region
+	// orchestration walk and fold the snapshots into result.Orchestrations.
+	// Scanners that don't satisfy the interface (chunks 2/3's GCP +
+	// Azure scanners ship that capability, OCI does not) are silently
+	// no-op'd — the per-cloud Inventory tab renders an empty
+	// orchestrations slice. Storage persistence lives in chunk 4 of
+	// the arc; this chunk only surfaces orchestration rows on the
+	// HTTP wire shape.
+	if result != nil && tierListContains(tiers, TierOrchestration) {
+		if orchScanner, ok := awsScanner.(OrchestrationDiscoveryScanner); ok {
+			orchOut, orchErr := orchScanner.ScanOrchestrations(scanCtx, scanner.ScanScope{
+				AccountID: accountID,
+				Regions:   regions,
+			})
+			if orchErr != nil {
+				// Match the per-service partial-failure posture used
+				// throughout Scan(): an orchestration walk failure
+				// degrades the response (empty orchestration slice)
+				// rather than 500-ing the whole scan. The logger
+				// captures the diagnostic; the operator-visible
+				// signal is the absence of orchestration rows.
+				if h.logger != nil {
+					h.logger.Warn("aws run scan: orchestration scan failed",
+						zap.Error(orchErr), zap.String("account_id", accountID))
+				}
+			}
+			if len(orchOut) > 0 {
+				result.Orchestrations = append(result.Orchestrations, orchOut...)
+			}
+		}
 	}
 
 	if h.auditService != nil {
@@ -1792,7 +1933,14 @@ func (h *DiscoveryHandlers) HandleAWSScanAll(c *gin.Context) {
 	// HTTP status is dropped (the orchestrator aggregates failures
 	// rather than rendering one).
 	orch := awsorch.NewOrchestrator(h.credStore, func(ctx context.Context, conn *credstore.CloudConnection, regs []string, scanAllID string) (*scanner.Result, *awsorch.AccountScanFailure) {
-		result, herr, _ := h.runAWSScan(ctx, conn.AccountID, regs, scanAllID)
+		// Orchestration-tier slice 1 chunk 1 (v0.89.95, #728 Stream
+		// 126): the scan-all path uses the default tier surface — it
+		// does not currently surface a per-account tier filter.
+		// Passing nil triggers parseTiersOrDefault inside runAWSScan
+		// (defense-in-depth) and DefaultScanTiers includes
+		// orchestration so every per-account scan emits orchestration
+		// rows.
+		result, herr, _ := h.runAWSScan(ctx, conn.AccountID, regs, nil /* tiers */, scanAllID)
 		if herr != nil {
 			msg := herr.Message
 			if msg == "" {
