@@ -1,11 +1,12 @@
 # Orchestration tier — operator guide
 
 This is the operator-facing runbook for the v0.89.94 through
-v0.89.98 orchestration tier slice 1 arc. Squadron now scans
-three orchestration surfaces across three clouds — AWS Step
-Functions, GCP Workflows, Azure Logic Apps — for the
-observability primitives operators sequence business logic
-through.
+v0.89.136 orchestration tier arc — slice 1 (v0.89.94-98) +
+slice 2 (v0.89.134-136). Squadron now scans four
+orchestration surfaces across four clouds — AWS Step
+Functions, GCP Workflows, Azure Logic Apps, and OCI
+Resource Manager — for the observability primitives
+operators sequence business logic through.
 
 The strategic frame: Squadron previously covered four tiers
 (compute / database / kubernetes / serverless) across four
@@ -333,25 +334,130 @@ The recommendation lifecycle (`recommendation.created`,
   sub-tab.** This is correct slice 1 behavior. OCI
   orchestration ships in slice 2.
 
-## What slice 2 will add
+## Slice 2 SHIPPED in v0.89.134-v0.89.136
 
-Per §13 of the design doc:
+Slice 2 closes the qualified 5-tier orchestration claim by
+adding OCI Resource Manager coverage. After slice 2, the
+universal claim's orchestration tier is cleanly 4-cloud —
+no asterisks.
 
-- OCI orchestration coverage (Resource Manager + Process
-  Automation).
-- Per-state-transition trace propagation analysis.
-- Workflow definition introspection.
-- Step Functions Distributed Map state analysis.
-- Logic Apps connector trace pollution detection.
-- Long-running GCP Workflows callback handling.
-- Per-execution last-seen-at (instead of per-workflow).
-- Per-state Lambda invocation correlation back to the parent
-  state-machine span.
-- QualityDot column on GCP / Azure inventory tabs.
+Honest framing: OCI's primitives are shape-different from
+the AWS/GCP/Azure trio. Resource Manager (Stacks + Jobs) is
+infrastructure orchestration (Terraform-as-a-service), not
+workflow orchestration like Step Functions / Workflows /
+Logic Apps. But operators still want the same telemetry
+question answered: "did my orchestration emit logs?"
 
-## The universal claim grows a fifth tier (qualified)
+Slice 2's detection: Stack has OCI Logging configured at
+the compartment level with `service = "resourcemanager"`
+source mapping.
 
-After orchestration slice 1, Squadron's positioning reads:
+Coverage caveat: slice 2 uses compartment-level Logging
+detection. A compartment with Logging configured but NOT
+specifically routed for RM sources still gets
+`has_log_axis = true`. Operators who want stricter
+detection should ensure log resources have explicit RM
+source mappings; slice 3 may add per-source-mapping
+inspection.
+
+### What's NOT in slice 2
+
+- **OCI Process Automation** — the BPMN-based workflow
+  orchestration product. Semantically closer to Step
+  Functions / Workflows / Logic Apps but with smaller
+  adoption + different API surface. Slice 3 candidate
+  when adoption justifies the substrate cost.
+- **Per-execution Job log content inspection.** Slice 2
+  detects whether the Stack has Logging; not what the
+  Job logs contain.
+- **Stack state file inspection.** Squadron does NOT
+  inspect Terraform state contents.
+- **Job-level cold-start / latency / error rate analysis.**
+  The substrate's three diagnostics target serverless
+  surfaces. RM Jobs are infrastructure operations.
+
+### The new recommendation kind
+
+```
+resmgr-logging-enable
+```
+
+Webhook routing: `resmgr- → oci`.
+
+### Per-OCI Terraform pattern
+
+Per §8 of the design doc, the proposer emits an
+`oci_logging_log_group` + `oci_logging_log` pair with
+`configuration.source.service = "resourcemanager"` and
+`source_type = "OCISERVICE"`:
+
+```hcl
+resource "oci_logging_log_group" "resmgr_<name>" {
+  compartment_id = var.compartment_ocid
+  display_name   = "resmgr-stack-logs"
+}
+
+resource "oci_logging_log" "resmgr_<name>" {
+  log_group_id = oci_logging_log_group.resmgr_<name>.id
+  display_name = "stack-events"
+  log_type     = "SERVICE"
+  is_enabled   = true
+
+  configuration {
+    source {
+      category    = "all"
+      resource    = oci_resourcemanager_stack.<name>.id
+      service     = "resourcemanager"
+      source_type = "OCISERVICE"
+    }
+    compartment_id = var.compartment_ocid
+  }
+}
+```
+
+### The 3-failure-mode decline path (slice 1 pattern carried forward)
+
+Same as the slice 1 logicapps-* / stepfunc-* / workflows-*
+kinds: the recommendation acknowledges that the operator may
+have intentionally chosen a non-Logging destination. Decline
+the PR with a note ("custom processor reads from Streaming
+directly") and the verdict learning loop records.
+
+### OCI Resource Manager Stacks on the Discovery page
+
+The DiscoveryOCI page's Orchestration sub-tab from slice 1
+was hidden-conditional (hidden when `orchestrations[]` is
+empty). Slice 2 populates the array with `resmgr` rows,
+which causes the sub-tab to render. NO UI code changes.
+
+### IAM upgrade
+
+The OCI scanner policy needs an additional statement:
+
+```
+allow group SquadronReaders to inspect orm-stacks in compartment <compartment>
+```
+
+The in-product policy upgrade flow (#590) shows the diff.
+
+### Cost surface
+
+OCI Resource Manager Stacks API + OCI Logging API queries
+are free for read operations. No new operator-facing cost
+decisions per the no-money brief.
+
+### Slice 3 candidates
+
+Per §13 of the design doc: OCI Process Automation; per-execution
+Job log content inspection (PII concerns); per-source-mapping
+inspection (tighter than compartment-level); Stack drift
+detection correlation; Job-level diagnostic substrate
+extensions; cross-stack dependency mapping.
+
+## The universal claim grows a fifth tier (cleanly 4-cloud post-slice 2)
+
+After orchestration slice 1 + slice 2, Squadron's positioning
+reads:
 
 > Squadron scans AWS, GCP, Azure, AND Oracle Cloud across
 > COMPUTE, DATABASE, KUBERNETES, SERVERLESS, AND
@@ -361,9 +467,10 @@ After orchestration slice 1, Squadron's positioning reads:
 > it finds.
 
 Four clouds. Five tiers. Four verbs. One control plane.
-Twenty scanner surfaces (4 clouds × 4 prior tiers + 3 new
-orchestration surfaces; OCI orchestration deferred to slice
-2 makes the 5th tier honestly 3-cloud at this slice).
+Twenty-one scanner surfaces (4 clouds × 4 prior tiers + 3
+slice 1 orchestration surfaces + 1 slice 2 OCI Resource
+Manager surface). The 5th tier is now cleanly 4-cloud — no
+asterisks.
 
 Orchestration is where business logic gets sequenced — the
 trace integration arc + span quality arc together close the

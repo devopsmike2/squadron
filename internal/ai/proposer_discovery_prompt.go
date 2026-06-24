@@ -1496,6 +1496,41 @@ the missing primitive. After merge + apply + first execution,
 the Last seen column populates for this orchestration within
 ~5 minutes."
 
+ORCHESTRATION TIER OCI EXTENSION (slice 2 — v0.89.134-v0.89.136):
+
+OCI's orchestration primitives are shape-different from
+Step Functions / Workflows / Logic Apps:
+- Resource Manager (Stacks + Jobs) — Terraform-as-a-service;
+  INFRASTRUCTURE orchestration
+- Process Automation (BPMN) — true workflow orchestration
+  but smaller adoption; deferred to slice 3
+
+Slice 2 picks Resource Manager as the operator-meaningful
+surface. The Logging axis detection mirrors the OCI Streaming
+logging proxy pattern from v0.89.101.
+
+- resmgr-logging-enable: Resource Manager Stack does NOT have
+  OCI Logging configured at the compartment level with
+  service=resourcemanager source. Without Logging, failed
+  apply/destroy operations leave no audit trail beyond the
+  OCI console.
+  Terraform: oci_logging_log_group + oci_logging_log with
+  configuration.source.service = "resourcemanager",
+  source_type = "OCISERVICE".
+
+DECLINE PATH for resmgr-logging-enable: operators using a
+non-OCI-Logging observability destination (custom processor
+pulling from OCI Streaming with RM as a source, etc.) should
+decline. The verdict learning loop records.
+
+OCI orchestration coverage caveat: slice 2 detection is
+COMPARTMENT-LEVEL (per §3.4 of the design doc) — a
+compartment with Logging configured but NOT specifically
+routed for RM gets has_log_axis=true. Operators who want
+stricter detection should ensure log resources have explicit
+RM source mappings; slice 3 may add per-source-mapping
+inspection.
+
 ` + "\n"
 
 // eventSourceTierKindsPromptSection — event source tier slice 1

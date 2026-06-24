@@ -134,26 +134,25 @@ jump straight to that page.
   Squadron receives are healthy, AND drafts the IaC PRs
   that close the gaps it finds."
 - [Orchestration tier — operator guide](./orchestration-tier-operator-guide.md) —
-  v0.89.94 through v0.89.98 operator runbook for the
-  orchestration tier slice 1 arc (design at
-  [proposals/orchestration-tier-slice1.md](./proposals/orchestration-tier-slice1.md)).
-  Fifth tier alongside compute / database / kubernetes /
-  serverless. Three surfaces across three clouds: AWS Step
-  Functions, GCP Workflows, Azure Logic Apps (Standard +
-  Consumption tiers). OCI orchestration deferred to slice 2
-  because Resource Manager + Process Automation are
-  shape-different from the AWS/GCP/Azure trio. New
-  Orchestration Inventory sub-tab on AWS/GCP/Azure pages;
-  hidden conditional on OCI. 6 new recommendation kinds:
-  `stepfunc-{xray-active,logging-enable}`,
-  `workflows-{trace-enable,logging-enable}`,
-  `logicapps-{appinsights-enable,diagnostics-enable}`.
-  Discovery summary + trace_coverage endpoints gain
-  `orchestration_count` and `orchestration_pct`. Dashboard
-  TRACE COVERAGE chip breakdown adds ORCH column.
-  **Slice 1 SHIPPED in v0.89.98.** Squadron's claim grows a
-  fifth tier (qualified — 3 clouds in slice 1, full 4-cloud
-  in slice 2 when OCI's primitives get their own treatment).
+  v0.89.94 through v0.89.136 operator runbook for the
+  orchestration tier arc. Slice 1 (design at
+  [proposals/orchestration-tier-slice1.md](./proposals/orchestration-tier-slice1.md))
+  shipped AWS Step Functions + GCP Workflows + Azure Logic
+  Apps. Slice 2 (design at
+  [proposals/orchestration-tier-slice2.md](./proposals/orchestration-tier-slice2.md))
+  closes the qualification by adding OCI Resource Manager
+  (Stacks + Jobs) as the closest OCI orchestration primitive.
+  Honest framing: Resource Manager is infrastructure
+  orchestration (Terraform-as-a-service), not workflow
+  orchestration like Step Functions / Workflows / Logic Apps;
+  OCI Process Automation (BPMN) is the semantically closer
+  match but deferred to slice 3. Slice 2 detection:
+  compartment-level OCI Logging with service=resourcemanager
+  source mapping. 1 new recommendation kind:
+  resmgr-logging-enable; 1 new webhook prefix: resmgr- → oci.
+  **Slice 1 SHIPPED in v0.89.98. Slice 2 SHIPPED in
+  v0.89.136.** Universal claim's orchestration tier is now
+  cleanly 4-cloud — no asterisks.
 - [Serverless tier — operator guide](./serverless-tier-operator-guide.md) —
   v0.89.89 through v0.89.93 operator runbook for the
   serverless tier slice 1 arc (design at
