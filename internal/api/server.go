@@ -194,6 +194,21 @@ type Server struct {
 	// serving cold-start zeros / 404 respectively.
 	discoverySpanQualityHandler        *handlers.DiscoverySpanQualityHandlers
 	spanQualityHandlerOnce             sync.Once
+
+	// discoveryWorkloadHealthHandler — v0.89.132 (#772 Stream 170,
+	// Workload Health dashboard panel slice 1 chunk 1). Same lazily-
+	// constructed pattern as discoverySpanQualityHandler so the 30s
+	// aggregate cache lives across requests rather than being rebuilt
+	// per call. workloadHealthInventoryReader is wired post-
+	// construction via SetWorkloadHealthInventoryReader — nil leaves
+	// the endpoint serving every provider as zero-counts (the panel
+	// hides itself on the UI side, matching the design doc §5.3 hide
+	// conditions). Per design doc §6 the cache TTL is 30s;
+	// DefaultWorkloadHealthCacheTTL pins that.
+	discoveryWorkloadHealthHandler  *handlers.DiscoveryWorkloadHealthHandlers
+	workloadHealthHandlerOnce       sync.Once
+	workloadHealthInventoryReader   handlers.ServerlessHealthInventoryReader
+
 	// discoveryServerlessColdStartHandler — v0.89.114 (#752 Stream 150,
 	// Cold-start latency slice 1 chunk 2). The per-resource cold-start
 	// endpoint handler. Built lazily by discoveryServerlessColdStartTrampoline
@@ -1304,6 +1319,48 @@ func (s *Server) discoverySpanQualityTrampoline(fn func(*handlers.DiscoverySpanQ
 			)
 		})
 		fn(s.discoverySpanQualityHandler, c)
+	}
+}
+
+// SetWorkloadHealthInventoryReader wires the v0.89.132 (#772 Stream
+// 170, Workload Health dashboard panel slice 1 chunk 1) reader onto
+// the API server so the new /api/v1/discovery/workload_health handler
+// can project per-provider serverless health counts.
+//
+// Optional in the same posture as SetQualitySnapshotIndexForDiscovery:
+// a nil reader leaves the endpoint serving zero counts for every
+// provider — the correct cold-start posture for a deployment that
+// hasn't wired the serverless inventory annotators (the UI then hides
+// the panel per design doc §5.3). Production wiring (cmd/all-in-one)
+// calls this with the in-memory inventory reader that observes the
+// same per-scan annotations the cold-start / sampling / error-rate
+// annotators write.
+func (s *Server) SetWorkloadHealthInventoryReader(r handlers.ServerlessHealthInventoryReader) {
+	s.workloadHealthInventoryReader = r
+}
+
+// discoveryWorkloadHealthTrampoline late-binds the v0.89.132 (#772
+// Stream 170) workload health handler call so the route table can be
+// registered before SetWorkloadHealthInventoryReader runs. Same
+// posture as discoverySpanQualityTrampoline: ALWAYS serves — a
+// deployment that hasn't wired the reader gets zero counts for every
+// provider (the dashboard panel hides itself on the UI side), never
+// 503.
+//
+// The trampoline builds the handler once on first call and reuses it
+// thereafter so the 30s cache lives on the Server struct.
+func (s *Server) discoveryWorkloadHealthTrampoline(fn func(*handlers.DiscoveryWorkloadHealthHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.workloadHealthHandlerOnce.Do(func() {
+			s.discoveryWorkloadHealthHandler = handlers.NewDiscoveryWorkloadHealthHandlers(
+				s.workloadHealthInventoryReader,
+				s.auditService,
+				handlers.DefaultWorkloadHealthCacheTTL,
+				nil, // production clock
+				s.logger,
+			)
+		})
+		fn(s.discoveryWorkloadHealthHandler, c)
 	}
 }
 
@@ -2515,6 +2572,28 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/:provider/inventory/:kind/:id/span_quality",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoverySpanQualityTrampoline(func(h *handlers.DiscoverySpanQualityHandlers, c *gin.Context) { h.HandleResourceSpanQuality(c) }))
+
+		// v0.89.132 (#772 Stream 170, Workload Health dashboard panel
+		// slice 1 chunk 1) — workload health endpoint. Aggregates the
+		// per-provider serverless cold-start + sampling + error-rate
+		// detection counts into one JSON shape so the new WORKLOAD
+		// HEALTH dashboard panel renders in a single round-trip. Per
+		// design doc §6 the route sits under the existing auth
+		// middleware; agents:read matches the rest of the read-side
+		// discovery surface.
+		//
+		// Same nil-tolerant posture as the trace_coverage trampoline:
+		// a deployment that hasn't wired the per-provider serverless
+		// inventory annotators sees every provider populated as zero
+		// counts and the UI panel hides itself per design doc §5.3.
+		//
+		// HandleWorkloadHealth emits
+		// AuditEventDiscoveryWorkloadHealthRequested on cache MISS
+		// only — the 30s cache window short-circuits the emission so
+		// the timeline doesn't drown in dashboard polls.
+		v1.GET("/discovery/workload_health",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryWorkloadHealthTrampoline(func(h *handlers.DiscoveryWorkloadHealthHandlers, c *gin.Context) { h.HandleWorkloadHealth(c) }))
 
 		// v0.89.114 (#752 Stream 150, Cold-start latency slice 1 chunk
 		// 2) — per-resource cold-start observation endpoint. Returns the

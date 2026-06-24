@@ -2822,3 +2822,87 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostErrorRateSlice1(t *test
 			"OCI user message should NOT include error-rate system-prompt content: %q", kind)
 	}
 }
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostWorkloadHealthPanel
+// — Cold-start parity invariant per the Workload Health dashboard
+// panel slice 1 chunk 1 (v0.89.132, #772 Stream 170) §8 acceptance
+// test 15. Across all four providers, the user message produced by
+// buildDiscoveryUserMessage must remain byte-identical to v0.89.130
+// when the scan context carries no workload-health-flagged rows.
+//
+// The Workload Health arc is dashboard polish only — no new
+// recommendation kinds, no new substrate, no proposer code path
+// changes. The four user messages keep the v0.89.130 shape because
+// the new endpoint + UI panel only surface EXISTING substrate
+// diagnostics at a new dashboard tile; the per-resource cold-start /
+// sampling / error-rate prompts the proposer assembles stay
+// identical.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostWorkloadHealthPanel(t *testing.T) {
+	// AWS.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-workloadhealth-s1",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	for _, kind := range []string{
+		"WORKLOAD HEALTH",
+		"workload_health",
+		"discovery.workload_health.requested",
+	} {
+		assert.NotContains(t, awsMsg, kind,
+			"AWS user message should NOT include workload-health dashboard content: %q", kind)
+	}
+
+	// GCP.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-workloadhealth-s1",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	for _, kind := range []string{
+		"WORKLOAD HEALTH",
+		"workload_health",
+		"discovery.workload_health.requested",
+	} {
+		assert.NotContains(t, gcpMsg, kind,
+			"GCP user message should NOT include workload-health dashboard content: %q", kind)
+	}
+
+	// Azure.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-workloadhealth-s1",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	for _, kind := range []string{
+		"WORKLOAD HEALTH",
+		"workload_health",
+		"discovery.workload_health.requested",
+	} {
+		assert.NotContains(t, azureMsg, kind,
+			"Azure user message should NOT include workload-health dashboard content: %q", kind)
+	}
+
+	// OCI.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-workloadhealth-s1",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	for _, kind := range []string{
+		"WORKLOAD HEALTH",
+		"workload_health",
+		"discovery.workload_health.requested",
+	} {
+		assert.NotContains(t, ociMsg, kind,
+			"OCI user message should NOT include workload-health dashboard content: %q", kind)
+	}
+}
