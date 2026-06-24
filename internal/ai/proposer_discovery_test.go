@@ -1903,3 +1903,114 @@ func TestDiscoveryProposer_ClustersInScanResult_AppendedToUserMessage(t *testing
 	assert.Contains(t, awsMsg, "eks-addon-only, k8s=1.29, region=us-east-1, logging=none, addons=amazon-cloudwatch-observability, addon-only)")
 	assert.Contains(t, awsMsg, "eks-uncovered, k8s=1.29, region=us-east-1, logging=none, addons=none, uncovered)")
 }
+
+// --- Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) ----
+//
+// TestDiscoveryProposer_ServerlessTierKindsInSystemPrompt — the 11
+// new per-cloud serverless recommendation kinds must appear in the
+// shared system prompt so the model can route findings to the right
+// kind when the scan inventory carries serverless rows. Slice 1
+// compute + database tier + Kubernetes tier kinds must remain present
+// after the serverless extension — the same shared-system-prompt
+// invariant the prior chunk 5 tests pin.
+func TestDiscoveryProposer_ServerlessTierKindsInSystemPrompt(t *testing.T) {
+	for _, srvKind := range []string{
+		// AWS Lambda.
+		"lambda-xray-active", "lambda-otel-layer", "lambda-otel-wrapper",
+		// GCP Cloud Run.
+		"cloudrun-trace-enable", "cloudrun-otel-sidecar", "cloudrun-otel-export-endpoint",
+		// GCP Cloud Functions.
+		"cloudfunc-trace-enable", "cloudfunc-otel-layer",
+		// Azure Functions.
+		"azfunc-appinsights-enable", "azfunc-otel-distro",
+		// OCI Functions.
+		"ocifunc-apm-enable", "ocifunc-otel-distro",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, srvKind,
+			"shared system prompt should teach the serverless tier slice 1 kind %q", srvKind)
+	}
+	// Prior-tier compute / db / k8s kinds still present.
+	for _, priorKind := range []string{
+		"gce-otel-label", "vm-otel-tag", "compute-otel-tag",
+		"ec2-otel-layer", "rds-pi-em",
+		"cloudsql-pi-enable", "azsql-diag-enable", "ocidb-perfhub-enable",
+		"gke-mp-enable", "aks-monitor-enable", "oke-ops-insights-enable",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorKind,
+			"shared system prompt should still teach the prior-tier kind %q after the serverless tier", priorKind)
+	}
+	// The reasoning template (verbatim from the spec) is present.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"This [surface] has [axis] disabled.",
+		"shared system prompt should carry the serverless tier reasoning template")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"~5 minutes of the first",
+		"shared system prompt should carry the serverless tier reasoning template's traceindex follow-up")
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostServerlessTier
+// — serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123)
+// cold-start parity invariant: across all four providers, the
+// compute-only user message produced by buildDiscoveryUserMessage
+// must remain byte-identical to v0.89.88 when the scan context
+// carries no serverless rows. Acceptance test §11.18 invariant —
+// adding the serverless tier kinds must not perturb compute-only
+// prompt generation for any provider. The new kinds live ONLY in the
+// system prompt; the user message has no serverless section, so a
+// cold-start scan (no serverless rows in the inventory) renders the
+// same body the prior chunk 5 tier extensions pinned.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostServerlessTier(t *testing.T) {
+	// AWS cold start.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	assert.Contains(t, awsMsg, "account_id: 123456789012")
+	assert.NotContains(t, awsMsg, "lambda-xray-active")
+	assert.NotContains(t, awsMsg, "cloudrun-otel-sidecar")
+	assert.NotContains(t, awsMsg, "azfunc-appinsights-enable")
+	assert.NotContains(t, awsMsg, "ocifunc-apm-enable")
+	assert.Contains(t, awsMsg, "group_id on every step MUST equal the account_id above")
+
+	// GCP cold start.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.Contains(t, gcpMsg, "project_id: my-sandbox-project")
+	assert.NotContains(t, gcpMsg, "cloudrun-otel-sidecar")
+	assert.NotContains(t, gcpMsg, "cloudfunc-trace-enable")
+	assert.Contains(t, gcpMsg, "group_id on every step MUST equal the project_id above")
+
+	// Azure cold start.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.Contains(t, azureMsg, "subscription_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	assert.NotContains(t, azureMsg, "azfunc-appinsights-enable")
+	assert.NotContains(t, azureMsg, "azfunc-otel-distro")
+	assert.Contains(t, azureMsg, "group_id on every step MUST equal the subscription_id above")
+
+	// OCI cold start.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	assert.Contains(t, ociMsg, "tenancy_ocid: ocid1.tenancy.oc1..aaaaaaaa")
+	assert.NotContains(t, ociMsg, "ocifunc-apm-enable")
+	assert.NotContains(t, ociMsg, "ocifunc-otel-distro")
+	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
+}

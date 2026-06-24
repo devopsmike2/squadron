@@ -51,6 +51,15 @@ type ProviderTraceCoverage struct {
 	WeakMatchPct              float64    `json:"weak_match_pct"`
 	LastIndexUpdateAt         *time.Time `json:"last_index_update_at,omitempty"`
 	PendingTraceEmissionCount int        `json:"pending_trace_emission_count"`
+	// ServerlessPct — serverless tier slice 1 chunk 5 (v0.89.92,
+	// #725 Stream 123) — per-provider serverless coverage rendered
+	// as emitting / inventory * 100 over the serverless-only
+	// sub-counts. A serverless function counts as "emitting" when
+	// last_seen_at is within 24h, same rule as the other tiers
+	// (docs/proposals/serverless-tier-slice1.md §6.4). Zero on cold
+	// start; the dashboard hides the chip line when fleet-wide
+	// inventory is 0 (design doc §7 + §11 acceptance test 13).
+	ServerlessPct float64 `json:"serverless_pct"`
 }
 
 // TraceCoverageTotals is the cross-provider roll-up.
@@ -102,6 +111,17 @@ type InventoryCountQuery interface {
 // free to inject any duration.
 type PendingTraceEmissionCountQuery interface {
 	PendingTraceEmissionCount(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (int, error)
+}
+
+// ServerlessCoverageQuery — serverless tier slice 1 chunk 5 (v0.89.92,
+// #725 Stream 123). Returns per-scope serverless inventory + emitting
+// counts so the per-provider ServerlessPct chip can be computed
+// alongside the existing coverage_pct. A row counts as "emitting"
+// when its last_seen_at is within staleAfter (24h per design doc §6.4).
+// Zero counts on cold start; nil implementation short-circuits to
+// (0, 0) the same way InventoryCountQuery does.
+type ServerlessCoverageQuery interface {
+	ServerlessCoverageForScope(ctx context.Context, provider, scopeID string, staleAfter time.Duration) (inventory, emitting int, err error)
 }
 
 // TraceIndex is the slim surface DiscoveryTraceCoverageHandlers uses to
@@ -193,16 +213,17 @@ const pendingTraceEmissionStaleAfter = 24 * time.Hour
 // that hasn't observed any spans yet); inventoryQuery nil short-circuits
 // the inventory_count lookup to 0 for every scope.
 type DiscoveryTraceCoverageHandlers struct {
-	awsStore       AWSSummaryStore
-	gcpStore       GCPSummaryStore
-	azureStore     AzureSummaryStore
-	ociStore       OCISummaryStore
-	traceIndex     TraceIndex
-	inventoryQuery InventoryCountQuery
-	pendingQuery   PendingTraceEmissionCountQuery
-	auditService   services.AuditService
-	cache          *traceCoverageCache
-	logger         *zap.Logger
+	awsStore        AWSSummaryStore
+	gcpStore        GCPSummaryStore
+	azureStore      AzureSummaryStore
+	ociStore        OCISummaryStore
+	traceIndex      TraceIndex
+	inventoryQuery  InventoryCountQuery
+	pendingQuery    PendingTraceEmissionCountQuery
+	serverlessQuery ServerlessCoverageQuery
+	auditService    services.AuditService
+	cache           *traceCoverageCache
+	logger          *zap.Logger
 }
 
 // NewDiscoveryTraceCoverageHandlers builds the handler. ttl <= 0 falls
@@ -242,6 +263,19 @@ func NewDiscoveryTraceCoverageHandlers(
 		cache:          newTraceCoverageCache(ttl, clock),
 		logger:         logger,
 	}
+}
+
+// WithServerlessQuery — serverless tier slice 1 chunk 5 (v0.89.92,
+// #725 Stream 123). Optional setter for the per-scope serverless
+// coverage query. nil short-circuits the ServerlessPct column to 0 for
+// every provider (deployments that haven't wired the new query stay on
+// cold-start posture). Kept as a setter rather than a positional ctor
+// arg to preserve the v0.89.82 NewDiscoveryTraceCoverageHandlers
+// signature — existing call sites and tests don't churn just because
+// the serverless tier landed.
+func (h *DiscoveryTraceCoverageHandlers) WithServerlessQuery(q ServerlessCoverageQuery) *DiscoveryTraceCoverageHandlers {
+	h.serverlessQuery = q
+	return h
 }
 
 // HandleTraceCoverage serves GET /api/v1/discovery/trace_coverage.
@@ -434,6 +468,37 @@ func (h *DiscoveryTraceCoverageHandlers) aggregateProvider(
 		t := lastUpdate.UTC()
 		out.LastIndexUpdateAt = &t
 	}
+
+	// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+	// roll up per-scope serverless coverage when the optional
+	// ServerlessCoverageQuery is wired. Sums the per-scope counts and
+	// computes ServerlessPct = emitting / inventory * 100. nil query
+	// short-circuits to 0; a failed per-scope query logs a warning and
+	// stays at 0 for that scope. Mirrors the existing
+	// inventoryQuery / pendingQuery nil-tolerant posture so a
+	// deployment that hasn't wired the new query renders the chip line
+	// hidden (UI hides the line when the fleet-wide inventory is 0,
+	// per design doc §11 acceptance test 13).
+	if h.serverlessQuery != nil {
+		var slInv, slEmit int
+		for _, scope := range scopes {
+			if scope == "" {
+				continue
+			}
+			inv, emit, err := h.serverlessQuery.ServerlessCoverageForScope(ctx, provider, scope, pendingTraceEmissionStaleAfter)
+			if err != nil {
+				h.logger.Warn("trace coverage: serverless lookup failed",
+					zap.String("provider", provider),
+					zap.String("scope", scope),
+					zap.Error(err))
+				continue
+			}
+			slInv += inv
+			slEmit += emit
+		}
+		out.ServerlessPct = computeTraceCoveragePct(slEmit, slInv)
+	}
+
 	return out
 }
 

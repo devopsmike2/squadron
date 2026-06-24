@@ -666,6 +666,109 @@ describe("DiscoveryGCP", () => {
     ).toBeInTheDocument();
   });
 
+  // Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+  // Inventory tab gains a Serverless sub-tab rendering the Cloud Run
+  // + Cloud Functions inventory from the chunk 2 GCP scanner
+  // extension. The Surface column shows "cloudrun" / "cloudfunc" per
+  // row. Empty state mirrors the Databases / Kubernetes sub-tabs.
+  it("TestDiscoveryGCP_InventoryTab_ServerlessSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "gcp",
+          surface: "cloudrun",
+          account_id: "my-prod-project",
+          region: "us-central1",
+          resource_name: "api-svc",
+          resource_arn:
+            "projects/my-prod-project/locations/us-central1/services/api-svc",
+          runtime: "go1.21",
+          has_trace_axis: true,
+          has_otel_distro: true,
+        },
+        {
+          provider: "gcp",
+          surface: "cloudfunc",
+          account_id: "my-prod-project",
+          region: "us-central1",
+          resource_name: "nightly-cron",
+          resource_arn:
+            "projects/my-prod-project/locations/us-central1/functions/nightly-cron",
+          runtime: "python3.11",
+          has_trace_axis: false,
+          has_otel_distro: false,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(serverlessTab).toHaveAttribute("data-state", "active");
+
+    expect(screen.getByText("api-svc")).toBeInTheDocument();
+    expect(screen.getByText("nightly-cron")).toBeInTheDocument();
+    expect(screen.getByText("cloudrun")).toBeInTheDocument();
+    expect(screen.getByText("cloudfunc")).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryGCP_InventoryTab_ServerlessSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(
+      screen.getByText(/No serverless functions discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // advanceToKeyPasteStep walks the wizard from step 1 (project) to

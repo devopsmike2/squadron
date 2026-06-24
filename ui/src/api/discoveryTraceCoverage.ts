@@ -51,6 +51,17 @@ export type ProviderTraceCoverage = {
    * the backend always populates it (0 on cold start).
    */
   pending_trace_emission_count: number;
+  /**
+   * serverless_pct — serverless tier slice 1 chunk 5 (v0.89.92,
+   * #725 Stream 123). Per-provider serverless coverage rendered as
+   * emitting / inventory * 100 over the serverless-only sub-counts.
+   * A function counts as emitting when last_seen_at is within 24h
+   * (design doc §6.4). Zero on cold start; the dashboard hides the
+   * SERVERLESS chip line when the fleet-wide sum is 0 (design doc
+   * §7 + §11 acceptance test 13). Required field — the backend
+   * always populates it.
+   */
+  serverless_pct: number;
 };
 
 // --- Cross-provider totals -----------------------------------------

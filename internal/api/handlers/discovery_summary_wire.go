@@ -183,6 +183,12 @@ func (a *applicationStoreAuditQuery) ListRecentScanCompletedByProvider(
 			InstanceCount:       totalInstancesFromPayload(provider, e.Payload),
 			InstrumentedCount:   intFromPayload(e.Payload, "instrumented_count"),
 			UninstrumentedCount: intFromPayload(e.Payload, "uninstrumented_count"),
+			// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream
+			// 123) — project the optional serverless_count payload
+			// field. Older scans pre-date the field; intFromPayload
+			// returns 0 in that case so the cold-start posture stays
+			// zero-safe.
+			ServerlessCount: intFromPayload(e.Payload, "serverless_count"),
 		}
 	}
 	return out, nil

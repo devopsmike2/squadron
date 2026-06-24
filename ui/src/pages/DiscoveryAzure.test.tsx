@@ -710,6 +710,103 @@ describe("DiscoveryAzure", () => {
     ).toBeInTheDocument();
   });
 
+  // Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+  // Inventory tab gains a Serverless sub-tab rendering the Azure
+  // Functions inventory from the chunk 3 scanner extension.
+  it("TestDiscoveryAzure_InventoryTab_ServerlessSubTab_RendersTable", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "azure",
+          surface: "azfunc",
+          account_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          region: "eastus",
+          resource_name: "queue-consumer",
+          resource_arn:
+            "/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resourceGroups/rg/providers/Microsoft.Web/sites/queue-consumer",
+          runtime: "dotnet8",
+          has_trace_axis: true,
+          has_otel_distro: false,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(serverlessTab).toHaveAttribute("data-state", "active");
+    expect(screen.getByText("queue-consumer")).toBeInTheDocument();
+    expect(screen.getByText("azfunc")).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAzure_InventoryTab_ServerlessSubTab_EmptyState", async () => {
+    const user = userEvent.setup();
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanAzureConnection.mockResolvedValue(sampleScan);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/VMs: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(
+      screen.getByText(/No serverless functions discovered\. Run a scan to refresh\./i),
+    ).toBeInTheDocument();
+  });
+
   // --- helpers ---
 
   // advanceToServicePrincipalStep walks the wizard from step 1

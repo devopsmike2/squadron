@@ -582,3 +582,101 @@ func (stubAuthService) Validate(_ context.Context, _ string) (*services.APIToken
 	// translates into 401. Returning an error would 500.
 	return nil, nil
 }
+
+// --- Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) ----
+//
+// TestDiscoverySummary_IncludesServerlessCount — §11 acceptance test
+// 11: seeding the audit projection with a serverless_count per
+// provider must surface on each ProviderSummary.ServerlessCount field
+// and roll up to Totals.ServerlessCount. Mirrors the existing
+// AggregatesAllFourProviders test posture.
+func TestDiscoverySummary_IncludesServerlessCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"111122223333"}}
+	gcp := &stubGCPStore{ids: []string{"gcp-conn-1"}}
+	az := &stubAzureStore{ids: []string{"az-conn-1"}}
+	oci := &stubOCIStore{ids: []string{"oci-conn-1"}}
+
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	audit := &stubAuditQuery{
+		scans: map[string]map[string]ScanSummary{
+			"aws": {
+				"111122223333": {ScopeID: "111122223333", CompletedAt: now,
+					InstanceCount: 10, InstrumentedCount: 6, UninstrumentedCount: 4,
+					ServerlessCount: 3},
+			},
+			"gcp": {
+				"gcp-conn-1": {ScopeID: "gcp-conn-1", CompletedAt: now,
+					InstanceCount: 20, InstrumentedCount: 12, UninstrumentedCount: 8,
+					ServerlessCount: 5},
+			},
+			"azure": {
+				"az-conn-1": {ScopeID: "az-conn-1", CompletedAt: now,
+					InstanceCount: 30, InstrumentedCount: 18, UninstrumentedCount: 12,
+					ServerlessCount: 2},
+			},
+			"oci": {
+				"oci-conn-1": {ScopeID: "oci-conn-1", CompletedAt: now,
+					InstanceCount: 40, InstrumentedCount: 24, UninstrumentedCount: 16,
+					ServerlessCount: 1},
+			},
+		},
+	}
+	h := NewDiscoverySummaryHandlers(aws, gcp, az, oci, nil, audit, time.Second, nil, nil)
+	w := summaryDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	r := parseSummary(t, w)
+
+	cases := []struct {
+		name string
+		want int
+	}{
+		{"aws", 3}, {"gcp", 5}, {"azure", 2}, {"oci", 1},
+	}
+	for _, tc := range cases {
+		if got := r.Providers[tc.name].ServerlessCount; got != tc.want {
+			t.Errorf("%s.serverless_count = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	if got, want := r.Totals.ServerlessCount, 11; got != want {
+		t.Errorf("totals.serverless_count = %d, want %d", got, want)
+	}
+}
+
+// TestDiscoverySummary_ServerlessCountZeroOnColdStart — cold-start
+// posture: when the audit projection carries no serverless_count
+// field (older scans pre-date the field), every provider's
+// ServerlessCount stays 0 and Totals.ServerlessCount stays 0. Pins the
+// backward-compat invariant the wire adapter's intFromPayload helper
+// already enforces — surfacing it as a regression test so a future
+// refactor of the projection doesn't break older-scan deployments.
+func TestDiscoverySummary_ServerlessCountZeroOnColdStart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"111122223333"}}
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	audit := &stubAuditQuery{
+		scans: map[string]map[string]ScanSummary{
+			"aws": {
+				"111122223333": {ScopeID: "111122223333", CompletedAt: now,
+					InstanceCount: 10, InstrumentedCount: 6, UninstrumentedCount: 4},
+			},
+		},
+	}
+	h := NewDiscoverySummaryHandlers(aws, nil, nil, nil, nil, audit, time.Second, nil, nil)
+	w := summaryDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	r := parseSummary(t, w)
+
+	if got := r.Providers["aws"].ServerlessCount; got != 0 {
+		t.Errorf("aws.serverless_count = %d, want 0 (cold start)", got)
+	}
+	if got := r.Totals.ServerlessCount; got != 0 {
+		t.Errorf("totals.serverless_count = %d, want 0 (cold start)", got)
+	}
+}

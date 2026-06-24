@@ -936,11 +936,25 @@ func providerFromRecommendationKind(kind string) string {
 			return "aws"
 		}
 		return provider
-	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-"):
+	// Serverless tier slice 1 chunk 5 (v0.89.92, #725 Stream 123) —
+	// the 11 new serverless recommendation kinds route by per-cloud
+	// prefix. Ordering: the lambda- case sits before the gce-/cloudsql-
+	// /gke- GCP case so a future "cloudlambda-" or similar doesn't
+	// short-circuit through the GCP prefix detection. Similarly the
+	// cloudrun-/cloudfunc- cases share GCP with the existing
+	// gce-/cloudsql-/gke- prefixes; azfunc- adds to the Azure family
+	// alongside vm-/azsql-/aks-; ocifunc- adds to the OCI family
+	// alongside compute-/ocidb-/oke-.
+	case strings.HasPrefix(kind, "lambda-"):
+		return "aws"
+	case strings.HasPrefix(kind, "gce-") || strings.HasPrefix(kind, "cloudsql-") || strings.HasPrefix(kind, "gke-") ||
+		strings.HasPrefix(kind, "cloudrun-") || strings.HasPrefix(kind, "cloudfunc-"):
 		return "gcp"
-	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-"):
+	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-") ||
+		strings.HasPrefix(kind, "azfunc-"):
 		return "azure"
-	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-") || strings.HasPrefix(kind, "oke-"):
+	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-") || strings.HasPrefix(kind, "oke-") ||
+		strings.HasPrefix(kind, "ocifunc-"):
 		return "oci"
 	default:
 		return "aws"

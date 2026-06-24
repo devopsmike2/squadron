@@ -389,6 +389,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	spanQualityKindsPromptSection +
 
+	serverlessTierKindsPromptSection +
+
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
 	`level — the operator approves the whole plan at step 0 and the engine sequences the ` +
@@ -1126,6 +1128,87 @@ The most common cause is [cause]. This Terraform PR targets
 
 If the actual cause is different, decline this PR — the
 verdict learning loop will record the decline."
+
+` + "\n"
+
+// serverlessTierKindsPromptSection — serverless tier slice 1 chunk 5
+// (v0.89.92, #725 Stream 123). Eleven new recommendation kinds across
+// five surfaces (Lambda / Cloud Run / Cloud Functions / Azure Functions
+// / OCI Functions). Section is appended to the discovery system prompt
+// alongside the trace-emission and span-quality sections so the model
+// reads it as part of the universal kind catalog.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no serverless rows the rendered user message stays
+// byte-identical to v0.89.88. The 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostServerlessTier
+// pins this invariant.
+const serverlessTierKindsPromptSection = `SERVERLESS TIER KINDS (slice 1 of serverless tier):
+
+These kinds fire when an inventory row in the serverless tier
+has its observability axis disabled. Each (provider, surface)
+pair has 1-3 kinds:
+
+For AWS Lambda:
+- lambda-xray-active: function with tracing_config.mode set to
+  PassThrough or absent. Terraform: aws_lambda_function
+  tracing_config { mode = "Active" }.
+- lambda-otel-layer: function without the AWS Distro for
+  OpenTelemetry layer attached. Terraform: aws_lambda_function
+  layers = [...existing, "arn:aws:lambda:<region>:901920570463:layer:aws-otel-{lang}-{ver}"]
+- lambda-otel-wrapper: function missing AWS_LAMBDA_EXEC_WRAPPER
+  env var. Terraform: aws_lambda_function environment {
+  variables { AWS_LAMBDA_EXEC_WRAPPER = "/opt/otel-instrument" } }.
+
+For GCP Cloud Run:
+- cloudrun-trace-enable: service without the
+  run.googleapis.com/trace annotation. Terraform:
+  google_cloud_run_service metadata { annotations = {
+  "run.googleapis.com/trace" = "true" } }.
+- cloudrun-otel-sidecar: service without a sidecar container
+  matching the OTel collector pattern. Terraform: add a
+  containers block with name = "otel-collector" and the
+  upstream collector image.
+- cloudrun-otel-export-endpoint: service missing
+  OTEL_EXPORTER_OTLP_ENDPOINT env on the user's container.
+  Terraform: add env { name = "OTEL_EXPORTER_OTLP_ENDPOINT"
+  value = "http://localhost:4318" } (pointing at the sidecar).
+
+For GCP Cloud Functions:
+- cloudfunc-trace-enable: function without GOOGLE_CLOUD_TRACE
+  env var. Terraform: google_cloudfunctions_function
+  environment_variables { GOOGLE_CLOUD_TRACE = "true" }.
+- cloudfunc-otel-layer: function whose runtime supports OTel
+  auto-instrumentation but env var
+  OTEL_INSTRUMENTATION_AUTO_ENABLED is unset. Terraform:
+  same environment_variables block with the OTel flag.
+
+For Azure Functions:
+- azfunc-appinsights-enable: function app without
+  APPLICATIONINSIGHTS_CONNECTION_STRING app_setting.
+  Terraform: azurerm_linux_function_app app_settings = {
+  APPLICATIONINSIGHTS_CONNECTION_STRING = "..." }.
+- azfunc-otel-distro: function app without OTEL_DOTNET_AUTO_HOME
+  or OTEL_PYTHON_DISTRO app_setting. Terraform: same
+  app_settings block with the matching distro env var.
+
+For OCI Functions:
+- ocifunc-apm-enable: function with config[OCI_APM_ENABLED]
+  not set to "true". Terraform: oci_functions_function
+  config = { OCI_APM_ENABLED = "true" }.
+- ocifunc-otel-distro: function without OTEL_DISTRO config
+  set. Terraform: same config block with OTEL_DISTRO = "auto".
+
+REASONING TEMPLATE for serverless tier recommendations:
+
+"This [surface] has [axis] disabled. The most common cause is
+that the function/service was deployed before the team adopted
+OpenTelemetry, or the IaC was authored from an older template.
+This Terraform PR adds the missing primitive; once merged and
+applied, Squadron's traceindex will populate the Last seen
+column for this resource within ~5 minutes of the first
+invocation."
 
 ` + "\n"
 
