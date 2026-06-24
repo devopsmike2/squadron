@@ -2886,6 +2886,215 @@ describe("DiscoveryAWSPage", () => {
     expect(cell.textContent).toBe("—");
   });
 
+  // Error rate correlation slice 1 chunk 3 (v0.89.129, #769 Stream
+  // 167) — the Serverless table gains an "Error rate (24h)" column
+  // between "Sampling rate (24h)" and "Last seen". The cell renders
+  // amber when the server-side detection's predicate fires; slate
+  // otherwise; em-dash when no observation is persisted.
+
+  it("TestDiscoveryAWS_Serverless_ErrorRateColumnRenders", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "fn-er-render",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:fn-er-render",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Error rate \(24h\)/i)).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAWS_Serverless_ErrorRateCell_AmberWhenExceedsThreshold", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "fn-er-amber",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:fn-er-amber",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          current_error_rate: 0.0319,
+          error_rate_exceeds_threshold: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("error-rate-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/3.19%/);
+    const tip = cell.getAttribute("title") ?? "";
+    expect(tip).toMatch(/exceeds 2x baseline/);
+  });
+
+  it("TestDiscoveryAWS_Serverless_ErrorRateCell_SlateWhenBelowThreshold", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "fn-er-slate",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:fn-er-slate",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          current_error_rate: 0.005,
+          error_rate_exceeds_threshold: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("error-rate-cell");
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "ok");
+    expect(cell.className).not.toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/0.50%/);
+  });
+
+  it("TestDiscoveryAWS_Serverless_ErrorRateCell_DashWhenNoObservation", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "aws",
+          surface: "lambda",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "fn-er-dash",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:fn-er-dash",
+          runtime: "python3.11",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          // current_error_rate intentionally undefined.
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Serverless \(1\)/i)).toBeInTheDocument();
+    });
+    const cells = screen.getAllByTestId("error-rate-cell");
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "none");
+    expect(cell.textContent).toBe("—");
+  });
+
   // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
   // the Inventory tab gains an Orchestration section rendering the
   // Step Functions inventory from the v0.89.95 chunk 1 scanner. The

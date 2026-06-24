@@ -115,6 +115,12 @@ type Scanner struct {
 	// persisted cold-start observations. v0.89.118 — same rationale
 	// as the AWS scanner's connectionID field.
 	connectionID string
+
+	// errorRateStore — Error rate correlation slice 1 chunk 3
+	// (v0.89.129). Storage adapter for persisting
+	// error_rate_observation rows the chunk-3 detection branch
+	// produces. Nil-tolerant — same posture as coldStartStore.
+	errorRateStore ErrorRateStore
 }
 
 // Provider satisfies the (future) scanner.Scanner interface. The

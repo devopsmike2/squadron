@@ -1841,6 +1841,12 @@ function ServerlessSection({
                         tables per the slice 1 contract — all 5
                         serverless surfaces participate. */}
                     <th className="px-3 py-2 font-medium">Sampling rate (24h)</th>
+                    {/* Error rate correlation slice 1 chunk 3
+                        (v0.89.129, #769 Stream 167) — new
+                        "Error rate (24h)" column between Sampling
+                        rate and Last seen. Mirrored on all 4
+                        provider Serverless tables. */}
+                    <th className="px-3 py-2 font-medium">Error rate (24h)</th>
                     <th className="px-3 py-2 font-medium">Last seen</th>
                     <th className="px-3 py-2 font-medium">Quality</th>
                   </tr>
@@ -1865,6 +1871,9 @@ function ServerlessSection({
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <SamplingRateCell row={s} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <ErrorRateCell row={s} />
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <LastSeenCell value={s.last_seen_at} />
@@ -2012,6 +2021,53 @@ export function SamplingRateCell({ row }: { row: ServerlessRow }) {
       data-value={isAmber ? "amber" : "ok"}
     >
       {pct.toFixed(1)}%
+    </span>
+  );
+}
+
+// ErrorRateCell — Error rate correlation slice 1 chunk 3
+// (v0.89.129, #769 Stream 167). Renders the per-row 24h error rate
+// surfaced on ServerlessRow. Three render states matching the
+// ColdStartCell / SamplingRateCell pattern:
+//
+//   - undefined / null current_error_rate: render "—" at the muted
+//     color. Covers the "no observation persisted yet" case.
+//   - error_rate_exceeds_threshold === true: render the percentage
+//     amber. Hover tooltip names the 2.0x baseline + minimums so
+//     the operator can confirm without drilling into the
+//     per-resource /error_rate endpoint.
+//   - error_rate_exceeds_threshold === false / undefined: render
+//     the percentage at the default slate color.
+//
+// Exported so the GCP / Azure / OCI pages can share one
+// implementation — same posture as SamplingRateCell.
+export function ErrorRateCell({ row }: { row: ServerlessRow }) {
+  if (row.current_error_rate === undefined || row.current_error_rate === null) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="No error-rate observation yet"
+        data-testid="error-rate-cell"
+        data-value="none"
+      >
+        —
+      </span>
+    );
+  }
+  const pct = row.current_error_rate * 100;
+  const isAmber = row.error_rate_exceeds_threshold === true;
+  return (
+    <span
+      className={isAmber ? "text-amber-600" : "text-foreground"}
+      title={
+        isAmber
+          ? `Error rate ${pct.toFixed(2)}% — exceeds 2x baseline + minimums`
+          : `Error rate ${pct.toFixed(2)}%`
+      }
+      data-testid="error-rate-cell"
+      data-value={isAmber ? "amber" : "ok"}
+    >
+      {pct.toFixed(2)}%
     </span>
   );
 }

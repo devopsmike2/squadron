@@ -1513,6 +1513,11 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
                 between Cold-start P95 and Last seen. OCI Functions
                 participate per slice 1. */}
             <th className="px-3 py-2 font-medium">Sampling rate (24h)</th>
+            {/* Error rate correlation slice 1 chunk 3 (v0.89.129,
+                #769 Stream 167) — new "Error rate (24h)" column
+                between Sampling rate and Last seen. OCI Functions
+                participates. */}
+            <th className="px-3 py-2 font-medium">Error rate (24h)</th>
             <th className="px-3 py-2 font-medium">Last seen</th>
           </tr>
         </thead>
@@ -1555,6 +1560,9 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
               </td>
               <td className="px-3 py-2 text-xs">
                 <SamplingRateCell row={row} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <ErrorRateCell row={row} />
               </td>
               <td className="px-3 py-2 text-xs">
                 <LastSeenCell value={row.last_seen_at} />
@@ -1918,6 +1926,40 @@ function ColdStartCell({ row }: { row: ServerlessRow }) {
       data-value={isAmber ? "amber" : "ok"}
     >
       {ms}ms
+    </span>
+  );
+}
+
+// ErrorRateCell — Error rate correlation slice 1 chunk 3
+// (v0.89.129, #769 Stream 167). Mirrors the AWS DiscoveryAWS
+// ErrorRateCell exactly. See AWS ErrorRateCell godoc.
+function ErrorRateCell({ row }: { row: ServerlessRow }) {
+  if (row.current_error_rate === undefined || row.current_error_rate === null) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="No error-rate observation yet"
+        data-testid="error-rate-cell"
+        data-value="none"
+      >
+        —
+      </span>
+    );
+  }
+  const pct = row.current_error_rate * 100;
+  const isAmber = row.error_rate_exceeds_threshold === true;
+  return (
+    <span
+      className={isAmber ? "text-amber-600" : "text-foreground"}
+      title={
+        isAmber
+          ? `Error rate ${pct.toFixed(2)}% — exceeds 2x baseline + minimums`
+          : `Error rate ${pct.toFixed(2)}%`
+      }
+      data-testid="error-rate-cell"
+      data-value={isAmber ? "amber" : "ok"}
+    >
+      {pct.toFixed(2)}%
     </span>
   );
 }

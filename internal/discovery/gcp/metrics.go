@@ -537,6 +537,13 @@ func (s *Scanner) WithColdStartStore(store ColdStartStore) *Scanner {
 	return s
 }
 
+// WithErrorRateStore wires the error-rate observation storage
+// adapter into the Scanner. v0.89.129. Mirrors WithColdStartStore.
+func (s *Scanner) WithErrorRateStore(store ErrorRateStore) *Scanner {
+	s.errorRateStore = store
+	return s
+}
+
 // WithConnectionID overrides the connection identifier used to
 // scope persisted cold-start observations. v0.89.118. Production
 // constructors carry the value through their CloudConnection
