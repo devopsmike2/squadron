@@ -20,6 +20,7 @@ import (
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -444,16 +445,17 @@ func (f *fakeDynamoDB) ListTagsOfResource(_ context.Context, in *dynamodb.ListTa
 }
 
 type fakeFactory struct {
-	ec2      EC2Client
-	lambda   LambdaClient
-	rds      RDSClient
-	s3       S3Client
-	elbv2    ELBv2Client
-	eks      EKSClient
-	dynamodb DynamoDBClient
-	ecs      ECSClient
-	sfn      SFNClient
-	sts      STSClient
+	ec2         EC2Client
+	lambda      LambdaClient
+	rds         RDSClient
+	s3          S3Client
+	elbv2       ELBv2Client
+	eks         EKSClient
+	dynamodb    DynamoDBClient
+	ecs         ECSClient
+	sfn         SFNClient
+	eventbridge EventBridgeClient
+	sts         STSClient
 }
 
 func (f *fakeFactory) STS(_ context.Context, _ string) (STSClient, error)       { return f.sts, nil }
@@ -528,6 +530,18 @@ func (f *fakeFactory) SFN(_ context.Context, _ string) (SFNClient, error) {
 		return &fakeSFN{}, nil
 	}
 	return f.sfn, nil
+}
+
+// EventBridge returns the configured fake EventBridge client. Same
+// zero-output fallback as the other services so tests that don't
+// exercise the EventBridge path get an empty-inventory fake rather than
+// nil-panicking. Slice 1 chunk 1 of the event-source-tier arc
+// (v0.89.100, #734 Stream 132).
+func (f *fakeFactory) EventBridge(_ context.Context, _ string) (EventBridgeClient, error) {
+	if f.eventbridge == nil {
+		return &fakeEventBridge{}, nil
+	}
+	return f.eventbridge, nil
 }
 
 // newTestScanner builds a Scanner wired against the supplied fake
@@ -2172,6 +2186,102 @@ var _ SFNClient = (*fakeSFN)(nil)
 // touches the sfn types (not sfntypes) directly; the stepfunctions_test.go
 // file references sfntypes through the per-fixture builders.
 var _ = sfntypes.StateMachineTypeStandard
+
+// fakeEventBridge is the test substitute for the EventBridgeClient
+// interface. Slice 1 chunk 1 of the event-source-tier arc (v0.89.100,
+// #734 Stream 132). Drives the three-method API:
+//   - ListEventBuses paginates through listBusesPages
+//   - ListRules paginates through listRulesPagesByBus[busName]
+//   - ListTargetsByRule returns targetsByRule[rule.Name]
+//
+// listBusesErr / listRulesErr / listTargetsErr (when set) cause the
+// matching call to fail — used by the per-call partial-failure
+// acceptance tests.
+type fakeEventBridge struct {
+	listBusesPages    []*eventbridge.ListEventBusesOutput
+	listBusesCallIdx  int
+	listBusesErr      error
+	lastListBusesIn   *eventbridge.ListEventBusesInput
+	listBusesCalls    int
+
+	// listRulesPagesByBus maps bus name → list of paginated ListRulesOutput
+	// pages. nil/missing → empty result.
+	listRulesPagesByBus map[string][]*eventbridge.ListRulesOutput
+	listRulesCallIdx    map[string]int
+	listRulesErr        error
+	lastListRulesIn     *eventbridge.ListRulesInput
+	listRulesCalls      int
+
+	// targetsByRule maps rule name → list of targets. nil/missing →
+	// empty result.
+	targetsByRule    map[string]*eventbridge.ListTargetsByRuleOutput
+	listTargetsErr   error
+	listTargetsCalls int
+}
+
+func (f *fakeEventBridge) ListEventBuses(_ context.Context, in *eventbridge.ListEventBusesInput, _ ...func(*eventbridge.Options)) (*eventbridge.ListEventBusesOutput, error) {
+	f.lastListBusesIn = in
+	f.listBusesCalls++
+	if f.listBusesErr != nil {
+		return nil, f.listBusesErr
+	}
+	if f.listBusesCallIdx >= len(f.listBusesPages) {
+		return &eventbridge.ListEventBusesOutput{}, nil
+	}
+	out := f.listBusesPages[f.listBusesCallIdx]
+	f.listBusesCallIdx++
+	if out == nil {
+		return &eventbridge.ListEventBusesOutput{}, nil
+	}
+	return out, nil
+}
+
+func (f *fakeEventBridge) ListRules(_ context.Context, in *eventbridge.ListRulesInput, _ ...func(*eventbridge.Options)) (*eventbridge.ListRulesOutput, error) {
+	f.lastListRulesIn = in
+	f.listRulesCalls++
+	if f.listRulesErr != nil {
+		return nil, f.listRulesErr
+	}
+	if f.listRulesCallIdx == nil {
+		f.listRulesCallIdx = map[string]int{}
+	}
+	bus := ""
+	if in != nil && in.EventBusName != nil {
+		bus = *in.EventBusName
+	}
+	pages, ok := f.listRulesPagesByBus[bus]
+	if !ok {
+		return &eventbridge.ListRulesOutput{}, nil
+	}
+	idx := f.listRulesCallIdx[bus]
+	if idx >= len(pages) {
+		return &eventbridge.ListRulesOutput{}, nil
+	}
+	out := pages[idx]
+	f.listRulesCallIdx[bus] = idx + 1
+	if out == nil {
+		return &eventbridge.ListRulesOutput{}, nil
+	}
+	return out, nil
+}
+
+func (f *fakeEventBridge) ListTargetsByRule(_ context.Context, in *eventbridge.ListTargetsByRuleInput, _ ...func(*eventbridge.Options)) (*eventbridge.ListTargetsByRuleOutput, error) {
+	f.listTargetsCalls++
+	if f.listTargetsErr != nil {
+		return nil, f.listTargetsErr
+	}
+	if in == nil || in.Rule == nil {
+		return &eventbridge.ListTargetsByRuleOutput{}, nil
+	}
+	if out, ok := f.targetsByRule[*in.Rule]; ok && out != nil {
+		return out, nil
+	}
+	return &eventbridge.ListTargetsByRuleOutput{}, nil
+}
+
+// Compile-time check that fakeEventBridge satisfies the EventBridgeClient
+// interface.
+var _ EventBridgeClient = (*fakeEventBridge)(nil)
 
 // TestScanRegionECS_HappyPath_TwoClusters_OneInstrumented_OneNot
 // drives the mapping happy path: two clusters surface through

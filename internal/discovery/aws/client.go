@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -207,6 +208,40 @@ type STSClient interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
+// EventBridgeClient is the narrow AWS EventBridge surface the event source
+// scanner depends on. Added in v0.89.100 (#734 Stream 132, slice 1 chunk 1
+// of the Event source tier arc). The real *eventbridge.Client satisfies it.
+//
+// The three methods cover the slice 1 chunk 1 detection contract:
+// ListEventBuses surfaces every event bus the assumed-role principal can
+// see in a region (paginated via NextToken); ListRules surfaces each bus's
+// rules (paginated); ListTargetsByRule surfaces each rule's targets so the
+// scanner can detect a CloudWatch Logs target ARN — the slice 1 chunk 1
+// log-target axis proxy. All three APIs are read-only.
+//
+// SLICE 1 CHUNK 1 SCHEMAS DETECTION DEFERRAL (design doc §3.1 + §12):
+// The design doc names the Schemas Discoverer state as the soft proxy for
+// HasTraceAxis, but the AWS Schemas API lives in a separate SDK package
+// (github.com/aws/aws-sdk-go-v2/service/schemas). The chunk-1 budget
+// (~1300 lines) does not accommodate the additional client interface +
+// factory wiring + per-bus DescribeDiscoverer fan-out + IAM action set
+// extension. The chunk-1 scanner falls back to the log-target axis as
+// the proxy for BOTH HasTraceAxis AND HasLogAxis — a bus with a
+// CloudWatch Logs target is a strong proxy for trace observability
+// readiness since CloudWatch Logs can carry the X-Ray trace header.
+// Slice 2 lands the direct Schemas Discoverer detection and separates
+// the two axes per the design doc's three-axis table.
+//
+// IAM contract per docs/proposals/event-source-tier-slice1.md §12:
+// events:ListEventBuses + events:ListRules + events:ListTargetsByRule.
+// All three read-only. Squadron does NOT call any EventBridge mutation
+// API.
+type EventBridgeClient interface {
+	ListEventBuses(ctx context.Context, params *eventbridge.ListEventBusesInput, optFns ...func(*eventbridge.Options)) (*eventbridge.ListEventBusesOutput, error)
+	ListRules(ctx context.Context, params *eventbridge.ListRulesInput, optFns ...func(*eventbridge.Options)) (*eventbridge.ListRulesOutput, error)
+	ListTargetsByRule(ctx context.Context, params *eventbridge.ListTargetsByRuleInput, optFns ...func(*eventbridge.Options)) (*eventbridge.ListTargetsByRuleOutput, error)
+}
+
 // SFNClient is the narrow AWS Step Functions surface the orchestration
 // scanner depends on. Added in v0.89.95 (#728 Stream 126, slice 1 chunk
 // 1 of the Orchestration tier arc). The real *sfn.Client satisfies it.
@@ -297,6 +332,14 @@ type ClientFactory interface {
 	// machine WorkflowType is recorded so the proposer can route to
 	// the appropriate recommendation kind.
 	SFN(ctx context.Context, region string) (SFNClient, error)
+
+	// EventBridge returns an EventBridge client for the supplied region.
+	// Added in slice 1 chunk 1 of the event-source-tier arc (v0.89.100,
+	// #734 Stream 132). EventBridge is a per-region API — the supplied
+	// region is where ListEventBuses walks. Covers the default event bus
+	// plus any custom event buses the account has provisioned in the
+	// region.
+	EventBridge(ctx context.Context, region string) (EventBridgeClient, error)
 }
 
 // sdkClientFactory is the production ClientFactory — it does a real
@@ -460,6 +503,13 @@ func (f *sdkClientFactory) ECS(_ context.Context, region string) (ECSClient, err
 
 func (f *sdkClientFactory) SFN(_ context.Context, region string) (SFNClient, error) {
 	return sfn.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+func (f *sdkClientFactory) EventBridge(_ context.Context, region string) (EventBridgeClient, error) {
+	return eventbridge.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil

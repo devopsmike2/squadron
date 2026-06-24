@@ -197,6 +197,21 @@ type Result struct {
 	// surfaces) and §11 (acceptance tests).
 	Orchestrations []OrchestrationInstanceSnapshot `json:"orchestrations"`
 
+	// EventSources is the inbound event source inventory — the cloud's
+	// request entry point where trace IDs are created (or not). Added in
+	// slice 1 chunk 1 of the event-source-tier arc (v0.89.100, #734
+	// Stream 132). Covers AWS EventBridge in chunk 1; chunk 2 adds GCP
+	// Pub/Sub, chunk 3 adds Azure Service Bus, chunk 4 adds OCI
+	// Streaming. The proposer's recommendation surface for event sources
+	// reasons about a TWO-axis detection rule (HasTraceAxis +
+	// HasLogAxis) — same shape as the orchestration tier. Either-axis
+	// presence is informationally surfaced; neither axis gates
+	// Result.InstrumentedCount on its own.
+	//
+	// See docs/proposals/event-source-tier-slice1.md §3 (detection
+	// surfaces) and §11 (acceptance tests).
+	EventSources []EventSourceInstanceSnapshot `json:"event_sources"`
+
 	// ECSClusters is the ECS (and future Cloud Run / AKS-style
 	// container-orchestration) cluster inventory. Added in slice 5
 	// of the universal-observation arc (v0.89.10). The proposer's
@@ -1313,6 +1328,143 @@ type OrchestrationInstanceSnapshot struct {
 // proposer-side reasoning, and the per-cloud Inventory tab all reference
 // the same predicate.
 func (s OrchestrationInstanceSnapshot) IsInstrumented() bool {
+	return s.HasTraceAxis || s.HasLogAxis
+}
+
+// EventSourceInstanceSnapshot is the category-typed view of an inbound
+// event source — the surface where a trace ID is created (or fails to be
+// created) at the cloud's request entry point. v0.89.100 (#734 Stream 132,
+// slice 1 chunk 1 of the Event source tier arc). Per-cloud scanners populate
+// this from AWS EventBridge ListEventBuses + ListRules + ListTargetsByRule
+// (chunk 1), GCP Pub/Sub projects.topics.list (chunk 2), Azure Service Bus
+// namespaces.list (chunk 3), OCI Streaming ListStreams (chunk 4).
+//
+// Slice 1 chunk 1 ships the AWS EventBridge scanner only; chunks 2-4 add
+// the other three clouds. The proposer reasons about category-level levers
+// (trace primitive enabled at the source, structured-logging destination
+// wired) rather than per-message propagation — the per-message analysis is
+// substantially harder and slated for slice 2.
+//
+// The two axes the proposer reasons about per surface
+// (docs/proposals/event-source-tier-slice1.md §3):
+//
+//  1. HasTraceAxis — the cloud-native trace primitive is on for the event
+//     source. AWS EventBridge: Schemas Discoverer in "Active" state OR (slice
+//     1 chunk 1 fallback) at least one rule with a CloudWatch Logs target.
+//     GCP Pub/Sub: tracingConfig.samplingRatio > 0 (chunk 2). Azure Service
+//     Bus: a diagnostic-setting routes WorkflowRuntime to App Insights or
+//     Log Analytics (chunk 3). OCI Streaming: OCI Logging captures the
+//     stream's events (chunk 4).
+//  2. HasLogAxis — a structured-logging destination is wired. AWS
+//     EventBridge: rule has a target whose ARN is a CloudWatch Logs log
+//     group. GCP Pub/Sub: schemaSettings.schema set OR log sink configured
+//     (chunk 2). Azure Service Bus: diagnostic-settings routes to Log
+//     Analytics (chunk 3). OCI Streaming: Logging log group attached
+//     (chunk 4).
+//
+// EventBridge Schemas Discoverer detection softness (design doc §12):
+// Slice 1 chunk 1 treats the log-target axis as the proxy for BOTH
+// HasTraceAxis AND HasLogAxis because the Schemas Discoverer API lives in
+// a separate SDK package (github.com/aws/aws-sdk-go-v2/service/schemas)
+// and the chunk-1 budget (~1300 lines) does not accommodate the
+// additional client wiring + IAM action set. The log-target proxy is
+// honest: a bus with a CloudWatch Logs target is a strong proxy for trace
+// observability readiness — CloudWatch Logs can carry the X-Ray trace
+// header. Slice 2 lands the direct Schemas Discoverer detection and
+// separates the two axes per the design doc's three-axis table.
+//
+// Squadron does NOT execute any modify call — discovery is strictly
+// read-only; the operator runs the enablement Terraform through their own
+// IaC pipeline. Same posture as the compute / database / cluster /
+// serverless / orchestration tiers.
+//
+// See docs/proposals/event-source-tier-slice1.md §3 (per-cloud detection
+// axes), §4 (storage schema), §5 (scanner contract), §11 acceptance
+// tests 1-3, §12 (threat model on Schemas detection softness).
+type EventSourceInstanceSnapshot struct {
+	// Provider is the cloud name — "aws" / "gcp" / "azure" / "oci".
+	// Discriminator for the Detail bag's shape.
+	Provider string `json:"provider"`
+
+	// Surface is the per-cloud event source surface identifier —
+	// "eventbridge" / "pubsub" / "servicebus" / "streaming". Drives the
+	// proposer's recommendation-kind prefix routing (eventbridge-* →
+	// AWS, pubsub-* → GCP, servicebus-* → Azure, streaming-* → OCI).
+	Surface string `json:"surface"`
+
+	// AccountID is the provider-native primary identifier of the owning
+	// connection (account_id / project_id / subscription_id /
+	// tenancy OCID).
+	AccountID string `json:"account_id"`
+
+	// Region is where the event source lives. EventBridge is per-region;
+	// Pub/Sub topics are global with locational hints; Service Bus is
+	// per-resource-group; Streaming is per-region.
+	Region string `json:"region"`
+
+	// ResourceName is the operator-readable name. For EventBridge this
+	// is the event-bus name; for Pub/Sub the topic id; for Service Bus
+	// the namespace name; for Streaming the stream name.
+	ResourceName string `json:"resource_name"`
+
+	// ResourceARN is the provider-native fully-qualified resource
+	// identifier. EventBridge ARN / Pub/Sub resource path / Service Bus
+	// resource ID / Streaming OCID. Carries the canonical handle the
+	// proposer's evidence list and the recommendation envelope's
+	// AffectedResources field both reference.
+	ResourceARN string `json:"resource_arn"`
+
+	// SourceType is the per-surface subtype string. EventBridge: "bus".
+	// Pub/Sub: "topic". Service Bus: "namespace" / "queue" / "topic".
+	// Streaming: "stream". Surfaced so the per-cloud Inventory tab can
+	// render a typed column without parsing ResourceARN.
+	SourceType string `json:"source_type,omitempty"`
+
+	// HasTraceAxis signals the cloud-native trace primitive is on for
+	// this event source (see type godoc for per-cloud detection). One
+	// of the two axes the proposer's recommendation kinds key off.
+	HasTraceAxis bool `json:"has_trace_axis"`
+
+	// HasLogAxis signals a structured-logging destination is wired for
+	// this event source. The other axis.
+	HasLogAxis bool `json:"has_log_axis"`
+
+	// LastSeenAt — slice 1 trace integration parity (see
+	// ComputeInstanceSnapshot.LastSeenAt godoc for the join semantics).
+	// Most recent timestamp at which Squadron's traceindex saw any span
+	// tagged for this event source. Nil means "no traces ever observed"
+	// (rendered as "never" in the UI). Set at scan-response time by
+	// joining against the traceindex on the per-surface projection key;
+	// empty on the scanner-produced result. Slice 1 chunk 1 leaves the
+	// join unwired (chunk 5 of the arc adds it).
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+
+	// Detail is the per-surface bag the per-cloud Inventory tabs render
+	// alongside the universal columns. EventBridge populates
+	// {"rule_count": N}; Pub/Sub populates a schema-settings subset;
+	// Service Bus populates a diagnostic-settings subset; Streaming
+	// populates a logging-target subset. Empty when no surface-specific
+	// context applies.
+	Detail map[string]any `json:"detail,omitempty"`
+}
+
+// IsInstrumented implements the slice 1 OR-rule for event source
+// resources: an event source counts as instrumented when at least one of
+// the two axes (HasTraceAxis OR HasLogAxis) is true.
+//
+// Rationale: same as the serverless and orchestration tiers — the
+// cloud-native trace primitive (Schemas Discoverer for EventBridge,
+// tracingConfig for Pub/Sub, diagnostic-settings for Service Bus, OCI
+// Logging for Streaming) is itself a meaningful observability signal.
+// Operators frequently ship to the cloud's native observability surface
+// and do NOT layer OTel on top. The OR rule gives credit to either axis
+// without forcing both. Slice 2 may tighten the predicate per surface if
+// operator feedback warrants.
+//
+// Kept as a method on the snapshot so the scanner-side tally, the
+// proposer-side reasoning, and the per-cloud Inventory tab all reference
+// the same predicate.
+func (s EventSourceInstanceSnapshot) IsInstrumented() bool {
 	return s.HasTraceAxis || s.HasLogAxis
 }
 

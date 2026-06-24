@@ -87,6 +87,25 @@ type OrchestrationDiscoveryScanner interface {
 	ScanOrchestrations(ctx context.Context, scope scanner.ScanScope) ([]scanner.OrchestrationInstanceSnapshot, error)
 }
 
+// EventSourceDiscoveryScanner is the optional event-source-tier extension
+// to DiscoveryScanner. Slice 1 chunk 1 of the event-source-tier arc
+// (v0.89.100, #734 Stream 132). Mirrors OrchestrationDiscoveryScanner —
+// scanners that implement this interface get dispatched a per-call
+// ScanEventSources after the main Scan returns when the request's Tiers
+// include "event_source"; scanners that don't surface no event source
+// rows on the response.
+//
+// Kept as a separate interface (rather than appended to DiscoveryScanner)
+// so the GCP / Azure / OCI scanner types that haven't yet grown an event
+// source surface continue to satisfy DiscoveryScanner without having to
+// ship a no-op ScanEventSources. The handler does a runtime type
+// assertion; failure to satisfy the interface is silently treated as "no
+// event source support" — matches the chunks-2/3/4 staged rollout where
+// each cloud lights up incrementally.
+type EventSourceDiscoveryScanner interface {
+	ScanEventSources(ctx context.Context, scope scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error)
+}
+
 // AWSScannerFactory builds a DiscoveryScanner from a stored connection.
 // Indirected so the scan handler doesn't import the AWS SDK directly;
 // the production factory (defaultAWSScannerFactory in
@@ -905,28 +924,30 @@ type awsRunScanRequest struct {
 }
 
 // TierCompute / TierDatabase / TierKubernetes / TierServerless /
-// TierOrchestration are the tier identifiers the scan endpoint's Tiers
-// field accepts. DefaultScanTiers is the implicit value when the field
-// is empty — the full surface, matching the design doc §6.1: the
-// orchestration-tier arc (v0.89.95, #728 Stream 126) widens the default
-// from [compute, database, kubernetes, serverless] to [compute,
-// database, kubernetes, serverless, orchestration].
+// TierOrchestration / TierEventSource are the tier identifiers the scan
+// endpoint's Tiers field accepts. DefaultScanTiers is the implicit value
+// when the field is empty — the full surface, matching the design doc
+// §6.1: the event-source-tier arc (v0.89.100, #734 Stream 132) widens the
+// default from [compute, database, kubernetes, serverless, orchestration]
+// to [compute, database, kubernetes, serverless, orchestration,
+// event_source].
 const (
 	TierCompute       = "compute"
 	TierDatabase      = "database"
 	TierKubernetes    = "kubernetes"
 	TierServerless    = "serverless"
 	TierOrchestration = "orchestration"
+	TierEventSource   = "event_source"
 )
 
 // DefaultScanTiers is the default tier list applied when a scan
-// request omits the Tiers field. Orchestration-tier slice 1 chunk 1
-// (v0.89.95, #728 Stream 126) further widens the default from
-// [compute, database, kubernetes, serverless] to include orchestration.
-// Operators who passed an explicit list keep their old behavior;
-// default callers get the wider surface.
+// request omits the Tiers field. Event-source-tier slice 1 chunk 1
+// (v0.89.100, #734 Stream 132) widens the default from
+// [compute, database, kubernetes, serverless, orchestration] to include
+// event_source. Operators who passed an explicit list keep their old
+// behavior; default callers get the wider surface.
 var DefaultScanTiers = []string{
-	TierCompute, TierDatabase, TierKubernetes, TierServerless, TierOrchestration,
+	TierCompute, TierDatabase, TierKubernetes, TierServerless, TierOrchestration, TierEventSource,
 }
 
 // parseTiersOrDefault normalizes the request's Tiers field into the
@@ -946,7 +967,7 @@ func parseTiersOrDefault(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, t := range in {
 		switch strings.ToLower(strings.TrimSpace(t)) {
-		case TierCompute, TierDatabase, TierKubernetes, TierServerless, TierOrchestration:
+		case TierCompute, TierDatabase, TierKubernetes, TierServerless, TierOrchestration, TierEventSource:
 			out = append(out, strings.ToLower(strings.TrimSpace(t)))
 		}
 	}
@@ -1021,11 +1042,20 @@ type awsScanResponse struct {
 	// Inventory tab renders. Slice 1 chunk 1 only populates AWS
 	// Step Functions rows; chunk 2 adds GCP Workflows and chunk 3
 	// adds Azure Logic Apps. Empty for OCI throughout slice 1.
-	Orchestrations      []awsOrchestrationRow `json:"orchestrations"`
-	InstrumentedCount   int                   `json:"instrumented_count"`
-	UninstrumentedCount int                   `json:"uninstrumented_count"`
-	Partial             bool                  `json:"partial"`
-	PartialReason       string                `json:"partial_reason,omitempty"`
+	Orchestrations []awsOrchestrationRow `json:"orchestrations"`
+	// EventSources joins the wire shape in event-source-tier slice 1
+	// chunk 1 (v0.89.100, #734 Stream 132). Same non-null posture as
+	// the other category arrays. Carries the cross-cloud detection
+	// shape (provider / surface / two-axis booleans + LastSeenAt)
+	// alongside a per-surface Detail bag the per-cloud Inventory tab
+	// renders. Slice 1 chunk 1 only populates AWS EventBridge rows;
+	// chunk 2 adds GCP Pub/Sub, chunk 3 adds Azure Service Bus,
+	// chunk 4 adds OCI Streaming.
+	EventSources        []awsEventSourceRow `json:"event_sources"`
+	InstrumentedCount   int                 `json:"instrumented_count"`
+	UninstrumentedCount int                 `json:"uninstrumented_count"`
+	Partial             bool                `json:"partial"`
+	PartialReason       string              `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -1251,6 +1281,42 @@ type awsOrchestrationRow struct {
 	Detail       map[string]any `json:"detail,omitempty"`
 }
 
+// awsEventSourceRow is the snake_case wire shape for one inbound event
+// source row. Event-source-tier slice 1 chunk 1 (v0.89.100, #734 Stream
+// 132). Mirrors scanner.EventSourceInstanceSnapshot — the two detection-
+// rule axes (has_trace_axis + has_log_axis) surface as independent
+// booleans so the per-cloud Inventory tab renders them as independent
+// badge columns, matching the proposer prompt's "either axis presence is
+// informationally surfaced" framing.
+//
+// Provider + Surface drive the proposer's recommendation-kind prefix
+// routing (eventbridge-* → AWS, pubsub-* → GCP, servicebus-* → Azure,
+// streaming-* → OCI). Detail carries surface-specific context
+// (EventBridge's rule_count, Pub/Sub's schema settings subset, Service
+// Bus's diagnostic-settings subset, Streaming's logging-target subset)
+// the per-cloud Inventory tab renders as a per-row drilldown.
+//
+// SLICE 1 CHUNK 1 SCHEMAS DEFERRAL: Slice 1 chunk 1 of the
+// event-source-tier arc defers the EventBridge Schemas Discoverer axis
+// to slice 2 (the Schemas SDK is a separate package and would push chunk
+// 1 past its ~1300 LOC budget). The chunk-1 detection rule uses a
+// log-target proxy: any rule on the bus with a CloudWatch Logs target
+// flips BOTH has_trace_axis AND has_log_axis. Slice 2 separates the two
+// axes.
+type awsEventSourceRow struct {
+	Provider     string         `json:"provider"`
+	Surface      string         `json:"surface"`
+	AccountID    string         `json:"account_id"`
+	Region       string         `json:"region"`
+	ResourceName string         `json:"resource_name"`
+	ResourceARN  string         `json:"resource_arn"`
+	SourceType   string         `json:"source_type,omitempty"`
+	HasTraceAxis bool           `json:"has_trace_axis"`
+	HasLogAxis   bool           `json:"has_log_axis"`
+	LastSeenAt   *time.Time     `json:"last_seen_at,omitempty"`
+	Detail       map[string]any `json:"detail,omitempty"`
+}
+
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
@@ -1272,6 +1338,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		ECSClusters:         make([]awsECSClusterRow, 0, len(r.ECSClusters)),
 		Serverless:          make([]awsServerlessRow, 0, len(r.Serverless)),
 		Orchestrations:      make([]awsOrchestrationRow, 0, len(r.Orchestrations)),
+		EventSources:        make([]awsEventSourceRow, 0, len(r.EventSources)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -1434,6 +1501,28 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			HasLogAxis:   oc.HasLogAxis,
 			LastSeenAt:   oc.LastSeenAt,
 			Detail:       oc.Detail,
+		})
+	}
+	// Event-source-tier slice 1 chunk 1 (v0.89.100, #734 Stream 132) —
+	// event source rows surface alongside the other category arrays.
+	// Same non-null posture; the two detection-rule axes (has_trace_axis
+	// + has_log_axis) pass verbatim through to the UI alongside the
+	// per-surface Detail bag. AWS EventBridge is the only populated
+	// surface in chunk 1; chunks 2 + 3 + 4 add GCP Pub/Sub, Azure
+	// Service Bus, and OCI Streaming.
+	for _, es := range r.EventSources {
+		out.EventSources = append(out.EventSources, awsEventSourceRow{
+			Provider:     es.Provider,
+			Surface:      es.Surface,
+			AccountID:    es.AccountID,
+			Region:       es.Region,
+			ResourceName: es.ResourceName,
+			ResourceARN:  es.ResourceARN,
+			SourceType:   es.SourceType,
+			HasTraceAxis: es.HasTraceAxis,
+			HasLogAxis:   es.HasLogAxis,
+			LastSeenAt:   es.LastSeenAt,
+			Detail:       es.Detail,
 		})
 	}
 	return out
@@ -1694,6 +1783,41 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 			}
 			if len(orchOut) > 0 {
 				result.Orchestrations = append(result.Orchestrations, orchOut...)
+			}
+		}
+	}
+
+	// Event-source-tier slice 1 chunk 1 (v0.89.100, #734 Stream 132).
+	// When the request's normalized tier list contains "event_source" and
+	// the underlying scanner satisfies the optional
+	// EventSourceDiscoveryScanner interface, dispatch a per-region event
+	// source walk and fold the snapshots into result.EventSources.
+	// Scanners that don't satisfy the interface (chunks 2/3/4's GCP +
+	// Azure + OCI scanners ship their per-cloud surfaces) are silently
+	// no-op'd — the per-cloud Inventory tab renders an empty event_sources
+	// slice. Storage persistence and the per-provider rollup endpoints
+	// live in chunk 5 of the arc; this chunk only surfaces event source
+	// rows on the HTTP wire shape.
+	if result != nil && tierListContains(tiers, TierEventSource) {
+		if esScanner, ok := awsScanner.(EventSourceDiscoveryScanner); ok {
+			esOut, esErr := esScanner.ScanEventSources(scanCtx, scanner.ScanScope{
+				AccountID: accountID,
+				Regions:   regions,
+			})
+			if esErr != nil {
+				// Match the per-service partial-failure posture used
+				// throughout Scan(): an event source walk failure
+				// degrades the response (empty event_sources slice)
+				// rather than 500-ing the whole scan. The logger
+				// captures the diagnostic; the operator-visible signal
+				// is the absence of event source rows.
+				if h.logger != nil {
+					h.logger.Warn("aws run scan: event source scan failed",
+						zap.Error(esErr), zap.String("account_id", accountID))
+				}
+			}
+			if len(esOut) > 0 {
+				result.EventSources = append(result.EventSources, esOut...)
 			}
 		}
 	}
