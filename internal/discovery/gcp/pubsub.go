@@ -282,21 +282,57 @@ func schemaIncludesTraceparentField(schemaDefinition string) (bool, string) {
 }
 
 // ScanEventSources is the GCP scanner's event-source-tier entry
-// point. Slice 1 chunk 2 only covers Pub/Sub; future slices may add
-// other GCP event source primitives (Cloud Tasks, Eventarc).
+// point. Slice 1 chunk 2 (v0.89.101) shipped Pub/Sub alone; slice 5
+// chunk 1 (v0.89.144, #784 Stream 182) extends the dispatcher to fan
+// out across BOTH Pub/Sub topics AND Cloud Tasks queues with a
+// two-way partial-scan posture mirroring the AWS slice 4 three-way
+// dispatcher (internal/discovery/aws/eventbridge.go::ScanEventSources).
 //
-// Mirrors the AWS scanner's ScanEventSources / ScanEventBridge layout
-// and this scanner's ScanOrchestrations / ScanWorkflows layout: a
-// standalone Scanner method returning snapshots directly rather than
-// threading them through Scan().
+// Partial-scan posture per docs/proposals/event-source-tier-slice5.md
+// §5: when ONE of the two surfaces fails (e.g. an IAM gap on the
+// Cloud Tasks read permissions while the Pub/Sub grant is already
+// wired) the REMAINING surface still surfaces. Only when BOTH
+// surfaces fail does the dispatcher return a non-nil error wrapping
+// every per-surface error so the operator sees the full failure
+// envelope. The §12 threat model treats this as load-bearing: the
+// dispatcher's both-directions partial-scan posture is pinned by
+// acceptance tests 10 / 11 / 12 / 13 of the slice 5 design doc.
 //
 // scope.AccountID overrides the per-snapshot AccountID; empty falls
-// back to s.ProjectID. scope.Regions is ignored because Pub/Sub
-// topics are project-global (see PubSubRegionGlobal).
+// back to s.ProjectID. scope.Regions controls the Cloud Tasks walk's
+// per-region iteration; Pub/Sub topics are project-global and ignore
+// the region list (see PubSubRegionGlobal).
 //
-// IAM contract per design doc §12: pubsub.topics.list. Read-only.
+// IAM contract per design doc §12:
+//   - pubsub.topics.list
+//   - cloudtasks.queues.list + cloudtasks.queues.get
+//
+// All read-only. Squadron never executes a Pub/Sub or Cloud Tasks
+// mutation API.
 func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
-	return s.ScanPubSubTopics(ctx, scope)
+	var all []scanner.EventSourceInstanceSnapshot
+
+	topics, pubsubErr := s.ScanPubSubTopics(ctx, scope)
+	if pubsubErr == nil {
+		all = append(all, topics...)
+	}
+
+	queues, ctErr := s.ScanCloudTasksQueues(ctx, scope)
+	if ctErr == nil {
+		all = append(all, queues...)
+	}
+
+	// Two-way partial-scan posture: only return an error when BOTH
+	// surfaces failed. Any single-surface failure is silenced at this
+	// layer so an IAM gap on one surface doesn't drop the inventory
+	// the operator actually CAN see on the other. Tests 11 + 12 of
+	// the slice 5 design doc pin the two single-failure directions
+	// plus the both-fail path (test 13).
+	if pubsubErr != nil && ctErr != nil {
+		return all, fmt.Errorf("all gcp event source surfaces failed: pubsub=%v cloudtasks=%w", pubsubErr, ctErr)
+	}
+
+	return all, nil
 }
 
 // ScanPubSubTopics walks the configured project's Pub/Sub topics and
