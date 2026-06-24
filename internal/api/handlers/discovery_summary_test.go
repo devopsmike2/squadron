@@ -646,6 +646,106 @@ func TestDiscoverySummary_IncludesServerlessCount(t *testing.T) {
 	}
 }
 
+// --- Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) -
+//
+// TestDiscoverySummary_IncludesOrchestrationCount — §11 acceptance
+// test 11 for the orchestration tier: seeding the audit projection
+// with an orchestration_count per provider must surface on each
+// ProviderSummary.OrchestrationCount field and roll up to
+// Totals.OrchestrationCount. For OCI it stays 0 in slice 1 — OCI
+// orchestration is deferred to slice 2 — but the test still drives a
+// nonzero OCI value to assert the substrate handles the field
+// uniformly. The separate OCI-zero-on-empty-payload contract is
+// pinned in TestDiscoverySummary_OCIOrchestrationCountIsZero.
+func TestDiscoverySummary_IncludesOrchestrationCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	aws := &stubAWSStore{ids: []string{"111122223333"}}
+	gcp := &stubGCPStore{ids: []string{"gcp-conn-1"}}
+	az := &stubAzureStore{ids: []string{"az-conn-1"}}
+	oci := &stubOCIStore{ids: []string{"oci-conn-1"}}
+
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	audit := &stubAuditQuery{
+		scans: map[string]map[string]ScanSummary{
+			"aws": {
+				"111122223333": {ScopeID: "111122223333", CompletedAt: now,
+					InstanceCount: 10, InstrumentedCount: 6, UninstrumentedCount: 4,
+					OrchestrationCount: 3},
+			},
+			"gcp": {
+				"gcp-conn-1": {ScopeID: "gcp-conn-1", CompletedAt: now,
+					InstanceCount: 20, InstrumentedCount: 12, UninstrumentedCount: 8,
+					OrchestrationCount: 2},
+			},
+			"azure": {
+				"az-conn-1": {ScopeID: "az-conn-1", CompletedAt: now,
+					InstanceCount: 30, InstrumentedCount: 18, UninstrumentedCount: 12,
+					OrchestrationCount: 1},
+			},
+			"oci": {
+				"oci-conn-1": {ScopeID: "oci-conn-1", CompletedAt: now,
+					InstanceCount: 40, InstrumentedCount: 24, UninstrumentedCount: 16,
+					OrchestrationCount: 0},
+			},
+		},
+	}
+	h := NewDiscoverySummaryHandlers(aws, gcp, az, oci, nil, audit, time.Second, nil, nil)
+	w := summaryDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	r := parseSummary(t, w)
+
+	cases := []struct {
+		name string
+		want int
+	}{
+		{"aws", 3}, {"gcp", 2}, {"azure", 1}, {"oci", 0},
+	}
+	for _, tc := range cases {
+		if got := r.Providers[tc.name].OrchestrationCount; got != tc.want {
+			t.Errorf("%s.orchestration_count = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	if got, want := r.Totals.OrchestrationCount, 6; got != want {
+		t.Errorf("totals.orchestration_count = %d, want %d", got, want)
+	}
+}
+
+// TestDiscoverySummary_OCIOrchestrationCountIsZero — slice 1 contract
+// per docs/proposals/orchestration-tier-slice1.md §6.3: OCI is
+// deferred to slice 2, so OCI scan_completed events never populate
+// orchestration_count and the dashboard shows 0 for OCI. The
+// projection treats the missing field as 0 (intFromPayload's zero-safe
+// posture).
+func TestDiscoverySummary_OCIOrchestrationCountIsZero(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oci := &stubOCIStore{ids: []string{"oci-conn-1"}}
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	audit := &stubAuditQuery{
+		scans: map[string]map[string]ScanSummary{
+			"oci": {
+				"oci-conn-1": {ScopeID: "oci-conn-1", CompletedAt: now,
+					InstanceCount: 5, InstrumentedCount: 3, UninstrumentedCount: 2},
+			},
+		},
+	}
+	h := NewDiscoverySummaryHandlers(nil, nil, nil, oci, nil, audit, time.Second, nil, nil)
+	w := summaryDoRequest(h)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	r := parseSummary(t, w)
+	if got := r.Providers["oci"].OrchestrationCount; got != 0 {
+		t.Errorf("oci.orchestration_count = %d, want 0 (slice 1 contract — OCI deferred to slice 2)", got)
+	}
+	if got := r.Totals.OrchestrationCount; got != 0 {
+		t.Errorf("totals.orchestration_count = %d, want 0 (OCI-only deployment)", got)
+	}
+}
+
 // TestDiscoverySummary_ServerlessCountZeroOnColdStart — cold-start
 // posture: when the audit projection carries no serverless_count
 // field (older scans pre-date the field), every provider's

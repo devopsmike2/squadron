@@ -61,6 +61,7 @@ import {
   type OCIValidateErrorKind,
   type ScanOCIResponse,
   type ServerlessRow,
+  type OrchestrationRow,
   type ValidateOCIResponse,
 } from "@/api/discoveryOCI";
 import { Badge } from "@/components/ui/badge";
@@ -122,6 +123,12 @@ const INVENTORY_SUBTAB_KUBERNETES = "kubernetes";
 // fourth Inventory sub-tab carrying OCI Functions rows from the
 // chunk 4 scanner extension.
 const INVENTORY_SUBTAB_SERVERLESS = "serverless";
+// Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
+// fifth Inventory sub-tab. OCI orchestration coverage is deferred to
+// slice 2; the slice 1 contract is "OCI scan responses always return
+// orchestrations: []" and the sub-tab MUST be hidden when the rows
+// array is empty (design doc §7 + §11 acceptance test 17).
+const INVENTORY_SUBTAB_ORCHESTRATION = "orchestration";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1178,6 +1185,14 @@ function InventoryTab({
   // the slice-1 UX is preserved; the Databases sub-tab surfaces
   // the OCI DB Systems + Autonomous Database inventory from the
   // chunk 4 scanner extension.
+  //
+  // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
+  // the Orchestration sub-tab is conditionally hidden when the
+  // orchestrations[] array is empty (slice 1 contract per
+  // docs/proposals/orchestration-tier-slice1.md §7). The OCI scanner
+  // returns no orchestration rows in slice 1; once slice 2 ships the
+  // OCI orchestration substrate the sub-tab will appear automatically.
+  const showOrchestration = (scan.orchestrations?.length ?? 0) > 0;
   return (
     <div className="space-y-3">
       <InventorySummary scan={scan} />
@@ -1193,6 +1208,11 @@ function InventoryTab({
           <TabsTrigger value={INVENTORY_SUBTAB_SERVERLESS}>
             Serverless
           </TabsTrigger>
+          {showOrchestration && (
+            <TabsTrigger value={INVENTORY_SUBTAB_ORCHESTRATION}>
+              Orchestration
+            </TabsTrigger>
+          )}
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
           <InventoryTable rows={scan.computes} />
@@ -1206,6 +1226,11 @@ function InventoryTab({
         <TabsContent value={INVENTORY_SUBTAB_SERVERLESS} className="mt-3">
           <ServerlessInventoryTable rows={scan.serverless ?? []} />
         </TabsContent>
+        {showOrchestration && (
+          <TabsContent value={INVENTORY_SUBTAB_ORCHESTRATION} className="mt-3">
+            <OrchestrationInventoryTable rows={scan.orchestrations ?? []} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
@@ -1498,6 +1523,90 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+// OrchestrationInventoryTable — orchestration tier slice 1 chunk 4
+// (v0.89.97, #731 Stream 129). Slice 1 contract: OCI orchestration
+// substrate ships no rows, so this table is only rendered by the
+// conditional sub-tab path when slice 2 lands. Column layout matches
+// the GCP / Azure tables exactly so the forward-compatible UX is
+// already in place.
+function OrchestrationInventoryTable({ rows }: { rows: OrchestrationRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
+        No orchestration workflows discovered. Run a scan to refresh.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr className="text-left">
+            <th className="px-3 py-2 font-medium">Resource Name</th>
+            <th className="px-3 py-2 font-medium">Surface</th>
+            <th className="px-3 py-2 font-medium">Type</th>
+            <th className="px-3 py-2 font-medium">Region</th>
+            <th className="px-3 py-2 font-medium">Trace axis</th>
+            <th className="px-3 py-2 font-medium">Log axis</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.resource_arn || row.resource_name}
+              className="border-t"
+            >
+              <td className="px-3 py-2 font-mono text-xs">
+                {row.resource_name}
+              </td>
+              <td className="px-3 py-2 text-xs">{row.surface}</td>
+              <td className="px-3 py-2 text-xs">{row.workflow_type || "—"}</td>
+              <td className="px-3 py-2 text-xs">{row.region}</td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_trace_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <OrchestrationAxisCheck ok={row.has_log_axis} />
+              </td>
+              <td className="px-3 py-2 text-xs">
+                <LastSeenCell value={row.last_seen_at} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OrchestrationAxisCheck({ ok }: { ok: boolean }) {
+  if (ok) {
+    return (
+      <span
+        className="text-emerald-600"
+        title="enabled"
+        aria-label="enabled"
+        data-testid="orchestration-axis-check"
+        data-value="yes"
+      >
+        ✓
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-muted-foreground"
+      title="disabled"
+      aria-label="disabled"
+      data-testid="orchestration-axis-check"
+      data-value="no"
+    >
+      ✗
+    </span>
   );
 }
 

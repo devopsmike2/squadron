@@ -542,6 +542,7 @@ function TraceCoveragePanel({ coverage }: { coverage: TraceCoverage }) {
             </div>
           </div>
           <ProviderChipRow providers={coverage.providers} />
+          <TierCoverageChipRow providers={coverage.providers} />
           {totalPendingTraceEmission > 0 && (
             <div
               data-testid="trace-coverage-pending-indicator"
@@ -621,6 +622,97 @@ function TraceCoverageChip({
       )}
     </span>
   );
+}
+
+// TierCoverageChipRow — orchestration tier slice 1 chunk 4 (v0.89.97,
+// #731 Stream 129). Renders a per-tier coverage chip line beneath the
+// per-provider chip row. Slice 1 lands the ORCH column only — the
+// SERVERLESS column is reserved for the parallel v0.89.92 chunk 5
+// follow-up (same hide-when-zero pattern). The ORCH chip aggregates
+// the four providers' orchestration_pct fields by weighted average
+// over each provider's emitting_count; when every provider reports
+// orchestration_pct == 0 (cold start, or no orchestration tier wired)
+// the chip line stays hidden — design doc §7 acceptance test 12.
+//
+// The aggregation rule for the cross-provider tier chip:
+//   - skip providers with no emitting_count (no signal yet)
+//   - weight each provider's pct by its emitting_count so a deployment
+//     with 1000 emitters in AWS doesn't get drowned out by 1 emitter
+//     in OCI; matches the per-provider weighted-average pattern in
+//     internal/api/handlers/discovery_trace_coverage.go::aggregateProvider.
+function TierCoverageChipRow({
+  providers,
+}: {
+  providers: TraceCoverage["providers"];
+}) {
+  const orchPct = computeTierWeightedAverage(providers, (p) => p.orchestration_pct);
+  const showOrch = orchPct !== null;
+  // Hide the whole line when no tier chip has any signal. Slice 1
+  // surfaces only ORCH; when the SERVERLESS column lands the
+  // condition broadens.
+  if (!showOrch) {
+    return null;
+  }
+  return (
+    <div
+      className="mt-2 flex flex-wrap gap-2"
+      data-testid="trace-coverage-tier-chip-row"
+    >
+      {showOrch && (
+        <TierCoverageChip label="ORCH" pct={orchPct ?? 0} testId="trace-coverage-tier-chip-orch" />
+      )}
+    </div>
+  );
+}
+
+function TierCoverageChip({
+  label,
+  pct,
+  testId,
+}: {
+  label: string;
+  pct: number;
+  testId: string;
+}) {
+  const color = coverageColor(pct);
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs tabular-nums"
+      style={{ borderColor: color, color }}
+      data-testid={testId}
+      data-color={color}
+    >
+      <span className="font-medium">{label}</span>
+      <span aria-label={`${label} coverage`}>{pct.toFixed(0)}%</span>
+    </span>
+  );
+}
+
+// computeTierWeightedAverage rolls the per-provider tier pct into a
+// single fleet-wide weighted average. Returns null when no provider
+// reports a non-zero tier pct (used to drive the hide-when-zero rule
+// on the tier chip line). Mirrors the per-provider weighted-average
+// logic the Go handler uses for strong/weak match percentages so the
+// UI value matches the server-side semantics.
+function computeTierWeightedAverage(
+  providers: TraceCoverage["providers"],
+  selector: (p: ProviderTraceCoverage) => number,
+): number | null {
+  let weighted = 0;
+  let weightTotal = 0;
+  for (const p of PROVIDER_ORDER) {
+    const row = providers[p];
+    if (!row) continue;
+    const pct = selector(row);
+    if (pct <= 0) continue;
+    const w = Math.max(row.emitting_count, 1);
+    weighted += pct * w;
+    weightTotal += w;
+  }
+  if (weightTotal === 0) {
+    return null;
+  }
+  return Math.round((weighted / weightTotal) * 10) / 10;
 }
 
 // --- Span quality panel ----------------------------------------------

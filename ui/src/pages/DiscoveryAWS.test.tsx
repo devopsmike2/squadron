@@ -2373,4 +2373,165 @@ describe("DiscoveryAWSPage", () => {
       screen.getByText(/No serverless functions visible in the scanned regions/i),
     ).toBeInTheDocument();
   });
+
+  // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
+  // the Inventory tab gains an Orchestration section rendering the
+  // Step Functions inventory from the v0.89.95 chunk 1 scanner. The
+  // Surface column shows "stepfunc" per row; Type shows the
+  // workflow_type discriminator; Trace axis + Log axis render as
+  // check/cross. AWS gets the QualityDot column per the slice 1
+  // constraint.
+  it("TestDiscoveryAWS_OrchestrationSubTab_Renders", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      orchestrations: [
+        {
+          provider: "aws",
+          surface: "stepfunc",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "order-pipeline",
+          resource_arn:
+            "arn:aws:states:us-east-1:123:stateMachine:order-pipeline",
+          workflow_type: "STANDARD",
+          has_trace_axis: true,
+          has_log_axis: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Run an inventory scan/i)).toBeInTheDocument();
+    });
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Orchestration \(1\)/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("order-pipeline", { selector: "td" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("stepfunc")).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryAWS_OrchestrationSubTab_RowsShowTraceAndLogAxisChecks", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      orchestrations: [
+        {
+          provider: "aws",
+          surface: "stepfunc",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "trace-on",
+          resource_arn: "arn:aws:states:us-east-1:123:stateMachine:trace-on",
+          workflow_type: "STANDARD",
+          has_trace_axis: true,
+          has_log_axis: true,
+        },
+        {
+          provider: "aws",
+          surface: "stepfunc",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "trace-off",
+          resource_arn: "arn:aws:states:us-east-1:123:stateMachine:trace-off",
+          workflow_type: "EXPRESS",
+          has_trace_axis: false,
+          has_log_axis: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Orchestration \(2\)/i)).toBeInTheDocument();
+    });
+    // Each row contributes one ✓ + one ✗ pair (or two of each) via
+    // AxisCheck. Count check / cross rendered by AxisCheck (data-testid
+    // "axis-check") to ensure both columns render. Two rows × 2 axes =
+    // four axis cells total.
+    const axisCells = screen.getAllByTestId("axis-check");
+    expect(axisCells.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("TestDiscoveryAWS_OrchestrationSubTab_WorkflowTypeColumnRenders", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      orchestrations: [
+        {
+          provider: "aws",
+          surface: "stepfunc",
+          account_id: "123456789012",
+          region: "us-east-1",
+          resource_name: "express-machine",
+          resource_arn: "arn:aws:states:us-east-1:123:stateMachine:express-machine",
+          workflow_type: "EXPRESS",
+          has_trace_axis: false,
+          has_log_axis: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Orchestration \(1\)/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText("EXPRESS")).toBeInTheDocument();
+  });
 });

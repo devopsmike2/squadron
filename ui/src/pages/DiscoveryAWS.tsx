@@ -61,6 +61,7 @@ import {
   type RowSpanQuality,
   type ScanResult,
   type ServerlessRow,
+  type OrchestrationRow,
 } from "@/api/discovery";
 import {
   IaCGitHubOpenPRError,
@@ -1258,6 +1259,10 @@ function ScanResultPanel({
       {/* Serverless section (serverless tier slice 1 chunk 5 —
           v0.89.92, #725 Stream 123). */}
       <ServerlessSection serverless={result.serverless ?? []} />
+
+      {/* Orchestration section (orchestration tier slice 1 chunk 4
+          — v0.89.97, #731 Stream 129). */}
+      <OrchestrationSection orchestrations={result.orchestrations ?? []} />
     </div>
   );
 }
@@ -1882,6 +1887,99 @@ function AxisCheck({ ok }: { ok: boolean }) {
     >
       ✗
     </span>
+  );
+}
+
+// OrchestrationSection — orchestration tier slice 1 chunk 4 (v0.89.97,
+// #731 Stream 129). Renders the per-row AWS Step Functions inventory
+// the chunk 1 scanner produced. Columns per §7 of the design doc:
+// Resource Name, Surface, Type (workflow_type — STANDARD/EXPRESS),
+// Region, Trace axis (X-Ray active?), Log axis (CloudWatch Logs?),
+// Last seen, Quality. AWS gets the Quality column per the slice 1
+// constraint mirroring v0.89.92 — GCP / Azure parity for QualityDot
+// is a slice 2 candidate. The section collapses when empty so an
+// account with no Step Functions still gets a header but no row noise.
+function OrchestrationSection({
+  orchestrations,
+}: {
+  orchestrations: OrchestrationRow[];
+}) {
+  const [open, setOpen] = useState(orchestrations.length > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={open}
+        >
+          <CardTitle className="text-base">
+            Orchestration ({orchestrations.length})
+          </CardTitle>
+          {open ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {orchestrations.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No orchestration workflows visible in the scanned regions.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40">
+                  <tr className="text-left">
+                    <th className="px-3 py-2 font-medium">Resource Name</th>
+                    <th className="px-3 py-2 font-medium">Surface</th>
+                    <th className="px-3 py-2 font-medium">Type</th>
+                    <th className="px-3 py-2 font-medium">Region</th>
+                    <th className="px-3 py-2 font-medium">Trace axis</th>
+                    <th className="px-3 py-2 font-medium">Log axis</th>
+                    <th className="px-3 py-2 font-medium">Last seen</th>
+                    <th className="px-3 py-2 font-medium">Quality</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orchestrations.map((o) => (
+                    <tr
+                      key={o.resource_arn || o.resource_name}
+                      className="border-t"
+                    >
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {o.resource_name}
+                      </td>
+                      <td className="px-3 py-2 text-xs">{o.surface}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {o.workflow_type || "—"}
+                      </td>
+                      <td className="px-3 py-2 text-xs">{o.region}</td>
+                      <td className="px-3 py-2 text-xs">
+                        <AxisCheck ok={o.has_trace_axis} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <AxisCheck ok={o.has_log_axis} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <LastSeenCell value={o.last_seen_at} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <QualityDot quality={o.span_quality} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
   );
 }
 

@@ -80,6 +80,13 @@ function makeProviderTrace(
     // default to zero so existing trace-coverage tests still pass and
     // the sub-indicator stays hidden unless a test explicitly opts in.
     pending_trace_emission_count: 0,
+    // v0.89.92 (#725 Stream 123, Serverless tier slice 1 chunk 5) —
+    // default to zero so SERVERLESS chip stays hidden.
+    serverless_pct: 0,
+    // v0.89.97 (#731 Stream 129, Orchestration tier slice 1 chunk 4)
+    // — default to zero so ORCH chip stays hidden in tests that
+    // don't explicitly opt in.
+    orchestration_pct: 0,
     ...over,
   };
 }
@@ -134,6 +141,10 @@ function makeProvider(over: Partial<ProviderSummary> = {}): ProviderSummary {
     instrumented_count: 0,
     uninstrumented_count: 0,
     recommendation_count: 0,
+    // v0.89.92 (#725 Stream 123, Serverless tier slice 1 chunk 5).
+    serverless_count: 0,
+    // v0.89.97 (#731 Stream 129, Orchestration tier slice 1 chunk 4).
+    orchestration_count: 0,
     ...over,
   };
 }
@@ -158,6 +169,8 @@ function makeSummary(
       instrumented_count: 132,
       uninstrumented_count: 66,
       recommendation_count: 66,
+      serverless_count: 0,
+      orchestration_count: 0,
       coverage_pct: 66.7,
     },
     recent_recommendations: [],
@@ -286,6 +299,8 @@ describe("DiscoveryDashboard", () => {
             instrumented_count: 0,
             uninstrumented_count: 0,
             recommendation_count: 0,
+            serverless_count: 0,
+            orchestration_count: 0,
             coverage_pct: 0,
           },
           recent_recommendations: [],
@@ -339,6 +354,8 @@ describe("DiscoveryDashboard", () => {
           instrumented_count: 90,
           uninstrumented_count: 10,
           recommendation_count: 10,
+          serverless_count: 0,
+          orchestration_count: 0,
           coverage_pct: 90,
         },
       }),
@@ -360,6 +377,8 @@ describe("DiscoveryDashboard", () => {
           instrumented_count: 65,
           uninstrumented_count: 35,
           recommendation_count: 35,
+          serverless_count: 0,
+          orchestration_count: 0,
           coverage_pct: 65,
         },
       }),
@@ -381,6 +400,8 @@ describe("DiscoveryDashboard", () => {
           instrumented_count: 30,
           uninstrumented_count: 70,
           recommendation_count: 70,
+          serverless_count: 0,
+          orchestration_count: 0,
           coverage_pct: 30,
         },
       }),
@@ -786,6 +807,58 @@ describe("DiscoveryDashboard", () => {
     });
     expect(
       screen.queryByTestId("trace-coverage-pending-indicator"),
+    ).not.toBeInTheDocument();
+  });
+
+  // --- Tier coverage chip line (v0.89.97 #731 Stream 129) -----------
+  //
+  // Orchestration tier slice 1 chunk 4 adds a per-tier chip line
+  // beneath the per-provider chip row. Slice 1 lands the ORCH column
+  // only. The chip line stays hidden when no tier reports a non-zero
+  // pct (design doc §7 acceptance test).
+
+  it("TestDiscoveryDashboard_TraceCoveragePanel_ORCHColumnRendersWhenNonZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    mockedGetTraceCoverage.mockResolvedValue(
+      makeTraceCoverage(
+        {},
+        {
+          aws: makeProviderTrace({
+            coverage_pct: 67,
+            emitting_count: 10,
+            orchestration_pct: 12,
+          }),
+        },
+      ),
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("trace-coverage-tier-chip-orch"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId("trace-coverage-tier-chip-orch"),
+    ).toHaveTextContent(/ORCH/);
+    expect(
+      screen.getByTestId("trace-coverage-tier-chip-orch"),
+    ).toHaveTextContent(/12%/);
+  });
+
+  it("TestDiscoveryDashboard_TraceCoveragePanel_ORCHColumnHiddenWhenZero", async () => {
+    mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
+    // Default makeTraceCoverage() carries orchestration_pct = 0 on
+    // every provider, so the ORCH chip must stay hidden.
+    mockedGetTraceCoverage.mockResolvedValue(makeTraceCoverage());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("trace-coverage-panel")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("trace-coverage-tier-chip-orch"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("trace-coverage-tier-chip-row"),
     ).not.toBeInTheDocument();
   });
 

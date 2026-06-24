@@ -189,6 +189,13 @@ func (a *applicationStoreAuditQuery) ListRecentScanCompletedByProvider(
 			// returns 0 in that case so the cold-start posture stays
 			// zero-safe.
 			ServerlessCount: intFromPayload(e.Payload, "serverless_count"),
+			// Orchestration tier slice 1 chunk 4 (v0.89.97, #731
+			// Stream 129) — project the optional orchestration_count
+			// payload field. Older scans pre-date the field;
+			// intFromPayload returns 0 so the cold-start posture stays
+			// zero-safe. OCI scan_completed events never set the field
+			// in slice 1.
+			OrchestrationCount: intFromPayload(e.Payload, "orchestration_count"),
 		}
 	}
 	return out, nil

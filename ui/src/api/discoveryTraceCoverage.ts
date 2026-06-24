@@ -62,6 +62,17 @@ export type ProviderTraceCoverage = {
    * always populates it.
    */
   serverless_pct: number;
+  /**
+   * orchestration_pct — orchestration tier slice 1 chunk 4 (v0.89.97,
+   * #731 Stream 129). Per-provider orchestration coverage rendered as
+   * emitting / inventory * 100 over the orchestration-only sub-counts.
+   * A workflow / state machine counts as emitting when last_seen_at is
+   * within 24h (design doc §6.4). Zero on cold start and always zero
+   * for OCI in slice 1 — OCI orchestration is deferred to slice 2. The
+   * dashboard hides the ORCH chip line when fleet-wide inventory is 0.
+   * Required field — the backend always populates it.
+   */
+  orchestration_pct: number;
 };
 
 // --- Cross-provider totals -----------------------------------------

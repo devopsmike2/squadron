@@ -2014,3 +2014,109 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostServerlessTier(t *testi
 	assert.NotContains(t, ociMsg, "ocifunc-otel-distro")
 	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
 }
+
+// TestDiscoveryProposer_OrchestrationKindsInSystemPrompt — orchestration
+// tier slice 1 chunk 4 (v0.89.97, #731 Stream 129). The 6 new
+// per-cloud orchestration recommendation kinds must appear in the
+// shared system prompt so the model can route findings to the right
+// kind when the scan inventory carries orchestration rows. Slice 1
+// compute + database + Kubernetes + serverless tier kinds must remain
+// present after the orchestration extension — same shared-system-prompt
+// invariant the prior chunk 5 tests pin.
+func TestDiscoveryProposer_OrchestrationKindsInSystemPrompt(t *testing.T) {
+	for _, orchKind := range []string{
+		// AWS Step Functions.
+		"stepfunc-xray-active", "stepfunc-logging-enable",
+		// GCP Workflows.
+		"workflows-trace-enable", "workflows-logging-enable",
+		// Azure Logic Apps.
+		"logicapps-appinsights-enable", "logicapps-diagnostics-enable",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, orchKind,
+			"shared system prompt should teach the orchestration tier slice 1 kind %q", orchKind)
+	}
+	// Prior-tier kinds still present.
+	for _, priorKind := range []string{
+		"lambda-xray-active", "cloudrun-otel-sidecar",
+		"azfunc-appinsights-enable", "ocifunc-apm-enable",
+		"gce-otel-label", "vm-otel-tag", "compute-otel-tag",
+		"ec2-otel-layer", "rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorKind,
+			"shared system prompt should still teach the prior-tier kind %q after the orchestration tier", priorKind)
+	}
+	// Reasoning template tokens.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"Orchestration workflows",
+		"shared system prompt should carry the orchestration tier reasoning template")
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"OCI orchestration is",
+		"shared system prompt should call out the OCI deferral note")
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostOrchestrationSlice1
+// — orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129)
+// cold-start parity invariant: across all four providers, the
+// compute-only user message produced by buildDiscoveryUserMessage
+// must remain byte-identical to v0.89.93 / v0.89.88 when the scan
+// context carries no orchestration rows. Acceptance test §11
+// invariant — adding orchestration tier kinds must not perturb
+// compute-only prompt generation for any provider. The new kinds
+// live ONLY in the system prompt; the user message has no
+// orchestration section, so a cold-start scan renders the same body
+// the prior chunk 5 tier extensions pinned.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostOrchestrationSlice1(t *testing.T) {
+	// AWS cold start.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	assert.NotContains(t, awsMsg, "stepfunc-xray-active")
+	assert.NotContains(t, awsMsg, "stepfunc-logging-enable")
+	assert.Contains(t, awsMsg, "group_id on every step MUST equal the account_id above")
+
+	// GCP cold start.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	assert.NotContains(t, gcpMsg, "workflows-trace-enable")
+	assert.NotContains(t, gcpMsg, "workflows-logging-enable")
+	assert.Contains(t, gcpMsg, "group_id on every step MUST equal the project_id above")
+
+	// Azure cold start.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	assert.NotContains(t, azureMsg, "logicapps-appinsights-enable")
+	assert.NotContains(t, azureMsg, "logicapps-diagnostics-enable")
+	assert.Contains(t, azureMsg, "group_id on every step MUST equal the subscription_id above")
+
+	// OCI cold start.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	// OCI is explicitly deferred to slice 2; the cold-start prompt
+	// carries no orchestration tokens because the user-message
+	// renderer has no orchestration section. The system-prompt
+	// section names the kinds but does not embed them into the user
+	// message.
+	assert.NotContains(t, ociMsg, "stepfunc-")
+	assert.NotContains(t, ociMsg, "workflows-trace-enable")
+	assert.NotContains(t, ociMsg, "logicapps-appinsights-enable")
+	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
+}

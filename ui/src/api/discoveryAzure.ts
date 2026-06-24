@@ -242,6 +242,25 @@ export interface ServerlessRow {
   detail?: Record<string, unknown>;
 }
 
+// OrchestrationRow — orchestration tier slice 1 chunk 4 (v0.89.97,
+// #731 Stream 129). Shared cross-cloud orchestration row shape. On
+// Azure the surface is always "logicapps"; workflow_type carries
+// "Standard" (Logic Apps Standard on App Service) or "Consumption"
+// (Logic Apps Consumption multi-tenant).
+export interface OrchestrationRow {
+  provider: "aws" | "gcp" | "azure";
+  surface: "stepfunc" | "workflows" | "logicapps";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn?: string;
+  workflow_type?: string;
+  has_trace_axis: boolean;
+  has_log_axis: boolean;
+  last_seen_at?: string;
+  detail?: Record<string, unknown>;
+}
+
 // ScanAzureResponse mirrors azureScanResponse on the wire. The
 // handler emits instance_count, instrumented_count, uninstrumented_count
 // directly so the UI doesn't have to derive them — symmetric with the
@@ -271,6 +290,10 @@ export interface ScanAzureResponse {
   // scanner extension. Optional on the wire; the Inventory tab's
   // Serverless sub-tab treats undefined as empty.
   serverless?: ServerlessRow[];
+  // orchestrations — orchestration tier slice 1 chunk 4 (v0.89.97,
+  // #731 Stream 129). Azure Logic Apps inventory from the chunk 3
+  // Azure Logic Apps scanner extension.
+  orchestrations?: OrchestrationRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

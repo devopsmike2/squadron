@@ -391,6 +391,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	serverlessTierKindsPromptSection +
 
+	orchestrationTierKindsPromptSection +
+
 	`Rules that apply to every plan step:` + "\n" +
 	`  - Set require_approval to true on step 0. Steps 1..N inherit approval at the plan ` +
 	`level — the operator approves the whole plan at step 0 and the engine sequences the ` +
@@ -1209,6 +1211,70 @@ This Terraform PR adds the missing primitive; once merged and
 applied, Squadron's traceindex will populate the Last seen
 column for this resource within ~5 minutes of the first
 invocation."
+
+` + "\n"
+
+// orchestrationTierKindsPromptSection — orchestration tier slice 1
+// chunk 4 (v0.89.97, #731 Stream 129). Six new recommendation kinds
+// across three surfaces (Step Functions / Workflows / Logic Apps). OCI
+// orchestration is deferred to slice 2; slice 1 covers AWS / GCP /
+// Azure only. Section is appended to the discovery system prompt
+// alongside the trace-emission, span-quality, and serverless tier
+// sections so the model reads it as part of the universal kind catalog.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no orchestration rows the rendered user message
+// stays byte-identical to v0.89.93 / v0.89.88 across all four
+// providers. The 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostOrchestrationSlice1
+// pins this invariant.
+const orchestrationTierKindsPromptSection = `ORCHESTRATION TIER KINDS (slice 1):
+
+These kinds fire when an inventory row in the orchestration
+tier has its observability axis disabled. OCI orchestration is
+deferred to slice 2; slice 1 covers AWS / GCP / Azure only.
+
+For AWS Step Functions:
+- stepfunc-xray-active: state machine with
+  tracingConfiguration.enabled = false (or absent). Terraform:
+  aws_sfn_state_machine tracing_configuration { enabled = true }.
+  Caveat: EXPRESS state machines emit X-Ray segments only for
+  per-state Lambda invocations, not the orchestration runtime
+  itself. The recommendation reasoning notes this for EXPRESS
+  workflows.
+- stepfunc-logging-enable: state machine with
+  loggingConfiguration.level = "OFF". Terraform: enable
+  CloudWatch Logs destination via logging_configuration block.
+
+For GCP Workflows:
+- workflows-trace-enable: workflow with callLogLevel !=
+  LOG_ALL_CALLS. Terraform: google_workflows_workflow
+  call_log_level = "LOG_ALL_CALLS".
+- workflows-logging-enable: workflow with callLogLevel =
+  CALL_LOG_LEVEL_UNSPECIFIED. Terraform: same block setting
+  call_log_level to at least LOG_ERRORS_ONLY.
+
+For Azure Logic Apps:
+- logicapps-appinsights-enable: Standard tier workflowapp
+  without APPLICATIONINSIGHTS_CONNECTION_STRING app_setting.
+  Terraform: azurerm_logic_app_standard app_settings = {
+  APPLICATIONINSIGHTS_CONNECTION_STRING = "..." }.
+- logicapps-diagnostics-enable: Consumption tier workflow
+  without a Microsoft.Insights/diagnosticSettings child.
+  Terraform: azurerm_monitor_diagnostic_setting attached to
+  the azurerm_logic_app_workflow resource.
+
+REASONING TEMPLATE for orchestration tier recommendations:
+
+"This [surface] has [axis] disabled. Orchestration workflows
+sit above the serverless / compute layer Squadron already
+scans; without this axis on, Squadron's traceindex receives
+no spans correlating the workflow execution back to its
+per-state resource invocations. This Terraform PR enables
+the missing primitive. After merge + apply + first execution,
+the Last seen column populates for this orchestration within
+~5 minutes."
 
 ` + "\n"
 

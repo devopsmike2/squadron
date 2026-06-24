@@ -2715,3 +2715,154 @@ func TestProviderFromRecommendationKind_ServerlessTierExtension(t *testing.T) {
 		}
 	}
 }
+
+// --- Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) -
+
+// TestWebhook_StepfuncKinds_RouteToAWS — §11 acceptance test 13.
+// The two AWS Step Functions kinds (stepfunc-xray-active,
+// stepfunc-logging-enable) must route through the webhook receiver
+// as provider=aws with the parsed account_id surfaced on the audit
+// payload.
+func TestWebhook_StepfuncKinds_RouteToAWS(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/stepfunc-xray-active/123456789012/us-east-1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "stepfunc-xray-active" {
+		t.Errorf("payload.recommendation_kind = %v, want stepfunc-xray-active", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "aws" {
+		t.Errorf("payload.provider = %v, want aws", pay["provider"])
+	}
+	if pay["account_id"] != "123456789012" {
+		t.Errorf("payload.account_id = %v, want 123456789012", pay["account_id"])
+	}
+}
+
+// TestWebhook_WorkflowsKinds_RouteToGCP — §11 acceptance test 14.
+// The two GCP Workflows kinds route through the webhook receiver as
+// provider=gcp with the parsed project_id surfaced on the audit
+// payload (and account_id explicitly empty per the v0.89.48 stable
+// schema invariant).
+func TestWebhook_WorkflowsKinds_RouteToGCP(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/workflows-trace-enable/my-prod-project/us-central1/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "workflows-trace-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want workflows-trace-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "gcp" {
+		t.Errorf("payload.provider = %v, want gcp", pay["provider"])
+	}
+	if pay["project_id"] != "my-prod-project" {
+		t.Errorf("payload.project_id = %v, want my-prod-project", pay["project_id"])
+	}
+	if pay["account_id"] != "" {
+		t.Errorf("payload.account_id = %v, want empty string", pay["account_id"])
+	}
+}
+
+// TestWebhook_LogicAppsKinds_RouteToAzure — §11 acceptance test 15.
+// The two Azure Logic Apps kinds route through the webhook receiver
+// as provider=azure with the parsed subscription_id surfaced.
+func TestWebhook_LogicAppsKinds_RouteToAzure(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+	connectionID := seedConnection(t, store, "octo/widgets")
+
+	body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+		"squadron/rec/logicapps-appinsights-enable/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/eastus/abc123",
+		"2026-06-22T12:34:56Z", "alice")
+	sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	e := audit.entries[0]
+	if e.TargetID != connectionID {
+		t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+	}
+	pay := e.Payload
+	if pay["recommendation_kind"] != "logicapps-appinsights-enable" {
+		t.Errorf("payload.recommendation_kind = %v, want logicapps-appinsights-enable", pay["recommendation_kind"])
+	}
+	if pay["provider"] != "azure" {
+		t.Errorf("payload.provider = %v, want azure", pay["provider"])
+	}
+	if pay["subscription_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Errorf("payload.subscription_id = %v, want aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pay["subscription_id"])
+	}
+}
+
+// TestProviderFromRecommendationKind_OrchestrationTierExtension —
+// pins the dispatch table for the 6 new orchestration kinds and
+// reasserts prior-tier routing remains green. Boundary cases on
+// "stepfunc" / "workflows" / "logicapps" alone (no trailing hyphen)
+// fall through to AWS.
+func TestProviderFromRecommendationKind_OrchestrationTierExtension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{kind: "stepfunc-xray-active", want: "aws"},
+		{kind: "stepfunc-logging-enable", want: "aws"},
+		{kind: "workflows-trace-enable", want: "gcp"},
+		{kind: "workflows-logging-enable", want: "gcp"},
+		{kind: "logicapps-appinsights-enable", want: "azure"},
+		{kind: "logicapps-diagnostics-enable", want: "azure"},
+		// Prior-tier sanity.
+		{kind: "lambda-xray-active", want: "aws"},
+		{kind: "cloudrun-otel-sidecar", want: "gcp"},
+		{kind: "azfunc-appinsights-enable", want: "azure"},
+		{kind: "ocifunc-apm-enable", want: "oci"},
+		// Boundary cases — bare prefixes without trailing hyphen fall
+		// through to AWS via the switch default.
+		{kind: "stepfunc", want: "aws"},
+		{kind: "workflows", want: "aws"},
+		{kind: "logicapps", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}

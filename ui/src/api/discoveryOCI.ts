@@ -239,6 +239,27 @@ export interface ServerlessRow {
   detail?: Record<string, unknown>;
 }
 
+// OrchestrationRow — orchestration tier slice 1 chunk 4 (v0.89.97,
+// #731 Stream 129). OCI orchestration is deferred to slice 2; the OCI
+// scan response always returns orchestrations: [] in slice 1. The
+// shape is carried in this module so the OCI page's conditional
+// sub-tab render keys off a populated rows-array on the forward-
+// compatible slice 2 path. The provider union is constrained to
+// "aws" | "gcp" | "azure" since OCI scanners never emit rows.
+export interface OrchestrationRow {
+  provider: "aws" | "gcp" | "azure";
+  surface: "stepfunc" | "workflows" | "logicapps";
+  account_id: string;
+  region: string;
+  resource_name: string;
+  resource_arn?: string;
+  workflow_type?: string;
+  has_trace_axis: boolean;
+  has_log_axis: boolean;
+  last_seen_at?: string;
+  detail?: Record<string, unknown>;
+}
+
 // ScanOCIResponse mirrors ociScanResponse on the wire. Unlike the
 // Azure response which carries subscription_id + location, the OCI
 // response carries tenancy_ocid + region — the OCI substrate scopes
@@ -277,6 +298,12 @@ export interface ScanOCIResponse {
   // Stream 123). OCI Functions inventory from the chunk 4 OCI
   // scanner extension. Optional on the wire.
   serverless?: ServerlessRow[];
+  // orchestrations — orchestration tier slice 1 chunk 4 (v0.89.97,
+  // #731 Stream 129). Always empty in OCI scan responses for slice 1;
+  // the OCI Inventory tab conditionally hides the Orchestration
+  // sub-tab when this field is undefined or empty. Forward-compatible
+  // with slice 2 OCI orchestration coverage.
+  orchestrations?: OrchestrationRow[];
   scan_id: string;
 }
 
@@ -294,6 +321,7 @@ interface scanOCIConnectionWireResponse {
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
   serverless?: ServerlessRow[];
+  orchestrations?: OrchestrationRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;
@@ -323,6 +351,7 @@ export async function scanOCIConnection(
     databases: wire.databases,
     clusters: wire.clusters,
     serverless: wire.serverless,
+    orchestrations: wire.orchestrations,
     scan_id: wire.scan_id,
   };
 }
