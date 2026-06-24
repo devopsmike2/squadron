@@ -846,6 +846,117 @@ describe("DiscoveryOCI", () => {
     ).toBeInTheDocument();
   });
 
+  // --- Cold-start latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream 157) ---
+
+  // TestDiscoveryOCI_Serverless_ColdStartColumnRenders — slice 2 §11
+  // acceptance test 13 extension. The OCI Serverless table's
+  // "Cold-start P95 (24h)" column renders between OTel distro and
+  // Last seen. Mirrors the AWS column from slice 1 chunk 3.
+  it("TestDiscoveryOCI_Serverless_ColdStartColumnRenders", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "oci",
+          surface: "ocifunc",
+          account_id: "ocid1.tenancy.oc1..aaaa",
+          region: "us-ashburn-1",
+          resource_name: "ingest-worker",
+          resource_arn: "ocid1.fnfunc.oc1.iad.aaaa",
+          runtime: "java17",
+          has_trace_axis: true,
+          has_otel_distro: true,
+          cold_start_p95_ms: 2100,
+          cold_start_exceeds_threshold: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(screen.getByText(/Cold-start P95 \(24h\)/i)).toBeInTheDocument();
+  });
+
+  // TestDiscoveryOCI_Serverless_ColdStartCell_AmberWhenExceedsThreshold —
+  // when the server's cold_start_exceeds_threshold flag is true, the
+  // cell renders in amber. Mirrors the AWS slice 1 test.
+  it("TestDiscoveryOCI_Serverless_ColdStartCell_AmberWhenExceedsThreshold", async () => {
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanOCIConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "oci",
+          surface: "ocifunc",
+          account_id: "ocid1.tenancy.oc1..aaaa",
+          region: "us-ashburn-1",
+          resource_name: "hot-ocifunc",
+          resource_arn: "ocid1.fnfunc.oc1.iad.bbbb",
+          runtime: "java17",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          cold_start_p95_ms: 2100,
+          cold_start_exceeds_threshold: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+
+    const cells = screen.getAllByTestId("cold-start-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/2100ms/);
+  });
+
   // Orchestration tier slice 1 chunk 4 (v0.89.97, #731 Stream 129) —
   // slice 1 contract: the Orchestration sub-tab MUST be hidden when
   // the orchestrations[] array is empty. OCI orchestration coverage

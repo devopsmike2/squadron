@@ -300,3 +300,420 @@ func formatColdStartReasoning(row ColdStartInventoryRow, finding *ColdStartDetec
 	}
 	return b.String()
 }
+
+// ---------------------------------------------------------------------
+// Cold-start latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream
+// 157) — per-cloud detection branches sibling to CheckLambdaColdStart.
+// One helper per surface (cloudrun / cloudfunc / azfunc / ocifunc),
+// each emitting a per-cloud cold-start-baseline draft when the
+// underlying chunk-2/3 detection finding fires.
+//
+// Each per-cloud helper:
+//   - short-circuits on nil finding OR !ShouldFire
+//   - applies the per-row exclusion check (with the same ".cold_start"
+//     suffix convention slice 1 introduced)
+//   - calls the matching iacpicker emitter to get the Terraform +
+//     reasoning hedge
+//   - composes per-cloud reasoning text reflecting the per-surface
+//     caveats (warm-path inclusion on GCP, IsAfterColdStart fallback
+//     on Azure, function_duration approximation on OCI)
+//
+// See docs/proposals/cold-start-latency-slice2.md §3 + §8.
+// ---------------------------------------------------------------------
+
+// ColdStartRecommendationKindCloudRun is the recommendation kind the
+// CheckCloudRunColdStart branch emits.
+const ColdStartRecommendationKindCloudRun = "cloudrun-cold-start-baseline"
+
+// ColdStartRecommendationKindCloudFunc is the recommendation kind the
+// CheckCloudFunctionsColdStart branch emits.
+const ColdStartRecommendationKindCloudFunc = "cloudfunc-cold-start-baseline"
+
+// ColdStartRecommendationKindAzureFunc is the recommendation kind the
+// CheckAzureFunctionsColdStart branch emits.
+const ColdStartRecommendationKindAzureFunc = "azfunc-cold-start-baseline"
+
+// ColdStartRecommendationKindOCIFunc is the recommendation kind the
+// CheckOCIFunctionsColdStart branch emits.
+const ColdStartRecommendationKindOCIFunc = "ocifunc-cold-start-baseline"
+
+// ColdStartDetectionFindingPerCloud is the slim projection of the
+// per-cloud chunk-1/2/3 ColdStartDetectionResult the slice 2 detection
+// branches read. Stated as a struct here (rather than importing each
+// cloud's scanner package) so this package stays disjoint from the
+// cloud-specific scanners — the wiring layer projects each cloud's
+// ColdStartDetectionResult into this shape at the handler boundary.
+//
+// All four sub-fields from the per-cloud ShouldFireRecommendation
+// predicates are baked into ShouldFire on the wire so the branch just
+// reads the flag. The other fields are surfaced verbatim in reasoning
+// text.
+type ColdStartDetectionFindingPerCloud struct {
+	// ShouldFire is the pre-computed canonical predicate combining
+	// ExceedsThreshold + ExceedsFloor + BaselineSampleCount >=
+	// minimum, plus per-cloud gates (OCI Skipped).
+	ShouldFire bool
+
+	// CurrentP95Ms / BaselineP95Ms / Ratio are surfaced verbatim in
+	// the reasoning template so the operator sees the exact numbers.
+	CurrentP95Ms  float64
+	BaselineP95Ms float64
+	Ratio         float64
+
+	// CurrentSampleCount / BaselineSampleCount surfaced for the
+	// audit-trail completeness reasoning text.
+	CurrentSampleCount  int
+	BaselineSampleCount int
+
+	// UsedFallback signals the Azure runtime didn't emit the
+	// IsAfterColdStart dimension — Squadron fell back to an
+	// unfiltered query and the reasoning text adds an informational
+	// note explaining the operator's runtime version may need
+	// upgrading for cold-start-isolated metrics. Only meaningful for
+	// the Azure helper; the GCP / OCI helpers ignore this field.
+	UsedFallback bool
+
+	// Skipped signals the OCI cold_start_count was zero in the
+	// window — defensive gate. The OCI helper rejects the draft
+	// when this is true (the chunk-3 ShouldFireRecommendation
+	// predicate already bakes the gate in; this is a defense-in-
+	// depth check).
+	Skipped bool
+
+	// CurrentColdStartCount surfaced for the OCI reasoning text so
+	// the operator sees the underlying cold-start count when a
+	// detection fires (or doesn't).
+	CurrentColdStartCount int
+}
+
+// checkPerCloudColdStartExcluded consults the exclusion store for a
+// row + scope and returns true when either the per-row marker or
+// the kind-only marker covers the draft. Shared across the four per-
+// cloud helpers so the exclusion semantics stay byte-identical.
+func checkPerCloudColdStartExcluded(
+	ctx context.Context,
+	scope ColdStartScope,
+	exclusions ColdStartExclusionStore,
+	kind, recID string,
+) (bool, error) {
+	if exclusions == nil || scope.ConnectionID == "" || scope.ScopeID == "" {
+		return false, nil
+	}
+	excluded, err := exclusions.ListExcludedRecommendations(
+		ctx, scope.ConnectionID, scope.ScopeID, scope.Region, 256,
+	)
+	if err != nil {
+		return false, fmt.Errorf("cold start: list excluded recommendations: %w", err)
+	}
+	for _, ex := range excluded {
+		if ex.RecommendationID != "" && ex.RecommendationID == recID {
+			return true, nil
+		}
+		if ex.RecommendationID == "" && ex.RecommendationKind == kind {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// CheckCloudRunColdStart is the per-cloud detection branch for the
+// cloudrun-cold-start-baseline kind. Sibling of CheckLambdaColdStart.
+// Returns nil when:
+//   - finding is nil OR ShouldFire is false,
+//   - the row has been excluded by the operator,
+//   - the surface isn't "cloudrun".
+func CheckCloudRunColdStart(
+	ctx context.Context,
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	scope ColdStartScope,
+	exclusions ColdStartExclusionStore,
+) (*ColdStartRecommendationDraft, error) {
+	if finding == nil || !finding.ShouldFire {
+		return nil, nil
+	}
+	if row.Surface != "" && row.Surface != "cloudrun" {
+		return nil, nil
+	}
+	recID := row.RecommendationID + ".cold_start"
+	excluded, err := checkPerCloudColdStartExcluded(ctx, scope, exclusions, ColdStartRecommendationKindCloudRun, recID)
+	if err != nil {
+		return nil, err
+	}
+	if excluded {
+		return nil, nil
+	}
+	picked := iacpicker.PickCloudRunColdStartPattern(iacpicker.RecommendationContext{
+		Provider:       row.Provider,
+		Tier:           "serverless",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return &ColdStartRecommendationDraft{
+		Kind:             ColdStartRecommendationKindCloudRun,
+		RecommendationID: recID,
+		Reasoning:        formatCloudRunColdStartReasoning(row, finding, picked),
+		Terraform:        picked.PrimaryTerraform,
+		ScopeID:          scope.ScopeID,
+		Region:           scope.Region,
+		ResourceID:       row.ResourceID,
+		PickedPattern:    picked,
+	}, nil
+}
+
+// CheckCloudFunctionsColdStart is the per-cloud detection branch for
+// the cloudfunc-cold-start-baseline kind.
+func CheckCloudFunctionsColdStart(
+	ctx context.Context,
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	scope ColdStartScope,
+	exclusions ColdStartExclusionStore,
+) (*ColdStartRecommendationDraft, error) {
+	if finding == nil || !finding.ShouldFire {
+		return nil, nil
+	}
+	if row.Surface != "" && row.Surface != "cloudfunc" {
+		return nil, nil
+	}
+	recID := row.RecommendationID + ".cold_start"
+	excluded, err := checkPerCloudColdStartExcluded(ctx, scope, exclusions, ColdStartRecommendationKindCloudFunc, recID)
+	if err != nil {
+		return nil, err
+	}
+	if excluded {
+		return nil, nil
+	}
+	picked := iacpicker.PickCloudFunctionsColdStartPattern(iacpicker.RecommendationContext{
+		Provider:       row.Provider,
+		Tier:           "serverless",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return &ColdStartRecommendationDraft{
+		Kind:             ColdStartRecommendationKindCloudFunc,
+		RecommendationID: recID,
+		Reasoning:        formatCloudFunctionsColdStartReasoning(row, finding, picked),
+		Terraform:        picked.PrimaryTerraform,
+		ScopeID:          scope.ScopeID,
+		Region:           scope.Region,
+		ResourceID:       row.ResourceID,
+		PickedPattern:    picked,
+	}, nil
+}
+
+// CheckAzureFunctionsColdStart is the per-cloud detection branch for
+// the azfunc-cold-start-baseline kind. When finding.UsedFallback is
+// true, the reasoning text adds an informational note explaining
+// Squadron fell back to an unfiltered query because the Function
+// App's runtime didn't emit the IsAfterColdStart dimension.
+func CheckAzureFunctionsColdStart(
+	ctx context.Context,
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	scope ColdStartScope,
+	exclusions ColdStartExclusionStore,
+) (*ColdStartRecommendationDraft, error) {
+	if finding == nil || !finding.ShouldFire {
+		return nil, nil
+	}
+	if row.Surface != "" && row.Surface != "azfunc" {
+		return nil, nil
+	}
+	recID := row.RecommendationID + ".cold_start"
+	excluded, err := checkPerCloudColdStartExcluded(ctx, scope, exclusions, ColdStartRecommendationKindAzureFunc, recID)
+	if err != nil {
+		return nil, err
+	}
+	if excluded {
+		return nil, nil
+	}
+	picked := iacpicker.PickAzureFunctionsColdStartPattern(iacpicker.RecommendationContext{
+		Provider:       row.Provider,
+		Tier:           "serverless",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return &ColdStartRecommendationDraft{
+		Kind:             ColdStartRecommendationKindAzureFunc,
+		RecommendationID: recID,
+		Reasoning:        formatAzureFunctionsColdStartReasoning(row, finding, picked),
+		Terraform:        picked.PrimaryTerraform,
+		ScopeID:          scope.ScopeID,
+		Region:           scope.Region,
+		ResourceID:       row.ResourceID,
+		PickedPattern:    picked,
+	}, nil
+}
+
+// CheckOCIFunctionsColdStart is the per-cloud detection branch for
+// the ocifunc-cold-start-baseline kind. Skipped findings (no cold
+// starts in the window) are defensively rejected here — the chunk-3
+// ShouldFireRecommendation predicate already bakes the gate in but
+// the defensive check keeps the per-cloud invariant explicit.
+func CheckOCIFunctionsColdStart(
+	ctx context.Context,
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	scope ColdStartScope,
+	exclusions ColdStartExclusionStore,
+) (*ColdStartRecommendationDraft, error) {
+	if finding == nil || !finding.ShouldFire {
+		return nil, nil
+	}
+	// Defensive: per slice 2 §3.4 the OCI ShouldFireRecommendation
+	// predicate already gates on !Skipped, but a malformed wiring
+	// path could in principle pre-compute ShouldFire=true alongside
+	// Skipped=true. Reject defensively.
+	if finding.Skipped {
+		return nil, nil
+	}
+	if row.Surface != "" && row.Surface != "ocifunc" {
+		return nil, nil
+	}
+	recID := row.RecommendationID + ".cold_start"
+	excluded, err := checkPerCloudColdStartExcluded(ctx, scope, exclusions, ColdStartRecommendationKindOCIFunc, recID)
+	if err != nil {
+		return nil, err
+	}
+	if excluded {
+		return nil, nil
+	}
+	picked := iacpicker.PickOCIFunctionsColdStartPattern(iacpicker.RecommendationContext{
+		Provider:       row.Provider,
+		Tier:           "serverless",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return &ColdStartRecommendationDraft{
+		Kind:             ColdStartRecommendationKindOCIFunc,
+		RecommendationID: recID,
+		Reasoning:        formatOCIFunctionsColdStartReasoning(row, finding, picked),
+		Terraform:        picked.PrimaryTerraform,
+		ScopeID:          scope.ScopeID,
+		Region:           scope.Region,
+		ResourceID:       row.ResourceID,
+		PickedPattern:    picked,
+	}, nil
+}
+
+// formatCloudRunColdStartReasoning composes the operator-facing
+// reasoning for the cloudrun-cold-start-baseline kind. Mirrors the
+// lambda 3-failure-mode framing and adds the GCP warm-path inclusion
+// caveat from §3.1.
+func formatCloudRunColdStartReasoning(
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	picked iacpicker.PickedPattern,
+) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"This Cloud Run service's 24-hour P95 request latency is %.0fms, %.2fx its 7-day baseline of %.0fms (current samples=%d, baseline samples=%d).\n\n",
+		finding.CurrentP95Ms, finding.Ratio, finding.BaselineP95Ms,
+		finding.CurrentSampleCount, finding.BaselineSampleCount,
+	)
+	fmt.Fprintf(&b, "Resource: %s (provider=%s, region=%s).\n\n", row.ResourceID, row.Provider, row.Region)
+	b.WriteString("Squadron flags this when the ratio exceeds 1.5x AND the absolute value exceeds 500ms. CAVEAT: Cloud Run's request_latencies metric includes warm-path invocations, so a permanently-warm service (min-instances already set, regular traffic) may show false positives. Three common causes to evaluate:\n")
+	b.WriteString("  1. Init script regression: a recent deployment added heavy imports / startup work. Compare deployment timeline to the regression onset.\n")
+	b.WriteString("  2. Cold-start frequency increase: reduced invocation rate means more requests hit the cold path. Consider min-instances for predictable traffic.\n")
+	b.WriteString("  3. Architecture change: container image / runtime updates can shift cold-start behavior.\n\n")
+	b.WriteString("This Terraform PR drafts a baseline autoscaling.knative.dev/minScale annotation (floor=1, operator tunes). Decline if the cause is (1) or (3) and trace the regression in deployment history. The verdict learning loop will record the decline.\n")
+	if picked.Reasoning != "" {
+		b.WriteString("\nPicker note: ")
+		b.WriteString(picked.Reasoning)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// formatCloudFunctionsColdStartReasoning composes the reasoning for
+// the cloudfunc-cold-start-baseline kind. Same caveat as Cloud Run
+// (warm-path inclusion).
+func formatCloudFunctionsColdStartReasoning(
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	picked iacpicker.PickedPattern,
+) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"This Cloud Function's 24-hour P95 execution time is %.0fms, %.2fx its 7-day baseline of %.0fms (current samples=%d, baseline samples=%d).\n\n",
+		finding.CurrentP95Ms, finding.Ratio, finding.BaselineP95Ms,
+		finding.CurrentSampleCount, finding.BaselineSampleCount,
+	)
+	fmt.Fprintf(&b, "Resource: %s (provider=%s, region=%s).\n\n", row.ResourceID, row.Provider, row.Region)
+	b.WriteString("Squadron flags this when the ratio exceeds 1.5x AND the absolute value exceeds 500ms. CAVEAT: Cloud Functions' execution_times metric includes warm invocations, so functions on Gen 2 with min instances already set may show false positives. Three common causes to evaluate:\n")
+	b.WriteString("  1. Init script regression: a recent deployment added heavy imports / startup work.\n")
+	b.WriteString("  2. Cold-start frequency increase: reduced invocation rate means more invocations hit the cold path. Consider min_instance_count for predictable traffic.\n")
+	b.WriteString("  3. Architecture change: runtime updates or memory-tier changes can shift cold-start behavior.\n\n")
+	b.WriteString("This Terraform PR drafts a baseline min_instance_count = 1 on the Gen 2 service_config (operator tunes). Decline if the cause is (1) or (3) and trace the regression in deployment history.\n")
+	if picked.Reasoning != "" {
+		b.WriteString("\nPicker note: ")
+		b.WriteString(picked.Reasoning)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// formatAzureFunctionsColdStartReasoning composes the reasoning for
+// the azfunc-cold-start-baseline kind. When finding.UsedFallback is
+// true, the reasoning text adds an informational note explaining
+// Squadron fell back to an unfiltered query because the Function
+// App's runtime didn't emit the IsAfterColdStart dimension — the
+// P95 reported is across ALL invocations (cold + warm) rather than
+// cold-start-isolated. The regression signal is still actionable
+// (the overall execution duration spiked) but the operator should
+// know the metric isn't cold-start-isolated for older runtimes.
+func formatAzureFunctionsColdStartReasoning(
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	picked iacpicker.PickedPattern,
+) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"This Azure Function App's 24-hour P95 execution duration is %.0fms, %.2fx its 7-day baseline of %.0fms (current samples=%d, baseline samples=%d).\n\n",
+		finding.CurrentP95Ms, finding.Ratio, finding.BaselineP95Ms,
+		finding.CurrentSampleCount, finding.BaselineSampleCount,
+	)
+	fmt.Fprintf(&b, "Resource: %s (provider=%s, region=%s).\n\n", row.ResourceID, row.Provider, row.Region)
+	if finding.UsedFallback {
+		b.WriteString("INFORMATIONAL NOTE: This Function App's runtime version did NOT emit the IsAfterColdStart dimension on FunctionExecutionDuration — the IsAfterColdStart dimension was introduced in 2023+ runtime versions. Squadron fell back to an unfiltered P95 query, so the value above is across ALL invocations (cold + warm), not cold-start-isolated. The regression signal is still actionable (overall execution duration spiked), but consider upgrading the Function App's runtime to get cold-start-isolated metrics in future scans.\n\n")
+	}
+	b.WriteString("Squadron flags this when the ratio exceeds 1.5x AND the absolute value exceeds 500ms. Three common causes to evaluate:\n")
+	b.WriteString("  1. Init script regression: a recent deployment added heavy imports / startup work.\n")
+	b.WriteString("  2. Cold-start frequency increase: Consumption-plan apps scale to zero between invocations; Premium Plan eliminates this.\n")
+	b.WriteString("  3. Architecture change: runtime updates can shift cold-start behavior.\n\n")
+	b.WriteString("This Terraform PR drafts two paths: Premium Plan migration (EP1+) eliminates cold-start by maintaining warm instances; the lighter-weight alternative disables placeholder mode (WEBSITE_USE_PLACEHOLDER = \"0\"). Pick based on cost tolerance. Decline if the cause is (1) or (3).\n")
+	if picked.Reasoning != "" {
+		b.WriteString("\nPicker note: ")
+		b.WriteString(picked.Reasoning)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// formatOCIFunctionsColdStartReasoning composes the reasoning for
+// the ocifunc-cold-start-baseline kind. Notes the function_duration
+// approximation honestly (it's not cold-start-isolated; the
+// cold_start_count > 0 gate ensures the window genuinely had cold
+// starts, but the P95 is across all those invocations).
+func formatOCIFunctionsColdStartReasoning(
+	row ColdStartInventoryRow,
+	finding *ColdStartDetectionFindingPerCloud,
+	picked iacpicker.PickedPattern,
+) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"This OCI Function's 24-hour P95 function_duration is %.0fms, %.2fx its 7-day baseline of %.0fms (current samples=%d, baseline samples=%d; cold_start_count=%d in the current window).\n\n",
+		finding.CurrentP95Ms, finding.Ratio, finding.BaselineP95Ms,
+		finding.CurrentSampleCount, finding.BaselineSampleCount,
+		finding.CurrentColdStartCount,
+	)
+	fmt.Fprintf(&b, "Resource: %s (provider=%s, region=%s).\n\n", row.ResourceID, row.Provider, row.Region)
+	b.WriteString("Squadron flags this when cold_start_count > 0 AND the ratio exceeds 1.5x AND the absolute value exceeds 500ms. CAVEAT: OCI Functions doesn't have an isolated cold-start latency metric; function_duration is the proxy when cold_start_count > 0 — the P95 above is across all invocations in the window, not cold-start-isolated. Three common causes to evaluate:\n")
+	b.WriteString("  1. Init script regression: a recent deployment added heavy imports / startup work.\n")
+	b.WriteString("  2. Cold-start frequency increase: reduced invocation rate or scale-to-zero events.\n")
+	b.WriteString("  3. Architecture change: runtime / memory updates can shift cold-start behavior.\n\n")
+	b.WriteString("This Terraform PR drafts a WARMUP_DELAY config tuning adjustment. OCI Functions provisioned_concurrent_executions is currently in preview; when it exits preview the recommendation will shift to that. Decline if the cause is (1) or (3).\n")
+	if picked.Reasoning != "" {
+		b.WriteString("\nPicker note: ")
+		b.WriteString(picked.Reasoning)
+		b.WriteString("\n")
+	}
+	return b.String()
+}

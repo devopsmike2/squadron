@@ -2458,3 +2458,152 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostColdStartSlice1(t *test
 	assert.NotContains(t, ociMsg, "SERVERLESS COLD-START KINDS")
 	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
 }
+
+// TestDiscoveryProposer_FourCloudColdStartKindsInSystemPrompt —
+// Cold-start latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream
+// 157). The four new per-cloud cold-start kinds must appear in the
+// shared system prompt so the model can route findings to the right
+// kind when the scan inventory carries Cloud Run / Cloud Functions /
+// Azure Functions / OCI Functions rows that crossed the substrate
+// thresholds. The slice 1 lambda kind must remain present alongside
+// the new four — the substrate's cross-cloud uniform thresholds
+// claim depends on all five kinds being co-located in one section.
+func TestDiscoveryProposer_FourCloudColdStartKindsInSystemPrompt(t *testing.T) {
+	for _, kind := range []string{
+		"lambda-cold-start-baseline",
+		"cloudrun-cold-start-baseline",
+		"cloudfunc-cold-start-baseline",
+		"azfunc-cold-start-baseline",
+		"ocifunc-cold-start-baseline",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, kind,
+			"shared system prompt should teach the cold-start kind %q", kind)
+	}
+	// The slice 2 framing extends the section header.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"SERVERLESS COLD-START KINDS (cold-start latency analysis slice 1 + slice 2)",
+		"prompt section header should mention both slice 1 and slice 2")
+	// 3-failure-mode framing applies to all 4 kinds.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"3-FAILURE-MODE REASONING applies to all 4 kinds",
+		"prompt should call out that 3-failure-mode framing applies cross-cloud")
+	// Per-cloud caveat summary block.
+	for _, want := range []string{
+		"warm-path inclusion",
+		"IsAfterColdStart",
+		"function_duration not cold-start-isolated",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"prompt should call out per-cloud caveat: %q", want)
+	}
+	// Terraform shape cues per cloud.
+	for _, want := range []string{
+		"autoscaling.knative.dev/minScale",
+		"min_instance_count",
+		`sku_name = "EP1"`,
+		"WEBSITE_USE_PLACEHOLDER",
+		"WARMUP_DELAY",
+		"provisioned_concurrent_executions",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"prompt should name the per-cloud Terraform shape: %q", want)
+	}
+	// Slice 1 framing remains intact.
+	assert.Contains(t, proposeFromDiscoveryScanSystem,
+		"aws_lambda_provisioned_concurrency_config",
+		"slice 1 AWS Terraform shape should remain after the slice 2 extension")
+	// Prior-tier kinds still present.
+	for _, priorKind := range []string{
+		"lambda-xray-active",
+		"lambda-otel-layer",
+		"eventbridge-rule-preserves-trace",
+		"rds-pi-em",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, priorKind,
+			"prior-tier kind %q should still appear after the slice 2 cold-start extension", priorKind)
+	}
+}
+
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostColdStartSlice2
+// — Cold-start parity invariant (slice 2 §11 acceptance test 13).
+// Across all four providers, the user message produced by
+// buildDiscoveryUserMessage must remain byte-identical to v0.89.116
+// when the scan context carries no cold-start observations. The four
+// new kinds live ONLY in the system prompt; the user message has no
+// cold-start section, so a cold-start scan renders the same body the
+// prior tier extensions pinned.
+func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostColdStartSlice2(t *testing.T) {
+	// AWS.
+	awsMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-aws-cold-s2",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	})
+	assert.Contains(t, awsMsg, "AWS discovery scan completed on a Squadron-connected account.")
+	for _, kind := range []string{
+		"lambda-cold-start-baseline",
+		"cloudrun-cold-start-baseline",
+		"cloudfunc-cold-start-baseline",
+		"azfunc-cold-start-baseline",
+		"ocifunc-cold-start-baseline",
+		"SERVERLESS COLD-START KINDS",
+		"autoscaling.knative.dev/minScale",
+		"WARMUP_DELAY",
+	} {
+		assert.NotContains(t, awsMsg, kind,
+			"AWS user message should NOT include cold-start system-prompt content: %q", kind)
+	}
+
+	// GCP.
+	gcpMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:    "scan-gcp-cold-s2",
+		Provider:  "gcp",
+		ProjectID: "my-sandbox-project",
+		Regions:   []string{"us-central1"},
+	})
+	assert.Contains(t, gcpMsg, "GCP discovery scan completed on a Squadron-connected project.")
+	for _, kind := range []string{
+		"cloudrun-cold-start-baseline",
+		"cloudfunc-cold-start-baseline",
+		"SERVERLESS COLD-START KINDS",
+		"autoscaling.knative.dev/minScale",
+	} {
+		assert.NotContains(t, gcpMsg, kind,
+			"GCP user message should NOT include cold-start system-prompt content: %q", kind)
+	}
+
+	// Azure.
+	azureMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:         "scan-azure-cold-s2",
+		Provider:       "azure",
+		TenantID:       "11111111-2222-3333-4444-555555555555",
+		SubscriptionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Regions:        []string{"eastus"},
+	})
+	assert.Contains(t, azureMsg, "Azure discovery scan completed on a Squadron-connected subscription.")
+	for _, kind := range []string{
+		"azfunc-cold-start-baseline",
+		"SERVERLESS COLD-START KINDS",
+		"WEBSITE_USE_PLACEHOLDER",
+	} {
+		assert.NotContains(t, azureMsg, kind,
+			"Azure user message should NOT include cold-start system-prompt content: %q", kind)
+	}
+
+	// OCI.
+	ociMsg := buildDiscoveryUserMessage(DiscoveryScanContext{
+		ScanID:      "scan-oci-cold-s2",
+		Provider:    "oci",
+		TenancyOCID: "ocid1.tenancy.oc1..aaaaaaaa",
+		Regions:     []string{"us-phoenix-1"},
+	})
+	assert.Contains(t, ociMsg, "OCI discovery scan completed on a Squadron-connected tenancy.")
+	for _, kind := range []string{
+		"ocifunc-cold-start-baseline",
+		"SERVERLESS COLD-START KINDS",
+		"WARMUP_DELAY",
+	} {
+		assert.NotContains(t, ociMsg, kind,
+			"OCI user message should NOT include cold-start system-prompt content: %q", kind)
+	}
+}

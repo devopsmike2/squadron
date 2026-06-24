@@ -234,6 +234,19 @@ export interface ServerlessRow {
   has_otel_distro: boolean;
   // last_seen_at — v0.89.77 trace integration slice 1 chunk 4.
   last_seen_at?: string;
+  // cold_start_p95_ms — Cold-start latency analysis slice 2 chunk 4
+  // (v0.89.119, #759 Stream 157). 24-hour rolling P95 cold-start
+  // observation sourced from the cold_start_observation table at
+  // scan-response time. Undefined when no observation has been
+  // persisted yet — the column renders "—".
+  cold_start_p95_ms?: number;
+  // cold_start_exceeds_threshold — Cold-start latency analysis slice
+  // 2 chunk 4 (v0.89.119). Pre-computed amber-color predicate the
+  // UI's ColdStartCell reads to color the Cold-start P95 cell amber
+  // when true. The server applies the 1.5x ratio + 500ms floor rule
+  // so the UI keeps a single definition of "amber" across columns
+  // and the per-resource cold-start drill-down endpoint.
+  cold_start_exceeds_threshold?: boolean;
   detail?: Record<string, unknown>;
 }
 

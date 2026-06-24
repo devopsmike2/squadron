@@ -1397,11 +1397,14 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
             <th className="px-3 py-2 font-medium">Region</th>
             <th className="px-3 py-2 font-medium">Trace axis</th>
             <th className="px-3 py-2 font-medium">OTel distro</th>
-            {/* Cold-start latency analysis slice 1 chunk 3 (v0.89.115,
-                #753 Stream 151) — mirrored column on Azure Serverless
-                table; slice 1 covers AWS Lambda only, so every row
-                renders "—" here. Slice 2 will populate Azure
-                Functions cold-start observations. */}
+            {/* Cold-start latency analysis slice 2 chunk 4 (v0.89.119,
+                #759 Stream 157) — populated for Azure Functions
+                when the per-cloud MetricQuerier substrate (slice 2
+                chunk 2) has persisted an observation. Renders the
+                canonical "—" otherwise. Older Function App runtimes
+                that don't emit the IsAfterColdStart dimension get an
+                unfiltered P95 with the fallback note shown in the
+                detection branch reasoning. */}
             <th className="px-3 py-2 font-medium">Cold-start P95 (24h)</th>
             <th className="px-3 py-2 font-medium">Last seen</th>
           </tr>
@@ -1441,14 +1444,7 @@ function ServerlessInventoryTable({ rows }: { rows: ServerlessRow[] }) {
                 )}
               </td>
               <td className="px-3 py-2 text-xs">
-                <span
-                  className="text-muted-foreground"
-                  title="Cold-start observation not available on this surface (AWS-only in slice 1)"
-                  data-testid="cold-start-cell"
-                  data-value="none"
-                >
-                  —
-                </span>
+                <ColdStartCell row={row} />
               </td>
               <td className="px-3 py-2 text-xs">
                 <LastSeenCell value={row.last_seen_at} />
@@ -1772,6 +1768,42 @@ function LastSeenCell({ value }: { value?: string }) {
   return (
     <span className="text-muted-foreground" title={value}>
       {rel.text}
+    </span>
+  );
+}
+
+// ColdStartCell — Cold-start latency analysis slice 2 chunk 4
+// (v0.89.119, #759 Stream 157). Renders the per-row 24h P95
+// cold-start observation surfaced on ServerlessRow. Mirrors the AWS
+// DiscoveryAWS ColdStartCell logic so the per-cloud Discovery tabs
+// keep a single rendering vocabulary across the 4 providers.
+function ColdStartCell({ row }: { row: ServerlessRow }) {
+  if (row.cold_start_p95_ms === undefined || row.cold_start_p95_ms === null) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="No cold-start observation yet"
+        data-testid="cold-start-cell"
+        data-value="none"
+      >
+        —
+      </span>
+    );
+  }
+  const isAmber = row.cold_start_exceeds_threshold === true;
+  const ms = Math.round(row.cold_start_p95_ms);
+  return (
+    <span
+      className={isAmber ? "text-amber-600" : "text-foreground"}
+      title={
+        isAmber
+          ? `Cold-start P95 ${ms}ms exceeds baseline threshold (>= 1.5x baseline AND >= 500ms)`
+          : `Cold-start P95 ${ms}ms`
+      }
+      data-testid="cold-start-cell"
+      data-value={isAmber ? "amber" : "ok"}
+    >
+      {ms}ms
     </span>
   );
 }

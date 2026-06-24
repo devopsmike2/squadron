@@ -230,3 +230,375 @@ func TestLambdaColdStartBatch_AccumulatesDrafts(t *testing.T) {
 		t.Errorf("draft.RecommendationID = %q, want rec-1 prefix", drafts[0].RecommendationID)
 	}
 }
+
+// ---------------------------------------------------------------------
+// Cold-start latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream
+// 157) — per-cloud detection branch tests siblings to the slice 1
+// CheckLambdaColdStart tests above.
+// ---------------------------------------------------------------------
+
+func newCloudRunRow() ColdStartInventoryRow {
+	return ColdStartInventoryRow{
+		RecommendationID: "rec-gcp-cloudrun-checkout",
+		Provider:         "gcp",
+		Surface:          "cloudrun",
+		ResourceID:       "projects/my-proj/locations/us-central1/services/checkout-svc",
+		ResourceTFName:   "checkout_svc",
+		Region:           "us-central1",
+	}
+}
+
+func newCloudFuncRow() ColdStartInventoryRow {
+	return ColdStartInventoryRow{
+		RecommendationID: "rec-gcp-cloudfunc-resize",
+		Provider:         "gcp",
+		Surface:          "cloudfunc",
+		ResourceID:       "projects/my-proj/locations/us-central1/functions/image-resize",
+		ResourceTFName:   "image_resize",
+		Region:           "us-central1",
+	}
+}
+
+func newAzureFuncRow() ColdStartInventoryRow {
+	return ColdStartInventoryRow{
+		RecommendationID: "rec-azure-azfunc-payments",
+		Provider:         "azure",
+		Surface:          "azfunc",
+		ResourceID:       "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Web/sites/payments-fn",
+		ResourceTFName:   "payments_func",
+		Region:           "eastus",
+	}
+}
+
+func newOCIFuncRow() ColdStartInventoryRow {
+	return ColdStartInventoryRow{
+		RecommendationID: "rec-oci-ocifunc-ingest",
+		Provider:         "oci",
+		Surface:          "ocifunc",
+		ResourceID:       "ocid1.fnfunc.oc1.iad.aaaa",
+		ResourceTFName:   "ingest_worker",
+		Region:           "us-ashburn-1",
+	}
+}
+
+// TestCheckCloudRunColdStart_ShouldFire_EmitsRecommendation — Cloud
+// Run happy path. The detection finding fires, the picker emits the
+// minScale annotation pattern, the reasoning carries the warm-path
+// caveat.
+func TestCheckCloudRunColdStart_ShouldFire_EmitsRecommendation(t *testing.T) {
+	row := newCloudRunRow()
+	finding := &ColdStartDetectionFindingPerCloud{
+		ShouldFire:          true,
+		CurrentP95Ms:        1800,
+		BaselineP95Ms:       1000,
+		Ratio:               1.8,
+		CurrentSampleCount:  120,
+		BaselineSampleCount: 840,
+	}
+	draft, err := CheckCloudRunColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckCloudRunColdStart: %v", err)
+	}
+	if draft == nil {
+		t.Fatal("draft == nil; want non-nil")
+	}
+	if draft.Kind != ColdStartRecommendationKindCloudRun {
+		t.Errorf("Kind = %q, want %q", draft.Kind, ColdStartRecommendationKindCloudRun)
+	}
+	if draft.Kind != "cloudrun-cold-start-baseline" {
+		t.Errorf("Kind = %q, want cloudrun-cold-start-baseline", draft.Kind)
+	}
+	if !strings.HasSuffix(draft.RecommendationID, ".cold_start") {
+		t.Errorf("RecommendationID = %q, want .cold_start suffix", draft.RecommendationID)
+	}
+	for _, want := range []string{"1800ms", "1.80x", "1000ms", "warm-path", "minScale"} {
+		if !strings.Contains(draft.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, draft.Reasoning)
+		}
+	}
+	if !strings.Contains(draft.Terraform, "autoscaling.knative.dev/minScale") {
+		t.Errorf("Terraform missing minScale annotation; got: %s", draft.Terraform)
+	}
+}
+
+// TestCheckCloudFunctionsColdStart_ShouldFire_EmitsRecommendation —
+// Cloud Functions happy path.
+func TestCheckCloudFunctionsColdStart_ShouldFire_EmitsRecommendation(t *testing.T) {
+	row := newCloudFuncRow()
+	finding := &ColdStartDetectionFindingPerCloud{
+		ShouldFire:          true,
+		CurrentP95Ms:        2400,
+		BaselineP95Ms:       1500,
+		Ratio:               1.6,
+		CurrentSampleCount:  90,
+		BaselineSampleCount: 720,
+	}
+	draft, err := CheckCloudFunctionsColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckCloudFunctionsColdStart: %v", err)
+	}
+	if draft == nil {
+		t.Fatal("draft == nil; want non-nil")
+	}
+	if draft.Kind != ColdStartRecommendationKindCloudFunc {
+		t.Errorf("Kind = %q, want %q", draft.Kind, ColdStartRecommendationKindCloudFunc)
+	}
+	if draft.Kind != "cloudfunc-cold-start-baseline" {
+		t.Errorf("Kind = %q, want cloudfunc-cold-start-baseline", draft.Kind)
+	}
+	for _, want := range []string{"2400ms", "1.60x", "1500ms", "execution_times", "min_instance_count"} {
+		if !strings.Contains(draft.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, draft.Reasoning)
+		}
+	}
+	if !strings.Contains(draft.Terraform, "min_instance_count = 1") {
+		t.Errorf("Terraform missing min_instance_count; got: %s", draft.Terraform)
+	}
+}
+
+// TestCheckAzureFunctionsColdStart_ShouldFire_EmitsRecommendation —
+// Azure Functions happy path WITHOUT the UsedFallback signal. The
+// reasoning text omits the fallback note when the runtime emits
+// IsAfterColdStart.
+func TestCheckAzureFunctionsColdStart_ShouldFire_EmitsRecommendation(t *testing.T) {
+	row := newAzureFuncRow()
+	finding := &ColdStartDetectionFindingPerCloud{
+		ShouldFire:          true,
+		CurrentP95Ms:        3200,
+		BaselineP95Ms:       2000,
+		Ratio:               1.6,
+		CurrentSampleCount:  110,
+		BaselineSampleCount: 770,
+		UsedFallback:        false,
+	}
+	draft, err := CheckAzureFunctionsColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckAzureFunctionsColdStart: %v", err)
+	}
+	if draft == nil {
+		t.Fatal("draft == nil; want non-nil")
+	}
+	if draft.Kind != ColdStartRecommendationKindAzureFunc {
+		t.Errorf("Kind = %q, want %q", draft.Kind, ColdStartRecommendationKindAzureFunc)
+	}
+	if draft.Kind != "azfunc-cold-start-baseline" {
+		t.Errorf("Kind = %q, want azfunc-cold-start-baseline", draft.Kind)
+	}
+	for _, want := range []string{"3200ms", "1.60x", "2000ms", "Premium Plan", "WEBSITE_USE_PLACEHOLDER"} {
+		if !strings.Contains(draft.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, draft.Reasoning)
+		}
+	}
+	if strings.Contains(draft.Reasoning, "INFORMATIONAL NOTE") {
+		t.Errorf("Reasoning should NOT include fallback note when UsedFallback=false; got: %s", draft.Reasoning)
+	}
+	if strings.Contains(draft.Reasoning, "IsAfterColdStart dimension") {
+		t.Errorf("Reasoning should NOT mention IsAfterColdStart fallback when UsedFallback=false; got: %s", draft.Reasoning)
+	}
+}
+
+// TestCheckAzureFunctionsColdStart_UsedFallback_RecorderInformationalNote
+// — when the Azure detection finding carries UsedFallback=true, the
+// reasoning text MUST add the informational note explaining that
+// Squadron fell back to an unfiltered query because the Function
+// App's runtime doesn't emit IsAfterColdStart. The note tells the
+// operator the metric is not cold-start-isolated.
+func TestCheckAzureFunctionsColdStart_UsedFallback_RecorderInformationalNote(t *testing.T) {
+	row := newAzureFuncRow()
+	finding := &ColdStartDetectionFindingPerCloud{
+		ShouldFire:          true,
+		CurrentP95Ms:        2800,
+		BaselineP95Ms:       1700,
+		Ratio:               1.65,
+		CurrentSampleCount:  100,
+		BaselineSampleCount: 700,
+		UsedFallback:        true,
+	}
+	draft, err := CheckAzureFunctionsColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckAzureFunctionsColdStart: %v", err)
+	}
+	if draft == nil {
+		t.Fatal("draft == nil; want non-nil")
+	}
+	for _, want := range []string{
+		"INFORMATIONAL NOTE",
+		"IsAfterColdStart dimension",
+		"runtime",
+		"2023+",
+		"unfiltered",
+		"not cold-start-isolated",
+	} {
+		if !strings.Contains(draft.Reasoning, want) {
+			t.Errorf("Reasoning missing fallback note marker %q; got: %s", want, draft.Reasoning)
+		}
+	}
+}
+
+// TestCheckOCIFunctionsColdStart_SkippedWhenNoColdStarts_NoRecommendation
+// — when the OCI finding's ShouldFire was set to true but Skipped
+// is also true, the defensive gate rejects the draft. In production
+// the chunk-3 ShouldFireRecommendation predicate already gates on
+// !Skipped, but this test pins the defensive belt-and-suspenders
+// behavior at the proposer boundary.
+func TestCheckOCIFunctionsColdStart_SkippedWhenNoColdStarts_NoRecommendation(t *testing.T) {
+	row := newOCIFuncRow()
+	finding := &ColdStartDetectionFindingPerCloud{
+		// Production wiring would never reach this combination
+		// because the chunk-3 ShouldFireRecommendation predicate
+		// short-circuits on Skipped. Test pins defensive behavior.
+		ShouldFire: true,
+		Skipped:    true,
+	}
+	draft, err := CheckOCIFunctionsColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckOCIFunctionsColdStart: %v", err)
+	}
+	if draft != nil {
+		t.Errorf("draft != nil when Skipped=true; got: %+v", draft)
+	}
+
+	// Also pin: when ShouldFire is false (the production case),
+	// no draft emits even when Skipped is false.
+	notFiring := &ColdStartDetectionFindingPerCloud{
+		ShouldFire: false,
+	}
+	draft, err = CheckOCIFunctionsColdStart(context.Background(), row, notFiring, newColdStartScope(), &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckOCIFunctionsColdStart: %v", err)
+	}
+	if draft != nil {
+		t.Errorf("draft != nil when ShouldFire=false; got: %+v", draft)
+	}
+}
+
+// TestCheckOCIFunctionsColdStart_ShouldFire_EmitsRecommendation — OCI
+// happy path. The reasoning text surfaces the cold_start_count
+// honesty caveat: function_duration is not cold-start-isolated.
+func TestCheckOCIFunctionsColdStart_ShouldFire_EmitsRecommendation(t *testing.T) {
+	row := newOCIFuncRow()
+	finding := &ColdStartDetectionFindingPerCloud{
+		ShouldFire:            true,
+		CurrentP95Ms:          2100,
+		BaselineP95Ms:         1300,
+		Ratio:                 1.62,
+		CurrentSampleCount:    80,
+		BaselineSampleCount:   560,
+		CurrentColdStartCount: 14,
+	}
+	draft, err := CheckOCIFunctionsColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
+	if err != nil {
+		t.Fatalf("CheckOCIFunctionsColdStart: %v", err)
+	}
+	if draft == nil {
+		t.Fatal("draft == nil; want non-nil")
+	}
+	if draft.Kind != ColdStartRecommendationKindOCIFunc {
+		t.Errorf("Kind = %q, want %q", draft.Kind, ColdStartRecommendationKindOCIFunc)
+	}
+	if draft.Kind != "ocifunc-cold-start-baseline" {
+		t.Errorf("Kind = %q, want ocifunc-cold-start-baseline", draft.Kind)
+	}
+	for _, want := range []string{
+		"2100ms",
+		"1.62x",
+		"1300ms",
+		"cold_start_count=14",
+		"function_duration",
+		"not cold-start-isolated",
+		"WARMUP_DELAY",
+		"preview",
+	} {
+		if !strings.Contains(draft.Reasoning, want) {
+			t.Errorf("Reasoning missing %q; got: %s", want, draft.Reasoning)
+		}
+	}
+}
+
+// TestAllFourClouds_ExclusionRespected — the per-row exclusion check
+// honors the same .cold_start suffix convention slice 1 introduced,
+// applied across all four new helpers. Pins the cross-cloud exclusion
+// invariant.
+func TestAllFourClouds_ExclusionRespected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  ColdStartInventoryRow
+		kind string
+		call func(ctx context.Context, row ColdStartInventoryRow, f *ColdStartDetectionFindingPerCloud, s ColdStartScope, e ColdStartExclusionStore) (*ColdStartRecommendationDraft, error)
+	}{
+		{"cloudrun", newCloudRunRow(), ColdStartRecommendationKindCloudRun, CheckCloudRunColdStart},
+		{"cloudfunc", newCloudFuncRow(), ColdStartRecommendationKindCloudFunc, CheckCloudFunctionsColdStart},
+		{"azfunc", newAzureFuncRow(), ColdStartRecommendationKindAzureFunc, CheckAzureFunctionsColdStart},
+		{"ocifunc", newOCIFuncRow(), ColdStartRecommendationKindOCIFunc, CheckOCIFunctionsColdStart},
+	} {
+		t.Run(tc.name+"_per_row", func(t *testing.T) {
+			finding := &ColdStartDetectionFindingPerCloud{
+				ShouldFire:          true,
+				CurrentP95Ms:        4000,
+				BaselineP95Ms:       2000,
+				Ratio:               2.0,
+				BaselineSampleCount: 800,
+			}
+			exclusions := &fakeExclusionStore{rows: []applicationstore.ExcludedRecommendation{{
+				RecommendationID:   tc.row.RecommendationID + ".cold_start",
+				RecommendationKind: tc.kind,
+			}}}
+			draft, err := tc.call(context.Background(), tc.row, finding, newColdStartScope(), exclusions)
+			if err != nil {
+				t.Fatalf("%s call: %v", tc.name, err)
+			}
+			if draft != nil {
+				t.Errorf("%s: draft != nil for per-row excluded; got: %+v", tc.name, draft)
+			}
+		})
+		t.Run(tc.name+"_kind_only", func(t *testing.T) {
+			finding := &ColdStartDetectionFindingPerCloud{
+				ShouldFire:          true,
+				CurrentP95Ms:        4000,
+				BaselineP95Ms:       2000,
+				Ratio:               2.0,
+				BaselineSampleCount: 800,
+			}
+			exclusions := &fakeExclusionStore{rows: []applicationstore.ExcludedRecommendation{{
+				RecommendationID:   "",
+				RecommendationKind: tc.kind,
+			}}}
+			draft, err := tc.call(context.Background(), tc.row, finding, newColdStartScope(), exclusions)
+			if err != nil {
+				t.Fatalf("%s call: %v", tc.name, err)
+			}
+			if draft != nil {
+				t.Errorf("%s: draft != nil for kind-only excluded; got: %+v", tc.name, draft)
+			}
+		})
+	}
+}
+
+// TestPerCloudColdStart_WrongSurface_NoRecommendation — each per-cloud
+// helper rejects rows on a non-matching surface, mirroring the slice
+// 1 CheckLambdaColdStart guard.
+func TestPerCloudColdStart_WrongSurface_NoRecommendation(t *testing.T) {
+	finding := &ColdStartDetectionFindingPerCloud{
+		ShouldFire:          true,
+		CurrentP95Ms:        3000,
+		BaselineP95Ms:       1500,
+		Ratio:               2.0,
+		BaselineSampleCount: 500,
+	}
+	// A Cloud Run row passed to the Azure helper should NOT produce
+	// a draft (and vice-versa).
+	cloudRunRow := newCloudRunRow()
+	draft, _ := CheckAzureFunctionsColdStart(context.Background(), cloudRunRow, finding, newColdStartScope(), &fakeExclusionStore{})
+	if draft != nil {
+		t.Errorf("CheckAzureFunctionsColdStart accepted cloudrun row; got: %+v", draft)
+	}
+	draft, _ = CheckOCIFunctionsColdStart(context.Background(), cloudRunRow, finding, newColdStartScope(), &fakeExclusionStore{})
+	if draft != nil {
+		t.Errorf("CheckOCIFunctionsColdStart accepted cloudrun row; got: %+v", draft)
+	}
+	azureRow := newAzureFuncRow()
+	draft, _ = CheckCloudRunColdStart(context.Background(), azureRow, finding, newColdStartScope(), &fakeExclusionStore{})
+	if draft != nil {
+		t.Errorf("CheckCloudRunColdStart accepted azfunc row; got: %+v", draft)
+	}
+}

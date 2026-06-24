@@ -769,6 +769,122 @@ describe("DiscoveryGCP", () => {
     ).toBeInTheDocument();
   });
 
+  // --- Cold-start latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream 157) ---
+
+  // TestDiscoveryGCP_Serverless_ColdStartColumnRenders — slice 2 §11
+  // acceptance test 13 extension. The GCP Serverless table's
+  // "Cold-start P95 (24h)" column renders between OTel distro and
+  // Last seen. Mirrors the AWS column from slice 1 chunk 3.
+  it("TestDiscoveryGCP_Serverless_ColdStartColumnRenders", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "gcp",
+          surface: "cloudrun",
+          account_id: "my-prod-project",
+          region: "us-central1",
+          resource_name: "checkout-svc",
+          resource_arn:
+            "projects/my-prod-project/locations/us-central1/services/checkout-svc",
+          runtime: "go1.21",
+          has_trace_axis: true,
+          has_otel_distro: true,
+          cold_start_p95_ms: 1800,
+          cold_start_exceeds_threshold: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+    expect(screen.getByText(/Cold-start P95 \(24h\)/i)).toBeInTheDocument();
+  });
+
+  // TestDiscoveryGCP_Serverless_ColdStartCell_AmberWhenExceedsThreshold —
+  // when the server's cold_start_exceeds_threshold flag is true, the
+  // cell value renders in the amber-600 color class with the
+  // data-value="amber" attribute. Mirrors the AWS test from slice 1.
+  it("TestDiscoveryGCP_Serverless_ColdStartCell_AmberWhenExceedsThreshold", async () => {
+    const user = userEvent.setup();
+    mockedListGCPConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
+    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedScanGCPConnection.mockResolvedValue({
+      ...sampleScan,
+      serverless: [
+        {
+          provider: "gcp",
+          surface: "cloudrun",
+          account_id: "my-prod-project",
+          region: "us-central1",
+          resource_name: "hot-cloudrun",
+          resource_arn:
+            "projects/my-prod-project/locations/us-central1/services/hot-cloudrun",
+          runtime: "go1.21",
+          has_trace_axis: true,
+          has_otel_distro: false,
+          cold_start_p95_ms: 1800,
+          cold_start_exceeds_threshold: true,
+        },
+      ],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
+    await user.click(serverlessTab);
+
+    const cells = screen.getAllByTestId("cold-start-cell");
+    expect(cells.length).toBeGreaterThan(0);
+    const cell = cells[0];
+    expect(cell).toHaveAttribute("data-value", "amber");
+    expect(cell.className).toMatch(/text-amber-600/);
+    expect(cell.textContent).toMatch(/1800ms/);
+  });
+
   // --- helpers ---
 
   // advanceToKeyPasteStep walks the wizard from step 1 (project) to

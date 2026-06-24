@@ -312,3 +312,162 @@ func containsToken(s, tok string) bool {
 	}
 	return false
 }
+
+// Cold-start latency analysis slice 2 chunk 4 (v0.89.119, #759 Stream
+// 157) — per-provider AnnotateServerlessWithColdStart tests siblings
+// to the slice 1 AWS handler tests above. The annotator now handles
+// all 4 serverless surfaces; these tests call it directly (since the
+// per-cloud scan handlers don't yet expose the Serverless wire
+// surface in production paths) with a slice carrying GCP / Azure /
+// OCI rows.
+
+// TestAnnotateGCPServerless_PopulatesColdStartFields — slice 2 §11
+// acceptance test 12 extension. A serverless slice with a Cloud Run
+// row whose ARN matches a cold_start_observation entry gets the new
+// fields populated, and the threshold predicate is amber when the
+// 1.5x ratio + 500ms floor both hold.
+func TestAnnotateGCPServerless_PopulatesColdStartFields(t *testing.T) {
+	arn := "projects/my-proj/locations/us-central1/services/checkout-svc"
+	store := &stubColdStartStore{rows: map[string]sqlite.ColdStartObservationRow{
+		(&stubColdStartStore{}).key(arn, 24): {
+			ResourceARN: arn, WindowHours: 24, P95Ms: 1800, SampleCount: 120,
+			ObservedAt: time.Date(2026, 6, 24, 14, 0, 0, 0, time.UTC),
+		},
+		(&stubColdStartStore{}).key(arn, 168): {
+			ResourceARN: arn, WindowHours: 168, P95Ms: 1000, SampleCount: 840,
+			ObservedAt: time.Date(2026, 6, 24, 14, 0, 0, 0, time.UTC),
+		},
+	}}
+	snapshots := []scanner.ServerlessInstanceSnapshot{
+		{
+			Provider: "gcp", Surface: "cloudrun",
+			AccountID: "my-proj", Region: "us-central1",
+			ResourceName: "checkout-svc", ResourceARN: arn,
+		},
+		{
+			Provider: "gcp", Surface: "cloudfunc",
+			AccountID: "my-proj", Region: "us-central1",
+			ResourceName: "no-obs", ResourceARN: "projects/my-proj/locations/us-central1/functions/no-obs",
+		},
+	}
+	AnnotateServerlessWithColdStart(context.Background(), store, fixedColdStartConstants{}, snapshots, zap.NewNop())
+	if snapshots[0].ColdStartP95Ms == nil {
+		t.Fatalf("cloudrun row 0: ColdStartP95Ms = nil, want populated")
+	}
+	if *snapshots[0].ColdStartP95Ms != 1800 {
+		t.Errorf("cloudrun row 0: ColdStartP95Ms = %v, want 1800", *snapshots[0].ColdStartP95Ms)
+	}
+	if snapshots[0].ColdStartExceedsThreshold == nil {
+		t.Fatalf("cloudrun row 0: ColdStartExceedsThreshold = nil, want populated")
+	}
+	if !*snapshots[0].ColdStartExceedsThreshold {
+		t.Errorf("cloudrun row 0: ColdStartExceedsThreshold = false, want true (1800/1000 = 1.8, >= 500ms floor)")
+	}
+	// Row 1 has no observation — fields stay nil.
+	if snapshots[1].ColdStartP95Ms != nil {
+		t.Errorf("cloudfunc row 1: ColdStartP95Ms = %v, want nil (no observation)", *snapshots[1].ColdStartP95Ms)
+	}
+	if snapshots[1].ColdStartExceedsThreshold != nil {
+		t.Errorf("cloudfunc row 1: ColdStartExceedsThreshold = %v, want nil (no observation)", *snapshots[1].ColdStartExceedsThreshold)
+	}
+}
+
+// TestAnnotateAzureServerless_PopulatesColdStartFields — Azure
+// Functions surface. The annotator joins on resource_arn (the ARM
+// resource id) and stamps the same fields as AWS / GCP.
+func TestAnnotateAzureServerless_PopulatesColdStartFields(t *testing.T) {
+	arn := "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Web/sites/payments-fn"
+	store := &stubColdStartStore{rows: map[string]sqlite.ColdStartObservationRow{
+		(&stubColdStartStore{}).key(arn, 24): {
+			ResourceARN: arn, WindowHours: 24, P95Ms: 3200, SampleCount: 110,
+		},
+		(&stubColdStartStore{}).key(arn, 168): {
+			ResourceARN: arn, WindowHours: 168, P95Ms: 2000, SampleCount: 770,
+		},
+	}}
+	snapshots := []scanner.ServerlessInstanceSnapshot{
+		{
+			Provider: "azure", Surface: "azfunc",
+			AccountID: "sub1", Region: "eastus",
+			ResourceName: "payments-fn", ResourceARN: arn,
+		},
+	}
+	AnnotateServerlessWithColdStart(context.Background(), store, fixedColdStartConstants{}, snapshots, zap.NewNop())
+	if snapshots[0].ColdStartP95Ms == nil {
+		t.Fatalf("azfunc row: ColdStartP95Ms = nil, want populated")
+	}
+	if *snapshots[0].ColdStartP95Ms != 3200 {
+		t.Errorf("azfunc row: ColdStartP95Ms = %v, want 3200", *snapshots[0].ColdStartP95Ms)
+	}
+	if snapshots[0].ColdStartExceedsThreshold == nil || !*snapshots[0].ColdStartExceedsThreshold {
+		t.Errorf("azfunc row: ColdStartExceedsThreshold not true (3200/2000 = 1.6, >= 500ms)")
+	}
+}
+
+// TestAnnotateOCIServerless_PopulatesColdStartFields — OCI Functions
+// surface. Same shape; verifies the annotator handles the
+// "ocifunc" surface discriminator.
+func TestAnnotateOCIServerless_PopulatesColdStartFields(t *testing.T) {
+	arn := "ocid1.fnfunc.oc1.iad.aaaa"
+	store := &stubColdStartStore{rows: map[string]sqlite.ColdStartObservationRow{
+		(&stubColdStartStore{}).key(arn, 24): {
+			ResourceARN: arn, WindowHours: 24, P95Ms: 2100, SampleCount: 80,
+		},
+		(&stubColdStartStore{}).key(arn, 168): {
+			ResourceARN: arn, WindowHours: 168, P95Ms: 1300, SampleCount: 560,
+		},
+	}}
+	snapshots := []scanner.ServerlessInstanceSnapshot{
+		{
+			Provider: "oci", Surface: "ocifunc",
+			AccountID: "ocid1.tenancy.oc1..aaaa", Region: "us-ashburn-1",
+			ResourceName: "ingest-worker", ResourceARN: arn,
+		},
+	}
+	AnnotateServerlessWithColdStart(context.Background(), store, fixedColdStartConstants{}, snapshots, zap.NewNop())
+	if snapshots[0].ColdStartP95Ms == nil {
+		t.Fatalf("ocifunc row: ColdStartP95Ms = nil, want populated")
+	}
+	if *snapshots[0].ColdStartP95Ms != 2100 {
+		t.Errorf("ocifunc row: ColdStartP95Ms = %v, want 2100", *snapshots[0].ColdStartP95Ms)
+	}
+	if snapshots[0].ColdStartExceedsThreshold == nil || !*snapshots[0].ColdStartExceedsThreshold {
+		t.Errorf("ocifunc row: ColdStartExceedsThreshold not true (2100/1300 ~= 1.62, >= 500ms)")
+	}
+}
+
+// TestAnnotateServerless_UnknownSurface_LeavesNilFields — defensive
+// gate: an unknown surface (future slice 3+ extension) leaves both
+// fields nil. The annotator MUST NOT panic on the broader catalog.
+func TestAnnotateServerless_UnknownSurface_LeavesNilFields(t *testing.T) {
+	store := &stubColdStartStore{rows: map[string]sqlite.ColdStartObservationRow{}}
+	snapshots := []scanner.ServerlessInstanceSnapshot{
+		{
+			Provider: "aws", Surface: "future-surface",
+			AccountID: "123", Region: "us-east-1",
+			ResourceName: "x", ResourceARN: "future-arn",
+		},
+	}
+	AnnotateServerlessWithColdStart(context.Background(), store, fixedColdStartConstants{}, snapshots, zap.NewNop())
+	if snapshots[0].ColdStartP95Ms != nil || snapshots[0].ColdStartExceedsThreshold != nil {
+		t.Errorf("unknown surface: fields should stay nil; got p95=%v, exceeds=%v",
+			snapshots[0].ColdStartP95Ms, snapshots[0].ColdStartExceedsThreshold)
+	}
+}
+
+// TestIsColdStartAnnotatableSurface_KnownSurfaces — pins the four
+// per-cloud surface discriminators against the annotator's gate. A
+// future slice-3+ surface addition without updating this constant
+// would surface here.
+func TestIsColdStartAnnotatableSurface_KnownSurfaces(t *testing.T) {
+	for _, surface := range []string{"lambda", "cloudrun", "cloudfunc", "azfunc", "ocifunc"} {
+		if !isColdStartAnnotatableSurface(surface) {
+			t.Errorf("isColdStartAnnotatableSurface(%q) = false; want true", surface)
+		}
+	}
+	for _, surface := range []string{"", "future", "ec2"} {
+		if isColdStartAnnotatableSurface(surface) {
+			t.Errorf("isColdStartAnnotatableSurface(%q) = true; want false", surface)
+		}
+	}
+}
