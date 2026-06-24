@@ -177,6 +177,37 @@ jump straight to that page.
   verifies telemetry is actually flowing, validates the
   spans Squadron receives are healthy, AND drafts the IaC
   PRs that close the gaps it finds."
+- [Sampling rate analysis — operator guide](./sampling-rate-operator-guide.md) —
+  v0.89.121 through v0.89.125 operator runbook for the
+  sampling rate analysis slice 1 arc (design at
+  [proposals/sampling-rate-analysis-slice1.md](./proposals/sampling-rate-analysis-slice1.md)).
+  Closes the span quality slice 1 §13 deferral; second
+  diagnostic running on the cold-start latency substrate
+  (proves the architectural bet that the substrate
+  compounds). Per-resource detection: observed span count
+  from Squadron's traceindex 24h window vs expected
+  invocation count from the cloud-native metric API over
+  the same window. Fires
+  `span-quality-sampling-too-aggressive` (reuses
+  `span-quality-` webhook prefix) when ratio < 5% AND
+  invocations >= 1000. Per-cloud invocation metrics: AWS
+  `Invocations`, GCP Cloud Run `request_count` + Cloud
+  Functions `execution_count`, Azure `FunctionInvocations`,
+  OCI `function_invocation_count` — all reuse the existing
+  cold-start IAM. 24h-window counter added to the Quality
+  observer (parallel to slice 1's 1h window). New
+  per-resource endpoint at `GET /api/v1/discovery/{provider}/inventory/serverless/{id}/sampling`
+  exposes the underlying gate flags. SPAN QUALITY dashboard
+  panel grows from 5-column to 6-column grid; QualityDot
+  tooltip extends to all 6 percentages. Per-Serverless-row
+  "Sampling rate (24h)" column on all 4 provider tables.
+  iacpicker emits `OTEL_TRACES_SAMPLER_ARG=0.5` env var
+  injection per-cloud. **Slice 1 SHIPPED in v0.89.125.**
+  Universal claim's MEASURES verb gains a second
+  sub-diagnostic; the "where did my trace go?" chain now
+  has 5 layers (event source primitive → event source
+  config → W3C trace context → cold-start latency →
+  sampling rate).
 - [Cold-start latency — operator guide](./cold-start-latency-operator-guide.md) —
   v0.89.112 through v0.89.120 operator runbook for the
   cold-start latency analysis arc. Slice 2 (design at
