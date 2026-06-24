@@ -95,6 +95,29 @@ jump straight to that page.
   secret, configuring the GitHub repo webhook, verifying the
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
+- [Serverless tier — operator guide](./serverless-tier-operator-guide.md) —
+  v0.89.89 through v0.89.93 operator runbook for the
+  serverless tier slice 1 arc (design at
+  [proposals/serverless-tier-slice1.md](./proposals/serverless-tier-slice1.md)).
+  Fourth tier alongside compute / database / kubernetes
+  across all four clouds. Five surfaces: AWS Lambda, GCP
+  Cloud Run, GCP Cloud Functions, Azure Functions, OCI
+  Functions. Per-cloud detection of trace axis + OTel distro
+  primitives. New Serverless Inventory sub-tab on each
+  per-provider Discovery page. 11 new recommendation kinds:
+  `lambda-{xray-active,otel-layer,otel-wrapper}`,
+  `cloudrun-{trace-enable,otel-sidecar,otel-export-endpoint}`,
+  `cloudfunc-{trace-enable,otel-layer}`,
+  `azfunc-{appinsights-enable,otel-distro}`,
+  `ocifunc-{apm-enable,otel-distro}`. Discovery summary +
+  trace_coverage endpoints gain `serverless_count` and
+  `serverless_pct`. **Slice 1 SHIPPED in v0.89.93.**
+  Squadron's claim grows a fourth tier: "scans AWS, GCP,
+  Azure, AND Oracle Cloud across COMPUTE, DATABASE,
+  KUBERNETES, AND SERVERLESS for observability gaps,
+  verifies telemetry is actually flowing, validates the
+  spans Squadron receives are healthy, AND drafts the IaC
+  PRs that close the gaps it finds."
 - [Span quality — operator guide](./span-quality-operator-guide.md) —
   v0.89.84 through v0.89.88 operator runbook for the span
   quality slice 1 arc (design at
