@@ -162,3 +162,80 @@ func (sk *SigningKey) SignRequest(req *http.Request) error {
 	req.Header.Set("Authorization", authz)
 	return nil
 }
+
+// SignPOSTRequest signs an HTTP POST/PUT request per the OCI HTTP
+// Signatures spec. v0.89.118 — added for the slice 2 chunk 3 OCI
+// Monitoring summarizeMetricsData call (the first POST endpoint
+// the OCI scanner exercises). Sets Authorization, Date, Host,
+// Content-Length, Content-Type (when missing), and X-Content-SHA256
+// headers on req.
+//
+// The signing string for a POST request includes the three GET
+// headers plus three content-bound headers:
+//
+//	(request-target): post /<path>?<query>
+//	date: <RFC1123 date in UTC>
+//	host: <host>
+//	content-length: <body byte length>
+//	content-type: <Content-Type header>
+//	x-content-sha256: <base64(SHA-256(body))>
+//
+// Each line is separated by \n with no trailing newline. The
+// body parameter is the request body bytes (caller already wired
+// req.Body from these bytes via bytes.NewReader). Passing the
+// bytes directly here keeps the SHA-256 + length computation
+// deterministic without re-reading and rewinding the request
+// body.
+func (sk *SigningKey) SignPOSTRequest(req *http.Request, body []byte) error {
+	if sk == nil || sk.PrivateKey == nil {
+		return errors.New("oci: SignPOSTRequest: SigningKey has no parsed RSA private key")
+	}
+	if req == nil {
+		return errors.New("oci: SignPOSTRequest: request is nil")
+	}
+
+	date := time.Now().UTC().Format(http.TimeFormat)
+	req.Header.Set("Date", date)
+
+	host := req.URL.Host
+	req.Header.Set("Host", host)
+
+	contentType := req.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+		req.Header.Set("Content-Type", contentType)
+	}
+	contentLength := fmt.Sprintf("%d", len(body))
+	req.Header.Set("Content-Length", contentLength)
+
+	bodySHA := sha256.Sum256(body)
+	bodyHash := base64.StdEncoding.EncodeToString(bodySHA[:])
+	req.Header.Set("X-Content-SHA256", bodyHash)
+
+	method := strings.ToLower(req.Method)
+	target := req.URL.RequestURI()
+
+	signingString := strings.Join([]string{
+		"(request-target): " + method + " " + target,
+		"date: " + date,
+		"host: " + host,
+		"content-length: " + contentLength,
+		"content-type: " + contentType,
+		"x-content-sha256: " + bodyHash,
+	}, "\n")
+
+	hashed := sha256.Sum256([]byte(signingString))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, sk.PrivateKey, crypto.SHA256, hashed[:])
+	if err != nil {
+		return fmt.Errorf("oci: RSA-SHA256 sign failed: %w", err)
+	}
+	sigB64 := base64.StdEncoding.EncodeToString(sig)
+
+	authz := fmt.Sprintf(
+		`Signature version="1",keyId=%q,algorithm="rsa-sha256",headers="(request-target) date host content-length content-type x-content-sha256",signature=%q`,
+		sk.KeyID(),
+		sigB64,
+	)
+	req.Header.Set("Authorization", authz)
+	return nil
+}
