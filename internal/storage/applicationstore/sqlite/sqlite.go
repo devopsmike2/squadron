@@ -879,6 +879,54 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_coldstart_resource ON cold_start_observation(resource_arn)`,
 		`CREATE INDEX IF NOT EXISTS idx_coldstart_observed ON cold_start_observation(observed_at)`,
+
+		// v0.89.127 (#767 Stream 165, slice 1 chunk 1 of the Error rate
+		// correlation arc) — error_rate_observation carries one row per
+		// (connection_id, resource_arn, observed_at, window_hours)
+		// error-rate observation Squadron's per-cloud MetricQuerier
+		// records. Universal columns (provider / surface / account_id /
+		// region / resource_arn / window_hours) carry the cross-cloud
+		// detection shape; the (error_count, invocation_count,
+		// error_rate) trio carries the signal — slice 1's detection
+		// rule (per design doc §3) compares current.error_rate against
+		// baseline.error_rate * 2.0 with absolute floors on
+		// invocation_count (>= 1000) and error_count (>= 50). The
+		// snapshot_json column carries the canonical
+		// scanner.AggregateMetricResult serialization so the chunk-2
+		// per-resource error_rate API endpoint can return the raw shape
+		// without a re-query.
+		//
+		// The (connection_id, resource_arn, observed_at, window_hours)
+		// UNIQUE constraint distinguishes the 24h + 168h windows at the
+		// same observed_at — both rows land but neither violates
+		// uniqueness because window_hours differs. The keying lets a
+		// single observed_at point carry both the current-window and
+		// the baseline rows for cheap detection-time joins.
+		//
+		// idx_errorrate_resource backs the per-resource read (the
+		// chunk-2 per-resource error_rate endpoint's filter by
+		// resource_arn). idx_errorrate_observed backs the slice 2
+		// (deferred) retention policy sweep.
+		//
+		// See docs/proposals/error-rate-correlation-slice1.md §5.
+		`CREATE TABLE IF NOT EXISTS error_rate_observation (
+			id TEXT PRIMARY KEY,
+			connection_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			surface TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			region TEXT NOT NULL,
+			resource_arn TEXT NOT NULL,
+			observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			window_hours INTEGER NOT NULL,
+			error_count INTEGER NOT NULL,
+			invocation_count INTEGER NOT NULL,
+			error_rate REAL NOT NULL,
+			snapshot_json TEXT NOT NULL,
+			UNIQUE (connection_id, resource_arn, observed_at, window_hours)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_errorrate_resource ON error_rate_observation(resource_arn)`,
+		`CREATE INDEX IF NOT EXISTS idx_errorrate_observed ON error_rate_observation(observed_at)`,
 	}
 
 	for _, migration := range migrations {

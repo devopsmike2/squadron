@@ -611,3 +611,125 @@ func TestAWSQueryAggregate_Invocations_AggregatedAsSumNotMax(t *testing.T) {
 	}
 }
 
+// -- v0.89.127 error rate slice 1 chunk 1 additions ----------------------
+
+// TestLambdaErrorsMetricName_Constant pins the CloudWatch metric
+// name for Lambda Errors — the error-rate-correlation slice 1
+// numerator. A future SDK rename would silently break the
+// detection branch without this pin.
+func TestLambdaErrorsMetricName_Constant(t *testing.T) {
+	if LambdaErrorsMetricName != "Errors" {
+		t.Fatalf("LambdaErrorsMetricName = %q, want \"Errors\"", LambdaErrorsMetricName)
+	}
+}
+
+// TestAWSQueryAggregate_Errors_ReturnsSumOverWindow — acceptance
+// test 1 (error rate slice 1 §11). Multi-datapoint response with
+// per-period sums; QueryAggregate sums across periods (mirrors the
+// Invocations path) and returns the total error count.
+func TestAWSQueryAggregate_Errors_ReturnsSumOverWindow(t *testing.T) {
+	cw := &cwFake{
+		respondWith: &cloudwatch.GetMetricStatisticsOutput{
+			Datapoints: []cwtypes.Datapoint{
+				{Sum: awssdk.Float64(30.0), SampleCount: awssdk.Float64(1), Unit: cwtypes.StandardUnitCount},
+				{Sum: awssdk.Float64(20.0), SampleCount: awssdk.Float64(1), Unit: cwtypes.StandardUnitCount},
+				{Sum: awssdk.Float64(40.0), SampleCount: awssdk.Float64(1), Unit: cwtypes.StandardUnitCount},
+			},
+		},
+	}
+	s := newMetricsTestScannerWithCW(t, cw)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"arn:aws:lambda:us-east-1:123456789012:function:order-processor",
+		LambdaErrorsMetricName,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 90.0 {
+		t.Errorf("Value = %v, want SUM across periods (90.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != LambdaErrorsMetricName {
+		t.Errorf("MetricName = %q, want %q", res.MetricName, LambdaErrorsMetricName)
+	}
+}
+
+// TestAWSQueryAggregate_Errors_EmptyResponseReturnsZero — empty
+// Datapoints → Value=0, SampleCount=0, no error. The detection
+// branch's MIN_ERROR_COUNT (50) absolute floor naturally fails on
+// SampleCount=0 and the per-resource error-rate detection skips.
+func TestAWSQueryAggregate_Errors_EmptyResponseReturnsZero(t *testing.T) {
+	cw := &cwFake{
+		respondWith: &cloudwatch.GetMetricStatisticsOutput{
+			Datapoints: []cwtypes.Datapoint{},
+		},
+	}
+	s := newMetricsTestScannerWithCW(t, cw)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"arn:aws:lambda:us-east-1:123456789012:function:silent-fn",
+		LambdaErrorsMetricName,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 0 {
+		t.Errorf("Value = %v, want 0 on empty response", res.Value)
+	}
+	if res.SampleCount != 0 {
+		t.Errorf("SampleCount = %d, want 0 on empty response", res.SampleCount)
+	}
+}
+
+// TestAWSQueryAggregate_Errors_AggregatedAsSumNotMax pins the
+// rollup choice: per-period Sum values add up rather than reducing
+// to MAX. A regression that swapped to MAX would silently
+// underreport the numerator and the detection branch would miss
+// genuine error spikes.
+func TestAWSQueryAggregate_Errors_AggregatedAsSumNotMax(t *testing.T) {
+	cw := &cwFake{
+		respondWith: &cloudwatch.GetMetricStatisticsOutput{
+			Datapoints: []cwtypes.Datapoint{
+				{Sum: awssdk.Float64(60.0), SampleCount: awssdk.Float64(1)},
+				{Sum: awssdk.Float64(30.0), SampleCount: awssdk.Float64(1)},
+			},
+		},
+	}
+	s := newMetricsTestScannerWithCW(t, cw)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"arn:aws:lambda:us-east-1:123456789012:function:errors-sum-not-max",
+		LambdaErrorsMetricName,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 90.0 {
+		t.Fatalf("Value = %v, want 90 (sum), NOT 60 (max)", res.Value)
+	}
+	// Also verify CloudWatch was called with Statistics=["Sum"]
+	// (not ExtendedStatistics=["p95"]). The Errors path must use
+	// Statistics=Sum, not the init-duration percentile aggregation.
+	if cw.calls != 1 {
+		t.Fatalf("calls = %d, want 1", cw.calls)
+	}
+	in := cw.receivedInputs[0]
+	if len(in.ExtendedStatistics) != 0 {
+		t.Errorf("ExtendedStatistics = %v, want empty (Errors must use Statistics, not percentiles)", in.ExtendedStatistics)
+	}
+	if len(in.Statistics) != 1 || in.Statistics[0] != cwtypes.StatisticSum {
+		t.Errorf("Statistics = %v, want [Sum]", in.Statistics)
+	}
+	if in.MetricName == nil || *in.MetricName != LambdaErrorsMetricName {
+		t.Errorf("MetricName = %v, want %q", in.MetricName, LambdaErrorsMetricName)
+	}
+}

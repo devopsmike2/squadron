@@ -80,6 +80,28 @@ const AzureFunctionsIsAfterColdStartDimension = "IsAfterColdStart"
 // metrics_test.go::TestAzureFunctionsInvocationsMetric_Constant.
 const AzureFunctionsInvocationsMetric = "FunctionInvocations"
 
+// AzureFunctionsErrorsMetric is the Azure Monitor metric name for
+// per-function error count. Error rate correlation slice 1 chunk 1
+// (v0.89.127) uses this as the numerator for the
+// current_error_count / current_invocation_count ratio per
+// docs/proposals/error-rate-correlation-slice1.md §4.4.
+//
+// Aggregation is "Total" (sum) — Azure Monitor natively supports
+// Sum/Total on this counter. Mirrors the FunctionInvocations
+// aggregation choice; the QueryAggregate routing branches on the
+// metric name to pick the appropriate aggregation, and skips the
+// IsAfterColdStart dimension filter (the error count wants ALL
+// failed invocations, not just cold-start ones).
+//
+// IAM stays unchanged from cold-start slice 2 + sampling rate slice
+// 1: the existing Azure Reader role covers all three metrics. The
+// per-subscription rate limiter stays UNCHANGED — the new metric
+// query flows through the existing 12K RPH limiter.
+//
+// Pinned to "FunctionErrors" by
+// metrics_test.go::TestAzureFunctionsErrorsMetric_Constant.
+const AzureFunctionsErrorsMetric = "FunctionErrors"
+
 // azureMonitorMetricsAPIBase is the Azure Resource Manager path
 // segment under which microsoft.insights/metrics is exposed against
 // a Microsoft.Web/sites resource. The full URL is:
@@ -202,15 +224,26 @@ func (s *Scanner) QueryAggregate(
 	// invocation count denominator wants ALL invocations, not just
 	// cold-start ones).
 	if metricName == AzureFunctionsInvocationsMetric {
-		return s.queryAzureFunctionInvocations(ctx, resourceARN, window, stat)
+		return s.queryAzureFunctionCounterTotal(ctx, resourceARN, AzureFunctionsInvocationsMetric, window, stat)
+	}
+
+	// Error rate correlation slice 1 chunk 1 (v0.89.127):
+	// FunctionErrors is the third supported Azure Functions metric.
+	// Same Azure-side shape as FunctionInvocations (aggregation =
+	// "Total", no IsAfterColdStart filter — the error count wants
+	// ALL failed invocations, not just cold-start ones), so the
+	// underlying queryAzureFunctionCounterTotal helper is reused.
+	if metricName == AzureFunctionsErrorsMetric {
+		return s.queryAzureFunctionCounterTotal(ctx, resourceARN, AzureFunctionsErrorsMetric, window, stat)
 	}
 
 	if metricName != AzureFunctionsExecutionDurationMetric {
 		// Slice 2 substrate scope: FunctionExecutionDuration +
-		// FunctionInvocations only. Other names short-circuit to
-		// an empty result with no error so the interface contract
-		// distinguishes "metric not supported in slice 1" (empty
-		// result) from "API call failed" (non-nil error).
+		// FunctionInvocations + FunctionErrors. Other names short-
+		// circuit to an empty result with no error so the
+		// interface contract distinguishes "metric not supported
+		// in slice 1" (empty result) from "API call failed"
+		// (non-nil error).
 		return scanner.AggregateMetricResult{
 			ResourceARN: resourceARN,
 			MetricName:  metricName,
@@ -261,24 +294,32 @@ func (s *Scanner) QueryAggregate(
 	return result, nil
 }
 
-// queryAzureFunctionInvocations is the sampling-rate-slice-1
-// sibling of the duration code path inside QueryAggregate. It
-// reuses the rate limiter + the doAzureMonitorMetricsCall helper
-// but uses aggregation="Total" rather than "Maximum" and does NOT
-// apply the IsAfterColdStart dimension filter (the
-// invocation-count denominator wants every invocation in the
-// window, cold-start or warm). The cross-period rollup also
-// switches from MAX (latency) to SUM (counter).
+// queryAzureFunctionCounterTotal is the shared Azure Monitor
+// counter aggregation path. v0.89.127 (error rate slice 1 chunk 1)
+// generalizes the original sampling-rate-only
+// queryAzureFunctionInvocations helper so both FunctionInvocations
+// and FunctionErrors flow through the same code with the metric
+// name as a parameter.
 //
-// Empty datapoint handling matches the duration path: zero
-// invocations in the window returns Value=0 / SampleCount=0 with
-// no error. The chunk-2 detection branch's MIN_INVOCATION_COUNT
-// (1000) gate trips and the detection skips.
+// Reuses the per-subscription rate limiter + the
+// doAzureMonitorMetricsCall helper but uses aggregation="Total"
+// rather than "Maximum" and does NOT apply the IsAfterColdStart
+// dimension filter (the counter denominators want every
+// invocation/error in the window, cold-start or warm). The
+// cross-period rollup also switches from MAX (latency) to SUM
+// (counter).
 //
-// See docs/proposals/sampling-rate-analysis-slice1.md §4.4.
-func (s *Scanner) queryAzureFunctionInvocations(
+// Empty datapoint handling matches the duration path: zero events
+// in the window returns Value=0 / SampleCount=0 with no error.
+// The chunk-2 detection branches gate on the per-metric absolute
+// floor (>= 1000 invocations / >= 50 errors per design doc §3) so
+// the detection skips on empty responses.
+//
+// See docs/proposals/error-rate-correlation-slice1.md §4.4 and
+// docs/proposals/sampling-rate-analysis-slice1.md §4.4.
+func (s *Scanner) queryAzureFunctionCounterTotal(
 	ctx context.Context,
-	resourceARN string,
+	resourceARN, metricName string,
 	window time.Duration,
 	stat scanner.MetricStatistic,
 ) (scanner.AggregateMetricResult, error) {
@@ -294,12 +335,12 @@ func (s *Scanner) queryAzureFunctionInvocations(
 	// "Total" = sum across the timespan per Azure Monitor docs.
 	// Different aggregation than mapMetricStatisticToAzureAggregation
 	// returns (which always maps percentiles to "Maximum" for the
-	// duration metric); for the counter, "Total" is the native
+	// duration metric); for the counters, "Total" is the native
 	// fit.
 	const aggregation = "Total"
 
 	out, callErr := s.doAzureMonitorMetricsCall(
-		ctx, resourceARN, AzureFunctionsInvocationsMetric,
+		ctx, resourceARN, metricName,
 		startTime, endTime, aggregation, "",
 	)
 	if callErr != nil {
@@ -308,7 +349,7 @@ func (s *Scanner) queryAzureFunctionInvocations(
 
 	result := aggregateAzureTimeseriesSum(out, aggregation)
 	result.ResourceARN = resourceARN
-	result.MetricName = AzureFunctionsInvocationsMetric
+	result.MetricName = metricName
 	result.Window = window
 	result.Statistic = stat
 	result.ObservedAt = endTime

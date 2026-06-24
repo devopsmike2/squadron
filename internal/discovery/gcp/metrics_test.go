@@ -590,3 +590,182 @@ func TestGCPQueryAggregate_RequestCount_FiltersByResponseCodeClass(t *testing.T)
 	}
 }
 
+// -- v0.89.127 error rate slice 1 chunk 1 additions ----------------------
+
+// TestCloudRunRequestCount5xxMetricType_Constant pins the synthetic
+// "#5xx" suffix variant constant. Squadron's internal router signal
+// — the suffix is stripped before the wire request hits Cloud
+// Monitoring; the metric.type seen by Cloud Monitoring is the base
+// CloudRunRequestCountMetricType. A rename would silently break
+// the error-rate detection branch.
+func TestCloudRunRequestCount5xxMetricType_Constant(t *testing.T) {
+	if CloudRunRequestCount5xxMetricType != "run.googleapis.com/request_count#5xx" {
+		t.Fatalf("CloudRunRequestCount5xxMetricType = %q, want %q",
+			CloudRunRequestCount5xxMetricType, "run.googleapis.com/request_count#5xx")
+	}
+}
+
+// TestCloudFunctionsExecutionCountErrorMetricType_Constant pins
+// the synthetic "#error" suffix variant constant. Mirrors the
+// Cloud Run #5xx pin.
+func TestCloudFunctionsExecutionCountErrorMetricType_Constant(t *testing.T) {
+	if CloudFunctionsExecutionCountErrorMetricType != "cloudfunctions.googleapis.com/function/execution_count#error" {
+		t.Fatalf("CloudFunctionsExecutionCountErrorMetricType = %q, want %q",
+			CloudFunctionsExecutionCountErrorMetricType,
+			"cloudfunctions.googleapis.com/function/execution_count#error")
+	}
+}
+
+// TestGCPQueryAggregate_RequestCount5xx_ReturnsSumOverWindow —
+// acceptance test 2 (error rate slice 1 §11). Multi-point response;
+// the #5xx variant uses the same SUM-over-window rollup as the
+// non-suffix sampling-rate path. Returns the total count of 5xx
+// responses across the window.
+func TestGCPQueryAggregate_RequestCount5xx_ReturnsSumOverWindow(t *testing.T) {
+	f := &metricsFake{
+		respondWith: []TimeSeriesPoint{
+			{Value: 30.0, SampleCount: 1},
+			{Value: 20.0, SampleCount: 1},
+			{Value: 40.0, SampleCount: 1},
+		},
+	}
+	s := newMetricsTestScannerWithFake(t, f)
+	const arn = "projects/test-project/locations/us-central1/services/checkout"
+	res, err := s.QueryAggregate(
+		context.Background(),
+		arn,
+		CloudRunRequestCount5xxMetricType,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 90.0 {
+		t.Errorf("Value = %v, want SUM across points (90.0), NOT MAX (40.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != CloudRunRequestCount5xxMetricType {
+		t.Errorf("MetricName = %q, want %q (suffix variant echoed verbatim)",
+			res.MetricName, CloudRunRequestCount5xxMetricType)
+	}
+	// Count metrics use ALIGN_DELTA aligner.
+	if f.receivedStat[0] != "ALIGN_DELTA" {
+		t.Errorf("aligner = %q, want ALIGN_DELTA", f.receivedStat[0])
+	}
+}
+
+// TestGCPQueryAggregate_RequestCount5xx_FiltersByResponseCodeClass5xx
+// pins the §4.2 inverse-filter choice: response_code_class = "5xx"
+// (server errors only — the sampling-rate path uses != "5xx" for
+// the denominator). Also pins that the metric.type sent to Cloud
+// Monitoring is the suffix-stripped base form.
+func TestGCPQueryAggregate_RequestCount5xx_FiltersByResponseCodeClass5xx(t *testing.T) {
+	f := &metricsFake{respondWith: []TimeSeriesPoint{}}
+	s := newMetricsTestScannerWithFake(t, f)
+	const arn = "projects/test-project/locations/us-central1/services/checkout"
+	_, err := s.QueryAggregate(
+		context.Background(),
+		arn,
+		CloudRunRequestCount5xxMetricType,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.receivedFilter) != 1 {
+		t.Fatalf("calls = %d, want 1", len(f.receivedFilter))
+	}
+	flt := f.receivedFilter[0]
+	if !strings.Contains(flt, `response_code_class = "5xx"`) {
+		t.Errorf("filter %q missing response_code_class=5xx", flt)
+	}
+	// Must NOT carry the sampling-rate path's != 5xx filter.
+	if strings.Contains(flt, `response_code_class != "5xx"`) {
+		t.Errorf("filter %q uses sampling-rate-path != 5xx filter; error rate wants = 5xx", flt)
+	}
+	// Wire metric.type is the suffix-stripped base form — the
+	// "#5xx" suffix is a Squadron router signal, not an API
+	// parameter Cloud Monitoring understands.
+	if !strings.Contains(flt, CloudRunRequestCountMetricType) {
+		t.Errorf("filter %q missing base metric type", flt)
+	}
+	if strings.Contains(flt, "#5xx") {
+		t.Errorf("filter %q leaks the synthetic #5xx suffix onto the wire", flt)
+	}
+}
+
+// TestGCPQueryAggregate_ExecutionCountError_ReturnsSumOverWindow —
+// acceptance test 3 (error rate slice 1 §11). Cloud Functions
+// execution_count#error variant. Same SUM-over-window rollup as
+// the sampling-rate sibling.
+func TestGCPQueryAggregate_ExecutionCountError_ReturnsSumOverWindow(t *testing.T) {
+	f := &metricsFake{
+		respondWith: []TimeSeriesPoint{
+			{Value: 25.0, SampleCount: 1},
+			{Value: 75.0, SampleCount: 1},
+		},
+	}
+	s := newMetricsTestScannerWithFake(t, f)
+	const arn = "projects/test-project/locations/us-central1/functions/report-builder"
+	res, err := s.QueryAggregate(
+		context.Background(),
+		arn,
+		CloudFunctionsExecutionCountErrorMetricType,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 100.0 {
+		t.Errorf("Value = %v, want SUM (100.0)", res.Value)
+	}
+	if res.SampleCount != 2 {
+		t.Errorf("SampleCount = %d, want 2", res.SampleCount)
+	}
+	if res.MetricName != CloudFunctionsExecutionCountErrorMetricType {
+		t.Errorf("MetricName = %q, want %q (suffix variant echoed)",
+			res.MetricName, CloudFunctionsExecutionCountErrorMetricType)
+	}
+}
+
+// TestGCPQueryAggregate_ExecutionCountError_FiltersByStatusNotOk
+// pins the §4.3 inverse-filter choice: status != "ok" — failures,
+// timeouts, crashes — versus the sampling-rate path's status = "ok"
+// denominator.
+func TestGCPQueryAggregate_ExecutionCountError_FiltersByStatusNotOk(t *testing.T) {
+	f := &metricsFake{respondWith: []TimeSeriesPoint{}}
+	s := newMetricsTestScannerWithFake(t, f)
+	const arn = "projects/test-project/locations/us-central1/functions/report-builder"
+	_, err := s.QueryAggregate(
+		context.Background(),
+		arn,
+		CloudFunctionsExecutionCountErrorMetricType,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.receivedFilter) != 1 {
+		t.Fatalf("calls = %d, want 1", len(f.receivedFilter))
+	}
+	flt := f.receivedFilter[0]
+	if !strings.Contains(flt, `status != "ok"`) {
+		t.Errorf("filter %q missing status!=ok", flt)
+	}
+	// Wire metric.type is the suffix-stripped base form.
+	if !strings.Contains(flt, CloudFunctionsExecutionCountMetricType) {
+		t.Errorf("filter %q missing base metric type", flt)
+	}
+	if strings.Contains(flt, "#error") {
+		t.Errorf("filter %q leaks the synthetic #error suffix onto the wire", flt)
+	}
+	if !strings.Contains(flt, "function_name") || !strings.Contains(flt, `"report-builder"`) {
+		t.Errorf("filter %q missing function_name=report-builder", flt)
+	}
+}

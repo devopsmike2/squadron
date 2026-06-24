@@ -479,3 +479,141 @@ func TestOCIQueryAggregate_InvocationCount_ReturnsSumOverWindow(t *testing.T) {
 	}
 }
 
+// -- v0.89.127 error rate slice 1 chunk 1 additions ----------------------
+
+// TestOCIFunctionsInvocationCountErrorMetric_Constant pins the
+// synthetic "#error" suffix variant constant. Squadron's internal
+// router signal — the suffix is stripped before the MQL query hits
+// OCI Monitoring; the metric name in the MQL expression is the base
+// OCIFunctionsInvocationCountMetric. A rename would silently break
+// the error-rate detection branch.
+func TestOCIFunctionsInvocationCountErrorMetric_Constant(t *testing.T) {
+	if OCIFunctionsInvocationCountErrorMetric != "function_invocation_count#error" {
+		t.Fatalf("OCIFunctionsInvocationCountErrorMetric = %q, want %q",
+			OCIFunctionsInvocationCountErrorMetric, "function_invocation_count#error")
+	}
+}
+
+// TestOCIQueryAggregate_InvocationCountError_ReturnsSumOverWindow —
+// acceptance test 5 (error rate slice 1 §11). Multi-datapoint
+// response with per-resolution counts; the #error variant uses the
+// same SUM-across-datapoints rollup as the sampling-rate sibling.
+// Returns the total error count across the window.
+func TestOCIQueryAggregate_InvocationCountError_ReturnsSumOverWindow(t *testing.T) {
+	mf := &monitoringFake{
+		respondWith: []ociMetricDataPoint{
+			{Timestamp: time.Now().Add(-20 * time.Minute), Value: 30.0, SampleCount: 1},
+			{Timestamp: time.Now().Add(-15 * time.Minute), Value: 20.0, SampleCount: 1},
+			{Timestamp: time.Now().Add(-10 * time.Minute), Value: 40.0, SampleCount: 1},
+		},
+	}
+	s := newMetricsTestScanner(t, mf)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		"ocid1.fnfunc.oc1.phx.xxx",
+		OCIFunctionsInvocationCountErrorMetric,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 90.0 {
+		t.Errorf("Value = %v, want SUM across datapoints (90.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != OCIFunctionsInvocationCountErrorMetric {
+		t.Errorf("MetricName = %q, want %q (suffix variant echoed verbatim)",
+			res.MetricName, OCIFunctionsInvocationCountErrorMetric)
+	}
+}
+
+// TestOCIQueryAggregate_InvocationCountError_MQLFiltersByResultError
+// pins the MQL filter shape: the synthetic "#error" suffix
+// translates into a result = "error" dimension filter alongside
+// the resourceId filter, while the metric name in the MQL
+// expression is the suffix-stripped base form. The "#error"
+// suffix is a Squadron router signal and never appears in the
+// outgoing MQL.
+func TestOCIQueryAggregate_InvocationCountError_MQLFiltersByResultError(t *testing.T) {
+	mf := &monitoringFake{respondWith: []ociMetricDataPoint{}}
+	s := newMetricsTestScanner(t, mf)
+	_, err := s.QueryAggregate(
+		context.Background(),
+		"ocid1.fnfunc.oc1.phx.xxx",
+		OCIFunctionsInvocationCountErrorMetric,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mf.receivedQuery) != 1 {
+		t.Fatalf("calls = %d, want 1", len(mf.receivedQuery))
+	}
+	q := mf.receivedQuery[0]
+	// Base metric name (suffix stripped) — the MQL must NOT carry
+	// the synthetic "#error" suffix onto the wire.
+	if !strings.HasPrefix(q, OCIFunctionsInvocationCountMetric+"[") {
+		t.Errorf("query %q must start with base metric name (suffix-stripped)", q)
+	}
+	if strings.Contains(q, "#error") {
+		t.Errorf("query %q leaks the synthetic #error suffix onto the wire", q)
+	}
+	// result = "error" tag inside the resourceId filter block.
+	if !strings.Contains(q, `result = "error"`) {
+		t.Errorf("query %q missing result=\"error\" dimension filter", q)
+	}
+	if !strings.Contains(q, `resourceId = "ocid1.fnfunc.oc1.phx.xxx"`) {
+		t.Errorf("query %q missing quoted resourceId filter", q)
+	}
+	if !strings.Contains(q, ".sum()") {
+		t.Errorf("query %q missing .sum() reduction", q)
+	}
+}
+
+// TestSplitOCIMetricSuffix_Variants pins the table-driven decode
+// of the synthetic suffix convention. Adding new suffix variants
+// in future slices means adding entries to this test and the
+// switch in splitOCIMetricSuffix; the helper's surface stays
+// stable.
+func TestSplitOCIMetricSuffix_Variants(t *testing.T) {
+	cases := []struct {
+		in          string
+		wantBase    string
+		wantFilter  string
+		description string
+	}{
+		{
+			in:          OCIFunctionsInvocationCountErrorMetric,
+			wantBase:    OCIFunctionsInvocationCountMetric,
+			wantFilter:  `result = "error"`,
+			description: "error rate slice 1 #error suffix",
+		},
+		{
+			in:          OCIFunctionsInvocationCountMetric,
+			wantBase:    OCIFunctionsInvocationCountMetric,
+			wantFilter:  "",
+			description: "non-suffix metric passes through verbatim",
+		},
+		{
+			in:          OCIFunctionsFunctionDurationMetric,
+			wantBase:    OCIFunctionsFunctionDurationMetric,
+			wantFilter:  "",
+			description: "non-counter metric passes through verbatim",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.description, func(t *testing.T) {
+			base, flt := splitOCIMetricSuffix(c.in)
+			if base != c.wantBase {
+				t.Errorf("base = %q, want %q", base, c.wantBase)
+			}
+			if flt != c.wantFilter {
+				t.Errorf("filter = %q, want %q", flt, c.wantFilter)
+			}
+		})
+	}
+}

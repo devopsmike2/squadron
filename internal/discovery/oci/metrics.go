@@ -66,6 +66,37 @@ const OCIFunctionsColdStartCountMetric = "cold_start_count"
 // metrics_test.go::TestOCIFunctionsInvocationCountMetric_Constant.
 const OCIFunctionsInvocationCountMetric = "function_invocation_count"
 
+// OCIFunctionsInvocationCountErrorMetric is the Squadron-internal
+// synthetic-suffix variant of OCIFunctionsInvocationCountMetric
+// that the error-rate-correlation slice 1 chunk 1 (v0.89.127)
+// routes through with a result = "error" dimension filter on the
+// OCI Monitoring MQL query. The base metric name sent in the MQL
+// expression is the suffix-stripped form
+// (OCIFunctionsInvocationCountMetric); the "#error" suffix is
+// consumed by the Squadron router and never appears on the wire.
+//
+// Why a synthetic-suffix constant rather than a new
+// QueryAggregate parameter for dimension filtering: keeping the
+// scanner.MetricQuerier interface stable across the cold-start /
+// sampling-rate / error-rate arcs is a contract per the slice 1
+// design doc §4. Mirrors the GCP CloudRunRequestCount5xx /
+// CloudFunctionsExecutionCountError convention so the Squadron
+// router signal looks the same across providers.
+//
+// MQL shapes:
+//
+//   without suffix → function_invocation_count[24h]{resourceId = "..."}.sum()
+//   with #error suffix → function_invocation_count[24h]{resourceId = "...", result = "error"}.sum()
+//
+// IAM stays unchanged from slices 1 + 2: the existing
+// "read metrics in compartment" permission covers all three OCI
+// metric variants. Per-tenancy rate limiter stays UNCHANGED — the
+// new metric query flows through the existing 10 TPS limiter.
+//
+// Pinned to "function_invocation_count#error" by
+// metrics_test.go::TestOCIFunctionsInvocationCountErrorMetric_Constant.
+const OCIFunctionsInvocationCountErrorMetric = "function_invocation_count#error"
+
 // ociMonitoringAPIVersion pins the OCI Monitoring
 // summarizeMetricsData API path version. OCI versions live in the
 // path; single-sourced for the same reason as the compute /
@@ -226,9 +257,12 @@ func (s *Scanner) QueryAggregate(
 	switch metricName {
 	case OCIFunctionsFunctionDurationMetric,
 		OCIFunctionsColdStartCountMetric,
-		OCIFunctionsInvocationCountMetric:
+		OCIFunctionsInvocationCountMetric,
+		OCIFunctionsInvocationCountErrorMetric:
 		// Supported — fall through to the real call. Sampling rate
-		// slice 1 chunk 1 (v0.89.122) adds the third entry.
+		// slice 1 chunk 1 (v0.89.122) adds the InvocationCount
+		// entry; error rate slice 1 chunk 1 (v0.89.127) adds the
+		// InvocationCountError suffix variant.
 	default:
 		return scanner.AggregateMetricResult{
 			ResourceARN: resourceARN,
@@ -261,12 +295,20 @@ func (s *Scanner) QueryAggregate(
 	endTime := time.Now().UTC()
 	startTime := endTime.Add(-window)
 
+	// Resolve the metric name + dimension filter the MQL query
+	// expression carries. The synthetic-suffix variants
+	// (OCIFunctionsInvocationCountErrorMetric) strip the
+	// "#error" suffix to recover the base metric name and add a
+	// result = "error" tag to the resource filter. The base
+	// (non-suffix) variants pass through verbatim.
+	baseMetric, dimensionFilter := splitOCIMetricSuffix(metricName)
+
 	var query string
 	switch metricName {
 	case OCIFunctionsFunctionDurationMetric:
 		query = fmt.Sprintf(
 			"%s[%s]{resourceId = %q}.percentile(0.95)",
-			metricName, ociWindowQuery(window), functionOCID,
+			baseMetric, ociWindowQuery(window), functionOCID,
 		)
 	case OCIFunctionsColdStartCountMetric, OCIFunctionsInvocationCountMetric:
 		// Both counter metrics use .sum() — the per-period
@@ -274,7 +316,17 @@ func (s *Scanner) QueryAggregate(
 		// the substrate's cross-period rollup below also SUMs.
 		query = fmt.Sprintf(
 			"%s[%s]{resourceId = %q}.sum()",
-			metricName, ociWindowQuery(window), functionOCID,
+			baseMetric, ociWindowQuery(window), functionOCID,
+		)
+	case OCIFunctionsInvocationCountErrorMetric:
+		// Error rate slice 1 (v0.89.127) §4.5. The MQL filter
+		// gains a result = "error" tag alongside the resourceId
+		// filter; the base metric name + .sum() rollup match the
+		// sampling-rate denominator path so the error-rate
+		// numerator and denominator stay symmetric.
+		query = fmt.Sprintf(
+			"%s[%s]{resourceId = %q, %s}.sum()",
+			baseMetric, ociWindowQuery(window), functionOCID, dimensionFilter,
 		)
 	}
 
@@ -313,11 +365,17 @@ func (s *Scanner) QueryAggregate(
 			}
 			totalSamples += p.SampleCount
 		}
-	case OCIFunctionsColdStartCountMetric, OCIFunctionsInvocationCountMetric:
+	case OCIFunctionsColdStartCountMetric,
+		OCIFunctionsInvocationCountMetric,
+		OCIFunctionsInvocationCountErrorMetric:
 		// Counter rollup: SUM across periods = total events
 		// across the window. Mirrors the cold_start_count path —
 		// the invocation count uses the same MQL .sum() reduction
-		// and the same per-period SUM aggregation.
+		// and the same per-period SUM aggregation. The error
+		// suffix variant follows the same path because the OCI
+		// API has already done the result="error" filter at the
+		// MQL layer (see splitOCIMetricSuffix); the substrate
+		// just sums what comes back.
 		for _, p := range points {
 			val += p.Value
 			totalSamples += p.SampleCount
@@ -371,6 +429,37 @@ func parseOCIFunctionARN(arn, fallbackCompartment string) (string, string, error
 		return "", "", fmt.Errorf("not an OCI OCID: %q", arn)
 	}
 	return fallbackCompartment, arn, nil
+}
+
+// splitOCIMetricSuffix is the v0.89.127 (error rate slice 1 chunk 1)
+// helper that decodes the Squadron-internal synthetic-suffix metric
+// name convention into the (base metric name, MQL dimension filter)
+// pair the QueryAggregate routing assembles into the final MQL
+// expression.
+//
+// The convention follows the GCP per-cloud counterpart
+// (CloudRunRequestCount5xxMetricType / CloudFunctionsExecutionCountError
+// MetricType): a "#<tag>" suffix on the metric name is consumed by
+// the Squadron router rather than passed on the wire, and the
+// router translates the tag into a per-API dimension filter
+// expression.
+//
+// Slice 1 ships exactly one suffix variant: "#error" on
+// function_invocation_count. Additional suffix variants land in
+// future slices through this same helper; keeping the helper as a
+// table-driven switch lets us add new variants without growing the
+// QueryAggregate switch.
+//
+// Returns ("function_invocation_count", `result = "error"`) for
+// the OCIFunctionsInvocationCountErrorMetric input; returns the
+// input verbatim with an empty filter for any non-suffix metric.
+func splitOCIMetricSuffix(metricName string) (baseMetric, dimensionFilter string) {
+	switch metricName {
+	case OCIFunctionsInvocationCountErrorMetric:
+		return OCIFunctionsInvocationCountMetric, `result = "error"`
+	default:
+		return metricName, ""
+	}
 }
 
 // ociWindowQuery formats the MQL window suffix. OCI's MQL accepts

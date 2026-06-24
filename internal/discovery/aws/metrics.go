@@ -70,6 +70,29 @@ const LambdaMetricNamespace = "AWS/Lambda"
 // metrics_test.go::TestLambdaInvocationsMetricName_Constant.
 const LambdaInvocationsMetricName = "Invocations"
 
+// LambdaErrorsMetricName is the CloudWatch metric name for AWS Lambda
+// error count. Error rate correlation slice 1 chunk 1 (v0.89.127)
+// uses this as the numerator for the
+// current_error_count / current_invocation_count ratio per
+// docs/proposals/error-rate-correlation-slice1.md §4.1.
+//
+// CloudWatch reports this metric as a counter (Statistics=["Sum"]
+// rather than ExtendedStatistics=["p95"] like InitDuration) — the
+// QueryAggregate routing accordingly branches into queryLambdaErrors
+// rather than the existing init-duration path. Reuses the
+// queryLambdaInvocations rate-limit / throttle-retry / SUM-rollup
+// scaffold byte-for-byte; only the metric name and the
+// AggregateMetricResult.MetricName echo differ.
+//
+// IAM stays unchanged from cold-start slice 1 + sampling rate slice
+// 1: the same cloudwatch:GetMetricStatistics permission covers all
+// three metric names. Per-account rate limiter stays UNCHANGED —
+// the new metric query flows through the existing 10 RPS limiter.
+//
+// Pinned to "Errors" by
+// metrics_test.go::TestLambdaErrorsMetricName_Constant.
+const LambdaErrorsMetricName = "Errors"
+
 // cloudWatchMetricPeriodSeconds is the 5-minute aggregation period
 // the slice 1 substrate uses for every CloudWatch GetMetricStatistics
 // call. The design doc §3 step 1 names this number: "5-minute period
@@ -194,13 +217,25 @@ func (s *Scanner) QueryAggregate(
 		return s.queryLambdaInvocations(ctx, resourceARN, window, stat)
 	}
 
+	// Error rate correlation slice 1 chunk 1 (v0.89.127): Errors is
+	// the third supported AWS/Lambda metric. Identical SDK shape to
+	// the Invocations path — Statistics=["Sum"] and SUM-across-
+	// periods rollup — so a thin wrapper that forwards into
+	// queryLambdaCounterSum keeps the routing readable without
+	// duplicating the CloudWatch input construction or the per-
+	// account rate-limiter Wait. See queryLambdaCounterSum godoc
+	// for the shared aggregation.
+	if metricName == LambdaErrorsMetricName {
+		return s.queryLambdaCounterSum(ctx, resourceARN, LambdaErrorsMetricName, window, stat)
+	}
+
 	if metricName != LambdaInitDurationMetricName {
-		// Slice 1 substrate scope: InitDuration + Invocations only.
-		// Other names short-circuit to an empty result with no error
-		// so the interface contract distinguishes "metric not
-		// supported in slice 1" (empty result) from "API call failed"
-		// (non-nil error). Slice 2 may broaden the routing as new
-		// metric kinds land.
+		// Slice 1 substrate scope: InitDuration + Invocations +
+		// Errors. Other names short-circuit to an empty result with
+		// no error so the interface contract distinguishes "metric
+		// not supported in slice 1" (empty result) from "API call
+		// failed" (non-nil error). Slice 2 may broaden the routing
+		// as new metric kinds land.
 		return scanner.AggregateMetricResult{
 			ResourceARN: resourceARN,
 			MetricName:  metricName,
@@ -298,26 +333,49 @@ func (s *Scanner) QueryAggregate(
 }
 
 // queryLambdaInvocations is the sampling-rate-slice-1 sibling of the
-// init-duration code path inside QueryAggregate. It mirrors the
-// rate-limiter / throttle-retry / empty-result semantics but uses
-// Statistics=["Sum"] rather than ExtendedStatistics=["p95"] and
-// aggregates across per-period datapoints via SUM rather than MAX —
-// the per-5-minute Sum values add up to the total invocations across
-// the window, which is the denominator the sampling-rate detection
-// branch (chunk 2) compares against the observed_span_count from
-// traceindex.
-//
-// Empty datapoint handling matches the init-duration path: zero
-// invocations in the window returns Value=0 / SampleCount=0 with no
-// error. The chunk-2 detection branch additionally gates on the
-// MIN_INVOCATION_COUNT (1000) floor per design doc §3 step 4, so an
-// empty CloudWatch response naturally falls below the floor and the
-// detection skips.
+// init-duration code path inside QueryAggregate. Thin wrapper over
+// queryLambdaCounterSum — the Invocations and Errors paths share
+// the same CloudWatch shape (Statistics=["Sum"] + SUM-across-periods
+// rollup), so factoring the common body lets the error-rate slice
+// reuse the proven plumbing without duplication.
 //
 // See docs/proposals/sampling-rate-analysis-slice1.md §4.1.
 func (s *Scanner) queryLambdaInvocations(
 	ctx context.Context,
 	resourceARN string,
+	window time.Duration,
+	stat scanner.MetricStatistic,
+) (scanner.AggregateMetricResult, error) {
+	return s.queryLambdaCounterSum(ctx, resourceARN, LambdaInvocationsMetricName, window, stat)
+}
+
+// queryLambdaCounterSum is the shared CloudWatch SUM-aggregated
+// counter path for Lambda counter metrics. v0.89.127 (error rate
+// slice 1 chunk 1) factors this out so Invocations + Errors share
+// one implementation; the metric name flows through verbatim into
+// the GetMetricStatisticsInput.MetricName and the result's
+// MetricName echo.
+//
+// Mirrors the rate-limiter / throttle-retry / empty-result semantics
+// of the init-duration path but uses Statistics=["Sum"] rather than
+// ExtendedStatistics=["p95"] and aggregates across per-period
+// datapoints via SUM rather than MAX — the per-5-minute Sum values
+// add up to the total count across the window. For Invocations this
+// is the sampling-rate denominator; for Errors this is the error-
+// rate numerator.
+//
+// Empty datapoint handling matches the init-duration path: zero
+// events in the window returns Value=0 / SampleCount=0 with no
+// error. The chunk-2 detection branches additionally gate on the
+// minimum invocation count (>= 1000) and minimum error count
+// (>= 50) per design doc §3, so an empty CloudWatch response
+// naturally falls below the floor and the detection skips.
+//
+// See docs/proposals/error-rate-correlation-slice1.md §4.1 and
+// docs/proposals/sampling-rate-analysis-slice1.md §4.1.
+func (s *Scanner) queryLambdaCounterSum(
+	ctx context.Context,
+	resourceARN, metricName string,
 	window time.Duration,
 	stat scanner.MetricStatistic,
 ) (scanner.AggregateMetricResult, error) {
@@ -338,7 +396,7 @@ func (s *Scanner) queryLambdaInvocations(
 
 	input := &cloudwatch.GetMetricStatisticsInput{
 		Namespace:  awssdk.String(LambdaMetricNamespace),
-		MetricName: awssdk.String(LambdaInvocationsMetricName),
+		MetricName: awssdk.String(metricName),
 		Dimensions: []cwtypes.Dimension{{
 			Name:  awssdk.String("FunctionName"),
 			Value: awssdk.String(functionName),
@@ -347,7 +405,7 @@ func (s *Scanner) queryLambdaInvocations(
 		EndTime:   awssdk.Time(endTime),
 		Period:    &periodSeconds,
 		// Sum (counter), not ExtendedStatistics percentile —
-		// Invocations is a count metric, percentile aggregation
+		// counters use Sum aggregation; percentile aggregation
 		// would be a category error.
 		Statistics: []cwtypes.Statistic{cwtypes.StatisticSum},
 	}
@@ -359,31 +417,28 @@ func (s *Scanner) queryLambdaInvocations(
 
 	result := scanner.AggregateMetricResult{
 		ResourceARN: resourceARN,
-		MetricName:  LambdaInvocationsMetricName,
+		MetricName:  metricName,
 		Window:      window,
 		Statistic:   stat,
 		ObservedAt:  endTime,
 	}
 	if len(out.Datapoints) == 0 {
-		// No invocations in the window. SampleCount stays 0 so the
-		// chunk-2 detection branch's MIN_INVOCATION_COUNT gate
-		// trips and the sampling-rate detection skips this
-		// resource.
+		// No events in the window. SampleCount stays 0 so the
+		// chunk-2 detection branch's per-metric floor gate trips
+		// and the detection skips this resource.
 		return result, nil
 	}
 
-	// SUM across per-period sums = total invocations across the
-	// window. Mirrors the design doc §4.1 contract: "AWS/Lambda
-	// Invocations (sum statistic over window)". The MAX-of-P95
-	// rollup the init-duration path uses is the wrong rollup here
-	// — we want the count denominator, not the worst-case
+	// SUM across per-period sums = total events across the window.
+	// The MAX-of-P95 rollup the init-duration path uses is the
+	// wrong rollup here — we want the count, not the worst-case
 	// percentile.
-	totalInvocations := 0.0
+	totalCount := 0.0
 	sampleCount := 0
 	unit := ""
 	for _, dp := range out.Datapoints {
 		if dp.Sum != nil {
-			totalInvocations += *dp.Sum
+			totalCount += *dp.Sum
 		}
 		if dp.SampleCount != nil {
 			sampleCount += int(*dp.SampleCount)
@@ -392,7 +447,7 @@ func (s *Scanner) queryLambdaInvocations(
 			unit = string(dp.Unit)
 		}
 	}
-	result.Value = totalInvocations
+	result.Value = totalCount
 	result.SampleCount = sampleCount
 	result.Unit = unit
 	return result, nil

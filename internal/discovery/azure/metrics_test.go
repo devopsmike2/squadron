@@ -615,3 +615,82 @@ func TestAzureQueryAggregate_FunctionInvocations_UsesTotalAggregation(t *testing
 	}
 }
 
+// -- v0.89.127 error rate slice 1 chunk 1 additions ----------------------
+
+// TestAzureFunctionsErrorsMetric_Constant pins the Azure Monitor
+// metric name for FunctionErrors — the error-rate-correlation
+// slice 1 numerator (§4.4). A future ARM rename would silently
+// break the detection branch without this pin.
+func TestAzureFunctionsErrorsMetric_Constant(t *testing.T) {
+	if AzureFunctionsErrorsMetric != "FunctionErrors" {
+		t.Fatalf("AzureFunctionsErrorsMetric = %q, want \"FunctionErrors\"", AzureFunctionsErrorsMetric)
+	}
+}
+
+// TestAzureQueryAggregate_FunctionErrors_ReturnsSumOverWindow —
+// acceptance test 4 (error rate slice 1 §11). Multi-bucket
+// response with per-period Total values; QueryAggregate sums
+// across buckets and returns the total error count.
+func TestAzureQueryAggregate_FunctionErrors_ReturnsSumOverWindow(t *testing.T) {
+	fake := &fakeAzureMetrics{
+		cannedResponse: metricsOKTotals(30.0, 20.0, 40.0),
+	}
+	s := newMetricsScannerWithFake(t, fake)
+	res, err := s.QueryAggregate(
+		context.Background(),
+		testFunctionAppARN,
+		AzureFunctionsErrorsMetric,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Value != 90.0 {
+		t.Errorf("Value = %v, want SUM across buckets (90.0)", res.Value)
+	}
+	if res.SampleCount != 3 {
+		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
+	}
+	if res.MetricName != AzureFunctionsErrorsMetric {
+		t.Errorf("MetricName = %q, want %q", res.MetricName, AzureFunctionsErrorsMetric)
+	}
+}
+
+// TestAzureQueryAggregate_FunctionErrors_UsesTotalAggregation pins
+// the aggregation parameter to "Total" (the Azure-native sum
+// aggregation) rather than "Maximum" (the duration-path
+// approximation). Mirrors the FunctionInvocations contract.
+//
+// Also pins that the IsAfterColdStart dimension filter is NOT
+// applied — the error count wants every failed invocation in the
+// window, cold-start or warm.
+func TestAzureQueryAggregate_FunctionErrors_UsesTotalAggregation(t *testing.T) {
+	fake := &fakeAzureMetrics{
+		cannedResponse: metricsOKTotals(50.0),
+	}
+	s := newMetricsScannerWithFake(t, fake)
+	_, err := s.QueryAggregate(
+		context.Background(),
+		testFunctionAppARN,
+		AzureFunctionsErrorsMetric,
+		24*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.receivedReqs) != 1 {
+		t.Fatalf("calls = %d, want 1", len(fake.receivedReqs))
+	}
+	req := fake.receivedReqs[0]
+	if got := req.URL.Query().Get("aggregation"); got != "Total" {
+		t.Errorf("aggregation = %q, want Total", got)
+	}
+	if got := req.URL.Query().Get("metricnames"); got != AzureFunctionsErrorsMetric {
+		t.Errorf("metricnames = %q, want %q", got, AzureFunctionsErrorsMetric)
+	}
+	if got := fake.receivedFilters[0]; got != "" {
+		t.Errorf("$filter = %q, want empty (no IsAfterColdStart filter on error count)", got)
+	}
+}

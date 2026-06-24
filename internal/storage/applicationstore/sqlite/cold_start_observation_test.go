@@ -260,9 +260,13 @@ func TestMigration_v13_to_v14_AddsColdStartObservationTable(t *testing.T) {
 		require.NoError(t, row.Scan(&n))
 		assert.Equal(t, 2, n, "both cold_start_observation indexes must exist post-migration")
 
-		// SchemaVersion + Migrations slice both reflect the v14 bump.
-		assert.Equal(t, 14, SchemaVersion, "SchemaVersion must bump to 14")
-		assert.Len(t, Migrations, 14, "Migrations slice must contain 14 entries")
+		// SchemaVersion + Migrations slice both reflect the latest
+		// schema version. v0.89.113's test originally pinned v14; the
+		// v0.89.127 chunk-1 bump to v15 moves the floor up by one but
+		// the v14 → v15 ratchet leaves the cold_start_observation
+		// table itself unchanged.
+		assert.GreaterOrEqual(t, SchemaVersion, 14, "SchemaVersion must be >= 14 (cold_start_observation landed at v14)")
+		assert.GreaterOrEqual(t, len(Migrations), 14, "Migrations slice must contain >= 14 entries")
 	})
 }
 
