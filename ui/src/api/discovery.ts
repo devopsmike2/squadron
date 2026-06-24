@@ -402,6 +402,23 @@ export interface EventSourceRow {
   source_type?: string;
   has_trace_axis: boolean;
   has_log_axis: boolean;
+  // has_propagation_config — event source tier slice 2 chunk 5
+  // (v0.89.107, #745 Stream 143). True when the source's
+  // control-plane config preserves trace context end-to-end (every
+  // EventBridge rule keeps the X-Ray header through, every Pub/Sub
+  // schema includes traceparent, every Service Bus policy permits
+  // ApplicationProperties, every OCI Stream retains Kafka headers).
+  // False when at least one config gap would drop trace context.
+  // Undefined when there is nothing to evaluate (no rules / no schema
+  // / no subscriptions / a surface the slice 2 scanner cannot
+  // inspect yet); the UI renders an em dash in that case.
+  has_propagation_config?: boolean;
+  // propagation_notes — per-issue strings explaining why
+  // has_propagation_config is false. The Event sources sub-tab
+  // renders the first entry as a tooltip on the ✗ cell and opens a
+  // side panel with the full list on click. Empty / undefined when
+  // has_propagation_config is true or undefined.
+  propagation_notes?: string[];
   // last_seen_at — joined from the traceindex; undefined when the
   // index has no observation for this resource.
   last_seen_at?: string;

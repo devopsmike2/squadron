@@ -325,7 +325,12 @@ function DashboardBody({
   return (
     <div className="space-y-6">
       <CoveragePanel totals={summary.totals} />
-      {traceCoverage && <TraceCoveragePanel coverage={traceCoverage} />}
+      {traceCoverage && (
+        <TraceCoveragePanel
+          coverage={traceCoverage}
+          eventSourceCount={summary.totals.event_source_count}
+        />
+      )}
       {spanQuality && <SpanQualityPanel quality={spanQuality} />}
       <ProviderGrid providers={summary.providers} />
       <RecentRecommendations rows={summary.recent_recommendations} />
@@ -481,7 +486,18 @@ function coverageColor(pct: number): string {
 // inside the panel — the panel itself stays visible so the operator
 // can tell the feature exists.
 
-function TraceCoveragePanel({ coverage }: { coverage: TraceCoverage }) {
+function TraceCoveragePanel({
+  coverage,
+  eventSourceCount,
+}: {
+  coverage: TraceCoverage;
+  // eventSourceCount — event source tier slice 2 chunk 5 (v0.89.107,
+  // #745 Stream 143). Fleet-wide event source inventory count from the
+  // discovery summary. Drives the EVT chip propagation suffix
+  // hide-when-zero rule (spec §7): when there are no event sources to
+  // evaluate, the propagation suffix on the EVT chip stays hidden.
+  eventSourceCount: number;
+}) {
   const totals = coverage.totals;
   const isEmpty = totals.inventory_count === 0;
 
@@ -542,7 +558,10 @@ function TraceCoveragePanel({ coverage }: { coverage: TraceCoverage }) {
             </div>
           </div>
           <ProviderChipRow providers={coverage.providers} />
-          <TierCoverageChipRow providers={coverage.providers} />
+          <TierCoverageChipRow
+            providers={coverage.providers}
+            eventSourceCount={eventSourceCount}
+          />
           {totalPendingTraceEmission > 0 && (
             <div
               data-testid="trace-coverage-pending-indicator"
@@ -642,14 +661,28 @@ function TraceCoverageChip({
 //     internal/api/handlers/discovery_trace_coverage.go::aggregateProvider.
 function TierCoverageChipRow({
   providers,
+  eventSourceCount,
 }: {
   providers: TraceCoverage["providers"];
+  // eventSourceCount — event source tier slice 2 chunk 5 (v0.89.107,
+  // #745 Stream 143). Fleet-wide event source inventory count.
+  // Gates the propagation suffix on the EVT chip (hide-when-zero per
+  // spec §7).
+  eventSourceCount: number;
 }) {
   const orchPct = computeTierWeightedAverage(providers, (p) => p.orchestration_pct);
   // Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) —
   // EVT column extends the per-tier chip row. Same hide-when-zero
   // pattern as ORCH.
   const evtPct = computeTierWeightedAverage(providers, (p) => p.event_source_pct);
+  // Event source tier slice 2 chunk 5 (v0.89.107, #745 Stream 143) —
+  // EVT chip gains a "(prop N%)" suffix surfacing the propagation gap
+  // aggregated across all four providers. The suffix hides when
+  // event_source_count is zero (spec §7); the EVT chip itself is
+  // already hidden when event_source_pct is zero across all
+  // providers, so the suffix only renders when at least one provider
+  // has an event source with the source-level axis on.
+  const propPct = computeTierWeightedAverage(providers, (p) => p.propagation_pct);
   const showOrch = orchPct !== null;
   const showEvt = evtPct !== null;
   // Hide the whole line when no tier chip has any signal.
@@ -665,7 +698,18 @@ function TierCoverageChipRow({
         <TierCoverageChip label="ORCH" pct={orchPct ?? 0} testId="trace-coverage-tier-chip-orch" />
       )}
       {showEvt && (
-        <TierCoverageChip label="EVT" pct={evtPct ?? 0} testId="trace-coverage-tier-chip-evt" />
+        <TierCoverageChip
+          label="EVT"
+          pct={evtPct ?? 0}
+          testId="trace-coverage-tier-chip-evt"
+          // Suffix is rendered only when event_source_count is
+          // non-zero AND propPct is computable. Hides on cold start.
+          suffix={
+            eventSourceCount > 0 && propPct !== null
+              ? { label: "prop", pct: propPct }
+              : null
+          }
+        />
       )}
     </div>
   );
@@ -675,10 +719,15 @@ function TierCoverageChip({
   label,
   pct,
   testId,
+  suffix,
 }: {
   label: string;
   pct: number;
   testId: string;
+  // suffix — optional secondary label/pct rendered after the main pct
+  // in a muted style. Used by the EVT chip's "(prop N%)" propagation
+  // suffix (event source tier slice 2 chunk 5).
+  suffix?: { label: string; pct: number } | null;
 }) {
   const color = coverageColor(pct);
   return (
@@ -690,6 +739,15 @@ function TierCoverageChip({
     >
       <span className="font-medium">{label}</span>
       <span aria-label={`${label} coverage`}>{pct.toFixed(0)}%</span>
+      {suffix && (
+        <span
+          className="ml-1 text-xs text-slate-400"
+          data-testid={`${testId}-suffix`}
+          aria-label={`${label} ${suffix.label} coverage`}
+        >
+          ({suffix.label} {suffix.pct.toFixed(0)}%)
+        </span>
+      )}
     </span>
   );
 }

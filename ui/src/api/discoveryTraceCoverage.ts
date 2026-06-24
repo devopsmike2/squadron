@@ -85,6 +85,20 @@ export type ProviderTraceCoverage = {
    * always populates it.
    */
   event_source_pct: number;
+  /**
+   * propagation_pct — event source tier slice 2 chunk 5 (v0.89.107,
+   * #745 Stream 143). Per-provider event source propagation coverage
+   * rendered as has_propagation_config=true count / total event source
+   * count * 100. Surfaces the slice 2 per-message propagation gap
+   * alongside the slice 1 source-level axis: an operator can read EVT
+   * 80% (prop 45%) and immediately see that most sources have their
+   * trace primitive on but most of those sources have a config gap
+   * that drops trace context. Zero on cold start. The dashboard EVT
+   * chip suffix hides when event_source totals are zero (design doc
+   * §7). Required field — the backend always populates it (0 when
+   * there are no event sources to evaluate).
+   */
+  propagation_pct: number;
 };
 
 // --- Cross-provider totals -----------------------------------------

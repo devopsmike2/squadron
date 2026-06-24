@@ -3045,6 +3045,100 @@ func TestWebhook_StreamingKinds_RouteToOCI(t *testing.T) {
 	}
 }
 
+// TestWebhook_PropagationKinds_RouteToCorrectProviders — event source
+// tier slice 2 chunk 5 (v0.89.107, #745 Stream 143). The 5 new
+// propagation recommendation kinds reuse the slice 1 prefixes
+// (eventbridge-/pubsub-/servicebus-/streaming-) so the existing
+// providerFromRecommendationKind switch already routes them to the
+// correct provider WITHOUT any new prefix matchers. This table-driven
+// test pins that behaviour end-to-end through the webhook receiver:
+// the audit payload carries provider + the cloud's primary identifier
+// parsed from the branch name, mirroring the slice 1 routing tests.
+func TestWebhook_PropagationKinds_RouteToCorrectProviders(t *testing.T) {
+	cases := []struct {
+		kind        string
+		wantProv    string
+		branchID    string // the cloud's primary identifier in the branch
+		region      string
+		payloadKey  string // audit payload key carrying the cloud-id
+		payloadWant string // audit payload value at payloadKey
+	}{
+		{
+			kind:        "eventbridge-rule-preserves-trace",
+			wantProv:    "aws",
+			branchID:    "123456789012",
+			region:      "us-east-1",
+			payloadKey:  "account_id",
+			payloadWant: "123456789012",
+		},
+		{
+			kind:        "pubsub-schema-includes-traceparent",
+			wantProv:    "gcp",
+			branchID:    "my-prod-project",
+			region:      "us-central1",
+			payloadKey:  "project_id",
+			payloadWant: "my-prod-project",
+		},
+		{
+			kind:        "pubsub-subscription-preserves-attrs",
+			wantProv:    "gcp",
+			branchID:    "my-prod-project",
+			region:      "us-central1",
+			payloadKey:  "project_id",
+			payloadWant: "my-prod-project",
+		},
+		{
+			kind:        "servicebus-policy-preserves-traceparent",
+			wantProv:    "azure",
+			branchID:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			region:      "eastus",
+			payloadKey:  "subscription_id",
+			payloadWant: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		},
+		{
+			kind:        "streaming-config-preserves-headers",
+			wantProv:    "oci",
+			branchID:    "ocid1.tenancy.oc1..aaaaaaaa",
+			region:      "us-phoenix-1",
+			payloadKey:  "tenancy_ocid",
+			payloadWant: "ocid1.tenancy.oc1..aaaaaaaa",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+			branch := "squadron/rec/" + tc.kind + "/" + tc.branchID + "/" + tc.region + "/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-22T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != tc.kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], tc.kind)
+			}
+			if pay["provider"] != tc.wantProv {
+				t.Errorf("payload.provider = %v, want %s", pay["provider"], tc.wantProv)
+			}
+			if pay[tc.payloadKey] != tc.payloadWant {
+				t.Errorf("payload.%s = %v, want %s", tc.payloadKey, pay[tc.payloadKey], tc.payloadWant)
+			}
+		})
+	}
+}
+
 // TestProviderFromRecommendationKind_EventSourceTierExtension — pins
 // the dispatch table for the 7 new event source kinds and reasserts
 // prior-tier routing remains green. Same shape as the orchestration

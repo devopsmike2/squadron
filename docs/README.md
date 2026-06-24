@@ -96,31 +96,43 @@ jump straight to that page.
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
 - [Event source tier — operator guide](./event-source-tier-operator-guide.md) —
-  v0.89.99 through v0.89.103 operator runbook for the event
-  source tier slice 1 arc (design at
-  [proposals/event-source-tier-slice1.md](./proposals/event-source-tier-slice1.md)).
+  v0.89.99 through v0.89.107 operator runbook for the event
+  source tier arc (slice 1 design at
+  [proposals/event-source-tier-slice1.md](./proposals/event-source-tier-slice1.md),
+  slice 2 design at
+  [proposals/event-source-tier-slice2.md](./proposals/event-source-tier-slice2.md)).
   Sixth tier alongside compute / database / kubernetes /
   serverless / orchestration. Four surfaces across four
   clouds: AWS EventBridge, GCP Pub/Sub, Azure Service Bus,
-  OCI Streaming. Per-cloud detection of trace axis + log
-  axis primitives at the event source level (per-message
-  propagation analysis deferred to slice 2). New Event
-  sources Inventory sub-tab on all four per-provider
-  Discovery pages. 7 new recommendation kinds:
-  `eventbridge-{xray-enable,schemas-discover,logging-enable}`,
+  OCI Streaming. **Slice 1 (v0.89.99-v0.89.103)** ships
+  per-cloud detection of trace axis + log axis primitives
+  at the event source level; 7 recommendation kinds
+  (`eventbridge-{xray-enable,schemas-discover,logging-enable}`,
   `pubsub-{trace-enable,schema-attach}`,
   `servicebus-diagnostics-enable`,
-  `streaming-logging-enable`. Discovery summary +
+  `streaming-logging-enable`); Discovery summary +
   trace_coverage endpoints gain `event_source_count` and
-  `event_source_pct`. Dashboard TRACE COVERAGE chip
-  breakdown adds EVT column. **Slice 1 SHIPPED in
-  v0.89.103.** Squadron's claim grows a sixth tier: "scans
-  AWS, GCP, Azure, AND Oracle Cloud across COMPUTE,
-  DATABASE, KUBERNETES, SERVERLESS, ORCHESTRATION, AND
-  EVENT SOURCES for observability gaps, verifies telemetry
-  is actually flowing, validates the spans Squadron
-  receives are healthy, AND drafts the IaC PRs that close
-  the gaps it finds."
+  `event_source_pct`; dashboard TRACE COVERAGE chip
+  breakdown adds EVT column. **Slice 2
+  (v0.89.104-v0.89.107)** ships per-message propagation
+  detection — does the source's CONFIG preserve trace
+  context end-to-end? 5 new recommendation kinds reusing
+  the slice 1 webhook prefixes:
+  `eventbridge-rule-preserves-trace`,
+  `pubsub-{schema-includes-traceparent,subscription-preserves-attrs}`,
+  `servicebus-policy-preserves-traceparent`,
+  `streaming-config-preserves-headers`. Event sources
+  sub-tab gains a Propagation column + notes side panel
+  on all four provider pages. Trace coverage endpoint
+  gains `propagation_pct`; dashboard EVT chip gains a
+  `(prop N%)` suffix when event sources exist. **Slice 2
+  SHIPPED in v0.89.107.** Squadron's claim grows a sixth
+  tier: "scans AWS, GCP, Azure, AND Oracle Cloud across
+  COMPUTE, DATABASE, KUBERNETES, SERVERLESS, ORCHESTRATION,
+  AND EVENT SOURCES for observability gaps, verifies
+  telemetry is actually flowing, validates the spans
+  Squadron receives are healthy, AND drafts the IaC PRs
+  that close the gaps it finds."
 - [Orchestration tier — operator guide](./orchestration-tier-operator-guide.md) —
   v0.89.94 through v0.89.98 operator runbook for the
   orchestration tier slice 1 arc (design at

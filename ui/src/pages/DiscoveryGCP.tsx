@@ -61,6 +61,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -1440,6 +1447,12 @@ function OrchestrationInventoryTable({ rows }: { rows: OrchestrationRow[] }) {
 // candidate — slice 1 keeps the AWS-only Quality column constraint
 // for the Inventory tab.
 function EventSourcesInventoryTable({ rows }: { rows: EventSourceRow[] }) {
+  // propagationDialog — event source tier slice 2 chunk 5 (v0.89.107,
+  // #745 Stream 143). See DiscoveryAWS.tsx::PropagationNotesDialog.
+  const [propagationDialog, setPropagationDialog] = useState<{
+    row: EventSourceRow;
+    notes: string[];
+  } | null>(null);
   if (rows.length === 0) {
     return (
       <div
@@ -1451,49 +1464,172 @@ function EventSourcesInventoryTable({ rows }: { rows: EventSourceRow[] }) {
     );
   }
   return (
-    <div
-      className="overflow-x-auto rounded-md border"
-      data-testid="event-sources-table"
-    >
-      <table className="w-full text-sm">
-        <thead className="bg-muted/40">
-          <tr className="text-left">
-            <th className="px-3 py-2 font-medium">Resource Name</th>
-            <th className="px-3 py-2 font-medium">Surface</th>
-            <th className="px-3 py-2 font-medium">Type</th>
-            <th className="px-3 py-2 font-medium">Region</th>
-            <th className="px-3 py-2 font-medium">Trace axis</th>
-            <th className="px-3 py-2 font-medium">Log axis</th>
-            <th className="px-3 py-2 font-medium">Last seen</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr
-              key={row.resource_arn || row.resource_name}
-              className="border-t"
-              data-testid="event-sources-row"
-            >
-              <td className="px-3 py-2 font-mono text-xs">
-                {row.resource_name}
-              </td>
-              <td className="px-3 py-2 text-xs">{row.surface}</td>
-              <td className="px-3 py-2 text-xs">{row.source_type || "—"}</td>
-              <td className="px-3 py-2 text-xs">{row.region}</td>
-              <td className="px-3 py-2 text-xs">
-                <OrchestrationAxisCheck ok={row.has_trace_axis} />
-              </td>
-              <td className="px-3 py-2 text-xs">
-                <OrchestrationAxisCheck ok={row.has_log_axis} />
-              </td>
-              <td className="px-3 py-2 text-xs">
-                <LastSeenCell value={row.last_seen_at} />
-              </td>
+    <>
+      <div
+        className="overflow-x-auto rounded-md border"
+        data-testid="event-sources-table"
+      >
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40">
+            <tr className="text-left">
+              <th className="px-3 py-2 font-medium">Resource Name</th>
+              <th className="px-3 py-2 font-medium">Surface</th>
+              <th className="px-3 py-2 font-medium">Type</th>
+              <th className="px-3 py-2 font-medium">Region</th>
+              <th className="px-3 py-2 font-medium">Trace axis</th>
+              <th className="px-3 py-2 font-medium">Log axis</th>
+              <th className="px-3 py-2 font-medium">Propagation</th>
+              <th className="px-3 py-2 font-medium">Last seen</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.resource_arn || row.resource_name}
+                className="border-t"
+                data-testid="event-sources-row"
+              >
+                <td className="px-3 py-2 font-mono text-xs">
+                  {row.resource_name}
+                </td>
+                <td className="px-3 py-2 text-xs">{row.surface}</td>
+                <td className="px-3 py-2 text-xs">{row.source_type || "—"}</td>
+                <td className="px-3 py-2 text-xs">{row.region}</td>
+                <td className="px-3 py-2 text-xs">
+                  <OrchestrationAxisCheck ok={row.has_trace_axis} />
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  <OrchestrationAxisCheck ok={row.has_log_axis} />
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  <PropagationCell
+                    row={row}
+                    onOpen={(r, notes) =>
+                      setPropagationDialog({ row: r, notes })
+                    }
+                  />
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  <LastSeenCell value={row.last_seen_at} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <PropagationNotesDialog
+        state={propagationDialog}
+        onClose={() => setPropagationDialog(null)}
+      />
+    </>
+  );
+}
+
+// PropagationCell — event source tier slice 2 chunk 5 (v0.89.107,
+// #745 Stream 143). Mirrors the DiscoveryAWS.tsx variant. Three
+// states (undefined / true / false). Amber on ✗ matches slice 1
+// palette for "primitive on, config gap".
+function PropagationCell({
+  row,
+  onOpen,
+}: {
+  row: EventSourceRow;
+  onOpen: (row: EventSourceRow, notes: string[]) => void;
+}) {
+  if (row.has_propagation_config === undefined) {
+    return (
+      <span
+        aria-label="not evaluated"
+        title="Propagation not evaluated for this row"
+        data-testid="propagation-cell"
+        data-value="unknown"
+      >
+        —
+      </span>
+    );
+  }
+  if (row.has_propagation_config) {
+    return (
+      <span
+        className="text-emerald-600"
+        aria-label="propagation preserved"
+        title="Config preserves trace context end-to-end"
+        data-testid="propagation-cell"
+        data-value="yes"
+      >
+        ✓
+      </span>
+    );
+  }
+  const notes = row.propagation_notes ?? [];
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(row, notes)}
+      className="text-amber-500 hover:text-amber-600"
+      aria-label="propagation broken — click for details"
+      title={notes[0] ?? "Propagation broken"}
+      data-testid="propagation-cell"
+      data-value="no"
+    >
+      ✗
+    </button>
+  );
+}
+
+// PropagationNotesDialog — event source tier slice 2 chunk 5
+// (v0.89.107, #745 Stream 143). Side panel surfaced from the
+// Propagation column ✗ button. Lists every propagation_notes entry
+// for the row.
+function PropagationNotesDialog({
+  state,
+  onClose,
+}: {
+  state: { row: EventSourceRow; notes: string[] } | null;
+  onClose: () => void;
+}) {
+  const isOpen = state !== null;
+  return (
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent
+        className="max-w-lg"
+        data-testid="propagation-notes-dialog"
+      >
+        <DialogHeader>
+          <DialogTitle>Propagation notes</DialogTitle>
+          <DialogDescription>
+            {state
+              ? `${state.row.surface} · ${state.row.resource_name}`
+              : ""}
+          </DialogDescription>
+        </DialogHeader>
+        {state && state.notes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Propagation broken; no specific notes recorded for this row.
+          </p>
+        ) : null}
+        {state && state.notes.length > 0 ? (
+          <ul
+            className="space-y-2 text-sm"
+            data-testid="propagation-notes-list"
+          >
+            {state.notes.map((note, i) => (
+              <li
+                key={i}
+                className="rounded-md border border-amber-500/40 bg-amber-50/40 px-3 py-2 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200"
+              >
+                {note}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
