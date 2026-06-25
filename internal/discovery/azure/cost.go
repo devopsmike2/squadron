@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -237,45 +236,9 @@ func (s *Scanner) QueryCost(
 // float. Truncates beyond 6 decimal places. Mirrors the AWS
 // parseUSDToMicroUSD contract.
 func parseAzureCostToMicroUSD(s string) (scanner.MicroUSD, error) {
-	s = strings.TrimSpace(strings.Trim(s, `"`))
-	if s == "" {
-		return 0, fmt.Errorf("empty amount")
-	}
-	neg := false
-	if strings.HasPrefix(s, "-") {
-		neg = true
-		s = s[1:]
-	} else if strings.HasPrefix(s, "+") {
-		s = s[1:]
-	}
-	intPart := s
-	fracPart := ""
-	if dot := strings.IndexByte(s, '.'); dot >= 0 {
-		intPart = s[:dot]
-		fracPart = s[dot+1:]
-	}
-	if intPart == "" {
-		intPart = "0"
-	}
-	ip, err := strconv.ParseInt(intPart, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse integer part of %q: %w", s, err)
-	}
-	if len(fracPart) > 6 {
-		fracPart = fracPart[:6]
-	}
-	for len(fracPart) < 6 {
-		fracPart += "0"
-	}
-	fp, err := strconv.ParseInt(fracPart, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse fractional part of %q: %w", s, err)
-	}
-	micro := ip*scanner.MicroUSDPerDollar + fp
-	if neg {
-		micro = -micro
-	}
-	return micro, nil
+	// Delegates to the canonical shared parser (slice 6 chunk 5,
+	// v0.89.187). Kept as a named wrapper for the call site.
+	return scanner.ParseDecimalToMicroUSD(s)
 }
 
 // doARMPostJSON issues a bearer-authenticated POST with a JSON body

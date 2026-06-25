@@ -6,6 +6,9 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -240,4 +243,71 @@ func (g *CostBudgetGovernor) Ceiling() MicroUSD {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.ceiling
+}
+
+// ParseDecimalToMicroUSD parses a decimal money string (e.g.
+// "12.3456789") into integer micro-USD WITHOUT float, so money
+// accounting stays exact across the cost substrate. The canonical
+// parser shared by every per-cloud CostQuerier — provider readers
+// receive amounts as decimal strings (AWS Cost Explorer Amount, Azure
+// Cost Management cost cells) and convert through this one
+// implementation rather than copy-pasting the logic.
+//
+// Rules:
+//   - The fractional part is truncated to 6 digits (micro precision);
+//     a missing fractional part is treated as zero.
+//   - A leading "-" (or "+") is honored.
+//   - Surrounding whitespace and wrapping double-quotes (JSON number
+//     tokens arriving as raw bytes) are trimmed.
+//   - A non-numeric input returns an error so the caller can skip the
+//     value rather than record a bogus 0.
+//
+// Cost-correlation substrate slice 6 chunk 5 (v0.89.187) — extracted
+// from the per-cloud parsers (aws.parseUSDToMicroUSD,
+// azure.parseAzureCostToMicroUSD) so the correctness-critical money
+// conversion lives in exactly one place.
+func ParseDecimalToMicroUSD(s string) (MicroUSD, error) {
+	s = strings.TrimSpace(strings.Trim(strings.TrimSpace(s), `"`))
+	if s == "" {
+		return 0, fmt.Errorf("empty amount")
+	}
+	neg := false
+	switch {
+	case strings.HasPrefix(s, "-"):
+		neg = true
+		s = s[1:]
+	case strings.HasPrefix(s, "+"):
+		s = s[1:]
+	}
+
+	intPart := s
+	fracPart := ""
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		intPart = s[:dot]
+		fracPart = s[dot+1:]
+	}
+	if intPart == "" {
+		intPart = "0"
+	}
+	ip, err := strconv.ParseInt(intPart, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse integer part of %q: %w", s, err)
+	}
+
+	if len(fracPart) > 6 {
+		fracPart = fracPart[:6]
+	}
+	for len(fracPart) < 6 {
+		fracPart += "0"
+	}
+	fp, err := strconv.ParseInt(fracPart, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse fractional part of %q: %w", s, err)
+	}
+
+	micro := ip*MicroUSDPerDollar + fp
+	if neg {
+		micro = -micro
+	}
+	return micro, nil
 }

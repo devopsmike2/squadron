@@ -6,8 +6,6 @@ package aws
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -185,49 +183,10 @@ func (s *Scanner) QueryCost(
 // and the source Unit recorded, so a non-USD account's figure carries
 // its own currency label rather than a silently-wrong USD claim.
 func parseUSDToMicroUSD(s string) (scanner.MicroUSD, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, fmt.Errorf("empty amount")
-	}
-	neg := false
-	if strings.HasPrefix(s, "-") {
-		neg = true
-		s = s[1:]
-	} else if strings.HasPrefix(s, "+") {
-		s = s[1:]
-	}
-
-	intPart := s
-	fracPart := ""
-	if dot := strings.IndexByte(s, '.'); dot >= 0 {
-		intPart = s[:dot]
-		fracPart = s[dot+1:]
-	}
-	if intPart == "" {
-		intPart = "0"
-	}
-	ip, err := strconv.ParseInt(intPart, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse integer part of %q: %w", s, err)
-	}
-
-	// Normalize the fractional part to exactly 6 digits.
-	if len(fracPart) > 6 {
-		fracPart = fracPart[:6]
-	}
-	for len(fracPart) < 6 {
-		fracPart += "0"
-	}
-	fp, err := strconv.ParseInt(fracPart, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse fractional part of %q: %w", s, err)
-	}
-
-	micro := ip*scanner.MicroUSDPerDollar + fp
-	if neg {
-		micro = -micro
-	}
-	return micro, nil
+	// Delegates to the canonical shared parser (slice 6 chunk 5,
+	// v0.89.187). Kept as a named wrapper so the chunk-2 tests and
+	// call sites stay stable.
+	return scanner.ParseDecimalToMicroUSD(s)
 }
 
 // WithCostExplorerClient wires the Cost Explorer SDK client (or a test
