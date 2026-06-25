@@ -999,7 +999,17 @@ func providerFromRecommendationKind(kind string) string {
 		// Event Hubs / OCI Notification Service. The cloudtasks- prefix
 		// is positioned alongside pubsub- so the GCP event source family
 		// stays grouped.
-		strings.HasPrefix(kind, "cloudtasks-"):
+		strings.HasPrefix(kind, "cloudtasks-") ||
+		// Event source tier slice 10 chunk 2 (v0.89.160, #802 Stream 199)
+		// — GCP Pub/Sub Lite kinds (pubsublite-logging-enable,
+		// pubsublite-reservation-attach) route to GCP. CLOSES the
+		// cross-cloud event source widening pass at 3-3-3-3 / 12
+		// surfaces across 4 clouds. Pub/Sub Lite is GCP's
+		// partitioned-log primitive, the structural analog of AWS
+		// Kinesis Data Streams and Azure Event Hubs. The pubsublite-
+		// prefix is positioned alongside pubsub- + cloudtasks- so the
+		// GCP event source family stays grouped.
+		strings.HasPrefix(kind, "pubsublite-"):
 		return "gcp"
 	case strings.HasPrefix(kind, "vm-") || strings.HasPrefix(kind, "azsql-") || strings.HasPrefix(kind, "aks-") ||
 		strings.HasPrefix(kind, "azfunc-") ||

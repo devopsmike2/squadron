@@ -529,3 +529,83 @@ func PickQueuesLoggingPattern(row RecommendationContext) (terraform, reasoning s
 
 	return
 }
+
+// PickPubSubLiteLoggingPattern emits the Terraform snippet for a
+// pubsublite-logging-enable recommendation per event source tier
+// slice 10 chunk 2 (v0.89.160, #802 Stream 199). Configures a Cloud
+// Logging sink filtering on the topic's ID with destination defaulting
+// to a BigQuery dataset via var.pubsublite_logging_dataset_id.
+//
+// Slice 10 CLOSES the cross-cloud event source widening pass at
+// 3-3-3-3 / 12 surfaces. Pub/Sub Lite is GCP's partitioned-log
+// primitive analogous to AWS Kinesis + Azure Event Hubs.
+func PickPubSubLiteLoggingPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "google_logging_project_sink" "%s_lite_log_sink" {
+  name        = "pubsublite-${google_pubsub_lite_topic.%s.name}-audit"
+  destination = "bigquery.googleapis.com/projects/${var.project_id}/datasets/${var.pubsublite_logging_dataset_id}"
+
+  filter = <<-EOT
+    resource.type="pubsublite_topic"
+    resource.labels.topic_id="${google_pubsub_lite_topic.%s.name}"
+  EOT
+
+  unique_writer_identity = true
+}
+`, name, name, name)
+
+	reasoning = "Pub/Sub Lite topics without a Cloud Logging sink have no audit trail for publish failures, per-partition throughput exhaustion events, or reservation-related throttling — the failure modes unique to the Lite tier. Mirrors the slice 1 Pub/Sub pattern via the Cloud Logging sink primitive. The PR configures a google_logging_project_sink filtering on the topic's ID with destination defaulting to a BigQuery dataset (var.pubsublite_logging_dataset_id). Decline if your team routes Lite topic audit through a non-Cloud-Logging destination (Stackdriver custom exporter, third-party SIEM) — the verdict learning loop records."
+
+	return
+}
+
+// PickPubSubLiteReservationPattern emits the Terraform snippet for a
+// pubsublite-reservation-attach recommendation per event source tier
+// slice 10 chunk 2 (v0.89.160, #802 Stream 199). Creates a NEW
+// google_pubsub_lite_reservation resource AND updates the topic's
+// reservation_config.throughput_reservation reference.
+//
+// CRITICAL: this recommendation creates a BILLABLE RESOURCE. The
+// reasoning text emphasizes the cost implication so PR reviewers see
+// it explicitly. Default sizing is conservative (4 publish + subscribe
+// units) but the operator MUST validate against actual peak throughput
+// before merging. This is the FIRST recommendation in the event source
+// tier that creates a billable resource — prior kinds only configured
+// Logging sinks or attached to existing resources. The decline path is
+// load-bearing for operators who deliberately run below reservation
+// breakeven.
+func PickPubSubLiteReservationPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "google_pubsub_lite_reservation" "%s_reservation" {
+  name    = "${google_pubsub_lite_topic.%s.name}-reservation"
+  project = var.project_id
+  region  = var.lite_region  # operator provides; must match topic zone
+
+  # CONSERVATIVE DEFAULT: 4 publish + subscribe units. Operator MUST
+  # tune throughput_capacity to match ACTUAL peak before merging.
+  # Under-sized reservations re-create the throttling problem the
+  # recommendation is meant to solve.
+  throughput_capacity = 4
+}
+
+resource "google_pubsub_lite_topic" "%s" {
+  # ... existing fields ...
+
+  reservation_config {
+    throughput_reservation = google_pubsub_lite_reservation.%s_reservation.name
+  }
+}
+`, name, name, name, name)
+
+	reasoning = "Pub/Sub Lite topics without a reservation attached are throttled to the bare minimum publish + subscribe throughput per partition — typically becoming a silent bottleneck under peak load. This PR CREATES a NEW google_pubsub_lite_reservation resource AND updates the topic to reference it. BILLABLE: the reservation is operator-incurred cost. Default sizing is conservative (4 publish + subscribe units) but the operator MUST validate against ACTUAL peak throughput before merging — under-sized reservations re-create the throttling problem the recommendation solves. Decline if your team intentionally runs Lite topics at the minimum-throughput floor because the topic is below the per-zone reservation breakeven — the verdict learning loop records."
+
+	return
+}
