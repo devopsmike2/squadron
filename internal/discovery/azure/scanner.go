@@ -93,6 +93,15 @@ type Scanner struct {
 	// with the v0.89.113 surface.
 	accessToken string
 
+	// costGovernor caps cost-query usage and is the opt-in "cost
+	// correlation enabled" signal. Cost-correlation substrate slice 6
+	// chunk 4 (v0.89.186) — Azure Cost Management Query is free per
+	// call, but QueryCost still requires a governor (authorizing the
+	// $0 per-call cost) so cost correlation only runs when explicitly
+	// wired, never by default. See scanner.CostBudgetGovernor +
+	// azure/cost.go.
+	costGovernor *scanner.CostBudgetGovernor
+
 	// metricsLimiter is the per-Scanner-instance rate limiter the
 	// chunk-2 MetricQuerier implementation consults before every
 	// Azure Monitor /metrics call (v0.89.118). Caps the per-

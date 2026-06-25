@@ -227,6 +227,12 @@ func (s *Scanner) scanServiceBusForDispatcher(ctx context.Context, accessToken, 
 	// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
 	s.enrichServiceBusPoisonRatePerQueue(ctx, out, accessToken)
 
+	// Cost-correlation slice 6 chunk 4 (v0.89.186, #828 Stream 225) —
+	// attach Service Bus service cost to namespace snapshots. No-op
+	// unless a cost governor is wired (opt-in); one free Cost
+	// Management query per scan. See azure/cost.go.
+	s.enrichServiceBusCost(ctx, out, accessToken)
+
 	return out, nil
 }
 

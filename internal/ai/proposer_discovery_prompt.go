@@ -2819,7 +2819,8 @@ webhook prefix. Cold-start parity preserved.
 const costCorrelationSlice6KindsPromptSection = `COST CORRELATION (cost-correlation substrate slice 6, v0.89.185+):
 
 When the read-only cost substrate is wired, DLQ-bearing AWS SQS
-queue snapshots carry these Detail keys:
+queue snapshots AND Azure Service Bus namespace snapshots carry
+these Detail keys:
 
   - service_cost_monthly_micro_usd: the account's Amazon SQS spend
     over the trailing 30 days, in MICRO-USD (divide by 1,000,000 for
@@ -2843,8 +2844,8 @@ HOW TO SURFACE IT (honest framing, load-bearing):
   - When the keys are ABSENT (cost substrate not wired, over budget, or
     not measured), say nothing about cost — never guess a figure.
 
-Only AWS SQS carries cost keys today; other clouds' cost readers land
-in later chunks.
+AWS SQS and Azure Service Bus carry cost keys today (both at
+service level). GCP / OCI cost readers land in later chunks.
 
 ` + "\n"
 

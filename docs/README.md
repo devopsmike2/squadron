@@ -512,6 +512,17 @@ jump straight to that page.
   otherwise). The proposer prompt enforces service-level,
   non-editorializing reporting. Same design doc.
 
+  **Chunk 4 (v0.89.186) adds the Azure Service Bus cost reader** —
+  Azure Cost Management `/query` (free per call), governor-gated as
+  the opt-in signal, reusing the Azure bearer-token ARM plumbing
+  (no new SDK). One read-only POST per scan filtered to the Service
+  Bus ServiceName dimension; columns found by name (order-
+  independent); micro-USD parsing (no float; non-USD currency
+  preserved). Attaches `service_cost_*` to Service Bus namespace
+  snapshots, same honest service-level scope as AWS. Cost readers
+  now cover AWS SQS + Azure Service Bus; GCP (BigQuery export,
+  heavier) and OCI land later. Same design doc.
+
   **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
   attribution.** The `DeadletteredMessages` metric is split by
   the `EntityName` dimension (one Azure Monitor call,
