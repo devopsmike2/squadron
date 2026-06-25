@@ -1992,3 +1992,68 @@ only).
 
 Cross-reference:
 [Consumer lag detection slice 2 design doc](./proposals/consumer-lag-detection-slice2.md).
+
+
+## Poison-Message Rate Analysis SHIPPED in v0.89.172-176 — Queue tier per-axis depth slice 3 (post-consumer-lag)
+
+THIRD per-axis-depth slice. Identical 4-chunk + design-doc
+shape to DLQ slice 1 (v0.89.162-166) and consumer lag slice
+2 (v0.89.167-171). Closes at v0.89.176 with the OCI Queue
+Service chunk (CLOSES SLICE 3 ARC).
+
+Poison-message RATE is the leading-indicator axis that sits
+between the structural DLQ-presence axis (slice 1: does a
+DLQ exist?) and the temporal consumer-lag axis (slice 2: is
+the consumer keeping up?). A spiking poison-message rate
+signals schema drift, a downstream dependency outage, or a
+code regression on a single message shape — high rates burn
+consumer-side processing budget before messages reach the
+DLQ.
+
+Detection axis (2 additive Detail keys per surface):
+`poison_rate_per_hour` + `poison_rate_high_band`. Across
+ALL FOUR clouds these are hard-coded to the absent state
+(`poison_rate_per_hour=-1`, `poison_rate_high_band=false`)
+under §3.3 substrate-metric-dependence honest framing —
+the per-queue poison rate requires a time-series metric
+delta the single-pass scanner does not query:
+
+- AWS SQS: DLQ `ApproximateNumberOfMessages` delta via
+  CloudWatch GetMetricStatistics.
+- GCP Cloud Tasks:
+  `cloudtasks.googleapis.com/queue/task_attempt_count` via
+  Cloud Monitoring.
+- Azure Service Bus: `DeadletteredMessages` delta via Azure
+  Monitor metrics.
+- OCI Queue Service: dead-letter delivery delta via OCI
+  Monitoring SummarizeMetricsData.
+
+Recommendation kinds (4 total — one per cloud, identical
+shape, all §3.3 honest framing):
+`sqs-poison-rate-monitor-add`,
+`cloudtasks-poison-rate-monitor-add`,
+`servicebus-poison-rate-monitor-add`,
+`queues-poison-rate-monitor-add`. Each ALWAYS fires with
+reasoning text explicitly calling out that Squadron cannot
+yet compute the rate from the scanner pass — the generated
+Terraform alarm (threshold 60/hour, 5-minute window) is the
+operator's load-bearing surrogate until the substrate
+MetricQuerier integration lands. All routed via existing
+per-cloud webhook prefixes (`sqs-`, `cloudtasks-`,
+`servicebus-`, `queues-`) — NO new prefix routing.
+
+§3.3 is the FIFTH application of the honest-framing taxonomy
+and the FIRST where a single variant covers all four clouds
+(slices 1 + 2 mixed §3.1 + §3.2 across clouds; slice 3 is
+uniform §3.3). This makes §3.3 the cleanest deferral to
+close: a future substrate MetricQuerier slice retires ALL
+FOUR clouds' deferrals at once, mirroring how the cold-start
+latency slice 1 -> slice 2 arc built the per-cloud
+MetricQuerier. That unified MetricQuerier integration is the
+recommended next arc.
+
+NO new API calls. NO IAM extension. NO storage migration.
+Cold-start parity preserved (additive Detail bag keys only).
+
+Cross-reference:
+[Poison-message rate analysis slice 3 design doc](./proposals/poison-message-rate-slice3.md).

@@ -327,6 +327,18 @@ func (s *Scanner) projectOCIQueue(ctx context.Context, sk *SigningKey, queue oci
 	// lag axis keys see byte-identical output to v0.89.170.
 	applyOCIQueueLagDetail(&snap, queue)
 
+	// Poison-message rate analysis slice 3 chunk 4 (v0.89.176,
+	// #818 Stream 215) — adds the two OCI Queue Service poison-rate
+	// axis Detail keys (poison_rate_per_hour, poison_rate_high_band)
+	// per docs/proposals/poison-message-rate-slice3.md §3.3. §3.3
+	// honest framing: both keys hard-coded to absent state until a
+	// future slice integrates the OCI Monitoring substrate. ADDITIVE
+	// only — none of the slice-9 + slice-1-DLQ + slice-2-lag keys
+	// above are modified here, so callers that have not yet adopted
+	// the poison-rate axis keys see byte-identical output to
+	// v0.89.175.
+	applyOCIQueuePoisonRateDetail(&snap, queue)
+
 	return snap
 }
 
