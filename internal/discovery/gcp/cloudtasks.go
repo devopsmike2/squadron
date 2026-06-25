@@ -450,6 +450,17 @@ func buildCloudTasksSnapshot(accountID, region string, q *cloudTasksQueue) scann
 	if len(detail) > 0 {
 		snap.Detail = detail
 	}
+
+	// DLQ configuration analysis slice 1 chunk 2 (v0.89.164, #806
+	// Stream 203) — adds the three Cloud Tasks DLQ axis Detail keys
+	// (has_dlq_pattern_likely, dlq_retry_count,
+	// dlq_retry_count_in_band) per
+	// docs/proposals/dlq-configuration-analysis-slice1.md §3.1.
+	// ADDITIVE only — none of the slice-5 keys above are modified
+	// here, so callers that have not yet adopted the DLQ axis keys
+	// see byte-identical output to v0.89.163.
+	applyCloudTasksDLQDetail(&snap, q)
+
 	return snap
 }
 
