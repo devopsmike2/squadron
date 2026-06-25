@@ -230,6 +230,31 @@ jump straight to that page.
   v0.89.154.** Cross-cloud count after slice 8: **3-2-3-2 /
   10 surfaces across 4 clouds** — Azure now matches AWS at
   3 surfaces.
+  **Slice 9 (v0.89.155-v0.89.157)** brings OCI to parity
+  with AWS + Azure on the event source tier by adding Queue
+  Service as the third OCI surface alongside Streaming and
+  Notification Service. OCI Queue Service is the
+  transactional FIFO message queue primitive analogous to
+  AWS SQS — distinct from ONS pub/sub fan-out (one consumer
+  per message vs. many-consumer fan-out) and from Streaming
+  partitioned log analytics intake. 1 new recommendation
+  kind: `queues-logging-enable` (Terraform: `oci_logging_log`
+  routing queue delivery events to a log group via
+  `var.default_log_group_id`) mirrors the slice 1 Streaming
+  `streaming-logging-enable` and slice 7 ONS
+  `ons-logging-enable` patterns through the same OCI Logging
+  `/logs` detection helper structure. 1 new webhook prefix:
+  `queues-` → oci. `ScanEventSources` dispatcher extends
+  from two-way (Streaming + Notifications) to three-way
+  (Streaming + Notifications + Queues) with combinatorial
+  partial-scan posture mirroring the slice 8 Azure three-way
+  pattern. IAM extension: `read queues in compartment` added
+  to the OCI scanner policy template; existing slice 1
+  Logging read policy covers the per-queue detection call.
+  **Slice 9 SHIPPED in v0.89.157.** Cross-cloud count after
+  slice 9: **3-2-3-3 / 11 surfaces across 4 clouds** — only
+  GCP at 2 surfaces remains for slice 10+ to close the
+  widening pass at 3-3-3-3 / 12 surfaces.
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

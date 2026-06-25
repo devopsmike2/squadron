@@ -1049,7 +1049,14 @@ func providerFromRecommendationKind(kind string) string {
 		// Notification Service). The ons- prefix is positioned
 		// alongside streaming- so the OCI event-source family stays
 		// grouped.
-		strings.HasPrefix(kind, "ons-"):
+		strings.HasPrefix(kind, "ons-") ||
+		// Event source tier slice 9 chunk 2 (v0.89.157, #799 Stream 196)
+		// — OCI Queue Service kinds (queues-logging-enable) route to
+		// OCI. Brings OCI to parity with AWS + Azure at 3 event source
+		// surfaces (Streaming + Notification Service + Queue Service).
+		// Cross-cloud count after slice 9: 3-2-3-3 / 11 surfaces; only
+		// GCP at 2 surfaces remains for slice 10+ to close at 3-3-3-3.
+		strings.HasPrefix(kind, "queues-"):
 		return "oci"
 	default:
 		return "aws"

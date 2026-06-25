@@ -474,3 +474,58 @@ func PickEventHubsCapturePattern(row RecommendationContext) (terraform, reasonin
 
 	return
 }
+
+// PickQueuesLoggingPattern emits the Terraform snippet for a
+// queues-logging-enable recommendation per event source tier slice 9
+// chunk 2 (v0.89.157, #799 Stream 196). Configures an OCI Logging
+// service log routing the queue's delivery events to a log group per
+// §8 of docs/proposals/event-source-tier-slice9.md.
+//
+// Slice 9 brings OCI to parity with AWS + Azure at 3 event source
+// surfaces (Streaming + Notification Service + Queue Service). The
+// Logging axis on Queue Service mirrors the slice 1 Streaming
+// streaming-logging-enable and slice 7 ONS ons-logging-enable
+// patterns exactly — same oci_logging_log resource shape, same
+// configuration block. The only differences are service = "queue"
+// and the resource type reference points at oci_queue_queue.
+//
+// row.ResourceTFName is the best-effort Terraform resource name the
+// proposer extracted from the operator's repo. When empty, the
+// snippet falls back to "<name>" so the operator can substitute the
+// real queue name during review.
+//
+// The log_group_id reference is var.default_log_group_id —
+// operator's existing log group is reused when set; when unset, the
+// operator extends var declarations during PR review. This keeps the
+// emitted Terraform compatible with operators who manage the log
+// group destination outside Squadron's PR scope.
+func PickQueuesLoggingPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "oci_logging_log" "%s_queue_log" {
+  display_name = "${oci_queue_queue.%s.display_name}-delivery-log"
+  log_group_id = var.default_log_group_id  # operator provides
+  log_type     = "SERVICE"
+
+  configuration {
+    source {
+      category    = "all"
+      resource    = oci_queue_queue.%s.id
+      service     = "queue"
+      source_type = "OCISERVICE"
+    }
+    compartment_id = oci_queue_queue.%s.compartment_id
+  }
+
+  is_enabled         = true
+  retention_duration = 30  # operator may tune
+}
+`, name, name, name, name)
+
+	reasoning = "OCI Queues without OCI Logging configured have no audit trail for which messages were dequeued, processed, or sent to the DLQ — critical for postmortem analysis of consumer-side failures and poison-message investigation. When a message lands in the DLQ at 2am the operator has no record of which consumer attempted it — only that the DLQ count incremented. Mirrors the slice 1 streaming-logging-enable and slice 7 ons-logging-enable patterns. The PR configures an oci_logging_log routing queue delivery events to var.default_log_group_id; operators using a different log group can swap the variable. Decline if your team routes queue audit through a non-OCI-Logging destination (Cloud Guard custom recipe, OCI Streaming capture, third-party SIEM connector) — the verdict learning loop records."
+
+	return
+}
