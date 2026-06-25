@@ -18,6 +18,7 @@
 //     ./base helpers.
 
 import { apiDelete, apiGet, apiPost } from "./base";
+import type { EventSourceRow } from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -26,6 +27,8 @@ import { apiDelete, apiGet, apiPost } from "./base";
 // includes the sealed credential blob — operators see "this project
 // is connected"; they cannot read back the SA key material from the
 // UI. Mirrors the AWS CloudConnection posture.
+export type { EventSourceRow };
+
 export interface GCPConnection {
   id: string;
   display_name: string;
@@ -169,11 +172,11 @@ export interface DatabaseInstanceSnapshot {
   provider?: string;
 
   performance_insights_enabled?: boolean; // AWS RDS (slice 1)
-  enhanced_monitoring_enabled?: boolean;  // AWS RDS (slice 1)
+  enhanced_monitoring_enabled?: boolean; // AWS RDS (slice 1)
 
-  query_insights_enabled?: boolean;       // GCP Cloud SQL (slice 2)
-  sql_insights_diag_enabled?: boolean;    // Azure SQL (slice 2)
-  database_management_enabled?: boolean;  // OCI DB (slice 2)
+  query_insights_enabled?: boolean; // GCP Cloud SQL (slice 2)
+  sql_insights_diag_enabled?: boolean; // Azure SQL (slice 2)
+  database_management_enabled?: boolean; // OCI DB (slice 2)
 
   // last_seen_at — v0.89.77 trace integration slice 1 chunk 4.
   last_seen_at?: string;
@@ -207,9 +210,9 @@ export interface ClusterSnapshot {
   fargate_profile_count?: number;
 
   // Slice 2 per-cloud managed-observability axes.
-  managed_prometheus_enabled?: boolean;     // GCP GKE
-  azure_monitor_enabled?: boolean;          // Azure AKS
-  operations_insights_enabled?: boolean;    // OCI OKE
+  managed_prometheus_enabled?: boolean; // GCP GKE
+  azure_monitor_enabled?: boolean; // Azure AKS
+  operations_insights_enabled?: boolean; // OCI OKE
 
   // last_seen_at — v0.89.77 trace integration slice 1 chunk 4.
   last_seen_at?: string;
@@ -254,6 +257,11 @@ export interface ServerlessRow {
   // covers all 5 serverless surfaces).
   sampling_ratio?: number | null;
   sampling_exceeds_floor?: boolean | null;
+  // current_error_rate + error_rate_exceeds_threshold — Error rate
+  // correlation slice 1 chunk 3 (v0.89.129). See discovery.ts
+  // ServerlessRow godoc; all 5 serverless surfaces participate.
+  current_error_rate?: number | null;
+  error_rate_exceeds_threshold?: boolean | null;
   detail?: Record<string, unknown>;
 }
 
@@ -316,6 +324,11 @@ export interface ScanGCPResponse {
   // JSON tag); the Inventory tab's Orchestration sub-tab treats
   // undefined as empty.
   orchestrations?: OrchestrationRow[];
+  // event_sources — event-source tier inventory (SNS / SQS / Cloud
+  // Tasks / Service Bus / Queues / etc.) from the per-cloud
+  // event-source scanner. Optional on the wire; the Inventory tab's
+  // Event Sources sub-tab treats undefined as empty.
+  event_sources?: EventSourceRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;

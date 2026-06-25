@@ -300,7 +300,9 @@ export default function RolloutsPage() {
   // from listing every config in the deployment unnecessarily.
   // revalidateOnFocus stays default-on: configs can be created in
   // another tab and the operator should see them on tab refocus.
-  const configsKey = form.group_id ? ["configs-for-group", form.group_id] : null;
+  const configsKey = form.group_id
+    ? ["configs-for-group", form.group_id]
+    : null;
   const { data: configsResp, isLoading: configsLoading } = useSWR(
     configsKey,
     () => getConfigs({ group_id: form.group_id }),
@@ -496,7 +498,9 @@ export default function RolloutsPage() {
       setPendingDecision(null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "request failed";
-      setPendingDecision((s) => (s ? { ...s, submitting: false, error: msg } : s));
+      setPendingDecision((s) =>
+        s ? { ...s, submitting: false, error: msg } : s,
+      );
     }
   };
 
@@ -1541,10 +1545,7 @@ function RolloutCard({
                   occasional operator who wants the canonical
                   identifier. */}
               {" · "}target config{" "}
-              <span
-                className="font-mono"
-                title={r.target_config_id}
-              >
+              <span className="font-mono" title={r.target_config_id}>
                 {configLabel(r.target_config_id)}
               </span>
               {" · "}stage {r.current_stage + 1} of {totalStages}

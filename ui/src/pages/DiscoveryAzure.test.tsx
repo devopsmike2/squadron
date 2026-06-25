@@ -177,9 +177,7 @@ describe("DiscoveryAzure", () => {
     // Invalid tenant ID (non-UUID) — Next stays disabled and the
     // inline error message renders.
     fireEvent.change(tenantInput, { target: { value: "not-a-uuid" } });
-    expect(
-      screen.getByText(/Tenant IDs must be a UUID/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Tenant IDs must be a UUID/i)).toBeInTheDocument();
     const nextBtn = screen.getByRole("button", { name: /^Next$/i });
     expect(nextBtn).toBeDisabled();
 
@@ -245,9 +243,7 @@ describe("DiscoveryAzure", () => {
     // Paste a malformed client_id — inline error renders.
     const clientIDInput = screen.getByLabelText(/Client ID/i);
     fireEvent.change(clientIDInput, { target: { value: "not-a-uuid" } });
-    expect(
-      screen.getByText(/Client IDs must be a UUID/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Client IDs must be a UUID/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
 
     // Fix the client_id but leave the secret empty — ack still
@@ -474,9 +470,7 @@ describe("DiscoveryAzure", () => {
       expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
     });
 
-    await user.click(
-      screen.getByRole("tab", { name: /Recommendations/i }),
-    );
+    await user.click(screen.getByRole("tab", { name: /Recommendations/i }));
     await waitFor(() => {
       expect(
         screen.getByText(/ships in chunk 5 of this arc/i),
@@ -492,7 +486,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       databases: [
@@ -562,7 +559,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -605,7 +605,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       clusters: [
@@ -675,7 +678,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -706,7 +712,9 @@ describe("DiscoveryAzure", () => {
     const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
     await user.click(kubernetesTab);
     expect(
-      screen.getByText(/No Kubernetes clusters discovered\. Run a scan to refresh\./i),
+      screen.getByText(
+        /No Kubernetes clusters discovered\. Run a scan to refresh\./i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -717,7 +725,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -772,7 +783,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -803,7 +817,9 @@ describe("DiscoveryAzure", () => {
     const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
     await user.click(serverlessTab);
     expect(
-      screen.getByText(/No serverless functions discovered\. Run a scan to refresh\./i),
+      screen.getByText(
+        /No serverless functions discovered\. Run a scan to refresh\./i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -817,7 +833,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -875,7 +894,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -938,7 +960,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -993,7 +1018,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1056,7 +1084,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1106,7 +1137,10 @@ describe("DiscoveryAzure", () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
-    mockedValidateAzureConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1179,9 +1213,7 @@ describe("DiscoveryAzure", () => {
     // "Create the Service Principal", so we anchor on the command
     // body text rather than the heading copy.
     await waitFor(() => {
-      expect(
-        screen.getByText(/az ad sp create-for-rbac/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/az ad sp create-for-rbac/i)).toBeInTheDocument();
     });
   }
 
@@ -1242,9 +1274,7 @@ describe("DiscoveryAzure", () => {
     });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
-      compute: [
-        { ...sampleScan.compute[0], last_seen_at: twoHoursAgo },
-      ],
+      compute: [{ ...sampleScan.compute[0], last_seen_at: twoHoursAgo }],
       instrumented_count: 1,
       uninstrumented_count: 0,
     });
@@ -1286,9 +1316,7 @@ describe("DiscoveryAzure", () => {
     });
     mockedScanAzureConnection.mockResolvedValue({
       ...sampleScan,
-      compute: [
-        { ...sampleScan.compute[0], last_seen_at: undefined },
-      ],
+      compute: [{ ...sampleScan.compute[0], last_seen_at: undefined }],
       instrumented_count: 1,
       uninstrumented_count: 0,
     });
@@ -1315,7 +1343,9 @@ describe("DiscoveryAzure", () => {
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
     await waitFor(() => {
-      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(0);
+      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(
+        0,
+      );
     });
   });
 });

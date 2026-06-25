@@ -329,7 +329,8 @@ function AzureWizard({ onComplete }: AzureWizardProps) {
     location.trim() === "" || AZURE_LOCATION_REGEX.test(location.trim());
 
   // Step-3 field validation.
-  const clientIDValid = clientID !== "" && AZURE_UUID_REGEX.test(clientID.trim());
+  const clientIDValid =
+    clientID !== "" && AZURE_UUID_REGEX.test(clientID.trim());
   const clientSecretValid = clientSecret.trim() !== "";
 
   // Next-enablement matrix per step. Mirrors the GCP / IaCGitHubWizard
@@ -339,7 +340,10 @@ function AzureWizard({ onComplete }: AzureWizardProps) {
   switch (currentStepID) {
     case AZURE_STEP_SUBSCRIPTION:
       nextEnabled =
-        displayNameValid && tenantIDValid && subscriptionIDValid && locationValid;
+        displayNameValid &&
+        tenantIDValid &&
+        subscriptionIDValid &&
+        locationValid;
       break;
     case AZURE_STEP_SERVICE_PRINCIPAL:
       // The SP-create step is read-only instructions — Next is
@@ -611,8 +615,8 @@ function SubscriptionStep({
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Tell Squadron which Azure subscription to scan. We&apos;ll never write
-        to it — the Reader role is the only RBAC role we&apos;ll ask the
-        Service Principal to carry.
+        to it — the Reader role is the only RBAC role we&apos;ll ask the Service
+        Principal to carry.
       </p>
 
       <div className="space-y-2">
@@ -663,8 +667,8 @@ function SubscriptionStep({
         />
         {subscriptionID !== "" && !subscriptionIDValid && (
           <p className="text-xs text-destructive">
-            Subscription IDs must be a UUID (8-4-4-4-12 hex with hyphens).
-            Find the value in the Azure portal under Subscriptions.
+            Subscription IDs must be a UUID (8-4-4-4-12 hex with hyphens). Find
+            the value in the Azure portal under Subscriptions.
           </p>
         )}
         {subscriptionID === "" && (
@@ -712,8 +716,8 @@ function SubscriptionStep({
             Squadron walks your Azure Virtual Machines inventory and flags
             instances that lack the OpenTelemetry tag heuristic the proposer
             reads. The connection here is the credential + scope tuple Squadron
-            uses to call the Azure Resource Manager API — nothing else. You
-            can disconnect at any time; the sealed Service Principal secret is
+            uses to call the Azure Resource Manager API — nothing else. You can
+            disconnect at any time; the sealed Service Principal secret is
             removed from the credstore on delete.
           </p>
           <p className="mt-2">
@@ -750,9 +754,9 @@ function ServicePrincipalStep({
       <p className="text-sm text-muted-foreground">
         Run this <code>az</code> CLI command in a shell where you&apos;re
         authenticated as a subscription owner. It creates a Service Principal
-        named &quot;Squadron Discovery&quot; with the Reader role scoped to
-        your subscription. Squadron never asks for anything more permissive
-        than read.
+        named &quot;Squadron Discovery&quot; with the Reader role scoped to your
+        subscription. Squadron never asks for anything more permissive than
+        read.
       </p>
       <CommandBlock
         label="Create the Service Principal"
@@ -852,8 +856,8 @@ function CredentialsStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Paste the <code>appId</code> and <code>password</code> values from
-        Step 2&apos;s <code>az ad sp create-for-rbac</code> output.
+        Paste the <code>appId</code> and <code>password</code> values from Step
+        2&apos;s <code>az ad sp create-for-rbac</code> output.
       </p>
 
       <div className="space-y-2">
@@ -870,7 +874,8 @@ function CredentialsStep({
         {clientID !== "" && !clientIDValid && (
           <p className="text-xs text-destructive">
             Client IDs must be a UUID (8-4-4-4-12 hex with hyphens). Paste the
-            <code> appId</code> field from the <code>az ad sp create-for-rbac</code>
+            <code> appId</code> field from the{" "}
+            <code>az ad sp create-for-rbac</code>
             output, not the display name.
           </p>
         )}
@@ -902,8 +907,8 @@ function CredentialsStep({
           data-1p-ignore
         />
         <p className="text-xs text-muted-foreground">
-          The secret stays in browser memory until the wizard completes — it
-          is base64-encoded over the wire and sealed at rest by Squadron.
+          The secret stays in browser memory until the wizard completes — it is
+          base64-encoded over the wire and sealed at rest by Squadron.
         </p>
       </div>
 
@@ -918,8 +923,8 @@ function CredentialsStep({
           htmlFor="azure-secret-ack"
           className="text-xs font-normal leading-tight text-muted-foreground"
         >
-          I have stored this secret securely. Squadron seals it at rest, but
-          the bytes are visible during paste.
+          I have stored this secret securely. Squadron seals it at rest, but the
+          bytes are visible during paste.
         </Label>
       </div>
     </div>
@@ -981,9 +986,7 @@ function ValidateStep({
               Connected — {result.instance_count ?? 0} virtual machines visible.
             </span>
           </div>
-          <p className="mt-1 text-xs">
-            Click Next to run a full scan.
-          </p>
+          <p className="mt-1 text-xs">Click Next to run a full scan.</p>
         </div>
       )}
 
@@ -996,9 +999,7 @@ function ValidateStep({
             <AlertTriangle className="h-4 w-4" aria-hidden />
             <span>Validation failed</span>
           </div>
-          {result.message && (
-            <p className="mt-1 text-xs">{result.message}</p>
-          )}
+          {result.message && <p className="mt-1 text-xs">{result.message}</p>}
           <p className="mt-2 text-xs">
             {validateErrorRemediation(
               result.error_kind as AzureValidateErrorKind,
@@ -1030,9 +1031,9 @@ function ScanStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Walk Virtual Machines across the configured location and inventory
-        every VM. Single-location per slice-1 — this can take a minute or two
-        on large subscriptions.
+        Walk Virtual Machines across the configured location and inventory every
+        VM. Single-location per slice-1 — this can take a minute or two on large
+        subscriptions.
       </p>
       <Button type="button" onClick={onScan} disabled={submitting}>
         {submitting ? (
@@ -1182,8 +1183,7 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
     return (
       <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
         Scan completed but no virtual machines were returned. Either the
-        subscription is empty or the scan was scoped to a location with no
-        VMs.
+        subscription is empty or the scan was scoped to a location with no VMs.
       </div>
     );
   }
@@ -1243,7 +1243,11 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
 // sql_insights_diag_enabled (the Azure single-axis observability
 // lever); rows where the field is undefined render "No" because
 // absence is the uncovered signal per design doc §3.2.
-function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) {
+function DatabaseInventoryTable({
+  rows,
+}: {
+  rows: DatabaseInstanceSnapshot[];
+}) {
   if (rows.length === 0) {
     return (
       <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
@@ -1339,7 +1343,9 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
             <tr key={row.resource_id} className="border-t">
               <td className="px-3 py-2 font-mono text-xs">{row.resource_id}</td>
               <td className="px-3 py-2 text-xs">{row.name || "-"}</td>
-              <td className="px-3 py-2 text-xs">{row.kubernetes_version || "-"}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.kubernetes_version || "-"}
+              </td>
               <td className="px-3 py-2 text-xs">{row.status || "-"}</td>
               <td className="px-3 py-2 text-xs">
                 {row.azure_monitor_enabled ? (
@@ -1690,9 +1696,7 @@ function PropagationNotesDialog({
         <DialogHeader>
           <DialogTitle>Propagation notes</DialogTitle>
           <DialogDescription>
-            {state
-              ? `${state.row.surface} · ${state.row.resource_name}`
-              : ""}
+            {state ? `${state.row.surface} · ${state.row.resource_name}` : ""}
           </DialogDescription>
         </DialogHeader>
         {state && state.notes.length === 0 ? (
@@ -1757,9 +1761,10 @@ function RecommendationsTab() {
         this arc.
       </p>
       <p className="mt-2 text-xs">
-        Chunk 5 extends the discovery proposer with the Provider=&quot;azure&quot;
-        path and the vm-otel-tag recommendation kind, then wires this tab to
-        the same generate-recommendations flow the AWS / GCP pages use.
+        Chunk 5 extends the discovery proposer with the
+        Provider=&quot;azure&quot; path and the vm-otel-tag recommendation kind,
+        then wires this tab to the same generate-recommendations flow the AWS /
+        GCP pages use.
       </p>
     </div>
   );

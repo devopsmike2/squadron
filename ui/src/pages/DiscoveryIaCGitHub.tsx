@@ -26,7 +26,13 @@
 //   - On dialog close the query params are stripped via replaceState
 //     so the back button doesn't re-trigger the wizard.
 
-import { AlertTriangle, ExternalLink, Github, Sparkles, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  ExternalLink,
+  Github,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
@@ -341,8 +347,8 @@ export default function DiscoveryIaCGitHubPage() {
           <DialogHeader>
             <DialogTitle>Delete IaC connection</DialogTitle>
             <DialogDescription>
-              This removes the connection and its stored token. Open-PR
-              actions for{" "}
+              This removes the connection and its stored token. Open-PR actions
+              for{" "}
               <code className="rounded bg-muted px-1 py-0.5 text-xs">
                 {deleting?.repo_full_name}
               </code>{" "}
@@ -473,9 +479,9 @@ function EmptyState() {
             className="mr-1 inline-block h-3 w-3 text-violet-500"
             aria-hidden
           />
-          Squadron opens pull requests against your repo&apos;s branches —
-          never your default branch. Your branch protection and CI stay
-          in charge of merges and applies.
+          Squadron opens pull requests against your repo&apos;s branches — never
+          your default branch. Your branch protection and CI stay in charge of
+          merges and applies.
         </div>
       </CardContent>
     </Card>

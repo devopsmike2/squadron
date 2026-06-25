@@ -22,7 +22,15 @@
 // step. The shell maps step IDs to indices once on render — no
 // imperative navigation logic in the call site.
 
-import { CheckCircle2, ChevronLeft, Copy, ExternalLink, HelpCircle, Loader2, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronLeft,
+  Copy,
+  ExternalLink,
+  HelpCircle,
+  Loader2,
+  XCircle,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "../ui/button";
@@ -44,7 +52,6 @@ import {
   AWS_TRUST_POLICY_TEMPLATE,
 } from "@/data/awsWizard";
 import { cn } from "@/lib/utils";
-
 
 export interface ConnectorWizardProps {
   wizard: ConnectorWizardDef;
@@ -133,9 +140,10 @@ export function renderTrustPolicy(
     principalOverride && PRINCIPAL_OVERRIDE_RE.test(principalOverride)
       ? principalOverride
       : defaultPrincipal;
-  return AWS_TRUST_POLICY_TEMPLATE
-    .replace("<PRINCIPAL-PLACEHOLDER>", principal)
-    .replace("<UUID-PLACEHOLDER>", externalId);
+  return AWS_TRUST_POLICY_TEMPLATE.replace(
+    "<PRINCIPAL-PLACEHOLDER>",
+    principal,
+  ).replace("<UUID-PLACEHOLDER>", externalId);
 }
 
 // effectiveExternalId returns the override when present and well-formed,
@@ -185,13 +193,14 @@ export function ConnectorWizard({
   const [stepIndex, setStepIndex] = useState(0);
   const [draft, setDraft] = useState<WizardDraft>({ regions: ["us-east-1"] });
   const [externalId, setExternalId] = useState<string>("");
-  const [validationResult, setValidationResult] = useState<ValidationResult | null>(
-    null,
-  );
+  const [validationResult, setValidationResult] =
+    useState<ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [savedConnectionId, setSavedConnectionId] = useState<string | null>(null);
+  const [savedConnectionId, setSavedConnectionId] = useState<string | null>(
+    null,
+  );
   const [whyOpen, setWhyOpen] = useState<Record<string, boolean>>({});
 
   // Generate the ExternalId once when the wizard mounts. The
@@ -217,7 +226,10 @@ export function ConnectorWizard({
   // well-formed; otherwise falls back to the auto-generated UUID. We
   // compute this once per render so the trust-policy display, the
   // validate payload, and the save payload all use the same value.
-  const liveExternalId = effectiveExternalId(externalId, draft.external_id_override);
+  const liveExternalId = effectiveExternalId(
+    externalId,
+    draft.external_id_override,
+  );
 
   // showPrincipalOverride and showExternalIdResume toggle the two
   // always-visible affordance rows under the trust-policy JSON.
@@ -246,9 +258,13 @@ export function ConnectorWizard({
 
   // Per-step input value. fill_field steps read/write via the draft's
   // field key; non-input steps return "".
-  const fieldKey = step.action.kind === "fill_field" ? fieldFromPayload(step.action.payload) : "";
+  const fieldKey =
+    step.action.kind === "fill_field"
+      ? fieldFromPayload(step.action.payload)
+      : "";
   const currentValue = fieldKey
-    ? ((draft as Record<string, unknown>)[fieldKey] as string | undefined) ?? ""
+    ? (((draft as Record<string, unknown>)[fieldKey] as string | undefined) ??
+      "")
     : "";
 
   const inlineValid = validateInline(step, currentValue);
@@ -264,7 +280,10 @@ export function ConnectorWizard({
   let nextEnabled = false;
   if (step.action.kind === "fill_field") {
     nextEnabled = inlineValid;
-  } else if (step.action.kind === "copy_value" || step.action.kind === "deep_link") {
+  } else if (
+    step.action.kind === "copy_value" ||
+    step.action.kind === "deep_link"
+  ) {
     nextEnabled = true;
   } else if (step.action.kind === "test_connection") {
     nextEnabled = !!validationResult?.assume_role_ok;
@@ -272,15 +291,12 @@ export function ConnectorWizard({
 
   const isLastStep = stepIndex === stepCount - 1;
 
-  const handleFieldChange = useCallback(
-    (key: string, value: string) => {
-      setDraft((d) => ({ ...d, [key]: value }));
-      // Any draft edit invalidates the prior validation — the
-      // operator must re-run the probe before saving.
-      setValidationResult(null);
-    },
-    [],
-  );
+  const handleFieldChange = useCallback((key: string, value: string) => {
+    setDraft((d) => ({ ...d, [key]: value }));
+    // Any draft edit invalidates the prior validation — the
+    // operator must re-run the probe before saving.
+    setValidationResult(null);
+  }, []);
 
   const handleNext = useCallback(() => {
     if (!nextEnabled) return;
@@ -359,7 +375,9 @@ export function ConnectorWizard({
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
           Squadron will scan account{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">{savedConnectionId}</code>{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">
+            {savedConnectionId}
+          </code>{" "}
           on the next scheduled run. You can trigger an ad-hoc scan from the
           inventory tab.
         </p>
@@ -399,7 +417,9 @@ export function ConnectorWizard({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold">{step.title}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{step.description}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {step.description}
+            </p>
           </div>
           <Button
             type="button"
@@ -441,12 +461,15 @@ export function ConnectorWizard({
                   render and the validate/save payload. See #622. */}
               {resumeMode && stepIndex === 0 && (
                 <div className="space-y-1 rounded-md border bg-muted/30 p-3">
-                  <label className="text-xs font-semibold" htmlFor="resume-external-id">
+                  <label
+                    className="text-xs font-semibold"
+                    htmlFor="resume-external-id"
+                  >
                     Existing ExternalId (optional)
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    Paste the UUID you previously configured in AWS.
-                    Leave empty to generate a fresh one.
+                    Paste the UUID you previously configured in AWS. Leave empty
+                    to generate a fresh one.
                   </p>
                   <Input
                     id="resume-external-id"
@@ -462,10 +485,12 @@ export function ConnectorWizard({
                     }
                   />
                   {draft.external_id_override &&
-                    !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override) && (
+                    !EXTERNAL_ID_OVERRIDE_RE.test(
+                      draft.external_id_override,
+                    ) && (
                       <p className="text-xs text-destructive">
-                        Must be a lowercase UUID v4 shape. Reverting to
-                        the auto-generated ExternalId until valid.
+                        Must be a lowercase UUID v4 shape. Reverting to the
+                        auto-generated ExternalId until valid.
                       </p>
                     )}
                 </div>
@@ -477,9 +502,13 @@ export function ConnectorWizard({
                 value={currentValue}
                 onChange={(e) => handleFieldChange(fieldKey, e.target.value)}
               />
-              {!inlineValid && currentValue !== "" && step.validation.message && (
-                <p className="text-xs text-destructive">{step.validation.message}</p>
-              )}
+              {!inlineValid &&
+                currentValue !== "" &&
+                step.validation.message && (
+                  <p className="text-xs text-destructive">
+                    {step.validation.message}
+                  </p>
+                )}
             </div>
           )}
 
@@ -516,7 +545,13 @@ export function ConnectorWizard({
                   type="button"
                   size="sm"
                   variant="secondary"
-                  onClick={() => window.open(AWS_IAM_ROLE_CREATE_URL, "_blank", "noopener,noreferrer")}
+                  onClick={() =>
+                    window.open(
+                      AWS_IAM_ROLE_CREATE_URL,
+                      "_blank",
+                      "noopener,noreferrer",
+                    )
+                  }
                 >
                   <ExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden />
                   Open AWS IAM role creation
@@ -533,7 +568,10 @@ export function ConnectorWizard({
                   awsWizard.ts. Operators read ":root" as the AWS root
                   user; the note disambiguates without making them
                   read the description paragraph above the JSON. #621. */}
-              <p className="text-xs text-muted-foreground" data-testid="root-principal-note">
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="root-principal-note"
+              >
                 {AWS_TRUST_POLICY_ROOT_NOTE}
               </p>
 
@@ -570,7 +608,10 @@ export function ConnectorWizard({
                     </div>
                   </Button>
                   {showPrincipalOverride && (
-                    <div id="principal-override-input" className="space-y-1 pt-1">
+                    <div
+                      id="principal-override-input"
+                      className="space-y-1 pt-1"
+                    >
                       <Input
                         id="principal-override"
                         aria-label="Principal override ARN"
@@ -581,14 +622,20 @@ export function ConnectorWizard({
                         placeholder="arn:aws:iam::123456789012:user/squadron-bot"
                         value={draft.principal_override ?? ""}
                         onChange={(e) =>
-                          handleFieldChange("principal_override", e.target.value)
+                          handleFieldChange(
+                            "principal_override",
+                            e.target.value,
+                          )
                         }
                       />
                       {draft.principal_override &&
-                        !PRINCIPAL_OVERRIDE_RE.test(draft.principal_override) && (
+                        !PRINCIPAL_OVERRIDE_RE.test(
+                          draft.principal_override,
+                        ) && (
                           <p className="text-xs text-destructive">
-                            Override must look like arn:aws:iam::123456789012:user/Name
-                            (or role/Name, or root). Reverting to account root until valid.
+                            Override must look like
+                            arn:aws:iam::123456789012:user/Name (or role/Name,
+                            or root). Reverting to account root until valid.
                           </p>
                         )}
                     </div>
@@ -611,30 +658,41 @@ export function ConnectorWizard({
                         Resume with existing ExternalId
                       </span>
                       <span className="text-xs font-normal text-muted-foreground">
-                        If you&apos;ve connected this account in a previous Squadron deployment.
+                        If you&apos;ve connected this account in a previous
+                        Squadron deployment.
                       </span>
                     </div>
                   </Button>
                   {showExternalIdResume && (
-                    <div id="external-id-override-input" className="space-y-1 pt-1">
+                    <div
+                      id="external-id-override-input"
+                      className="space-y-1 pt-1"
+                    >
                       <Input
                         id="external-id-override"
                         aria-label="ExternalId override"
                         aria-invalid={
                           !!draft.external_id_override &&
-                          !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override)
+                          !EXTERNAL_ID_OVERRIDE_RE.test(
+                            draft.external_id_override,
+                          )
                         }
                         placeholder="00000000-0000-0000-0000-000000000000"
                         value={draft.external_id_override ?? ""}
                         onChange={(e) =>
-                          handleFieldChange("external_id_override", e.target.value)
+                          handleFieldChange(
+                            "external_id_override",
+                            e.target.value,
+                          )
                         }
                       />
                       {draft.external_id_override &&
-                        !EXTERNAL_ID_OVERRIDE_RE.test(draft.external_id_override) && (
+                        !EXTERNAL_ID_OVERRIDE_RE.test(
+                          draft.external_id_override,
+                        ) && (
                           <p className="text-xs text-destructive">
-                            Must be a lowercase UUID v4 shape. Reverting to
-                            the auto-generated ExternalId until valid.
+                            Must be a lowercase UUID v4 shape. Reverting to the
+                            auto-generated ExternalId until valid.
                           </p>
                         )}
                     </div>
@@ -644,35 +702,38 @@ export function ConnectorWizard({
             </div>
           )}
 
-          {step.action.kind === "copy_value" && step.id === "permissions-policy" && (
-            <div className="space-y-2">
-              <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
-                <code>{AWS_PERMISSIONS_POLICY_TEMPLATE}</code>
-              </pre>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleCopy(AWS_PERMISSIONS_POLICY_TEMPLATE)}
-                >
-                  <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
-                  Copy permissions policy
-                </Button>
+          {step.action.kind === "copy_value" &&
+            step.id === "permissions-policy" && (
+              <div className="space-y-2">
+                <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
+                  <code>{AWS_PERMISSIONS_POLICY_TEMPLATE}</code>
+                </pre>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleCopy(AWS_PERMISSIONS_POLICY_TEMPLATE)}
+                  >
+                    <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
+                    Copy permissions policy
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Read-only across EC2, Lambda, and RDS. No write/modify actions
+                  are granted.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Read-only across EC2, Lambda, and RDS. No write/modify
-                actions are granted.
-              </p>
-            </div>
-          )}
+            )}
 
           {step.action.kind === "deep_link" && (
             <Button
               type="button"
               variant="secondary"
               onClick={() => {
-                const payload = step.action.payload as { url?: string } | undefined;
+                const payload = step.action.payload as
+                  | { url?: string }
+                  | undefined;
                 if (payload?.url) {
                   window.open(payload.url, "_blank", "noopener,noreferrer");
                 }
@@ -690,7 +751,9 @@ export function ConnectorWizard({
                 onClick={handleValidate}
                 disabled={validating || !draft.role_arn || !liveExternalId}
               >
-                {validating && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />}
+                {validating && (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
+                )}
                 Validate connection
               </Button>
               {validationResult && (
@@ -705,13 +768,20 @@ export function ConnectorWizard({
 
           {step.action.kind === "test_connection" && step.id === "save" && (
             <div className="space-y-3">
-              <Button type="button" onClick={handleSave} disabled={saving || !validationResult?.assume_role_ok}>
-                {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />}
+              <Button
+                type="button"
+                onClick={handleSave}
+                disabled={saving || !validationResult?.assume_role_ok}
+              >
+                {saving && (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
+                )}
                 Save and finish
               </Button>
               {!validationResult?.assume_role_ok && (
                 <p className="text-xs text-muted-foreground">
-                  Return to the Validate step and run a successful probe before saving.
+                  Return to the Validate step and run a successful probe before
+                  saving.
                 </p>
               )}
               {saveError && (
@@ -805,7 +875,9 @@ function StatusRow({
         <XCircle className="h-4 w-4 text-destructive" aria-hidden />
       )}
       <span className="font-medium">{label}</span>
-      {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
+      {suffix && (
+        <span className="text-xs text-muted-foreground">{suffix}</span>
+      )}
     </div>
   );
 }

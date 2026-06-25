@@ -37,10 +37,7 @@ export type RecommendationSourceKind =
  * constants. The UI matches on this to render the right button
  * label + confirmation flow.
  */
-export type RecommendationActionKind =
-  | "rollout"
-  | "plan"
-  | "discovery_action";
+export type RecommendationActionKind = "rollout" | "plan" | "discovery_action";
 
 /**
  * v0.85 — Infrastructure-as-Code format. Slice 1 emits Terraform

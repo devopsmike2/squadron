@@ -525,9 +525,7 @@ function describe(e: AuditEvent): string {
     // forward + backward arc without opening each rollout.
     case "plan.created": {
       const count =
-        typeof e.payload?.step_count === "number"
-          ? e.payload.step_count
-          : null;
+        typeof e.payload?.step_count === "number" ? e.payload.step_count : null;
       const planID = planIDOf(e);
       return planID
         ? `Plan created · ${count ?? "?"} steps · ${planID.slice(0, 8)}…`

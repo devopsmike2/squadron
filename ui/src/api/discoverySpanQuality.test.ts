@@ -12,13 +12,18 @@ import {
   type SpanQualityResponse,
 } from "./discoverySpanQuality";
 
-function provider(over: Partial<ProviderSpanQuality> = {}): ProviderSpanQuality {
+function provider(
+  over: Partial<ProviderSpanQuality> = {},
+): ProviderSpanQuality {
   return {
     resource_count: 0,
     resources_with_issues: 0,
     orphan_pct: 0,
     missing_attr_pct: 0,
     attr_mismatch_pct: 0,
+    malformed_traceparent_pct: 0,
+    missing_traceparent_on_child_pct: 0,
+    sampling_too_aggressive_pct: 0,
     ...over,
   };
 }
@@ -58,6 +63,9 @@ const NON_ZERO_RESPONSE: SpanQualityResponse = {
     orphan_pct: 4.1,
     missing_attr_pct: 6.3,
     attr_mismatch_pct: 2.0,
+    malformed_traceparent_pct: 0,
+    missing_traceparent_on_child_pct: 0,
+    sampling_too_aggressive_pct: 0,
   },
 };
 
@@ -74,6 +82,9 @@ const ALL_ZERO_RESPONSE: SpanQualityResponse = {
     orphan_pct: 0,
     missing_attr_pct: 0,
     attr_mismatch_pct: 0,
+    malformed_traceparent_pct: 0,
+    missing_traceparent_on_child_pct: 0,
+    sampling_too_aggressive_pct: 0,
   },
 };
 
@@ -92,7 +103,9 @@ function makeFetchResponse(status: number, body: unknown): Response {
 describe("discoverySpanQuality", () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
-    fetchSpy = vi.spyOn(globalThis, "fetch");
+    fetchSpy = vi.spyOn(globalThis, "fetch") as unknown as ReturnType<
+      typeof vi.spyOn
+    >;
   });
   afterEach(() => {
     fetchSpy.mockRestore();
@@ -143,11 +156,7 @@ describe("discoverySpanQuality", () => {
     fetchSpy.mockResolvedValueOnce(
       makeFetchResponse(404, { error: "resource not found" }),
     );
-    const got = await fetchResourceSpanQuality(
-      "aws",
-      "compute",
-      "i-0abc",
-    );
+    const got = await fetchResourceSpanQuality("aws", "compute", "i-0abc");
     expect(got).toBeNull();
 
     // Wire path includes the four-segment per-resource shape.

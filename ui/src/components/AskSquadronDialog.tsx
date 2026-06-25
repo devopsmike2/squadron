@@ -192,9 +192,7 @@ export function AskSquadronDialog() {
               </div>
             )}
 
-            {!state.error && !state.answer && !state.loading && (
-              <EmptyHint />
-            )}
+            {!state.error && !state.answer && !state.loading && <EmptyHint />}
 
             {state.answer && (
               <>
@@ -211,9 +209,7 @@ export function AskSquadronDialog() {
                         className="inline-flex items-center gap-1 rounded border bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                         title={`Open ${c.kind} ${c.id}`}
                       >
-                        <span className={chipKindColor(c.kind)}>
-                          {c.kind}
-                        </span>
+                        <span className={chipKindColor(c.kind)}>{c.kind}</span>
                         <span className="font-mono">{shortenID(c.id)}</span>
                       </button>
                     ))}
@@ -264,9 +260,8 @@ function EmptyHint() {
         <li>What was the last rollback and what did it undo?</li>
       </ul>
       <div className="mt-3 text-[11px] text-muted-foreground/80">
-        Squadron answers from recent rollouts and audit events. It
-        cites the rows it drew from; click a chip to open the
-        source.
+        Squadron answers from recent rollouts and audit events. It cites the
+        rows it drew from; click a chip to open the source.
       </div>
     </div>
   );

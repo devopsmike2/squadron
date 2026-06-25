@@ -50,9 +50,10 @@ if (!Element.prototype.scrollIntoView) {
 }
 
 vi.mock("@/api/discoveryOCI", async () => {
-  const actual = await vi.importActual<typeof import("@/api/discoveryOCI")>(
-    "@/api/discoveryOCI",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/api/discoveryOCI")>(
+      "@/api/discoveryOCI",
+    );
   return {
     ...actual,
     listOCIConnections: vi.fn(),
@@ -85,8 +86,7 @@ function renderPage(initialEntries: string[] = ["/discovery/oci"]) {
 // not the content, so any valid OCID works.
 const TENANCY_OCID =
   "ocid1.tenancy.oc1..aaaaaaaaexampletenancyocid1234567890abcdef";
-const USER_OCID =
-  "ocid1.user.oc1..aaaaaaaaexampleuserocid1234567890abcdef1234";
+const USER_OCID = "ocid1.user.oc1..aaaaaaaaexampleuserocid1234567890abcdef1234";
 const REGION = "us-phoenix-1";
 const FINGERPRINT = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99";
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
@@ -221,9 +221,7 @@ describe("DiscoveryOCI", () => {
 
     // Invalid user OCID — Next stays disabled, inline error renders.
     fireEvent.change(userInput, { target: { value: "not-an-ocid" } });
-    expect(
-      screen.getByText(/User OCIDs must start with/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/User OCIDs must start with/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
 
     // Valid user OCID — inline error clears.
@@ -281,7 +279,9 @@ describe("DiscoveryOCI", () => {
     fireEvent.change(fingerprintInput, { target: { value: FINGERPRINT } });
     await waitFor(() => {
       expect(
-        screen.queryByText(/Fingerprints must be 16 colon-separated hex pairs/i),
+        screen.queryByText(
+          /Fingerprints must be 16 colon-separated hex pairs/i,
+        ),
       ).not.toBeInTheDocument();
     });
   });
@@ -446,13 +446,13 @@ describe("DiscoveryOCI", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(
-          /The pasted PEM is malformed or not an RSA key/i,
-        ),
+        screen.getByText(/The pasted PEM is malformed or not an RSA key/i),
       ).toBeInTheDocument();
     });
     expect(
-      screen.getByText(/Squadron could not decrypt the stored API Signing Key/i),
+      screen.getByText(
+        /Squadron could not decrypt the stored API Signing Key/i,
+      ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Run scan/i })).toBeDisabled();
   });
@@ -565,7 +565,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       databases: [
@@ -631,7 +634,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -669,7 +675,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       clusters: [
@@ -733,7 +742,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -758,7 +770,9 @@ describe("DiscoveryOCI", () => {
     const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
     await user.click(kubernetesTab);
     expect(
-      screen.getByText(/No Kubernetes clusters discovered\. Run a scan to refresh\./i),
+      screen.getByText(
+        /No Kubernetes clusters discovered\. Run a scan to refresh\./i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -769,7 +783,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -817,7 +834,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -842,7 +862,9 @@ describe("DiscoveryOCI", () => {
     const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
     await user.click(serverlessTab);
     expect(
-      screen.getByText(/No serverless functions discovered\. Run a scan to refresh\./i),
+      screen.getByText(
+        /No serverless functions discovered\. Run a scan to refresh\./i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -856,7 +878,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -907,7 +932,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -963,7 +991,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1011,7 +1042,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1067,7 +1101,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1110,7 +1147,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1167,7 +1207,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -1205,7 +1248,10 @@ describe("DiscoveryOCI", () => {
     const user = userEvent.setup();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
-    mockedValidateOCIConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
       // Slice 2 hypothetical row — the OrchestrationRow shape is the
@@ -1359,7 +1405,9 @@ describe("DiscoveryOCI", () => {
 
   it("TestInventoryTab_ComputeSubTab_LastSeenColumn_RendersRelativeTime", async () => {
     const user = userEvent.setup();
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const threeDaysAgo = new Date(
+      Date.now() - 3 * 24 * 60 * 60 * 1000,
+    ).toISOString();
     mockedListOCIConnections.mockResolvedValue([sampleConnection]);
     mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
     mockedValidateOCIConnection.mockResolvedValue({
@@ -1368,9 +1416,7 @@ describe("DiscoveryOCI", () => {
     });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
-      computes: [
-        { ...sampleScan.computes[0], last_seen_at: threeDaysAgo },
-      ],
+      computes: [{ ...sampleScan.computes[0], last_seen_at: threeDaysAgo }],
       instrumented_count: 1,
       uninstrumented_count: 0,
     });
@@ -1406,9 +1452,7 @@ describe("DiscoveryOCI", () => {
     });
     mockedScanOCIConnection.mockResolvedValue({
       ...sampleScan,
-      computes: [
-        { ...sampleScan.computes[0], last_seen_at: undefined },
-      ],
+      computes: [{ ...sampleScan.computes[0], last_seen_at: undefined }],
       instrumented_count: 1,
       uninstrumented_count: 0,
     });
@@ -1429,7 +1473,9 @@ describe("DiscoveryOCI", () => {
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
     await waitFor(() => {
-      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(0);
+      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(
+        0,
+      );
     });
   });
 });

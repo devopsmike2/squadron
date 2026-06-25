@@ -92,10 +92,8 @@ const SWR_KEY_WORKLOAD_HEALTH = "/discovery/workload_health";
 // Azure / OCI surfaces; slice 1 surfaces all serverless via the
 // per-provider recommendations tab filter.
 const WORKLOAD_HEALTH_KIND_COLD_START = "cold-start";
-const WORKLOAD_HEALTH_KIND_SAMPLING =
-  "span-quality-sampling-too-aggressive";
-const WORKLOAD_HEALTH_KIND_ERROR_RATE =
-  "span-quality-error-rate-spike";
+const WORKLOAD_HEALTH_KIND_SAMPLING = "span-quality-sampling-too-aggressive";
+const WORKLOAD_HEALTH_KIND_ERROR_RATE = "span-quality-error-rate-spike";
 
 // Filter-chip kinds the dashboard panel deep-links into. Three
 // recommendation kinds match 1:1 with the three columns of the
@@ -616,8 +614,8 @@ function TraceCoveragePanel({
                 {totals.coverage_pct.toFixed(1)}%
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
-                {totals.emitting_count} of {totals.inventory_count}{" "}
-                inventoried resources have emitted spans in the last 24h
+                {totals.emitting_count} of {totals.inventory_count} inventoried
+                resources have emitted spans in the last 24h
               </p>
             </div>
           </div>
@@ -633,12 +631,9 @@ function TraceCoveragePanel({
             >
               <AlertTriangle className="h-4 w-4" aria-hidden />
               <span>
-                {totalPendingTraceEmission} resources have the primitive
-                enabled but no recent emission —{" "}
-                <Link
-                  to="/discovery/aws#recommendations"
-                  className="underline"
-                >
+                {totalPendingTraceEmission} resources have the primitive enabled
+                but no recent emission —{" "}
+                <Link to="/discovery/aws#recommendations" className="underline">
                   see Recommendations on each provider
                 </Link>{" "}
                 for the drafts.
@@ -734,11 +729,17 @@ function TierCoverageChipRow({
   // spec §7).
   eventSourceCount: number;
 }) {
-  const orchPct = computeTierWeightedAverage(providers, (p) => p.orchestration_pct);
+  const orchPct = computeTierWeightedAverage(
+    providers,
+    (p) => p.orchestration_pct,
+  );
   // Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) —
   // EVT column extends the per-tier chip row. Same hide-when-zero
   // pattern as ORCH.
-  const evtPct = computeTierWeightedAverage(providers, (p) => p.event_source_pct);
+  const evtPct = computeTierWeightedAverage(
+    providers,
+    (p) => p.event_source_pct,
+  );
   // Event source tier slice 2 chunk 5 (v0.89.107, #745 Stream 143) —
   // EVT chip gains a "(prop N%)" suffix surfacing the propagation gap
   // aggregated across all four providers. The suffix hides when
@@ -746,7 +747,10 @@ function TierCoverageChipRow({
   // already hidden when event_source_pct is zero across all
   // providers, so the suffix only renders when at least one provider
   // has an event source with the source-level axis on.
-  const propPct = computeTierWeightedAverage(providers, (p) => p.propagation_pct);
+  const propPct = computeTierWeightedAverage(
+    providers,
+    (p) => p.propagation_pct,
+  );
   const showOrch = orchPct !== null;
   const showEvt = evtPct !== null;
   // Hide the whole line when no tier chip has any signal.
@@ -759,7 +763,11 @@ function TierCoverageChipRow({
       data-testid="trace-coverage-tier-chip-row"
     >
       {showOrch && (
-        <TierCoverageChip label="ORCH" pct={orchPct ?? 0} testId="trace-coverage-tier-chip-orch" />
+        <TierCoverageChip
+          label="ORCH"
+          pct={orchPct ?? 0}
+          testId="trace-coverage-tier-chip-orch"
+        />
       )}
       {showEvt && (
         <TierCoverageChip
@@ -1056,10 +1064,7 @@ function SpanQualityPanel({ quality }: { quality: SpanQualityResponse }) {
         <SpanQualityColumn
           label="Orphan trace"
           pct={t.orphan_pct}
-          count={countResourcesWith(
-            quality.providers,
-            (p) => p.orphan_pct > 0,
-          )}
+          count={countResourcesWith(quality.providers, (p) => p.orphan_pct > 0)}
           kind={SPAN_QUALITY_KIND_ORPHAN}
           testIdSuffix="orphan"
         />

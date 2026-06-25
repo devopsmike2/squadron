@@ -45,7 +45,6 @@ import {
 import { Link, useSearchParams } from "react-router-dom";
 import useSWR from "swr";
 
-
 import {
   generateAWSRecommendations,
   listAWSConnections,
@@ -165,8 +164,9 @@ export default function DiscoveryAWSPage() {
   // them, Recommendations reads them. State is per-session: refreshing
   // the page clears the panel, matching the slice-1 posture that
   // recommendations themselves aren't persisted.
-  const [recs, setRecs] =
-    useState<GenerateRecommendationsResponse | null>(null);
+  const [recs, setRecs] = useState<GenerateRecommendationsResponse | null>(
+    null,
+  );
   // v0.89.3 #603 Stream 19 Phase 4: account_id + scan_id of the scan
   // the proposer just generated against. Threaded down to the Open-PR
   // button so the per-card POST carries the right (scan_id, step_idx,
@@ -473,24 +473,18 @@ function ScanAllStatusGrid({
   return (
     <div className="space-y-3">
       {result && result.partial && (
-        <Card
-          role="status"
-          className="border-yellow-500/50 bg-yellow-500/5"
-        >
+        <Card role="status" className="border-yellow-500/50 bg-yellow-500/5">
           <CardContent className="p-3 text-sm">
             <span className="font-medium">Partial scan-all:</span>{" "}
             {result.failed_accounts.length} of {result.total_accounts} accounts
-            failed. The per-account cards below show the humanized error;
-            re-run after addressing each.
+            failed. The per-account cards below show the humanized error; re-run
+            after addressing each.
           </CardContent>
         </Card>
       )}
       {error && (
         <Card>
-          <CardContent
-            role="alert"
-            className="p-3 text-sm text-destructive"
-          >
+          <CardContent role="alert" className="p-3 text-sm text-destructive">
             Scan all failed: {error}
           </CardContent>
         </Card>
@@ -652,8 +646,7 @@ function AggregateInventorySummary({
           <CardTitle className="text-base">Aggregate inventory</CardTitle>
           <CardDescription>
             Across {result.total_accounts} account
-            {result.total_accounts === 1 ? "" : "s"} ·{" "}
-            scan_all_id{" "}
+            {result.total_accounts === 1 ? "" : "s"} · scan_all_id{" "}
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
               {result.scan_all_id}
             </code>
@@ -679,10 +672,7 @@ function AggregateInventorySummary({
       </Card>
       <Card>
         <CardContent className="flex items-start gap-2 p-4 text-sm">
-          <Sparkles
-            className="mt-0.5 h-4 w-4 text-violet-500"
-            aria-hidden
-          />
+          <Sparkles className="mt-0.5 h-4 w-4 text-violet-500" aria-hidden />
           <div>
             <p className="font-medium">
               Switch to a single account to see per-resource inventory.
@@ -767,9 +757,9 @@ function AggregateRecommendationsNotice({
         </div>
         <p className="text-sm text-muted-foreground">
           Slice 1 punts on cross-account recommendation aggregation —
-          recommendations are still generated per-scan via the proposer.
-          Pick an account below to see Inventory + Recommendations work
-          exactly as in the single-account view.
+          recommendations are still generated per-scan via the proposer. Pick an
+          account below to see Inventory + Recommendations work exactly as in
+          the single-account view.
         </p>
         {connections.length > 0 && (
           <div className="flex flex-wrap gap-1">
@@ -1193,9 +1183,8 @@ function ScanResultPanel({
           <CardDescription>
             Regions {result.regions.join(", ") || "(none)"} · completed{" "}
             {formatTime(result.scan_completed_at)} · scanned{" "}
-            {result.compute.length} compute instances,{" "}
-            {result.functions.length} functions,{" "}
-            {(result.databases ?? []).length} databases,{" "}
+            {result.compute.length} compute instances, {result.functions.length}{" "}
+            functions, {(result.databases ?? []).length} databases,{" "}
             {(result.object_stores ?? []).length} object stores,{" "}
             {(result.load_balancers ?? []).length} load balancers, and{" "}
             {(result.clusters ?? []).length} clusters.
@@ -1219,7 +1208,9 @@ function ScanResultPanel({
               ) : (
                 <Sparkles className="h-4 w-4" aria-hidden />
               )}
-              {generating ? "Generating recommendations…" : "Generate recommendations"}
+              {generating
+                ? "Generating recommendations…"
+                : "Generate recommendations"}
             </Button>
           </div>
           {genError && (
@@ -1235,8 +1226,9 @@ function ScanResultPanel({
         <Card className="border-yellow-500/50 bg-yellow-500/5">
           <CardContent className="p-4 text-sm">
             <span className="font-medium">Scan was partial:</span>{" "}
-            {result.partial_reason ?? "the walk did not cover the full inventory"}.
-            Re-run to capture missed resources.
+            {result.partial_reason ??
+              "the walk did not cover the full inventory"}
+            . Re-run to capture missed resources.
           </CardContent>
         </Card>
       )}
@@ -1273,11 +1265,7 @@ function ScanResultPanel({
   );
 }
 
-function ComputeSection({
-  compute,
-}: {
-  compute: ScanResult["compute"];
-}) {
+function ComputeSection({ compute }: { compute: ScanResult["compute"] }) {
   const [open, setOpen] = useState(compute.length > 0);
   return (
     <Card>
@@ -1650,11 +1638,7 @@ function LoadBalancersSection({
 // ADOT / cloudwatch-observability highlighted as the observability
 // names). The k8s version + status render alongside as
 // informational columns.
-function ClustersSection({
-  clusters,
-}: {
-  clusters: ScanResult["clusters"];
-}) {
+function ClustersSection({ clusters }: { clusters: ScanResult["clusters"] }) {
   const [open, setOpen] = useState(clusters.length > 0);
   return (
     <Card>
@@ -1709,7 +1693,10 @@ function ClustersSection({
                         Control Plane Logging:
                       </span>
                       {c.control_plane_logging.length === 0 ? (
-                        <Badge variant="outline" className="text-muted-foreground">
+                        <Badge
+                          variant="outline"
+                          className="text-muted-foreground"
+                        >
                           none
                         </Badge>
                       ) : (
@@ -1736,7 +1723,10 @@ function ClustersSection({
                         Add-ons:
                       </span>
                       {c.addons.length === 0 ? (
-                        <Badge variant="outline" className="text-muted-foreground">
+                        <Badge
+                          variant="outline"
+                          className="text-muted-foreground"
+                        >
                           none
                         </Badge>
                       ) : (
@@ -1785,11 +1775,7 @@ function ClustersSection({
 // span-quality dot from v0.89.87. The section collapses when empty
 // (same pattern as the other AWS sections) so an account with no
 // Lambda still gets a header but no row noise.
-function ServerlessSection({
-  serverless,
-}: {
-  serverless: ServerlessRow[];
-}) {
+function ServerlessSection({ serverless }: { serverless: ServerlessRow[] }) {
   const [open, setOpen] = useState(serverless.length > 0);
   return (
     <Card>
@@ -1833,14 +1819,18 @@ function ServerlessSection({
                         seen. Mirrored on the GCP / Azure / OCI
                         Serverless tables as "—" everywhere since
                         slice 1 ships AWS Lambda only. */}
-                    <th className="px-3 py-2 font-medium">Cold-start P95 (24h)</th>
+                    <th className="px-3 py-2 font-medium">
+                      Cold-start P95 (24h)
+                    </th>
                     {/* Sampling rate analysis slice 1 chunk 3 (v0.89.124,
                         #764 Stream 162) — new "Sampling rate (24h)"
                         column between Cold-start P95 and Last seen.
                         Mirrored on the GCP / Azure / OCI Serverless
                         tables per the slice 1 contract — all 5
                         serverless surfaces participate. */}
-                    <th className="px-3 py-2 font-medium">Sampling rate (24h)</th>
+                    <th className="px-3 py-2 font-medium">
+                      Sampling rate (24h)
+                    </th>
                     {/* Error rate correlation slice 1 chunk 3
                         (v0.89.129, #769 Stream 167) — new
                         "Error rate (24h)" column between Sampling
@@ -1853,7 +1843,10 @@ function ServerlessSection({
                 </thead>
                 <tbody>
                   {serverless.map((s) => (
-                    <tr key={s.resource_arn || s.resource_name} className="border-t">
+                    <tr
+                      key={s.resource_arn || s.resource_name}
+                      className="border-t"
+                    >
                       <td className="px-3 py-2 font-mono text-xs">
                         {s.resource_name}
                       </td>
@@ -2368,9 +2361,7 @@ function PropagationNotesDialog({
         <DialogHeader>
           <DialogTitle>Propagation notes</DialogTitle>
           <DialogDescription>
-            {state
-              ? `${state.row.surface} · ${state.row.resource_name}`
-              : ""}
+            {state ? `${state.row.surface} · ${state.row.resource_name}` : ""}
           </DialogDescription>
         </DialogHeader>
         {state && state.notes.length === 0 ? (
@@ -2481,9 +2472,7 @@ export function RecommendationsTab({
   // operators don't see the unbadged flash on a healthy
   // deployment); (b) degrades gracefully on error: console.error +
   // leave the Set empty so the operator can still toggle.
-  const [excludedSet, setExcludedSet] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [excludedSet, setExcludedSet] = useState<Set<string>>(() => new Set());
   // v0.89.82 (#713 Stream 111, Trace integration slice 2 chunk 3) —
   // operator-set filter chip that narrows the recommendations list to
   // the slice-2 trace-emission-* drafts. Toggled via the chip above
@@ -2527,7 +2516,7 @@ export function RecommendationsTab({
         // Graceful degradation: log + leave the Set empty so the
         // operator can still toggle. The audit timeline remains
         // the authoritative log for "was this excluded?" questions.
-         
+
         console.error("listExcludedRecommendations failed", err);
       });
     return () => {
@@ -2580,9 +2569,8 @@ export function RecommendationsTab({
   // is intentional — slice 1 ships at most a few connections per
   // deployment, so re-fetching per card would be needless network
   // traffic.
-  const { data: iacData } = useSWR(
-    IAC_GITHUB_CONNECTIONS_SWR_KEY,
-    () => listIaCGitHubConnections(),
+  const { data: iacData } = useSWR(IAC_GITHUB_CONNECTIONS_SWR_KEY, () =>
+    listIaCGitHubConnections(),
   );
   const iacConnections = iacData?.connections ?? [];
 
@@ -2664,12 +2652,12 @@ export function RecommendationsTab({
           <div>
             <h3 className="text-base font-semibold">No recommendations yet.</h3>
             <p className="mt-2 max-w-md text-sm text-muted-foreground">
-              Run a scan and click &quot;Generate recommendations&quot; from
-              the Inventory tab.
+              Run a scan and click &quot;Generate recommendations&quot; from the
+              Inventory tab.
             </p>
             <p className="mt-3 max-w-md text-xs text-muted-foreground">
-              Recommendations arrive as Terraform snippets for your IaC
-              pipeline — Squadron never mutates your cloud.
+              Recommendations arrive as Terraform snippets for your IaC pipeline
+              — Squadron never mutates your cloud.
             </p>
           </div>
         </CardContent>
@@ -2870,8 +2858,9 @@ export function DiscoveryRecommendationCard({
   const [opening, setOpening] = useState(false);
   const [openPRResult, setOpenPRResult] =
     useState<IaCGitHubOpenPRResponse | null>(null);
-  const [openPRError, setOpenPRError] =
-    useState<IaCGitHubOpenPRError | null>(null);
+  const [openPRError, setOpenPRError] = useState<IaCGitHubOpenPRError | null>(
+    null,
+  );
 
   // Derive the per-card connection state from the page-level list.
   // Slice 1 ships at most one IaC connection per deployment; the
@@ -2996,9 +2985,7 @@ export function DiscoveryRecommendationCard({
   return (
     <Card
       className={
-        excluded
-          ? "border-muted-foreground/30 opacity-60 grayscale"
-          : undefined
+        excluded ? "border-muted-foreground/30 opacity-60 grayscale" : undefined
       }
       data-testid="discovery-recommendation-card"
       data-excluded={excluded ? "true" : "false"}
@@ -3107,9 +3094,9 @@ export function DiscoveryRecommendationCard({
                   "patch_existing_hcl_merged" && (
                   <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
                     <Check className="mr-1 inline h-3 w-3" aria-hidden />
-                    HCL-merged — Squadron parsed the placement file and
-                    applied the patch in place. terraform plan accepts
-                    the result; no manual integration needed.
+                    HCL-merged — Squadron parsed the placement file and applied
+                    the patch in place. terraform plan accepts the result; no
+                    manual integration needed.
                   </p>
                 )}
                 {openPRResult.lifecycle_ignored && (
@@ -3119,8 +3106,8 @@ export function DiscoveryRecommendationCard({
                       aria-hidden
                     />
                     lifecycle.ignore_changes covers one of the patched
-                    attributes — terraform apply will no-op that
-                    attribute until you edit the ignore_changes entry.
+                    attributes — terraform apply will no-op that attribute until
+                    you edit the ignore_changes entry.
                   </p>
                 )}
                 {openPRResult.manual_merge_required && (
@@ -3129,9 +3116,8 @@ export function DiscoveryRecommendationCard({
                       className="mr-1 inline h-3 w-3"
                       aria-hidden
                     />
-                    Manual merge required — Squadron appended the
-                    snippet to your placement file. Hand-integrate
-                    before merging.
+                    Manual merge required — Squadron appended the snippet to
+                    your placement file. Hand-integrate before merging.
                     {openPRResult.hcl_patch_failure_reason ? (
                       <>
                         {" "}
@@ -3190,10 +3176,7 @@ export function DiscoveryRecommendationCard({
                           aria-hidden
                         />
                       ) : (
-                        <GitPullRequest
-                          className="mr-1 h-3 w-3"
-                          aria-hidden
-                        />
+                        <GitPullRequest className="mr-1 h-3 w-3" aria-hidden />
                       )}
                       {opening ? "Opening PR…" : "Open PR"}
                     </Button>
@@ -3239,10 +3222,7 @@ export function DiscoveryRecommendationCard({
                         aria-label="Needs manual merge — patch_existing disposition"
                         className="border-amber-500/40 text-xs text-amber-700 dark:text-amber-300"
                       >
-                        <AlertTriangle
-                          className="mr-1 h-3 w-3"
-                          aria-hidden
-                        />
+                        <AlertTriangle className="mr-1 h-3 w-3" aria-hidden />
                         Needs manual merge
                       </Badge>
                     )}
@@ -3280,10 +3260,7 @@ export function DiscoveryRecommendationCard({
                       className="text-xs"
                     >
                       {excluded ? (
-                        <RotateCcw
-                          className="mr-1 h-3 w-3"
-                          aria-hidden
-                        />
+                        <RotateCcw className="mr-1 h-3 w-3" aria-hidden />
                       ) : (
                         <Ban className="mr-1 h-3 w-3" aria-hidden />
                       )}
@@ -3302,30 +3279,28 @@ export function DiscoveryRecommendationCard({
                     the wizard at the right placement row in one
                     click instead of dropping the operator on the
                     connections list. */}
-                {connection &&
-                  rec.resource_kind &&
-                  !placementFilePath && (
-                    <p className="text-xs text-muted-foreground">
-                      Open PR needs a Terraform file path for{" "}
-                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-                        {rec.resource_kind}
-                      </code>{" "}
-                      in your{" "}
-                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-                        {connection.repo_full_name}
-                      </code>{" "}
-                      connection.{" "}
-                      <Link
-                        to={buildIaCPlacementDeepLink(
-                          connection.connection_id,
-                          rec.resource_kind,
-                        )}
-                        className="text-violet-500 hover:underline"
-                      >
-                        Configure placement
-                      </Link>
-                    </p>
-                  )}
+                {connection && rec.resource_kind && !placementFilePath && (
+                  <p className="text-xs text-muted-foreground">
+                    Open PR needs a Terraform file path for{" "}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                      {rec.resource_kind}
+                    </code>{" "}
+                    in your{" "}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                      {connection.repo_full_name}
+                    </code>{" "}
+                    connection.{" "}
+                    <Link
+                      to={buildIaCPlacementDeepLink(
+                        connection.connection_id,
+                        rec.resource_kind,
+                      )}
+                      className="text-violet-500 hover:underline"
+                    >
+                      Configure placement
+                    </Link>
+                  </p>
+                )}
 
                 {/* State C — no connections at all. */}
                 {!connection && (
@@ -3433,8 +3408,7 @@ function openPRErrorRecoveryHint(
     case "FileNotFound":
       return (
         <>
-          Squadron could not read the placement file. Confirm the path in
-          your{" "}
+          Squadron could not read the placement file. Confirm the path in your{" "}
           <Link to={bareHref} className="text-violet-500 hover:underline">
             IaC connection
           </Link>{" "}
@@ -3512,11 +3486,7 @@ function LastSeenCell({ value }: { value?: string }) {
 // populate row.span_quality; until chunk 2 merges, every dot is
 // gray. The lazy per-row fetch alternative would add N round-trips
 // per scan render — overweight for slice 1.
-export function QualityDot({
-  quality,
-}: {
-  quality?: RowSpanQuality | null;
-}) {
+export function QualityDot({ quality }: { quality?: RowSpanQuality | null }) {
   if (!quality) {
     return (
       <span

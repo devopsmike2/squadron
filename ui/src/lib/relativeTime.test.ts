@@ -52,18 +52,54 @@ describe("relativeTime", () => {
     }> = [
       { name: "5 seconds ago", isoOffsetMs: 5 * 1000, want: "5s ago" },
       { name: "59 seconds ago", isoOffsetMs: 59 * 1000, want: "59s ago" },
-      { name: "60 seconds rolls to 1m ago", isoOffsetMs: 60 * 1000, want: "1m ago" },
+      {
+        name: "60 seconds rolls to 1m ago",
+        isoOffsetMs: 60 * 1000,
+        want: "1m ago",
+      },
       { name: "30 minutes ago", isoOffsetMs: 30 * 60 * 1000, want: "30m ago" },
       { name: "59 minutes ago", isoOffsetMs: 59 * 60 * 1000, want: "59m ago" },
-      { name: "60 minutes rolls to 1h ago", isoOffsetMs: 60 * 60 * 1000, want: "1h ago" },
+      {
+        name: "60 minutes rolls to 1h ago",
+        isoOffsetMs: 60 * 60 * 1000,
+        want: "1h ago",
+      },
       { name: "3 hours ago", isoOffsetMs: 3 * 60 * 60 * 1000, want: "3h ago" },
-      { name: "23 hours ago", isoOffsetMs: 23 * 60 * 60 * 1000, want: "23h ago" },
-      { name: "24 hours rolls to 1d ago", isoOffsetMs: 24 * 60 * 60 * 1000, want: "1d ago" },
-      { name: "2 days ago", isoOffsetMs: 2 * 24 * 60 * 60 * 1000, want: "2d ago" },
-      { name: "6 days ago", isoOffsetMs: 6 * 24 * 60 * 60 * 1000, want: "6d ago" },
-      { name: "7 days rolls to 1w ago", isoOffsetMs: 7 * 24 * 60 * 60 * 1000, want: "1w ago" },
-      { name: "3 weeks ago", isoOffsetMs: 21 * 24 * 60 * 60 * 1000, want: "3w ago" },
-      { name: "29 days ago is still weeks", isoOffsetMs: 29 * 24 * 60 * 60 * 1000, want: "4w ago" },
+      {
+        name: "23 hours ago",
+        isoOffsetMs: 23 * 60 * 60 * 1000,
+        want: "23h ago",
+      },
+      {
+        name: "24 hours rolls to 1d ago",
+        isoOffsetMs: 24 * 60 * 60 * 1000,
+        want: "1d ago",
+      },
+      {
+        name: "2 days ago",
+        isoOffsetMs: 2 * 24 * 60 * 60 * 1000,
+        want: "2d ago",
+      },
+      {
+        name: "6 days ago",
+        isoOffsetMs: 6 * 24 * 60 * 60 * 1000,
+        want: "6d ago",
+      },
+      {
+        name: "7 days rolls to 1w ago",
+        isoOffsetMs: 7 * 24 * 60 * 60 * 1000,
+        want: "1w ago",
+      },
+      {
+        name: "3 weeks ago",
+        isoOffsetMs: 21 * 24 * 60 * 60 * 1000,
+        want: "3w ago",
+      },
+      {
+        name: "29 days ago is still weeks",
+        isoOffsetMs: 29 * 24 * 60 * 60 * 1000,
+        want: "4w ago",
+      },
     ];
     for (const c of cases) {
       const iso = new Date(nowFixed - c.isoOffsetMs).toISOString();

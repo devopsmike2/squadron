@@ -209,7 +209,8 @@ export default function DiscoveryOCIPage() {
           <h1 className="text-2xl font-semibold">OCI Discovery</h1>
         </div>
         <p className="text-sm text-muted-foreground">
-          Connect Oracle Cloud tenancies and discover what&apos;s uninstrumented.
+          Connect Oracle Cloud tenancies and discover what&apos;s
+          uninstrumented.
         </p>
       </header>
 
@@ -627,9 +628,9 @@ function TenancyStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Tell Squadron which Oracle Cloud tenancy to scan. We&apos;ll never
-        write to it — read-only IAM permissions on compute instances are the
-        most the API Signing Key will be asked to carry.
+        Tell Squadron which Oracle Cloud tenancy to scan. We&apos;ll never write
+        to it — read-only IAM permissions on compute instances are the most the
+        API Signing Key will be asked to carry.
       </p>
 
       <div className="space-y-2">
@@ -659,9 +660,8 @@ function TenancyStep({
         />
         {tenancyOCID !== "" && !tenancyOCIDValid && (
           <p className="text-xs text-destructive">
-            Tenancy OCIDs must start with{" "}
-            <code>ocid1.tenancy.oc1.</code> Find the value in the OCI Console
-            under Profile → Tenancy → OCID.
+            Tenancy OCIDs must start with <code>ocid1.tenancy.oc1.</code> Find
+            the value in the OCI Console under Profile → Tenancy → OCID.
           </p>
         )}
         {tenancyOCID === "" && (
@@ -735,10 +735,10 @@ function TenancyStep({
           <p>
             Squadron walks your OCI Compute Instances inventory and flags
             instances that lack the OpenTelemetry tag heuristic the proposer
-            reads. The connection here is the credential + scope tuple
-            Squadron uses to call the OCI ListInstances API — nothing else.
-            You can disconnect at any time; the sealed API Signing Key
-            private key is removed from the credstore on delete.
+            reads. The connection here is the credential + scope tuple Squadron
+            uses to call the OCI ListInstances API — nothing else. You can
+            disconnect at any time; the sealed API Signing Key private key is
+            removed from the credstore on delete.
           </p>
           <p className="mt-2">
             <a
@@ -762,9 +762,9 @@ function GenerateKeyStep({ onCopy }: { onCopy: (v: string) => void }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Generate a 2048-bit RSA keypair locally. The private half stays on
-        your machine + gets pasted into Squadron in Step 4; the public half
-        gets uploaded to OCI Console in Step 3.
+        Generate a 2048-bit RSA keypair locally. The private half stays on your
+        machine + gets pasted into Squadron in Step 4; the public half gets
+        uploaded to OCI Console in Step 3.
       </p>
 
       <CommandBlock
@@ -781,8 +781,8 @@ function GenerateKeyStep({ onCopy }: { onCopy: (v: string) => void }) {
 
       <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
         <p>
-          The last command outputs the key fingerprint — note it for Step 4.
-          It looks like a colon-separated 16-hex-pair string, e.g.
+          The last command outputs the key fingerprint — note it for Step 4. It
+          looks like a colon-separated 16-hex-pair string, e.g.
           <code> aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99</code>.
         </p>
       </div>
@@ -844,8 +844,9 @@ function UploadKeyStep() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Upload the public half of the keypair (<code>oci_api_key_public.pem</code>)
-        to OCI Console so OCI can verify Squadron&apos;s signed requests.
+        Upload the public half of the keypair (
+        <code>oci_api_key_public.pem</code>) to OCI Console so OCI can verify
+        Squadron&apos;s signed requests.
       </p>
 
       <ol className="ml-4 list-decimal space-y-2 text-sm">
@@ -875,17 +876,17 @@ function UploadKeyStep() {
         </li>
         <li>
           Confirm the fingerprint OCI Console displays matches the fingerprint
-          your openssl command output in Step 2. Note the fingerprint for
-          Step 4.
+          your openssl command output in Step 2. Note the fingerprint for Step
+          4.
         </li>
       </ol>
 
       <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
         <p>
-          OCI Console also displays a config file snippet after the upload —
-          you can ignore that snippet for Squadron; Squadron only needs the
-          tenancy OCID, user OCID, region, fingerprint, and private key
-          (entered separately in this wizard).
+          OCI Console also displays a config file snippet after the upload — you
+          can ignore that snippet for Squadron; Squadron only needs the tenancy
+          OCID, user OCID, region, fingerprint, and private key (entered
+          separately in this wizard).
         </p>
       </div>
 
@@ -950,8 +951,8 @@ function CredentialsStep({
             <code>aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99</code>).
             Re-verify with{" "}
             <code>
-              openssl rsa -pubout -outform DER -in oci_api_key.pem | openssl
-              md5 -c
+              openssl rsa -pubout -outform DER -in oci_api_key.pem | openssl md5
+              -c
             </code>
             .
           </p>
@@ -960,16 +961,13 @@ function CredentialsStep({
 
       <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
         <div className="flex items-start gap-2">
-          <AlertTriangle
-            className="mt-0.5 h-4 w-4 flex-shrink-0"
-            aria-hidden
-          />
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden />
           <p className="text-xs">
             The API Signing Key private key is full asymmetric authentication
-            material — the strongest credential type Squadron handles.
-            Squadron seals it at rest with AES-GCM; the bytes never appear in
-            audit payloads or logs. Never paste this key into Slack, email,
-            or any other transient surface.
+            material — the strongest credential type Squadron handles. Squadron
+            seals it at rest with AES-GCM; the bytes never appear in audit
+            payloads or logs. Never paste this key into Slack, email, or any
+            other transient surface.
           </p>
         </div>
       </div>
@@ -995,14 +993,14 @@ function CredentialsStep({
             The paste should include the{" "}
             <code>-----BEGIN PRIVATE KEY-----</code> and{" "}
             <code>-----END PRIVATE KEY-----</code> markers (or the matching
-            RSA-PRIVATE-KEY variant). Re-copy the file contents — most
-            terminals truncate when copying via select-all.
+            RSA-PRIVATE-KEY variant). Re-copy the file contents — most terminals
+            truncate when copying via select-all.
           </p>
         )}
         <p className="text-xs text-muted-foreground">
           The key stays in browser memory until the wizard completes — it is
-          base64-encoded over the wire and sealed at rest by Squadron under
-          the <code>squadron.oci_signing_key.v1</code> AAD.
+          base64-encoded over the wire and sealed at rest by Squadron under the{" "}
+          <code>squadron.oci_signing_key.v1</code> AAD.
         </p>
       </div>
 
@@ -1051,8 +1049,8 @@ function ValidateScanStep({
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Squadron will dry-run a ListInstances call against your tenancy to
-        confirm the API Signing Key works. On success, the second button
-        runs a full scan and lands you on the Inventory tab.
+        confirm the API Signing Key works. On success, the second button runs a
+        full scan and lands you on the Inventory tab.
       </p>
       <div className="flex flex-wrap gap-2">
         <Button
@@ -1103,8 +1101,8 @@ function ValidateScanStep({
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" aria-hidden />
             <span className="font-medium">
-              Connected — {validateResult.instance_count ?? 0} compute
-              instances visible.
+              Connected — {validateResult.instance_count ?? 0} compute instances
+              visible.
             </span>
           </div>
           <p className="mt-1 text-xs">
@@ -1147,8 +1145,8 @@ function ValidateScanStep({
             <span className="font-medium">
               Scan complete: {scanResult.instance_count} compute instances (
               {scanResult.instrumented_count} instrumented,{" "}
-              {scanResult.uninstrumented_count} uninstrumented). View
-              Inventory →
+              {scanResult.uninstrumented_count} uninstrumented). View Inventory
+              →
             </span>
           </div>
           <p className="mt-1 text-xs">
@@ -1281,8 +1279,8 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
     return (
       <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
         Scan completed but no compute instances were returned. Either the
-        tenancy is empty in this region or the user OCID lacks read access
-        on the compartments it spans.
+        tenancy is empty in this region or the user OCID lacks read access on
+        the compartments it spans.
       </div>
     );
   }
@@ -1305,7 +1303,9 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
             <tr key={row.resource_id} className="border-t">
               <td className="px-3 py-2 font-mono text-xs">{row.resource_id}</td>
               <td className="px-3 py-2 text-xs">{row.instance_type}</td>
-              <td className="px-3 py-2 text-xs">{row.os_family || "unknown"}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.os_family || "unknown"}
+              </td>
               <td className="px-3 py-2 text-xs">{row.region}</td>
               <td className="px-3 py-2 text-xs">
                 {row.has_otel ? (
@@ -1343,7 +1343,11 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
 // axis observability lever — Operations Insights / Database
 // Management enrollment); rows where the field is undefined render
 // "No" because absence is the uncovered signal per design doc §3.3.
-function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) {
+function DatabaseInventoryTable({
+  rows,
+}: {
+  rows: DatabaseInstanceSnapshot[];
+}) {
   if (rows.length === 0) {
     return (
       <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
@@ -1441,7 +1445,9 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
             <tr key={row.resource_id} className="border-t">
               <td className="px-3 py-2 font-mono text-xs">{row.resource_id}</td>
               <td className="px-3 py-2 text-xs">{row.name || "-"}</td>
-              <td className="px-3 py-2 text-xs">{row.kubernetes_version || "-"}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.kubernetes_version || "-"}
+              </td>
               <td className="px-3 py-2 text-xs">{row.status || "-"}</td>
               <td className="px-3 py-2 text-xs">
                 {row.operations_insights_enabled ? (
@@ -1795,9 +1801,7 @@ function PropagationNotesDialog({
         <DialogHeader>
           <DialogTitle>Propagation notes</DialogTitle>
           <DialogDescription>
-            {state
-              ? `${state.row.surface} · ${state.row.resource_name}`
-              : ""}
+            {state ? `${state.row.surface} · ${state.row.resource_name}` : ""}
           </DialogDescription>
         </DialogHeader>
         {state && state.notes.length === 0 ? (
@@ -1858,14 +1862,14 @@ function RecommendationsTab() {
   return (
     <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
       <p>
-        Recommendations are pending — proposer integration ships in chunk 5
-        of this arc.
+        Recommendations are pending — proposer integration ships in chunk 5 of
+        this arc.
       </p>
       <p className="mt-2 text-xs">
         Chunk 5 extends the discovery proposer with the Provider=&quot;oci&quot;
-        path and the compute-otel-tag recommendation kind, then wires this
-        tab to the same generate-recommendations flow the AWS / GCP / Azure
-        pages use.
+        path and the compute-otel-tag recommendation kind, then wires this tab
+        to the same generate-recommendations flow the AWS / GCP / Azure pages
+        use.
       </p>
     </div>
   );

@@ -165,14 +165,10 @@ export function CommandPalette() {
                     doesn't see a button that 503s on click. */}
                 {askEnabled && (
                   <PaletteItem
-                    icon={
-                      <Sparkles className="h-4 w-4 text-violet-500" />
-                    }
+                    icon={<Sparkles className="h-4 w-4 text-violet-500" />}
                     onSelect={() => {
                       setOpen(false);
-                      document.dispatchEvent(
-                        new CustomEvent(ASK_OPEN_EVENT),
-                      );
+                      document.dispatchEvent(new CustomEvent(ASK_OPEN_EVENT));
                     }}
                     keywords={[
                       "ask",

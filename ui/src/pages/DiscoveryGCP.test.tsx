@@ -50,9 +50,10 @@ if (!Element.prototype.scrollIntoView) {
 }
 
 vi.mock("@/api/discoveryGCP", async () => {
-  const actual = await vi.importActual<typeof import("@/api/discoveryGCP")>(
-    "@/api/discoveryGCP",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/api/discoveryGCP")>(
+      "@/api/discoveryGCP",
+    );
   return {
     ...actual,
     listGCPConnections: vi.fn(),
@@ -91,7 +92,8 @@ function buildSAJSON(overrides: Partial<Record<string, string>> = {}): string {
     type: "service_account",
     project_id: "my-prod-project",
     private_key_id: "abcd1234",
-    private_key: "-----BEGIN PRIVATE KEY-----\nfake-key-bytes\n-----END PRIVATE KEY-----\n",
+    private_key:
+      "-----BEGIN PRIVATE KEY-----\nfake-key-bytes\n-----END PRIVATE KEY-----\n",
     client_email: "squadron-discovery@my-prod-project.iam.gserviceaccount.com",
     client_id: "1234567890",
   };
@@ -115,7 +117,8 @@ const sampleScan: ScanGCPResponse = {
   scan_id: "scan-uuid-1",
   compute: [
     {
-      resource_id: "projects/my-prod-project/zones/us-central1-a/instances/web-1",
+      resource_id:
+        "projects/my-prod-project/zones/us-central1-a/instances/web-1",
       instance_type: "e2-medium",
       tags: { otel: "true" },
       has_otel: true,
@@ -123,7 +126,8 @@ const sampleScan: ScanGCPResponse = {
       region: "us-central1",
     },
     {
-      resource_id: "projects/my-prod-project/zones/us-central1-a/instances/web-2",
+      resource_id:
+        "projects/my-prod-project/zones/us-central1-a/instances/web-2",
       instance_type: "e2-medium",
       tags: { env: "prod" },
       has_otel: false,
@@ -131,7 +135,8 @@ const sampleScan: ScanGCPResponse = {
       region: "us-central1",
     },
     {
-      resource_id: "projects/my-prod-project/zones/us-central1-a/instances/web-3",
+      resource_id:
+        "projects/my-prod-project/zones/us-central1-a/instances/web-3",
       instance_type: "n2-standard-2",
       tags: {},
       has_otel: false,
@@ -139,7 +144,8 @@ const sampleScan: ScanGCPResponse = {
       region: "us-central1",
     },
     {
-      resource_id: "projects/my-prod-project/zones/us-central1-a/instances/web-4",
+      resource_id:
+        "projects/my-prod-project/zones/us-central1-a/instances/web-4",
       instance_type: "e2-medium",
       tags: {},
       has_otel: false,
@@ -147,7 +153,8 @@ const sampleScan: ScanGCPResponse = {
       region: "us-central1",
     },
     {
-      resource_id: "projects/my-prod-project/zones/us-central1-a/instances/web-5",
+      resource_id:
+        "projects/my-prod-project/zones/us-central1-a/instances/web-5",
       instance_type: "e2-medium",
       tags: {},
       has_otel: false,
@@ -237,7 +244,8 @@ describe("DiscoveryGCP", () => {
     const incomplete = JSON.stringify({
       type: "service_account",
       project_id: "my-prod-project",
-      private_key: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+      private_key:
+        "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
       // client_email intentionally omitted.
     });
     const textarea = screen.getByLabelText(/Service-account key/i);
@@ -374,9 +382,7 @@ describe("DiscoveryGCP", () => {
 
     // The table renders with the seeded 5 rows.
     await waitFor(() => {
-      expect(
-        screen.getByText(/instances\/web-1/),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/instances\/web-1/)).toBeInTheDocument();
     });
     expect(screen.getByText(/instances\/web-5/)).toBeInTheDocument();
     expect(mockedScanGCPConnection).toHaveBeenCalledWith(sampleConnection.id);
@@ -435,9 +441,7 @@ describe("DiscoveryGCP", () => {
       expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
     });
 
-    await user.click(
-      screen.getByRole("tab", { name: /Recommendations/i }),
-    );
+    await user.click(screen.getByRole("tab", { name: /Recommendations/i }));
     await waitFor(() => {
       expect(
         screen.getByText(/ships in chunk 5 of this arc/i),
@@ -455,7 +459,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       databases: [
@@ -488,13 +495,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -528,7 +541,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -537,13 +553,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
     await waitFor(() => {
@@ -566,12 +588,16 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       clusters: [
         {
-          resource_id: "projects/my-prod-project/locations/us-central1/clusters/gke-covered",
+          resource_id:
+            "projects/my-prod-project/locations/us-central1/clusters/gke-covered",
           name: "gke-covered",
           kubernetes_version: "1.29",
           status: "RUNNING",
@@ -581,7 +607,8 @@ describe("DiscoveryGCP", () => {
           tags: { env: "prod" },
         },
         {
-          resource_id: "projects/my-prod-project/locations/us-central1/clusters/gke-uncovered",
+          resource_id:
+            "projects/my-prod-project/locations/us-central1/clusters/gke-uncovered",
           name: "gke-uncovered",
           kubernetes_version: "1.29",
           status: "RUNNING",
@@ -599,13 +626,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -621,10 +654,14 @@ describe("DiscoveryGCP", () => {
     // column reads "Yes"; the uncovered row reads "No". The
     // instrumentation column header reads "Managed Prometheus?".
     expect(
-      screen.getByText("projects/my-prod-project/locations/us-central1/clusters/gke-covered"),
+      screen.getByText(
+        "projects/my-prod-project/locations/us-central1/clusters/gke-covered",
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("projects/my-prod-project/locations/us-central1/clusters/gke-uncovered"),
+      screen.getByText(
+        "projects/my-prod-project/locations/us-central1/clusters/gke-uncovered",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText(/Managed Prometheus\?/i)).toBeInTheDocument();
   });
@@ -637,7 +674,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -646,13 +686,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
     await waitFor(() => {
@@ -662,7 +708,9 @@ describe("DiscoveryGCP", () => {
     const kubernetesTab = screen.getByRole("tab", { name: /^Kubernetes$/i });
     await user.click(kubernetesTab);
     expect(
-      screen.getByText(/No Kubernetes clusters discovered\. Run a scan to refresh\./i),
+      screen.getByText(
+        /No Kubernetes clusters discovered\. Run a scan to refresh\./i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -675,7 +723,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -712,13 +763,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -740,7 +797,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue(sampleScan);
 
     renderPage();
@@ -749,13 +809,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
     await waitFor(() => {
@@ -765,7 +831,9 @@ describe("DiscoveryGCP", () => {
     const serverlessTab = screen.getByRole("tab", { name: /^Serverless$/i });
     await user.click(serverlessTab);
     expect(
-      screen.getByText(/No serverless functions discovered\. Run a scan to refresh\./i),
+      screen.getByText(
+        /No serverless functions discovered\. Run a scan to refresh\./i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -779,7 +847,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -806,13 +877,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -833,7 +910,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -860,13 +940,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -891,7 +977,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -918,13 +1007,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -941,7 +1036,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -968,13 +1066,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -999,7 +1103,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1024,13 +1131,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -1047,7 +1160,10 @@ describe("DiscoveryGCP", () => {
     const user = userEvent.setup();
     mockedListGCPConnections.mockResolvedValue([sampleConnection]);
     mockedCreateGCPConnection.mockResolvedValue(sampleConnection);
-    mockedValidateGCPConnection.mockResolvedValue({ ok: true, instance_count: 5 });
+    mockedValidateGCPConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
     mockedScanGCPConnection.mockResolvedValue({
       ...sampleScan,
       serverless: [
@@ -1074,13 +1190,19 @@ describe("DiscoveryGCP", () => {
     });
 
     await advanceToValidateStep(user);
-    await user.click(screen.getByRole("button", { name: /Validate connection/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
-      expect(screen.getByText(/Connected — 5 instances visible/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Connected — 5 instances visible/i),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Run scan/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
@@ -1121,9 +1243,7 @@ describe("DiscoveryGCP", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
     await waitFor(() => {
-      expect(
-        screen.getByLabelText(/Service-account key/i),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/Service-account key/i)).toBeInTheDocument();
     });
   }
 
@@ -1253,7 +1373,9 @@ describe("DiscoveryGCP", () => {
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
 
     await waitFor(() => {
-      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(0);
+      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(
+        0,
+      );
     });
   });
 });

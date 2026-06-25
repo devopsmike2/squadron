@@ -74,9 +74,8 @@ if (!Element.prototype.scrollIntoView) {
 }
 
 vi.mock("@/api/discovery", async () => {
-  const actual = await vi.importActual<typeof import("@/api/discovery")>(
-    "@/api/discovery",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/api/discovery")>("@/api/discovery");
   return {
     ...actual,
     listAWSConnections: vi.fn(),
@@ -111,9 +110,8 @@ vi.mock("@/api/discovery", async () => {
 // configure-placement notice, or the connect-a-repo notice. The
 // mock replaces the live fetcher with a vi.fn each test configures.
 vi.mock("@/api/iacGithub", async () => {
-  const actual = await vi.importActual<typeof import("@/api/iacGithub")>(
-    "@/api/iacGithub",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/api/iacGithub")>("@/api/iacGithub");
   return {
     ...actual,
     listIaCGitHubConnections: vi.fn(),
@@ -127,7 +125,9 @@ const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
 const mockedListIaCConnections = vi.mocked(listIaCGitHubConnections);
 const mockedOpenPullRequest = vi.mocked(openIaCGitHubPullRequest);
 const mockedSetRecommendationExclusion = vi.mocked(setRecommendationExclusion);
-const mockedListExcludedRecommendations = vi.mocked(listExcludedRecommendations);
+const mockedListExcludedRecommendations = vi.mocked(
+  listExcludedRecommendations,
+);
 
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Without this, the second test in the file would
@@ -246,7 +246,8 @@ const sampleScan: ScanResult = {
   ],
   load_balancers: [
     {
-      resource_id: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/api-prod/aaaa",
+      resource_id:
+        "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/api-prod/aaaa",
       name: "api-prod",
       type: "application",
       scheme: "internet-facing",
@@ -315,9 +316,7 @@ describe("DiscoveryAWSPage", () => {
     renderPage();
     // Tabs render as buttons with role tab.
     expect(screen.getByRole("tab", { name: /Account/i })).toBeInTheDocument();
-    expect(
-      screen.getByRole("tab", { name: /Inventory/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Inventory/i })).toBeInTheDocument();
     expect(
       screen.getByRole("tab", { name: /Recommendations/i }),
     ).toBeInTheDocument();
@@ -438,15 +437,11 @@ describe("DiscoveryAWSPage", () => {
       }),
     );
     await waitFor(() => {
-      expect(
-        screen.getByLabelText(/Existing ExternalId/i),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/Existing ExternalId/i)).toBeInTheDocument();
     });
     // The standard account-id input is still there — the resume
     // field is additive, not replacement.
-    expect(
-      screen.getByPlaceholderText("123456789012"),
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("123456789012")).toBeInTheDocument();
   });
 
   it("Connect new account button (without resume) does NOT show the Existing ExternalId field", async () => {
@@ -470,7 +465,7 @@ describe("DiscoveryAWSPage", () => {
     ).not.toBeInTheDocument();
   });
 
-    it("Inventory tab Run scan triggers scanner and renders result", async () => {
+  it("Inventory tab Run scan triggers scanner and renders result", async () => {
     mockedListAWSConnections.mockResolvedValue({
       connections: sampleConnections,
     });
@@ -570,9 +565,9 @@ describe("DiscoveryAWSPage", () => {
     expect(screen.getByText("staging-cluster")).toBeInTheDocument();
     // Control plane logging badge for the covered cluster
     // renders "api" + "audit" (both required for axis 1).
-    expect(
-      within(document.body).getAllByText(/^api$/).length,
-    ).toBeGreaterThan(0);
+    expect(within(document.body).getAllByText(/^api$/).length).toBeGreaterThan(
+      0,
+    );
     expect(
       within(document.body).getAllByText(/^audit$/).length,
     ).toBeGreaterThan(0);
@@ -664,7 +659,8 @@ describe("DiscoveryAWSPage", () => {
         action: { kind: "plan", payload: {} },
         iac: {
           format: "terraform",
-          source: 'resource "aws_lambda_function" "hello" {\n  layers = [...]\n}',
+          source:
+            'resource "aws_lambda_function" "hello" {\n  layers = [...]\n}',
         },
       },
       {
@@ -736,9 +732,7 @@ describe("DiscoveryAWSPage", () => {
     // Auto-switched to the Recommendations tab — the proposer reasoning
     // and both step titles render.
     await waitFor(() => {
-      expect(
-        screen.getByText(/Proposer reasoning/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/Proposer reasoning/i)).toBeInTheDocument();
     });
     expect(
       screen.getByText(/AI plan step 0: instrument 2 Lambdas/i),
@@ -856,9 +850,7 @@ describe("DiscoveryAWSPage", () => {
     expect(
       screen.queryByRole("button", { name: /^Open PR for/i }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/Want one-click PRs\?/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Want one-click PRs\?/i)).toBeInTheDocument();
     const link = screen.getByRole("link", {
       name: /Connect a Terraform repo/i,
     });
@@ -893,9 +885,7 @@ describe("DiscoveryAWSPage", () => {
     expect(
       screen.getByRole("button", { name: /Copy Terraform snippet/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Want one-click PRs\?/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Want one-click PRs\?/i)).not.toBeInTheDocument();
   });
 
   it("RecommendationCard_renders_configure_placement_link_when_connection_but_no_placement", async () => {
@@ -934,9 +924,7 @@ describe("DiscoveryAWSPage", () => {
     ).toBeInTheDocument();
     // The resource_kind name is in the notice (rendered inside a
     // <code>); querying the surrounding paragraph is sufficient.
-    expect(
-      screen.getByText(/lambda-otel-layer/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/lambda-otel-layer/)).toBeInTheDocument();
     // v0.89.4 (#610) — State-B link target deep-links the wizard
     // via ?connection_id=...&step=placement&kind=<resource_kind>
     // so the operator lands on the right placement row in one
@@ -1209,9 +1197,7 @@ describe("DiscoveryAWSPage", () => {
     expect(
       screen.getByRole("button", { name: /^Open PR for/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Needs manual merge/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Needs manual merge/i)).toBeInTheDocument();
   });
 
   // v0.89.12 (#628 Stream 29) — slice 2 — when the recommendation
@@ -1263,9 +1249,7 @@ describe("DiscoveryAWSPage", () => {
       screen.getByRole("button", { name: /^Open PR for/i }),
     ).toBeInTheDocument();
     expect(screen.getByText(/HCL-merged/i)).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Needs manual merge/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Needs manual merge/i)).not.toBeInTheDocument();
   });
 
   // v0.89.12 — fallback case: patch_existing kind with NO
@@ -1341,9 +1325,7 @@ describe("DiscoveryAWSPage", () => {
     expect(
       screen.getByRole("button", { name: /^Open PR for/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Needs manual merge/i),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Needs manual merge/i)).not.toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------
@@ -1535,9 +1517,7 @@ describe("DiscoveryAWSPage", () => {
       expect(screen.getByText(/Scan succeeded/i)).toBeInTheDocument();
     });
     expect(
-      screen.getByText(
-        /10 resources · 6 instrumented · 4 uninstrumented/,
-      ),
+      screen.getByText(/10 resources · 6 instrumented · 4 uninstrumented/),
     ).toBeInTheDocument();
     expect(screen.getByText("AccessDenied")).toBeInTheDocument();
     expect(
@@ -1598,9 +1578,7 @@ describe("DiscoveryAWSPage", () => {
     await waitFor(() => {
       expect(screen.getByText(/Partial scan-all/i)).toBeInTheDocument();
     });
-    expect(
-      screen.getByText(/1 of 2 accounts failed/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/1 of 2 accounts failed/i)).toBeInTheDocument();
     scanAllSpy.mockRestore();
   });
 
@@ -1729,9 +1707,10 @@ describe("DiscoveryAWSPage", () => {
       resource_kind: "lambda-otel-layer",
       affected_resources: [`arn:aws:lambda:us-east-1:123:function:fn-${i}`],
     });
-    const items = overrides.length === 0
-      ? [base(1), base(2)]
-      : overrides.map((o, i) => ({ ...base(i + 1), ...o }));
+    const items =
+      overrides.length === 0
+        ? [base(1), base(2)]
+        : overrides.map((o, i) => ({ ...base(i + 1), ...o }));
     return {
       declined: false,
       reasoning: "",
@@ -1795,9 +1774,9 @@ describe("DiscoveryAWSPage", () => {
       ).toBeInTheDocument();
     });
     // Success toast names the persistence behavior.
-    expect(
-      screen.getByTestId("exclusion-toast"),
-    ).toHaveTextContent(/Excluded — Squadron won't propose this/i);
+    expect(screen.getByTestId("exclusion-toast")).toHaveTextContent(
+      /Excluded — Squadron won't propose this/i,
+    );
     // The first card switches its button label to Restore; the
     // second still reads "Don't propose this again".
     expect(
@@ -1980,7 +1959,9 @@ describe("DiscoveryAWSPage", () => {
     ).toHaveLength(1);
     // And the two excluded rows surface Restore buttons.
     expect(
-      screen.getAllByRole("button", { name: /Restore .* as a recommendation/i }),
+      screen.getAllByRole("button", {
+        name: /Restore .* as a recommendation/i,
+      }),
     ).toHaveLength(2);
     // No toast on hydration — that's a side-effect of a user
     // action, not a passive load.
@@ -2035,9 +2016,7 @@ describe("DiscoveryAWSPage", () => {
     });
     mockedRunAWSScan.mockResolvedValue({
       ...sampleScan,
-      compute: [
-        { ...sampleScan.compute[0], last_seen_at: fiveMinAgo },
-      ],
+      compute: [{ ...sampleScan.compute[0], last_seen_at: fiveMinAgo }],
     });
     const user = userEvent.setup();
     renderPageInSingleAccountView();
@@ -2071,9 +2050,7 @@ describe("DiscoveryAWSPage", () => {
     });
     mockedRunAWSScan.mockResolvedValue({
       ...sampleScan,
-      compute: [
-        { ...sampleScan.compute[0], last_seen_at: undefined },
-      ],
+      compute: [{ ...sampleScan.compute[0], last_seen_at: undefined }],
     });
     const user = userEvent.setup();
     renderPageInSingleAccountView();
@@ -2098,7 +2075,9 @@ describe("DiscoveryAWSPage", () => {
 
     await waitFor(() => {
       // At least one row renders with "never" + warning indicator.
-      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(0);
+      expect(screen.getAllByTestId("last-seen-never").length).toBeGreaterThan(
+        0,
+      );
     });
   });
 
@@ -2154,9 +2133,9 @@ describe("DiscoveryAWSPage", () => {
     );
 
     // All 5 cards visible initially.
-    expect(
-      screen.getAllByTestId("discovery-recommendation-card"),
-    ).toHaveLength(5);
+    expect(screen.getAllByTestId("discovery-recommendation-card")).toHaveLength(
+      5,
+    );
 
     // Click the filter chip; only the 3 trace-emission-* cards remain.
     const chip = screen.getByTestId("trace-emission-filter-chip");
@@ -2169,9 +2148,10 @@ describe("DiscoveryAWSPage", () => {
         screen.getAllByTestId("discovery-recommendation-card"),
       ).toHaveLength(3);
     });
-    expect(
-      screen.getByTestId("trace-emission-filter-chip"),
-    ).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("trace-emission-filter-chip")).toHaveAttribute(
+      "data-active",
+      "true",
+    );
 
     // Click again — filter clears, all 5 return.
     await user.click(screen.getByTestId("trace-emission-filter-chip"));
@@ -2358,9 +2338,7 @@ describe("DiscoveryAWSPage", () => {
     });
     // The Lambda row's resource name renders; surface column reads
     // "lambda". The trace axis cell renders a ✓ via AxisCheck.
-    expect(
-      screen.getByText("hello", { selector: "td" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("hello", { selector: "td" })).toBeInTheDocument();
     expect(screen.getByText("lambda")).toBeInTheDocument();
   });
 
@@ -2398,7 +2376,9 @@ describe("DiscoveryAWSPage", () => {
     // Functions / Databases sections).
     await user.click(screen.getByRole("button", { name: /Serverless \(0\)/i }));
     expect(
-      screen.getByText(/No serverless functions visible in the scanned regions/i),
+      screen.getByText(
+        /No serverless functions visible in the scanned regions/i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -2421,8 +2401,7 @@ describe("DiscoveryAWSPage", () => {
           account_id: "123456789012",
           region: "us-east-1",
           resource_name: "order-processor",
-          resource_arn:
-            "arn:aws:lambda:us-east-1:123:function:order-processor",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:order-processor",
           runtime: "python3.11",
           has_trace_axis: true,
           has_otel_distro: false,
@@ -2690,8 +2669,7 @@ describe("DiscoveryAWSPage", () => {
           account_id: "123456789012",
           region: "us-east-1",
           resource_name: "sampling-lambda",
-          resource_arn:
-            "arn:aws:lambda:us-east-1:123:function:sampling-lambda",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:sampling-lambda",
           runtime: "python3.11",
           has_trace_axis: true,
           has_otel_distro: false,
@@ -2848,8 +2826,7 @@ describe("DiscoveryAWSPage", () => {
           account_id: "123456789012",
           region: "us-east-1",
           resource_name: "no-sampling-obs",
-          resource_arn:
-            "arn:aws:lambda:us-east-1:123:function:no-sampling-obs",
+          resource_arn: "arn:aws:lambda:us-east-1:123:function:no-sampling-obs",
           runtime: "python3.11",
           has_trace_axis: true,
           has_otel_distro: false,
@@ -3225,7 +3202,8 @@ describe("DiscoveryAWSPage", () => {
           account_id: "123456789012",
           region: "us-east-1",
           resource_name: "express-machine",
-          resource_arn: "arn:aws:states:us-east-1:123:stateMachine:express-machine",
+          resource_arn:
+            "arn:aws:states:us-east-1:123:stateMachine:express-machine",
           workflow_type: "EXPRESS",
           has_trace_axis: false,
           has_log_axis: true,
@@ -3307,9 +3285,7 @@ describe("DiscoveryAWSPage", () => {
     await waitFor(() => {
       expect(screen.getByText(/Event sources \(1\)/i)).toBeInTheDocument();
     });
-    expect(
-      screen.getByText("default", { selector: "td" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("default", { selector: "td" })).toBeInTheDocument();
     expect(screen.getByText("eventbridge")).toBeInTheDocument();
   });
 
