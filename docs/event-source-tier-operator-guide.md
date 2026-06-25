@@ -1188,6 +1188,154 @@ Per §13 of the design doc:
   CloudEvents payload validation, private endpoint
   configuration validation
 
+## Slice 7 SHIPPED in v0.89.149-v0.89.151 — OCI Notification Service
+
+Slice 7 closes the cross-cloud event source widening pass by
+adding OCI Notification Service (ONS) as the second OCI
+event source surface alongside Streaming. ONS serves the
+pub/sub fan-out pattern — the analog of AWS SNS + GCP Pub/Sub
+on the alert distribution side.
+
+After slice 7, the cross-cloud surface count lands at
+**3-2-2-2**:
+
+- AWS: EventBridge + SNS + SQS (3 surfaces)
+- GCP: Pub/Sub + Cloud Tasks (2 surfaces)
+- Azure: Service Bus + Event Grid (2 surfaces)
+- OCI: Streaming + Notification Service (2 surfaces)
+
+Total: **9 event source surfaces across 4 clouds.** The
+widening pass closes here.
+
+### New recommendation kind
+
+1 new kind in slice 7:
+
+- `ons-logging-enable` — ONS Topic has no OCI Logging
+  configuration. Without a log group capturing topic
+  delivery events, the operator has no audit trail for
+  which alarms / notifications were delivered to which
+  subscribers — the first question in any incident
+  postmortem where the operator needs to confirm "did the
+  page actually get sent?".
+
+The Logging axis mirrors the slice 1 Streaming
+`streaming-logging-enable` pattern exactly. The
+`listLogsForTopic` helper is structurally identical to
+`listLogsForStream` from slice 1 chunk 4 — same OCI Logging
+`/logs` endpoint, same `searchTerm=<ocid>` convention, same
+defensive `Source.Resource` side-check.
+
+### Terraform Squadron emits
+
+For an `ons-logging-enable` recommendation, Squadron's IaC PR
+configures an `oci_logging_log` routing the topic's delivery
+events to a log group. The log group destination is parameterized
+via `var.default_log_group_id` so operators with an existing
+log group can reuse it without Squadron prescribing the
+destination.
+
+```hcl
+resource "oci_logging_log" "<name>_delivery_log" {
+  display_name = "${oci_ons_notification_topic.<name>.name}-delivery-log"
+  log_group_id = var.default_log_group_id  # operator provides
+  log_type     = "SERVICE"
+
+  configuration {
+    source {
+      category    = "all"
+      resource    = oci_ons_notification_topic.<name>.id
+      service     = "notification"
+      source_type = "OCISERVICE"
+    }
+    compartment_id = oci_ons_notification_topic.<name>.compartment_id
+  }
+
+  is_enabled         = true
+  retention_duration = 30  # operator may tune
+}
+```
+
+### Decline path
+
+Decline `ons-logging-enable` if your team routes ONS audit
+through a non-OCI-Logging destination — Cloud Guard custom
+recipes, OCI Streaming capture, third-party SIEM connectors
+all count. The verdict learning loop records the decline and
+quiets the recommendation on future scans matching the same
+fingerprint.
+
+### Two-way dispatcher posture
+
+Slice 7 extends `ScanEventSources` to fan out across
+Streaming + Notifications with partial-scan posture mirroring
+the slice 6 Azure two-way dispatcher:
+
+- Streaming success + ONS success → returns union of snapshots
+- One-side failure → returns the other side's snapshots
+- Both-side failure → returns terminal error mentioning both
+  surfaces
+
+The compartment list call is shared between both surface
+walks. When `/compartments` fails, both surfaces fail with
+the same root cause (substrate-shared); the dispatcher
+surfaces the error mentioning both surfaces so the audit
+consumer sees the cross-surface fault domain explicitly.
+Pinned by `TestScanEventSources_BothFail_MentionsBothSurfaces`.
+
+### IAM extension
+
+Slice 7 adds one new OCI policy statement:
+
+```
+Allow group SquadronReaders to read ons-topics in compartment <name>
+```
+
+The existing Logging read policy from slice 1 (`read log-content`
++ `read log-groups`) covers the per-topic Logging detection
+call without extension.
+
+### The OCI alerting + integration chain Squadron now sees
+
+After slice 7, the canonical OCI workload-health chain is
+fully visible end-to-end:
+
+1. **Monitoring alarm** firing on a workload metric
+   (substrate's three diagnostics: cold-start P95, sampling
+   rate, error rate)
+2. **ONS topic** without Logging configured (this slice
+   `ons-logging-enable`) — operator has no audit of which
+   subscribers got the page
+3. **ONS subscription** (slice 8+ — protocol enforcement,
+   retry policy tuning)
+4. **Functions / OKE** without trace primitive (serverless +
+   kubernetes tiers)
+5. **Workload health view** — workload-health dashboard
+   panel from v0.89.131-133
+
+Five layers. One control plane. Four clouds. Fully widened
+on the event source tier.
+
+### Slice 8+ deferrals
+
+Per §13 of the slice 7 design doc:
+- **Azure Event Hubs** — third Azure surface (deferred from
+  slice 7 honest deferral; design doc §1 picks ONS first
+  for closing the OCI pass)
+- **OCI Queue Service** — third OCI surface (transactional
+  message queues, distinct primitive)
+- **Per-subscription protocol enforcement** — HTTP → HTTPS
+  recommendation at subscription scope
+- **Per-subscription retry policy tuning** — extending
+  `deliveryPolicy.maxRetryDuration` on subscriptions with
+  short default retries
+- **ONS Subscription confirmation lag detection** — flag
+  PENDING subscriptions older than 24h
+- **CMEK / vault key rotation validation** — deeper
+  encryption posture
+- **Per-delivery audit reconstruction** — assemble per-event
+  delivery timelines from the Logging stream
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —

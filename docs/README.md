@@ -180,9 +180,30 @@ jump straight to that page.
   only) to two-way (Service Bus + Event Grid) with partial-scan
   posture both directions. NO IAM extension (existing Reader
   role covers). **Slice 6 SHIPPED in v0.89.148.** AWS: 3 event
-  source surfaces; GCP: 2; Azure: 2; OCI: 1 — slice 7 will add
-  Azure Event Hubs + OCI Notification Service to close the
-  widening pass at 3-2-3-2.
+  source surfaces; GCP: 2; Azure: 2; OCI: 1 — slice 7 closes
+  the widening pass at 3-2-2-2.
+  **Slice 7 (v0.89.149-v0.89.151)** closes the cross-cloud
+  event source widening pass by adding OCI Notification
+  Service (ONS) as the second OCI event source surface
+  alongside Streaming. ONS serves the pub/sub fan-out pattern
+  — the analog of AWS SNS + GCP Pub/Sub on the alert
+  distribution side. 1 new recommendation kind:
+  `ons-logging-enable` (Terraform: `oci_logging_log` routing
+  topic delivery events to a log group, parameterized via
+  `var.default_log_group_id`) mirrors the slice 1 Streaming
+  `streaming-logging-enable` pattern via a shared OCI Logging
+  `/logs` detection helper. 1 new webhook prefix: `ons-` → oci.
+  `ScanEventSources` dispatcher extends from one-way (Streaming
+  only) to two-way (Streaming + Notifications) with
+  partial-scan posture both directions. IAM extension:
+  `read ons-topics in compartment` added to the OCI scanner
+  policy template; existing slice 1 Logging read policy covers
+  the per-topic detection call. **Slice 7 SHIPPED in
+  v0.89.151.** The cross-cloud widening pass closes at
+  **3-2-2-2 / 9 surfaces across 4 clouds** — AWS 3
+  (EventBridge + SNS + SQS), GCP 2 (Pub/Sub + Cloud Tasks),
+  Azure 2 (Service Bus + Event Grid), OCI 2 (Streaming +
+  Notification Service).
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

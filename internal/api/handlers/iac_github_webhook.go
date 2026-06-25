@@ -1033,7 +1033,16 @@ func providerFromRecommendationKind(kind string) string {
 		// orchestration coverage. The resmgr- prefix is positioned
 		// alongside compute-/ocidb-/oke-/ocifunc-/streaming- so the OCI
 		// family stays grouped.
-		strings.HasPrefix(kind, "resmgr-"):
+		strings.HasPrefix(kind, "resmgr-") ||
+		// Event source tier slice 7 chunk 2 (v0.89.151, #793 Stream 190)
+		// — OCI Notification Service kinds (ons-logging-enable) route
+		// to OCI. Closes the cross-cloud event source widening pass at
+		// 3-2-2-2 surfaces (AWS EventBridge+SNS+SQS, GCP Pub/Sub+
+		// Cloud Tasks, Azure Service Bus+Event Grid, OCI Streaming+
+		// Notification Service). The ons- prefix is positioned
+		// alongside streaming- so the OCI event-source family stays
+		// grouped.
+		strings.HasPrefix(kind, "ons-"):
 		return "oci"
 	default:
 		return "aws"

@@ -411,6 +411,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice6EventGridKindsPromptSection +
 
+	eventSourceTierSlice7ONSKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -1963,6 +1965,61 @@ Slice 6 covers Custom Topics. Event Grid System Topics
 (auto-created by Azure services like Blob Storage) are slice
 8+ candidate. Event Grid Domains (multi-tenant pattern) are
 also slice 8+.
+
+` + "\n"
+
+// eventSourceTierSlice7ONSKindsPromptSection — event source tier
+// slice 7 chunk 2 (v0.89.151, #793 Stream 190). One new
+// recommendation kind: ons-logging-enable. Closes the cross-cloud
+// event source widening pass at 3-2-2-2 surfaces.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no ONS observations the rendered user message
+// stays byte-identical to v0.89.148 across all four providers.
+// Pinned by TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice7.
+const eventSourceTierSlice7ONSKindsPromptSection = `EVENT SOURCE TIER SLICE 7 — OCI NOTIFICATION SERVICE (v0.89.149-151):
+
+Adds OCI Notification Service (ONS) as the second OCI event
+source surface alongside Streaming. ONS is OCI's pub/sub
+fan-out primitive — the analog of AWS SNS + GCP Pub/Sub on
+the alert distribution side. After slice 7, OCI has 2 event
+source surfaces matching Azure (Service Bus + Event Grid).
+
+The cross-cloud event source widening pass closes at 3-2-2-2:
+AWS 3 (EventBridge + SNS + SQS), GCP 2 (Pub/Sub + Cloud
+Tasks), Azure 2 (Service Bus + Event Grid), OCI 2 (Streaming
++ Notification Service).
+
+The canonical OCI alerting + integration architecture:
+Monitoring alarm -> ONS topic -> subscribers (HTTP(S),
+email, PagerDuty, Slack, Functions, etc.).
+
+- ons-logging-enable: ONS Topic has no OCI Logging
+  configuration. Without a log group capturing topic
+  delivery events, the operator has no audit trail for
+  which alarms / notifications were delivered to which
+  subscribers — the first question in any incident
+  postmortem where the operator needs to confirm 'did the
+  page actually get sent?'.
+
+  Mirrors the Streaming streaming-logging-enable pattern
+  from slice 1. Terraform: oci_logging_log routing
+  delivery events to a log group (operator's existing log
+  group via var.default_log_group_id; new log group created
+  if no operator-default is provided).
+
+DECLINE PATH for ons-logging-enable: operators routing ONS
+audit through a non-OCI-Logging destination (Cloud Guard
+custom recipe, OCI Streaming capture, third-party SIEM
+connector) should decline. The verdict learning loop records.
+
+CAVEAT FOR ALL ONS RECOMMENDATIONS:
+Slice 7 covers per-topic Logging axis. Per-subscription
+detection (HTTP -> HTTPS, retry policy tuning) is slice 8+
+candidate. Per-delivery audit reconstruction from the
+Logging stream is slice 8+ candidate. ONS Subscription
+confirmation lag detection (PENDING > 24h) is slice 8+.
 
 ` + "\n"
 

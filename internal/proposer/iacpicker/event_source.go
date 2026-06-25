@@ -311,3 +311,60 @@ func PickEventGridCloudEventSchemaPattern(row RecommendationContext) (terraform,
 
 	return
 }
+
+// PickONSLoggingPattern emits the Terraform snippet for an
+// ons-logging-enable recommendation per event source tier slice 7
+// chunk 2 (v0.89.151, #793 Stream 190). Configures an OCI Logging
+// service log routing the topic's delivery events to a log group per
+// §8 of docs/proposals/event-source-tier-slice7.md.
+//
+// Slice 7 closes the cross-cloud event source widening pass by
+// adding OCI Notification Service (ONS) as the second OCI event
+// source surface (alongside Streaming, slice 1). The Logging axis on
+// ONS mirrors the slice 1 streaming-logging-enable pattern exactly —
+// same oci_logging_log resource shape, same configuration block,
+// same retention default. The only differences are
+// service = "notification" (vs. "streaming") and source_type still
+// "OCISERVICE" for both.
+//
+// row.ResourceTFName is the best-effort Terraform resource name the
+// proposer extracted from the operator's repo. When empty, the
+// snippet falls back to "<name>" so the operator can substitute the
+// real topic name during review (matches every slice in the
+// event-source family).
+//
+// The log_group_id reference is var.default_log_group_id — the
+// operator's existing log group is reused when set; when unset, the
+// operator extends var declarations during PR review. This keeps the
+// emitted Terraform compatible with operators who manage the log
+// group destination outside Squadron's PR scope.
+func PickONSLoggingPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "oci_logging_log" "%s_delivery_log" {
+  display_name = "${oci_ons_notification_topic.%s.name}-delivery-log"
+  log_group_id = var.default_log_group_id  # operator provides
+  log_type     = "SERVICE"
+
+  configuration {
+    source {
+      category    = "all"
+      resource    = oci_ons_notification_topic.%s.id
+      service     = "notification"
+      source_type = "OCISERVICE"
+    }
+    compartment_id = oci_ons_notification_topic.%s.compartment_id
+  }
+
+  is_enabled         = true
+  retention_duration = 30  # operator may tune
+}
+`, name, name, name, name)
+
+	reasoning = "ONS Topics without OCI Logging configured have no audit trail for which alarms / notifications were delivered to which subscribers — the first question in any incident postmortem where the operator needs to confirm 'did the page actually get sent?'. Mirrors the slice 1 streaming-logging-enable pattern. The PR configures an oci_logging_log routing delivery events to var.default_log_group_id; operators using a different log group can swap the variable. Decline if your team routes ONS audit through a non-OCI-Logging destination (Cloud Guard custom recipe, OCI Streaming capture, third-party SIEM connector) — the verdict learning loop records."
+
+	return
+}
