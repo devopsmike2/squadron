@@ -53,9 +53,9 @@ export function AskSquadronHero() {
               </button>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Ask in plain English. The deputy answers from your rollouts,
-              audit events, cost spikes, and agents — with citation chips
-              that link straight to the source row.
+              Ask in plain English. The deputy answers from your rollouts, audit
+              events, cost spikes, and agents — with citation chips that link
+              straight to the source row.
             </p>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {EXAMPLES.map((q) => (

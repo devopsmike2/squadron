@@ -47,9 +47,8 @@ if (!Element.prototype.setPointerCapture) {
 }
 
 vi.mock("@/api/iacGithub", async () => {
-  const actual = await vi.importActual<typeof import("@/api/iacGithub")>(
-    "@/api/iacGithub",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/api/iacGithub")>("@/api/iacGithub");
   return {
     ...actual,
     listIaCGitHubConnections: vi.fn(),
@@ -136,9 +135,7 @@ describe("DiscoveryIaCGitHubPage", () => {
     ).toBeInTheDocument();
     // Read-only / branch-protection reassurance reinforces the
     // trust thesis at the empty state.
-    expect(
-      screen.getByText(/never your default branch/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/never your default branch/i)).toBeInTheDocument();
   });
 
   it("renders two connection cards when populated", async () => {
@@ -149,8 +146,12 @@ describe("DiscoveryIaCGitHubPage", () => {
     });
     expect(screen.getByText("octo/platform")).toBeInTheDocument();
     // Layout badges visible per row.
-    expect(within(document.body).getAllByText(/^multi$/).length).toBeGreaterThan(0);
-    expect(within(document.body).getAllByText(/^mono$/).length).toBeGreaterThan(0);
+    expect(
+      within(document.body).getAllByText(/^multi$/).length,
+    ).toBeGreaterThan(0);
+    expect(within(document.body).getAllByText(/^mono$/).length).toBeGreaterThan(
+      0,
+    );
     // Per-row placement counts visible — uses pluralized labels.
     expect(screen.getByText(/1 placement/)).toBeInTheDocument();
     expect(screen.getByText(/2 placements/)).toBeInTheDocument();
@@ -175,9 +176,7 @@ describe("DiscoveryIaCGitHubPage", () => {
     );
     // Confirm modal renders the repo in the body.
     await waitFor(() => {
-      expect(
-        screen.getByText(/Delete IaC connection/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/Delete IaC connection/i)).toBeInTheDocument();
     });
     // The confirm "Delete" button in the modal footer (not the row's).
     const deleteButtons = screen.getAllByRole("button", { name: /^Delete$/i });
@@ -217,9 +216,7 @@ describe("DiscoveryIaCGitHubPage", () => {
     // enough to auto-open the wizard at the placement-only edit
     // shell. No ?kind=... → no focused row (separate test below).
     mockedList.mockResolvedValue({ connections: sampleConnections });
-    renderPage([
-      "/discovery/iac/github?connection_id=conn-1&step=placement",
-    ]);
+    renderPage(["/discovery/iac/github?connection_id=conn-1&step=placement"]);
     // The placement-only-edit dialog mounts with the "Edit
     // placement map" title (a string only the edit shell renders).
     await waitFor(() => {
@@ -273,9 +270,7 @@ describe("DiscoveryIaCGitHubPage", () => {
       ).toBeInTheDocument();
     });
     // No data-focused="true" anywhere in the document.
-    expect(
-      document.querySelector("[data-focused='true']"),
-    ).toBeNull();
+    expect(document.querySelector("[data-focused='true']")).toBeNull();
   });
 
   it("DiscoveryIaCGitHub_shows_stale_link_notice_when_connection_id_does_not_exist", async () => {
@@ -289,9 +284,7 @@ describe("DiscoveryIaCGitHubPage", () => {
       "/discovery/iac/github?connection_id=conn-deleted&step=placement&kind=lambda-otel-layer",
     ]);
     await waitFor(() => {
-      expect(
-        screen.getByText(/no longer exists/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/no longer exists/i)).toBeInTheDocument();
     });
     // The connection list still renders.
     expect(screen.getByText("octo/infra")).toBeInTheDocument();

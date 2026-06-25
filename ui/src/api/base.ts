@@ -72,9 +72,13 @@ export const simpleRequest = async <T = unknown>(
       if (errorData.error) {
         if (typeof errorData.error === "string") {
           errorMessage = errorData.error;
-        } else if (typeof errorData.error === "object" && errorData.error !== null) {
+        } else if (
+          typeof errorData.error === "object" &&
+          errorData.error !== null
+        ) {
           // Humanized error envelope shape.
-          errorMessage = errorData.error.message ?? JSON.stringify(errorData.error);
+          errorMessage =
+            errorData.error.message ?? JSON.stringify(errorData.error);
         }
         if (errorData.details) {
           errorMessage += `: ${errorData.details}`;

@@ -130,9 +130,9 @@ export default function ActionsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Actions</h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            Every signed request Squadron dispatched to a runner. Use the
-            filter to hunt down failures or denied requests, or expand a row
-            to see the dry run output before the matching execute fires.
+            Every signed request Squadron dispatched to a runner. Use the filter
+            to hunt down failures or denied requests, or expand a row to see the
+            dry run output before the matching execute fires.
           </p>
         </div>
         <div className="w-40 shrink-0">
@@ -249,13 +249,7 @@ export default function ActionsPage() {
   );
 }
 
-function Section({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
+function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="space-y-2">
       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -274,4 +268,3 @@ function KV({ k, v, mono = false }: { k: string; v: string; mono?: boolean }) {
     </div>
   );
 }
-

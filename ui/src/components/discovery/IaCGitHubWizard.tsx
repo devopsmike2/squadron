@@ -184,7 +184,10 @@ export interface IaCGitHubWizardProps {
   // on the connection-list SWR key and closes the dialog. The shape
   // matches both create + edit-placement modes; in the edit-placement
   // mode the connection_id is the existing row's ID (not a fresh one).
-  onComplete: (connection: { connection_id: string; repo_full_name: string }) => void;
+  onComplete: (connection: {
+    connection_id: string;
+    repo_full_name: string;
+  }) => void;
   // editMode opt-in for the v0.89.4 #610 deep-link path. When unset,
   // the wizard runs the full six-step create flow as before
   // (regression posture for the Phase-3 callers).
@@ -225,7 +228,9 @@ function initialPlacementRows(
 // shape. Skipped rows are dropped — they never reach the validate /
 // save payload (per design doc §6, skipped kinds simply don't have a
 // placement-map row).
-function placementRowsToEntries(rows: PlacementRowState[]): IaCPlacementEntry[] {
+function placementRowsToEntries(
+  rows: PlacementRowState[],
+): IaCPlacementEntry[] {
   return rows
     .filter((r) => !r.skipped && r.file_path.trim() !== "")
     .map((r) => ({
@@ -241,7 +246,10 @@ function placementRowsToEntries(rows: PlacementRowState[]): IaCPlacementEntry[] 
 // flow uses ~15 useState calls + memos; the placement-only edit
 // flow uses a smaller set. Switching between them inside one
 // function body would violate the rules-of-hooks contract.
-export function IaCGitHubWizard({ onComplete, editMode }: IaCGitHubWizardProps) {
+export function IaCGitHubWizard({
+  onComplete,
+  editMode,
+}: IaCGitHubWizardProps) {
   if (editMode) {
     return <PlacementOnlyEditor editMode={editMode} onComplete={onComplete} />;
   }
@@ -282,9 +290,8 @@ function IaCGitHubWizardCreate({
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Placement map — per-row file_path + skipped flag.
-  const [placementRows, setPlacementRows] = useState<PlacementRowState[]>(
-    initialPlacementRows,
-  );
+  const [placementRows, setPlacementRows] =
+    useState<PlacementRowState[]>(initialPlacementRows);
 
   // Bulk-apply pattern input (e.g. "modules/{kind}/main.tf"). Slice 1
   // nice-to-have — typing a pattern and clicking Apply substitutes
@@ -502,7 +509,8 @@ function IaCGitHubWizardCreate({
       const res = await validateIaCGitHub({
         token,
         repo_full_name: repoFullName,
-        default_branch: defaultBranch.trim() === "main" ? undefined : defaultBranch.trim(),
+        default_branch:
+          defaultBranch.trim() === "main" ? undefined : defaultBranch.trim(),
         placement_map: placementEntries,
       });
       setValidateResult(res);
@@ -784,9 +792,8 @@ function ProviderStep() {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Squadron opens PRs against your IaC repo when a recommendation
-        is acted on. Slice 1 supports GitHub; GitLab and Bitbucket land
-        in slice 2.
+        Squadron opens PRs against your IaC repo when a recommendation is acted
+        on. Slice 1 supports GitHub; GitLab and Bitbucket land in slice 2.
       </p>
       <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
         <ProviderTile name="GitHub" selected enabled icon={Github} />
@@ -874,7 +881,10 @@ function PATStep({
             scope and a Squadron description).
           </li>
           <li>Confirm the scope, click Generate, copy the token.</li>
-          <li>Paste it in the field below — it never leaves your browser before save.</li>
+          <li>
+            Paste it in the field below — it never leaves your browser before
+            save.
+          </li>
         </ol>
         <div className="flex flex-wrap gap-2 pt-1">
           <Button
@@ -882,7 +892,11 @@ function PATStep({
             size="sm"
             variant="secondary"
             onClick={() =>
-              window.open(GITHUB_CREATE_PAT_URL, "_blank", "noopener,noreferrer")
+              window.open(
+                GITHUB_CREATE_PAT_URL,
+                "_blank",
+                "noopener,noreferrer",
+              )
             }
           >
             <ExternalLink className="mr-1 h-3.5 w-3.5" aria-hidden />
@@ -913,8 +927,8 @@ function PATStep({
         />
         <p className="text-xs text-muted-foreground">
           The token stays in this browser tab until you click Save. Squadron
-          will only create branches and open pull requests — Squadron will
-          never push to your default branch.
+          will only create branches and open pull requests — Squadron will never
+          push to your default branch.
         </p>
       </div>
 
@@ -924,8 +938,8 @@ function PATStep({
           aria-hidden
         />
         <p className="text-muted-foreground">
-          PAT is org-wide. For per-repo scoping, wait for the GitHub App
-          path in slice 2.
+          PAT is org-wide. For per-repo scoping, wait for the GitHub App path in
+          slice 2.
         </p>
       </div>
     </div>
@@ -1013,11 +1027,11 @@ function WebhookSecretStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Squadron&apos;s webhook listener needs an HMAC secret to verify
-        inbound GitHub deliveries. You can generate a per-connection
-        secret now (recommended for multi-team deployments), use the
-        global env-var secret your Squadron deployment already has
-        configured, or skip this step and configure later via the API.
+        Squadron&apos;s webhook listener needs an HMAC secret to verify inbound
+        GitHub deliveries. You can generate a per-connection secret now
+        (recommended for multi-team deployments), use the global env-var secret
+        your Squadron deployment already has configured, or skip this step and
+        configure later via the API.
       </p>
 
       <div
@@ -1078,9 +1092,9 @@ function WebhookSecretStep({
               aria-hidden
             />
             <p className="text-muted-foreground">
-              Save this secret somewhere safe. Squadron won&apos;t show it
-              again after you complete the wizard. If you lose it,
-              generate a new one and PATCH the connection.
+              Save this secret somewhere safe. Squadron won&apos;t show it again
+              after you complete the wizard. If you lose it, generate a new one
+              and PATCH the connection.
             </p>
           </div>
 
@@ -1091,10 +1105,7 @@ function WebhookSecretStep({
               onCheckedChange={(v) => onAcknowledgeChange(v === true)}
               aria-label="I have saved this secret securely"
             />
-            <Label
-              htmlFor="iac-github-webhook-secret-ack"
-              className="text-xs"
-            >
+            <Label htmlFor="iac-github-webhook-secret-ack" className="text-xs">
               I have saved this secret securely
             </Label>
           </div>
@@ -1142,9 +1153,7 @@ function SourceCard({
       onClick={onSelect}
       className={cn(
         "w-full rounded-md border p-3 text-left transition-colors",
-        selected
-          ? "border-primary bg-primary/5"
-          : "hover:border-foreground/30",
+        selected ? "border-primary bg-primary/5" : "hover:border-foreground/30",
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -1180,9 +1189,9 @@ function PickRepoStep({
   return (
     <div className="space-y-2">
       <p className="text-sm text-muted-foreground">
-        Type the repository as <code>owner/repo</code>. Slice 1 ships
-        one repo per connection; slice 2 will autocomplete from the
-        token&apos;s reachable repos.
+        Type the repository as <code>owner/repo</code>. Slice 1 ships one repo
+        per connection; slice 2 will autocomplete from the token&apos;s
+        reachable repos.
       </p>
       <Label htmlFor="iac-github-repo" className="text-xs font-semibold">
         Repository
@@ -1261,7 +1270,10 @@ function RepoLayoutStep({
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor="iac-github-default-branch" className="text-xs font-semibold">
+        <Label
+          htmlFor="iac-github-default-branch"
+          className="text-xs font-semibold"
+        >
           Default branch
         </Label>
         <Input
@@ -1274,8 +1286,8 @@ function RepoLayoutStep({
           spellCheck={false}
         />
         <p className="text-xs text-muted-foreground">
-          We&apos;ll auto-detect this on validate. If GitHub disagrees,
-          the server&apos;s value wins.
+          We&apos;ll auto-detect this on validate. If GitHub disagrees, the
+          server&apos;s value wins.
         </p>
       </div>
 
@@ -1295,7 +1307,10 @@ function RepoLayoutStep({
       {showAdvanced && (
         <div className="space-y-4 rounded-md border bg-muted/30 p-3">
           <div className="space-y-1">
-            <Label htmlFor="iac-github-branch-prefix" className="text-xs font-semibold">
+            <Label
+              htmlFor="iac-github-branch-prefix"
+              className="text-xs font-semibold"
+            >
               Branch prefix
             </Label>
             <Input
@@ -1309,12 +1324,15 @@ function RepoLayoutStep({
             />
             <p className="text-xs text-muted-foreground">
               Squadron&apos;s PR branches will be named{" "}
-              <code>&lt;this&gt;-&lt;scan-id&gt;-&lt;step&gt;</code>.
-              Defaults to <code>{DEFAULT_BRANCH_PREFIX}</code>.
+              <code>&lt;this&gt;-&lt;scan-id&gt;-&lt;step&gt;</code>. Defaults
+              to <code>{DEFAULT_BRANCH_PREFIX}</code>.
             </p>
           </div>
           <div className="space-y-1">
-            <Label htmlFor="iac-github-reviewer-team" className="text-xs font-semibold">
+            <Label
+              htmlFor="iac-github-reviewer-team"
+              className="text-xs font-semibold"
+            >
               Reviewer team handle
             </Label>
             <Input
@@ -1327,8 +1345,8 @@ function RepoLayoutStep({
               spellCheck={false}
             />
             <p className="text-xs text-muted-foreground">
-              If set, Squadron requests review from this team on every PR.
-              Leave empty to skip.
+              If set, Squadron requests review from this team on every PR. Leave
+              empty to skip.
             </p>
           </div>
         </div>
@@ -1355,9 +1373,7 @@ function LayoutTile({
       aria-pressed={selected}
       className={cn(
         "rounded-md border p-3 text-left transition-colors",
-        selected
-          ? "border-primary bg-primary/5"
-          : "hover:border-foreground/30",
+        selected ? "border-primary bg-primary/5" : "hover:border-foreground/30",
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -1430,7 +1446,10 @@ function PlacementMapStep({
       </p>
 
       <div className="space-y-2 rounded-md border bg-muted/30 p-3">
-        <Label htmlFor="iac-github-bulk-pattern" className="text-xs font-semibold">
+        <Label
+          htmlFor="iac-github-bulk-pattern"
+          className="text-xs font-semibold"
+        >
           Apply a pattern to all empty rows
         </Label>
         <div className="flex flex-col gap-2 md:flex-row">
@@ -1455,8 +1474,7 @@ function PlacementMapStep({
         </div>
         <p className="text-xs text-muted-foreground">
           <code>{"{kind}"}</code> is substituted with the row&apos;s{" "}
-          <code>resource_kind</code>. Only empty, non-skipped rows are
-          updated.
+          <code>resource_kind</code>. Only empty, non-skipped rows are updated.
         </p>
       </div>
 
@@ -1493,74 +1511,75 @@ function PlacementMapStep({
             focusedResourceKind != null &&
             row.resource_kind === focusedResourceKind;
           return (
-          <li
-            key={row.resource_kind}
-            ref={isFocused ? focusedRowRef : undefined}
-            data-focused={isFocused ? "true" : undefined}
-            data-testid={`iac-github-placement-row-${row.resource_kind}`}
-            className={cn(
-              "rounded-md border bg-card p-3",
-              row.skipped && "opacity-60",
-              isFocused &&
-                "border-violet-500 ring-2 ring-violet-500/50",
-            )}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <code className="font-mono text-xs">{row.resource_kind}</code>
-                  <Badge variant="outline" className="text-[10px]">
-                    {row.provider}
-                  </Badge>
-                  {row.skipped && (
-                    <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                      <MinusCircle className="mr-1 h-3 w-3" aria-hidden />
-                      skipped
+            <li
+              key={row.resource_kind}
+              ref={isFocused ? focusedRowRef : undefined}
+              data-focused={isFocused ? "true" : undefined}
+              data-testid={`iac-github-placement-row-${row.resource_kind}`}
+              className={cn(
+                "rounded-md border bg-card p-3",
+                row.skipped && "opacity-60",
+                isFocused && "border-violet-500 ring-2 ring-violet-500/50",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <code className="font-mono text-xs">
+                      {row.resource_kind}
+                    </code>
+                    <Badge variant="outline" className="text-[10px]">
+                      {row.provider}
                     </Badge>
-                  )}
+                    {row.skipped && (
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] text-muted-foreground"
+                      >
+                        <MinusCircle className="mr-1 h-3 w-3" aria-hidden />
+                        skipped
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs font-medium">{row.display_name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {row.description}
+                  </p>
                 </div>
-                <p className="text-xs font-medium">{row.display_name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {row.description}
-                </p>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Label
+                    htmlFor={`iac-github-skip-${idx}`}
+                    className="text-[10px] uppercase text-muted-foreground"
+                  >
+                    Skip
+                  </Label>
+                  <Switch
+                    id={`iac-github-skip-${idx}`}
+                    aria-label={`Skip ${row.resource_kind}`}
+                    checked={row.skipped}
+                    onCheckedChange={() => onToggleRowSkipped(idx)}
+                  />
+                </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Label
-                  htmlFor={`iac-github-skip-${idx}`}
-                  className="text-[10px] uppercase text-muted-foreground"
-                >
-                  Skip
+              <div className="mt-2">
+                <Label htmlFor={`iac-github-path-${idx}`} className="sr-only">
+                  File path for {row.resource_kind}
                 </Label>
-                <Switch
-                  id={`iac-github-skip-${idx}`}
-                  aria-label={`Skip ${row.resource_kind}`}
-                  checked={row.skipped}
-                  onCheckedChange={() => onToggleRowSkipped(idx)}
+                <Input
+                  id={`iac-github-path-${idx}`}
+                  aria-label={`File path for ${row.resource_kind}`}
+                  placeholder={placeholderExample.replace(
+                    "{kind}",
+                    row.resource_kind.split("-")[0],
+                  )}
+                  value={row.file_path}
+                  onChange={(e) => onRowFilePathChange(idx, e.target.value)}
+                  disabled={row.skipped}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </div>
-            </div>
-            <div className="mt-2">
-              <Label
-                htmlFor={`iac-github-path-${idx}`}
-                className="sr-only"
-              >
-                File path for {row.resource_kind}
-              </Label>
-              <Input
-                id={`iac-github-path-${idx}`}
-                aria-label={`File path for ${row.resource_kind}`}
-                placeholder={placeholderExample.replace(
-                  "{kind}",
-                  row.resource_kind.split("-")[0],
-                )}
-                value={row.file_path}
-                onChange={(e) => onRowFilePathChange(idx, e.target.value)}
-                disabled={row.skipped}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
-          </li>
+            </li>
           );
         })}
       </ul>
@@ -1619,8 +1638,8 @@ function ConfigureWebhookStep({
       <p className="text-sm text-muted-foreground">
         On the GitHub repo you connected above, add a webhook that
         Squadron&apos;s listener can receive.{" "}
-        <strong>Settings → Webhooks → Add webhook.</strong> Copy the
-        values from below.
+        <strong>Settings → Webhooks → Add webhook.</strong> Copy the values from
+        below.
       </p>
 
       <div className="space-y-3 rounded-md border bg-muted/30 p-3">
@@ -1675,10 +1694,10 @@ function ConfigureWebhookStep({
           aria-hidden
         />
         <p className="text-muted-foreground">
-          If GitHub&apos;s test delivery shows red after Save, check that
-          the Payload URL matches your Squadron host, Content type is{" "}
-          <code>application/json</code>, and only the{" "}
-          <code>pull_request</code> event is checked. See{" "}
+          If GitHub&apos;s test delivery shows red after Save, check that the
+          Payload URL matches your Squadron host, Content type is{" "}
+          <code>application/json</code>, and only the <code>pull_request</code>{" "}
+          event is checked. See{" "}
           <a
             href={WEBHOOK_LISTENER_DOC_LINK}
             target="_blank"
@@ -1818,14 +1837,15 @@ function ValidateStep({
     !!validateResult && !validateResult.repo_err && !validating && !saving;
 
   // Count per-row outcomes for the Save-time notice.
-  const rowsWithError = validateResult?.preflight_results.filter((r) => !!r.err) ?? [];
+  const rowsWithError =
+    validateResult?.preflight_results.filter((r) => !!r.err) ?? [];
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Squadron will check it can reach <code>{repoFullName || "your repo"}</code>{" "}
-        and that each non-skipped placement file is readable. No records
-        are created until Save.
+        Squadron will check it can reach{" "}
+        <code>{repoFullName || "your repo"}</code> and that each non-skipped
+        placement file is readable. No records are created until Save.
       </p>
 
       <Button type="button" onClick={onValidate} disabled={validating}>
@@ -1842,10 +1862,7 @@ function ValidateStep({
       )}
 
       {validateResult && (
-        <PreflightPanel
-          result={validateResult}
-          onJumpToStep={onJumpToStep}
-        />
+        <PreflightPanel result={validateResult} onJumpToStep={onJumpToStep} />
       )}
 
       {validateResult && !validateResult.repo_err && (
@@ -1858,11 +1875,7 @@ function ValidateStep({
             </p>
           )}
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              onClick={onSave}
-              disabled={!canSave}
-            >
+            <Button type="button" onClick={onSave} disabled={!canSave}>
               {saving && (
                 <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
               )}
@@ -1922,8 +1935,8 @@ function PreflightPanel({
         ))}
         {result.preflight_results.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            No placement-map rows to check — all were skipped. You can
-            still save the connection and configure paths later.
+            No placement-map rows to check — all were skipped. You can still
+            save the connection and configure paths later.
           </p>
         )}
       </div>
@@ -1945,8 +1958,8 @@ function PreflightRowView({
           ok={false}
           label={
             <>
-              <code className="font-mono text-xs">{row.resource_kind}</code>{" "}
-              · <code className="text-xs">{row.file_path}</code>
+              <code className="font-mono text-xs">{row.resource_kind}</code> ·{" "}
+              <code className="text-xs">{row.file_path}</code>
             </>
           }
         />
@@ -1995,7 +2008,9 @@ function StatusRow({
         <XCircle className="h-4 w-4 text-destructive" aria-hidden />
       )}
       <span className="font-medium">{label}</span>
-      {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
+      {suffix && (
+        <span className="text-xs text-muted-foreground">{suffix}</span>
+      )}
     </div>
   );
 }
@@ -2102,8 +2117,8 @@ function ConnectedCard({
         >
           <p className="font-semibold">Webhook secret stored.</p>
           <p className="text-muted-foreground">
-            Inbound deliveries from GitHub will be HMAC-verified against
-            the per-connection secret you generated.
+            Inbound deliveries from GitHub will be HMAC-verified against the
+            per-connection secret you generated.
           </p>
         </div>
       )}
@@ -2116,10 +2131,9 @@ function ConnectedCard({
         >
           <p className="font-semibold">Using the global webhook secret.</p>
           <p className="text-muted-foreground">
-            Inbound deliveries from GitHub will be HMAC-verified against
-            your <code>SQUADRON_GITHUB_WEBHOOK_SECRET</code> env var.
-            Verify it is set on the Squadron process or deliveries will
-            503.
+            Inbound deliveries from GitHub will be HMAC-verified against your{" "}
+            <code>SQUADRON_GITHUB_WEBHOOK_SECRET</code> env var. Verify it is
+            set on the Squadron process or deliveries will 503.
           </p>
         </div>
       )}
@@ -2134,8 +2148,8 @@ function ConnectedCard({
             Webhook setup deferred. Configure later.
           </p>
           <p className="text-muted-foreground">
-            Run <code>openssl rand -hex 32</code> and PATCH the
-            connection when ready:
+            Run <code>openssl rand -hex 32</code> and PATCH the connection when
+            ready:
           </p>
           <code className="block break-all rounded bg-muted px-2 py-1.5 font-mono text-[10px]">
             {recoveryCurl}
@@ -2150,15 +2164,12 @@ function ConnectedCard({
           data-testid="iac-github-webhook-patch-failed"
         >
           <p className="font-semibold text-destructive">
-            Connection created, but per-connection secret could not be
-            stored.
+            Connection created, but per-connection secret could not be stored.
           </p>
           {secretPatchError && (
             <p className="text-destructive">{secretPatchError}</p>
           )}
-          <p className="text-muted-foreground">
-            Set it manually:
-          </p>
+          <p className="text-muted-foreground">Set it manually:</p>
           <code className="block break-all rounded bg-muted px-2 py-1.5 font-mono text-[10px]">
             {recoveryCurl}
           </code>
@@ -2298,8 +2309,8 @@ function PlacementOnlyEditor({
           <code className="rounded bg-muted px-1 py-0.5 text-xs">
             {editMode.repoFullName}
           </code>
-          . The connection&apos;s token, branch prefix, and reviewer team
-          stay as they were.
+          . The connection&apos;s token, branch prefix, and reviewer team stay
+          as they were.
         </p>
       </div>
 
@@ -2343,4 +2354,3 @@ function PlacementOnlyEditor({
     </div>
   );
 }
-

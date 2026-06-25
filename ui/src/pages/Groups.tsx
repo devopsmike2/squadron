@@ -433,9 +433,8 @@ export default function GroupsPage() {
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     Forces every operator initiated rollback into
                     pending_approval, even when the original rollout did not
-                    require approval. Treats undo as a more sensitive
-                    operation. Independent of the rollout-approval policy
-                    above.
+                    require approval. Treats undo as a more sensitive operation.
+                    Independent of the rollout-approval policy above.
                   </p>
                 </div>
               </label>
@@ -465,14 +464,13 @@ export default function GroupsPage() {
                     Learn from prior accepted/rejected AI proposals
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    Use prior accepted and rejected AI proposals for
-                    this group as context for new ones. Approvals signal
-                    &ldquo;good shape, ship it&rdquo;; rejections weight the
-                    model away from repeating rejected shapes. Up to four
-                    recent verdicts from the past 30 days are included.
-                    Turn off if proposer reasoning may contain
-                    operator notes you don&apos;t want sent on the next
-                    call.
+                    Use prior accepted and rejected AI proposals for this group
+                    as context for new ones. Approvals signal &ldquo;good shape,
+                    ship it&rdquo;; rejections weight the model away from
+                    repeating rejected shapes. Up to four recent verdicts from
+                    the past 30 days are included. Turn off if proposer
+                    reasoning may contain operator notes you don&apos;t want
+                    sent on the next call.
                   </p>
                 </div>
               </label>

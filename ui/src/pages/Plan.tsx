@@ -108,8 +108,8 @@ function ForwardSteps({ plan }: { plan: Plan }) {
       <CardHeader>
         <CardTitle className="text-base">Steps</CardTitle>
         <div className="text-xs text-muted-foreground">
-          The plan approves as a unit at step 0. Each subsequent step
-          waits for the previous one to succeed.
+          The plan approves as a unit at step 0. Each subsequent step waits for
+          the previous one to succeed.
         </div>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -141,8 +141,8 @@ function RollbackSteps({ plan }: { plan: Plan }) {
           </span>
         </button>
         <div className="text-xs text-muted-foreground">
-          The engine created these when a forward step failed. They
-          undo the succeeded predecessors in reverse order.
+          The engine created these when a forward step failed. They undo the
+          succeeded predecessors in reverse order.
         </div>
       </CardHeader>
       {open && (
@@ -171,8 +171,8 @@ function StepRow({ step, rollback }: { step: Rollout; rollback?: boolean }) {
       ? `request ${step.action_request_id.slice(0, 8)}…`
       : "no request yet"
     : step.target_config_id
-    ? `target ${step.target_config_id.slice(0, 8)}…`
-    : "no target";
+      ? `target ${step.target_config_id.slice(0, 8)}…`
+      : "no target";
   return (
     <Link
       to={`/rollouts?rollout=${encodeURIComponent(step.id)}`}

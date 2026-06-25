@@ -92,8 +92,7 @@ const scenarios: Array<{
   },
   {
     name: "Empty attribution → decline",
-    blurb:
-      "No top attributes; model should decline rather than guess.",
+    blurb: "No top attributes; model should decline rather than guess.",
     request: {
       ...emptyForm,
       spike_id: "playground-decline-1",
@@ -172,8 +171,8 @@ export default function ProposerPlaygroundPage() {
         </div>
         <p className="text-muted-foreground text-sm">
           Hand-craft a cost spike context and see what the proposer would
-          create. No side effects — nothing is persisted, no rollouts or
-          plans are created.
+          create. No side effects — nothing is persisted, no rollouts or plans
+          are created.
         </p>
       </div>
 
@@ -207,7 +206,9 @@ export default function ProposerPlaygroundPage() {
           viewports. Fields grouped by purpose. */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Cost spike context</CardTitle>
+          <CardTitle className="text-sm font-medium">
+            Cost spike context
+          </CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="space-y-1">
@@ -234,9 +235,7 @@ export default function ProposerPlaygroundPage() {
               <Input
                 id="severity"
                 value={form.severity}
-                onChange={(e) =>
-                  setForm({ ...form, severity: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, severity: e.target.value })}
                 placeholder="warn / critical"
               />
             </div>
@@ -292,9 +291,7 @@ export default function ProposerPlaygroundPage() {
             <Input
               id="group_id"
               value={form.group_id}
-              onChange={(e) =>
-                setForm({ ...form, group_id: e.target.value })
-              }
+              onChange={(e) => setForm({ ...form, group_id: e.target.value })}
               placeholder="prod-utility-fleet"
             />
           </div>
@@ -303,17 +300,13 @@ export default function ProposerPlaygroundPage() {
             <Input
               id="group_name"
               value={form.group_name}
-              onChange={(e) =>
-                setForm({ ...form, group_name: e.target.value })
-              }
+              onChange={(e) => setForm({ ...form, group_name: e.target.value })}
               placeholder="Prod utility fleet"
             />
           </div>
 
           <div className="space-y-1 md:col-span-2">
-            <Label htmlFor="top_attrs">
-              Top attributes (one per line)
-            </Label>
+            <Label htmlFor="top_attrs">Top attributes (one per line)</Label>
             <textarea
               id="top_attrs"
               className="w-full min-h-[60px] rounded-md border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -338,7 +331,9 @@ export default function ProposerPlaygroundPage() {
           </div>
 
           <div className="space-y-1 md:col-span-2">
-            <Label htmlFor="findings">Recent lint findings (one per line)</Label>
+            <Label htmlFor="findings">
+              Recent lint findings (one per line)
+            </Label>
             <textarea
               id="findings"
               className="w-full min-h-[60px] rounded-md border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -353,9 +348,7 @@ export default function ProposerPlaygroundPage() {
             />
           </div>
           <div className="space-y-1 md:col-span-2">
-            <Label htmlFor="recs">
-              Recent recommendations (one per line)
-            </Label>
+            <Label htmlFor="recs">Recent recommendations (one per line)</Label>
             <textarea
               id="recs"
               className="w-full min-h-[60px] rounded-md border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -421,8 +414,7 @@ function ResultPanel({ response }: { response: ProposerPreviewResponse }) {
     );
   }
   const kind = response.kind || "rollout";
-  const stepCount =
-    kind === "plan" ? response.plan?.steps?.length ?? 0 : 1;
+  const stepCount = kind === "plan" ? (response.plan?.steps?.length ?? 0) : 1;
   return (
     <Card>
       <CardHeader>
@@ -476,9 +468,7 @@ function MeteringStrip({ response }: { response: ProposerPreviewResponse }) {
       </span>
       <span>
         cost{" "}
-        <span className="font-mono">
-          ${response.estimated_usd.toFixed(4)}
-        </span>
+        <span className="font-mono">${response.estimated_usd.toFixed(4)}</span>
       </span>
       {response.model && (
         <span>

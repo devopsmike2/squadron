@@ -180,14 +180,40 @@ function makeProvider(over: Partial<ProviderSummary> = {}): ProviderSummary {
 // the `providers` partial.
 function makeSummary(
   over: Partial<DiscoverySummary> = {},
-  providersOver: Partial<Record<keyof DiscoverySummary["providers"], Partial<ProviderSummary>>> = {},
+  providersOver: Partial<
+    Record<keyof DiscoverySummary["providers"], Partial<ProviderSummary>>
+  > = {},
 ): DiscoverySummary {
   const base: DiscoverySummary = {
     providers: {
-      aws: makeProvider({ connection_count: 3, instance_count: 142, instrumented_count: 89, uninstrumented_count: 53, recommendation_count: 53 }),
-      gcp: makeProvider({ connection_count: 1, instance_count: 24, instrumented_count: 18, uninstrumented_count: 6, recommendation_count: 6 }),
-      azure: makeProvider({ connection_count: 1, instance_count: 16, instrumented_count: 12, uninstrumented_count: 4, recommendation_count: 4 }),
-      oci: makeProvider({ connection_count: 1, instance_count: 16, instrumented_count: 13, uninstrumented_count: 3, recommendation_count: 3 }),
+      aws: makeProvider({
+        connection_count: 3,
+        instance_count: 142,
+        instrumented_count: 89,
+        uninstrumented_count: 53,
+        recommendation_count: 53,
+      }),
+      gcp: makeProvider({
+        connection_count: 1,
+        instance_count: 24,
+        instrumented_count: 18,
+        uninstrumented_count: 6,
+        recommendation_count: 6,
+      }),
+      azure: makeProvider({
+        connection_count: 1,
+        instance_count: 16,
+        instrumented_count: 12,
+        uninstrumented_count: 4,
+        recommendation_count: 4,
+      }),
+      oci: makeProvider({
+        connection_count: 1,
+        instance_count: 16,
+        instrumented_count: 13,
+        uninstrumented_count: 3,
+        recommendation_count: 3,
+      }),
     },
     totals: {
       connection_count: 6,
@@ -202,7 +228,9 @@ function makeSummary(
     },
     recent_recommendations: [],
   };
-  for (const k of Object.keys(providersOver) as Array<keyof DiscoverySummary["providers"]>) {
+  for (const k of Object.keys(providersOver) as Array<
+    keyof DiscoverySummary["providers"]
+  >) {
     base.providers[k] = { ...base.providers[k], ...(providersOver[k] ?? {}) };
   }
   return { ...base, ...over };
@@ -306,7 +334,10 @@ function makeProviderWorkloadHealth(
 function makeWorkloadHealth(
   over: Partial<WorkloadHealthResponse> = {},
   providersOver: Partial<
-    Record<keyof WorkloadHealthResponse["providers"], Partial<ProviderWorkloadHealth>>
+    Record<
+      keyof WorkloadHealthResponse["providers"],
+      Partial<ProviderWorkloadHealth>
+    >
   > = {},
 ): WorkloadHealthResponse {
   const base: WorkloadHealthResponse = {
@@ -401,15 +432,44 @@ describe("DiscoveryDashboard", () => {
             recommendation_count: 0,
             serverless_count: 0,
             orchestration_count: 0,
+            event_source_count: 0,
             coverage_pct: 0,
           },
           recent_recommendations: [],
         },
         {
-          aws: { enabled: false, connection_count: 0, instance_count: 0, instrumented_count: 0, uninstrumented_count: 0, recommendation_count: 0 },
-          gcp: { enabled: false, connection_count: 0, instance_count: 0, instrumented_count: 0, uninstrumented_count: 0, recommendation_count: 0 },
-          azure: { enabled: false, connection_count: 0, instance_count: 0, instrumented_count: 0, uninstrumented_count: 0, recommendation_count: 0 },
-          oci: { enabled: false, connection_count: 0, instance_count: 0, instrumented_count: 0, uninstrumented_count: 0, recommendation_count: 0 },
+          aws: {
+            enabled: false,
+            connection_count: 0,
+            instance_count: 0,
+            instrumented_count: 0,
+            uninstrumented_count: 0,
+            recommendation_count: 0,
+          },
+          gcp: {
+            enabled: false,
+            connection_count: 0,
+            instance_count: 0,
+            instrumented_count: 0,
+            uninstrumented_count: 0,
+            recommendation_count: 0,
+          },
+          azure: {
+            enabled: false,
+            connection_count: 0,
+            instance_count: 0,
+            instrumented_count: 0,
+            uninstrumented_count: 0,
+            recommendation_count: 0,
+          },
+          oci: {
+            enabled: false,
+            connection_count: 0,
+            instance_count: 0,
+            instrumented_count: 0,
+            uninstrumented_count: 0,
+            recommendation_count: 0,
+          },
         },
       ),
     );
@@ -456,6 +516,7 @@ describe("DiscoveryDashboard", () => {
           recommendation_count: 10,
           serverless_count: 0,
           orchestration_count: 0,
+          event_source_count: 0,
           coverage_pct: 90,
         },
       }),
@@ -479,6 +540,7 @@ describe("DiscoveryDashboard", () => {
           recommendation_count: 35,
           serverless_count: 0,
           orchestration_count: 0,
+          event_source_count: 0,
           coverage_pct: 65,
         },
       }),
@@ -502,6 +564,7 @@ describe("DiscoveryDashboard", () => {
           recommendation_count: 70,
           serverless_count: 0,
           orchestration_count: 0,
+          event_source_count: 0,
           coverage_pct: 30,
         },
       }),
@@ -615,9 +678,19 @@ describe("DiscoveryDashboard", () => {
 
   it("TestDiscoveryDashboard_DisabledProvider_RendersConnectCTA", async () => {
     mockedGetDiscoverySummary.mockResolvedValue(
-      makeSummary({}, {
-        oci: { enabled: false, connection_count: 0, instance_count: 0, instrumented_count: 0, uninstrumented_count: 0, recommendation_count: 0 },
-      }),
+      makeSummary(
+        {},
+        {
+          oci: {
+            enabled: false,
+            connection_count: 0,
+            instance_count: 0,
+            instrumented_count: 0,
+            uninstrumented_count: 0,
+            recommendation_count: 0,
+          },
+        },
+      ),
     );
     renderPage();
 
@@ -660,9 +733,7 @@ describe("DiscoveryDashboard", () => {
     await waitFor(() => {
       expect(screen.getByTestId("recommendations-empty")).toBeInTheDocument();
     });
-    expect(
-      screen.getByText(/No recommendations yet/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/No recommendations yet/i)).toBeInTheDocument();
   });
 
   // --- Trace coverage panel (v0.89.76 #707 Stream 105) --------------
@@ -671,7 +742,11 @@ describe("DiscoveryDashboard", () => {
     mockedGetDiscoverySummary.mockResolvedValue(makeSummary());
     mockedGetTraceCoverage.mockResolvedValue(
       makeTraceCoverage({
-        totals: { inventory_count: 198, emitting_count: 122, coverage_pct: 61.6 },
+        totals: {
+          inventory_count: 198,
+          emitting_count: 122,
+          coverage_pct: 61.6,
+        },
       }),
     );
     renderPage();
@@ -758,14 +833,10 @@ describe("DiscoveryDashboard", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("trace-coverage-chip-gcp"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("trace-coverage-chip-gcp")).toBeInTheDocument();
     });
     // GCP shows the caveat icon (weak_match_pct=25 > threshold 20).
-    expect(
-      screen.getByTestId("trace-coverage-caveat-gcp"),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("trace-coverage-caveat-gcp")).toBeInTheDocument();
     // Other providers (weak_match_pct=0) do NOT show the icon.
     expect(
       screen.queryByTestId("trace-coverage-caveat-aws"),
@@ -1060,9 +1131,7 @@ describe("DiscoveryDashboard", () => {
         screen.getByTestId("trace-coverage-tier-chip-evt"),
       ).toBeInTheDocument();
     });
-    const suffix = screen.getByTestId(
-      "trace-coverage-tier-chip-evt-suffix",
-    );
+    const suffix = screen.getByTestId("trace-coverage-tier-chip-evt-suffix");
     expect(suffix).toHaveTextContent(/prop/);
     expect(suffix).toHaveTextContent(/23%/);
   });
@@ -1150,17 +1219,14 @@ describe("DiscoveryDashboard", () => {
     expect(
       screen.getByTestId("span-quality-pct-missing-attrs"),
     ).toHaveTextContent("6.3%");
-    expect(
-      screen.getByTestId("span-quality-pct-mismatch"),
-    ).toHaveTextContent("2.0%");
+    expect(screen.getByTestId("span-quality-pct-mismatch")).toHaveTextContent(
+      "2.0%",
+    );
 
     // The three columns are present and deep-link to the matching
     // recommendation kind via a hash fragment.
     const orphanCol = screen.getByTestId("span-quality-column-orphan");
-    expect(orphanCol).toHaveAttribute(
-      "data-kind",
-      "span-quality-orphan-trace",
-    );
+    expect(orphanCol).toHaveAttribute("data-kind", "span-quality-orphan-trace");
     expect(orphanCol).toHaveAttribute(
       "href",
       "/discovery/aws#recommendations:span-quality-orphan-trace",
@@ -1179,9 +1245,7 @@ describe("DiscoveryDashboard", () => {
     await waitFor(() => {
       expect(screen.getByTestId("provider-grid")).toBeInTheDocument();
     });
-    expect(
-      screen.queryByTestId("span-quality-panel"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("span-quality-panel")).not.toBeInTheDocument();
     expect(
       screen.queryByTestId("span-quality-pct-orphan"),
     ).not.toBeInTheDocument();
@@ -1217,9 +1281,7 @@ describe("DiscoveryDashboard", () => {
       "href",
       "/discovery/aws#recommendations:span-quality-missing-resource-attrs",
     );
-    expect(
-      screen.getByTestId("span-quality-column-mismatch"),
-    ).toHaveAttribute(
+    expect(screen.getByTestId("span-quality-column-mismatch")).toHaveAttribute(
       "href",
       "/discovery/aws#recommendations:span-quality-attribute-mismatch",
     );
@@ -1255,9 +1317,9 @@ describe("DiscoveryDashboard", () => {
     expect(
       screen.getByTestId("span-quality-pct-missing-attrs"),
     ).toHaveTextContent("6.3%");
-    expect(
-      screen.getByTestId("span-quality-pct-mismatch"),
-    ).toHaveTextContent("2.0%");
+    expect(screen.getByTestId("span-quality-pct-mismatch")).toHaveTextContent(
+      "2.0%",
+    );
     expect(
       screen.getByTestId("span-quality-pct-malformed-traceparent"),
     ).toHaveTextContent("0.8%");
@@ -1389,9 +1451,9 @@ describe("DiscoveryDashboard", () => {
     expect(
       screen.getByTestId("span-quality-pct-missing-attrs"),
     ).toHaveTextContent("6.3%");
-    expect(
-      screen.getByTestId("span-quality-pct-mismatch"),
-    ).toHaveTextContent("2.0%");
+    expect(screen.getByTestId("span-quality-pct-mismatch")).toHaveTextContent(
+      "2.0%",
+    );
     expect(
       screen.getByTestId("span-quality-pct-malformed-traceparent"),
     ).toHaveTextContent("0.8%");
@@ -1444,7 +1506,9 @@ describe("DiscoveryDashboard", () => {
     await waitFor(() => {
       expect(screen.getByTestId("span-quality-panel")).toBeInTheDocument();
     });
-    const col = screen.getByTestId("span-quality-column-sampling-too-aggressive");
+    const col = screen.getByTestId(
+      "span-quality-column-sampling-too-aggressive",
+    );
     expect(col.tagName).toBe("A");
     expect(col).toHaveAttribute(
       "data-kind",
@@ -1476,9 +1540,7 @@ describe("DiscoveryDashboard", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("workload-health-panel"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("workload-health-panel")).toBeInTheDocument();
     });
     expect(
       screen.getByTestId("workload-health-pct-cold-start"),
@@ -1559,9 +1621,7 @@ describe("DiscoveryDashboard", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("workload-health-panel"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("workload-health-panel")).toBeInTheDocument();
     });
     const col = screen.getByTestId("workload-health-cold-start");
     expect(col).toHaveAttribute(
@@ -1587,9 +1647,7 @@ describe("DiscoveryDashboard", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("workload-health-panel"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("workload-health-panel")).toBeInTheDocument();
     });
     const col = screen.getByTestId("workload-health-sampling");
     expect(col).toHaveAttribute(
@@ -1614,9 +1672,7 @@ describe("DiscoveryDashboard", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("workload-health-panel"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("workload-health-panel")).toBeInTheDocument();
     });
     const col = screen.getByTestId("workload-health-error-rate");
     expect(col).toHaveAttribute(
@@ -1648,16 +1704,14 @@ describe("DiscoveryDashboard", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("workload-health-panel"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("workload-health-panel")).toBeInTheDocument();
     });
     expect(
       screen.getByTestId("workload-health-any-issue-count"),
     ).toHaveTextContent("22");
-    expect(
-      screen.getByTestId("workload-health-footer"),
-    ).toHaveTextContent("22 / 142 (15.5%)");
+    expect(screen.getByTestId("workload-health-footer")).toHaveTextContent(
+      "22 / 142 (15.5%)",
+    );
   });
 
   it("TestDiscoveryDashboard_WorkloadHealthPanel_PlacedBetweenTraceCoverageAndSpanQuality", async () => {
@@ -1693,9 +1747,7 @@ describe("DiscoveryDashboard", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("workload-health-panel"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("workload-health-panel")).toBeInTheDocument();
     });
 
     const trace = screen.getByTestId("trace-coverage-panel");
@@ -1711,8 +1763,7 @@ describe("DiscoveryDashboard", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      workload.compareDocumentPosition(span) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      workload.compareDocumentPosition(span) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 });

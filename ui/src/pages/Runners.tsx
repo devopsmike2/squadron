@@ -15,10 +15,7 @@
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 
-import {
-  listActionRunners,
-  revokeActionRunner,
-} from "@/api/actions";
+import { listActionRunners, revokeActionRunner } from "@/api/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -132,10 +129,10 @@ export default function RunnersPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Runners</h1>
         <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-          Hosts running the squadron-action-runner daemon. Each one declares
-          a capability list at registration; Squadron will only dispatch an
-          action to a runner that has accepted it. {onlineCount} of{" "}
-          {visible.length} online.
+          Hosts running the squadron-action-runner daemon. Each one declares a
+          capability list at registration; Squadron will only dispatch an action
+          to a runner that has accepted it. {onlineCount} of {visible.length}{" "}
+          online.
         </p>
       </div>
 
@@ -156,9 +153,9 @@ export default function RunnersPage() {
       ) : visible.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-sm text-muted-foreground">
-            No runners registered yet. Install the squadron-action-runner
-            daemon on a host, point it at this server, and it will appear
-            here after its first poll.
+            No runners registered yet. Install the squadron-action-runner daemon
+            on a host, point it at this server, and it will appear here after
+            its first poll.
           </CardContent>
         </Card>
       ) : (
@@ -205,8 +202,8 @@ export default function RunnersPage() {
                       </div>
                       {caps.length === 0 ? (
                         <p className="text-xs text-muted-foreground">
-                          No capabilities declared. This runner cannot
-                          accept any action and will deny every dispatch.
+                          No capabilities declared. This runner cannot accept
+                          any action and will deny every dispatch.
                         </p>
                       ) : (
                         <ul className="space-y-1">
@@ -216,7 +213,8 @@ export default function RunnersPage() {
                                 <code className="text-xs bg-muted/40 rounded px-1.5 py-0.5">
                                   {cap.action_type}
                                 </code>
-                                {cap.policy && Object.keys(cap.policy).length ? (
+                                {cap.policy &&
+                                Object.keys(cap.policy).length ? (
                                   <span className="text-xs text-muted-foreground">
                                     constrained
                                   </span>

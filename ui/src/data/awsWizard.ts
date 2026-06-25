@@ -178,7 +178,8 @@ export const awsWizard: ConnectorWizard = {
         },
       },
       validation: { kind: "none" },
-      doc_link: "https://docs.squadron.example/discovery/aws#permissions-policy",
+      doc_link:
+        "https://docs.squadron.example/discovery/aws#permissions-policy",
       recovery_hint:
         "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB/EKS/DynamoDB/ECS probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
     },

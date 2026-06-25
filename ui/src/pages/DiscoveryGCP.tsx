@@ -260,7 +260,10 @@ function ConnectionSelectorBar({
   }
   return (
     <div className="flex items-center gap-3">
-      <Label htmlFor="gcp-connection-select" className="text-xs uppercase tracking-wider text-muted-foreground">
+      <Label
+        htmlFor="gcp-connection-select"
+        className="text-xs uppercase tracking-wider text-muted-foreground"
+      >
         Project
       </Label>
       <div className="w-72">
@@ -477,10 +480,7 @@ function GCPWizard({ onComplete }: GCPWizardProps) {
           )}
 
           {currentStepID === GCP_STEP_SERVICE_ACCOUNT && (
-            <ServiceAccountStep
-              projectID={projectID}
-              onCopy={handleCopy}
-            />
+            <ServiceAccountStep projectID={projectID} onCopy={handleCopy} />
           )}
 
           {currentStepID === GCP_STEP_KEY_PASTE && (
@@ -658,9 +658,9 @@ function ProjectStep({
         )}
         {region === "" && (
           <p className="text-xs text-muted-foreground">
-            Empty means &quot;scan every region the service account can see.&quot;
-            Slice 1 ships single-region per scan; pick one region if your
-            project is large.
+            Empty means &quot;scan every region the service account can
+            see.&quot; Slice 1 ships single-region per scan; pick one region if
+            your project is large.
           </p>
         )}
       </div>
@@ -676,10 +676,10 @@ function ProjectStep({
         <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
           <p>
             Squadron walks your Compute Engine inventory and flags instances
-            that lack the OpenTelemetry label heuristic the proposer reads.
-            The connection here is the credential + scope tuple Squadron uses
-            to call compute.instances.list — nothing else. You can disconnect
-            at any time; the sealed SA JSON is removed from the credstore on
+            that lack the OpenTelemetry label heuristic the proposer reads. The
+            connection here is the credential + scope tuple Squadron uses to
+            call compute.instances.list — nothing else. You can disconnect at
+            any time; the sealed SA JSON is removed from the credstore on
             delete.
           </p>
           <p className="mt-2">
@@ -922,9 +922,7 @@ function ValidateStep({
               Connected — {result.instance_count ?? 0} instances visible.
             </span>
           </div>
-          <p className="mt-1 text-xs">
-            Click Next to run a full scan.
-          </p>
+          <p className="mt-1 text-xs">Click Next to run a full scan.</p>
         </div>
       )}
 
@@ -937,14 +935,15 @@ function ValidateStep({
             <AlertTriangle className="h-4 w-4" aria-hidden />
             <span>Validation failed</span>
           </div>
-          {result.message && (
-            <p className="mt-1 text-xs">{result.message}</p>
-          )}
+          {result.message && <p className="mt-1 text-xs">{result.message}</p>}
           <p className="mt-2 text-xs">
-            {validateErrorRemediation(result.error_kind as GCPValidateErrorKind, {
-              connectionProjectID,
-              saProjectID,
-            })}
+            {validateErrorRemediation(
+              result.error_kind as GCPValidateErrorKind,
+              {
+                connectionProjectID,
+                saProjectID,
+              },
+            )}
           </p>
         </div>
       )}
@@ -1000,7 +999,9 @@ function ScanStep({
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" aria-hidden />
             <span className="font-medium">
-              Scan complete: {result.compute.length} instances ({result.instrumented_count} instrumented, {result.uninstrumented_count} uninstrumented).
+              Scan complete: {result.compute.length} instances (
+              {result.instrumented_count} instrumented,{" "}
+              {result.uninstrumented_count} uninstrumented).
             </span>
           </div>
           <p className="mt-1 text-xs">
@@ -1179,7 +1180,11 @@ function InventoryTable({ rows }: { rows: ComputeInstanceSnapshot[] }) {
 // query_insights_enabled (the GCP single-axis observability lever);
 // rows where the field is undefined render "No" because absence is
 // the uncovered signal per design doc §3.1.
-function DatabaseInventoryTable({ rows }: { rows: DatabaseInstanceSnapshot[] }) {
+function DatabaseInventoryTable({
+  rows,
+}: {
+  rows: DatabaseInstanceSnapshot[];
+}) {
   if (rows.length === 0) {
     return (
       <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
@@ -1273,7 +1278,9 @@ function ClusterInventoryTable({ rows }: { rows: ClusterSnapshot[] }) {
             <tr key={row.resource_id} className="border-t">
               <td className="px-3 py-2 font-mono text-xs">{row.resource_id}</td>
               <td className="px-3 py-2 text-xs">{row.name || "-"}</td>
-              <td className="px-3 py-2 text-xs">{row.kubernetes_version || "-"}</td>
+              <td className="px-3 py-2 text-xs">
+                {row.kubernetes_version || "-"}
+              </td>
               <td className="px-3 py-2 text-xs">{row.status || "-"}</td>
               <td className="px-3 py-2 text-xs">
                 {row.managed_prometheus_enabled ? (
@@ -1632,9 +1639,7 @@ function PropagationNotesDialog({
         <DialogHeader>
           <DialogTitle>Propagation notes</DialogTitle>
           <DialogDescription>
-            {state
-              ? `${state.row.surface} · ${state.row.resource_name}`
-              : ""}
+            {state ? `${state.row.surface} · ${state.row.resource_name}` : ""}
           </DialogDescription>
         </DialogHeader>
         {state && state.notes.length === 0 ? (
@@ -1702,9 +1707,9 @@ function RecommendationsTab() {
         this arc.
       </p>
       <p className="mt-2 text-xs">
-        Chunk 5 extends the discovery proposer with a Provider discriminator
-        and the gce-otel-label recommendation kind, then wires this tab to the
-        same generate-recommendations flow the AWS page uses.
+        Chunk 5 extends the discovery proposer with a Provider discriminator and
+        the gce-otel-label recommendation kind, then wires this tab to the same
+        generate-recommendations flow the AWS page uses.
       </p>
     </div>
   );

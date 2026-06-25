@@ -128,7 +128,11 @@ export function substituteProject(template: string, projectID: string): string {
 //                    configured project_id. Required so the mismatch
 //                    can be detected client-side too in a future
 //                    enhancement.
-export const SA_REQUIRED_FIELDS = ["client_email", "private_key", "project_id"] as const;
+export const SA_REQUIRED_FIELDS = [
+  "client_email",
+  "private_key",
+  "project_id",
+] as const;
 
 // ParsedServiceAccount is the typed projection of a valid SA JSON
 // blob — the wizard renderer reads this rather than re-parsing.
@@ -160,7 +164,9 @@ export interface SAValidationError {
 // rendering.
 export function parseServiceAccount(
   raw: string,
-): { ok: true; sa: ParsedServiceAccount } | { ok: false; err: SAValidationError } {
+):
+  | { ok: true; sa: ParsedServiceAccount }
+  | { ok: false; err: SAValidationError } {
   const trimmed = raw.trim();
   if (trimmed === "") {
     return {

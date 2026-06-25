@@ -43,8 +43,7 @@ export const IAC_GITHUB_PLACEMENT_KINDS: PlacementKindRow[] = [
     provider: "aws",
     resource_kind: "rds-pi-em",
     display_name: "RDS Performance Insights + Enhanced Monitoring",
-    description:
-      "Enables PI and EM on RDS instances missing either lever.",
+    description: "Enables PI and EM on RDS instances missing either lever.",
   },
   {
     provider: "aws",

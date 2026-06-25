@@ -13,7 +13,13 @@
 // (validateIaCGitHub + saveIaCGitHubConnection) so tests don't reach
 // the network.
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { IaCGitHubWizard } from "./IaCGitHubWizard";
@@ -38,9 +44,8 @@ if (!Element.prototype.setPointerCapture) {
 }
 
 vi.mock("@/api/iacGithub", async () => {
-  const actual = await vi.importActual<typeof import("@/api/iacGithub")>(
-    "@/api/iacGithub",
-  );
+  const actual =
+    await vi.importActual<typeof import("@/api/iacGithub")>("@/api/iacGithub");
   return {
     ...actual,
     validateIaCGitHub: vi.fn(),
@@ -127,10 +132,9 @@ describe("IaCGitHubWizard", () => {
 
     // Step 2: PAT. Paste a value, then Next.
     expect(screen.getByText(/Authenticate with GitHub/i)).toBeInTheDocument();
-    fireEvent.change(
-      screen.getByLabelText(/GitHub Personal Access Token/i),
-      { target: { value: "ghp_test1234567890" } },
-    );
+    fireEvent.change(screen.getByLabelText(/GitHub Personal Access Token/i), {
+      target: { value: "ghp_test1234567890" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
 
     // Step 2.5: webhook-secret (v0.89.32). Pick "use global" — the
@@ -152,7 +156,9 @@ describe("IaCGitHubWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
 
     // Step 5: placement map. Fill one path.
-    expect(screen.getByText(/Map resource kinds to files/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Map resource kinds to files/i),
+    ).toBeInTheDocument();
     fireEvent.change(
       screen.getByLabelText(/File path for lambda-otel-layer/i),
       { target: { value: "modules/lambda/main.tf" } },
@@ -238,13 +244,16 @@ describe("IaCGitHubWizard", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i })); // repo → layout
     // Stay on the layout step to verify multi is the default tile.
-    expect(
-      screen.getByRole("button", { name: /Multi-repo/i }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Multi-repo/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     // Advance to placement. Multi placeholders use "modules/...".
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
-    const lambdaInput = screen.getByLabelText(/File path for lambda-otel-layer/i);
+    const lambdaInput = screen.getByLabelText(
+      /File path for lambda-otel-layer/i,
+    );
     expect(lambdaInput).toHaveAttribute(
       "placeholder",
       "modules/lambda/main.tf",
@@ -269,14 +278,16 @@ describe("IaCGitHubWizard", () => {
       default_branch: "",
       repo_err: {
         code: "AuthFailed",
-        message: "GitHub rejected the token. Re-paste the value; ensure the repo scope is checked.",
+        message:
+          "GitHub rejected the token. Re-paste the value; ensure the repo scope is checked.",
         suggested_step: "pat",
       },
       preflight_results: [],
       errors: [
         {
           code: "AuthFailed",
-          message: "GitHub rejected the token. Re-paste the value; ensure the repo scope is checked.",
+          message:
+            "GitHub rejected the token. Re-paste the value; ensure the repo scope is checked.",
           suggested_step: "pat",
         },
       ],
@@ -430,9 +441,7 @@ describe("IaCGitHubWizard", () => {
     return waitFor(() => {
       expect(screen.getByText("What just happened")).toBeInTheDocument();
     }).then(() => {
-      fireEvent.click(
-        screen.getByRole("button", { name: /Save connection/i }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: /Save connection/i }));
     });
   }
 
@@ -461,17 +470,13 @@ describe("IaCGitHubWizard", () => {
     expect(displayedSecret).toMatch(/^[a-f0-9]{64}$/);
 
     // Next is disabled until the operator acknowledges.
-    expect(
-      screen.getByRole("button", { name: /^Next$/i }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
 
     // Tick the acknowledgment checkbox. Next enables.
     fireEvent.click(
       screen.getByLabelText(/I have saved this secret securely/i),
     );
-    expect(
-      screen.getByRole("button", { name: /^Next$/i }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeEnabled();
 
     walkFromWebhookSecretToValidate();
     await validateAndSave();
@@ -514,9 +519,7 @@ describe("IaCGitHubWizard", () => {
     ).not.toBeInTheDocument();
 
     // Next enables immediately — no acknowledgment needed.
-    expect(
-      screen.getByRole("button", { name: /^Next$/i }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Next$/i })).toBeEnabled();
 
     walkFromWebhookSecretToValidate();
     await validateAndSave();
@@ -568,9 +571,7 @@ describe("IaCGitHubWizard", () => {
     expect(mockedUpdate).not.toHaveBeenCalled();
 
     // Success card surfaces the deferred reminder.
-    const deferred = await screen.findByTestId(
-      "iac-github-webhook-deferred",
-    );
+    const deferred = await screen.findByTestId("iac-github-webhook-deferred");
     expect(deferred.textContent).toMatch(/configure later|deferred/i);
   });
 });

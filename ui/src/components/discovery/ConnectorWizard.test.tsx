@@ -23,7 +23,6 @@ import {
 } from "@/api/discovery";
 import { awsWizard, AWS_PERMISSIONS_POLICY_TEMPLATE } from "@/data/awsWizard";
 
-
 // makeProps builds default props for each test, defaulting onValidate
 // to a successful result and onSave to a 1-row response. Tests
 // override the callbacks they care about.
@@ -116,7 +115,9 @@ describe("ConnectorWizard", () => {
 
     // Step 5: validate. Click the Validate button and wait for the
     // result panel to land.
-    fireEvent.click(screen.getByRole("button", { name: /Validate connection/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
       expect(screen.getByText("What just happened")).toBeInTheDocument();
     });
@@ -127,15 +128,18 @@ describe("ConnectorWizard", () => {
   });
 
   it("validation error shows humanized message + jump button", async () => {
-    const onValidate = vi.fn(async (): Promise<ValidationResult> => ({
-      assume_role_ok: false,
-      assume_role_err: {
-        code: "AccessDenied",
-        message: "The role's trust policy doesn't authorize Squadron's principal.",
-        suggested_step: "trust-policy",
-      },
-      preflight: [],
-    }));
+    const onValidate = vi.fn(
+      async (): Promise<ValidationResult> => ({
+        assume_role_ok: false,
+        assume_role_err: {
+          code: "AccessDenied",
+          message:
+            "The role's trust policy doesn't authorize Squadron's principal.",
+          suggested_step: "trust-policy",
+        },
+        preflight: [],
+      }),
+    );
     const props = makeProps({ onValidate });
     render(<ConnectorWizard {...props} />);
 
@@ -161,7 +165,9 @@ describe("ConnectorWizard", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
 
-    fireEvent.click(screen.getByRole("button", { name: /Validate connection/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
     await waitFor(() => {
       expect(
         screen.getByText(/trust policy doesn't authorize/i),
@@ -266,10 +272,7 @@ describe("renderTrustPolicy", () => {
 describe("effectiveExternalId", () => {
   it("uses a well-formed override in place of the auto-generated value", () => {
     expect(
-      effectiveExternalId(
-        "auto-uuid",
-        "12345678-1234-1234-1234-123456789012",
-      ),
+      effectiveExternalId("auto-uuid", "12345678-1234-1234-1234-123456789012"),
     ).toBe("12345678-1234-1234-1234-123456789012");
   });
 
@@ -280,10 +283,7 @@ describe("effectiveExternalId", () => {
     );
     // Bad shape: uppercase. We pin lowercase canonical form.
     expect(
-      effectiveExternalId(
-        "auto-uuid",
-        "12345678-1234-1234-1234-12345678901A",
-      ),
+      effectiveExternalId("auto-uuid", "12345678-1234-1234-1234-12345678901A"),
     ).toBe("auto-uuid");
   });
 
@@ -312,10 +312,9 @@ describe("ExternalId override UX", () => {
     );
 
     const override = "abcdef12-3456-7890-abcd-ef1234567890";
-    fireEvent.change(
-      screen.getByLabelText(/ExternalId override/i),
-      { target: { value: override } },
-    );
+    fireEvent.change(screen.getByLabelText(/ExternalId override/i), {
+      target: { value: override },
+    });
 
     // The trust-policy <code> block must now reflect the override.
     const codeBlock = document.querySelector("pre code");
@@ -338,10 +337,9 @@ describe("ExternalId override UX", () => {
       screen.getByRole("button", { name: /Resume with existing ExternalId/i }),
     );
 
-    fireEvent.change(
-      screen.getByLabelText(/ExternalId override/i),
-      { target: { value: "not-a-uuid" } },
-    );
+    fireEvent.change(screen.getByLabelText(/ExternalId override/i), {
+      target: { value: "not-a-uuid" },
+    });
 
     // The malformed string must NOT end up in the trust policy. The
     // ExternalId field below the policy continues to show the
@@ -350,9 +348,7 @@ describe("ExternalId override UX", () => {
     expect(codeBlock?.textContent).not.toContain("not-a-uuid");
 
     // Inline error guidance surfaces.
-    expect(
-      screen.getByText(/lowercase UUID v4 shape/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/lowercase UUID v4 shape/i)).toBeInTheDocument();
   });
 });
 
@@ -460,9 +456,7 @@ describe("ConnectorWizard step 2 UX (#622)", () => {
     render(<ConnectorWizard {...makeProps()} resumeMode />);
     // The wizard mounts on step 1; the resume pre-step field is
     // visible above the account-id input.
-    expect(
-      screen.getByLabelText(/Existing ExternalId/i),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Existing ExternalId/i)).toBeInTheDocument();
     // A well-formed paste threads through to step 2's trust policy.
     const override = "abcdef12-3456-7890-abcd-ef1234567890";
     fireEvent.change(screen.getByLabelText(/Existing ExternalId/i), {
