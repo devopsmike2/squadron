@@ -214,12 +214,10 @@ func streamPreservesPropagation(retentionInHours int) (bool, string) {
 }
 
 // ScanEventSources is the OCI scanner's event-source-tier entry
-// point. Slice 1 chunk 4 only covers OCI Streaming; future slices may
-// add other OCI event source primitives (Notifications, Queue
-// service). The method is kept narrow so chunk 4 callers see a
-// single dispatch point even as the per-surface coverage grows.
-// Mirrors the orchestration tier's ScanOrchestrations / serverless
-// tier's ScanServerless layout.
+// point. Slice 7 chunk 1 (v0.89.150) extends the dispatcher to
+// two-way (Streaming + Notifications) with partial-scan posture
+// mirroring the slice 6 Azure two-way dispatcher. Slice 8+ may add
+// further OCI event source primitives (Queue service).
 //
 // Scope semantics: scope.AccountID overrides the per-snapshot
 // AccountID stamped on every row; empty falls back to the scanner's
@@ -228,14 +226,44 @@ func streamPreservesPropagation(retentionInHours int) (bool, string) {
 // level children" via the existing listCompartments helper (same
 // default as the Compute / Database / OKE / Functions walks).
 //
-// IAM contract per docs/proposals/event-source-tier-slice1.md §12:
-// "inspect streams in compartment" (Streaming) + the existing
-// Logging read policy already in the IAM template
-// (logs.read-log + logs.read-log-resource for the per-stream detection
-// call). All read-only; Squadron never executes a Streaming or
-// Logging mutation API.
+// Partial-scan posture: Streaming failure with Notifications success
+// still surfaces the ONS topics, and vice versa. The dispatcher only
+// returns a hard error when BOTH surfaces fail — same posture as the
+// slice 6 Azure dispatcher (Service Bus + Event Grid). The chunk 5
+// trampoline above this is responsible for surfacing per-surface
+// partial failures via recordPartialFailure; the dispatcher itself
+// only returns the union of snapshots + the both-failed terminal
+// error case.
+//
+// IAM contract per docs/proposals/event-source-tier-slice1.md §12
+// (Streaming) + docs/proposals/event-source-tier-slice7.md §12 (ONS):
+// "inspect streams in compartment" (Streaming) + "read ons-topics in
+// compartment" (ONS) + the existing Logging read policy already in
+// the IAM template (logs.read-log + logs.read-log-resource for the
+// per-stream + per-topic detection calls). All read-only; Squadron
+// never executes a Streaming / ONS / Logging mutation API.
 func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
-	return s.ScanStreams(ctx, scope)
+	var all []scanner.EventSourceInstanceSnapshot
+
+	streams, strErr := s.ScanStreams(ctx, scope)
+	if strErr == nil {
+		all = append(all, streams...)
+	}
+
+	topics, onsErr := s.ScanNotificationTopics(ctx, scope)
+	if onsErr == nil {
+		all = append(all, topics...)
+	}
+
+	// Partial-scan posture: error only when BOTH failed. Pinned by
+	// slice 7 acceptance tests 8 + 9 (single-surface partial-scan)
+	// and test 10 (both-failed error message references both
+	// surfaces).
+	if strErr != nil && onsErr != nil {
+		return all, fmt.Errorf("oci: all event source surfaces failed: streaming=%v notifications=%w", strErr, onsErr)
+	}
+
+	return all, nil
 }
 
 // ScanStreams walks the OCI Streaming surface for the configured
