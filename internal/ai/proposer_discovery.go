@@ -26,6 +26,44 @@ import (
 // category-typed underneath so the proposer prompt reasons about
 // "compute" and "function" rather than provider-specific resource
 // types.
+// EventSourceCandidate is the proposer-facing shape of one event
+// source (queue / topic / bus) from the discovery scan's event-source
+// inventory. Flat-struct convention, mirroring ComputeResourceCandidate.
+// v0.89.189 — the event-source -> proposer bridge.
+//
+// Provider + Surface + SourceType drive the recommendation-kind prefix
+// routing (sqs- -> AWS, cloudtasks- -> GCP, servicebus- -> Azure,
+// queues- -> OCI, etc.). The DLQ-axis fields are detected entirely from
+// the read-only scan (GetQueueAttributes RedrivePolicy + the in-account
+// ARN-reachability check) with NO metric substrate, so the DLQ
+// recommendations they drive are undeniable.
+type EventSourceCandidate struct {
+	Provider     string
+	Surface      string
+	SourceType   string
+	ResourceName string
+	ResourceARN  string
+	Region       string
+
+	// Slice 1 + 2 axes (cloud-native trace / structured-logging).
+	HasTraceAxis bool
+	HasLogAxis   bool
+
+	// DLQ configuration axis (DLQ-configuration-analysis slice 1).
+	// HasDLQ: the queue has a redrive policy pointing at a reachable
+	// in-account DLQ. When false -> the proposer should emit the
+	// dlq-attach kind for the surface. RedrivePolicyTargetARN is the
+	// configured dead-letter target (empty when no redrive policy); a
+	// non-empty target that is NOT reachable in-account is the dangling
+	// reference that drives the deadletter-queue-attach kind.
+	// DLQRetryCountInBand: maxReceiveCount is within the [2, 50] band;
+	// when false (and HasDLQ true) -> the dlq-retry-count-bound kind.
+	HasDLQ                 bool
+	RedrivePolicyTargetARN string
+	DLQRetryCount          int
+	DLQRetryCountInBand    bool
+}
+
 type DiscoveryScanContext struct {
 	// Identification. ScanID flows into the audit trail and the
 	// recommendation Source.RefID; AccountID doubles as the group_id
@@ -178,6 +216,19 @@ type DiscoveryScanContext struct {
 	// Squadron NEVER executes ecs:UpdateClusterSettings — read-only
 	// invariant.
 	ECSClusters []ECSClusterCandidate
+
+	// EventSources joins the inventory list for the event-source tier
+	// (v0.89.189 — the event-source -> proposer bridge). SQS / SNS /
+	// EventBridge today (Cloud Tasks / Pub/Sub / Service Bus / OCI
+	// Queues slot into the same field). Previously the scan collected
+	// event sources (Result.EventSources) and the UI rendered them, but
+	// they were NEVER passed to the proposer — so the proposer could not
+	// emit any event-source recommendation (sqs-dlq-attach, etc.) despite
+	// the system prompt documenting every such kind. This field closes
+	// that bridge. The DLQ-axis fields (HasDLQ / RedrivePolicyTargetARN /
+	// DLQRetryCount* ) are the scan-substantiated, metric-free signals
+	// that drive the dead-letter remediation family.
+	EventSources []EventSourceCandidate
 
 	// Coverage assessment, denormalized so the prompt body can
 	// reference the totals without recounting. Match the scanner

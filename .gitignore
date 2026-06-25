@@ -58,3 +58,6 @@ temp/
 /fleetsim
 /webhook-echo
 /squadron-action-runner
+
+# stray go build artifacts at repo root
+/squadron-proposer-bench

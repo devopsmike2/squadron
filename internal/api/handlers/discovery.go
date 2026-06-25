@@ -2625,6 +2625,46 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		})
 	}
 
+	// Event sources (v0.89.189 - the event-source -> proposer bridge).
+	// Previously Result.EventSources was collected + rendered in the UI
+	// but never passed to the proposer, so it could not emit any
+	// event-source recommendation. Map each snapshot to an
+	// EventSourceCandidate, reading the DLQ-axis Detail keys defensively
+	// (Detail is map[string]any; numbers arrive as float64 after a JSON
+	// round-trip, so handle int / int64 / float64).
+	for _, es := range req.ScanResult.EventSources {
+		cand := ai.EventSourceCandidate{
+			Provider:     es.Provider,
+			Surface:      es.Surface,
+			SourceType:   es.SourceType,
+			ResourceName: es.ResourceName,
+			ResourceARN:  es.ResourceARN,
+			Region:       es.Region,
+			HasTraceAxis: es.HasTraceAxis,
+			HasLogAxis:   es.HasLogAxis,
+		}
+		if es.Detail != nil {
+			if v, ok := es.Detail["has_dlq"].(bool); ok {
+				cand.HasDLQ = v
+			}
+			if v, ok := es.Detail["redrive_policy_target_arn"].(string); ok {
+				cand.RedrivePolicyTargetARN = v
+			}
+			if v, ok := es.Detail["dlq_retry_count_in_band"].(bool); ok {
+				cand.DLQRetryCountInBand = v
+			}
+			switch v := es.Detail["dlq_retry_count"].(type) {
+			case int:
+				cand.DLQRetryCount = v
+			case int64:
+				cand.DLQRetryCount = int(v)
+			case float64:
+				cand.DLQRetryCount = int(v)
+			}
+		}
+		aiCtx.EventSources = append(aiCtx.EventSources, cand)
+	}
+
 	// v0.89.28 (#643 slice 1) → v0.89.36 (#655 Stream 53, #531 slice
 	// 2 chunk 3) — populate the verdict few-shot block before the
 	// proposer call. AssembleVerdictBlock returns ("", nil, nil) on
