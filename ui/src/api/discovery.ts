@@ -730,7 +730,7 @@ export function setRecommendationExclusion(
   req: ExcludeRecommendationRequest,
 ): Promise<ExcludeRecommendationResponse> {
   return apiPost<ExcludeRecommendationResponse>(
-    "/discovery/aws/recommendations/exclude",
+    "/discovery/recommendations/exclude",
     req,
   );
 }
@@ -796,7 +796,7 @@ export async function listExcludedRecommendations(
     params.limit = String(req.limit);
   }
   const resp = await apiGet<listExcludedRecommendationsResponse>(
-    "/discovery/aws/recommendations/excluded",
+    "/discovery/recommendations/excluded",
     params,
   );
   return resp.excluded ?? [];

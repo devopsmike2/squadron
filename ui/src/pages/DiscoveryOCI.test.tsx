@@ -73,7 +73,14 @@ const mockedScanOCIConnection = vi.mocked(scanOCIConnection);
 function renderPage(initialEntries: string[] = ["/discovery/oci"]) {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
       </SWRConfig>
     );

@@ -2421,6 +2421,19 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRecommendationListExcluded(c) }))
 
+		// Recs-UI parity (v0.89.201) — provider-agnostic aliases for the
+		// exclusion endpoints. HandleAWSRecommendationExclude /
+		// ListExcluded key off the request-body scope (account_id /
+		// region / kind), not the URL, so the GCP / Azure / OCI
+		// Recommendations tabs reuse them with their own scope. The
+		// /aws/ routes above stay for backward compat.
+		v1.POST("/discovery/recommendations/exclude",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRecommendationExclude(c) }))
+		v1.GET("/discovery/recommendations/excluded",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRecommendationListExcluded(c) }))
+
 		// v0.89.47 (#667 Stream 67, GCP discovery slice 1 chunk 3) —
 		// GCP-side mirror of the /discovery/aws/* surface. Per design
 		// doc §6 the route shapes mirror the AWS counterparts so the

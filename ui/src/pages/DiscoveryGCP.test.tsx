@@ -73,7 +73,14 @@ const mockedScanGCPConnection = vi.mocked(scanGCPConnection);
 function renderPage(initialEntries: string[] = ["/discovery/gcp"]) {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
       </SWRConfig>
     );
@@ -434,7 +441,11 @@ describe("DiscoveryGCP", () => {
     }
   });
 
-  it("TestDiscoveryGCP_RecommendationsTab_ChunkStubMessage", async () => {
+  // v0.89.201 — the Recommendations tab is now wired (chunk-5 proposer
+  // + the recs UI). With no scan selected it shows the run-a-scan-first
+  // empty state; the generate flow + shared RecommendationsTab render
+  // once a scan exists.
+  it("TestDiscoveryGCP_RecommendationsTab_EmptyStateWithoutScan", async () => {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => {
@@ -444,7 +455,7 @@ describe("DiscoveryGCP", () => {
     await user.click(screen.getByRole("tab", { name: /Recommendations/i }));
     await waitFor(() => {
       expect(
-        screen.getByText(/ships in chunk 5 of this arc/i),
+        screen.getByText(/Run a scan from the Inventory tab first/i),
       ).toBeInTheDocument();
     });
   });

@@ -18,7 +18,10 @@
 //     ./base helpers.
 
 import { apiDelete, apiGet, apiPost } from "./base";
-import type { EventSourceRow } from "./discovery";
+import type {
+  EventSourceRow,
+  GenerateRecommendationsResponse,
+} from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -340,6 +343,21 @@ export interface ScanGCPResponse {
 export function scanGCPConnection(id: string): Promise<ScanGCPResponse> {
   return apiPost<ScanGCPResponse>(
     `/discovery/gcp/connections/${encodeURIComponent(id)}/scan`,
+  );
+}
+
+// generateGCPRecommendations asks the discovery proposer to draft an
+// instrumentation plan from a GCP scan result. Mirrors
+// generateAWSRecommendations: the browser POSTs the scan it just
+// rendered; the server builds a Provider="gcp" DiscoveryScanContext and
+// walks the plan-kind result into typed Recommendations.
+export function generateGCPRecommendations(
+  connectionID: string,
+  scanResult: ScanGCPResponse,
+): Promise<GenerateRecommendationsResponse> {
+  return apiPost<GenerateRecommendationsResponse>(
+    `/discovery/gcp/connections/${encodeURIComponent(connectionID)}/recommendations`,
+    { scan_result: scanResult },
   );
 }
 
