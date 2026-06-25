@@ -343,6 +343,37 @@ jump straight to that page.
   runbook close in
   [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
 
+  **Poison-Message Rate Analysis slice 3 (v0.89.172-v0.89.176)
+  ships the THIRD per-axis depth slice** with the identical
+  4-chunk + design-doc shape (CLOSES at v0.89.176 with the
+  OCI Queue Service chunk). Poison-message RATE is the
+  leading-indicator axis between DLQ presence (slice 1,
+  structural) and consumer lag (slice 2, temporal): a
+  spiking rate signals schema drift, downstream outages, or
+  a code regression on one message shape before messages
+  reach the DLQ. Two additive Detail keys per surface
+  (`poison_rate_per_hour` + `poison_rate_high_band`); 4
+  recommendation kinds (`sqs-poison-rate-monitor-add`,
+  `cloudtasks-poison-rate-monitor-add`,
+  `servicebus-poison-rate-monitor-add`,
+  `queues-poison-rate-monitor-add`). Unlike slices 1 + 2
+  (AWS + OCI real detection, GCP + Azure honest framing),
+  slice 3 is UNIFORM: all four clouds ship §3.3
+  substrate-metric-dependence honest framing because every
+  per-queue poison rate needs a time-series metric delta the
+  single-pass scanner does not query. §3.3 is therefore the
+  cleanest deferral to close — a future substrate
+  MetricQuerier slice retires all four clouds at once
+  (recommended next arc, mirroring the cold-start latency
+  slice 1 -> slice 2 MetricQuerier build). All kinds route
+  via existing per-cloud webhook prefixes — NO new prefix
+  routing. NO new API calls, NO IAM extension, NO storage
+  migration; additive Detail bag keys only preserve
+  cold-start parity. Design doc at
+  [proposals/poison-message-rate-slice3.md](./proposals/poison-message-rate-slice3.md);
+  runbook close in
+  [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
+
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

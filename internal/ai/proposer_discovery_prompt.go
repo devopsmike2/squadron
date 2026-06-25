@@ -422,6 +422,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	dlqConfigSlice1KindsPromptSection +
 
 	consumerLagSlice2KindsPromptSection +
+	poisonRateSlice3KindsPromptSection +
 
 	coldStartKindsPromptSection +
 
@@ -2530,6 +2531,114 @@ depth slices. The horizon ahead: throughput inversion
 time, cross-surface message-loss estimation, per-queue
 cost-per-message correlation. Each axis re-traverses 4
 clouds independently.
+
+` + "\n"
+
+// poisonRateSlice3KindsPromptSection — Poison-message rate
+// analysis slice 3 chunk 4 (v0.89.176, #818 Stream 215). THIRD
+// per-axis-depth slice of the post-widening horizon, closes the
+// poison-message rate arc. ALL FOUR clouds ship §3.3
+// substrate-metric-dependence honest framing (no mixed shape).
+//
+//   AWS SQS:           sqs-poison-rate-monitor-add        (§3.3 honest framing)
+//   GCP Cloud Tasks:   cloudtasks-poison-rate-monitor-add (§3.3 honest framing)
+//   Azure Service Bus: servicebus-poison-rate-monitor-add (§3.3 honest framing)
+//   OCI Queue Service: queues-poison-rate-monitor-add     (§3.3 honest framing)
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged.
+const poisonRateSlice3KindsPromptSection = `POISON-MESSAGE RATE ANALYSIS SLICE 3 — QUEUE TIER PER-AXIS DEPTH (v0.89.172-176):
+
+THIRD per-axis-depth slice after DLQ slice 1 closed at
+v0.89.166 + consumer lag slice 2 closed at v0.89.171. Same
+playbook: pick one operational axis that matters for every
+queue, detect where the scanner pass already has the data,
+ship honest-framing recommendations for substrate gaps,
+route via existing per-cloud webhook prefixes.
+
+Poison-message RATE is a leading indicator distinct from
+the DLQ slice 1 axis (does a DLQ EXIST?) and the consumer
+lag slice 2 axis (is the consumer KEEPING UP?). A spiking
+poison-message rate signals schema drift, a downstream
+dependency outage, or a code regression on one message
+shape — high rates exhaust consumer-side processing budget
+BEFORE the messages land in the DLQ. DLQ presence is
+structural; poison RATE is temporal.
+
+§3.3 SUBSTRATE-METRIC-DEPENDENCE — THE UNIFYING SHAPE:
+Unlike slices 1 + 2 (where AWS + OCI ship real detection
+and GCP + Azure ship honest framing), slice 3 is uniform:
+EVERY cloud's per-queue poison rate requires a time-series
+metric delta that the single-pass scanner does NOT read.
+There is NO mixed shape across chunks.
+
+  AWS   | SQS          | DLQ ApproximateNumberOfMessages delta via CloudWatch GetMetricStatistics
+  GCP   | Cloud Tasks  | cloudtasks.googleapis.com/queue/task_attempt_count via Cloud Monitoring
+  Azure | Service Bus  | DeadletteredMessages delta via Azure Monitor metrics
+  OCI   | Queue Service| dead-letter delivery delta via OCI Monitoring SummarizeMetricsData
+
+DETECTION (all four clouds, slice 3):
+
+- poison_rate_per_hour ALWAYS = -1 (absent sentinel).
+- poison_rate_high_band ALWAYS = false.
+- The future firing bound is 60/hour (1/minute), heuristic
+  per design doc §4, shared across clouds for consistency.
+
+RECOMMENDATION KINDS (4 — one per cloud, identical shape):
+
+- sqs-poison-rate-monitor-add: ALWAYS fires per SQS queue
+  (§3.3 honest framing). Terraform creates a CloudWatch
+  alarm on the DLQ's ApproximateNumberOfMessages metric
+  (threshold 60, 5-minute window). Reasoning text EXPLICITLY
+  calls out that Squadron CANNOT yet compute the rate from
+  the scanner pass — the alarm is the operator's load-bearing
+  surrogate until the CloudWatch GetMetricStatistics
+  integration lands.
+- cloudtasks-poison-rate-monitor-add: ALWAYS fires per
+  Cloud Tasks queue (§3.3). Terraform creates a Cloud
+  Monitoring alerting policy on task_attempt_count.
+- servicebus-poison-rate-monitor-add: ALWAYS fires per
+  Service Bus namespace (§3.3). Terraform creates an Azure
+  Monitor metric alert on DeadletteredMessages.
+- queues-poison-rate-monitor-add: ALWAYS fires per OCI
+  Queue Service queue (§3.3). Terraform creates an OCI
+  Monitoring alarm on the dead-letter delivery metric.
+
+All four route via the EXISTING per-cloud webhook prefixes
+(sqs-, cloudtasks-, servicebus-, queues-) — NO new prefix
+routing.
+
+HONEST FRAMING — slice 3 is the FIFTH application + the
+FIRST where a single variant (§3.3) covers all four clouds:
+
+  §3.1 — managed-primitive-absence (DLQ slice 1 chunk 2 +
+         lag slice 2 chunk 2: Cloud Tasks).
+  §3.2 — scanner-coverage-gap (DLQ slice 1 chunk 3 + lag
+         slice 2 chunk 3: Service Bus).
+  §3.3 — substrate-metric-dependence (slice 3 ALL chunks):
+         the data exists in a per-cloud time-series metric
+         the scanner does not yet query.
+
+§3.3 is the cleanest variant: a future substrate
+MetricQuerier slice closes ALL FOUR clouds' deferrals at
+once — the recommended next arc, mirroring how the
+cold-start latency slice 1 -> slice 2 arc built the
+MetricQuerier per cloud.
+
+DECLINE PATHS:
+
+- Operators who already monitor poison-message rates via a
+  different surface (Datadog metric, SignalFx detector,
+  existing observability stack) decline the monitor-add for
+  their cloud.
+
+STRATEGIC NOTE: slice 3 closes the THIRD per-axis-depth
+slice. The horizon ahead: a substrate MetricQuerier
+integration that closes ALL §3.3 deferrals at once
+(recommended), cross-surface message-loss estimation, and
+per-queue cost-per-message correlation. The per-axis-depth
+shape is fixed: each axis adds 2-4 Detail keys per surface
+and 2-6 recommendation kinds across the 4 clouds.
 
 ` + "\n"
 
