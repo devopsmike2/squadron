@@ -244,7 +244,7 @@ func AWSWizard() ConnectorWizard {
 				// five service categories Squadron now reads from.
 				ID:          "permissions-policy",
 				Title:       "Add this permissions policy to the role",
-				Description: "Squadron needs read-only access to EC2, Lambda, RDS, S3, ELBv2 (ALB / NLB), EKS, DynamoDB, and ECS in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
+				Description: "Squadron needs read-only access to EC2, Lambda, RDS, S3, ELBv2 (ALB / NLB), EKS, DynamoDB, ECS, SQS, SNS, EventBridge, and Step Functions in your account to discover what's uninstrumented. Copy this policy verbatim and attach it to the SquadronDiscovery role you just created — either as an inline policy or a separate managed policy. Squadron never executes write/modify actions; only the actions in this list are granted.",
 				Action: WizardAction{
 					Kind: ActionCopyValue,
 					Payload: map[string]string{
@@ -256,7 +256,7 @@ func AWSWizard() ConnectorWizard {
 					Kind: ValidationNone,
 				},
 				DocLink:      "https://docs.squadron.example/discovery/aws#permissions-policy",
-				RecoveryHint: "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB/EKS/DynamoDB/ECS probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step.",
+				RecoveryHint: "If the validate step's sts:AssumeRole succeeds but the EC2/Lambda/RDS/S3/ALB/EKS/DynamoDB/ECS/SQS/SNS/EventBridge/StepFunctions probes return AccessDenied, the permissions policy is missing or scoped wrong. Re-copy the policy from this step (the event-source actions — SQS/SNS/EventBridge/Step Functions — were added in v0.89.207; an older role needs them re-applied).",
 			},
 			{
 				ID:          "role-arn",

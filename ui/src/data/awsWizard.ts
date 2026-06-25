@@ -58,8 +58,18 @@ export const AWS_TRUST_POLICY_TEMPLATE = `{
 // slice 3b (v0.89.0) added EKS (5 actions, hotfixed to 6 in
 // v0.89.1); slice 4 (v0.89.6) added DynamoDB (4 actions);
 // slice 5 (v0.89.10) adds ECS / Fargate (3 actions:
-// ecs:ListClusters + ecs:DescribeClusters + ecs:ListTagsForResource)
-// — bringing the total to 30 read-only actions. No write actions;
+// ecs:ListClusters + ecs:DescribeClusters + ecs:ListTagsForResource);
+// the event-source tier (shipped v0.89.149-160) adds SQS (2), SNS (2),
+// EventBridge (3), and Step Functions (2) — 9 actions: sqs:ListQueues,
+// sqs:GetQueueAttributes, sns:ListTopics, sns:GetTopicAttributes,
+// events:ListEventBuses, events:ListRules, events:ListTargetsByRule,
+// states:ListStateMachines, states:DescribeStateMachine — bringing the
+// total to 39 read-only actions. REGRESSION: the event-source tier
+// shipped without these in the template, so operators who set up against
+// the v0.89.149-160 wizard hit AccessDenied + an empty event-source
+// inventory at scan time; corrected in v0.89.207. Re-copy this policy
+// (or add the 9 actions) on an existing role to enable event-source
+// discovery. No write actions;
 // the principle of least privilege is enforced at the policy
 // level so even a fully compromised Squadron cannot escalate.
 //
@@ -102,7 +112,16 @@ export const AWS_PERMISSIONS_POLICY_TEMPLATE = `{
         "dynamodb:ListTagsOfResource",
         "ecs:ListClusters",
         "ecs:DescribeClusters",
-        "ecs:ListTagsForResource"
+        "ecs:ListTagsForResource",
+        "sqs:ListQueues",
+        "sqs:GetQueueAttributes",
+        "sns:ListTopics",
+        "sns:GetTopicAttributes",
+        "events:ListEventBuses",
+        "events:ListRules",
+        "events:ListTargetsByRule",
+        "states:ListStateMachines",
+        "states:DescribeStateMachine"
       ],
       "Resource": "*"
     }

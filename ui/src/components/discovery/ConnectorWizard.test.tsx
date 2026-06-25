@@ -499,4 +499,76 @@ describe("AWS_PERMISSIONS_POLICY_TEMPLATE", () => {
     expect(AWS_PERMISSIONS_POLICY_TEMPLATE).not.toMatch(/:Put\w+/);
     expect(AWS_PERMISSIONS_POLICY_TEMPLATE).not.toMatch(/iam:/);
   });
+
+  it("includes the 9 event-source actions (SQS/SNS/EventBridge/Step Functions)", () => {
+    // Regression for the v0.89.207 fix: the event-source recommendation
+    // tier shipped in v0.89.149-160 but these actions were missing from
+    // the template, so operators got AccessDenied + an empty event-source
+    // inventory at scan time. Pin each one so a tier can never ship
+    // without its IAM grant again.
+    for (const action of [
+      "sqs:ListQueues",
+      "sqs:GetQueueAttributes",
+      "sns:ListTopics",
+      "sns:GetTopicAttributes",
+      "events:ListEventBuses",
+      "events:ListRules",
+      "events:ListTargetsByRule",
+      "states:ListStateMachines",
+      "states:DescribeStateMachine",
+    ]) {
+      expect(AWS_PERMISSIONS_POLICY_TEMPLATE).toContain(action);
+    }
+  });
+
+  it("pins the exact permissions action set (guard for tier additions)", () => {
+    // Strong regression: parse the template and assert the full action
+    // list, in order. Any new scanner tier that adds an IAM call must
+    // also update this list (and the template), or this fails — that is
+    // exactly the gap that shipped event-source discovery un-grantable.
+    const parsed = JSON.parse(AWS_PERMISSIONS_POLICY_TEMPLATE);
+    const actions = parsed.Statement[0].Action as string[];
+    expect(actions).toEqual([
+      "ec2:DescribeInstances",
+      "ec2:DescribeInstanceStatus",
+      "ec2:DescribeRegions",
+      "ec2:DescribeTags",
+      "lambda:ListFunctions",
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:ListTags",
+      "rds:DescribeDBInstances",
+      "s3:ListAllMyBuckets",
+      "s3:GetBucketLocation",
+      "s3:GetBucketLogging",
+      "s3:GetBucketTagging",
+      "s3:GetBucketRequestPayment",
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeLoadBalancerAttributes",
+      "elasticloadbalancing:DescribeTags",
+      "eks:ListClusters",
+      "eks:DescribeCluster",
+      "eks:ListAddons",
+      "eks:DescribeAddon",
+      "eks:ListNodegroups",
+      "eks:ListFargateProfiles",
+      "dynamodb:ListTables",
+      "dynamodb:DescribeTable",
+      "dynamodb:DescribeContributorInsights",
+      "dynamodb:ListTagsOfResource",
+      "ecs:ListClusters",
+      "ecs:DescribeClusters",
+      "ecs:ListTagsForResource",
+      "sqs:ListQueues",
+      "sqs:GetQueueAttributes",
+      "sns:ListTopics",
+      "sns:GetTopicAttributes",
+      "events:ListEventBuses",
+      "events:ListRules",
+      "events:ListTargetsByRule",
+      "states:ListStateMachines",
+      "states:DescribeStateMachine",
+    ]);
+    expect(actions).toHaveLength(39);
+  });
 });

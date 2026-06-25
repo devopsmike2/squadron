@@ -203,7 +203,16 @@ For reference, the v0.89.10 wizard's permissions policy is:
         "dynamodb:ListTagsOfResource",
         "ecs:ListClusters",
         "ecs:DescribeClusters",
-        "ecs:ListTagsForResource"
+        "ecs:ListTagsForResource",
+        "sqs:ListQueues",
+        "sqs:GetQueueAttributes",
+        "sns:ListTopics",
+        "sns:GetTopicAttributes",
+        "events:ListEventBuses",
+        "events:ListRules",
+        "events:ListTargetsByRule",
+        "states:ListStateMachines",
+        "states:DescribeStateMachine"
       ],
       "Resource": "*"
     }
@@ -211,7 +220,7 @@ For reference, the v0.89.10 wizard's permissions policy is:
 }
 ```
 
-30 actions total: 4 EC2 + 4 Lambda + 1 RDS + 5 S3 + 3 ELBv2 + 6 EKS + 4 DynamoDB + 3 ECS.
+39 actions total: 4 EC2 + 4 Lambda + 1 RDS + 5 S3 + 3 ELBv2 + 6 EKS + 4 DynamoDB + 3 ECS + 2 SQS + 2 SNS + 3 EventBridge + 2 Step Functions.
 All Describe/List/Get; no write actions. Click **Next**. Policy name:
 `SquadronDiscoveryReadOnly`. Click **Create policy**.
 
@@ -440,6 +449,7 @@ Squadron's discovery role explicitly does not have permission to do.
 | v0.89.1 (hotfix — see #605) | (correction) v0.89.0 was published with 5 eks:* actions but the scanner also calls `eks:ListFargateProfiles`. Add the 6th action if you set up against the v0.89.0 template; no other change. | 23 |
 | v0.89.6 (slice 4 — DynamoDB) | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:DescribeContributorInsights`, `dynamodb:ListTagsOfResource` | 27 |
 | v0.89.10 (slice 5 — ECS/Fargate) | `ecs:ListClusters`, `ecs:DescribeClusters`, `ecs:ListTagsForResource` | 30 |
+| v0.89.207 (event-source tier — IAM fix) | `sqs:ListQueues`, `sqs:GetQueueAttributes`, `sns:ListTopics`, `sns:GetTopicAttributes`, `events:ListEventBuses`, `events:ListRules`, `events:ListTargetsByRule`, `states:ListStateMachines`, `states:DescribeStateMachine` — **power the SQS/SNS/EventBridge/Step Functions event-source recommendation tier. That tier shipped in v0.89.149–160 but these actions were missing from this template until v0.89.207, so a role created against the earlier template returns AccessDenied + an empty event-source inventory at scan time. Add these 9 actions to an existing role to enable it.** | 39 |
 
 ### How to update
 
@@ -464,7 +474,7 @@ A quick health check after the update:
 
 ```bash
 # Compares the action count in your live role to the expected
-# v0.89.10+ count (30 actions). Run as the squadron-terraform or
+# v0.89.207+ count (39 actions). Run as the squadron-terraform or
 # any IAM-read-capable profile (not squadron-bot — that profile
 # only has sts:AssumeRole, not iam:GetRolePolicy).
 AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
@@ -473,10 +483,12 @@ AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
   --query 'PolicyDocument.Statement[0].Action | length(@)'
 ```
 
-Expected output: `30` for v0.89.10+ (v0.89.6–v0.89.9 expected
-`27`; v0.89.0–v0.89.5 expected `23`; v0.85.0–v0.87.x ranged from
-8 to 17). Anything less than the expected value means you're
-missing actions for one of the shipped slices.
+Expected output: `39` for v0.89.207+ (`30` for v0.89.10–v0.89.206 —
+these lacked the 9 event-source actions, so event-source discovery
+returned AccessDenied; v0.89.6–v0.89.9 expected `27`; v0.89.0–v0.89.5
+expected `23`; v0.85.0–v0.87.x ranged from 8 to 17). Anything less than
+the expected value means you're missing actions for one of the shipped
+slices.
 
 ## What this does NOT cover
 
