@@ -24,7 +24,10 @@
 //     Azure counterparts via the shared ./base helpers.
 
 import { apiDelete, apiGet, apiPost } from "./base";
-import type { EventSourceRow } from "./discovery";
+import type {
+  EventSourceRow,
+  GenerateRecommendationsResponse,
+} from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -348,6 +351,7 @@ interface scanOCIConnectionWireResponse {
   clusters?: ClusterSnapshot[];
   serverless?: ServerlessRow[];
   orchestrations?: OrchestrationRow[];
+  event_sources?: EventSourceRow[];
   instrumented_count: number;
   uninstrumented_count: number;
   partial: boolean;
@@ -376,8 +380,37 @@ export async function scanOCIConnection(id: string): Promise<ScanOCIResponse> {
     clusters: wire.clusters,
     serverless: wire.serverless,
     orchestrations: wire.orchestrations,
+    event_sources: wire.event_sources,
     scan_id: wire.scan_id,
   };
+}
+
+// generateOCIRecommendations asks the discovery proposer to draft an
+// instrumentation plan from an OCI scan result (Provider="oci"). The OCI
+// frontend ScanOCIResponse renames the wire `compute` field to
+// `computes`; the Go recommendations handler binds the wire
+// `ociScanResponse` shape, so this reshapes back so every tier (incl.
+// event sources) reaches the proposer.
+export function generateOCIRecommendations(
+  connectionID: string,
+  scan: ScanOCIResponse,
+): Promise<GenerateRecommendationsResponse> {
+  return apiPost<GenerateRecommendationsResponse>(
+    `/discovery/oci/connections/${encodeURIComponent(connectionID)}/recommendations`,
+    {
+      scan_result: {
+        scan_id: scan.scan_id,
+        tenancy_ocid: scan.tenancy_ocid,
+        region: scan.region,
+        instrumented_count: scan.instrumented_count,
+        uninstrumented_count: scan.uninstrumented_count,
+        compute: scan.computes,
+        databases: scan.databases,
+        clusters: scan.clusters,
+        event_sources: scan.event_sources,
+      },
+    },
+  );
 }
 
 // --- Wire-encoding helper ------------------------------------------

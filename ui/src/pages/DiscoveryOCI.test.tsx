@@ -548,7 +548,7 @@ describe("DiscoveryOCI", () => {
     }
   });
 
-  it("TestDiscoveryOCI_RecommendationsTab_ChunkStubMessage", async () => {
+  it("TestDiscoveryOCI_RecommendationsTab_EmptyStateWithoutScan", async () => {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => {
@@ -558,7 +558,7 @@ describe("DiscoveryOCI", () => {
     await user.click(screen.getByRole("tab", { name: /Recommendations/i }));
     await waitFor(() => {
       expect(
-        screen.getByText(/ships in chunk 5 of this arc/i),
+        screen.getByText(/Run a scan from the Inventory tab first/i),
       ).toBeInTheDocument();
     });
   });
