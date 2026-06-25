@@ -15,9 +15,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -106,6 +108,9 @@ type DiscoveryOCIHandlers struct {
 	// Optional; see DiscoveryHandlers.traceIndex godoc for posture.
 	traceIndex TraceIndexLookup
 	logger     *zap.Logger
+	// aiProposer — chunk 5 (v0.89.198). nil when AI assist is off;
+	// HandleRecommendationsForOCIScan 503s in that case.
+	aiProposer DiscoveryAIProposer
 }
 
 // NewDiscoveryOCIHandlers builds the handler struct. Optional
@@ -153,6 +158,13 @@ func (h *DiscoveryOCIHandlers) WithOCITraceIndex(idx TraceIndexLookup) *Discover
 
 func (h *DiscoveryOCIHandlers) WithOCIScannerFactory(f OCIScannerFactory) *DiscoveryOCIHandlers {
 	h.scannerFactory = f
+	return h
+}
+
+// WithOCIAIProposer wires the discovery-side AI proposer used by
+// HandleRecommendationsForOCIScan.
+func (h *DiscoveryOCIHandlers) WithOCIAIProposer(p DiscoveryAIProposer) *DiscoveryOCIHandlers {
+	h.aiProposer = p
 	return h
 }
 
@@ -1114,11 +1126,189 @@ func (h *DiscoveryOCIHandlers) emitOCIScanFailed(ctx context.Context, conn *ocic
 // Until then, the route returns a humanized "coming in chunk 5"
 // message so the UI can render an empty Recommendations tab without
 // 404ing.
+// ociGenerateRecommendationsRequest is the POST body: the
+// ociScanResponse echoed back so the proposer reasons over the same
+// inventory the Inventory tab rendered.
+type ociGenerateRecommendationsRequest struct {
+	ScanResult ociScanResponse `json:"scan_result"`
+}
+
+// HandleRecommendationsForOCIScan — POST
+// /api/v1/discovery/oci/connections/:id/recommendations (chunk 5,
+// v0.89.198). Builds a Provider="oci" DiscoveryScanContext from the
+// posted scan result and runs the shared proposer, mirroring AWS / GCP
+// / Azure.
 func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": &scanner.HumanizedError{
-		Code:    "OCIRecommendationsNotImplemented",
-		Message: "OCI recommendations are coming in chunk 5 of the OCI discovery slice 1 arc (#681). Until then, the OCI scan result is render-only.",
-	}})
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
+		}})
+		return
+	}
+	if h.aiProposer == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "AIProposerNotWired",
+			Message: "Squadron's AI assist is not configured. Set ANTHROPIC_API_KEY and ai.enabled=true to enable discovery recommendations.",
+		}})
+		return
+	}
+
+	conn, err := h.store.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, ociconnstore.ErrConnectionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code:    "ConnectionNotFound",
+				Message: "No OCI connection exists with that ID. Connect the tenancy from the wizard first.",
+			}})
+			return
+		}
+		if h.logger != nil {
+			h.logger.Error("oci generate recommendations: store read failed", zap.Error(err), zap.String("id", id))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "OCIStoreReadFailed",
+			Message: "Squadron could not read the OCI connection. The error has been logged; retry in a moment.",
+		}})
+		return
+	}
+
+	var req ociGenerateRecommendationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message: "Request body could not be parsed as JSON. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.ScanResult.ScanID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingScanID",
+			Message: "scan_result.scan_id is required. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if tid := strings.TrimSpace(req.ScanResult.TenancyOCID); tid != "" && tid != conn.TenancyOCID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "TenancyOCIDMismatch",
+			Message: "scan_result.tenancy_ocid does not match the connection. Re-run the scan against the right connection and retry.",
+		}})
+		return
+	}
+
+	regions := []string{}
+	if r := strings.TrimSpace(req.ScanResult.Region); r != "" {
+		regions = append(regions, r)
+	}
+	aiCtx := &ai.DiscoveryScanContext{
+		ScanID:              req.ScanResult.ScanID,
+		Provider:            "oci",
+		TenancyOCID:         conn.TenancyOCID,
+		Regions:             regions,
+		InstrumentedCount:   req.ScanResult.InstrumentedCount,
+		UninstrumentedCount: req.ScanResult.UninstrumentedCount,
+	}
+	for _, ci := range req.ScanResult.Compute {
+		aiCtx.ComputeInstances = append(aiCtx.ComputeInstances, ai.ComputeResourceCandidate{
+			ResourceID:   ci.ResourceID,
+			InstanceType: ci.InstanceType,
+			Region:       ci.Region,
+			OSFamily:     ci.OSFamily,
+			HasOTel:      ci.HasOTel,
+		})
+	}
+	for _, db := range req.ScanResult.Databases {
+		aiCtx.Databases = append(aiCtx.Databases, ai.DatabaseResourceCandidate{
+			ResourceID:                 db.ResourceID,
+			Engine:                     db.Engine,
+			EngineVersion:              db.EngineVersion,
+			InstanceClass:              db.InstanceClass,
+			PerformanceInsightsEnabled: db.PerformanceInsightsEnabled,
+			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
+			Region:                     db.Region,
+			Provider:                   db.Provider,
+			QueryInsightsEnabled:       db.QueryInsightsEnabled,
+			SQLInsightsDiagEnabled:     db.SQLInsightsDiagEnabled,
+			DatabaseManagementEnabled:  db.DatabaseManagementEnabled,
+		})
+	}
+	for _, cl := range req.ScanResult.Clusters {
+		addonNames := make([]string, 0, len(cl.Addons))
+		for _, a := range cl.Addons {
+			if !strings.EqualFold(a.Status, "ACTIVE") {
+				continue
+			}
+			addonNames = append(addonNames, a.Name)
+		}
+		aiCtx.Clusters = append(aiCtx.Clusters, ai.ClusterCandidate{
+			ResourceID:          cl.ResourceID,
+			Name:                cl.Name,
+			KubernetesVersion:   cl.KubernetesVersion,
+			ControlPlaneLogging: append([]string(nil), cl.ControlPlaneLogging...),
+			AddonNames:          addonNames,
+			Region:              cl.Region,
+		})
+	}
+	aiCtx.EventSources = mapEventSourceCandidates(req.ScanResult.EventSources)
+
+	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("oci generate recommendations: proposer call failed",
+				zap.Error(err), zap.String("tenancy_ocid", conn.TenancyOCID), zap.String("scan_id", aiCtx.ScanID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ProposerCallFailed",
+			Message: "Squadron's AI proposer failed: " + err.Error(),
+		}})
+		return
+	}
+	if result.Declined {
+		c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+			Declined:        true,
+			Reason:          result.Reason,
+			Recommendations: []recommendations.Recommendation{},
+		})
+		return
+	}
+
+	now := time.Now().UTC()
+	recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("oci generate recommendations: plan step marshal failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "PlanStepMarshalFailed",
+			Message: "Squadron could not encode the plan step. The error has been logged.",
+		}})
+		return
+	}
+
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      services.AuditActorSystem,
+			EventType:  "discovery.oci.recommendations_generated",
+			TargetType: credstore.TargetTypeCloudConnection,
+			TargetID:   conn.ID,
+			Action:     "recommendations_generated",
+			Payload: map[string]any{
+				"connection_id": conn.ID,
+				"tenancy_ocid":  conn.TenancyOCID,
+				"scan_id":       req.ScanResult.ScanID,
+				"step_count":    len(recs),
+				"tokens_in":     result.TokensIn,
+				"tokens_out":    result.TokensOut,
+				"model":         result.Model,
+				"recorded_at":   now,
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+		Reasoning:       result.Reasoning,
+		Recommendations: recs,
+	})
 }
 
 // --- helpers ------------------------------------------------------------

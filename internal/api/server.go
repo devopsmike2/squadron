@@ -1116,6 +1116,9 @@ func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandle
 		if s.traceIndexLookupForDiscovery != nil {
 			h.WithAzureTraceIndex(s.traceIndexLookupForDiscovery)
 		}
+		// chunk 5 (v0.89.198) — wire the AI proposer for the Azure
+		// recommendations endpoint. Unconditional; the handler 503s on nil.
+		h.WithAzureAIProposer(s.discoveryAIService)
 		fn(h, c)
 	}
 }
@@ -1157,6 +1160,8 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 		if s.traceIndexLookupForDiscovery != nil {
 			h.WithOCITraceIndex(s.traceIndexLookupForDiscovery)
 		}
+		// chunk 5 (v0.89.198) — wire the AI proposer for OCI recommendations.
+		h.WithOCIAIProposer(s.discoveryAIService)
 		fn(h, c)
 	}
 }
