@@ -255,12 +255,26 @@ func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope)
 		all = append(all, topics...)
 	}
 
-	// Partial-scan posture: error only when BOTH failed. Pinned by
-	// slice 7 acceptance tests 8 + 9 (single-surface partial-scan)
-	// and test 10 (both-failed error message references both
-	// surfaces).
-	if strErr != nil && onsErr != nil {
-		return all, fmt.Errorf("oci: all event source surfaces failed: streaming=%v notifications=%w", strErr, onsErr)
+	// Slice 9 chunk 1 (v0.89.156, #798 Stream 195) extends the OCI
+	// dispatcher to three-way (Streaming + Notifications + Queues).
+	// Queue Service is the transactional FIFO queue primitive
+	// analogous to AWS SQS — distinct from ONS pub/sub fan-out.
+	// See docs/proposals/event-source-tier-slice9.md §5.
+	queues, qErr := s.ScanQueues(ctx, scope)
+	if qErr == nil {
+		all = append(all, queues...)
+	}
+
+	// Three-way partial-scan posture: only return an error when ALL
+	// THREE surfaces failed. Any one- OR two-surface failure is
+	// silenced at this layer so an IAM gap on one or two surfaces
+	// doesn't drop the inventory the operator actually CAN see on
+	// the remaining surface(s). Combinatorial single-failure paths
+	// are pinned by slice 9 acceptance tests 8 + 9 + 10; the
+	// two-of-three failure path is pinned by test 11; the
+	// all-three-fail error-string contract by test 12.
+	if strErr != nil && onsErr != nil && qErr != nil {
+		return all, fmt.Errorf("oci: all event source surfaces failed: streaming=%v notifications=%v queues=%w", strErr, onsErr, qErr)
 	}
 
 	return all, nil
