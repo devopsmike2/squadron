@@ -956,6 +956,39 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 	}
 	b.WriteString("\n")
 
+	// Event sources (v0.89.189 — the event-source -> proposer bridge).
+	// Rendered ONLY when non-empty so the cold-start / empty path is
+	// byte-identical to the pre-bridge output (every existing prompt
+	// test uses an empty event-source list). For queues the DLQ-axis
+	// fields (dlq / redrive_target / retry_count / retry_in_band) are
+	// surfaced explicitly because they drive the dead-letter
+	// remediation family, which is substantiated entirely by the
+	// read-only scan (no metric substrate).
+	if len(in.EventSources) > 0 {
+		fmt.Fprintf(&b, "Event sources (%d total):\n", len(in.EventSources))
+		esample := in.EventSources
+		if len(esample) > 20 {
+			esample = esample[:20]
+		}
+		for _, e := range esample {
+			dlq := "no-dlq"
+			if e.HasDLQ {
+				dlq = "has-dlq"
+			}
+			redrive := "none"
+			if e.RedrivePolicyTargetARN != "" {
+				redrive = e.RedrivePolicyTargetARN
+			}
+			fmt.Fprintf(&b, "  - %s [%s/%s/%s] region=%s trace_axis=%t log_axis=%t dlq=%s redrive_target=%s retry_count=%d retry_in_band=%t\n",
+				e.ResourceName, e.Provider, e.Surface, e.SourceType, e.Region,
+				e.HasTraceAxis, e.HasLogAxis, dlq, redrive, e.DLQRetryCount, e.DLQRetryCountInBand)
+		}
+		if len(in.EventSources) > len(esample) {
+			fmt.Fprintf(&b, "  ... and %d more\n", len(in.EventSources)-len(esample))
+		}
+		b.WriteString("\n")
+	}
+
 	// v0.89.28 (#643 slice 1) → v0.89.36 (#655 Stream 53, #531 slice
 	// 2 chunk 3) — verdict prompt block. Two insertion paths:
 	//

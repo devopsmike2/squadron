@@ -3527,3 +3527,58 @@ func TestDiscoveryProposer_ColdStart_PromptUnchanged_PostOrchestrationSlice2(t *
 	assert.NotContains(t, ociMsg, "ORCHESTRATION TIER OCI EXTENSION")
 	assert.Contains(t, ociMsg, "group_id on every step MUST equal the tenancy_ocid above")
 }
+
+// TestDiscoveryProposer_EventSourcesRendered — the event-source ->
+// proposer bridge (v0.89.189). When EventSources is populated, the
+// user message renders an "Event sources" section with the per-queue
+// DLQ-axis signals the proposer keys off to emit the dead-letter
+// remediation family. When empty, NO section renders (cold-start
+// parity — the pre-bridge output byte-for-byte).
+func TestDiscoveryProposer_EventSourcesRendered(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:    "scan-es-001",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+		EventSources: []EventSourceCandidate{
+			{
+				Provider: "aws", Surface: "sqs", SourceType: "queue",
+				ResourceName: "orders-no-dlq", ResourceARN: "arn:aws:sqs:us-east-1:123456789012:orders-no-dlq",
+				Region: "us-east-1", HasTraceAxis: false, HasLogAxis: false,
+				HasDLQ: false,
+			},
+			{
+				Provider: "aws", Surface: "sqs", SourceType: "queue",
+				ResourceName: "orders-dangling", ResourceARN: "arn:aws:sqs:us-east-1:123456789012:orders-dangling",
+				Region: "us-east-1", HasTraceAxis: true, HasLogAxis: false,
+				HasDLQ: false, RedrivePolicyTargetARN: "arn:aws:sqs:us-east-1:123456789012:does-not-exist",
+			},
+			{
+				Provider: "aws", Surface: "sqs", SourceType: "queue",
+				ResourceName: "orders-bad-retry", ResourceARN: "arn:aws:sqs:us-east-1:123456789012:orders-bad-retry",
+				Region: "us-east-1", HasTraceAxis: true, HasLogAxis: true,
+				HasDLQ: true, RedrivePolicyTargetARN: "arn:aws:sqs:us-east-1:123456789012:shared-dlq",
+				DLQRetryCount: 100, DLQRetryCountInBand: false,
+			},
+		},
+	}
+	got := buildDiscoveryUserMessage(ctx)
+
+	// The section + each queue + its DLQ signals must surface so the
+	// model has what it needs for sqs-dlq-attach /
+	// sqs-deadletter-queue-attach / sqs-dlq-retry-count-bound.
+	assert.Contains(t, got, "Event sources (3 total):")
+	assert.Contains(t, got, "orders-no-dlq")
+	assert.Contains(t, got, "dlq=no-dlq")
+	assert.Contains(t, got, "orders-dangling")
+	assert.Contains(t, got, "redrive_target=arn:aws:sqs:us-east-1:123456789012:does-not-exist")
+	assert.Contains(t, got, "orders-bad-retry")
+	assert.Contains(t, got, "dlq=has-dlq")
+	assert.Contains(t, got, "retry_count=100")
+	assert.Contains(t, got, "retry_in_band=false")
+	assert.Contains(t, got, "[aws/sqs/queue]")
+
+	// Cold-start parity: an empty event-source list renders NO section.
+	empty := DiscoveryScanContext{ScanID: "scan-es-002", AccountID: "123456789012", Regions: []string{"us-east-1"}}
+	emptyMsg := buildDiscoveryUserMessage(empty)
+	assert.NotContains(t, emptyMsg, "Event sources", "empty event-source list must render no section (pre-bridge parity)")
+}

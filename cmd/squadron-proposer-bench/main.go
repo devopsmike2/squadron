@@ -88,7 +88,7 @@ type seed struct {
 	expectPlan bool                    // hint for the human reading the report; not asserted
 }
 
-// corpus is a hand-curated 18-scenario set covering both proposer
+// corpus is a hand-curated 19-scenario set covering both proposer
 // arcs: 8 cost-spike seeds (the v0.83 originals — #550 truncation,
 // #552 preamble) and 10 discovery seeds (the v0.86 Stream 2F arc,
 // v0.87's RDS seed added when the universal-observation arc grew to
@@ -96,7 +96,7 @@ type seed struct {
 // covered object stores + load balancers, and v0.89's EKS seed
 // added when slice 3b covered managed Kubernetes clusters).
 // v0.84+ can expand this — for now small + diverse beats large +
-// redundant. Cost per run stays ~$0.22-0.32 at 18 seeds.
+// redundant. Cost per run stays ~$0.23-0.34 at 19 seeds.
 func corpus() []seed {
 	return []seed{
 		{
@@ -566,6 +566,67 @@ func corpus() []seed {
 						ControlPlaneLogging: nil,
 						AddonNames:          []string{"aws-ebs-csi-driver"},
 						Region:              "us-east-1",
+					},
+				},
+			},
+			expectPlan: true,
+		},
+		{
+			// SQS dead-letter-queue gaps — the event-source -> proposer
+			// bridge (v0.89.189). Validates that the proposer, once it
+			// actually receives event sources, emits the dead-letter
+			// remediation family from the scan-substantiated DLQ axis (no
+			// metric substrate). Four queues: no-dlq (sqs-dlq-attach),
+			// dangling redrive (sqs-deadletter-queue-attach), out-of-band
+			// retry (sqs-dlq-retry-count-bound), and a healthy control.
+			name: "discovery_sqs_dlq_gaps",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-11",
+				AccountID:           "111122223333",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   1,
+				UninstrumentedCount: 3,
+				EventSources: []ai.EventSourceCandidate{
+					{
+						Provider: "aws", Surface: "sqs", SourceType: "queue",
+						ResourceName: "orders-no-dlq",
+						ResourceARN:  "arn:aws:sqs:us-east-1:111122223333:orders-no-dlq",
+						Region:       "us-east-1",
+						HasDLQ:       false,
+					},
+					{
+						Provider: "aws", Surface: "sqs", SourceType: "queue",
+						ResourceName:           "orders-dangling",
+						ResourceARN:            "arn:aws:sqs:us-east-1:111122223333:orders-dangling",
+						Region:                 "us-east-1",
+						HasTraceAxis:           true,
+						HasDLQ:                 false,
+						RedrivePolicyTargetARN: "arn:aws:sqs:us-east-1:111122223333:does-not-exist",
+					},
+					{
+						Provider: "aws", Surface: "sqs", SourceType: "queue",
+						ResourceName:           "orders-bad-retry",
+						ResourceARN:            "arn:aws:sqs:us-east-1:111122223333:orders-bad-retry",
+						Region:                 "us-east-1",
+						HasTraceAxis:           true,
+						HasLogAxis:             true,
+						HasDLQ:                 true,
+						RedrivePolicyTargetARN: "arn:aws:sqs:us-east-1:111122223333:shared-dlq",
+						DLQRetryCount:          100,
+						DLQRetryCountInBand:    false,
+					},
+					{
+						Provider: "aws", Surface: "sqs", SourceType: "queue",
+						ResourceName:           "orders-healthy",
+						ResourceARN:            "arn:aws:sqs:us-east-1:111122223333:orders-healthy",
+						Region:                 "us-east-1",
+						HasTraceAxis:           true,
+						HasLogAxis:             true,
+						HasDLQ:                 true,
+						RedrivePolicyTargetARN: "arn:aws:sqs:us-east-1:111122223333:shared-dlq",
+						DLQRetryCount:          5,
+						DLQRetryCountInBand:    true,
 					},
 				},
 			},
