@@ -368,3 +368,109 @@ func PickONSLoggingPattern(row RecommendationContext) (terraform, reasoning stri
 
 	return
 }
+
+// PickEventHubsDiagnosticsPattern emits the Terraform snippet for an
+// eventhubs-diagnostics-enable recommendation per event source tier
+// slice 8 chunk 2 (v0.89.154, #796 Stream 193). Configures diagnostic
+// settings routing to a Log Analytics workspace (operator provides
+// workspace ID via variable) with the 5 enabled_log categories Event
+// Hubs supports per §8 of docs/proposals/event-source-tier-slice8.md.
+//
+// Slice 8 closes the cross-cloud event source widening pass by adding
+// Event Hubs as the third Azure surface, matching AWS's 3-surface
+// count. The diagnostic settings axis mirrors the slice 1 Service Bus
+// + slice 6 Event Grid patterns exactly — same
+// azurerm_monitor_diagnostic_setting resource shape.
+//
+// row.ResourceTFName fallback shape mirrors PickEventGridDiagnosticsPattern.
+func PickEventHubsDiagnosticsPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "azurerm_monitor_diagnostic_setting" "%s_diag" {
+  name                       = "${azurerm_eventhub_namespace.%s.name}-diag"
+  target_resource_id         = azurerm_eventhub_namespace.%s.id
+  log_analytics_workspace_id = var.log_analytics_workspace_id  # operator provides
+
+  enabled_log {
+    category = "ArchiveLogs"
+  }
+  enabled_log {
+    category = "OperationalLogs"
+  }
+  enabled_log {
+    category = "AutoScaleLogs"
+  }
+  enabled_log {
+    category = "KafkaCoordinatorLogs"
+  }
+  enabled_log {
+    category = "KafkaUserErrorLogs"
+  }
+
+  metric {
+    category = "AllMetrics"
+    enabled  = true
+  }
+}
+`, name, name, name)
+
+	reasoning = "Event Hubs Namespaces without diagnostic settings have no per-namespace visibility into delivery health, capture status, or throughput unit utilization. The PR configures Microsoft.Insights/diagnosticSettings routing to a Log Analytics workspace with the 5 Event Hubs log categories (ArchiveLogs, OperationalLogs, AutoScaleLogs, KafkaCoordinatorLogs, KafkaUserErrorLogs) + AllMetrics. Decline if your team uses a non-Insights destination (custom capture pipeline, third-party SIEM connector) — the verdict learning loop records."
+
+	return
+}
+
+// PickEventHubsCapturePattern emits the Terraform snippet for an
+// eventhubs-capture-enable recommendation per event source tier
+// slice 8 chunk 2 (v0.89.154, #796 Stream 193). Enables Capture on
+// ONE event hub in the namespace (operator picks which during PR
+// review based on which hub carries the durability-critical stream)
+// per §8 of docs/proposals/event-source-tier-slice8.md.
+//
+// CRITICAL: the emitted snippet uses <hub_name> as the resource
+// identifier — operators MUST replace this with the actual hub name
+// during PR review. The reasoning text emphasizes that Squadron does
+// not prescribe WHICH hub to enable Capture on; the operator picks
+// based on per-hub durability requirements that Squadron cannot
+// infer from the ARM API surface alone.
+//
+// Capture auto-archives events to Blob Storage or Azure Data Lake
+// Storage at configurable intervals (default 5min / 300MB). Without
+// Capture, events expire after the namespace's configured retention
+// window (1 day default; 7 days max on Standard; 90 days max on
+// Premium). The recommendation's framing is operator-prescriptive
+// without auto-deciding which hub.
+//
+// row.ResourceTFName carries the NAMESPACE name when present; the
+// hub name is left as <hub_name> for operator substitution.
+func PickEventHubsCapturePattern(row RecommendationContext) (terraform, reasoning string) {
+	_ = row.ResourceTFName // namespace name is operator context; emitted snippet targets a hub
+	terraform = `resource "azurerm_eventhub" "<hub_name>" {
+  # ... existing fields ...
+
+  # NOTE: Squadron does NOT prescribe WHICH hub to enable Capture on.
+  # Operator picks based on which hub carries durability-critical
+  # streams. Replace <hub_name> with the chosen hub's Terraform
+  # resource identifier.
+  capture_description {
+    enabled             = true
+    encoding            = "Avro"
+    interval_in_seconds = 300       # 5 minutes default
+    size_limit_in_bytes = 314572800 # 300 MB default
+    skip_empty_archives = true
+    destination {
+      name                = "EventHubArchive.AzureBlockBlob"
+      storage_account_id  = var.capture_storage_account_id  # operator provides
+      blob_container_name = "eventhub-capture"
+      archive_name_format = "{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}"
+    }
+  }
+}
+`
+
+	reasoning = "Event Hubs Namespaces with NO event hub having Capture enabled lose event content after the retention window expires (1 day default; 7 days max on Standard; 90 days max on Premium). The operator has no event-content audit trail beyond the retention window for incident postmortems. The PR enables Capture on ONE event hub in the namespace — OPERATOR PICKS WHICH during PR review based on which hub carries the durability-critical stream. Squadron does not prescribe the selection. Decline if your team has an out-of-band consumer pipeline doing archival (Databricks + Delta Lake ingestion, Stream Analytics persisting to its own destination) — the verdict learning loop records."
+
+	return
+}

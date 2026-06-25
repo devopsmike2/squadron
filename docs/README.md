@@ -204,6 +204,32 @@ jump straight to that page.
   (EventBridge + SNS + SQS), GCP 2 (Pub/Sub + Cloud Tasks),
   Azure 2 (Service Bus + Event Grid), OCI 2 (Streaming +
   Notification Service).
+  **Slice 8 (v0.89.152-v0.89.154)** brings Azure to parity
+  with AWS on the event source tier by adding Event Hubs as
+  the third Azure surface alongside Service Bus and Event
+  Grid. Event Hubs is Azure's big-data event ingestion
+  primitive — a partitioned log analogous to Kafka,
+  distinct from the messaging primitives. 2 new
+  recommendation kinds: `eventhubs-diagnostics-enable`
+  (Terraform: `azurerm_monitor_diagnostic_setting` with the
+  5 Event Hubs log categories — ArchiveLogs,
+  OperationalLogs, AutoScaleLogs, KafkaCoordinatorLogs,
+  KafkaUserErrorLogs) mirrors the Service Bus + Event Grid
+  diagnostic settings pattern; +
+  `eventhubs-capture-enable` (Terraform: `azurerm_eventhub`
+  with `capture_description` block enabling Capture on ONE
+  hub) is operator-prescriptive — the operator picks WHICH
+  hub to enable Capture on during PR review based on
+  durability-critical streams. 1 new webhook prefix:
+  `eventhubs-` → azure. `ScanEventSources` dispatcher
+  extends from two-way (Service Bus + Event Grid) to
+  three-way (Service Bus + Event Grid + Event Hubs) with
+  combinatorial partial-scan posture mirroring the slice 4
+  AWS three-way pattern. NO IAM extension beyond what slice
+  1 + slice 6 already covered. **Slice 8 SHIPPED in
+  v0.89.154.** Cross-cloud count after slice 8: **3-2-3-2 /
+  10 surfaces across 4 clouds** — Azure now matches AWS at
+  3 surfaces.
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

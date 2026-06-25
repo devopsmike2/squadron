@@ -1336,6 +1336,192 @@ Per §13 of the slice 7 design doc:
 - **Per-delivery audit reconstruction** — assemble per-event
   delivery timelines from the Logging stream
 
+## Slice 8 SHIPPED in v0.89.152-v0.89.154 — Azure Event Hubs
+
+Slice 8 brings Azure to parity with AWS on the event source
+tier at 3 surfaces. Event Hubs is Azure's big-data event
+ingestion primitive — a partitioned log analogous to Kafka,
+distinct from the messaging primitives (Service Bus = queue,
+Event Grid = fan-out topic).
+
+After slice 8, the cross-cloud surface count lands at
+**3-2-3-2**:
+
+- AWS: EventBridge + SNS + SQS (3 surfaces)
+- GCP: Pub/Sub + Cloud Tasks (2 surfaces)
+- Azure: Service Bus + Event Grid + Event Hubs (3 surfaces)
+- OCI: Streaming + Notification Service (2 surfaces)
+
+Total: **10 event source surfaces across 4 clouds.**
+
+### New recommendation kinds
+
+2 new kinds in slice 8:
+
+- `eventhubs-diagnostics-enable` — Event Hubs Namespace has
+  no diagnostic settings configured. Without diagnostic
+  settings routing to App Insights OR a Log Analytics
+  workspace, the operator has no visibility into per-namespace
+  delivery health, capture status, or throughput unit
+  utilization.
+
+- `eventhubs-capture-enable` — Event Hubs Namespace has NO
+  event hub with Capture enabled. Without Capture, events
+  expire after the namespace's retention window (1 day
+  default; 7 days max on Standard; 90 days max on Premium).
+  The operator has no event-content audit trail beyond the
+  retention window for incident postmortems.
+
+The diagnostic settings axis mirrors the slice 1 Service
+Bus + slice 6 Event Grid patterns exactly — same
+`azurerm_monitor_diagnostic_setting` resource shape, same
+log analytics workspace destination.
+
+The Capture axis is Event-Hubs-specific. The
+at-least-one-hub-enabled rule fires when ZERO hubs in the
+namespace have `properties.captureDescription.enabled ==
+true`. Operators routinely have multiple hubs per namespace
+with different durability requirements; a blanket "every hub
+must have Capture" rule would be too prescriptive.
+
+### Terraform Squadron emits
+
+For `eventhubs-diagnostics-enable`:
+
+```hcl
+resource "azurerm_monitor_diagnostic_setting" "<name>_diag" {
+  name                       = "${azurerm_eventhub_namespace.<name>.name}-diag"
+  target_resource_id         = azurerm_eventhub_namespace.<name>.id
+  log_analytics_workspace_id = var.log_analytics_workspace_id  # operator provides
+
+  enabled_log { category = "ArchiveLogs" }
+  enabled_log { category = "OperationalLogs" }
+  enabled_log { category = "AutoScaleLogs" }
+  enabled_log { category = "KafkaCoordinatorLogs" }
+  enabled_log { category = "KafkaUserErrorLogs" }
+
+  metric {
+    category = "AllMetrics"
+    enabled  = true
+  }
+}
+```
+
+For `eventhubs-capture-enable`:
+
+```hcl
+resource "azurerm_eventhub" "<hub_name>" {
+  # ... existing fields ...
+
+  # NOTE: Squadron does NOT prescribe WHICH hub to enable
+  # Capture on. Operator picks based on durability-critical
+  # streams during PR review.
+  capture_description {
+    enabled             = true
+    encoding            = "Avro"
+    interval_in_seconds = 300       # 5 minutes default
+    size_limit_in_bytes = 314572800 # 300 MB default
+    skip_empty_archives = true
+    destination {
+      name                = "EventHubArchive.AzureBlockBlob"
+      storage_account_id  = var.capture_storage_account_id  # operator provides
+      blob_container_name = "eventhub-capture"
+      archive_name_format = "{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}"
+    }
+  }
+}
+```
+
+### Decline paths
+
+Decline `eventhubs-diagnostics-enable` if your team uses a
+non-Insights destination (custom capture pipeline,
+third-party SIEM connector). Decline
+`eventhubs-capture-enable` if your team has an out-of-band
+consumer pipeline doing archival (Databricks + Delta Lake
+ingestion, Stream Analytics persisting to its own
+destination). Verdict learning loop records both.
+
+### Operator-prescriptive Capture recommendation
+
+The `eventhubs-capture-enable` Terraform leaves `<hub_name>`
+as a placeholder. Squadron does NOT prescribe WHICH hub to
+enable Capture on — operators routinely have multiple hubs
+per namespace with different durability requirements, and
+Squadron cannot infer the per-hub durability profile from
+the ARM API surface alone. The reasoning text emphasizes
+this so PR reviewers see the intent explicitly: pick the
+hub that carries the durability-critical stream.
+
+### Three-way dispatcher posture
+
+Slice 8 extends `ScanEventSources` from two-way (Service
+Bus + Event Grid) to three-way (Service Bus + Event Grid +
+Event Hubs) with combinatorial partial-scan posture
+mirroring the slice 4 AWS three-way dispatcher (EventBridge
++ SNS + SQS):
+
+- Any one of three surfaces fails → other two surfaces
+  still surface their snapshots
+- Any two of three surfaces fail → remaining surface still
+  surfaces
+- All three surfaces fail → dispatcher returns terminal
+  error mentioning all three surface identifiers
+
+Pinned by `TestScanEventSources_ThreeWay_*` (4 tests
+covering each combinatorial path).
+
+### IAM extension
+
+NO new IAM beyond what slice 1 + slice 6 already provided.
+The existing Reader role at subscription scope covers:
+
+- `Microsoft.EventHub/namespaces/read` (namespace list)
+- `Microsoft.EventHub/namespaces/eventhubs/read` (per-namespace
+  hubs list for Capture detection)
+- `microsoft.insights/diagnosticSettings/read` (already shared
+  across Service Bus + Event Grid)
+
+### The Azure analytics + messaging chain Squadron now sees
+
+After slice 8, the Azure event chain is fully visible
+end-to-end:
+
+1. **Event Hubs namespace** without diagnostic settings
+   (this slice `eventhubs-diagnostics-enable`) — no
+   per-namespace delivery audit
+2. **Event Hubs namespace** without Capture anywhere (this
+   slice `eventhubs-capture-enable`) — event content lost
+   after retention window
+3. **Event Grid topic** without diagnostic settings (slice
+   6 `eventgrid-diagnostics-enable`) — no per-event audit
+4. **Service Bus namespace** without diagnostic settings
+   (slice 1 `servicebus-diagnostics-enable`) — no queue
+   audit
+5. **Azure Functions / Logic Apps** without trace primitive
+   (serverless + orchestration tiers)
+6. **Azure Functions cold-start regression** (substrate's
+   three diagnostics) — workload-health view
+
+Six layers. One control plane.
+
+### Slice 9+ deferrals
+
+Per §13 of the slice 8 design doc:
+- **OCI Queue Service** — third OCI surface (transactional
+  message queues, distinct from ONS pub/sub primitive)
+- **Event Hubs Geo-DR** — paired namespace pattern for
+  disaster recovery
+- **Per-consumer-group lag detection** — Event Hubs
+  per-CG offset lag vs. tail position
+- **Per-partition throughput-unit utilization** —
+  auto-inflate detection via per-namespace metrics through
+  the substrate's MetricQuerier
+- **Schema Registry validation** — Event Hubs Schema
+  Registry integration health
+- **Private endpoint configuration validation** — deeper
+  network access analysis
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —

@@ -413,6 +413,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice7ONSKindsPromptSection +
 
+	eventSourceTierSlice8EventHubsKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -2020,6 +2022,93 @@ detection (HTTP -> HTTPS, retry policy tuning) is slice 8+
 candidate. Per-delivery audit reconstruction from the
 Logging stream is slice 8+ candidate. ONS Subscription
 confirmation lag detection (PENDING > 24h) is slice 8+.
+
+` + "\n"
+
+// eventSourceTierSlice8EventHubsKindsPromptSection — event source
+// tier slice 8 chunk 2 (v0.89.154, #796 Stream 193). Two new
+// recommendation kinds: eventhubs-diagnostics-enable +
+// eventhubs-capture-enable. Brings Azure to parity with AWS at 3
+// event source surfaces; cross-cloud count lands at 3-2-3-2 / 10
+// surfaces total.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no Event Hubs observations the rendered user
+// message stays byte-identical to v0.89.151 across all four
+// providers. Pinned by
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice8.
+const eventSourceTierSlice8EventHubsKindsPromptSection = `EVENT SOURCE TIER SLICE 8 — AZURE EVENT HUBS (v0.89.152-154):
+
+Adds Azure Event Hubs as the third Azure event source
+surface alongside Service Bus + Event Grid. Event Hubs is
+Azure's big-data event ingestion primitive — a partitioned
+log analogous to Kafka, distinct from the messaging
+primitives. After slice 8, Azure has 3 event source
+surfaces matching AWS's count.
+
+Cross-cloud after slice 8: AWS 3 (EventBridge + SNS + SQS),
+GCP 2 (Pub/Sub + Cloud Tasks), Azure 3 (Service Bus + Event
+Grid + Event Hubs), OCI 2 (Streaming + Notification
+Service). Total: 10 event source surfaces across 4 clouds.
+
+The canonical Azure analytics ingestion architecture:
+Event Hubs namespace -> Capture -> Blob Storage / ADLS,
+with parallel Event Hubs namespace -> Stream Analytics /
+Databricks consumption.
+
+- eventhubs-diagnostics-enable: Event Hubs Namespace has no
+  diagnostic settings configured. Without diagnostic
+  settings routing to App Insights OR a Log Analytics
+  workspace, the operator has no visibility into
+  per-namespace delivery health, capture status, or
+  throughput unit utilization.
+
+  Mirrors the Service Bus servicebus-diagnostics-enable
+  (slice 1) and Event Grid eventgrid-diagnostics-enable
+  (slice 6) patterns. Terraform: azurerm_monitor_diagnostic_setting
+  with the 5 Event Hubs log categories (ArchiveLogs,
+  OperationalLogs, AutoScaleLogs, KafkaCoordinatorLogs,
+  KafkaUserErrorLogs) + AllMetrics.
+
+- eventhubs-capture-enable: Event Hubs Namespace has NO
+  event hub with Capture enabled. Without Capture, events
+  expire after the namespace's configured retention window
+  (1 day default; 7 days max on Standard; 90 days max on
+  Premium). The operator has no event-content audit trail
+  beyond the retention window for incident postmortems.
+
+  Capture auto-archives events to Blob Storage or Azure
+  Data Lake Storage at configurable intervals (default
+  5min / 300MB). Terraform: azurerm_eventhub with
+  capture_description block enabling Capture on ONE hub
+  (operator picks which during PR review).
+
+  IMPORTANT: Squadron does NOT prescribe WHICH hub to
+  enable Capture on. The proposer's reasoning text MUST
+  emphasize this so reviewers see the intent explicitly —
+  the operator picks based on which hub carries the
+  durability-critical stream.
+
+DECLINE PATH for eventhubs-diagnostics-enable: operators
+using a non-Insights destination (custom capture pipeline,
+third-party SIEM connector) should decline. The verdict
+learning loop records.
+
+DECLINE PATH for eventhubs-capture-enable: operators with
+an out-of-band consumer pipeline doing archival (Databricks
++ Delta Lake ingestion, Stream Analytics persisting to its
+own destination) should decline.
+
+CAVEAT FOR ALL EVENT HUBS RECOMMENDATIONS:
+Slice 8 covers per-namespace Logging + Capture axes.
+Event Hubs Geo-DR (paired namespaces for disaster
+recovery) is slice 9+ candidate. Per-consumer-group lag
+detection is slice 9+. Per-partition throughput-unit
+utilization / auto-inflate analysis requires substrate
+MetricQuerier integration; slice 9+. Schema Registry
+validation is slice 9+. Private endpoint configuration
+validation is slice 9+.
 
 ` + "\n"
 
