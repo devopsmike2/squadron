@@ -64,7 +64,14 @@ const mockedDelete = vi.mocked(deleteIaCGitHubConnection);
 function renderPage(initialEntries: string[] = ["/discovery/iac/github"]) {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
       </SWRConfig>
     );
@@ -129,10 +136,6 @@ describe("DiscoveryIaCGitHubPage", () => {
         screen.getByText(/No IaC repositories connected yet/i),
       ).toBeInTheDocument();
     });
-    // CTA button is present.
-    expect(
-      screen.getByRole("button", { name: /Connect IaC repo/i }),
-    ).toBeInTheDocument();
     // Read-only / branch-protection reassurance reinforces the
     // trust thesis at the empty state.
     expect(screen.getByText(/never your default branch/i)).toBeInTheDocument();

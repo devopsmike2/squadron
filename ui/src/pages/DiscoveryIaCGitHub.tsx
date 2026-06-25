@@ -253,42 +253,49 @@ export default function DiscoveryIaCGitHubPage() {
         </p>
       </header>
 
-      <div className="flex items-center justify-between">
+      {/* Inline connect wizard — new connections render inline here,
+          matching the AWS / GCP / Azure / OCI flow (no launch modal). */}
+      <div className="space-y-3">
         <div>
-          <h2 className="text-base font-semibold">Connected repositories</h2>
+          <h2 className="text-base font-semibold">Connect a repository</h2>
           <p className="text-xs text-muted-foreground">
-            One row per IaC connection. Slice 1 supports GitHub only.
+            Walk through the steps to grant Squadron PR access via a GitHub
+            Personal Access Token.
           </p>
         </div>
-        <Dialog open={open} onOpenChange={onDialogOpenChange}>
-          <Button onClick={() => setOpen(true)}>Connect IaC repo</Button>
-          {/*
-           * Height-bounded flex column so the wizard body scrolls inside the
-           * viewport instead of clipping the dialog header and Back/Next
-           * footer on shorter screens (#618). max-h-[90vh] is the Radix
-           * convention; flex-1 min-h-0 on the body is required for the
-           * scroll container to compute its own bounds inside a flex parent.
-           */}
-          <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden">
-            <DialogHeader className="shrink-0">
-              <DialogTitle>
-                {editMode ? "Edit placement map" : "Connect IaC repository"}
-              </DialogTitle>
-              <DialogDescription>
-                {editMode
-                  ? "Update which Terraform file each resource kind appends to. The connection's token, branch prefix, and reviewer team are unchanged."
-                  : "Walk through the six steps to grant Squadron PR access via a GitHub Personal Access Token."}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-              <IaCGitHubWizard
-                onComplete={onWizardComplete}
-                editMode={editMode ?? undefined}
-              />
-            </div>
-          </DialogContent>
-        </Dialog>
+        <IaCGitHubWizard onComplete={onWizardComplete} />
       </div>
+
+      <div>
+        <h2 className="text-base font-semibold">Connected repositories</h2>
+        <p className="text-xs text-muted-foreground">
+          One row per IaC connection. Slice 1 supports GitHub only.
+        </p>
+      </div>
+
+      {/* Placement-edit modal — opened only by a deep link
+          (?connection_id=...&step=placement) to edit an existing
+          connection's placement map. New connections use the inline
+          wizard above; editing a specific connection's placement is a
+          contextual action, so it stays a modal. */}
+      <Dialog open={open} onOpenChange={onDialogOpenChange}>
+        <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>Edit placement map</DialogTitle>
+            <DialogDescription>
+              Update which Terraform file each resource kind appends to. The
+              connection&apos;s token, branch prefix, and reviewer team are
+              unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+            <IaCGitHubWizard
+              onComplete={onWizardComplete}
+              editMode={editMode ?? undefined}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {staleNotice && (
         <Card role="alert" aria-live="polite">
