@@ -1108,6 +1108,12 @@ type awsScanResponse struct {
 	UninstrumentedCount int              `json:"uninstrumented_count"`
 	Partial             bool             `json:"partial"`
 	PartialReason       string           `json:"partial_reason,omitempty"`
+	// FailedServices lists the service/tier identifiers whose walk
+	// produced a non-fatal error this scan (e.g. "event_source",
+	// "orchestration", "ec2"). Mirrors PartialReason in structured
+	// form so the UI can render which tiers were degraded/denied
+	// instead of showing an empty inventory as if it were complete.
+	FailedServices []string `json:"failed_services,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -1393,6 +1399,28 @@ type eventSourceRow struct {
 // marshalScanResult walks the scanner.Result into the snake_case wire
 // shape. Empty slices stay empty (never null) so the UI's empty-state
 // rendering keys off .length === 0 rather than nil-checking.
+// recordTierFailure marks a scan result partial when a handler-dispatched
+// tier walk (orchestration, event_source) fails. Without this, a tier
+// that errors — most importantly an IAM AccessDenied on the event-source
+// scanners — would log a warning but leave Partial=false and an empty
+// category slice, so the operator sees "0 event sources" and concludes
+// they have none rather than "the scan was denied." It folds into the
+// same Partial / PartialReason / FailedServices accumulator the per-
+// service walks inside Scan() use. (v0.89.208, found via real-AWS e2e.)
+func recordTierFailure(result *scanner.Result, tier string, err error) {
+	if result == nil || err == nil {
+		return
+	}
+	result.Partial = true
+	result.FailedServices = append(result.FailedServices, tier)
+	reason := tier + " discovery failed: " + err.Error()
+	if result.PartialReason == "" {
+		result.PartialReason = reason
+	} else {
+		result.PartialReason = result.PartialReason + "; " + reason
+	}
+}
+
 func marshalScanResult(r *scanner.Result) awsScanResponse {
 	out := awsScanResponse{
 		ScanID:              r.ScanID,
@@ -1416,6 +1444,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
 		PartialReason:       r.PartialReason,
+		FailedServices:      append([]string{}, r.FailedServices...),
 	}
 	for _, ci := range r.Compute {
 		out.Compute = append(out.Compute, awsComputeInstanceRow{
@@ -1878,6 +1907,7 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 					h.logger.Warn("aws run scan: orchestration scan failed",
 						zap.Error(orchErr), zap.String("account_id", accountID))
 				}
+				recordTierFailure(result, "orchestration", orchErr)
 			}
 			if len(orchOut) > 0 {
 				result.Orchestrations = append(result.Orchestrations, orchOut...)
@@ -1913,6 +1943,7 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 					h.logger.Warn("aws run scan: event source scan failed",
 						zap.Error(esErr), zap.String("account_id", accountID))
 				}
+				recordTierFailure(result, "event_source", esErr)
 			}
 			if len(esOut) > 0 {
 				result.EventSources = append(result.EventSources, esOut...)
