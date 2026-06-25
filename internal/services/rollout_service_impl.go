@@ -15,9 +15,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/policy"
 	"github.com/devopsmike2/squadron/internal/configdiff"
 	"github.com/devopsmike2/squadron/internal/configlint"
-	"github.com/devopsmike2/squadron/extension/policy"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 

@@ -525,8 +525,8 @@ func (s *Service) SyncRun(ctx context.Context, runID string) (*apptypes.DeployRu
 // silent-agent payloads so a single webhook receiver can route by
 // the `kind` field.
 type CompletionEvent struct {
-	Kind          string    `json:"kind"`           // "deploy_completed"
-	State         string    `json:"state"`          // "success" | "failure" | "cancelled" | "timed_out" | "skipped"
+	Kind          string    `json:"kind"`  // "deploy_completed"
+	State         string    `json:"state"` // "success" | "failure" | "cancelled" | "timed_out" | "skipped"
 	RunID         string    `json:"run_id"`
 	TargetID      string    `json:"target_id"`
 	TargetName    string    `json:"target_name"`
@@ -895,11 +895,11 @@ func zeroize(b []byte) {
 // them spot "the deploy I'm about to fire would hit a host that's
 // been silent for 30 minutes" before clicking Run.
 type HostLiveStatus struct {
-	Hostname  string     `json:"hostname"`
-	Status    string     `json:"status"`    // "healthy" | "silent" | "never_seen"
-	AgentID   string     `json:"agent_id,omitempty"`
-	LastSeen  *time.Time `json:"last_seen,omitempty"`
-	SilenceFor string    `json:"silence_for,omitempty"`
+	Hostname   string     `json:"hostname"`
+	Status     string     `json:"status"` // "healthy" | "silent" | "never_seen"
+	AgentID    string     `json:"agent_id,omitempty"`
+	LastSeen   *time.Time `json:"last_seen,omitempty"`
+	SilenceFor string     `json:"silence_for,omitempty"`
 }
 
 // SilentThresholdForInventory is the wall-clock gap after which a

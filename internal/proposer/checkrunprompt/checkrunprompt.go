@@ -287,7 +287,7 @@ func viewInSquadronLink(in SummaryInput) string {
 //     `>` get escaped along with the rest.
 //
 //  4. escapeMarkdown handles the remaining markdown special
-//     characters so leftover `*` / `_` / `` ` `` / `[]()` etc
+//     characters so leftover `*` / `_` / “ ` “ / `[]()` etc
 //     render as literal characters.
 func sanitizeReasoning(s string) string {
 	if s == "" {

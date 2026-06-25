@@ -116,14 +116,14 @@ type SpanQualityResponse struct {
 // framing alongside the percentage. HasIssues extends to any of the
 // five percentages being non-zero.
 type ResourceSpanQuality struct {
-	ResourceID      string                              `json:"resource_id"`
-	Provider        string                              `json:"provider"`
-	Kind            string                              `json:"kind"`
-	TotalSpans      uint64                              `json:"total_spans"`
-	WindowStart     time.Time                           `json:"window_start"`
-	OrphanPct       float64                             `json:"orphan_pct"`
-	MissingAttrPct  float64                             `json:"missing_attr_pct"`
-	AttrMismatchPct float64                             `json:"attr_mismatch_pct"`
+	ResourceID      string    `json:"resource_id"`
+	Provider        string    `json:"provider"`
+	Kind            string    `json:"kind"`
+	TotalSpans      uint64    `json:"total_spans"`
+	WindowStart     time.Time `json:"window_start"`
+	OrphanPct       float64   `json:"orphan_pct"`
+	MissingAttrPct  float64   `json:"missing_attr_pct"`
+	AttrMismatchPct float64   `json:"attr_mismatch_pct"`
 
 	// Slice 2 (v0.89.110) — W3C trace context parsing per
 	// span-quality-slice2.md §6.1.
@@ -329,10 +329,10 @@ func (h *DiscoverySpanQualityHandlers) HandleSpanQuality(c *gin.Context) {
 			EventType: services.AuditEventSpanQualityRequested,
 			Action:    "requested",
 			Payload: map[string]any{
-				"cache_status":                  "miss",
-				"total_resource_count":          resp.Totals.ResourceCount,
-				"total_resources_with_issues":   resp.Totals.ResourcesWithIssues,
-				"recorded_at":                   time.Now().UTC(),
+				"cache_status":                "miss",
+				"total_resource_count":        resp.Totals.ResourceCount,
+				"total_resources_with_issues": resp.Totals.ResourcesWithIssues,
+				"recorded_at":                 time.Now().UTC(),
 			},
 		})
 	}

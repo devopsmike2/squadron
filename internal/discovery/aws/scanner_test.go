@@ -2161,13 +2161,13 @@ func (f *fakeECS) ListTagsForResource(_ context.Context, in *ecs.ListTagsForReso
 // scenario — the loop must continue past per-machine describe
 // failures rather than aborting the whole scan).
 type fakeSFN struct {
-	listPages      []*sfn.ListStateMachinesOutput
-	listCallIdx    int
-	listErr        error
-	describeByARN  map[string]*sfn.DescribeStateMachineOutput
-	describeErr    error
-	describeCalls  int
-	lastListInput  *sfn.ListStateMachinesInput
+	listPages     []*sfn.ListStateMachinesOutput
+	listCallIdx   int
+	listErr       error
+	describeByARN map[string]*sfn.DescribeStateMachineOutput
+	describeErr   error
+	describeCalls int
+	lastListInput *sfn.ListStateMachinesInput
 }
 
 func (f *fakeSFN) ListStateMachines(_ context.Context, in *sfn.ListStateMachinesInput, _ ...func(*sfn.Options)) (*sfn.ListStateMachinesOutput, error) {
@@ -2222,11 +2222,11 @@ var _ = sfntypes.StateMachineTypeStandard
 // matching call to fail — used by the per-call partial-failure
 // acceptance tests.
 type fakeEventBridge struct {
-	listBusesPages    []*eventbridge.ListEventBusesOutput
-	listBusesCallIdx  int
-	listBusesErr      error
-	lastListBusesIn   *eventbridge.ListEventBusesInput
-	listBusesCalls    int
+	listBusesPages   []*eventbridge.ListEventBusesOutput
+	listBusesCallIdx int
+	listBusesErr     error
+	lastListBusesIn  *eventbridge.ListEventBusesInput
+	listBusesCalls   int
 
 	// listRulesPagesByBus maps bus name → list of paginated ListRulesOutput
 	// pages. nil/missing → empty result.

@@ -62,20 +62,20 @@ func excludeTestFixture(t *testing.T) (h *RolloutHandlers, rolloutID string, aud
 	now := time.Now().UTC()
 	rolloutID = "rlt_acceptance"
 	require.NoError(t, store.CreateRollout(t.Context(), &types.Rollout{
-		ID:                 rolloutID,
-		Name:               "AI: drop container.id",
-		GroupID:            gid,
-		TargetConfigID:     "cfg-1",
-		Stages:             []types.RolloutStage{{Mode: "percent", Percentage: 100, DwellSeconds: 60}},
-		State:              types.RolloutStateSucceeded,
-		ProposedBy:         types.RolloutProposedByAI,
-		ProposalReasoning:  "container.id was driving 60% of the spike",
-		ApprovedBy:         "operator@example.com",
-		ApprovedAt:         &now,
-		ApprovalNotes:      "good plan, ship it",
+		ID:                  rolloutID,
+		Name:                "AI: drop container.id",
+		GroupID:             gid,
+		TargetConfigID:      "cfg-1",
+		Stages:              []types.RolloutStage{{Mode: "percent", Percentage: 100, DwellSeconds: 60}},
+		State:               types.RolloutStateSucceeded,
+		ProposedBy:          types.RolloutProposedByAI,
+		ProposalReasoning:   "container.id was driving 60% of the spike",
+		ApprovedBy:          "operator@example.com",
+		ApprovedAt:          &now,
+		ApprovalNotes:       "good plan, ship it",
 		ExcludeFromLearning: false,
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}))
 
 	audit = services.NewAuditService(store, nil, zap.NewNop())

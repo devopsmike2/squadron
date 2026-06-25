@@ -52,8 +52,8 @@ func (b *fakeBridge) DecryptedPAT(_ context.Context, _ *apptypes.DeployTarget) (
 
 // fakeWalkerProvider implements deploy.Provider.
 type fakeWalkerProvider struct {
-	runs            []deploy.WorkflowRunSummary
-	contentsByRef   map[string]map[string][]byte // ref -> path -> content
+	runs          []deploy.WorkflowRunSummary
+	contentsByRef map[string]map[string][]byte // ref -> path -> content
 }
 
 func (p *fakeWalkerProvider) Dispatch(_ context.Context, _ *apptypes.DeployTarget, _ string, _ map[string]string) (string, error) {

@@ -27,17 +27,17 @@ import (
 // and an expected fake-LLM behavior so the test can classify
 // "proposer refused incorrectly" vs "proposer refused correctly".
 type stressSeed struct {
-	name        string
-	category    string
-	legitimate  bool          // true means the proposer should produce a proposal
-	expectError bool          // true means the fake LLM intentionally errors
-	expectDispatchFail bool   // true means we wire fakeRollouts to fail
+	name               string
+	category           string
+	legitimate         bool // true means the proposer should produce a proposal
+	expectError        bool // true means the fake LLM intentionally errors
+	expectDispatchFail bool // true means we wire fakeRollouts to fail
 	// v0.79 — when true the fake LLM returns a plan-kind result for
 	// this seed instead of a rollout-kind result. Bridge should
 	// dispatch through CreatePlan and the seed should classify as
 	// outcomeSucceeded.
-	expectPlan  bool
-	makeStore   func() (*fakeStore, *types.CostSpikeEvent)
+	expectPlan bool
+	makeStore  func() (*fakeStore, *types.CostSpikeEvent)
 }
 
 // stressSeeds returns the 50-row corpus. Categories are intentionally
@@ -801,4 +801,3 @@ func (f *stressFakeProposer) ProposeFromCostSpike(_ context.Context, in ai.CostS
 		TokensOut: 400,
 	}, nil
 }
-

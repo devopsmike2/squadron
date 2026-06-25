@@ -79,6 +79,7 @@ func BenchmarkQuality_Observe_WithTraceparentChild(b *testing.B) {
 //   - isNonRootSpan returns false (no ChildSpans++).
 //   - lookupTraceparent returns "" after 2 map lookups.
 //   - else-if isChild is false → no MissingTraceparentOnChildSpans++.
+//
 // Roughly: ~30ns of additional overhead above slice 1.
 func BenchmarkQuality_Observe_NoTraceparentRoot(b *testing.B) {
 	q := NewQuality()

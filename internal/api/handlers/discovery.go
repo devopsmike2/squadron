@@ -173,7 +173,7 @@ type DiscoveryHandlers struct {
 	// iac_github_checkrun.go — the application store satisfies
 	// CheckRunStore directly; *iacgithub.PATClient satisfies ChecksAPI
 	// directly.
-	checksClient ChecksAPI
+	checksClient  ChecksAPI
 	checkRunStore CheckRunStore
 	checksPAT     string
 	squadronHost  string
@@ -212,7 +212,7 @@ type DiscoveryHandlers struct {
 	// posture as coldStartStore.
 	errorRateStore ErrorRateObservationStore
 
-	logger        *zap.Logger
+	logger *zap.Logger
 }
 
 // DiscoveryExclusionStore — v0.89.37 (#656 Stream 54, #531 slice 2
@@ -2048,14 +2048,14 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 // can pattern-match on the codes without parsing prose. Snake_case
 // throughout, matching the per-account endpoint's posture.
 type awsScanAllResponse struct {
-	ScanAllID           string                       `json:"scan_all_id"`
-	TotalAccounts       int                          `json:"total_accounts"`
-	SucceededAccounts   []awsScanAllAccountRow       `json:"succeeded_accounts"`
-	FailedAccounts      []awsScanAllFailureRow       `json:"failed_accounts"`
-	TotalResources      int                          `json:"total_resources"`
-	TotalInstrumented   int                          `json:"total_instrumented"`
-	TotalUninstrumented int                          `json:"total_uninstrumented"`
-	Partial             bool                         `json:"partial"`
+	ScanAllID           string                 `json:"scan_all_id"`
+	TotalAccounts       int                    `json:"total_accounts"`
+	SucceededAccounts   []awsScanAllAccountRow `json:"succeeded_accounts"`
+	FailedAccounts      []awsScanAllFailureRow `json:"failed_accounts"`
+	TotalResources      int                    `json:"total_resources"`
+	TotalInstrumented   int                    `json:"total_instrumented"`
+	TotalUninstrumented int                    `json:"total_uninstrumented"`
+	Partial             bool                   `json:"partial"`
 	// Concurrency surfaces the effective bound the orchestrator
 	// used after defaults + cap were applied. Operators who asked
 	// for 10 see 8 here; operators who omitted the parameter see
@@ -3354,22 +3354,22 @@ func (h *DiscoveryHandlers) emitDiscoveryCheckRunUpdatedAudit(
 		prURL = "https://github.com/" + ref.Owner + "/" + ref.Repo
 	}
 	payload := map[string]any{
-		"connection_id":        req.ConnectionID,
-		"recommendation_id":    req.RecommendationID,
-		"recommendation_kind":  req.RecommendationKind,
-		"account_id":           req.AccountID,
-		"region":               req.Region,
-		"pr_url":               prURL,
-		"head_sha":             ref.HeadSHA,
-		"check_run_id":         ref.CheckID,
-		"owner":                ref.Owner,
-		"repo":                 ref.Repo,
-		"previous_status":      prevStatus,
-		"previous_conclusion":  prevConclusion,
-		"new_status":           iacgithub.CheckRunStatusCompleted,
-		"new_conclusion":       iacgithub.CheckRunConclusionNeutral,
-		"actor":                services.AuditActorSystem,
-		"recorded_at":          time.Now().UTC(),
+		"connection_id":       req.ConnectionID,
+		"recommendation_id":   req.RecommendationID,
+		"recommendation_kind": req.RecommendationKind,
+		"account_id":          req.AccountID,
+		"region":              req.Region,
+		"pr_url":              prURL,
+		"head_sha":            ref.HeadSHA,
+		"check_run_id":        ref.CheckID,
+		"owner":               ref.Owner,
+		"repo":                ref.Repo,
+		"previous_status":     prevStatus,
+		"previous_conclusion": prevConclusion,
+		"new_status":          iacgithub.CheckRunStatusCompleted,
+		"new_conclusion":      iacgithub.CheckRunConclusionNeutral,
+		"actor":               services.AuditActorSystem,
+		"recorded_at":         time.Now().UTC(),
 	}
 	_ = h.auditService.Record(ctx, services.AuditEntry{
 		Actor:      services.AuditActorSystem,

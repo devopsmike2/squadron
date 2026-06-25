@@ -179,10 +179,10 @@ func TestMarshalScanResult_EmptyServerless_NonNullSlice(t *testing.T) {
 // uninstrumented.
 func TestServerlessSnapshot_IsInstrumented_ORRule(t *testing.T) {
 	cases := []struct {
-		name      string
-		hasTrace  bool
-		hasOTel   bool
-		wantTrue  bool
+		name     string
+		hasTrace bool
+		hasOTel  bool
+		wantTrue bool
 	}{
 		{"both off", false, false, false},
 		{"trace only", true, false, true},

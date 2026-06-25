@@ -99,11 +99,11 @@ type PatchOp struct {
 
 // Op enum, locked per design doc §3.
 const (
-	OpScalarSet                = "scalar_set"
-	OpListAppendDedupe         = "list_append_dedupe"
-	OpNestedBlockSet           = "nested_block_set"
-	OpNestedBlockFindOrCreate  = "nested_block_find_or_create"
-	OpMapMerge                 = "map_merge"
+	OpScalarSet               = "scalar_set"
+	OpListAppendDedupe        = "list_append_dedupe"
+	OpNestedBlockSet          = "nested_block_set"
+	OpNestedBlockFindOrCreate = "nested_block_find_or_create"
+	OpMapMerge                = "map_merge"
 )
 
 // Sentinel errors. Callers errors.Is against these; the Open-PR

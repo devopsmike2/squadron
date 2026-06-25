@@ -160,7 +160,7 @@ func scanIncidentDraft(scanner interface {
 	Scan(dest ...any) error
 }) (*types.IncidentDraft, error) {
 	var (
-		d                                                              types.IncidentDraft
+		d                                                                     types.IncidentDraft
 		actionRequestID, rolloutID, draftContentJSON, provider, extID, extURL sql.NullString
 	)
 	err := scanner.Scan(

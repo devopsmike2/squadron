@@ -24,10 +24,10 @@ func TestListDiscoveryVerdicts_ReturnsMergedAndClosed(t *testing.T) {
 	s := NewStore()
 	ctx := context.Background()
 	const (
-		connID  = "conn-1"
-		acctID  = "123456789012"
-		region  = "us-east-1"
-		repo    = "octo/widgets"
+		connID = "conn-1"
+		acctID = "123456789012"
+		region = "us-east-1"
+		repo   = "octo/widgets"
 	)
 	now := time.Now().UTC()
 	seed := func(eventType string, age time.Duration, kind, url, actorKey, actorVal, tsKey string) {

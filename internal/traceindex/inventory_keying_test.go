@@ -14,9 +14,9 @@ import "testing"
 
 func TestProjectComputeKey_HappyPath(t *testing.T) {
 	cases := []struct {
-		name                       string
-		provider, scope, resource  string
-		want                       string
+		name                      string
+		provider, scope, resource string
+		want                      string
 	}{
 		{"aws", "aws", "123456789012", "i-0abc", "aws:123456789012:i-0abc"},
 		{"gcp", "gcp", "sandbox-12345", "1234567890", "gcp:sandbox-12345:1234567890"},

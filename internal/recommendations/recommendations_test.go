@@ -412,7 +412,7 @@ func TestSorting(t *testing.T) {
 		},
 		attrs: map[insights.Signal][]insights.AttributeVolume{
 			insights.SignalMetrics: {
-				{Key: "small-noisy", PctOfSignal: 0.18, Bytes: 180_000}, // warn
+				{Key: "small-noisy", PctOfSignal: 0.18, Bytes: 180_000},  // warn
 				{Key: "big-critical", PctOfSignal: 0.40, Bytes: 400_000}, // critical
 			},
 		},

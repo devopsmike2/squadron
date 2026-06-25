@@ -76,7 +76,7 @@ type Pool struct {
 	// v0.36: passive OTLP discovery. Optional — nil disables the
 	// discovery hook so the worker pool's hot path is unchanged for
 	// installs that don't want it.
-	discovery     *discovery.Service
+	discovery *discovery.Service
 }
 
 // SetDiscovery wires the v0.36 passive OTLP discovery service.

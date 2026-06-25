@@ -555,8 +555,8 @@ func TestQuality_SnapshotKey_PopulatesNewFields(t *testing.T) {
 func TestQuality_RollingWindowResetsNewCounters(t *testing.T) {
 	q, clock := newTestQuality()
 	// Seed all four slice 2 counters in the first window.
-	q.Observe(observeWithTraceparent("k1", "p1", "garbage"))  // malformed + child
-	q.Observe(observeWithTraceparent("k1", "p1", ""))         // missing-on-child + child
+	q.Observe(observeWithTraceparent("k1", "p1", "garbage")) // malformed + child
+	q.Observe(observeWithTraceparent("k1", "p1", ""))        // missing-on-child + child
 	q.Observe(observeWithTraceparent("k1", "p1", validTraceparent))
 
 	c := q.perKey["k1"]
@@ -753,4 +753,3 @@ func TestSnapshotKey_PopulatesTotalSpansLast24h(t *testing.T) {
 	assert.Equal(t, uint64(4), snap.TotalSpansLast24h)
 	assert.Equal(t, uint64(4), snap.TotalSpans, "snapshot preserves 1h field too")
 }
-

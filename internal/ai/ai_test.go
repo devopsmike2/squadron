@@ -21,9 +21,9 @@ import (
 // system prompt fragments) without hitting the real API.
 type fakeAnthropic struct {
 	t            *testing.T
-	respText     string  // text returned in the first content block
-	respModel    string  // model echoed back
-	respStatus   int     // default 200
+	respText     string // text returned in the first content block
+	respModel    string // model echoed back
+	respStatus   int    // default 200
 	tokensIn     int
 	tokensOut    int
 	lastRequest  *http.Request
@@ -201,9 +201,9 @@ service:
 	svc := mkService(t, srv.URL)
 
 	resp, err := svc.MergeIntoConfig(context.Background(), MergeIntoConfigRequest{
-		BaseYAML: "receivers:\n  otlp: {}\nprocessors:\n  batch:\n    timeout: 10s",
+		BaseYAML:    "receivers:\n  otlp: {}\nprocessors:\n  batch:\n    timeout: 10s",
 		SnippetYAML: "processors:\n  attributes/drop_http_url:\n    actions:\n      - key: http.url\n        action: delete",
-		Goal: "Drop http.url from metrics",
+		Goal:        "Drop http.url from metrics",
 	})
 	if err != nil {
 		t.Fatalf("MergeIntoConfig: %v", err)

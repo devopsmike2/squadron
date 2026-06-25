@@ -213,9 +213,9 @@ func extractMajorMinor(version string) string {
 //     roles/container.viewer (the slice-2 new IAM grant the runbook
 //     documents).
 //   - 404 -> project not found (same remediation hint as the compute
-//     + Cloud SQL paths — verify project_id).
+//   - Cloud SQL paths — verify project_id).
 //   - 429 -> rate limit (GKE has its own quota separate from compute
-//     + Cloud SQL; same recovery story).
+//   - Cloud SQL; same recovery story).
 //   - Transport / network -> network-error with the underlying
 //     err.Error() truncated to keep audit payloads bounded.
 //   - Other 4xx/5xx -> truncated message with the HTTP code surfaced

@@ -269,14 +269,14 @@ type fakeAzureThreeSurface struct {
 	SBAuthRules404ByNS   map[string]bool
 	NamespacesListStatus int
 
-	Topics            []armEventGridTopic
-	EGDiag404ByTopic  map[string]bool
-	TopicsListStatus  int
+	Topics           []armEventGridTopic
+	EGDiag404ByTopic map[string]bool
+	TopicsListStatus int
 
-	EHNamespaces            []armEventHubsNamespace
-	EHDiag404ByNS           map[string]bool
-	EHHubs404ByNS           map[string]bool
-	EHNamespacesListStatus  int
+	EHNamespaces           []armEventHubsNamespace
+	EHDiag404ByNS          map[string]bool
+	EHHubs404ByNS          map[string]bool
+	EHNamespacesListStatus int
 }
 
 func newFakeAzureThreeSurface() *fakeAzureThreeSurface {

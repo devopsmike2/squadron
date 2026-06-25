@@ -22,10 +22,10 @@ import (
 // approved or rejected slice. The string values are stable and
 // intended to be persisted (they appear in audit-event payloads).
 const (
-	StateApproved        = "approved"          // cost-spike: rollout approved
-	StateRejected        = "rejected"          // cost-spike: rollout rejected
-	StateMerged          = "merged"            // discovery: PR merged
-	StateClosedNotMerged = "closed_not_merged" // discovery: PR closed without merge
+	StateApproved         = "approved"          // cost-spike: rollout approved
+	StateRejected         = "rejected"          // cost-spike: rollout rejected
+	StateMerged           = "merged"            // discovery: PR merged
+	StateClosedNotMerged  = "closed_not_merged" // discovery: PR closed without merge
 	StateOperatorExcluded = "operator_excluded" // discovery: operator clicked Don't propose this again
 )
 

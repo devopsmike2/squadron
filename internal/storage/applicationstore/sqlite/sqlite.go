@@ -1602,7 +1602,6 @@ func (s *Storage) CreateSavedQuery(ctx context.Context, query *types.SavedQuery)
 	return nil
 }
 
-
 func (s *Storage) GetSavedQuery(ctx context.Context, id string) (*types.SavedQuery, error) {
 	stmt := `SELECT id, name, description, query, tags, created_at, updated_at FROM saved_queries WHERE id = ?`
 	var sq types.SavedQuery
@@ -1684,7 +1683,6 @@ func (s *Storage) DeleteSavedQuery(ctx context.Context, id string) error {
 	s.logger.Debug("Deleted saved query", zap.String("saved_query_id", id))
 	return nil
 }
-
 
 // Alert rule management
 

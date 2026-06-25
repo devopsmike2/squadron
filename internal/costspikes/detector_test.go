@@ -16,11 +16,11 @@ import (
 // fakeStore is an in-memory SpikeStore that records every write.
 // Sufficient for testing the detector's state-machine.
 type fakeStore struct {
-	open      *storetypes.CostSpikeEvent
-	all       []*storetypes.CostSpikeEvent
-	created   int
-	updated   int
-	openErr   error
+	open    *storetypes.CostSpikeEvent
+	all     []*storetypes.CostSpikeEvent
+	created int
+	updated int
+	openErr error
 }
 
 func (f *fakeStore) CreateCostSpikeEvent(_ context.Context, e *storetypes.CostSpikeEvent) error {

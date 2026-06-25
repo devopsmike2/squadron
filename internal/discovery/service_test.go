@@ -17,10 +17,10 @@ import (
 
 // fakeStore counts CreateAgent + UpdateLastSeen calls.
 type fakeStore struct {
-	mu       sync.Mutex
-	agents   map[uuid.UUID]*apptypes.Agent
-	created  int
-	bumped   int
+	mu        sync.Mutex
+	agents    map[uuid.UUID]*apptypes.Agent
+	created   int
+	bumped    int
 	createErr error
 }
 

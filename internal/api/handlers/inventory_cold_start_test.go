@@ -31,10 +31,10 @@ import (
 // the (resource_arn, window_hours) key against the canned
 // ColdStartObservationRow returned by LatestColdStartObservation.
 type stubColdStartStore struct {
-	mu     sync.Mutex
-	rows   map[string]sqlite.ColdStartObservationRow
-	err    error
-	calls  int
+	mu    sync.Mutex
+	rows  map[string]sqlite.ColdStartObservationRow
+	err   error
+	calls int
 }
 
 func (s *stubColdStartStore) key(arn string, hours int) string {

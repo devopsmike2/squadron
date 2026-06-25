@@ -1014,4 +1014,3 @@ func TestTraceCoverage_PropagationPctAggregatesPerProvider(t *testing.T) {
 		t.Errorf("aws.propagation_pct = %v, want %v", got, want)
 	}
 }
-

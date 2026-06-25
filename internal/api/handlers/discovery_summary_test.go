@@ -466,10 +466,10 @@ func TestDiscoverySummary_CoveragePctZeroSafe(t *testing.T) {
 func TestDiscoverySummary_CoveragePctRoundsToOneDecimal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cases := []struct {
-		name              string
-		instrumented      int
-		instanceCount     int
-		wantPct           float64
+		name          string
+		instrumented  int
+		instanceCount int
+		wantPct       float64
 	}{
 		{"67_of_100_clean", 67, 100, 67.0},
 		{"2_of_3_rounded", 2, 3, 66.7},

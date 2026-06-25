@@ -69,7 +69,7 @@ const (
 	// elevate the cap question again. Cost is actual output not
 	// cap — raising adds no per-call charge for short responses.
 	ProposerMaxTokens = 8192
-	DefaultMaxTokens    = 1024
+	DefaultMaxTokens  = 1024
 
 	apiVersion       = "2023-06-01"
 	defaultUserAgent = "squadron/v0.26 (+https://github.com/devopsmike2/squadron)"

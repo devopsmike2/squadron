@@ -83,8 +83,8 @@ type fakeCheckRunStore struct {
 	// stored ref + status + conclusion. exists=true when the key is
 	// present; missing keys return exists=false with zero values
 	// (matching the production store's "row not present" signal).
-	seeded  map[string]fakeCheckRunStoreCall
-	getErr  error
+	seeded   map[string]fakeCheckRunStoreCall
+	getErr   error
 	getCalls []string
 }
 

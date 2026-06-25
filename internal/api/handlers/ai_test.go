@@ -18,9 +18,9 @@ import (
 // catches.
 func TestEstimateProposerCostUSD(t *testing.T) {
 	cases := []struct {
-		name     string
-		in, out  int
-		want     float64
+		name      string
+		in, out   int
+		want      float64
 		tolerance float64
 	}{
 		// v0.82 successful proposer call sized: 1848 in / 1090 out.

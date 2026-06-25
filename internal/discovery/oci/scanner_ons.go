@@ -339,11 +339,11 @@ func (s *Scanner) projectOCITopic(ctx context.Context, sk *SigningKey, topic oci
 		snap.HasTraceAxis = true
 	}
 	snap.Detail = map[string]any{
-		"lifecycle_state":     topic.LifecycleState,
-		"compartment_id":      compartmentID,
-		"has_log_group":       snap.HasLogAxis,
-		"short_topic_id_set":  topic.ShortTopicID != "",
-		"kms_key_id_set":      topic.KmsKeyID != "",
+		"lifecycle_state":    topic.LifecycleState,
+		"compartment_id":     compartmentID,
+		"has_log_group":      snap.HasLogAxis,
+		"short_topic_id_set": topic.ShortTopicID != "",
+		"kms_key_id_set":     topic.KmsKeyID != "",
 	}
 	return snap
 }

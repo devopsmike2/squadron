@@ -31,10 +31,10 @@ const (
 // Finding is one lint result.
 type Finding struct {
 	Severity Severity `json:"severity"`
-	Rule     string   `json:"rule"`            // stable identifier so callers can ignore or auto-fix
-	Message  string   `json:"message"`         // human-readable explanation
-	Line     int      `json:"line,omitempty"`  // 1-indexed; 0 if unknown
-	Path     string   `json:"path,omitempty"`  // dotted path through the YAML tree e.g. "service.pipelines.traces"
+	Rule     string   `json:"rule"`           // stable identifier so callers can ignore or auto-fix
+	Message  string   `json:"message"`        // human-readable explanation
+	Line     int      `json:"line,omitempty"` // 1-indexed; 0 if unknown
+	Path     string   `json:"path,omitempty"` // dotted path through the YAML tree e.g. "service.pipelines.traces"
 }
 
 // Lint parses YAML and returns every finding. A YAML parse error becomes a

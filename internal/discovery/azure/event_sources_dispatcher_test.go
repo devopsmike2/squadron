@@ -39,17 +39,17 @@ type fakeAzureTwoSurface struct {
 	mu sync.Mutex
 
 	// Service Bus state.
-	Namespaces            []armServiceBusNamespace
-	SBDiagByNS            map[string]armServiceBusDiagnosticSettingsResponse
-	SBDiag404ByNS         map[string]bool
-	SBAuthRules404ByNS    map[string]bool
-	NamespacesListStatus  int
+	Namespaces           []armServiceBusNamespace
+	SBDiagByNS           map[string]armServiceBusDiagnosticSettingsResponse
+	SBDiag404ByNS        map[string]bool
+	SBAuthRules404ByNS   map[string]bool
+	NamespacesListStatus int
 
 	// Event Grid state.
-	Topics            []armEventGridTopic
-	EGDiagByTopic     map[string]armServiceBusDiagnosticSettingsResponse
-	EGDiag404ByTopic  map[string]bool
-	TopicsListStatus  int
+	Topics           []armEventGridTopic
+	EGDiagByTopic    map[string]armServiceBusDiagnosticSettingsResponse
+	EGDiag404ByTopic map[string]bool
+	TopicsListStatus int
 }
 
 func newFakeAzureTwoSurface() *fakeAzureTwoSurface {

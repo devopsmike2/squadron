@@ -75,7 +75,7 @@ type fakeOCIFunctions struct {
 	// configured"; any non-zero status returns that code with a
 	// JSON error body.
 	ApplicationsStatus int
-	FunctionsStatus   int
+	FunctionsStatus    int
 	CompartmentsStatus int
 }
 
@@ -267,7 +267,7 @@ func TestOCIFunctionsScanner_FunctionWithAPMEnabledFalse_NoTraceAxis(t *testing.
 		value string
 	}{
 		{"literal_false", "false"},
-		{"uppercase_TRUE", "TRUE"},  // exact-match-on-"true" — design doc canonical lowercase
+		{"uppercase_TRUE", "TRUE"}, // exact-match-on-"true" — design doc canonical lowercase
 		{"numeric_one", "1"},
 		{"empty_string", ""},
 	}

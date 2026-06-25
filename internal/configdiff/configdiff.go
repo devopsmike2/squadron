@@ -65,7 +65,7 @@ func Diff(current, target string) Result {
 	if currentNorm == "" {
 		lines := difflib.SplitLines(targetNorm)
 		var b strings.Builder
-		b.WriteString("--- current\n+++ target\n@@ -0,0 +1," )
+		b.WriteString("--- current\n+++ target\n@@ -0,0 +1,")
 		b.WriteString(itoa(len(lines)))
 		b.WriteString(" @@\n")
 		for _, l := range lines {

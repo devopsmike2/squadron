@@ -131,4 +131,3 @@ func TestProposeFromCostSpike_Live_PlanKindFitsInMaxTokens(t *testing.T) {
 		t.Fatalf("unexpected kind: %q", result.Kind)
 	}
 }
-

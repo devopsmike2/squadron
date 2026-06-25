@@ -170,8 +170,8 @@ func (s *Storage) GetTraceResource(
 		FROM trace_resource_seen
 		WHERE resource_key = ?`
 	var (
-		r       traceindex.ResourceRow
-		conf    string
+		r    traceindex.ResourceRow
+		conf string
 	)
 	err := s.db.QueryRowContext(ctx, stmt, key).Scan(
 		&r.ResourceKey, &r.Provider,

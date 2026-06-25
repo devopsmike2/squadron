@@ -39,11 +39,11 @@ type armAKSCluster struct {
 // ProvisioningState + PowerState drive the Status normalization
 // per the chunk-3 brief.
 type armAKSProperties struct {
-	KubernetesVersion        string                    `json:"kubernetesVersion,omitempty"`
-	CurrentKubernetesVersion string                    `json:"currentKubernetesVersion,omitempty"`
-	ProvisioningState        string                    `json:"provisioningState,omitempty"`
-	PowerState               *armAKSPowerState         `json:"powerState,omitempty"`
-	AddonProfiles            map[string]armAKSAddon    `json:"addonProfiles,omitempty"`
+	KubernetesVersion        string                     `json:"kubernetesVersion,omitempty"`
+	CurrentKubernetesVersion string                     `json:"currentKubernetesVersion,omitempty"`
+	ProvisioningState        string                     `json:"provisioningState,omitempty"`
+	PowerState               *armAKSPowerState          `json:"powerState,omitempty"`
+	AddonProfiles            map[string]armAKSAddon     `json:"addonProfiles,omitempty"`
 	AzureMonitorProfile      *armAKSAzureMonitorProfile `json:"azureMonitorProfile,omitempty"`
 }
 
@@ -79,8 +79,8 @@ type armAKSAddon struct {
 // one) project to nil and the detection rule treats them as
 // false rather than panicking on a missing field.
 type armAKSAzureMonitorProfile struct {
-	Metrics            *armAKSMonitorFlag `json:"metrics,omitempty"`
-	ContainerInsights  *armAKSMonitorFlag `json:"containerInsights,omitempty"`
+	Metrics           *armAKSMonitorFlag `json:"metrics,omitempty"`
+	ContainerInsights *armAKSMonitorFlag `json:"containerInsights,omitempty"`
 }
 
 // armAKSMonitorFlag is the common {enabled: bool} shape both

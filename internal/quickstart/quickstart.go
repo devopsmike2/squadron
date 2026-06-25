@@ -61,16 +61,16 @@ var AllBackends = []Backend{
 // environment variables the operator will need to set on the
 // collector host, and a docs link.
 type BackendInfo struct {
-	ID          Backend  `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
+	ID          Backend `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
 	// EnvVars is the list of env vars the rendered config
 	// references (typically one for the API key). The UI renders
 	// these as a "you'll need to export these on the collector
 	// host" reminder. We deliberately don't ask the operator to
 	// paste the key — the config references the env var by name.
-	EnvVars  []EnvVar `json:"env_vars,omitempty"`
-	DocsURL  string   `json:"docs_url,omitempty"`
+	EnvVars []EnvVar `json:"env_vars,omitempty"`
+	DocsURL string   `json:"docs_url,omitempty"`
 }
 
 // EnvVar describes one environment variable the generated config

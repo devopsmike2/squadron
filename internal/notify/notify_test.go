@@ -36,7 +36,7 @@ func sampleEvent() Event {
 // and we assert on the saved values.
 type captureServer struct {
 	*httptest.Server
-	body []byte
+	body  []byte
 	ctype string
 	path  string
 	auth  string

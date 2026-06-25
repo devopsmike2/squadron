@@ -192,8 +192,8 @@ type Server struct {
 	// via SetQualitySnapshotIndexForDiscovery /
 	// SetResourceKeyProjectorForDiscovery — nil leaves the endpoints
 	// serving cold-start zeros / 404 respectively.
-	discoverySpanQualityHandler        *handlers.DiscoverySpanQualityHandlers
-	spanQualityHandlerOnce             sync.Once
+	discoverySpanQualityHandler *handlers.DiscoverySpanQualityHandlers
+	spanQualityHandlerOnce      sync.Once
 
 	// discoveryWorkloadHealthHandler — v0.89.132 (#772 Stream 170,
 	// Workload Health dashboard panel slice 1 chunk 1). Same lazily-
@@ -205,9 +205,9 @@ type Server struct {
 	// hides itself on the UI side, matching the design doc §5.3 hide
 	// conditions). Per design doc §6 the cache TTL is 30s;
 	// DefaultWorkloadHealthCacheTTL pins that.
-	discoveryWorkloadHealthHandler  *handlers.DiscoveryWorkloadHealthHandlers
-	workloadHealthHandlerOnce       sync.Once
-	workloadHealthInventoryReader   handlers.ServerlessHealthInventoryReader
+	discoveryWorkloadHealthHandler *handlers.DiscoveryWorkloadHealthHandlers
+	workloadHealthHandlerOnce      sync.Once
+	workloadHealthInventoryReader  handlers.ServerlessHealthInventoryReader
 
 	// discoveryServerlessColdStartHandler — v0.89.114 (#752 Stream 150,
 	// Cold-start latency slice 1 chunk 2). The per-resource cold-start
@@ -215,9 +215,9 @@ type Server struct {
 	// the first time the route is hit; nil store at construction time
 	// short-circuits to 404 the same way the trace-coverage handler
 	// degrades when its substrate isn't wired.
-	discoveryServerlessColdStartHandler   *handlers.DiscoveryServerlessColdStartHandlers
-	coldStartHandlerOnce                  sync.Once
-	coldStartObservationReader            handlers.ColdStartObservationReader
+	discoveryServerlessColdStartHandler *handlers.DiscoveryServerlessColdStartHandlers
+	coldStartHandlerOnce                sync.Once
+	coldStartObservationReader          handlers.ColdStartObservationReader
 
 	// discoveryServerlessSamplingHandler — v0.89.123 (#763 Stream 161,
 	// Sampling rate analysis slice 1 chunk 2). Per-resource sampling
@@ -241,8 +241,8 @@ type Server struct {
 	discoveryServerlessErrorRateHandler *handlers.DiscoveryServerlessErrorRateHandlers
 	errorRateHandlerOnce                sync.Once
 	errorRateObservationReader          handlers.ErrorRateObservationReader
-	qualitySnapshotIndexForDiscovery   handlers.QualitySnapshotIndex
-	resourceKeyProjectorForDiscovery   handlers.ResourceKeyProjector
+	qualitySnapshotIndexForDiscovery    handlers.QualitySnapshotIndex
+	resourceKeyProjectorForDiscovery    handlers.ResourceKeyProjector
 	// traceIndexLookupForDiscovery — v0.89.77 (#708 Stream 106,
 	// Trace integration slice 1 chunk 4) — the LastSeenAt-shaped
 	// slice of the traceindex consumed by the per-provider scan

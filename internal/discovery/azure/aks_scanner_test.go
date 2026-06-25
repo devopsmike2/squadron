@@ -231,8 +231,8 @@ func TestScan_AKS_OMSAgentEnabled_DetectsHasMonitor(t *testing.T) {
 	fake := newFakeAzureAKS()
 	fake.Clusters = []armAKSCluster{
 		makeAKSCluster("aks", "eastus", "1.29.4", aksProvisioningSucceeded, aksRunningPowerState, nil,
-			true,  // omsEnabled
-			true,  // hasOMS profile entry
+			true, // omsEnabled
+			true, // hasOMS profile entry
 			nil, nil, false),
 	}
 
@@ -248,7 +248,7 @@ func TestScan_AKS_AzureMonitorMetricsEnabled_DetectsHasMonitor(t *testing.T) {
 	fake.Clusters = []armAKSCluster{
 		makeAKSCluster("aks", "eastus", "1.29.4", aksProvisioningSucceeded, aksRunningPowerState, nil,
 			false, false,
-			boolp(true),  // azureMonitorProfile.metrics.enabled
+			boolp(true), // azureMonitorProfile.metrics.enabled
 			nil,
 			true),
 	}

@@ -303,12 +303,12 @@ const pendingTraceEmissionStaleAfter = 24 * time.Hour
 // that hasn't observed any spans yet); inventoryQuery nil short-circuits
 // the inventory_count lookup to 0 for every scope.
 type DiscoveryTraceCoverageHandlers struct {
-	awsStore        AWSSummaryStore
-	gcpStore        GCPSummaryStore
-	azureStore      AzureSummaryStore
-	ociStore        OCISummaryStore
-	traceIndex      TraceIndex
-	inventoryQuery  InventoryCountQuery
+	awsStore           AWSSummaryStore
+	gcpStore           GCPSummaryStore
+	azureStore         AzureSummaryStore
+	ociStore           OCISummaryStore
+	traceIndex         TraceIndex
+	inventoryQuery     InventoryCountQuery
 	pendingQuery       PendingTraceEmissionCountQuery
 	serverlessQuery    ServerlessCoverageQuery
 	orchestrationQuery OrchestrationCoverageQuery
@@ -319,8 +319,8 @@ type DiscoveryTraceCoverageHandlers struct {
 	// provider — same nil-tolerant posture as eventSourceQuery.
 	propagationQuery EventSourcePropagationQuery
 	auditService     services.AuditService
-	cache           *traceCoverageCache
-	logger          *zap.Logger
+	cache            *traceCoverageCache
+	logger           *zap.Logger
 }
 
 // NewDiscoveryTraceCoverageHandlers builds the handler. ttl <= 0 falls
@@ -435,11 +435,11 @@ func (h *DiscoveryTraceCoverageHandlers) HandleTraceCoverage(c *gin.Context) {
 			EventType: services.AuditEventTraceCoverageRequested,
 			Action:    "requested",
 			Payload: map[string]any{
-				"cache_status":           "miss",
-				"total_inventory_count":  resp.Totals.InventoryCount,
-				"total_emitting_count":   resp.Totals.EmittingCount,
-				"total_coverage_pct":     resp.Totals.CoveragePct,
-				"recorded_at":            time.Now().UTC(),
+				"cache_status":          "miss",
+				"total_inventory_count": resp.Totals.InventoryCount,
+				"total_emitting_count":  resp.Totals.EmittingCount,
+				"total_coverage_pct":    resp.Totals.CoveragePct,
+				"recorded_at":           time.Now().UTC(),
 			},
 		})
 	}

@@ -173,12 +173,12 @@ func runEventBridgePropagationScan(t *testing.T, f *fakeEventBridge) []map[strin
 	rows := make([]map[string]any, 0, len(out))
 	for _, snap := range out {
 		rows = append(rows, map[string]any{
-			"name":          snap.ResourceName,
-			"has_prop":      snap.HasPropagationConfig,
-			"notes":         snap.PropagationNotes,
-			"rule_count":    snap.Detail["rule_count"],
-			"has_log_axis":  snap.HasLogAxis,
-			"has_trace_ax":  snap.HasTraceAxis,
+			"name":         snap.ResourceName,
+			"has_prop":     snap.HasPropagationConfig,
+			"notes":        snap.PropagationNotes,
+			"rule_count":   snap.Detail["rule_count"],
+			"has_log_axis": snap.HasLogAxis,
+			"has_trace_ax": snap.HasTraceAxis,
 		})
 	}
 	return rows

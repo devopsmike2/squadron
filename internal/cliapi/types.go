@@ -23,10 +23,10 @@ type Agent struct {
 // AgentsResponse is the shape of GET /api/v1/agents. The map is keyed
 // by agent ID — we flatten it in the command layer for tabular display.
 type AgentsResponse struct {
-	Agents       map[string]Agent `json:"agents"`
-	TotalCount   int              `json:"totalCount"`
-	ActiveCount  int              `json:"activeCount"`
-	InactiveCount int             `json:"inactiveCount"`
+	Agents        map[string]Agent `json:"agents"`
+	TotalCount    int              `json:"totalCount"`
+	ActiveCount   int              `json:"activeCount"`
+	InactiveCount int              `json:"inactiveCount"`
 }
 
 // Group mirrors /api/v1/groups items.
@@ -81,18 +81,18 @@ type LintResponse struct {
 
 // Rollout mirrors services.Rollout. CurrentStage indexes into Stages.
 type Rollout struct {
-	ID               string         `json:"id"`
-	Name             string         `json:"name"`
-	GroupID          string         `json:"group_id"`
-	TargetConfigID   string         `json:"target_config_id"`
-	PreviousConfigID string         `json:"previous_config_id,omitempty"`
-	Stages           []RolloutStage `json:"stages"`
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	GroupID          string               `json:"group_id"`
+	TargetConfigID   string               `json:"target_config_id"`
+	PreviousConfigID string               `json:"previous_config_id,omitempty"`
+	Stages           []RolloutStage       `json:"stages"`
 	AbortCriteria    RolloutAbortCriteria `json:"abort_criteria"`
-	NotificationURL  string         `json:"notification_url,omitempty"`
-	State            string         `json:"state"`
-	CurrentStage     int            `json:"current_stage"`
-	StageStartedAt   *time.Time     `json:"stage_started_at,omitempty"`
-	AbortReason      string         `json:"abort_reason,omitempty"`
+	NotificationURL  string               `json:"notification_url,omitempty"`
+	State            string               `json:"state"`
+	CurrentStage     int                  `json:"current_stage"`
+	StageStartedAt   *time.Time           `json:"stage_started_at,omitempty"`
+	AbortReason      string               `json:"abort_reason,omitempty"`
 	// v0.69 — multi step plan grouping. Empty PlanID means
 	// standalone. Negative PlanStepIndex is reserved for v0.72
 	// rollback steps within the same plan. v0.82 dropped omitempty
@@ -108,11 +108,11 @@ type Rollout struct {
 	// ActionRequestID links an action step to the dispatched
 	// action_request row so squadronctl can fetch the underlying
 	// runner-side details via /api/v1/actions/:id when present.
-	StepKind        string `json:"step_kind,omitempty"`
-	ActionRequestID string `json:"action_request_id,omitempty"`
-	CreatedAt        time.Time      `json:"created_at"`
-	UpdatedAt        time.Time      `json:"updated_at"`
-	CompletedAt      *time.Time     `json:"completed_at,omitempty"`
+	StepKind        string     `json:"step_kind,omitempty"`
+	ActionRequestID string     `json:"action_request_id,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 }
 
 type RolloutStage struct {

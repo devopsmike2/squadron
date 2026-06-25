@@ -26,18 +26,18 @@ import (
 //
 // The test serves three goals:
 //
-//   1. Regression gate. The test asserts a small floor for the
-//      outcome mix (no proposer-refused-incorrectly; no panics; no
-//      dispatcher-error outside the seeds that opt into it) so a
-//      future PR that subtly breaks the proposer trips the bar.
-//   2. Latency budget. The test computes p50/p95/p99 wall time and
-//      logs them. The numbers are not asserted as hard ceilings
-//      because they vary by host, but they are the regression bar
-//      for the next stress run.
-//   3. Findings doc. The per-iteration outcome table and percentile
-//      summary are emitted to t.Log and copied into
-//      docs/stress-tests/proposer-v0.58.md as the methodology
-//      reference.
+//  1. Regression gate. The test asserts a small floor for the
+//     outcome mix (no proposer-refused-incorrectly; no panics; no
+//     dispatcher-error outside the seeds that opt into it) so a
+//     future PR that subtly breaks the proposer trips the bar.
+//  2. Latency budget. The test computes p50/p95/p99 wall time and
+//     logs them. The numbers are not asserted as hard ceilings
+//     because they vary by host, but they are the regression bar
+//     for the next stress run.
+//  3. Findings doc. The per-iteration outcome table and percentile
+//     summary are emitted to t.Log and copied into
+//     docs/stress-tests/proposer-v0.58.md as the methodology
+//     reference.
 //
 // The fake LLM mode is the default. A live mode against the real
 // Anthropic API lives in stress_live_test.go behind the "live"

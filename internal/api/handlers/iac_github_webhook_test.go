@@ -140,11 +140,11 @@ func makePREventBody(t *testing.T, action string, merged bool, repo string, prNu
 		Login string `json:"login"`
 	}
 	type prT struct {
-		Number   int     `json:"number"`
-		Merged   bool    `json:"merged"`
-		MergedAt string  `json:"merged_at,omitempty"`
-		ClosedAt string  `json:"closed_at,omitempty"`
-		HTMLURL  string  `json:"html_url"`
+		Number   int    `json:"number"`
+		Merged   bool   `json:"merged"`
+		MergedAt string `json:"merged_at,omitempty"`
+		ClosedAt string `json:"closed_at,omitempty"`
+		HTMLURL  string `json:"html_url"`
 		Head     struct {
 			Ref string `json:"ref"`
 		} `json:"head"`
@@ -460,11 +460,11 @@ func TestGitHubWebhook_SecretNotConfigured_Returns503(t *testing.T) {
 
 func TestGitHubWebhook_BranchPrefixParse(t *testing.T) {
 	cases := []struct {
-		name    string
-		branch  string
-		prefix  string
-		wantK   string
-		wantOK  bool
+		name   string
+		branch string
+		prefix string
+		wantK  string
+		wantOK bool
 	}{
 		{
 			name:   "squadron-shaped branch with kind segment",
@@ -1117,10 +1117,10 @@ func TestPerConnectionWebhookSecret_NeverRevealedInResponse(t *testing.T) {
 // request slice so tests can assert the wire shape that reached the
 // wrapper.
 type fakeWebhookChecksClient struct {
-	mu       sync.Mutex
-	updates  []iacgithub.CheckRunUpdate
-	updPATs  []string
-	respErr  error
+	mu      sync.Mutex
+	updates []iacgithub.CheckRunUpdate
+	updPATs []string
+	respErr error
 }
 
 func (f *fakeWebhookChecksClient) UpdateCheckRun(_ context.Context, pat string, req iacgithub.CheckRunUpdate) error {
@@ -1640,7 +1640,8 @@ func TestPerConnectionWebhookSecret_NoConnectionFound_UsesGlobal(t *testing.T) {
 // project_id=<scope_id>, account_id="", and provider="gcp".
 //
 // Branch shape per docs/proposals/gcp-discovery-slice1.md §9.1:
-//   squadron/rec/gce-otel-label/<project_id>/<region>/<short_id>
+//
+//	squadron/rec/gce-otel-label/<project_id>/<region>/<short_id>
 func TestWebhook_GCERecommendationKind_AuditPayloadCarriesProjectID(t *testing.T) {
 	audit := &discoveryRecordingAudit{}
 	h, store := newTestWebhookHandler(t, audit, webhookTestSecret)

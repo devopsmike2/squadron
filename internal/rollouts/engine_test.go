@@ -200,7 +200,7 @@ func TestEngine_CanaryAgentsForStage_LabelMode_MultiKeyAndSemantics(t *testing.T
 	// Multiple selector keys must AND together — agents need every
 	// key=value pair to match. Verifies we don't accidentally OR them.
 	agents := makeLabeledAgents(4, "group-a", map[string]string{"region": "us-east", "tier": "free"})
-	agents[0].Labels["tier"] = "pro" // region=us-east, tier=pro — no match
+	agents[0].Labels["tier"] = "pro"       // region=us-east, tier=pro — no match
 	agents[1].Labels["region"] = "us-west" // region=us-west, tier=free — no match
 	agents[2].Labels["region"] = "us-east" // region=us-east, tier=free — MATCH
 	agents[3].Labels["region"] = "us-east"

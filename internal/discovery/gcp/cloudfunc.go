@@ -220,8 +220,8 @@ func projectCloudFunction(fn *cloudfunctions.CloudFunction, projectID, region st
 	}
 
 	snap.Detail = map[string]any{
-		"runtime":         fn.Runtime,
-		"env_keys_count":  len(fn.EnvironmentVariables),
+		"runtime":        fn.Runtime,
+		"env_keys_count": len(fn.EnvironmentVariables),
 	}
 	return snap
 }

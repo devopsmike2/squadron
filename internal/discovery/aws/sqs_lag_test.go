@@ -29,9 +29,9 @@ func TestScanSQSQueues_SmallBacklogYoungOldest_NoLagFiring(t *testing.T) {
 		},
 		attrsByURL: map[string]map[string]string{
 			url: {
-				SQSQueueArnAttr:                       arn,
-				SQSApproximateNumberOfMessagesAttr:    strconv.Itoa(500),
-				SQSApproximateAgeOfOldestMessageAttr:  strconv.Itoa(60),
+				SQSQueueArnAttr:                      arn,
+				SQSApproximateNumberOfMessagesAttr:   strconv.Itoa(500),
+				SQSApproximateAgeOfOldestMessageAttr: strconv.Itoa(60),
 			},
 		},
 	}
@@ -58,9 +58,9 @@ func TestScanSQSQueues_LargeBacklogOldOldest_BothAxesFire(t *testing.T) {
 		},
 		attrsByURL: map[string]map[string]string{
 			url: {
-				SQSQueueArnAttr:                       arn,
-				SQSApproximateNumberOfMessagesAttr:    strconv.Itoa(2000),
-				SQSApproximateAgeOfOldestMessageAttr:  strconv.Itoa(400),
+				SQSQueueArnAttr:                      arn,
+				SQSApproximateNumberOfMessagesAttr:   strconv.Itoa(2000),
+				SQSApproximateAgeOfOldestMessageAttr: strconv.Itoa(400),
 			},
 		},
 	}
@@ -87,9 +87,9 @@ func TestScanSQSQueues_LargeBacklogYoungOldest_OnlyBacklogFires(t *testing.T) {
 		},
 		attrsByURL: map[string]map[string]string{
 			url: {
-				SQSQueueArnAttr:                       arn,
-				SQSApproximateNumberOfMessagesAttr:    strconv.Itoa(2000),
-				SQSApproximateAgeOfOldestMessageAttr:  strconv.Itoa(60),
+				SQSQueueArnAttr:                      arn,
+				SQSApproximateNumberOfMessagesAttr:   strconv.Itoa(2000),
+				SQSApproximateAgeOfOldestMessageAttr: strconv.Itoa(60),
 			},
 		},
 	}
@@ -128,11 +128,11 @@ func TestScanSQSQueues_MissingLagAttributes_AbsentSentinels(t *testing.T) {
 
 func TestScanSQSQueues_LagThresholds_BoundaryEdges(t *testing.T) {
 	cases := []struct {
-		name                 string
-		backlogDepth         int
-		ageSeconds           int
-		expectBacklogHigh    bool
-		expectSilenceHigh    bool
+		name              string
+		backlogDepth      int
+		ageSeconds        int
+		expectBacklogHigh bool
+		expectSilenceHigh bool
 	}{
 		{"backlog-just-below-1000", 999, 0, false, false},
 		{"backlog-equal-1000-inclusive", 1000, 0, true, false},
@@ -151,9 +151,9 @@ func TestScanSQSQueues_LagThresholds_BoundaryEdges(t *testing.T) {
 				},
 				attrsByURL: map[string]map[string]string{
 					url: {
-						SQSQueueArnAttr:                       arn,
-						SQSApproximateNumberOfMessagesAttr:    strconv.Itoa(tc.backlogDepth),
-						SQSApproximateAgeOfOldestMessageAttr:  strconv.Itoa(tc.ageSeconds),
+						SQSQueueArnAttr:                      arn,
+						SQSApproximateNumberOfMessagesAttr:   strconv.Itoa(tc.backlogDepth),
+						SQSApproximateAgeOfOldestMessageAttr: strconv.Itoa(tc.ageSeconds),
 					},
 				},
 			}
@@ -184,10 +184,10 @@ func TestScanSQSQueues_LagAxisAdditive_PreservesPriorKeys(t *testing.T) {
 		},
 		attrsByURL: map[string]map[string]string{
 			mainURL: {
-				SQSQueueArnAttr:                       mainARN,
-				SQSRedrivePolicyAttr:                  makeRedrivePolicyJSON(dlqARN, 7),
-				SQSApproximateNumberOfMessagesAttr:    strconv.Itoa(1500),
-				SQSApproximateAgeOfOldestMessageAttr:  strconv.Itoa(450),
+				SQSQueueArnAttr:                      mainARN,
+				SQSRedrivePolicyAttr:                 makeRedrivePolicyJSON(dlqARN, 7),
+				SQSApproximateNumberOfMessagesAttr:   strconv.Itoa(1500),
+				SQSApproximateAgeOfOldestMessageAttr: strconv.Itoa(450),
 			},
 			dlqURL: {SQSQueueArnAttr: dlqARN},
 		},

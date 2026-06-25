@@ -47,11 +47,11 @@ import (
 type DestinationType string
 
 const (
-	TypeGeneric    DestinationType = "generic"
-	TypeSlack      DestinationType = "slack"
-	TypeTeams      DestinationType = "teams"
-	TypePagerDuty  DestinationType = "pagerduty"
-	TypeOpsgenie   DestinationType = "opsgenie"
+	TypeGeneric   DestinationType = "generic"
+	TypeSlack     DestinationType = "slack"
+	TypeTeams     DestinationType = "teams"
+	TypePagerDuty DestinationType = "pagerduty"
+	TypeOpsgenie  DestinationType = "opsgenie"
 	// v0.62 — Discord incoming webhook. Same destination URL shape as
 	// Slack/Teams; the formatter emits a single embed per event with
 	// severity-tinted color, fields, and a deep link.

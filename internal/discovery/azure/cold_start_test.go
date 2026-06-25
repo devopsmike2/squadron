@@ -26,14 +26,14 @@ import (
 // different responses. Optional perCallOverride flips specific
 // calls to return errors (used for fallback path testing).
 type perWindowMetricsFake struct {
-	mu               sync.Mutex
-	calls            int32
-	responses        map[time.Duration]armMetricsResponse
+	mu        sync.Mutex
+	calls     int32
+	responses map[time.Duration]armMetricsResponse
 	// perCallOverride lets a test return a non-200 status on
 	// specific call indices — used by the fallback path test to
 	// inject a 400 on call N then a 200 on call N+1.
-	perCallOverride  func(callN int, r *http.Request) (status int, body interface{}, handled bool)
-	filterSeen       []string
+	perCallOverride func(callN int, r *http.Request) (status int, body interface{}, handled bool)
+	filterSeen      []string
 }
 
 func (f *perWindowMetricsFake) handler() http.Handler {

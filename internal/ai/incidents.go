@@ -49,7 +49,7 @@ type IncidentDraftInput struct {
 	// uses this for the "what happened" framing of the ticket. May
 	// be empty if the operator created the rollout manually and an
 	// action ran as part of it.
-	TriggerSummary   string
+	TriggerSummary    string
 	ProposalReasoning string
 
 	// Outcome bullets the bridge has extracted from the action

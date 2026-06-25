@@ -99,12 +99,12 @@ type armEventHubsNamespace struct {
 // (that's via the diagnostic-settings child); they all surface in the
 // snapshot Detail bag as informational context per design doc §3.
 type armEventHubsNamespaceProperties struct {
-	Status                string `json:"status,omitempty"`
-	IsAutoInflateEnabled  bool   `json:"isAutoInflateEnabled,omitempty"`
-	ZoneRedundant         bool   `json:"zoneRedundant,omitempty"`
-	DisableLocalAuth      bool   `json:"disableLocalAuth,omitempty"`
-	KafkaEnabled          bool   `json:"kafkaEnabled,omitempty"`
-	MaximumThroughputUnits int   `json:"maximumThroughputUnits,omitempty"`
+	Status                 string `json:"status,omitempty"`
+	IsAutoInflateEnabled   bool   `json:"isAutoInflateEnabled,omitempty"`
+	ZoneRedundant          bool   `json:"zoneRedundant,omitempty"`
+	DisableLocalAuth       bool   `json:"disableLocalAuth,omitempty"`
+	KafkaEnabled           bool   `json:"kafkaEnabled,omitempty"`
+	MaximumThroughputUnits int    `json:"maximumThroughputUnits,omitempty"`
 }
 
 // armEventHubsHubListResponse is the JSON shape returned by the
@@ -379,9 +379,9 @@ func (s *Scanner) probeEventHubsCapture(ctx context.Context, accessToken, namesp
 // disable_local_auth, status, kafka_enabled).
 func projectEventHubsNamespace(ns armEventHubsNamespace, hasLog, hasCapture bool, accountID string) scanner.EventSourceInstanceSnapshot {
 	detail := map[string]any{
-		"source_type":  eventHubsSourceTypeNamespace,
-		"has_log":      hasLog,
-		"has_capture":  hasCapture,
+		"source_type": eventHubsSourceTypeNamespace,
+		"has_log":     hasLog,
+		"has_capture": hasCapture,
 	}
 	if ns.Properties.Status != "" {
 		detail["status"] = ns.Properties.Status

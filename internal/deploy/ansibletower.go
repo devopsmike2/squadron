@@ -111,14 +111,14 @@ func (p *AnsibleTowerProvider) do(ctx context.Context, method, urlStr, pat strin
 
 // towerJob is the slice of Tower's job representation we care about.
 type towerJob struct {
-	ID        int64      `json:"id"`
-	URL       string     `json:"url"`
-	Status    string     `json:"status"` // "pending" | "running" | "successful" | "failed" | "canceled"
-	Failed    bool       `json:"failed"`
-	Started   *time.Time `json:"started,omitempty"`
-	Finished  *time.Time `json:"finished,omitempty"`
-	JobURL    string     `json:"-"` // we synthesize a UI URL from the base host
-	Created   time.Time  `json:"created"`
+	ID       int64      `json:"id"`
+	URL      string     `json:"url"`
+	Status   string     `json:"status"` // "pending" | "running" | "successful" | "failed" | "canceled"
+	Failed   bool       `json:"failed"`
+	Started  *time.Time `json:"started,omitempty"`
+	Finished *time.Time `json:"finished,omitempty"`
+	JobURL   string     `json:"-"` // we synthesize a UI URL from the base host
+	Created  time.Time  `json:"created"`
 }
 
 func (j *towerJob) toRunStatus(base string) *RunStatus {

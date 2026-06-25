@@ -64,10 +64,10 @@ const ConsumerSilenceHighThreshold = 300
 // sqsLagDetectionResult is the bare result of detectSQSLag. Four
 // fields mirror the four Detail keys the chunk 1 projection writes.
 type sqsLagDetectionResult struct {
-	BacklogDepth          int
-	BacklogDepthHigh      bool
+	BacklogDepth           int
+	BacklogDepthHigh       bool
 	ConsumerSilenceSeconds int
-	ConsumerSilenceHigh   bool
+	ConsumerSilenceHigh    bool
 }
 
 // detectSQSLag inspects the raw GetQueueAttributes attributes map

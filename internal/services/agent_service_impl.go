@@ -339,15 +339,15 @@ func (s *AgentServiceImpl) CreateGroup(ctx context.Context, group *Group) error 
 		cwJSON = string(raw)
 	}
 	storageGroup := &applicationstore.Group{
-		ID:                group.ID,
-		Name:              group.Name,
-		Labels:            group.Labels,
+		ID:                         group.ID,
+		Name:                       group.Name,
+		Labels:                     group.Labels,
 		RequireApproval:            group.RequireApproval,
 		RequireApprovalForRollback: group.RequireApprovalForRollback,
 		// v0.89.18 (#634) — round-trip the verdict-learning policy
 		// through the service layer so handlers can flip it.
 		LearnFromVerdicts: group.LearnFromVerdicts,
-		ChangeWindowsJSON:          cwJSON,
+		ChangeWindowsJSON: cwJSON,
 		CreatedAt:         group.CreatedAt,
 		UpdatedAt:         group.UpdatedAt,
 	}
@@ -414,16 +414,16 @@ func (s *AgentServiceImpl) UpdateGroup(ctx context.Context, group *Group) error 
 		cwJSON = string(raw)
 	}
 	storageGroup := &applicationstore.Group{
-		ID:                group.ID,
-		Name:              group.Name,
-		Labels:            group.Labels,
+		ID:                         group.ID,
+		Name:                       group.Name,
+		Labels:                     group.Labels,
 		RequireApproval:            group.RequireApproval,
 		RequireApprovalForRollback: group.RequireApprovalForRollback,
 		// v0.89.18 (#634) — round-trip the verdict-learning policy
 		// on update too. Without this, the v0.89.17 (#633) flag was
 		// settable through SQL only.
 		LearnFromVerdicts: group.LearnFromVerdicts,
-		ChangeWindowsJSON:          cwJSON,
+		ChangeWindowsJSON: cwJSON,
 		CreatedAt:         group.CreatedAt,
 		UpdatedAt:         group.UpdatedAt,
 	}
@@ -451,8 +451,8 @@ func groupToService(g *applicationstore.Group) *Group {
 		// service-layer Group so handlers and the JSON wire shape
 		// see it.
 		LearnFromVerdicts: g.LearnFromVerdicts,
-		CreatedAt:                  g.CreatedAt,
-		UpdatedAt:                  g.UpdatedAt,
+		CreatedAt:         g.CreatedAt,
+		UpdatedAt:         g.UpdatedAt,
 	}
 	if g.ChangeWindowsJSON != "" && g.ChangeWindowsJSON != "[]" {
 		// Failing closed (empty slice) on malformed JSON is the safe

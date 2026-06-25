@@ -290,12 +290,12 @@ func (b *Bridge) handleOne(ctx context.Context, req *types.ActionRequest) {
 	}
 
 	draft := &types.IncidentDraft{
-		ID:              uuid.NewString(),
-		ActionRequestID: req.ID,
-		RolloutID:       req.ProposalID, // proposal_id on the action carries the rollout
-		Status:          "draft",
-		Title:           res.Title,
-		BodyMarkdown:    ai.RenderIncidentMarkdown(res, in),
+		ID:               uuid.NewString(),
+		ActionRequestID:  req.ID,
+		RolloutID:        req.ProposalID, // proposal_id on the action carries the rollout
+		Status:           "draft",
+		Title:            res.Title,
+		BodyMarkdown:     ai.RenderIncidentMarkdown(res, in),
 		DraftContentJSON: marshalOrEmpty(res),
 	}
 	if err := b.store.CreateIncidentDraft(ctx, draft); err != nil {

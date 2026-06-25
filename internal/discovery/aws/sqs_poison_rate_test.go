@@ -19,9 +19,9 @@ import (
 
 func TestScanSQSQueues_PoisonRate_AlwaysHonestFramingState(t *testing.T) {
 	cases := []struct {
-		name string
-		url  string
-		arn  string
+		name       string
+		url        string
+		arn        string
 		extraAttrs map[string]string
 	}{
 		{
@@ -76,10 +76,10 @@ func TestScanSQSQueues_PoisonRateAxisAdditive_PreservesPriorKeys(t *testing.T) {
 		},
 		attrsByURL: map[string]map[string]string{
 			mainURL: {
-				SQSQueueArnAttr:                       mainARN,
-				SQSRedrivePolicyAttr:                  makeRedrivePolicyJSON(dlqARN, 7),
-				SQSApproximateNumberOfMessagesAttr:    "1500",
-				SQSApproximateAgeOfOldestMessageAttr:  "450",
+				SQSQueueArnAttr:                      mainARN,
+				SQSRedrivePolicyAttr:                 makeRedrivePolicyJSON(dlqARN, 7),
+				SQSApproximateNumberOfMessagesAttr:   "1500",
+				SQSApproximateAgeOfOldestMessageAttr: "450",
 			},
 			dlqURL: {SQSQueueArnAttr: dlqARN},
 		},
