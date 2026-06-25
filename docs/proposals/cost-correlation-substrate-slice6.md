@@ -138,12 +138,22 @@ SampleCount), and `ObservedAt`.
   filter, columns found by name. Attaches service_cost_* to Service
   Bus namespace snapshots. Reuses the Azure bearer-token ARM
   plumbing — no new SDK.
-- Chunk 5+: GCP (BigQuery billing export — heavier, operator-setup-
-  dependent; may ship as honest-framed pending operator export
-  config) + OCI (usage-report objects) cost readers, and the
-  production opt-in wiring path (cost client + governor construction
-  behind an explicit operator switch — the step that makes any
-  substrate, cost or metric, actually run in production).
+- **Chunk 6 (v0.89.188): the production opt-in switch.** A
+  `cost_correlation` config block (Enabled default FALSE,
+  MonthlyBudgetUSD default $1) + `Scanner.EnableCostCorrelation`,
+  which wires the real Cost Explorer client + a budget governor
+  sized to the configured budget. OFF by default — the cost path
+  stays dormant (no client, no spend) until an operator opts in.
+  Fails loud (errors) if a non-production factory can't build the
+  client, rather than making charged calls through an unexpected
+  path. This is the explicit, reviewable spend decision, isolated
+  in its own release.
+- Chunk 7+: GCP (BigQuery billing export — heavier, operator-setup-
+  dependent; likely honest-framed pending operator export config) +
+  OCI (usage-report objects) cost readers. (Wiring the metric-
+  detection substrate — cold-start / poison-rate / lag — live in
+  production is a SEPARATE strategic decision, not part of this
+  cost switch.)
 
 ## 7. IAM
 

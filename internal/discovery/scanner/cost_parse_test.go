@@ -58,3 +58,14 @@ func TestParseDecimalToMicroUSD_ExactSummation(t *testing.T) {
 	}
 	assert.Equal(t, MicroUSD(10_000_000), total, "1000 x $0.01 = exactly $10.00, no drift")
 }
+
+// --- NewCostBudgetGovernorFromUSD (slice 6 chunk 6) ---------------
+
+func TestNewCostBudgetGovernorFromUSD(t *testing.T) {
+	assert.Equal(t, MicroUSD(1_000_000), NewCostBudgetGovernorFromUSD(1.0).Ceiling(), "$1 → 1_000_000 micro-USD")
+	assert.Equal(t, MicroUSD(5_000_000), NewCostBudgetGovernorFromUSD(5.0).Ceiling(), "$5 ceiling")
+	assert.Equal(t, MicroUSD(2_500_000), NewCostBudgetGovernorFromUSD(2.5).Ceiling(), "$2.50 ceiling")
+	// Non-positive → safe default $1, never unbounded.
+	assert.Equal(t, DefaultMonthlyCostBudgetMicroUSD, NewCostBudgetGovernorFromUSD(0).Ceiling())
+	assert.Equal(t, DefaultMonthlyCostBudgetMicroUSD, NewCostBudgetGovernorFromUSD(-3).Ceiling())
+}
