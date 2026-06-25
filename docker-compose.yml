@@ -44,12 +44,13 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Discovery credential substrate (v0.85). Seals stored cloud-
       # connection secrets (AWS external-id, GCP SA JSON, GitHub PAT) at
-      # rest; must base64-decode to exactly 32 bytes (AES-256). A built-in
-      # DEV default is set so the connect-account + discovery flow works
-      # out of the box. OVERRIDE it for anything real — set
-      # SQUADRON_SECRETS_KEY in your shell or repo-root .env:
-      #   head -c 32 /dev/urandom | base64
-      - SQUADRON_SECRETS_KEY=${SQUADRON_SECRETS_KEY:-c3F1YWRyb24tbG9jYWwtZGV2LWtleS1jaGFuZ2UtbWU=}
+      # rest with AES-256. Leave UNSET and Squadron auto-generates a key
+      # on first boot and persists it to the data volume (secrets.key),
+      # so the connect-account + discovery flow works out of the box.
+      # Set it (base64 of 32 bytes — `head -c 32 /dev/urandom | base64`)
+      # only when you want to supply your own key or share one across
+      # replicas:
+      - SQUADRON_SECRETS_KEY=${SQUADRON_SECRETS_KEY:-}
       # AWS credentials for discovery's assume-role into a connected
       # account (the base identity that assumes the SquadronDiscovery
       # role). Passed through from your shell / .env when set; leave

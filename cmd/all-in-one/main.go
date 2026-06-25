@@ -739,10 +739,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// routes become reachable. Opt-in: if SQUADRON_SECRETS_KEY is
 	// unset, discovery stays 503 and Squadron continues to boot. This
 	// keeps existing deployments working unchanged.
-	if credKey, err := credstore.LoadKeyFromEnv(); err != nil {
-		logger.Info("discovery credstore not configured (set SQUADRON_SECRETS_KEY to enable AWS connect-account)",
-			zap.String("hint", "generate with: head -c 32 /dev/urandom | base64"))
+	if credKey, generated, err := credstore.LoadOrGenerateKey(filepath.Dir(config.Storage.App.Path)); err != nil {
+		logger.Warn("discovery credstore: could not resolve a secrets key; discovery disabled",
+			zap.Error(err),
+			zap.String("hint", "set a valid base64 32-byte SQUADRON_SECRETS_KEY (head -c 32 /dev/urandom | base64), or ensure the data dir is writable"))
 	} else {
+		if generated {
+			logger.Info("discovery credstore: no SQUADRON_SECRETS_KEY set — generated one and persisted it to the data dir; discovery is enabled out of the box. Set SQUADRON_SECRETS_KEY to supply your own key or share it across replicas.",
+				zap.String("path", filepath.Join(filepath.Dir(config.Storage.App.Path), credstore.SecretsKeyFileName)))
+		}
 		credDBPath := filepath.Join(filepath.Dir(config.Storage.App.Path), "credstore.db")
 		credDB, err := sql.Open("sqlite3", credDBPath)
 		if err != nil {
