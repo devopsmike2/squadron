@@ -44,7 +44,7 @@ func ParseInventoryHosts(content []byte) []string {
 	var (
 		out         []string
 		seen        = map[string]struct{}{}
-		currentSect = ""
+		currentSect string
 		skipSection = false
 	)
 	sc := bufio.NewScanner(bytes.NewReader(content))

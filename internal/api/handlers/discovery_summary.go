@@ -426,7 +426,7 @@ func (h *DiscoverySummaryHandlers) aggregate(ctx context.Context) *SummaryRespon
 		} else {
 			recs := make([]RecentRecommendation, 0, len(events))
 			for _, e := range events {
-				recs = append(recs, RecentRecommendation{
+				recs = append(recs, RecentRecommendation{ //nolint:gosimple // explicit field copy keeps the view model decoupled from ProposalEvent
 					Provider:    e.Provider,
 					Kind:        e.Kind,
 					ResourceID:  e.ResourceID,

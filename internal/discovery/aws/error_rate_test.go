@@ -44,7 +44,7 @@ func (f *cwSumFake) GetMetricStatistics(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	if in.Dimensions == nil || len(in.Dimensions) == 0 || in.Dimensions[0].Value == nil {
+	if len(in.Dimensions) == 0 || in.Dimensions[0].Value == nil {
 		return &cloudwatch.GetMetricStatisticsOutput{}, nil
 	}
 	fnName := *in.Dimensions[0].Value
