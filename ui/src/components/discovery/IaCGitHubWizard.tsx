@@ -50,6 +50,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { WizardProgress } from "./WizardShell";
+
 import {
   type IaCGitHubPreflightRow,
   type IaCGitHubValidateResponse,
@@ -760,28 +762,9 @@ function Header({
   stepCount: number;
 }) {
   return (
-    <div>
+    <div className="space-y-3">
       <h2 className="text-lg font-semibold">Connect an IaC repository</h2>
-      <div
-        className="mt-3 flex items-center gap-2"
-        role="progressbar"
-        aria-valuenow={stepIndex + 1}
-        aria-valuemin={1}
-        aria-valuemax={stepCount}
-      >
-        {Array.from({ length: stepCount }).map((_, i) => (
-          <div
-            key={i}
-            className={cn(
-              "h-2 flex-1 rounded-full",
-              i <= stepIndex ? "bg-primary" : "bg-muted",
-            )}
-          />
-        ))}
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Step {stepIndex + 1} of {stepCount}
-      </p>
+      <WizardProgress stepIndex={stepIndex} stepCount={stepCount} />
     </div>
   );
 }

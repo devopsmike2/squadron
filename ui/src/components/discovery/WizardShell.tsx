@@ -61,20 +61,11 @@ export function WizardShell({
   const isLastStep = stepIndex === stepCount - 1;
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs uppercase tracking-wider text-muted-foreground">
-            Step {stepIndex + 1} of {stepCount}
-          </span>
-          <span className="text-xs text-muted-foreground">{stepTitle}</span>
-        </div>
-        <div className="h-1 w-full rounded bg-muted">
-          <div
-            className="h-1 rounded bg-primary transition-all"
-            style={{ width: `${((stepIndex + 1) / stepCount) * 100}%` }}
-          />
-        </div>
-      </div>
+      <WizardProgress
+        stepIndex={stepIndex}
+        stepCount={stepCount}
+        rightLabel={stepTitle}
+      />
 
       <div className="rounded-lg border bg-card p-6">
         <h3 className="text-base font-semibold">{stepTitle}</h3>
@@ -100,6 +91,55 @@ export function WizardShell({
             Next
           </Button>
         )}
+      </div>
+    </div>
+  );
+}
+
+export interface WizardProgressProps {
+  // 0-based index of the current step.
+  stepIndex: number;
+  // Total number of steps in this provider's flow.
+  stepCount: number;
+  // Optional label rendered to the right of the "Step N of M" caption
+  // (the cloud wizards pass the current step title here; AWS / IaC,
+  // which surface the step title in their own card heading, omit it).
+  rightLabel?: string;
+}
+
+// WizardProgress is the shared step-progress indicator: a "Step N of M"
+// caption plus a single accessible fill bar. Before this every wizard
+// drew its own — the cloud wizards a bar, AWS and IaC a segmented-dot
+// stepper. Unifying on the bar (the flow operators preferred) keeps all
+// five connect wizards visually consistent, and the role="progressbar"
+// + aria-value* attributes give assistive tech a real progress reading
+// the cloud bar previously lacked.
+export function WizardProgress({
+  stepIndex,
+  stepCount,
+  rightLabel,
+}: WizardProgressProps) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">
+          Step {stepIndex + 1} of {stepCount}
+        </span>
+        {rightLabel ? (
+          <span className="text-xs text-muted-foreground">{rightLabel}</span>
+        ) : null}
+      </div>
+      <div
+        className="h-1 w-full rounded bg-muted"
+        role="progressbar"
+        aria-valuenow={stepIndex + 1}
+        aria-valuemin={1}
+        aria-valuemax={stepCount}
+      >
+        <div
+          className="h-1 rounded bg-primary transition-all"
+          style={{ width: `${((stepIndex + 1) / stepCount) * 100}%` }}
+        />
       </div>
     </div>
   );
