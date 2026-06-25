@@ -2192,3 +2192,49 @@ when no access token is available.
 
 Cross-reference:
 [Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
+
+
+## Poison-Rate Substrate Integration SHIPPED in v0.89.180 — slice 4 chunk 3b (Azure Service Bus per-queue attribution, CLOSES §3.2)
+
+Chunk 3b closes the **§3.2 scanner-coverage-gap** for Azure
+Service Bus poison-rate: the rate is now attributed to the
+specific worst-offending queue, not just the namespace
+aggregate that chunk 3a shipped.
+
+The closure uses the `DeadletteredMessages` metric's
+`EntityName` dimension directly — the dimension the §3.2 gap
+named. A single Azure Monitor call with
+`$filter="EntityName eq '*'"` returns one timeseries per
+queue/topic (tagged with its entity name in `metadatavalues`),
+so Squadron computes a per-queue `max(Maximum) - min(Minimum)`
+delta from one call. This deliberately avoids a separate ARM
+per-queue enumeration — the metric dimension split is the
+cleaner reach into the per-queue layer the namespace scanner
+didn't previously touch.
+
+Attribution: `poison_rate_per_hour` now carries the worst
+queue's rate; `poison_rate_high_band` is its `>= 60/hour`
+verdict. Two Detail keys are added when per-queue data exists:
+`poison_rate_worst_queue` (the offending queue name) and
+`poison_rate_measured_queue_count` (how many entities carried
+data). `servicebus-poison-rate-monitor-add` reasoning can now
+name the specific queue an operator should investigate.
+
+Fallback: when Azure returns no per-entity series, the
+enrichment falls back to the chunk-3a namespace-aggregated
+reading (no worst-queue key) — so no capability is lost on
+older API surfaces or namespaces with no per-entity breakdown.
+
+This completes the Azure cloud in the substrate arc (§3.3 in
+3a, §3.2 in 3b). OCI Queue Service is the last remaining cloud,
+on §3.3 honest framing until chunk 4.4.
+
+NO new IAM (the `microsoft.insights` metrics read already
+granted covers the EntityName-split query — splitting is a
+query parameter, not a new permission). NO new webhook prefix.
+Cold-start parity preserved: the enrichment overwrites/adds
+Detail keys only when an access token is wired AND per-entity
+data exists; the unwired path is a byte-identical no-op.
+
+Cross-reference:
+[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).

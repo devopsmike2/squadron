@@ -2699,8 +2699,8 @@ CHUNK 2 (v0.89.178) — GCP Cloud Tasks is now REAL:
   measured rate when poison_rate_per_hour >= 0, else fall back to
   the §3.3 reasoning.
 
-CHUNK 3a (v0.89.179) — Azure Service Bus is now REAL (namespace
-granularity):
+CHUNK 3a/3b (v0.89.179-180) — Azure Service Bus is now REAL
+(per-queue attribution):
 
 - Squadron reads the namespace's DeadletteredMessages gauge and
   derives the poison rate as the max(Maximum) - min(Minimum)
@@ -2711,12 +2711,17 @@ granularity):
 - poison_rate_per_hour now carries the MEASURED namespace-level
   rate; poison_rate_high_band is the real rate >= 60/hour verdict.
   Same real-zero (0) vs absent (-1) contract as AWS + GCP.
-- IMPORTANT SCOPE: chunk 3a is NAMESPACE-AGGREGATED across all
-  queues/topics. It closes §3.3 (real metric) but NOT §3.2
-  (per-queue attribution) — the per-queue EntityName-dimension
-  walk is chunk 3b. Reasoning for servicebus-poison-rate-monitor-add
-  should report the measured rate as a NAMESPACE-level signal, not
-  attribute it to a specific queue, until 3b lands.
+- CHUNK 3b (v0.89.180) closes §3.2 (per-queue attribution): the
+  DeadletteredMessages metric is split by the EntityName dimension,
+  so poison_rate_per_hour now carries the WORST-offending queue's
+  rate and two extra Detail keys are added when per-queue data
+  exists: poison_rate_worst_queue (the queue name) and
+  poison_rate_measured_queue_count. servicebus-poison-rate-monitor-add
+  reasoning SHOULD now name the worst queue (poison_rate_worst_queue)
+  when present — that is the actionable per-queue attribution. When
+  no per-entity data is returned it falls back to the namespace-
+  aggregated reading (no worst-queue key); report it as a
+  namespace-level signal in that case.
 
 STILL §3.3 HONEST FRAMING (do NOT claim measurement):
 

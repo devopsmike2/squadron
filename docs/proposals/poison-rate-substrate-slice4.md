@@ -141,11 +141,15 @@ No new permission.
   NAMESPACE granularity** — Azure Monitor `DeadletteredMessages`
   gauge, rate = max-min delta (net accumulation) over the window.
   Closes §3.3 (real metric). Per-queue attribution deferred.
-- **Chunk 3b: Azure Service Bus per-queue attribution** — adds
-  the per-queue walk so the `DeadletteredMessages` `EntityName`
-  dimension can be filtered per queue. Closes the §3.2
-  scanner-coverage-gap (split from 3a to keep each release clean:
-  a metric path and a scanner extension are separate concerns).
+- **Chunk 3b (v0.89.180): Azure Service Bus per-queue
+  attribution** — splits `DeadletteredMessages` by the
+  `EntityName` dimension (`$filter="EntityName eq '*'"`, one
+  call) to attribute the rate to the worst-offending queue
+  (poison_rate_worst_queue). Closes the §3.2 scanner-coverage-gap
+  via the metric dimension itself — no separate ARM queue
+  enumeration was needed, so the planned scanner walk was
+  unnecessary. Falls back to the 3a namespace reading when no
+  per-entity series is returned.
 - Chunk 4: OCI Queue Service (OCI Monitoring
   dead-letter delivery metric) — CLOSES the substrate arc and
   retires the last §3.3 poison-rate deferral.

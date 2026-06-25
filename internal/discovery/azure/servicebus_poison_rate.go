@@ -172,3 +172,112 @@ func (s *Scanner) enrichServiceBusPoisonRate(ctx context.Context, snaps []scanne
 		detail["poison_rate_high_band"] = res.HighBand
 	}
 }
+
+// --- Poison-rate substrate slice 4 chunk 3b (v0.89.180, #822 Stream
+// 219) — PER-QUEUE attribution that closes the §3.2
+// scanner-coverage-gap. Chunk 3a measured the namespace-aggregated
+// dead-letter delta; chunk 3b splits the same DeadletteredMessages
+// metric by the EntityName dimension (one Azure Monitor call,
+// $filter="EntityName eq '*'") so the poison rate is attributed to
+// the specific worst-offending queue — no separate ARM queue
+// enumeration needed.
+
+// serviceBusWorstQueuePoisonRate is the chunk-3b per-queue attribution
+// result: the worst-offending queue's name + its net dead-letter
+// accumulation rate, plus how many entities carried measurable data.
+type serviceBusWorstQueuePoisonRate struct {
+	WorstQueue     string
+	WorstRatePerHr int
+	MeasuredQueues int
+}
+
+// DetectServiceBusQueuePoisonRate splits the namespace's
+// DeadletteredMessages metric by EntityName and returns the
+// worst-offending queue's poison rate. Closes the §3.2 per-queue
+// attribution gap.
+//
+// MeasuredQueues == 0 means Azure returned no per-entity series (the
+// caller falls back to the namespace-level chunk-3a reading). The
+// real-zero vs absent contract is preserved by the caller via
+// MeasuredQueues.
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3 + §7.
+func (s *Scanner) DetectServiceBusQueuePoisonRate(ctx context.Context, namespaceResourceID string) (serviceBusWorstQueuePoisonRate, error) {
+	perEntity, err := s.queryServiceBusDeadletterPerEntity(
+		ctx, namespaceResourceID,
+		time.Duration(ServiceBusPoisonRateWindowHours)*time.Hour,
+	)
+	if err != nil {
+		return serviceBusWorstQueuePoisonRate{}, fmt.Errorf("per-queue poison-rate query: %w", err)
+	}
+	// MeasuredQueues == 0 (the empty-map case) signals the caller to
+	// fall back to the namespace-level reading; WorstRatePerHr stays
+	// at the absent sentinel.
+	res := serviceBusWorstQueuePoisonRate{WorstRatePerHr: -1}
+	if len(perEntity) == 0 {
+		return res, nil
+	}
+	for queue, rate := range perEntity {
+		res.MeasuredQueues++
+		if res.WorstQueue == "" || rate > res.WorstRatePerHr {
+			res.WorstQueue = queue
+			res.WorstRatePerHr = rate
+		}
+	}
+	return res, nil
+}
+
+// enrichServiceBusPoisonRatePerQueue is the chunk-3b enrichment pass.
+// It supersedes the chunk-3a namespace-level enrichment: for each
+// namespace it attributes the poison rate to the worst-offending
+// queue (via the EntityName split) and records the queue name +
+// measured-queue count. When the per-entity split returns nothing
+// (older API surface, or genuinely no entities), it falls back to the
+// chunk-3a namespace-aggregated reading so no capability is lost.
+//
+//   - accessToken == "" → no-op (cold-start parity).
+//   - poison_rate_per_hour / poison_rate_high_band → worst queue's
+//     rate / band (or the namespace-aggregate on fallback).
+//   - poison_rate_worst_queue / poison_rate_measured_queue_count →
+//     ADDED only when per-entity data exists (enrichment-only keys;
+//     absent on the unwired path, preserving cold-start parity).
+//   - per-namespace query error → snapshot left untouched, continue.
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
+func (s *Scanner) enrichServiceBusPoisonRatePerQueue(ctx context.Context, snaps []scanner.EventSourceInstanceSnapshot, accessToken string) {
+	if accessToken == "" {
+		return
+	}
+	if s.accessToken == "" {
+		s.accessToken = accessToken
+	}
+	for i := range snaps {
+		detail := snaps[i].Detail
+		if detail == nil {
+			continue
+		}
+		arn := snaps[i].ResourceARN
+		if arn == "" {
+			continue
+		}
+		worst, err := s.DetectServiceBusQueuePoisonRate(ctx, arn)
+		if err != nil {
+			continue
+		}
+		if worst.MeasuredQueues == 0 {
+			// No per-entity data — fall back to the chunk-3a
+			// namespace-aggregated reading so Azure still reports a
+			// real metric (or the absent sentinel) at namespace
+			// granularity.
+			if res, ferr := s.DetectServiceBusPoisonRate(ctx, arn); ferr == nil {
+				detail["poison_rate_per_hour"] = res.RatePerHour
+				detail["poison_rate_high_band"] = res.HighBand
+			}
+			continue
+		}
+		detail["poison_rate_per_hour"] = worst.WorstRatePerHr
+		detail["poison_rate_high_band"] = worst.WorstRatePerHr >= ServiceBusPoisonRatePerHourHighThreshold
+		detail["poison_rate_worst_queue"] = worst.WorstQueue
+		detail["poison_rate_measured_queue_count"] = worst.MeasuredQueues
+	}
+}

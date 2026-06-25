@@ -435,6 +435,22 @@ jump straight to that page.
   Same design doc
   ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
 
+  **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
+  attribution.** The `DeadletteredMessages` metric is split by
+  the `EntityName` dimension (one Azure Monitor call,
+  `$filter="EntityName eq '*'"`), so `poison_rate_per_hour` now
+  carries the WORST-offending queue's rate, plus
+  `poison_rate_worst_queue` (the queue name) and
+  `poison_rate_measured_queue_count`. Using the metric dimension
+  the §3.2 gap named is cleaner than a separate ARM per-queue
+  enumeration. Falls back to the chunk-3a namespace-aggregated
+  reading when no per-entity series is returned. This completes
+  Azure in the substrate arc (§3.3 in 3a, §3.2 in 3b); OCI is the
+  last cloud, on §3.3 until chunk 4.4. NO new IAM, NO new webhook
+  prefix; unwired path is a byte-identical no-op (cold-start
+  parity). Same design doc
+  ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
+
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,
