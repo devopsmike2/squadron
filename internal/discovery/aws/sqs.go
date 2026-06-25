@@ -353,6 +353,15 @@ func buildSQSSnapshot(accountID, region string, qa queueAttributes, arnSet map[s
 		}
 	}
 
+	// DLQ configuration analysis slice 1 chunk 1 (v0.89.163, #805
+	// Stream 202) — adds the three DLQ axis Detail keys (has_dlq,
+	// dlq_retry_count, dlq_retry_count_in_band) per
+	// docs/proposals/dlq-configuration-analysis-slice1.md §3 + §4.
+	// ADDITIVE only — none of the slice-4 keys above are modified
+	// here, so callers that have not yet adopted the DLQ axis keys
+	// see byte-identical output to v0.89.162.
+	applySQSDLQDetail(&snap, qa)
+
 	return snap
 }
 
