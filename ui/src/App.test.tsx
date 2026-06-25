@@ -13,6 +13,8 @@ const swrTestConfig = {
   provider: () => new Map(),
   revalidateOnFocus: false,
   revalidateOnReconnect: false,
+  isVisible: () => true,
+  isOnline: () => true,
 };
 const renderApp = () =>
   render(

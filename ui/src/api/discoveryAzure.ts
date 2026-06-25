@@ -21,7 +21,10 @@
 //     counterparts via the shared ./base helpers.
 
 import { apiDelete, apiGet, apiPost } from "./base";
-import type { EventSourceRow } from "./discovery";
+import type {
+  EventSourceRow,
+  GenerateRecommendationsResponse,
+} from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -327,6 +330,18 @@ export interface ScanAzureResponse {
 export function scanAzureConnection(id: string): Promise<ScanAzureResponse> {
   return apiPost<ScanAzureResponse>(
     `/discovery/azure/connections/${encodeURIComponent(id)}/scan`,
+  );
+}
+
+// generateAzureRecommendations asks the discovery proposer to draft an
+// instrumentation plan from an Azure scan result (Provider="azure").
+export function generateAzureRecommendations(
+  connectionID: string,
+  scanResult: ScanAzureResponse,
+): Promise<GenerateRecommendationsResponse> {
+  return apiPost<GenerateRecommendationsResponse>(
+    `/discovery/azure/connections/${encodeURIComponent(connectionID)}/recommendations`,
+    { scan_result: scanResult },
   );
 }
 
