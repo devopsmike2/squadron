@@ -64,11 +64,30 @@ func NewIncidentsHandlers(store applicationstore.ApplicationStore, audit service
 	}
 }
 
+// storeReady guards every handler against a nil store. registerRoutes()
+// runs inside NewServer before main.go wires the application store via
+// SetActionStoreAndSigner, so a handler built eagerly there would hold a
+// nil store; the route wiring now builds handlers lazily (per request) to
+// avoid that, and this is defense-in-depth so a nil store degrades to a
+// clean 503 instead of a nil-pointer panic -> 500. (v0.89.211)
+func (h *IncidentsHandlers) storeReady(c *gin.Context) bool {
+	if h.store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "incidents store not configured",
+		})
+		return false
+	}
+	return true
+}
+
 // HandleListDrafts returns recently-drafted tickets. Supports status
 // filtering via ?status=draft | published | dismissed. Defaults to
 // status=draft so the UI inbox view shows the unhandled items
 // without filtering.
 func (h *IncidentsHandlers) HandleListDrafts(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	status := c.Query("status")
 	if status == "" {
 		status = "draft"
@@ -90,6 +109,9 @@ func (h *IncidentsHandlers) HandleListDrafts(c *gin.Context) {
 
 // HandleGetDraft returns one draft by ID.
 func (h *IncidentsHandlers) HandleGetDraft(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	d, err := h.store.GetIncidentDraft(c.Request.Context(), id)
 	if err != nil {
@@ -115,6 +137,9 @@ type PatchDraftRequest struct {
 // provider, external_id) are stamped by dedicated endpoints below
 // to keep the state machine explicit.
 func (h *IncidentsHandlers) HandlePatchDraft(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	var body PatchDraftRequest
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -151,6 +176,9 @@ func (h *IncidentsHandlers) HandlePatchDraft(c *gin.Context) {
 // audit history; future tooling can purge dismissed drafts older
 // than N days if storage pressure shows up.
 func (h *IncidentsHandlers) HandleDismissDraft(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	existing, err := h.store.GetIncidentDraft(c.Request.Context(), id)
 	if err != nil {
@@ -208,6 +236,9 @@ type PublishDraftRequest struct {
 // will land in a follow-up chunk that calls out to Linear / Jira /
 // GitHub.
 func (h *IncidentsHandlers) HandlePublishDraft(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	var body PublishDraftRequest
 	if err := c.ShouldBindJSON(&body); err != nil {
