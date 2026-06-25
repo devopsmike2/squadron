@@ -6,6 +6,7 @@ package handlers
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -1250,67 +1251,75 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 		c.Request.Context(), h.acceptedAssembler, conn.SubscriptionID, firstRegion(regions), h.logger)
 	aiCtx.VerdictBlock = verdictBlock
 
-	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.Warn("azure generate recommendations: proposer call failed",
-				zap.Error(err), zap.String("subscription_id", conn.SubscriptionID), zap.String("scan_id", aiCtx.ScanID))
+	// v0.89.210 async: run the proposer in a background job (see
+	// docs/proposals/async-recommendations-design.md) and return 202 +
+	// a job_id the UI polls; the call can take 30s-120s+.
+	job := defaultRecommendationJobStore.Create("azure", conn.SubscriptionID)
+	defaultRecommendationJobStore.Run(job.ID, func(ctx context.Context) (json.RawMessage, *scanner.HumanizedError, int) {
+		result, err := h.aiProposer.ProposeFromDiscoveryScan(ctx, aiCtx)
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Warn("azure generate recommendations: proposer call failed",
+					zap.Error(err), zap.String("subscription_id", conn.SubscriptionID), zap.String("scan_id", aiCtx.ScanID))
+			}
+			return nil, &scanner.HumanizedError{
+				Code:    "ProposerCallFailed",
+				Message: "Squadron's AI proposer failed: " + err.Error(),
+			}, http.StatusInternalServerError
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
-			Code:    "ProposerCallFailed",
-			Message: "Squadron's AI proposer failed: " + err.Error(),
-		}})
-		return
-	}
-	if result.Declined {
-		c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
-			Declined:        true,
-			Reason:          result.Reason,
-			Recommendations: []recommendations.Recommendation{},
-		})
-		return
-	}
-
-	now := time.Now().UTC()
-	recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.Error("azure generate recommendations: plan step marshal failed", zap.Error(err))
+		if result.Declined {
+			return marshalRecResult(awsGenerateRecommendationsResponse{
+				Declined:        true,
+				Reason:          result.Reason,
+				Recommendations: []recommendations.Recommendation{},
+			})
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
-			Code:    "PlanStepMarshalFailed",
-			Message: "Squadron could not encode the plan step. The error has been logged.",
-		}})
-		return
-	}
 
-	if h.auditService != nil {
-		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
-			Actor:      services.AuditActorSystem,
-			EventType:  "discovery.azure.recommendations_generated",
-			TargetType: credstore.TargetTypeCloudConnection,
-			TargetID:   conn.ID,
-			Action:     "recommendations_generated",
-			Payload: map[string]any{
-				"connection_id":   conn.ID,
-				"subscription_id": conn.SubscriptionID,
-				"scan_id":         req.ScanResult.ScanID,
-				"step_count":      len(recs),
-				"tokens_in":       result.TokensIn,
-				"tokens_out":      result.TokensOut,
-				"model":           result.Model,
-				"recorded_at":     now,
-			},
+		now := time.Now().UTC()
+		recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Error("azure generate recommendations: plan step marshal failed", zap.Error(err))
+			}
+			return nil, &scanner.HumanizedError{
+				Code:    "PlanStepMarshalFailed",
+				Message: "Squadron could not encode the plan step. The error has been logged.",
+			}, http.StatusInternalServerError
+		}
+
+		if h.auditService != nil {
+			_ = h.auditService.Record(ctx, services.AuditEntry{
+				Actor:      services.AuditActorSystem,
+				EventType:  "discovery.azure.recommendations_generated",
+				TargetType: credstore.TargetTypeCloudConnection,
+				TargetID:   conn.ID,
+				Action:     "recommendations_generated",
+				Payload: map[string]any{
+					"connection_id":   conn.ID,
+					"subscription_id": conn.SubscriptionID,
+					"scan_id":         req.ScanResult.ScanID,
+					"step_count":      len(recs),
+					"tokens_in":       result.TokensIn,
+					"tokens_out":      result.TokensOut,
+					"model":           result.Model,
+					"recorded_at":     now,
+				},
+			})
+		}
+
+		emitDiscoveryProposalCreated(ctx, h.auditService,
+			conn.ID, conn.SubscriptionID, firstRegion(regions), req.ScanResult.ScanID,
+			len(recs), acceptedURLs, acceptedURLsByState)
+
+		return marshalRecResult(awsGenerateRecommendationsResponse{
+			Reasoning:       result.Reasoning,
+			Recommendations: recs,
 		})
-	}
+	})
 
-	emitDiscoveryProposalCreated(c.Request.Context(), h.auditService,
-		conn.ID, conn.SubscriptionID, firstRegion(regions), req.ScanResult.ScanID,
-		len(recs), acceptedURLs, acceptedURLsByState)
-
-	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
-		Reasoning:       result.Reasoning,
-		Recommendations: recs,
+	c.JSON(http.StatusAccepted, recommendationJobAcceptedResponse{
+		JobID:  job.ID,
+		Status: string(RecJobPending),
 	})
 }
 

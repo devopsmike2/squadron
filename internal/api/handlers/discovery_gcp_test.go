@@ -170,7 +170,38 @@ func gcpDoRequest(r http.Handler, method, path, body string) *httptest.ResponseR
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	return w
+	// Async recommendations (v0.89.210): a successful /recommendations
+	// kick-off returns 202 + a job_id; await the job via the shared store
+	// and synthesize the response the synchronous handler used to return,
+	// so existing assertions hold. Non-202 responses pass through.
+	if w.Code != http.StatusAccepted {
+		return w
+	}
+	var acc recommendationJobAcceptedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &acc); err != nil || acc.JobID == "" {
+		return w
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		job, ok := defaultRecommendationJobStore.Get(acc.JobID)
+		if ok && (job.Status == RecJobSucceeded || job.Status == RecJobFailed) {
+			synth := httptest.NewRecorder()
+			synth.Header().Set("Content-Type", "application/json")
+			if job.Status == RecJobSucceeded {
+				synth.Code = http.StatusOK
+				synth.Body.Write(job.ResultJSON)
+			} else {
+				synth.Code = job.HTTPStatus
+				eb, _ := json.Marshal(gin.H{"error": job.Err})
+				synth.Body.Write(eb)
+			}
+			return synth
+		}
+		if time.Now().After(deadline) {
+			return w
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // seedGCPConnection inserts a GCPConnection directly via the store
