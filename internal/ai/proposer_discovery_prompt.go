@@ -2684,16 +2684,29 @@ CHUNK 1 (this release) — AWS SQS is now REAL:
   disclaiming the §3.3 gap. When poison_rate_per_hour = -1, fall
   back to the slice-3 §3.3 honest-framing reasoning.
 
+CHUNK 2 (v0.89.178) — GCP Cloud Tasks is now REAL:
+
+- Squadron reads the queue's FAILED task_attempt_count
+  (response_code != "OK") SUM over a trailing 1-hour window via
+  Cloud Monitoring timeSeries.list. Cloud Tasks has no DLQ
+  primitive, so the failed-delivery-attempt rate is the poison
+  signal — measured on the queue itself (no reachability gate).
+- poison_rate_per_hour now carries the MEASURED failed-attempt
+  rate for Cloud Tasks queues; poison_rate_high_band is the real
+  rate >= 60/hour verdict. Same real-zero (0) vs absent (-1)
+  contract as AWS.
+- cloudtasks-poison-rate-monitor-add reasoning should REPORT the
+  measured rate when poison_rate_per_hour >= 0, else fall back to
+  the §3.3 reasoning.
+
 STILL §3.3 HONEST FRAMING (do NOT claim measurement):
 
-- GCP Cloud Tasks (cloudtasks-poison-rate-monitor-add),
 - Azure Service Bus (servicebus-poison-rate-monitor-add),
 - OCI Queue Service (queues-poison-rate-monitor-add).
 
 These keep poison_rate_per_hour = -1 and the slice-3 reasoning
-until chunks 4.2 / 4.3 / 4.4 land. The mixed state is
-deliberate — the per-cloud traversal is the whole shape of the
-arc.
+until chunks 4.3 / 4.4 land. The mixed state is deliberate —
+the per-cloud traversal is the whole shape of the arc.
 
 NO new IAM (cloudwatch:GetMetricStatistics already granted for
 the Lambda metric paths covers AWS/SQS — the permission is

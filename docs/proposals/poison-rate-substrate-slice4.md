@@ -133,8 +133,10 @@ No new permission.
 ## 7. Chunk map
 
 - **Chunk 1 (this slice, v0.89.177): AWS SQS real detection.**
-- Chunk 2: GCP Cloud Tasks (Cloud Monitoring
-  `task_attempt_count`).
+- **Chunk 2 (v0.89.178): GCP Cloud Tasks real detection** —
+  Cloud Monitoring `task_attempt_count` failed-attempt rate
+  (`response_code != "OK"`), measured on the queue itself (no
+  DLQ primitive).
 - Chunk 3: Azure Service Bus (Azure Monitor
   `DeadletteredMessages`).
 - Chunk 4: OCI Queue Service (OCI Monitoring
