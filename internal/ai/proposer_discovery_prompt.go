@@ -422,6 +422,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	dlqConfigSlice1KindsPromptSection +
 
 	consumerLagSlice2KindsPromptSection +
+	consumerLagSubstrateSlice5KindsPromptSection +
 	poisonRateSlice3KindsPromptSection +
 	poisonRateSubstrateSlice4KindsPromptSection +
 
@@ -2757,6 +2758,52 @@ the Lambda metric paths covers AWS/SQS — the permission is
 namespace-agnostic). NO new webhook prefix. Cold-start parity
 preserved: the enrichment overwrites two existing Detail keys
 and is a no-op when CloudWatch is not wired.
+
+` + "\n"
+
+// consumerLagSubstrateSlice5KindsPromptSection — Consumer-lag
+// substrate integration slice 5 chunk 1 (v0.89.182, #824 Stream 221).
+// Closes the slice-2 consumer-lag honest-framing deferrals via the
+// proven MetricQuerier substrate, one cloud per chunk. Chunk 1 makes
+// the GCP Cloud Tasks BACKLOG axis real.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged.
+const consumerLagSubstrateSlice5KindsPromptSection = `CONSUMER-LAG SUBSTRATE INTEGRATION SLICE 5 — CLOSING THE SLICE-2 LAG DEFERRALS (v0.89.182+):
+
+Consumer lag slice 2 shipped the lag axis across four clouds, but
+GCP Cloud Tasks (§3.1) and Azure Service Bus (§3.2) shipped the
+backlog as honest framing (lag_backlog_depth = -1 always). Slice 5
+closes those deferrals by reading the backlog metric from the
+per-cloud MetricQuerier substrate — the same pattern the poison-rate
+substrate arc used. AWS SQS + OCI Queue Service lag were already
+real in slice 2.
+
+CHUNK 1 (this release) — GCP Cloud Tasks BACKLOG is now REAL:
+
+- Squadron reads cloudtasks.googleapis.com/queue/depth (a gauge:
+  number of tasks in the queue) via Cloud Monitoring with the
+  ALIGN_MAX aligner — the peak backlog over the trailing 1-hour
+  window. lag_backlog_depth now carries the measured peak;
+  lag_backlog_depth_high is the real depth >= 1000 verdict.
+- Same real-zero (0 = empty queue) vs absent (-1 = not measured)
+  contract as the poison-rate arc.
+- cloudtasks-backlog-monitor-add reasoning should REPORT the
+  measured backlog when lag_backlog_depth >= 0, instead of
+  disclaiming the §3.1 gap.
+
+SILENCE AXIS STAYS HONEST-FRAMED (do NOT claim measurement): the
+consumer-silence keys (lag_consumer_silence_seconds /
+lag_consumer_silence_high) stay at -1 for Cloud Tasks — there is no
+clean per-queue oldest-task-age metric. Backlog is the primary lag
+signal; silence remains a documented deferral.
+
+STILL HONEST-FRAMED: Azure Service Bus lag backlog (§3.2) until
+chunk 2 (ActiveMessages per-queue via the EntityName split the
+poison-rate chunk 3b built).
+
+NO new IAM (monitoring.timeSeries.list already granted). NO new
+webhook prefix. Cold-start parity preserved.
 
 ` + "\n"
 

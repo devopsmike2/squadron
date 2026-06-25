@@ -2291,3 +2291,48 @@ a byte-identical no-op otherwise.
 
 Cross-reference:
 [Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
+
+
+## Consumer-Lag Substrate Integration SHIPPED in v0.89.182 — slice 5 chunk 1 (GCP Cloud Tasks backlog real)
+
+A new substrate arc, parallel to the poison-rate substrate
+(slice 4). Consumer lag slice 2 shipped the lag axis across four
+clouds, but GCP Cloud Tasks (§3.1) and Azure Service Bus (§3.2)
+shipped the backlog as honest framing (`lag_backlog_depth = -1`).
+Slice 5 closes those deferrals by reading the backlog metric from
+the per-cloud MetricQuerier substrate the cold-start arc built —
+the same proven pattern, applied to the lag axis.
+
+Chunk 1 makes the **GCP Cloud Tasks backlog real**. Squadron reads
+`cloudtasks.googleapis.com/queue/depth` (a gauge: number of tasks
+in the queue) via Cloud Monitoring with the `ALIGN_MAX` aligner —
+the peak backlog over the trailing 1-hour window. For each Cloud
+Tasks queue, `lag_backlog_depth` is overwritten with the measured
+peak and `lag_backlog_depth_high` with the real `depth >= 1000`
+verdict (matching the AWS + OCI backlog threshold).
+
+Scope — backlog only. The consumer-silence half of the lag axis
+(`lag_consumer_silence_seconds` / `lag_consumer_silence_high`)
+stays honest-framed (`-1`) for Cloud Tasks: there is no clean
+per-queue oldest-task-age metric the way SQS exposes
+`ApproximateAgeOfOldestMessage`. Backlog is the primary lag signal
+operators act on, so this closes the operationally important half;
+silence remains a documented deferral.
+
+Same real-zero versus absent contract: a measured `0` is a genuine
+"empty queue" reading; `-1` strictly means "not measured" (queue
+too new, no datapoints, metric client unwired, or a metric-name
+mismatch — which degrades safely to `-1`, never false data).
+`cloudtasks-backlog-monitor-add` reasoning now reports the measured
+backlog instead of disclaiming the §3.1 gap. Azure Service Bus lag
+backlog stays §3.2 honest-framed until chunk 2 (`ActiveMessages`
+per-queue via the EntityName split the poison-rate chunk 3b built).
+
+NO new IAM (`monitoring.timeSeries.list` already granted). NO new
+webhook prefix. Cold-start parity preserved: the enrichment
+overwrites the two backlog keys only when Cloud Monitoring is
+wired AND datapoints exist, and is a byte-identical no-op
+otherwise.
+
+Cross-reference:
+[Consumer-lag substrate integration slice 5 design doc](./proposals/consumer-lag-substrate-slice5.md).

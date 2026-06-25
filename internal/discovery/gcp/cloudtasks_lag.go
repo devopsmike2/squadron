@@ -4,6 +4,10 @@
 package gcp
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )
 
@@ -107,4 +111,96 @@ func applyCloudTasksLagDetail(snap *scanner.EventSourceInstanceSnapshot, q *clou
 	snap.Detail["lag_backlog_depth_high"] = res.BacklogDepthHigh
 	snap.Detail["lag_consumer_silence_seconds"] = res.ConsumerSilenceSeconds
 	snap.Detail["lag_consumer_silence_high"] = res.ConsumerSilenceHigh
+}
+
+// --- Consumer-lag substrate slice 5 chunk 1 (v0.89.182, #824 Stream
+// 221) — REAL Cloud Monitoring-backed BACKLOG detection that closes
+// the GCP §3.1 consumer-lag deferral. The honest-framing
+// detectCloudTasksLag above stays as the projection-time default
+// (cold-start parity for the unwired path); the enrichment below
+// overwrites the two BACKLOG keys with real readings when Cloud
+// Monitoring is wired. The two SILENCE keys stay honest-framed —
+// Cloud Tasks exposes no clean per-queue oldest-task-age metric, so
+// silence remains a documented deferral (design doc §2).
+
+// CloudTasksBacklogDepthHighThreshold is the inclusive lower bound
+// (tasks in queue) that flips lag_backlog_depth_high to true. 1000
+// mirrors the AWS BacklogDepthHighThreshold + OCI
+// OCIBacklogDepthHighThreshold for cross-cloud consistency.
+const CloudTasksBacklogDepthHighThreshold = 1000
+
+// CloudTasksBacklogWindowHours is the trailing window over which the
+// peak queue depth is read (ALIGN_MAX). 1 hour gives the recent peak
+// backlog — a queue that spiked in the last hour is backing up.
+const CloudTasksBacklogWindowHours = 1
+
+// DetectCloudTasksBacklog reads the queue's peak depth
+// (cloudtasks.googleapis.com/queue/depth, gauge) over the trailing
+// CloudTasksBacklogWindowHours window via the GCP MetricQuerier
+// substrate. This is the REAL detection that replaces the slice 2
+// §3.1 honest-framing absent sentinel for the Cloud Tasks BACKLOG
+// axis.
+//
+// Returns (depth, sampleCount). sampleCount==0 means Cloud Monitoring
+// returned no datapoints (queue too new / metric-name mismatch) — the
+// caller keeps the honest-framing absent sentinel (-1). A non-empty
+// series with depth 0 is a real "empty queue" reading.
+//
+// queueResourceName is the Cloud Tasks queue resource name
+// ("projects/{p}/locations/{l}/queues/{q}", the snapshot ResourceARN).
+//
+// See docs/proposals/consumer-lag-substrate-slice5.md §3.
+func (s *Scanner) DetectCloudTasksBacklog(ctx context.Context, queueResourceName string) (depth, sampleCount int, err error) {
+	res, qerr := s.QueryAggregate(
+		ctx, queueResourceName, CloudTasksQueueDepthMetricType,
+		time.Duration(CloudTasksBacklogWindowHours)*time.Hour,
+		scanner.StatisticP95, // routing keys on metric name; gauge path ignores stat
+	)
+	if qerr != nil {
+		return 0, 0, fmt.Errorf("backlog metric query: %w", qerr)
+	}
+	if res.SampleCount == 0 {
+		return -1, 0, nil
+	}
+	return int(res.Value), res.SampleCount, nil
+}
+
+// enrichCloudTasksLag is the post-projection enrichment pass that
+// overwrites the honest-framing BACKLOG lag keys with real Cloud
+// Monitoring readings. Mirrors the poison-rate enrichment posture:
+// nil-tolerant on metricsClient, per-row failures swallowed.
+//
+//   - metricsClient == nil → no-op (cold-start parity).
+//   - overwrites lag_backlog_depth + lag_backlog_depth_high only.
+//     The two SILENCE keys (lag_consumer_silence_seconds /
+//     lag_consumer_silence_high) are left at their honest-framing -1
+//     — Cloud Tasks has no per-queue oldest-task-age metric (design
+//     doc §2 deferral).
+//   - per-queue query error leaves the snapshot untouched, continues.
+//
+// See docs/proposals/consumer-lag-substrate-slice5.md §3-§5.
+func (s *Scanner) enrichCloudTasksLag(ctx context.Context, snaps []scanner.EventSourceInstanceSnapshot) {
+	if s.metricsClient == nil {
+		return
+	}
+	for i := range snaps {
+		detail := snaps[i].Detail
+		if detail == nil {
+			continue
+		}
+		arn := snaps[i].ResourceARN
+		if arn == "" {
+			continue
+		}
+		depth, samples, err := s.DetectCloudTasksBacklog(ctx, arn)
+		if err != nil {
+			continue
+		}
+		if samples == 0 {
+			// No datapoints — keep the honest-framing absent sentinel.
+			continue
+		}
+		detail["lag_backlog_depth"] = depth
+		detail["lag_backlog_depth_high"] = depth >= CloudTasksBacklogDepthHighThreshold
+	}
 }

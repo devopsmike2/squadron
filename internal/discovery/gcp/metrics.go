@@ -156,6 +156,20 @@ const CloudFunctionsExecutionCountErrorMetricType = "cloudfunctions.googleapis.c
 // metrics_test.go::TestCloudTasksTaskAttemptCountMetricType_Constant.
 const CloudTasksTaskAttemptCountMetricType = "cloudtasks.googleapis.com/queue/task_attempt_count"
 
+// CloudTasksQueueDepthMetricType is the Cloud Monitoring metric type
+// for Cloud Tasks queue depth (number of tasks currently in the
+// queue). Consumer-lag substrate slice 5 chunk 1 (v0.89.182) reads
+// this GAUGE to compute the real backlog depth that consumer-lag
+// slice 2 shipped as §3.1 honest-framing absent sentinel.
+//
+// Routed as a GAUGE (ALIGN_MAX aligner + MAX cross-period rollup =
+// peak backlog over the window), distinct from the count metrics
+// (poison-rate / sampling-rate) that use ALIGN_DELTA + SUM. The same
+// monitoring.timeSeries.list permission covers it — no new IAM.
+// Pinned to "cloudtasks.googleapis.com/queue/depth" by
+// cloudtasks_lag_substrate_test.go::TestCloudTasksQueueDepthMetricType_Constant.
+const CloudTasksQueueDepthMetricType = "cloudtasks.googleapis.com/queue/depth"
+
 // cloudMonitoringMetricUnit is the unit string the slice 2
 // substrate stamps on the AggregateMetricResult.Unit field for
 // Cloud Run / Cloud Functions latency metrics. Both surfaces emit
@@ -279,6 +293,11 @@ func (s *Scanner) QueryAggregate(
 	// + Cloud Functions; the latency metrics keep their MAX
 	// rollup so cross-cloud comparisons stay honest.
 	isCountMetric := false
+	// isGaugeMetric flips the per-period aligner to ALIGN_MAX (peak
+	// gauge value per period) while keeping the MAX cross-period
+	// rollup the latency path uses. Consumer-lag substrate slice 5
+	// chunk 1 (v0.89.182) uses it for Cloud Tasks queue/depth.
+	isGaugeMetric := false
 	switch metricName {
 	case CloudRunRequestLatenciesMetricType:
 		if kind != "services" {
@@ -386,6 +405,24 @@ func (s *Scanner) QueryAggregate(
 			`metric.type = %q AND resource.labels.function_name = %q AND metric.labels.status != "ok"`,
 			CloudFunctionsExecutionCountMetricType, name)
 		isCountMetric = true
+	case CloudTasksQueueDepthMetricType:
+		// Consumer-lag substrate slice 5 chunk 1 (v0.89.182). Cloud
+		// Tasks queue depth is a gauge scoped to the queue_id; the
+		// peak depth over the window is the backlog signal. No
+		// dimension filter beyond queue_id (unlike the failed-attempt
+		// poison-rate path, depth counts ALL queued tasks).
+		if kind != "queues" {
+			return scanner.AggregateMetricResult{
+				ResourceARN: resourceARN,
+				MetricName:  metricName,
+				Window:      window,
+				Statistic:   stat,
+			}, nil
+		}
+		filter = fmt.Sprintf(
+			`metric.type = %q AND resource.labels.queue_id = %q`,
+			CloudTasksQueueDepthMetricType, name)
+		isGaugeMetric = true
 	case CloudTasksTaskAttemptCountMetricType:
 		// Poison-rate substrate slice 4 chunk 2 (v0.89.178) §3. The
 		// Cloud Tasks queue resource name parses to kind "queues";
@@ -435,6 +472,12 @@ func (s *Scanner) QueryAggregate(
 		// Mirrors the AWS Statistics=["Sum"] choice for Lambda
 		// Invocations.
 		statStr = "ALIGN_DELTA"
+	}
+	if isGaugeMetric {
+		// Gauge metrics align to the per-period peak (ALIGN_MAX); the
+		// non-count MAX cross-period rollup below then takes the peak
+		// across periods = peak backlog over the window.
+		statStr = "ALIGN_MAX"
 	}
 
 	points, err := s.metricsClient.QueryTimeSeries(
@@ -487,7 +530,7 @@ func (s *Scanner) QueryAggregate(
 	// Latency surfaces report "ms"; count surfaces are unitless
 	// (the chunk-2 detection branch treats the count value as
 	// dimensionless when computing the observed/expected ratio).
-	if isCountMetric {
+	if isCountMetric || isGaugeMetric {
 		result.Unit = ""
 	} else {
 		result.Unit = cloudMonitoringMetricUnit

@@ -452,6 +452,22 @@ jump straight to that page.
   prefixes; every chunk preserves cold-start parity. Design doc
   ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
 
+  **Consumer-Lag Substrate Integration slice 5 (v0.89.182+)** is a
+  parallel substrate arc that closes the consumer-lag slice-2
+  honest-framing deferrals (GCP Cloud Tasks §3.1, Azure Service Bus
+  §3.2) by reading the backlog metric from the same MetricQuerier
+  substrate. **Chunk 1 (v0.89.182) makes the GCP Cloud Tasks backlog
+  real:** Squadron reads `cloudtasks.googleapis.com/queue/depth` (a
+  gauge) via Cloud Monitoring with the `ALIGN_MAX` aligner — the
+  peak backlog over a trailing 1-hour window — and overwrites
+  `lag_backlog_depth` + `lag_backlog_depth_high` (threshold 1000,
+  matching AWS + OCI). The consumer-silence half stays honest-framed
+  (no clean Cloud Tasks oldest-task-age metric). Azure Service Bus
+  backlog lands in chunk 2 (`ActiveMessages` per-queue via the
+  EntityName split). NO new IAM, NO new webhook prefix; unwired path
+  is a byte-identical no-op (cold-start parity). Design doc at
+  [proposals/consumer-lag-substrate-slice5.md](./proposals/consumer-lag-substrate-slice5.md).
+
   **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
   attribution.** The `DeadletteredMessages` metric is split by
   the `EntityName` dimension (one Azure Monitor call,
