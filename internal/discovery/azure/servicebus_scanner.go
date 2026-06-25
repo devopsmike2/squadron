@@ -154,15 +154,26 @@ func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope)
 		all = append(all, topics...)
 	}
 
-	// Two-way partial-scan posture: only return an error when BOTH
-	// surfaces failed. Any single-surface failure is silenced at this
-	// layer so an IAM gap on one surface doesn't drop the inventory
-	// the operator actually CAN see on the other. Tests 11 + 12 of
-	// the slice 6 design doc pin both single-failure directions; test
-	// 13 pins the both-fail path's error string mentioning both
-	// surface identifiers.
-	if sbErr != nil && egErr != nil {
-		return all, fmt.Errorf("all azure event source surfaces failed: servicebus=%v eventgrid=%w", sbErr, egErr)
+	// Slice 8 chunk 1 (v0.89.153, #795 Stream 192) extends the
+	// dispatcher to three-way (Service Bus + Event Grid + Event Hubs).
+	// Event Hubs is Azure's analytics + telemetry intake primitive
+	// (partitioned log), distinct from the messaging primitives.
+	// See docs/proposals/event-source-tier-slice8.md §5.
+	hubs, ehErr := s.scanEventHubsForDispatcher(ctx, token, accountID)
+	if ehErr == nil {
+		all = append(all, hubs...)
+	}
+
+	// Three-way partial-scan posture: only return an error when ALL
+	// THREE surfaces failed. Any one- OR two-surface failure is
+	// silenced at this layer so an IAM gap on one or two surfaces
+	// doesn't drop the inventory the operator actually CAN see on
+	// the remaining surface(s). Combinatorial single-failure paths
+	// are pinned by slice 8 acceptance tests 11 + 12 + 13; the
+	// two-of-three failure path is pinned by test 14; the
+	// all-three-fail error-string contract by test 15.
+	if sbErr != nil && egErr != nil && ehErr != nil {
+		return all, fmt.Errorf("all azure event source surfaces failed: servicebus=%v eventgrid=%v eventhubs=%w", sbErr, egErr, ehErr)
 	}
 
 	return all, nil
