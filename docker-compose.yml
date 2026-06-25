@@ -42,6 +42,22 @@ services:
       # .env). Empty when not set — squadron logs AI as disabled
       # at startup and the UI hides AI affordances.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Discovery credential substrate (v0.85). Seals stored cloud-
+      # connection secrets (AWS external-id, GCP SA JSON, GitHub PAT) at
+      # rest; must base64-decode to exactly 32 bytes (AES-256). A built-in
+      # DEV default is set so the connect-account + discovery flow works
+      # out of the box. OVERRIDE it for anything real — set
+      # SQUADRON_SECRETS_KEY in your shell or repo-root .env:
+      #   head -c 32 /dev/urandom | base64
+      - SQUADRON_SECRETS_KEY=${SQUADRON_SECRETS_KEY:-c3F1YWRyb24tbG9jYWwtZGV2LWtleS1jaGFuZ2UtbWU=}
+      # AWS credentials for discovery's assume-role into a connected
+      # account (the base identity that assumes the SquadronDiscovery
+      # role). Passed through from your shell / .env when set; leave
+      # unset if you're not connecting an AWS account yet.
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
