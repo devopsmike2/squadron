@@ -36,6 +36,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
+import { WizardProgress } from "./WizardShell";
+
 import {
   type ConnectorWizard as ConnectorWizardDef,
   type HumanizedError,
@@ -51,7 +53,6 @@ import {
   AWS_TRUST_POLICY_ROOT_NOTE,
   AWS_TRUST_POLICY_TEMPLATE,
 } from "@/data/awsWizard";
-import { cn } from "@/lib/utils";
 
 export interface ConnectorWizardProps {
   wizard: ConnectorWizardDef;
@@ -387,29 +388,10 @@ export function ConnectorWizard({
 
   return (
     <div className="space-y-6">
-      {/* Header — progress bar + title */}
-      <div>
+      {/* Header — title + shared progress indicator */}
+      <div className="space-y-3">
         <h2 className="text-lg font-semibold">{wizard.title}</h2>
-        <div
-          className="mt-3 flex items-center gap-2"
-          role="progressbar"
-          aria-valuenow={stepIndex + 1}
-          aria-valuemin={1}
-          aria-valuemax={stepCount}
-        >
-          {wizard.steps.map((s, i) => (
-            <div
-              key={s.id}
-              className={cn(
-                "h-2 flex-1 rounded-full",
-                i <= stepIndex ? "bg-primary" : "bg-muted",
-              )}
-            />
-          ))}
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Step {stepIndex + 1} of {stepCount}
-        </p>
+        <WizardProgress stepIndex={stepIndex} stepCount={stepCount} />
       </div>
 
       {/* Body — current step */}
