@@ -238,11 +238,11 @@ type RolloutTracer interface {
 // LintFindings is always non-nil so the UI can rely on .length without
 // a null check.
 type RolloutPreview struct {
-	GroupID         string              `json:"group_id"`
-	Current         *Config             `json:"current,omitempty"`
-	Target          *Config             `json:"target"`
-	Diff            configdiff.Result   `json:"diff"`
-	LintFindings    []configlint.Finding `json:"lint_findings"`
+	GroupID      string               `json:"group_id"`
+	Current      *Config              `json:"current,omitempty"`
+	Target       *Config              `json:"target"`
+	Diff         configdiff.Result    `json:"diff"`
+	LintFindings []configlint.Finding `json:"lint_findings"`
 }
 
 // RolloutState mirrors applicationstore.RolloutState so consumers don't
@@ -357,9 +357,9 @@ type Rollout struct {
 	// the approval drawer and audit log, and the SIEM fan-out
 	// includes them in every audit event so external systems can
 	// reconstruct the full chain. Squadron Move 1.
-	ProposedBy        string         `json:"proposed_by,omitempty"`
-	ProposalReasoning string         `json:"proposal_reasoning,omitempty"`
-	EvidenceRefs      []EvidenceRef  `json:"evidence_refs,omitempty"`
+	ProposedBy        string        `json:"proposed_by,omitempty"`
+	ProposalReasoning string        `json:"proposal_reasoning,omitempty"`
+	EvidenceRefs      []EvidenceRef `json:"evidence_refs,omitempty"`
 
 	// v0.60 — operator initiated rollback. Set when this rollout was
 	// created by clicking "Roll back" on a previous rollout. The

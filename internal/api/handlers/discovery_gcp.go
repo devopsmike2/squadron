@@ -160,14 +160,14 @@ type gcpCreateConnectionRequest struct {
 //
 // Per design doc §6: the body carries display_name, project_id,
 // base64-encoded SA JSON, and region. The handler:
-//   1. Validates the request shape (400 on missing fields, on
-//      malformed base64, on invalid project_id format, on a SA JSON
-//      whose client_email doesn't end in .iam.gserviceaccount.com).
-//   2. Seals the SA JSON via credstore.SealGCPServiceAccount.
-//   3. Persists the row via store.Create.
-//   4. Emits discovery.gcp.connection_created.
-//   5. Returns 201 with the connection JSON (SealedSA is suppressed by
-//      the json:"-" tag — never appears in the response).
+//  1. Validates the request shape (400 on missing fields, on
+//     malformed base64, on invalid project_id format, on a SA JSON
+//     whose client_email doesn't end in .iam.gserviceaccount.com).
+//  2. Seals the SA JSON via credstore.SealGCPServiceAccount.
+//  3. Persists the row via store.Create.
+//  4. Emits discovery.gcp.connection_created.
+//  5. Returns 201 with the connection JSON (SealedSA is suppressed by
+//     the json:"-" tag — never appears in the response).
 func (h *DiscoveryGCPHandlers) HandleCreateGCPConnection(c *gin.Context) {
 	var req gcpCreateConnectionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

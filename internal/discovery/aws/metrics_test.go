@@ -149,13 +149,13 @@ func TestScannerSatisfiesMetricQuerier(t *testing.T) {
 // can return a canned response, simulate a throttle storm, or count
 // calls for the rate-limiter pin.
 type cwFake struct {
-	mu              sync.Mutex
-	calls           int
-	throttleFirstN  int
-	respondWith     *cloudwatch.GetMetricStatisticsOutput
-	respondErr      error
-	respondPerCall  func(int, *cloudwatch.GetMetricStatisticsInput) (*cloudwatch.GetMetricStatisticsOutput, error)
-	receivedInputs  []*cloudwatch.GetMetricStatisticsInput
+	mu             sync.Mutex
+	calls          int
+	throttleFirstN int
+	respondWith    *cloudwatch.GetMetricStatisticsOutput
+	respondErr     error
+	respondPerCall func(int, *cloudwatch.GetMetricStatisticsInput) (*cloudwatch.GetMetricStatisticsOutput, error)
+	receivedInputs []*cloudwatch.GetMetricStatisticsInput
 }
 
 func (f *cwFake) GetMetricStatistics(
@@ -185,10 +185,10 @@ func (f *cwFake) GetMetricStatistics(
 // error code that isCloudWatchThrottleError flips the retry path on.
 type cwThrottleErr struct{}
 
-func (e *cwThrottleErr) Error() string                            { return "ThrottlingException: rate exceeded" }
-func (e *cwThrottleErr) ErrorCode() string                        { return "ThrottlingException" }
-func (e *cwThrottleErr) ErrorMessage() string                     { return "rate exceeded" }
-func (e *cwThrottleErr) ErrorFault() smithy.ErrorFault            { return smithy.FaultClient }
+func (e *cwThrottleErr) Error() string                 { return "ThrottlingException: rate exceeded" }
+func (e *cwThrottleErr) ErrorCode() string             { return "ThrottlingException" }
+func (e *cwThrottleErr) ErrorMessage() string          { return "rate exceeded" }
+func (e *cwThrottleErr) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
 // newMetricsTestScannerWithCW wires the cwFake plus the default
 // 10-RPS rate limiter onto a validation-shaped Scanner. The

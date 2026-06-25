@@ -30,12 +30,12 @@ type armWebSiteListResponse struct {
 // nil and the runtime extraction falls through to empty without
 // panicking on a missing field.
 type armWebSite struct {
-	ID         string             `json:"id"`
-	Name       string             `json:"name"`
-	Location   string             `json:"location"`
-	Kind       string             `json:"kind"`
-	Tags       map[string]string  `json:"tags,omitempty"`
-	Properties *armWebSiteProps   `json:"properties,omitempty"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Location   string            `json:"location"`
+	Kind       string            `json:"kind"`
+	Tags       map[string]string `json:"tags,omitempty"`
+	Properties *armWebSiteProps  `json:"properties,omitempty"`
 }
 
 // armWebSiteProps is the bare JSON shape of the Microsoft.Web/sites

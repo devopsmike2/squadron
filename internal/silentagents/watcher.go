@@ -100,15 +100,15 @@ const (
 // alerting payloads carry rule_id / rule_name; ours carry agent
 // metadata.
 type Event struct {
-	Kind         string            `json:"kind"`           // "silent_agent"
-	State        string            `json:"state"`          // "firing" or "resolved"
-	AgentID      string            `json:"agent_id,omitempty"`
-	Hostname     string            `json:"hostname"`
-	Source       string            `json:"source,omitempty"`
-	Labels       map[string]string `json:"labels,omitempty"`
-	LastSeen     time.Time         `json:"last_seen"`
-	SilenceFor   string            `json:"silence_for"` // human-readable duration
-	At           time.Time         `json:"at"`
+	Kind       string            `json:"kind"`  // "silent_agent"
+	State      string            `json:"state"` // "firing" or "resolved"
+	AgentID    string            `json:"agent_id,omitempty"`
+	Hostname   string            `json:"hostname"`
+	Source     string            `json:"source,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	LastSeen   time.Time         `json:"last_seen"`
+	SilenceFor string            `json:"silence_for"` // human-readable duration
+	At         time.Time         `json:"at"`
 }
 
 // New constructs a watcher with the given config. Use DefaultConfig

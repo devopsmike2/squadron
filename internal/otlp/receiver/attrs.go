@@ -25,7 +25,7 @@ import (
 //   - StringValue → as-is
 //   - IntValue    → base-10 decimal
 //   - DoubleValue → strconv.FormatFloat 'g' precision -1 (shortest
-//                   round-trippable representation)
+//     round-trippable representation)
 //   - BoolValue   → "true" / "false"
 //   - ArrayValue, KvListValue → SKIPPED. Slice 1's six-tier keying
 //     chain (design doc §3) consumes only scalar identifiers

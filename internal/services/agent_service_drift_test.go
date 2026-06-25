@@ -18,8 +18,8 @@ import (
 // to assert that a transition counter was fired.
 type recordingCounter struct{ n int64 }
 
-func (c *recordingCounter) Inc(v int64)   { atomic.AddInt64(&c.n, v) }
-func (c *recordingCounter) Value() int64  { return atomic.LoadInt64(&c.n) }
+func (c *recordingCounter) Inc(v int64)  { atomic.AddInt64(&c.n, v) }
+func (c *recordingCounter) Value() int64 { return atomic.LoadInt64(&c.n) }
 
 // recordingGauge is a metrics.Gauge that remembers the last value set on it.
 type recordingGauge struct{ v int64 }
@@ -93,9 +93,9 @@ func TestAgentServiceConfigDriftDetection(t *testing.T) {
 // the correct transition counter when an agent's drift status changes.
 //
 // Scenario:
-//   1. Agent created, intent stored, effective set to match -> synced.
-//   2. Effective changed to a different config -> drifted (TransitionsToDrifted increments).
-//   3. Effective changed back to match intent -> synced (TransitionsToSynced increments).
+//  1. Agent created, intent stored, effective set to match -> synced.
+//  2. Effective changed to a different config -> drifted (TransitionsToDrifted increments).
+//  3. Effective changed back to match intent -> synced (TransitionsToSynced increments).
 func TestDriftTransitionCounters(t *testing.T) {
 	store := memory.NewStore()
 	logger := zap.NewNop()

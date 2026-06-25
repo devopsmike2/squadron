@@ -35,22 +35,22 @@ import (
 //
 //   - exceeds_floor=true + exceeds_minimum_invocations=true
 //     → would_fire_recommendation=true (the trigger fires; ratio is
-//       below 5% AND the resource has enough invocations to be
-//       statistically meaningful)
+//     below 5% AND the resource has enough invocations to be
+//     statistically meaningful)
 //
 //   - exceeds_floor=true + exceeds_minimum_invocations=false
 //     → would_fire_recommendation=false (the ratio is below 5% but
-//       the invocation count is below the 1000 statistical noise
-//       floor; the percentage isn't trustworthy)
+//     the invocation count is below the 1000 statistical noise
+//     floor; the percentage isn't trustworthy)
 //
 //   - exceeds_floor=false + exceeds_minimum_invocations=true
 //     → would_fire_recommendation=false (enough invocations, but
-//       sampling ratio is at or above 5% — within the acceptable
-//       band)
+//     sampling ratio is at or above 5% — within the acceptable
+//     band)
 //
 //   - exceeds_floor=false + exceeds_minimum_invocations=false
 //     → would_fire_recommendation=false (insufficient data AND
-//       ratio above floor; double-negative no-fire)
+//     ratio above floor; double-negative no-fire)
 //
 // The UI's amber-color logic reads would_fire_recommendation; the
 // per-resource drill-down tooltip surfaces the two underlying

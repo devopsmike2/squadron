@@ -25,9 +25,9 @@ import (
 type fakeAzureServiceBus struct {
 	mu sync.Mutex
 
-	Namespaces             []armServiceBusNamespace
-	DiagSettingsByNS       map[string]armServiceBusDiagnosticSettingsResponse
-	NamespacesPages        []armServiceBusNamespaceListResponse
+	Namespaces       []armServiceBusNamespace
+	DiagSettingsByNS map[string]armServiceBusDiagnosticSettingsResponse
+	NamespacesPages  []armServiceBusNamespaceListResponse
 
 	// Failure-injection knobs.
 	NamespacesListStatus int
@@ -35,10 +35,10 @@ type fakeAzureServiceBus struct {
 	DiagSettings404ForNS map[string]bool
 
 	// Call counters for assertions.
-	TokenCalls         int
-	NamespacesCalls    int
-	DiagSettingsCalls  int
-	LastBearer         string
+	TokenCalls        int
+	NamespacesCalls   int
+	DiagSettingsCalls int
+	LastBearer        string
 }
 
 func newFakeAzureServiceBus() *fakeAzureServiceBus {

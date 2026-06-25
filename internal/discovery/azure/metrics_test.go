@@ -98,9 +98,9 @@ func TestAzureQueryAggregate_NoAccessToken_ReturnsNotImplemented(t *testing.T) {
 // and either returns the canned response or invokes responder for
 // per-request decisions (filter-vs-unfiltered branching).
 type fakeAzureMetrics struct {
-	mu             sync.Mutex
-	calls          int32
-	receivedReqs   []*http.Request
+	mu              sync.Mutex
+	calls           int32
+	receivedReqs    []*http.Request
 	receivedFilters []string
 	// responder is invoked per request; nil → return cannedResponse
 	// with cannedStatus.

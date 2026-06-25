@@ -5,15 +5,15 @@
 //
 // Endpoint shape:
 //
-//   POST   /api/v1/runners/register             enroll a new runner
-//   GET    /api/v1/runners                      list runners
-//   GET    /api/v1/runners/:id                  one runner
-//   POST   /api/v1/runners/:id/revoke           revoke a runner
-//   GET    /api/v1/runners/:id/pending          runner polls for work
-//   POST   /api/v1/actions/dispatch             sign + persist a request
-//   GET    /api/v1/actions                      list requests
-//   GET    /api/v1/actions/:id                  one request
-//   POST   /api/v1/actions/:id/result           runner posts result
+//	POST   /api/v1/runners/register             enroll a new runner
+//	GET    /api/v1/runners                      list runners
+//	GET    /api/v1/runners/:id                  one runner
+//	POST   /api/v1/runners/:id/revoke           revoke a runner
+//	GET    /api/v1/runners/:id/pending          runner polls for work
+//	POST   /api/v1/actions/dispatch             sign + persist a request
+//	GET    /api/v1/actions                      list requests
+//	GET    /api/v1/actions/:id                  one request
+//	POST   /api/v1/actions/:id/result           runner posts result
 //
 // Auth posture: read endpoints require actions:read, mutating
 // endpoints require actions:write. The runner daemon authenticates
@@ -318,12 +318,12 @@ func (h *ActionsHandlers) HandleDispatchAction(c *gin.Context) {
 			TargetID:   reqID,
 			Action:     "dispatched",
 			Payload: map[string]any{
-				"runner_id":   req.RunnerID,
-				"proposal_id": req.ProposalID,
-				"action_type": req.ActionType,
-				"phase":       string(phase),
-				"issued_at":   signedReq.IssuedAt,
-				"expires_at":  signedReq.ExpiresAt,
+				"runner_id":         req.RunnerID,
+				"proposal_id":       req.ProposalID,
+				"action_type":       req.ActionType,
+				"phase":             string(phase),
+				"issued_at":         signedReq.IssuedAt,
+				"expires_at":        signedReq.ExpiresAt,
 				"parameters_sha256": sha256Hex(string(req.Parameters)),
 			},
 		})

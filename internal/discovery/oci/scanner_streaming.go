@@ -115,11 +115,11 @@ const providerOCIEventSource = "oci"
 // Pagination follows the opc-next-page response header (see
 // listStreamsAll below).
 type ociStream struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	CompartmentID     string `json:"compartmentId"`
-	LifecycleState    string `json:"lifecycleState"`
-	RetentionInHours  int    `json:"retentionInHours"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	CompartmentID    string `json:"compartmentId"`
+	LifecycleState   string `json:"lifecycleState"`
+	RetentionInHours int    `json:"retentionInHours"`
 }
 
 // ociStreamList is the JSON envelope returned by the Streaming
@@ -149,9 +149,9 @@ type ociStreamList = []ociStream
 // still returns the full list and the scanner side-checks each
 // entry's Source.Resource against the target stream OCID.
 type ociLogResource struct {
-	ID            string                   `json:"id"`
-	DisplayName   string                   `json:"displayName"`
-	Configuration ociLogConfiguration      `json:"configuration"`
+	ID            string              `json:"id"`
+	DisplayName   string              `json:"displayName"`
+	Configuration ociLogConfiguration `json:"configuration"`
 }
 
 // ociLogConfiguration is the nested config block on an OCI Logging
@@ -477,6 +477,7 @@ func (s *Scanner) listLogsForStream(ctx context.Context, sk *SigningKey, compart
 //   - listLogsForStream  (slice 1 chunk 4, v0.89.101c)
 //   - listLogsForTopic   (slice 7 chunk 1, v0.89.150)
 //   - listLogsForQueue   (slice 9 chunk 1, v0.89.156)
+//
 // All three were character-identical except for the parameter name.
 // Slice 11 collapses them into this single shared implementation
 // keyed off the generic resourceOCID parameter; the three original

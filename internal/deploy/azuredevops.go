@@ -35,7 +35,7 @@ const AzureDevOpsBaseURL = "https://dev.azure.com"
 //
 //   - GitHubOwner    → Azure DevOps "organization" (the URL segment)
 //   - GitHubRepo     → Azure DevOps "project" (or "project/repo" if
-//                       the repo name differs from the project)
+//     the repo name differs from the project)
 //   - GitHubWorkflow → Azure DevOps "pipeline ID" as a string
 //   - GitHubBranch   → branch to dispatch on
 //
@@ -148,7 +148,7 @@ type adoLinks struct {
 
 func (r adoRunResponse) toRunStatus() *RunStatus {
 	return &RunStatus{
-		GitHubRunID:  r.ID,        // shared shape — UI labels this neutrally
+		GitHubRunID:  r.ID, // shared shape — UI labels this neutrally
 		GitHubRunURL: r.Links.Web.Href,
 		Status:       mapADOState(r.State),
 		Conclusion:   mapADOResult(r.Result),
@@ -189,7 +189,8 @@ func mapADOResult(s string) string {
 //
 // API: POST https://dev.azure.com/{org}/{project}/_apis/pipelines/{pipelineId}/runs?api-version=7.1
 // Body: { "resources": { "repositories": { "self": { "refName": "refs/heads/<branch>" } } },
-//         "templateParameters": { ...inputs... } }
+//
+//	"templateParameters": { ...inputs... } }
 //
 // Returns the run ID synchronously — unlike GitHub Actions, Azure
 // DevOps gives you the run identifier in the response body, so the

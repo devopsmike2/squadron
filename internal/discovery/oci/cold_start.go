@@ -319,13 +319,13 @@ func (s *Scanner) persistColdStartObservation(
 	result *scanner.Result,
 ) {
 	snapshotJSON, err := json.Marshal(map[string]any{
-		"resource_arn":            snap.ResourceARN,
-		"metric_name":             OCIFunctionsFunctionDurationMetric,
-		"window_hours":            windowHours,
-		"statistic":               string(scanner.StatisticP95),
-		"value":                   p95Ms,
-		"sample_count":            sampleCount,
-		"observed_at":             detection.ObservedAt,
+		"resource_arn":             snap.ResourceARN,
+		"metric_name":              OCIFunctionsFunctionDurationMetric,
+		"window_hours":             windowHours,
+		"statistic":                string(scanner.StatisticP95),
+		"value":                    p95Ms,
+		"sample_count":             sampleCount,
+		"observed_at":              detection.ObservedAt,
 		"current_cold_start_count": detection.CurrentColdStartCount,
 	})
 	if err != nil {

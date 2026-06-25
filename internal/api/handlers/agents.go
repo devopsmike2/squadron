@@ -147,7 +147,7 @@ var validDriftFilters = map[string]services.ConfigDriftStatus{
 //   - status       = online | offline | error
 //   - group_id     = UUID — agents with this exact group_id
 //   - q            = free-text — substring match against name + label
-//                    key=value pairs (case-insensitive)
+//     key=value pairs (case-insensitive)
 //   - offset       = integer >= 0, default 0
 //   - limit        = integer 1..500, default 100
 //

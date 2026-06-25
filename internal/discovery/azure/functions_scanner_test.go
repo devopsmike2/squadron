@@ -347,7 +347,7 @@ func TestFunctionAppScanner_FunctionWithNeitherDistro_NoOTelDistro(t *testing.T)
 	}
 	// Other app_settings present but none of the load-bearing keys.
 	fake.SettingsBySite["fn-bare"] = map[string]string{
-		"FUNCTIONS_EXTENSION_VERSION": "~4",
+		"FUNCTIONS_EXTENSION_VERSION":  "~4",
 		"WEBSITE_NODE_DEFAULT_VERSION": "~18",
 	}
 
@@ -716,10 +716,10 @@ func TestProjectFunctionApp_DetectionMatrix(t *testing.T) {
 	// future refactor that reorders the rule or swaps the
 	// short-circuit can't regress the contract silently.
 	cases := []struct {
-		name             string
-		settings         map[string]string
-		wantTraceAxis    bool
-		wantOTelDistro   bool
+		name           string
+		settings       map[string]string
+		wantTraceAxis  bool
+		wantOTelDistro bool
 	}{
 		{
 			name:           "empty",

@@ -85,14 +85,14 @@ type KV struct {
 // many agents fall into each bucket. The Dashboard shows this as
 // a stacked bar; the Fleet Map colorizes nodes by it.
 type FleetSummary struct {
-	Total     int                  `json:"total"`
-	Healthy   int                  `json:"healthy"`
-	Degraded  int                  `json:"degraded"`
-	Broken    int                  `json:"broken"`
-	Unknown   int                  `json:"unknown"`
-	PerAgent  map[string]Verdict   `json:"per_agent"`
-	UpdatedAt time.Time            `json:"updated_at"`
-	Concerns  []string             `json:"concerns,omitempty"` // top 5 worst-offender agent IDs
+	Total     int                `json:"total"`
+	Healthy   int                `json:"healthy"`
+	Degraded  int                `json:"degraded"`
+	Broken    int                `json:"broken"`
+	Unknown   int                `json:"unknown"`
+	PerAgent  map[string]Verdict `json:"per_agent"`
+	UpdatedAt time.Time          `json:"updated_at"`
+	Concerns  []string           `json:"concerns,omitempty"` // top 5 worst-offender agent IDs
 	_         map[string]AgentSnapshot
 }
 

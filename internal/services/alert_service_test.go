@@ -72,9 +72,9 @@ func TestAlertService_ValidationRejectsBadInput(t *testing.T) {
 	ctx := context.Background()
 
 	cases := []struct {
-		name    string
-		mutate  func(*AlertRuleInput)
-		errSub  string
+		name   string
+		mutate func(*AlertRuleInput)
+		errSub string
 	}{
 		{"empty name", func(i *AlertRuleInput) { i.Name = "" }, "name is required"},
 		{"empty query", func(i *AlertRuleInput) { i.Query = "" }, "query is required"},

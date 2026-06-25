@@ -78,7 +78,7 @@ type pubsubliteTopic struct {
 }
 
 type pubsubliteTopicPartitionConfig struct {
-	Count    int                              `json:"count,omitempty"`
+	Count    int                               `json:"count,omitempty"`
 	Capacity *pubsubliteTopicPartitionCapacity `json:"capacity,omitempty"`
 }
 

@@ -33,9 +33,9 @@ import (
 	"net/http"
 	"strings"
 
-	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
+	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )

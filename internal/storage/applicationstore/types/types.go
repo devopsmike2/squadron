@@ -451,13 +451,14 @@ type ExpectedAgent struct {
 // against the latest insights snapshot.
 //
 // Status lifecycle:
-//   pending      → just created, no observation yet
-//   realized     → observed byte rate dropped below baseline; savings active
-//   not_observed → 24h+ since apply, byte rate hasn't dropped (operator
-//                  may have decided not to roll out, or the rollout
-//                  hasn't reached the affected agents yet)
-//   reverted     → observed byte rate is back near baseline AFTER once
-//                  being realized (rollback or config drift)
+//
+//	pending      → just created, no observation yet
+//	realized     → observed byte rate dropped below baseline; savings active
+//	not_observed → 24h+ since apply, byte rate hasn't dropped (operator
+//	               may have decided not to roll out, or the rollout
+//	               hasn't reached the affected agents yet)
+//	reverted     → observed byte rate is back near baseline AFTER once
+//	               being realized (rollback or config drift)
 type RecommendationOutcome struct {
 	ID               string    `json:"id"`
 	RecommendationID string    `json:"recommendation_id"` // engine's deterministic hash
@@ -494,8 +495,8 @@ type RecommendationDismissal struct {
 	// fleet shape → same ID across runs, so this lookup is stable.
 	RecommendationID string    `json:"recommendation_id"`
 	DismissedAt      time.Time `json:"dismissed_at"`
-	DismissedBy      string    `json:"dismissed_by"`        // actor identifier ("operator:email", "system", etc.)
-	Reason           string    `json:"reason,omitempty"`    // optional free-text reason
+	DismissedBy      string    `json:"dismissed_by"`     // actor identifier ("operator:email", "system", etc.)
+	Reason           string    `json:"reason,omitempty"` // optional free-text reason
 }
 
 // APIToken is one issued bearer token. Plaintext token values are NEVER
@@ -517,9 +518,9 @@ type RecommendationDismissal struct {
 // rejected by the new middleware after upgrade.
 type APIToken struct {
 	ID         string     `json:"id"`
-	Label      string     `json:"label"`      // human-readable, operator-supplied
-	Hash       string     `json:"-"`          // sha256 hex; NEVER in JSON responses
-	Scopes     []string   `json:"scopes"`     // empty = legacy full-access token
+	Label      string     `json:"label"`  // human-readable, operator-supplied
+	Hash       string     `json:"-"`      // sha256 hex; NEVER in JSON responses
+	Scopes     []string   `json:"scopes"` // empty = legacy full-access token
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
@@ -651,9 +652,9 @@ type Rollout struct {
 	// ProposedBy MUST be one of: "operator", "ai", "system".
 	// Service-layer validation enforces this; storage allows any
 	// string for forward compatibility with future origins.
-	ProposedBy         string                 `json:"proposed_by,omitempty"`
-	ProposalReasoning  string                 `json:"proposal_reasoning,omitempty"`
-	EvidenceRefs       []RolloutEvidenceRef   `json:"evidence_refs,omitempty"`
+	ProposedBy        string               `json:"proposed_by,omitempty"`
+	ProposalReasoning string               `json:"proposal_reasoning,omitempty"`
+	EvidenceRefs      []RolloutEvidenceRef `json:"evidence_refs,omitempty"`
 
 	// v0.60 — operator initiated rollback. When this rollout was
 	// created by clicking "Roll back" on a previous rollout, this
@@ -769,23 +770,23 @@ type RolloutFilter struct {
 // forcing a schema migration every time we add a new event type.
 type AuditEvent struct {
 	ID         string         `json:"id"`
-	Timestamp  time.Time      `json:"timestamp"`            // when the event happened
-	Actor      string         `json:"actor"`                // "system" | "operator:<email>" | "agent:<id>" | "opamp"
-	EventType  string         `json:"event_type"`           // dotted name, e.g. "config.applied"
-	TargetType string         `json:"target_type"`          // "agent" | "group" | "config" | "rule"
-	TargetID   string         `json:"target_id,omitempty"`  // affected entity id; may be empty for fleet-wide events
-	Action     string         `json:"action"`               // "created" | "updated" | "deleted" | "applied" | "drift" | ...
-	Payload    map[string]any `json:"payload,omitempty"`    // freeform JSON metadata
-	CreatedAt  time.Time      `json:"created_at"`           // when the row was inserted
+	Timestamp  time.Time      `json:"timestamp"`           // when the event happened
+	Actor      string         `json:"actor"`               // "system" | "operator:<email>" | "agent:<id>" | "opamp"
+	EventType  string         `json:"event_type"`          // dotted name, e.g. "config.applied"
+	TargetType string         `json:"target_type"`         // "agent" | "group" | "config" | "rule"
+	TargetID   string         `json:"target_id,omitempty"` // affected entity id; may be empty for fleet-wide events
+	Action     string         `json:"action"`              // "created" | "updated" | "deleted" | "applied" | "drift" | ...
+	Payload    map[string]any `json:"payload,omitempty"`   // freeform JSON metadata
+	CreatedAt  time.Time      `json:"created_at"`          // when the row was inserted
 
 	// v0.57 — cached AI explanation of this audit row. Populated lazily
 	// the first time an operator clicks "Explain" on the row in the UI.
 	// Audit rows are immutable so a cached explanation never goes stale
 	// in the data sense; operators can still force a refresh via the
 	// regenerate endpoint when they want a different angle.
-	AIExplanation             string     `json:"ai_explanation,omitempty"`
-	AIExplanationModel        string     `json:"ai_explanation_model,omitempty"`
-	AIExplanationGeneratedAt  *time.Time `json:"ai_explanation_generated_at,omitempty"`
+	AIExplanation            string     `json:"ai_explanation,omitempty"`
+	AIExplanationModel       string     `json:"ai_explanation_model,omitempty"`
+	AIExplanationGeneratedAt *time.Time `json:"ai_explanation_generated_at,omitempty"`
 }
 
 // AuditEventFilter narrows a ListAuditEvents query.
@@ -793,7 +794,7 @@ type AuditEvent struct {
 // All fields are optional. An empty filter returns the most recent events
 // across the whole fleet (subject to Limit).
 type AuditEventFilter struct {
-	EventType  string    // exact-match on dotted event_type; empty disables the filter
+	EventType  string // exact-match on dotted event_type; empty disables the filter
 	TargetType string
 	TargetID   string
 	Since      time.Time // events with Timestamp >= Since; zero value disables the filter
@@ -1055,13 +1056,13 @@ type ConfigFilter struct {
 
 // SavedQuery represents a saved Squadron QL query
 type SavedQuery struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Query       string   `json:"query"`
-	Tags        []string `json:"tags"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Query       string    `json:"query"`
+	Tags        []string  `json:"tags"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // CostSpikeEvent records a detected anomaly in the fleet's
@@ -1126,18 +1127,18 @@ type CostSpikeFilter struct {
 //
 // Added in v0.50 for compliance-grade audit retention.
 type SiemDestination struct {
-	ID                     string     `json:"id"`
-	Name                   string     `json:"name"`
-	Type                   string     `json:"type"`
-	URL                    string     `json:"url"`
-	Secret                 []byte     `json:"-"` // ciphertext
-	Enabled                bool       `json:"enabled"`
-	EventTypePrefixesJSON  string     `json:"event_type_prefixes_json,omitempty"`
-	LastEventSentAt        *time.Time `json:"last_event_sent_at,omitempty"`
-	LastError              string     `json:"last_error,omitempty"`
-	LastErrorAt            *time.Time `json:"last_error_at,omitempty"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
+	ID                    string     `json:"id"`
+	Name                  string     `json:"name"`
+	Type                  string     `json:"type"`
+	URL                   string     `json:"url"`
+	Secret                []byte     `json:"-"` // ciphertext
+	Enabled               bool       `json:"enabled"`
+	EventTypePrefixesJSON string     `json:"event_type_prefixes_json,omitempty"`
+	LastEventSentAt       *time.Time `json:"last_event_sent_at,omitempty"`
+	LastError             string     `json:"last_error,omitempty"`
+	LastErrorAt           *time.Time `json:"last_error_at,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 // ActionRunnerRegistration is one installed squadron-action-runner
@@ -1219,18 +1220,18 @@ type ActionRequestFilter struct {
 // One draft per action is the default; the bridge dedups on
 // ActionRequestID so flapping does not flood the inbox.
 type IncidentDraft struct {
-	ID                string `json:"id"`
-	ActionRequestID   string `json:"action_request_id,omitempty"`
-	RolloutID         string `json:"rollout_id,omitempty"`
-	Status            string `json:"status"` // draft | published | dismissed
-	Title             string `json:"title"`
-	BodyMarkdown      string `json:"body_markdown"`
-	DraftContentJSON  string `json:"draft_content_json,omitempty"`
-	Provider          string `json:"provider,omitempty"`     // clipboard | github | linear | jira | generic
-	ExternalID        string `json:"external_id,omitempty"`  // set on publish
-	ExternalURL       string `json:"external_url,omitempty"` // set on publish
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	ActionRequestID  string    `json:"action_request_id,omitempty"`
+	RolloutID        string    `json:"rollout_id,omitempty"`
+	Status           string    `json:"status"` // draft | published | dismissed
+	Title            string    `json:"title"`
+	BodyMarkdown     string    `json:"body_markdown"`
+	DraftContentJSON string    `json:"draft_content_json,omitempty"`
+	Provider         string    `json:"provider,omitempty"`     // clipboard | github | linear | jira | generic
+	ExternalID       string    `json:"external_id,omitempty"`  // set on publish
+	ExternalURL      string    `json:"external_url,omitempty"` // set on publish
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // IncidentDraftFilter narrows a List query.

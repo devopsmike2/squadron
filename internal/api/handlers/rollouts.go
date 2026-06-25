@@ -498,9 +498,9 @@ type CreatePlanRequest struct {
 // plus the steps in step-index order so clients can render the plan
 // immediately without a follow up GET.
 type CreatePlanResponse struct {
-	PlanID string                `json:"plan_id"`
-	Steps  []*services.Rollout   `json:"steps"`
-	Count  int                   `json:"count"`
+	PlanID string              `json:"plan_id"`
+	Steps  []*services.Rollout `json:"steps"`
+	Count  int                 `json:"count"`
 }
 
 // HandleGetPlan serves GET /api/v1/rollouts/plans/:id.

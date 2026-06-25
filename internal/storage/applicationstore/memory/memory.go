@@ -118,18 +118,18 @@ type webhookDeliveryRecord struct {
 // NewStore creates a new in-memory store
 func NewStore() *Store {
 	return &Store{
-		agents:        make(map[uuid.UUID]*types.Agent),
-		groups:        make(map[string]*types.Group),
-		configs:       make(map[string]*types.Config),
-		savedQueries:  make(map[string]*types.SavedQuery),
-		alertRules:    make(map[string]*types.AlertRule),
-		auditEvents:   make([]*types.AuditEvent, 0, 64),
-		rollouts:      make(map[string]*types.Rollout),
-		apiTokens:     make(map[string]*types.APIToken),
-		recDismissals: make(map[string]*types.RecommendationDismissal),
-		recOutcomes:   make(map[string]*types.RecommendationOutcome),
-		costSpikes:    make(map[string]*types.CostSpikeEvent),
-		expectedAgents: make(map[string]*types.ExpectedAgent),
+		agents:           make(map[uuid.UUID]*types.Agent),
+		groups:           make(map[string]*types.Group),
+		configs:          make(map[string]*types.Config),
+		savedQueries:     make(map[string]*types.SavedQuery),
+		alertRules:       make(map[string]*types.AlertRule),
+		auditEvents:      make([]*types.AuditEvent, 0, 64),
+		rollouts:         make(map[string]*types.Rollout),
+		apiTokens:        make(map[string]*types.APIToken),
+		recDismissals:    make(map[string]*types.RecommendationDismissal),
+		recOutcomes:      make(map[string]*types.RecommendationOutcome),
+		costSpikes:       make(map[string]*types.CostSpikeEvent),
+		expectedAgents:   make(map[string]*types.ExpectedAgent),
 		deployTargets:    make(map[string]*types.DeployTarget),
 		deployRuns:       make(map[string]*types.DeployRun),
 		siemDestinations: make(map[string]*types.SiemDestination),
@@ -566,7 +566,6 @@ func (s *Store) CreateSavedQuery(ctx context.Context, query *types.SavedQuery) e
 	s.savedQueries[query.ID] = &queryCopy
 	return nil
 }
-
 
 func (s *Store) GetSavedQuery(ctx context.Context, id string) (*types.SavedQuery, error) {
 	s.mu.RLock()

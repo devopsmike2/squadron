@@ -196,12 +196,12 @@ const (
 	//     empty when no connection matches the repo). Token bytes
 	//     and webhook-secret bytes NEVER in payload; the HMAC is
 	//     validated and discarded before this row is written.
-	AuditEventIaCGitHubConnectionCreated     = "iac.github.connection_created"
-	AuditEventIaCGitHubConnectionValidated   = "iac.github.connection_validated"
-	AuditEventIaCGitHubPlacementMapUpdated   = "iac.github.placement_map_updated"
-	AuditEventRecommendationPROpened         = "recommendation.pr_opened"
-	AuditEventRecommendationPROpenFailed     = "recommendation.pr_open_failed"
-	AuditEventRecommendationPRMerged         = "recommendation.pr_merged"
+	AuditEventIaCGitHubConnectionCreated   = "iac.github.connection_created"
+	AuditEventIaCGitHubConnectionValidated = "iac.github.connection_validated"
+	AuditEventIaCGitHubPlacementMapUpdated = "iac.github.placement_map_updated"
+	AuditEventRecommendationPROpened       = "recommendation.pr_opened"
+	AuditEventRecommendationPROpenFailed   = "recommendation.pr_open_failed"
+	AuditEventRecommendationPRMerged       = "recommendation.pr_merged"
 
 	// AuditEventRecommendationPRClosedNotMerged — v0.89.36 (#655
 	// Stream 53, #531 slice 2 chunk 3) — recorded by the
@@ -305,7 +305,7 @@ const (
 	//
 	// See docs/proposals/531-proposer-learning-slice2.md §9 (b) and
 	// §10 contract item 8.
-	AuditEventDiscoveryRecommendationExcluded      = "discovery_recommendation.excluded"
+	AuditEventDiscoveryRecommendationExcluded       = "discovery_recommendation.excluded"
 	AuditEventDiscoveryRecommendationExcludeCleared = "discovery_recommendation.exclude_cleared"
 
 	// v0.89.42 (#662 Stream 60, slice 1 chunk 1 of the GitHub Checks
@@ -418,11 +418,11 @@ const (
 	//     existing verdict-learning loop without schema changes).
 	//
 	// See docs/proposals/gcp-discovery-slice1.md §10 contract item 6.
-	AuditEventDiscoveryGCPConnectionCreated      = "discovery.gcp.connection_created"
-	AuditEventDiscoveryGCPConnectionDeleted      = "discovery.gcp.connection_deleted"
-	AuditEventDiscoveryGCPScanStarted            = "discovery.gcp.scan_started"
-	AuditEventDiscoveryGCPScanCompleted          = "discovery.gcp.scan_completed"
-	AuditEventDiscoveryGCPScanFailed             = "discovery.gcp.scan_failed"
+	AuditEventDiscoveryGCPConnectionCreated        = "discovery.gcp.connection_created"
+	AuditEventDiscoveryGCPConnectionDeleted        = "discovery.gcp.connection_deleted"
+	AuditEventDiscoveryGCPScanStarted              = "discovery.gcp.scan_started"
+	AuditEventDiscoveryGCPScanCompleted            = "discovery.gcp.scan_completed"
+	AuditEventDiscoveryGCPScanFailed               = "discovery.gcp.scan_failed"
 	AuditEventDiscoveryGCPRecommendationsGenerated = "discovery.gcp.recommendations_generated"
 
 	// v0.89.51 (#674 Stream 72, Azure discovery slice 1 chunk 1) —

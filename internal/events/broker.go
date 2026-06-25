@@ -46,11 +46,11 @@ type Event struct {
 
 // Subscription holds a subscriber's channel and bookkeeping.
 type Subscription struct {
-	ch       chan Event
-	dropped  atomic.Int64
-	closed   atomic.Bool
-	unsubFn  func()
-	bufSize  int
+	ch      chan Event
+	dropped atomic.Int64
+	closed  atomic.Bool
+	unsubFn func()
+	bufSize int
 }
 
 // Events returns the receive-only channel. Callers should drain it

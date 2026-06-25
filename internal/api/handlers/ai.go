@@ -122,17 +122,17 @@ func (h *AIHandlers) HandleRemediateLint(c *gin.Context) {
 // without JSON tags) so the UI can POST a clean request without
 // coupling to internal field layout. v0.84 (Arc C slice 3).
 type ProposerPreviewRequest struct {
-	SpikeID              string   `json:"spike_id"`
-	Signal               string   `json:"signal"`
-	Severity             string   `json:"severity"`
-	BaselineMonthlyUSD   float64  `json:"baseline_monthly_usd"`
-	PeakMonthlyUSD       float64  `json:"peak_monthly_usd"`
-	PeakPctAboveBaseline float64  `json:"peak_pct_above_baseline"`
-	TopAgents            []string `json:"top_agents"`
-	TopAttributes        []string `json:"top_attributes"`
-	GroupID              string   `json:"group_id"`
-	GroupName            string   `json:"group_name"`
-	RecentLintFindings   []string `json:"recent_lint_findings"`
+	SpikeID               string   `json:"spike_id"`
+	Signal                string   `json:"signal"`
+	Severity              string   `json:"severity"`
+	BaselineMonthlyUSD    float64  `json:"baseline_monthly_usd"`
+	PeakMonthlyUSD        float64  `json:"peak_monthly_usd"`
+	PeakPctAboveBaseline  float64  `json:"peak_pct_above_baseline"`
+	TopAgents             []string `json:"top_agents"`
+	TopAttributes         []string `json:"top_attributes"`
+	GroupID               string   `json:"group_id"`
+	GroupName             string   `json:"group_name"`
+	RecentLintFindings    []string `json:"recent_lint_findings"`
 	RecentRecommendations []string `json:"recent_recommendations"`
 }
 
@@ -165,17 +165,17 @@ func (h *AIHandlers) HandleProposerPreview(c *gin.Context) {
 		return
 	}
 	ctx := ai.CostSpikeContext{
-		SpikeID:              req.SpikeID,
-		Signal:               req.Signal,
-		Severity:             req.Severity,
-		BaselineMonthlyUSD:   req.BaselineMonthlyUSD,
-		PeakMonthlyUSD:       req.PeakMonthlyUSD,
-		PeakPctAboveBaseline: req.PeakPctAboveBaseline,
-		TopAgents:            req.TopAgents,
-		TopAttributes:        req.TopAttributes,
-		GroupID:              req.GroupID,
-		GroupName:            req.GroupName,
-		RecentLintFindings:   req.RecentLintFindings,
+		SpikeID:               req.SpikeID,
+		Signal:                req.Signal,
+		Severity:              req.Severity,
+		BaselineMonthlyUSD:    req.BaselineMonthlyUSD,
+		PeakMonthlyUSD:        req.PeakMonthlyUSD,
+		PeakPctAboveBaseline:  req.PeakPctAboveBaseline,
+		TopAgents:             req.TopAgents,
+		TopAttributes:         req.TopAttributes,
+		GroupID:               req.GroupID,
+		GroupName:             req.GroupName,
+		RecentLintFindings:    req.RecentLintFindings,
 		RecentRecommendations: req.RecentRecommendations,
 	}
 	result, err := h.svc.ProposeFromCostSpike(c.Request.Context(), ctx)

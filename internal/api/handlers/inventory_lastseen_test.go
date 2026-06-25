@@ -127,7 +127,7 @@ type awsLastSeenRow struct {
 func TestAWSScan_LastSeenAt_PopulatedFromTraceIndex(t *testing.T) {
 	now := time.Date(2026, 6, 23, 14, 32, 0, 0, time.UTC)
 	lookup := &stubLookup{values: map[string]time.Time{
-		"aws:" + awsAccount + ":i-aaa":            now,
+		"aws:" + awsAccount + ":i-aaa":                 now,
 		"aws:" + awsAccount + ":db:postgresql:db-prod": now.Add(-5 * time.Minute),
 		"aws:" + awsAccount + ":k8s:prod-cluster":      now.Add(-1 * time.Hour),
 	}}
@@ -335,9 +335,9 @@ func TestGCPScan_LastSeenAt_NilTraceIndex_StillWorks(t *testing.T) {
 func TestAzureScan_LastSeenAt_PopulatedFromTraceIndex(t *testing.T) {
 	now := time.Date(2026, 6, 23, 14, 32, 0, 0, time.UTC)
 	lookup := &stubLookup{values: map[string]time.Time{
-		"azure:" + azureTestSubscriptionID + ":vm-prod":             now,
-		"azure:" + azureTestSubscriptionID + ":db:mssql:az-sql-db":  now,
-		"azure:" + azureTestSubscriptionID + ":k8s:aks-prod":        now,
+		"azure:" + azureTestSubscriptionID + ":vm-prod":            now,
+		"azure:" + azureTestSubscriptionID + ":db:mssql:az-sql-db": now,
+		"azure:" + azureTestSubscriptionID + ":k8s:aks-prod":       now,
 	}}
 	fs := &fakeAzureScanner{result: &scanner.Result{
 		ScanID: "scan-az",

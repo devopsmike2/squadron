@@ -107,13 +107,13 @@ func TestInventoryAnnotation_NullWhenNoObservation(t *testing.T) {
 func TestInventoryAnnotation_ExceedsThresholdReflectsAllGates(t *testing.T) {
 	arn := "arn:test"
 	cases := []struct {
-		name        string
-		currentErr  int
-		currentInv  int
-		currentRate float64
+		name         string
+		currentErr   int
+		currentInv   int
+		currentRate  float64
 		baselineRate float64
-		baselineOK  bool
-		want        bool
+		baselineOK   bool
+		want         bool
 	}{
 		{"3x_ratio_3000_invocations_90_errors_FIRES", 90, 3000, 0.03, 0.01, true, true},
 		{"1.9x_ratio_does_not_fire", 60, 3000, 0.02, 0.0106, true, false},

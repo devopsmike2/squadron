@@ -1263,6 +1263,7 @@ func discoveryProposalByStateTitle(payload map[string]any) string {
 // two shapes the audit pipeline produces:
 //   - map[string]any with []any (JSON-round-tripped payloads),
 //   - map[string][]string (in-process emits that bypass JSON).
+//
 // Returns nil for anything else so the humanizer falls through
 // gracefully on malformed rows.
 func payloadByStateMap(raw any) map[string]int {

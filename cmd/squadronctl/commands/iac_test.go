@@ -375,12 +375,12 @@ func TestIacConnect_PATNeverEchoedToStdout(t *testing.T) {
 	// Wizard input: PAT, repo, layout default, branch default,
 	// prefix default, reviewer default, 8 placement skips, save? y.
 	stdin := strings.Join([]string{
-		fakeToken,    // PAT
-		"acme/infra", // repo
-		"",           // layout (default multi)
-		"",           // default branch
-		"",           // branch prefix
-		"",           // reviewer team
+		fakeToken,                          // PAT
+		"acme/infra",                       // repo
+		"",                                 // layout (default multi)
+		"",                                 // default branch
+		"",                                 // branch prefix
+		"",                                 // reviewer team
 		"", "", "", "", "", "", "", "", "", // 9 placement rows (all skipped)
 		"y", // save?
 		"",

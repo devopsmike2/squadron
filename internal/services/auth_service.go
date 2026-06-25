@@ -48,18 +48,18 @@ type AuthService interface {
 // in AllScopes (so the UI picker can show it), and adding the
 // middleware.RequireScope("...") to every protected route that needs it.
 const (
-	ScopeWildcard       = "*"
-	ScopeAgentsRead     = "agents:read"
-	ScopeAgentsWrite    = "agents:write"
-	ScopeGroupsRead     = "groups:read"
-	ScopeGroupsWrite    = "groups:write"
-	ScopeConfigsRead    = "configs:read"
-	ScopeConfigsWrite   = "configs:write"
-	ScopeTelemetryRead  = "telemetry:read"
-	ScopeAlertsRead     = "alerts:read"
-	ScopeAlertsWrite    = "alerts:write"
-	ScopeRolloutsRead   = "rollouts:read"
-	ScopeRolloutsWrite  = "rollouts:write"
+	ScopeWildcard      = "*"
+	ScopeAgentsRead    = "agents:read"
+	ScopeAgentsWrite   = "agents:write"
+	ScopeGroupsRead    = "groups:read"
+	ScopeGroupsWrite   = "groups:write"
+	ScopeConfigsRead   = "configs:read"
+	ScopeConfigsWrite  = "configs:write"
+	ScopeTelemetryRead = "telemetry:read"
+	ScopeAlertsRead    = "alerts:read"
+	ScopeAlertsWrite   = "alerts:write"
+	ScopeRolloutsRead  = "rollouts:read"
+	ScopeRolloutsWrite = "rollouts:write"
 	// v0.48 — separation of duties for approval workflows.
 	// rollouts:write covers Create/Abort/Pause/Resume; the new
 	// rollouts:approve covers Approve/Reject. Splitting these
@@ -71,16 +71,16 @@ const (
 	// both — the runtime two-person rule still blocks
 	// self-approval based on the persisted RequestedBy.
 	ScopeRolloutsApprove = "rollouts:approve"
-	ScopeAuditRead      = "audit:read"
-	ScopeAuthRead       = "auth:read"
-	ScopeAuthWrite      = "auth:write"
+	ScopeAuditRead       = "audit:read"
+	ScopeAuthRead        = "auth:read"
+	ScopeAuthWrite       = "auth:write"
 	// v0.34 deploy integration. Deploy:read shows targets + run
 	// history; deploy:trigger is what's required to actually fire
 	// a workflow on the operator's behalf — guarded narrowly so
 	// rotating a write-only token doesn't accidentally regrant
 	// deploy authority.
-	ScopeDeployRead     = "deploy:read"
-	ScopeDeployTrigger  = "deploy:trigger"
+	ScopeDeployRead    = "deploy:read"
+	ScopeDeployTrigger = "deploy:trigger"
 	// v0.50 — SIEM destination management. siem:read returns the
 	// list and per-destination view (no plaintext secrets, ever).
 	// siem:write covers create / update / delete / test. Sized

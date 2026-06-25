@@ -851,10 +851,14 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 // from a Squadron-shaped branch name.
 //
 // The v0.89.28 branch encoding is
-//   "<prefix><kind>/<account_id>/<region>/<short_id>"
+//
+//	"<prefix><kind>/<account_id>/<region>/<short_id>"
+//
 // where prefix is the trailing-slash variant ("squadron/rec/"). Older
 // branches that pre-date the encoding extension are
-//   "<prefix><kind>/<short_id>"
+//
+//	"<prefix><kind>/<short_id>"
+//
 // (no account_id / region segments); the parser accepts both shapes
 // so a webhook fired against a PR opened on the previous release
 // still parses the kind cleanly. account_id and region come back
@@ -870,6 +874,7 @@ func parseRecommendationKindFromBranch(branch, prefix string) (string, bool) {
 //   - 6-segment shape
 //     "squadron/rec/<kind>/<account_id>/<region>/<short_id>" →
 //     (kind, account_id, region, true)
+//
 // providerFromRecommendationKind — v0.89.48 (#671 Stream 69, GCP
 // discovery slice 1 chunk 5). Maps a recommendation kind to the
 // provider that owns it. GCP kinds carry the "gce-" prefix today

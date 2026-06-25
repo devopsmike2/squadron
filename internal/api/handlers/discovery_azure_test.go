@@ -93,13 +93,13 @@ func (f *fakeAzureScanner) Validate(_ context.Context, _ *credstore.CloudConnect
 // bytes the handler passed so tests can assert the unseal happened
 // end-to-end without poking at credstore internals.
 type fakeAzureScannerFactory struct {
-	scanner          *fakeAzureScanner
-	buildErr         error
-	gotClientSecret  []byte
-	gotSubscription  string
-	gotTenant        string
-	gotClient        string
-	buildCall        int
+	scanner         *fakeAzureScanner
+	buildErr        error
+	gotClientSecret []byte
+	gotSubscription string
+	gotTenant       string
+	gotClient       string
+	buildCall       int
 }
 
 func (f *fakeAzureScannerFactory) Build(conn azureconnstore.AzureConnection, clientSecret []byte) (scanner.Scanner, error) {

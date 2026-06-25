@@ -240,7 +240,7 @@ func (r *recordingMonitoring) SummarizeMetricsData(
 // baseline samples should fire.
 func TestOCIDetectColdStartRegression_ExceedsThreshold(t *testing.T) {
 	mock := newDetectionMockMonitoring()
-	mock.setCount("24h", 12) // > 0, detection runs
+	mock.setCount("24h", 12)             // > 0, detection runs
 	mock.setDuration("24h", 2400.0, 60)  // current p95 high
 	mock.setDuration("168h", 800.0, 100) // baseline p95 lower
 	s := newColdStartTestScanner(t, mock)
@@ -291,7 +291,7 @@ func TestOCIDetectColdStartRegression_ExceedsThreshold(t *testing.T) {
 func TestOCIDetectColdStartRegression_BelowFloor_DoesNotFire(t *testing.T) {
 	mock := newDetectionMockMonitoring()
 	mock.setCount("24h", 5)
-	mock.setDuration("24h", 320.0, 60)  // 1.6x ratio but < 500ms
+	mock.setDuration("24h", 320.0, 60) // 1.6x ratio but < 500ms
 	mock.setDuration("168h", 200.0, 100)
 	s := newColdStartTestScanner(t, mock)
 

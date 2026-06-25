@@ -57,9 +57,9 @@ type fakePubSubPropagation struct {
 	// the topic axis stays preserved by design.
 	SubscriptionListStatus int
 	// Per-endpoint call counters for cache-reuse + non-fatal assertions.
-	TopicListCalls  int
-	SubListCalls    int
-	SchemaGetCalls  map[string]int
+	TopicListCalls int
+	SubListCalls   int
+	SchemaGetCalls map[string]int
 }
 
 func newFakePubSubPropagation() *fakePubSubPropagation {

@@ -25,8 +25,8 @@ import (
 // service enforces immutability of every other field.
 type AuditHandlers struct {
 	auditService services.AuditService
-	aiService    *ai.Service                          // optional; nil 503s the explain route
-	appStore     applicationstore.ApplicationStore    // optional; nil means no context enrichment
+	aiService    *ai.Service                       // optional; nil 503s the explain route
+	appStore     applicationstore.ApplicationStore // optional; nil means no context enrichment
 	logger       *zap.Logger
 }
 

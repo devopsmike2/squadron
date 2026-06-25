@@ -240,8 +240,8 @@ func TestScanSQSQueues_QueueWithKMS_DetailRecordsKmsKeyId(t *testing.T) {
 		},
 		attrsByURL: map[string]map[string]string{
 			url: {
-				SQSQueueArnAttr:        arn,
-				SQSKmsMasterKeyIdAttr:  kmsKey,
+				SQSQueueArnAttr:       arn,
+				SQSKmsMasterKeyIdAttr: kmsKey,
 			},
 		},
 	}

@@ -50,7 +50,7 @@ func newSamplingRow() SamplingRateInventoryRow {
 	return SamplingRateInventoryRow{
 		RecommendationID: "rec-aws-lambda-order-processor",
 		Provider:         "aws", Surface: "lambda",
-		ResourceID: "arn:aws:lambda:us-east-1:123:function:order-processor",
+		ResourceID:     "arn:aws:lambda:us-east-1:123:function:order-processor",
 		ResourceTFName: "order_processor", Region: "us-east-1",
 	}
 }

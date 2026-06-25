@@ -248,4 +248,3 @@ func TestExplainAuditEvent_PersistsCacheOnSuccess(t *testing.T) {
 	assert.Equal(t, "claude-haiku-4-5-20251001", event.AIExplanationModel)
 	require.NotNil(t, event.AIExplanationGeneratedAt)
 }
-

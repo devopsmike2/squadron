@@ -39,13 +39,14 @@ import (
 // "savings projected" doesn't overpromise.
 //
 // Per-GB ingest cost rough survey at time of writing:
-//   Datadog logs   ~$0.10/GB (1-day retention, varies wildly)
-//   Datadog APM    ~$5/M spans (depends on avg span size)
-//   Honeycomb      ~$0.40/M events (~$1-2/GB at typical avg size)
-//   New Relic      ~$0.30-0.50/GB telemetry
-//   Grafana Cloud  ~$0.50/GB metrics, much cheaper logs
-//   SigNoz Cloud   ~$0.30/GB telemetry
-//   Self-hosted    effectively storage + egress (often <$0.10/GB)
+//
+//	Datadog logs   ~$0.10/GB (1-day retention, varies wildly)
+//	Datadog APM    ~$5/M spans (depends on avg span size)
+//	Honeycomb      ~$0.40/M events (~$1-2/GB at typical avg size)
+//	New Relic      ~$0.30-0.50/GB telemetry
+//	Grafana Cloud  ~$0.50/GB metrics, much cheaper logs
+//	SigNoz Cloud   ~$0.30/GB telemetry
+//	Self-hosted    effectively storage + egress (often <$0.10/GB)
 //
 // We default to $0.30/GB across all signals, with destination-
 // specific overrides for the named backends. Operators override
@@ -257,7 +258,7 @@ type DestinationProjection struct {
 	DestinationKey string  `json:"destination_key"`
 	Label          string  `json:"label"`
 	MonthlyUSD     float64 `json:"monthly_usd"`
-	RuleMatched    string  `json:"rule_matched"`            // which Rule.Match caught it, for debugging
+	RuleMatched    string  `json:"rule_matched"` // which Rule.Match caught it, for debugging
 	RuleLabel      string  `json:"rule_label,omitempty"`
 }
 

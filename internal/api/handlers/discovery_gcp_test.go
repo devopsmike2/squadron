@@ -69,7 +69,9 @@ type fakeScanner struct {
 	err    error
 }
 
-func (f *fakeScanner) Provider() credstore.Provider { return credstore.Provider(gcpconnstore.ProviderGCP) }
+func (f *fakeScanner) Provider() credstore.Provider {
+	return credstore.Provider(gcpconnstore.ProviderGCP)
+}
 func (f *fakeScanner) Scan(_ context.Context, _ *credstore.CloudConnection, regions []string) (*scanner.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

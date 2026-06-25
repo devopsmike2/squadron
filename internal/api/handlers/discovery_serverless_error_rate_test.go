@@ -222,14 +222,14 @@ func TestErrorRateEndpoint_WouldFireReflectsAllGates(t *testing.T) {
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:gate-test"
 	now := time.Now().UTC()
 	cases := []struct {
-		name      string
-		errCurr   int
-		invCurr   int
+		name        string
+		errCurr     int
+		invCurr     int
 		errCurrRate float64
-		errBase   int
-		invBase   int
+		errBase     int
+		invBase     int
 		errBaseRate float64
-		wantFire  bool
+		wantFire    bool
 	}{
 		// 3x ratio, 3000 inv, 90 err → all three gates pass → fire.
 		{"all three gates pass", 90, 3000, 0.030, 60, 6000, 0.010, true},

@@ -94,11 +94,11 @@ var captureNames = map[string]struct{}{
 	// Process health. uptime makes it easy to detect a restart loop;
 	// memory_rss + cpu_seconds are the "is the collector itself
 	// healthy" signals.
-	"otelcol_process_uptime":            {},
-	"otelcol_process_memory_rss":        {},
-	"otelcol_process_runtime_heap_alloc_bytes": {},
+	"otelcol_process_uptime":                    {},
+	"otelcol_process_memory_rss":                {},
+	"otelcol_process_runtime_heap_alloc_bytes":  {},
 	"otelcol_process_runtime_total_alloc_bytes": {},
-	"otelcol_process_cpu_seconds":       {},
+	"otelcol_process_cpu_seconds":               {},
 }
 
 // IsCaptured reports whether a metric name is one we route into the

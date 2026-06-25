@@ -633,7 +633,7 @@ func (e *Engine) recipeNoisyAttribute(ctx context.Context, win insights.Window, 
 			// the volume panel the operator just saw.
 			est := int64(float64(sv.Bytes) * a.PctOfSignal)
 			out = append(out, Recommendation{
-				ID: idFor("noisy_attr", string(sv.Signal), a.Key),
+				ID:              idFor("noisy_attr", string(sv.Signal), a.Key),
 				Category:        CategoryNoisyAttribute,
 				Severity:        sev,
 				Title:           fmt.Sprintf("Drop attribute %q from %s", a.Key, sv.Signal),
@@ -696,7 +696,7 @@ func (e *Engine) recipeOutlierAgent(ctx context.Context, win insights.Window, _ 
 			AgentID:         a.AgentID,
 			AgentName:       name,
 			EstSavingsBytes: a.TotalBytes - median, // savings if it dropped to median
-			Snippet:         "", // no single snippet — operator needs to review the agent's config
+			Snippet:         "",                    // no single snippet — operator needs to review the agent's config
 			GeneratedAt:     now,
 		})
 	}
@@ -795,7 +795,7 @@ func (e *Engine) recipeEmptySignal(ctx context.Context, win insights.Window, fle
 				AgentID:         a.AgentID,
 				AgentName:       name,
 				Signal:          sig,
-				EstSavingsBytes: 0, // no byte savings — operational hygiene
+				EstSavingsBytes: 0,  // no byte savings — operational hygiene
 				Snippet:         "", // no single snippet — operator deletes the pipeline branch
 				GeneratedAt:     now,
 			})
@@ -808,9 +808,9 @@ func (e *Engine) recipeEmptySignal(ctx context.Context, win insights.Window, fle
 // of distinct label-set combinations. The threshold is intentionally
 // SMB-friendly:
 //
-//   >= 10,000 distinct combos → critical (almost certainly costing
-//     significant $ in metric storage)
-//   >= 2,000 distinct combos  → warn (worth reviewing)
+//	>= 10,000 distinct combos → critical (almost certainly costing
+//	  significant $ in metric storage)
+//	>= 2,000 distinct combos  → warn (worth reviewing)
 //
 // Backends differ wildly in how cardinality maps to cost. Datadog
 // charges per "custom metric" (a unique metric+tagset combo);

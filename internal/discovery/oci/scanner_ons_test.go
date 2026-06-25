@@ -151,13 +151,13 @@ func newONSScannerWithFake(t *testing.T, fake *fakeOCIONS, region string) *Scann
 		r = "us-phoenix-1"
 	}
 	return &Scanner{
-		TenancyOCID:    "ocid1.tenancy.oc1..aaa",
-		UserOCID:       "ocid1.user.oc1..bbb",
-		Fingerprint:    "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
-		PrivateKey:    pemBytes,
-		Region:        r,
-		ociEndpoint:   srv.URL,
-		httpClient:    srv.Client(),
+		TenancyOCID: "ocid1.tenancy.oc1..aaa",
+		UserOCID:    "ocid1.user.oc1..bbb",
+		Fingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+		PrivateKey:  pemBytes,
+		Region:      r,
+		ociEndpoint: srv.URL,
+		httpClient:  srv.Client(),
 	}
 }
 
@@ -433,13 +433,13 @@ func newDualScannerWithFake(t *testing.T, fake *fakeOCIDualEventSources, region 
 		r = "us-phoenix-1"
 	}
 	return &Scanner{
-		TenancyOCID:    "ocid1.tenancy.oc1..aaa",
-		UserOCID:       "ocid1.user.oc1..bbb",
-		Fingerprint:    "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
-		PrivateKey:    pemBytes,
-		Region:        r,
-		ociEndpoint:   srv.URL,
-		httpClient:    srv.Client(),
+		TenancyOCID: "ocid1.tenancy.oc1..aaa",
+		UserOCID:    "ocid1.user.oc1..bbb",
+		Fingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+		PrivateKey:  pemBytes,
+		Region:      r,
+		ociEndpoint: srv.URL,
+		httpClient:  srv.Client(),
 	}
 }
 

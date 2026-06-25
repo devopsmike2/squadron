@@ -90,12 +90,12 @@ type armEventGridTopicListResponse struct {
 // (Type, Tags, SystemData) are intentionally untyped — slice 7 may
 // extend the projection if operator feedback warrants.
 type armEventGridTopic struct {
-	ID         string                       `json:"id"`
-	Name       string                       `json:"name"`
-	Location   string                       `json:"location"`
-	Tags       map[string]string            `json:"tags,omitempty"`
-	Type       string                       `json:"type,omitempty"`
-	Properties armEventGridTopicProperties  `json:"properties,omitempty"`
+	ID         string                      `json:"id"`
+	Name       string                      `json:"name"`
+	Location   string                      `json:"location"`
+	Tags       map[string]string           `json:"tags,omitempty"`
+	Type       string                      `json:"type,omitempty"`
+	Properties armEventGridTopicProperties `json:"properties,omitempty"`
 }
 
 // armEventGridTopicProperties carries the slice 6 chunk 1 detection

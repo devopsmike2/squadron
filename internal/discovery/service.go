@@ -66,9 +66,9 @@ type Observation struct {
 // Service is the public surface. Construct once, share across the
 // worker pool's goroutines. All methods are safe for concurrent use.
 type Service struct {
-	store     Store
-	logger    *zap.Logger
-	dedup     time.Duration
+	store  Store
+	logger *zap.Logger
+	dedup  time.Duration
 
 	mu       sync.Mutex
 	lastSeen map[string]time.Time // dedup window cache

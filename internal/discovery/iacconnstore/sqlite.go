@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 )
 
@@ -486,13 +486,13 @@ type rowScanner interface {
 // scanConnection is the row-scan helper shared by Get and List.
 func scanConnection(r rowScanner) (*IaCConnection, error) {
 	var (
-		conn                IaCConnection
-		branchPrefix        sql.NullString
-		reviewerTeamHandle  sql.NullString
-		placementJSON       string
-		learnFromAccepted   int
-		createdAt           string
-		updatedAt           string
+		conn               IaCConnection
+		branchPrefix       sql.NullString
+		reviewerTeamHandle sql.NullString
+		placementJSON      string
+		learnFromAccepted  int
+		createdAt          string
+		updatedAt          string
 	)
 	if err := r.Scan(
 		&conn.ConnectionID,

@@ -184,10 +184,10 @@ type fakeOCI struct {
 	// InstancesStatus, when non-zero, makes every instances call
 	// return this status for the configured ForCompartment (or for
 	// every compartment when ForCompartment is empty).
-	InstancesStatus        int
-	InstancesErrorCode     string
+	InstancesStatus         int
+	InstancesErrorCode      string
 	InstancesForCompartment string
-	InstancesRetryAfter    string
+	InstancesRetryAfter     string
 
 	// DBSystemsStatus / ErrorCode / ForCompartment / RetryAfter:
 	// same shape as the instances knobs. Configures partial-failure
@@ -581,7 +581,7 @@ func TestScan_HasOTelTrueForFreeformOtelTag(t *testing.T) {
 
 func TestScan_HasOTelTrueForDefinedOtelTag(t *testing.T) {
 	cases := []struct {
-		name string
+		name    string
 		defined map[string]map[string]interface{}
 	}{
 		{

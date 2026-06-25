@@ -1011,4 +1011,3 @@ func TestAssembleDiscoveryVerdicts_FourProviderIsolation(t *testing.T) {
 		t.Errorf("AWS scope leaked another provider's row: %v", awsURLs)
 	}
 }
-

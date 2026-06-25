@@ -208,16 +208,16 @@ func (h *PricingHandlers) HandleForecast(c *gin.Context) {
 	remaining := calendarMonthly - spentSoFar
 
 	c.JSON(http.StatusOK, gin.H{
-		"enabled":           true,
-		"currency":          out.Currency,
-		"steady_state_usd":  out.MonthlyUSD,
-		"forecast_usd":      calendarMonthly,
-		"spent_so_far_usd":  spentSoFar,
-		"remaining_usd":     remaining,
-		"fraction_elapsed":  fractionElapsed,
-		"days_in_month":     daysInMonth,
-		"days_elapsed":      secondsElapsed / 86400,
-		"calendar_month":    now.Format("January 2006"),
-		"agent_count":       fleet.AgentCount,
+		"enabled":          true,
+		"currency":         out.Currency,
+		"steady_state_usd": out.MonthlyUSD,
+		"forecast_usd":     calendarMonthly,
+		"spent_so_far_usd": spentSoFar,
+		"remaining_usd":    remaining,
+		"fraction_elapsed": fractionElapsed,
+		"days_in_month":    daysInMonth,
+		"days_elapsed":     secondsElapsed / 86400,
+		"calendar_month":   now.Format("January 2006"),
+		"agent_count":      fleet.AgentCount,
 	})
 }

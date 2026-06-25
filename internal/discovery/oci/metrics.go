@@ -85,8 +85,8 @@ const OCIFunctionsInvocationCountMetric = "function_invocation_count"
 //
 // MQL shapes:
 //
-//   without suffix → function_invocation_count[24h]{resourceId = "..."}.sum()
-//   with #error suffix → function_invocation_count[24h]{resourceId = "...", result = "error"}.sum()
+//	without suffix → function_invocation_count[24h]{resourceId = "..."}.sum()
+//	with #error suffix → function_invocation_count[24h]{resourceId = "...", result = "error"}.sum()
 //
 // IAM stays unchanged from slices 1 + 2: the existing
 // "read metrics in compartment" permission covers all three OCI
@@ -189,10 +189,10 @@ type ociSummarizeResponse struct {
 // the metric name (echoes the query's metric), the resourceId (echoes
 // the query's filter), and the list of (timestamp, value) pairs.
 type ociMetricDataItem struct {
-	Name                 string                  `json:"name"`
-	Namespace            string                  `json:"namespace"`
-	Resolution           string                  `json:"resolution,omitempty"`
-	Dimensions           map[string]string       `json:"dimensions,omitempty"`
+	Name                 string                   `json:"name"`
+	Namespace            string                   `json:"namespace"`
+	Resolution           string                   `json:"resolution,omitempty"`
+	Dimensions           map[string]string        `json:"dimensions,omitempty"`
 	AggregatedDatapoints []ociAggregatedDatapoint `json:"aggregatedDatapoints"`
 }
 

@@ -270,8 +270,8 @@ func TestColdStartEndpoint_ExceedsThresholdReflectsDetectionLogic(t *testing.T) 
 	}{
 		{"ratio yes / floor yes", 750, 500, true, true},
 		{"ratio yes / floor no (well-tuned)", 499, 100, true, false},
-		{"ratio no / floor yes", 700, 500, false, true},   // ratio 1.4
-		{"ratio no / floor no", 300, 250, false, false},   // ratio 1.2
+		{"ratio no / floor yes", 700, 500, false, true}, // ratio 1.4
+		{"ratio no / floor no", 300, 250, false, false}, // ratio 1.2
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

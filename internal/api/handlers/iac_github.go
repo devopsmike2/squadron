@@ -1988,8 +1988,8 @@ func buildPRTitle(resourceKind string, count int, scanIDShort string) string {
 //     PR body carries the slice-1.5 manual-merge banner; the
 //     manual-merge label is applied.
 const (
-	dispositionPatchExistingHCLMerged          = "patch_existing_hcl_merged"
-	dispositionPatchExistingFellBackToAppend   = "patch_existing_fell_back_to_append"
+	dispositionPatchExistingHCLMerged        = "patch_existing_hcl_merged"
+	dispositionPatchExistingFellBackToAppend = "patch_existing_fell_back_to_append"
 )
 
 // hclPatchFailureReasonOf maps the hclpatch sentinel errors to a

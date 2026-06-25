@@ -336,7 +336,7 @@ func containerHasOTLPEndpointEnv(c *run.Container) bool {
 //   - 403 -> permission denied with remediation hint pointing at
 //     roles/run.viewer.
 //   - 404 -> project not found (same remediation hint as the compute
-//     + Cloud SQL + GKE paths — verify project_id).
+//   - Cloud SQL + GKE paths — verify project_id).
 //   - 429 -> rate limit (Cloud Run has its own quota separate from
 //     the other surfaces; same recovery story).
 //   - Transport / network -> network-error with the underlying

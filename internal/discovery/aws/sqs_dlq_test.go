@@ -173,8 +173,8 @@ func TestScanSQSQueues_MalformedRedrivePolicyJSON_HasDLQFalse(t *testing.T) {
 
 func TestScanSQSQueues_RetryCount_BoundaryEdges_BothInBand(t *testing.T) {
 	cases := []struct {
-		name        string
-		retryCount  int
+		name         string
+		retryCount   int
 		expectInBand bool
 	}{
 		{"lower-edge-2", 2, true},
