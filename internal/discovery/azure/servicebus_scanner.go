@@ -556,6 +556,19 @@ func projectServiceBusNamespace(ns armServiceBusNamespace, hasTrace, hasLog, pro
 	// lag axis keys see byte-identical output to v0.89.169.
 	applyServiceBusLagDetail(&snap, ns)
 
+	// Poison-message rate analysis slice 3 chunk 3 (v0.89.175,
+	// #817 Stream 214) — adds the two Azure Service Bus
+	// poison-rate axis Detail keys (poison_rate_per_hour,
+	// poison_rate_high_band) per
+	// docs/proposals/poison-message-rate-slice3.md §3.3 honest
+	// framing (also inherits §3.2 scanner-coverage-gap from
+	// DLQ slice 1 chunk 3 + lag slice 2 chunk 3). ADDITIVE
+	// only — none of the slice-1 + slice-2 + slice-1-DLQ +
+	// slice-2-lag keys above are modified here, so callers
+	// that have not yet adopted the poison-rate axis keys see
+	// byte-identical output to v0.89.174.
+	applyServiceBusPoisonRateDetail(&snap, ns)
+
 	return snap
 }
 
