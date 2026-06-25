@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed
+.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed
 
 # Variables
 BINARY_NAME=squadron
@@ -150,9 +150,13 @@ install-tools:
 docker-build:
 	docker build -t squadron:latest .
 
-# Run with Docker Compose
+# Run with Docker Compose (default = published image, UI+API on :8080)
 docker-run:
 	docker compose up -d
+
+# Run the hot-reload development stack (builds from source; UI on :5173)
+docker-dev:
+	docker compose -f docker-compose.dev.yml up
 
 # Stop all containers
 docker-stop:
@@ -178,7 +182,7 @@ docker-logs-backend:
 
 # View logs for UI only
 docker-logs-ui:
-	docker compose logs -f ui
+	docker compose -f docker-compose.dev.yml logs -f ui
 
 # Shell into backend container
 docker-shell:
@@ -186,7 +190,7 @@ docker-shell:
 
 # Shell into UI container
 docker-shell-ui:
-	docker compose exec ui sh
+	docker compose -f docker-compose.dev.yml exec ui sh
 
 # ===================================================================
 # v0.37 local test environment

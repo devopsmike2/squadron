@@ -114,12 +114,13 @@ Both files are written in-place. Squadron does not tolerate the data
 directory being mounted on a non-POSIX-compliant filesystem (some FUSE
 mounts, network drives without flush guarantees). Use a local volume.
 
-The Docker image runs as root and writes to `/data`. Mount a volume
-there:
+The Docker image runs as UID 1001 and writes its data dir to
+`/app/data` (SQLite + DuckDB stores and the auto-generated
+`secrets.key`). Mount a volume there:
 
 ```bash
 docker run -d \
-  -v squadron-data:/data \
+  -v squadron-data:/app/data \
   ghcr.io/devopsmike2/squadron:latest
 ```
 

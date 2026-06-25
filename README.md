@@ -9,10 +9,11 @@ where your bytes are going, what to fix, and how much you'd save
 staged rollout. AI explains every recommendation in plain English
 and can merge suggested snippets into your existing configs.
 
-Self-hosted. Free. One Docker command to start.
+Self-hosted. Free. One Docker command to start — no clone, no build:
 
 ```bash
-docker compose up -d
+docker run -d -p 8080:8080 -p 4320:4320 -p 4317:4317 -p 4318:4318 \
+  -v squadron-data:/app/data ghcr.io/devopsmike2/squadron:latest
 open http://localhost:8080/quickstart
 ```
 
@@ -98,11 +99,15 @@ You're probably **not** the target operator if:
 
 ## Quick start
 
+Prefer to clone? `docker compose up -d` runs the same published image
+plus a demo collector, so the dashboard lands with a live agent already
+connected:
+
 ```bash
 git clone https://github.com/devopsmike2/squadron.git
 cd squadron
 docker compose up -d
-open http://localhost:5173/quickstart
+open http://localhost:8080/quickstart
 ```
 
 The Quickstart wizard takes it from there: pick your backend
@@ -229,13 +234,14 @@ Release tags so far:
 
 ## Development
 
-The dev container runs the Go backend with hot reload via
+The dev stack runs the Go backend with hot reload via
 [Air](https://github.com/air-verse/air) and the Vite UI dev
-server side by side.
+server side by side. It builds from source, so use the dev
+compose file explicitly:
 
 ```bash
-docker compose up -d
-docker compose logs -f squadron
+docker compose -f docker-compose.dev.yml up
+docker compose -f docker-compose.dev.yml logs -f squadron
 
 # UI dev server on http://localhost:5173, API on http://localhost:8080
 ```

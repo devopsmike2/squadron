@@ -1,0 +1,141 @@
+# Squadron — DEVELOPMENT stack (hot reload).
+#
+# Builds the Go backend from source with air hot-reload (Dockerfile.dev)
+# and runs the Vite dev server for the UI on :5173 alongside the API on
+# :8080. Use this when you're changing Squadron's own code:
+#
+#   docker compose -f docker-compose.dev.yml up
+#   open http://localhost:5173
+#
+# For just running/trying Squadron (published image, UI+API on one port
+# 8080), use the default stack instead:  docker compose up -d
+#
+services:
+  # Go backend with hot reloading (development mode)
+  squadron:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: squadron
+    ports:
+      - "8080:8080"    # HTTP API
+      - "4320:4320"    # OpAMP server
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+      - "2345:2345"    # Delve debugger (optional)
+    volumes:
+      # Mount source code for hot reloading
+      - ./cmd:/app/cmd
+      - ./internal:/app/internal
+      # The extension/ tree holds the Compliance Pack stubs
+      # (changewindow, policy, siem) that cmd/all-in-one/wire_oss.go
+      # imports. Without this mount, air's hot-reload build fails
+      # with "no required module provides package
+      # github.com/devopsmike2/squadron/extension/..." and the
+      # container loops on rebuild forever.
+      - ./extension:/app/extension
+      - ./go.mod:/app/go.mod
+      - ./go.sum:/app/go.sum
+      - ./squadron.yaml:/app/squadron.yaml
+      # Persist data directory
+      - squadron-data:/app/data
+      # Persist go build cache for faster rebuilds
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    environment:
+      - GIN_MODE=debug
+      - CGO_ENABLED=1
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=console
+      - TZ=UTC
+      # v0.26 AI assist: passes the host's ANTHROPIC_API_KEY
+      # through to the container. Set it in your shell or in a
+      # .env file at the repo root (docker-compose auto-loads
+      # .env). Empty when not set — squadron logs AI as disabled
+      # at startup and the UI hides AI affordances.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Discovery credential substrate (v0.85). Seals stored cloud-
+      # connection secrets (AWS external-id, GCP SA JSON, GitHub PAT) at
+      # rest with AES-256. Leave UNSET and Squadron auto-generates a key
+      # on first boot and persists it to the data volume (secrets.key),
+      # so the connect-account + discovery flow works out of the box.
+      # Set it (base64 of 32 bytes — `head -c 32 /dev/urandom | base64`)
+      # only when you want to supply your own key or share one across
+      # replicas:
+      - SQUADRON_SECRETS_KEY=${SQUADRON_SECRETS_KEY:-}
+      # AWS credentials for discovery's assume-role into a connected
+      # account (the base identity that assumes the SquadronDiscovery
+      # role). Passed through from your shell / .env when set; leave
+      # unset if you're not connecting an AWS account yet.
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - squadron-network
+
+  # Development UI server with hot-reloading
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: squadron-ui
+    ports:
+      - "5173:5173"    # Vite dev server
+    volumes:
+      - ./ui:/app
+      - /app/node_modules  # Prevent overwriting node_modules
+    environment:
+      - VITE_BACKEND_URL=http://localhost:8080
+    depends_on:
+      - squadron
+    networks:
+      - squadron-network
+    restart: unless-stopped
+
+  # Demo OpenTelemetry Collector with OpAMP support
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.134.1
+    container_name: demo-collector
+    command: ['--config', '/etc/otelcol-contrib/config.yaml']
+    ports:
+      - "4319:4317"    # OTLP gRPC receiver
+      - "4321:4318"    # OTLP HTTP receiver
+      - "13133:13133"  # Health check
+    volumes:
+      - ./examples/collector/demo-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      - squadron
+    networks:
+      - squadron-network
+    restart: unless-stopped
+
+  supervisor:
+    build:
+      context: ./examples/supervisor
+      dockerfile: Dockerfile
+    container_name: demo-supervisor
+    depends_on:
+      - squadron
+    networks:
+      - squadron-network
+    restart: unless-stopped
+
+volumes:
+  squadron-data:
+    driver: local
+  go-build-cache:
+    driver: local
+  go-mod-cache:
+    driver: local
+
+networks:
+  squadron-network:
+    driver: bridge
