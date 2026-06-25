@@ -283,6 +283,14 @@ func (s *Scanner) ScanCloudTasksQueues(ctx context.Context, scope scanner.ScanSc
 	// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
 	s.enrichCloudTasksPoisonRate(ctx, all)
 
+	// Consumer-lag substrate slice 5 chunk 1 (v0.89.182, #824 Stream
+	// 221) — enrich the honest-framing BACKLOG lag keys with real
+	// Cloud Monitoring readings (queue/depth peak over the trailing
+	// window). Nil-tolerant on metricsClient (no-op → cold-start
+	// parity). Silence keys stay honest-framed.
+	// See docs/proposals/consumer-lag-substrate-slice5.md §3-§5.
+	s.enrichCloudTasksLag(ctx, all)
+
 	if successes == 0 && lastErr != nil {
 		return all, lastErr
 	}
