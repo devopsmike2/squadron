@@ -362,6 +362,17 @@ func buildSQSSnapshot(accountID, region string, qa queueAttributes, arnSet map[s
 	// see byte-identical output to v0.89.162.
 	applySQSDLQDetail(&snap, qa)
 
+	// Consumer lag detection slice 2 chunk 1 (v0.89.168, #810
+	// Stream 207) — adds the four AWS SQS lag axis Detail keys
+	// (lag_backlog_depth, lag_backlog_depth_high,
+	// lag_consumer_silence_seconds, lag_consumer_silence_high) per
+	// docs/proposals/consumer-lag-detection-slice2.md §3 + §11.1-4.
+	// ADDITIVE only — none of the slice-4 + slice-1 (DLQ) keys
+	// above are modified here, so callers that have not yet
+	// adopted the lag axis keys see byte-identical output to
+	// v0.89.166.
+	applySQSLagDetail(&snap, qa)
+
 	return snap
 }
 
