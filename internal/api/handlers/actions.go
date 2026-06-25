@@ -82,7 +82,26 @@ type RegisterRunnerRequest struct {
 // existing record (capabilities and last_seen_at refresh, all
 // other fields overwrite). This matches the runner side, which
 // re-registers on every start.
+// storeReady guards every handler against a nil store. registerRoutes()
+// runs inside NewServer before main.go wires the application store via
+// SetActionStoreAndSigner; the route wiring now builds handlers lazily
+// (per request) to read a live store, and this is defense-in-depth so a
+// nil store degrades to a clean 503 instead of a nil-pointer panic ->
+// 500. (v0.89.212)
+func (h *ActionsHandlers) storeReady(c *gin.Context) bool {
+	if h.store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "actions store not configured",
+		})
+		return false
+	}
+	return true
+}
+
 func (h *ActionsHandlers) HandleRegisterRunner(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	var req RegisterRunnerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "detail": err.Error()})
@@ -125,6 +144,9 @@ func (h *ActionsHandlers) HandleRegisterRunner(c *gin.Context) {
 
 // HandleListRunners returns every registered runner, newest first.
 func (h *ActionsHandlers) HandleListRunners(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	regs, err := h.store.ListActionRunnerRegistrations(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed", "detail": err.Error()})
@@ -138,6 +160,9 @@ func (h *ActionsHandlers) HandleListRunners(c *gin.Context) {
 
 // HandleGetRunner returns one runner by ID.
 func (h *ActionsHandlers) HandleGetRunner(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	reg, err := h.store.GetActionRunnerRegistration(c.Request.Context(), id)
 	if err != nil {
@@ -155,6 +180,9 @@ func (h *ActionsHandlers) HandleGetRunner(c *gin.Context) {
 // the table for audit history; dispatch refuses to send to revoked
 // runners.
 func (h *ActionsHandlers) HandleRevokeRunner(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	if err := h.store.RevokeActionRunnerRegistration(c.Request.Context(), id, time.Now().UTC()); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "runner not found or revoke failed", "detail": err.Error()})
@@ -169,6 +197,9 @@ func (h *ActionsHandlers) HandleRevokeRunner(c *gin.Context) {
 // since_id parameter so the runner can resume cleanly after a
 // restart without re-pulling already-handled requests.
 func (h *ActionsHandlers) HandleRunnerPending(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	list, err := h.store.ListActionRequests(c.Request.Context(), types.ActionRequestFilter{
 		RunnerID: id,
@@ -211,6 +242,9 @@ type DispatchActionRequest struct {
 // signed signature; the runner polls and consumes it on the next
 // HandleRunnerPending call.
 func (h *ActionsHandlers) HandleDispatchAction(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	var req DispatchActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "detail": err.Error()})
@@ -335,6 +369,9 @@ func (h *ActionsHandlers) HandleDispatchAction(c *gin.Context) {
 // HandleListActions returns recent action requests with optional
 // filtering by proposal, runner, and status.
 func (h *ActionsHandlers) HandleListActions(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	filter := types.ActionRequestFilter{
 		ProposalID: c.Query("proposal_id"),
 		RunnerID:   c.Query("runner_id"),
@@ -353,6 +390,9 @@ func (h *ActionsHandlers) HandleListActions(c *gin.Context) {
 
 // HandleGetAction returns one request by ID.
 func (h *ActionsHandlers) HandleGetAction(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	r, err := h.store.GetActionRequest(c.Request.Context(), id)
 	if err != nil {
@@ -380,6 +420,9 @@ type PostResultRequest struct {
 // are stamped server-side from the existing row to avoid trusting
 // the runner's clock.
 func (h *ActionsHandlers) HandlePostActionResult(c *gin.Context) {
+	if !h.storeReady(c) {
+		return
+	}
 	id := c.Param("id")
 	var body PostResultRequest
 	if err := c.ShouldBindJSON(&body); err != nil {

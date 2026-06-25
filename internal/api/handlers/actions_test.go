@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -427,4 +428,36 @@ func TestAudit_ResultDeniedEmitsActionDenied(t *testing.T) {
 	entry := lastEntry(t, audit, services.AuditEventActionDenied)
 	assert.Equal(t, "denied", entry.Action)
 	assert.Equal(t, "signature: expired", entry.Payload["denied_for"])
+}
+
+// TestActionsHandlers_NilStore_503NotPanic pins the v0.89.212 defense: a
+// handler built with a nil store (the eager-wiring bug captured a nil
+// s.appStore before SetActionStoreAndSigner ran) must return a clean 503,
+// never a nil-pointer panic -> 500. Covers the read + list routes.
+func TestActionsHandlers_NilStore_503NotPanic(t *testing.T) {
+	h := NewActionsHandlers(nil, nil, nil, nil, zap.NewNop())
+	cases := []struct {
+		name, method, path, route string
+		fn                        gin.HandlerFunc
+	}{
+		{"list-actions", http.MethodGet, "/actions", "/actions", h.HandleListActions},
+		{"get-action", http.MethodGet, "/actions/x", "/actions/:id", h.HandleGetAction},
+		{"list-runners", http.MethodGet, "/runners", "/runners", h.HandleListRunners},
+		{"get-runner", http.MethodGet, "/runners/x", "/runners/:id", h.HandleGetRunner},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := gin.New()
+			r.Handle(tc.method, tc.route, tc.fn)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			r.ServeHTTP(w, req) // must not panic
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("%s: status = %d, want 503; body=%s", tc.name, w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "actions store not configured") {
+				t.Errorf("%s: 503 should name the cause; got %s", tc.name, w.Body.String())
+			}
+		})
+	}
 }
