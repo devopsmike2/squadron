@@ -451,13 +451,49 @@ func (s *Scanner) listStreamsPage(ctx context.Context, sk *SigningKey, compartme
 // keeps walking — a single failing /logs call must not abort the
 // whole scan.
 func (s *Scanner) listLogsForStream(ctx context.Context, sk *SigningKey, compartmentID, streamID string) (bool, error) {
+	// Slice 11 chunk 1 (v0.89.161, #803 Stream 200) consolidates the
+	// three per-surface Logging detection helpers into a single
+	// shared listLogsForOCIResource implementation. This wrapper is
+	// retained for call-site stability — the slice 1 chunk 4 +
+	// slice 2 callers + every test that exercises the streaming
+	// detection axis continue to find the helper under its original
+	// name. Cold-start parity is byte-identical because the dispatch
+	// is a direct tail call with no parameter transformation.
+	return s.listLogsForOCIResource(ctx, sk, compartmentID, streamID)
+}
+
+// listLogsForOCIResource walks /logs with searchTerm=<resourceOCID>
+// and returns true when the response carries at least one log
+// resource whose Configuration.Source.Resource equals the supplied
+// OCID. The detection is defensive: even if the searchTerm
+// optimization is unsupported on a particular tenancy and the /logs
+// call returns the entire compartment-wide log list, the
+// per-resource Source.Resource side-check still flips the axis
+// correctly when (and only when) one of the entries references the
+// target OCID.
+//
+// Slice 11 chunk 1 (v0.89.161, #803 Stream 200) — POST-WIDENING-PASS
+// consolidation. Originally three parallel helpers shipped:
+//   - listLogsForStream  (slice 1 chunk 4, v0.89.101c)
+//   - listLogsForTopic   (slice 7 chunk 1, v0.89.150)
+//   - listLogsForQueue   (slice 9 chunk 1, v0.89.156)
+// All three were character-identical except for the parameter name.
+// Slice 11 collapses them into this single shared implementation
+// keyed off the generic resourceOCID parameter; the three original
+// helper names persist as one-line forwarders for call-site
+// stability + cold-start parity.
+//
+// A failure on the Logging call (network error, rate limit, 5xx)
+// returns (false, error) so the caller can decide whether to dim
+// the axis or accept the per-resource miss.
+func (s *Scanner) listLogsForOCIResource(ctx context.Context, sk *SigningKey, compartmentID, resourceOCID string) (bool, error) {
 	endpoint := s.loggingEndpoint()
 	u := fmt.Sprintf(
 		"%s/%s/logs?compartmentId=%s&searchTerm=%s",
 		strings.TrimRight(endpoint, "/"),
 		loggingListAPIVersion,
 		url.QueryEscape(compartmentID),
-		url.QueryEscape(streamID),
+		url.QueryEscape(resourceOCID),
 	)
 	body, _, callErr := s.doSignedGETWithPage(ctx, sk, u)
 	if callErr != nil {
@@ -468,7 +504,7 @@ func (s *Scanner) listLogsForStream(ctx context.Context, sk *SigningKey, compart
 		return false, &ociCallError{Wrapped: fmt.Errorf("logs response parse: %w", jerr)}
 	}
 	for _, lg := range out {
-		if lg.Configuration.Source.Resource == streamID {
+		if lg.Configuration.Source.Resource == resourceOCID {
 			return true, nil
 		}
 	}

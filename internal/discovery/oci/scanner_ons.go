@@ -264,28 +264,14 @@ func (s *Scanner) listNotificationTopicsPage(ctx context.Context, sk *SigningKey
 // keeps walking — a single failing /logs call must not abort the
 // whole scan.
 func (s *Scanner) listLogsForTopic(ctx context.Context, sk *SigningKey, compartmentID, topicID string) (bool, error) {
-	endpoint := s.loggingEndpoint()
-	u := fmt.Sprintf(
-		"%s/%s/logs?compartmentId=%s&searchTerm=%s",
-		strings.TrimRight(endpoint, "/"),
-		loggingListAPIVersion,
-		url.QueryEscape(compartmentID),
-		url.QueryEscape(topicID),
-	)
-	body, _, callErr := s.doSignedGETWithPage(ctx, sk, u)
-	if callErr != nil {
-		return false, callErr
-	}
-	var out ociLogResourceList
-	if jerr := json.Unmarshal(body, &out); jerr != nil {
-		return false, &ociCallError{Wrapped: fmt.Errorf("logs response parse: %w", jerr)}
-	}
-	for _, lg := range out {
-		if lg.Configuration.Source.Resource == topicID {
-			return true, nil
-		}
-	}
-	return false, nil
+	// Slice 11 chunk 1 (v0.89.161, #803 Stream 200) consolidated the
+	// three per-surface Logging detection helpers into a single
+	// shared listLogsForOCIResource (lives in scanner_streaming.go).
+	// This wrapper is retained for call-site stability — the slice
+	// 7 chunk 1 projectOCITopic + every test that exercises the ONS
+	// Logging detection axis continue to find the helper under its
+	// original name.
+	return s.listLogsForOCIResource(ctx, sk, compartmentID, topicID)
 }
 
 // notificationsEndpoint returns the OCI Notification Service
