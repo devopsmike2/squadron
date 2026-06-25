@@ -72,6 +72,8 @@ type fakeOCIScanner struct {
 	// result is returned on Scan() unless err is set.
 	result *scanner.Result
 	err    error
+	// eventSources is returned by ScanEventSources (event-source tier).
+	eventSources []scanner.EventSourceInstanceSnapshot
 }
 
 func (f *fakeOCIScanner) Provider() credstore.Provider {
@@ -91,6 +93,13 @@ func (f *fakeOCIScanner) Scan(_ context.Context, _ *credstore.CloudConnection, r
 }
 func (f *fakeOCIScanner) Validate(_ context.Context, _ *credstore.CloudConnection) (*scanner.ValidationResult, error) {
 	return &scanner.ValidationResult{AssumeRoleOK: true}, nil
+}
+
+// ScanEventSources satisfies EventSourceDiscoveryScanner so the OCI
+// scan handler's tier-gated event-source dispatch (v0.89.195) folds the
+// returned snapshots into the response.
+func (f *fakeOCIScanner) ScanEventSources(_ context.Context, _ scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
+	return f.eventSources, nil
 }
 
 // fakeOCIScannerFactory satisfies OCIScannerFactory by returning a
@@ -816,4 +825,58 @@ func TestClassifyOCIScanError(t *testing.T) {
 	}
 	// Avoid unused-import lint when time imports aren't otherwise hit.
 	_ = time.Now
+}
+
+// TestScanOCIConnection_SurfacesEventSources pins the v0.89.195
+// event-source-tier wiring for OCI Streaming, including the slice-2
+// propagation axis.
+func TestScanOCIConnection_SurfacesEventSources(t *testing.T) {
+	fs := &fakeOCIScanner{
+		result: &scanner.Result{
+			ScanID:              "scan-es-oci",
+			InstrumentedCount:   1,
+			UninstrumentedCount: 0,
+			Compute: []scanner.ComputeInstanceSnapshot{
+				{ResourceID: "ocid1.instance.1", HasOTel: true},
+			},
+		},
+		eventSources: []scanner.EventSourceInstanceSnapshot{
+			{
+				Provider: "oci", Surface: "streaming", SourceType: "stream",
+				ResourceName:         "orders-stream",
+				ResourceARN:          "ocid1.stream.oc1.iad.orders",
+				Region:               ociTestRegion,
+				HasTraceAxis:         true,
+				HasLogAxis:           true,
+				HasPropagationConfig: false,
+				PropagationNotes:     []string{"retentionInHours < 24 may truncate Kafka headers carrying traceparent"},
+			},
+		},
+	}
+	factory := &fakeOCIScannerFactory{scanner: fs}
+	h, store, key := newOCITestHandlers(t, nil, factory)
+	r := newOCIRouter(h)
+
+	conn := seedOCIConnection(t, store, key, "Prod", ociTestTenancyOCID, ociTestUserOCID, ociTestFingerprint, ociTestRegion)
+	w := ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp ociScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if len(resp.EventSources) != 1 {
+		t.Fatalf("event_sources len = %d, want 1; body=%s", len(resp.EventSources), w.Body.String())
+	}
+	es := resp.EventSources[0]
+	if es.ResourceName != "orders-stream" {
+		t.Errorf("resource_name = %q, want orders-stream", es.ResourceName)
+	}
+	if es.HasPropagationConfig {
+		t.Errorf("has_propagation_config = true, want false (propagation gap)")
+	}
+	if len(es.PropagationNotes) != 1 {
+		t.Errorf("propagation_notes len = %d, want 1", len(es.PropagationNotes))
+	}
 }

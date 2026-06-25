@@ -1102,11 +1102,11 @@ type awsScanResponse struct {
 	// renders. Slice 1 chunk 1 only populates AWS EventBridge rows;
 	// chunk 2 adds GCP Pub/Sub, chunk 3 adds Azure Service Bus,
 	// chunk 4 adds OCI Streaming.
-	EventSources        []awsEventSourceRow `json:"event_sources"`
-	InstrumentedCount   int                 `json:"instrumented_count"`
-	UninstrumentedCount int                 `json:"uninstrumented_count"`
-	Partial             bool                `json:"partial"`
-	PartialReason       string              `json:"partial_reason,omitempty"`
+	EventSources        []eventSourceRow `json:"event_sources"`
+	InstrumentedCount   int              `json:"instrumented_count"`
+	UninstrumentedCount int              `json:"uninstrumented_count"`
+	Partial             bool             `json:"partial"`
+	PartialReason       string           `json:"partial_reason,omitempty"`
 }
 
 type awsComputeInstanceRow struct {
@@ -1346,7 +1346,7 @@ type awsOrchestrationRow struct {
 	Detail       map[string]any `json:"detail,omitempty"`
 }
 
-// awsEventSourceRow is the snake_case wire shape for one inbound event
+// eventSourceRow is the snake_case wire shape for one inbound event
 // source row. Event-source-tier slice 1 chunk 1 (v0.89.100, #734 Stream
 // 132). Mirrors scanner.EventSourceInstanceSnapshot — the two detection-
 // rule axes (has_trace_axis + has_log_axis) surface as independent
@@ -1368,7 +1368,7 @@ type awsOrchestrationRow struct {
 // log-target proxy: any rule on the bus with a CloudWatch Logs target
 // flips BOTH has_trace_axis AND has_log_axis. Slice 2 separates the two
 // axes.
-type awsEventSourceRow struct {
+type eventSourceRow struct {
 	Provider     string         `json:"provider"`
 	Surface      string         `json:"surface"`
 	AccountID    string         `json:"account_id"`
@@ -1410,7 +1410,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 		ECSClusters:         make([]awsECSClusterRow, 0, len(r.ECSClusters)),
 		Serverless:          make([]awsServerlessRow, 0, len(r.Serverless)),
 		Orchestrations:      make([]awsOrchestrationRow, 0, len(r.Orchestrations)),
-		EventSources:        make([]awsEventSourceRow, 0, len(r.EventSources)),
+		EventSources:        make([]eventSourceRow, 0, len(r.EventSources)),
 		InstrumentedCount:   r.InstrumentedCount,
 		UninstrumentedCount: r.UninstrumentedCount,
 		Partial:             r.Partial,
@@ -1592,8 +1592,21 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 	// per-surface Detail bag. AWS EventBridge is the only populated
 	// surface in chunk 1; chunks 2 + 3 + 4 add GCP Pub/Sub, Azure
 	// Service Bus, and OCI Streaming.
-	for _, es := range r.EventSources {
-		out.EventSources = append(out.EventSources, awsEventSourceRow{
+	out.EventSources = marshalEventSourceRows(r.EventSources)
+	return out
+}
+
+// marshalEventSourceRows converts scanner event-source snapshots into
+// the snake_case wire rows shared by every cloud's scan response. The
+// AWS response (marshalScanResult) and the GCP / Azure / OCI scan
+// handlers all call this so the event-source wire shape — including the
+// slice-2 propagation axis (v0.89.194) — stays identical across clouds.
+// Returns a non-nil empty slice for empty input so the wire renders []
+// rather than null (the per-cloud Inventory tab's contract).
+func marshalEventSourceRows(snaps []scanner.EventSourceInstanceSnapshot) []eventSourceRow {
+	rows := make([]eventSourceRow, 0, len(snaps))
+	for _, es := range snaps {
+		rows = append(rows, eventSourceRow{
 			Provider:             es.Provider,
 			Surface:              es.Surface,
 			AccountID:            es.AccountID,
@@ -1609,7 +1622,7 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			PropagationNotes:     es.PropagationNotes,
 		})
 	}
-	return out
+	return rows
 }
 
 // HandleAWSRunScan — POST /api/v1/discovery/aws/connections/:id/scan.

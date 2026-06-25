@@ -67,6 +67,8 @@ type fakeScanner struct {
 	// result is returned on Scan() unless err is set.
 	result *scanner.Result
 	err    error
+	// eventSources is returned by ScanEventSources (event-source tier).
+	eventSources []scanner.EventSourceInstanceSnapshot
 }
 
 func (f *fakeScanner) Provider() credstore.Provider {
@@ -86,6 +88,13 @@ func (f *fakeScanner) Scan(_ context.Context, _ *credstore.CloudConnection, regi
 }
 func (f *fakeScanner) Validate(_ context.Context, _ *credstore.CloudConnection) (*scanner.ValidationResult, error) {
 	return &scanner.ValidationResult{AssumeRoleOK: true}, nil
+}
+
+// ScanEventSources satisfies EventSourceDiscoveryScanner so the GCP
+// scan handler's tier-gated event-source dispatch (v0.89.195) can fold
+// the returned snapshots into the response.
+func (f *fakeScanner) ScanEventSources(_ context.Context, _ scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
+	return f.eventSources, nil
 }
 
 // fakeGCPScannerFactory satisfies GCPScannerFactory by returning a
@@ -704,4 +713,60 @@ func TestClassifyGCPScanError(t *testing.T) {
 	}
 	// Avoid unused-import lint when time imports aren't otherwise hit.
 	_ = time.Now
+}
+
+// TestScanGCPConnection_SurfacesEventSources pins the v0.89.195
+// event-source-tier wiring: when the GCP scanner returns event-source
+// snapshots, the scan response carries them (the GCP Inventory tab's
+// Event-sources sub-tab already renders scan.event_sources), including
+// the slice-2 propagation axis.
+func TestScanGCPConnection_SurfacesEventSources(t *testing.T) {
+	fs := &fakeScanner{
+		result: &scanner.Result{
+			ScanID:              "scan-es-gcp",
+			InstrumentedCount:   1,
+			UninstrumentedCount: 0,
+			Compute: []scanner.ComputeInstanceSnapshot{
+				{ResourceID: "i-1", HasOTel: true},
+			},
+		},
+		eventSources: []scanner.EventSourceInstanceSnapshot{
+			{
+				Provider: "gcp", Surface: "pubsub", SourceType: "topic",
+				ResourceName:         "orders-topic",
+				ResourceARN:          "projects/sandbox-12345/topics/orders-topic",
+				Region:               "us-central1",
+				HasTraceAxis:         true,
+				HasLogAxis:           true,
+				HasPropagationConfig: false,
+				PropagationNotes:     []string{"subscription 'orders-sub' attribute filter excludes traceparent"},
+			},
+		},
+	}
+	factory := &fakeGCPScannerFactory{scanner: fs}
+	h, store, key := newGCPTestHandlers(t, nil, factory)
+	r := newGCPRouter(h)
+
+	conn := seedGCPConnection(t, store, key, "Prod", "sandbox-12345", "us-central1")
+	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp gcpScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if len(resp.EventSources) != 1 {
+		t.Fatalf("event_sources len = %d, want 1; body=%s", len(resp.EventSources), w.Body.String())
+	}
+	es := resp.EventSources[0]
+	if es.ResourceName != "orders-topic" {
+		t.Errorf("resource_name = %q, want orders-topic", es.ResourceName)
+	}
+	if es.HasPropagationConfig {
+		t.Errorf("has_propagation_config = true, want false (propagation gap)")
+	}
+	if len(es.PropagationNotes) != 1 {
+		t.Errorf("propagation_notes len = %d, want 1", len(es.PropagationNotes))
+	}
 }
