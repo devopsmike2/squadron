@@ -2421,3 +2421,52 @@ land in later chunks.
 
 Cross-reference:
 [Cost-correlation substrate slice 6 design doc](./proposals/cost-correlation-substrate-slice6.md).
+
+
+## Cost-Correlation Opt-In SHIPPED in v0.89.188 — slice 6 chunk 6 (the production switch, default OFF)
+
+Chunk 6 ships the operator-facing switch that flips the cost path
+from plumbed-but-dormant to live — and **it is OFF by default**.
+Until an operator explicitly enables it, Squadron makes ZERO
+cost-reporting API calls and incurs ZERO spend on connected
+accounts.
+
+How to enable (the explicit spend decision):
+
+```yaml
+cost_correlation:
+  enabled: true            # default false
+  monthly_budget_usd: 1.0  # default $1.00 per account / 30-day window
+```
+
+When `enabled: true`, the scan orchestrator calls the per-cloud
+scanner's `EnableCostCorrelation`, which wires the real cost
+client + a budget governor sized to `monthly_budget_usd`. The
+governor rejects any cost call that would exceed the ceiling, so
+worst-case spend is bounded regardless of scan cadence. AWS Cost
+Explorer is the only surface that charges (~$0.01/call); Azure
+Cost Management is free.
+
+Safety properties (enforced + tested):
+
+- **Default off.** An omitted block or `enabled: false` means no
+  cost client, no governor — `QueryCost` refuses to issue a
+  charged call (the dormant state the rest of the substrate
+  already sits in).
+- **Bounded.** `monthly_budget_usd` defaults to $1.00 and a
+  non-positive value falls back to the $1.00 default — never
+  unbounded.
+- **Fails loud, not silent.** If the wiring is attempted on a
+  factory that can't build a Cost Explorer client,
+  `EnableCostCorrelation` errors rather than silently making
+  charged calls through an unexpected path.
+
+NOTE: this switch wires the AWS cost reader specifically. The
+Azure reader (free) wires its governor through the same opt-in
+path; GCP/OCI readers land in later chunks. The broader question
+of wiring the metric-detection substrate (cold-start, poison-rate,
+lag) live in production is a separate decision and is NOT flipped
+by this switch.
+
+Cross-reference:
+[Cost-correlation substrate slice 6 design doc](./proposals/cost-correlation-substrate-slice6.md).

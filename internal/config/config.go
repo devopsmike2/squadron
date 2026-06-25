@@ -10,20 +10,21 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	OTLP      OTLPConfig      `yaml:"otlp"`
-	Storage   StorageConfig   `yaml:"storage"`
-	Retention RetentionConfig `yaml:"retention"`
-	Rollups   RollupsConfig   `yaml:"rollups"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Worker    WorkerConfig    `yaml:"worker"`
-	Auth      AuthConfig      `yaml:"auth"`
-	Telemetry TelemetryConfig `yaml:"telemetry"`
-	AI        AIConfig        `yaml:"ai"`
-	Pricing       PricingConfig       `yaml:"pricing"`
-	SilentAgents  SilentAgentsConfig  `yaml:"silent_agents,omitempty"`
-	Deploy        DeployConfig        `yaml:"deploy,omitempty"`
-	Billing       BillingConfig       `yaml:"billing,omitempty"`
+	Server          ServerConfig          `yaml:"server"`
+	OTLP            OTLPConfig            `yaml:"otlp"`
+	Storage         StorageConfig         `yaml:"storage"`
+	Retention       RetentionConfig       `yaml:"retention"`
+	Rollups         RollupsConfig         `yaml:"rollups"`
+	Logging         LoggingConfig         `yaml:"logging"`
+	Worker          WorkerConfig          `yaml:"worker"`
+	Auth            AuthConfig            `yaml:"auth"`
+	Telemetry       TelemetryConfig       `yaml:"telemetry"`
+	AI              AIConfig              `yaml:"ai"`
+	Pricing         PricingConfig         `yaml:"pricing"`
+	SilentAgents    SilentAgentsConfig    `yaml:"silent_agents,omitempty"`
+	Deploy          DeployConfig          `yaml:"deploy,omitempty"`
+	Billing         BillingConfig         `yaml:"billing,omitempty"`
+	CostCorrelation CostCorrelationConfig `yaml:"cost_correlation,omitempty"`
 }
 
 // BillingConfig wires the v0.42 billing connectors (Splunk for now;
@@ -41,6 +42,43 @@ type SplunkBillingConfig struct {
 	Token              string `yaml:"token"`
 	WindowDays         int    `yaml:"window_days,omitempty"`
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"`
+}
+
+// CostCorrelationConfig is the operator-facing opt-in for the
+// cost-correlation substrate (cost-correlation slice 6). It is OFF by
+// default: omitting the block, or leaving Enabled false, means
+// Squadron makes ZERO cost-reporting API calls and incurs ZERO
+// spend on the connected account. Setting Enabled=true is the
+// explicit decision to let Squadron read cost data — which on AWS
+// Cost Explorer costs ~$0.01 per request (GCP/Azure/OCI cost reads
+// are free). The per-account spend is bounded by the budget governor
+// at MonthlyBudgetUSD (default $1.00 / 30-day window).
+//
+// This is the single switch that flips the cost path from
+// plumbed-but-dormant to live. The scan orchestrator calls the
+// per-cloud Scanner's EnableCostCorrelation only when Enabled is
+// true.
+type CostCorrelationConfig struct {
+	// Enabled turns cost correlation on. Default false (off) — the
+	// safe default: no cost API calls, no spend.
+	Enabled bool `yaml:"enabled"`
+
+	// MonthlyBudgetUSD caps per-account spend on charged cost APIs
+	// over a rolling 30-day window. Defaults to $1.00 when unset
+	// (see EffectiveMonthlyBudgetUSD). The budget governor rejects
+	// any cost call that would exceed it.
+	MonthlyBudgetUSD float64 `yaml:"monthly_budget_usd,omitempty"`
+}
+
+// EffectiveMonthlyBudgetUSD returns the configured per-account
+// monthly cost budget in USD, defaulting to $1.00 when the operator
+// left it unset (or non-positive). The default is deliberately
+// conservative.
+func (c CostCorrelationConfig) EffectiveMonthlyBudgetUSD() float64 {
+	if c.MonthlyBudgetUSD <= 0 {
+		return 1.0
+	}
+	return c.MonthlyBudgetUSD
 }
 
 // DeployConfig is the v0.35+ deploy integration tuning. The deploy
@@ -98,9 +136,9 @@ type SilentAgentsConfig struct {
 // See docs/savings.md for the full pricing rule shape, the default
 // rates' rationale, and how to tune them.
 type PricingConfig struct {
-	Enabled  bool                 `yaml:"enabled"`
-	Currency string               `yaml:"currency,omitempty"`
-	Rules    []PricingRuleConfig  `yaml:"rules,omitempty"`
+	Enabled  bool                `yaml:"enabled"`
+	Currency string              `yaml:"currency,omitempty"`
+	Rules    []PricingRuleConfig `yaml:"rules,omitempty"`
 }
 
 // PricingRuleConfig mirrors pricing.Rule but lives in the config
@@ -145,8 +183,8 @@ type AIConfig struct {
 // receiver accepts telemetry FROM agents, this section emits telemetry
 // TO somewhere else.
 type TelemetryConfig struct {
-	Enabled        bool             `yaml:"enabled"`         // master switch
-	ServiceName    string           `yaml:"service_name"`    // resource attr; default "squadron"
+	Enabled        bool             `yaml:"enabled"`      // master switch
+	ServiceName    string           `yaml:"service_name"` // resource attr; default "squadron"
 	OTLP           OTLPExportConfig `yaml:"otlp"`
 	MetricInterval time.Duration    `yaml:"metric_interval"` // bridge scrape cadence; default 30s. Matches the Prom-scrape cadence operators typically already run.
 }
@@ -158,10 +196,10 @@ type TelemetryConfig struct {
 // verbatim — typically a bearer token if your destination requires
 // auth (e.g. SigNoz Cloud, Honeycomb, Datadog OTLP).
 type OTLPExportConfig struct {
-	Endpoint string            `yaml:"endpoint"`  // e.g. "localhost:4317" or "https://api.honeycomb.io"
-	Protocol string            `yaml:"protocol"`  // "grpc" (default) or "http"
-	Headers  map[string]string `yaml:"headers"`   // forwarded on every export request
-	Insecure bool              `yaml:"insecure"`  // skip TLS for grpc (local dev only)
+	Endpoint string            `yaml:"endpoint"` // e.g. "localhost:4317" or "https://api.honeycomb.io"
+	Protocol string            `yaml:"protocol"` // "grpc" (default) or "http"
+	Headers  map[string]string `yaml:"headers"`  // forwarded on every export request
+	Insecure bool              `yaml:"insecure"` // skip TLS for grpc (local dev only)
 }
 
 // AuthConfig controls API authentication. When enabled, every

@@ -5,6 +5,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -302,4 +303,53 @@ func hasDLQ(snap scanner.EventSourceInstanceSnapshot) bool {
 	}
 	v, ok := snap.Detail["has_dlq"].(bool)
 	return ok && v
+}
+
+// --- Cost-correlation opt-in wiring slice 6 chunk 6 (v0.89.188, #830
+// Stream 227) — the production path that flips the cost reader from
+// dormant to live. Called by the scan orchestrator ONLY when the
+// operator set CostCorrelation.Enabled = true (default false). Until
+// then, EnableCostCorrelation is never invoked and the cost path stays
+// a no-op (no client, no governor, no spend).
+
+// costExplorerBuilder is the concrete-factory capability the wiring
+// asserts for. The production *sdkClientFactory implements it; test
+// stubs opt in by adding the method. Kept OFF the ClientFactory
+// interface so existing factory implementations are untouched.
+type costExplorerBuilder interface {
+	CostExplorer() CostExplorerClient
+}
+
+// CostExplorer builds a real AWS Cost Explorer client bound to the
+// assumed-role session. Cost Explorer is a global service; us-east-1
+// is its endpoint. Implements costExplorerBuilder on the production
+// factory.
+func (f *sdkClientFactory) CostExplorer() CostExplorerClient {
+	return costexplorer.NewFromConfig(awssdk.Config{
+		Region:      "us-east-1",
+		Credentials: f.creds,
+	})
+}
+
+// EnableCostCorrelation wires the real Cost Explorer client + a budget
+// governor (ceiling = budgetUSD) onto the Scanner, flipping the cost
+// path live. The orchestrator calls this ONLY when
+// CostCorrelation.Enabled is true; it is the explicit spend decision.
+//
+// Returns an error when the factory cannot build a Cost Explorer
+// client (e.g. a non-production factory) so a misconfigured wiring
+// fails loudly rather than silently making charged calls through an
+// unexpected path.
+func (s *Scanner) EnableCostCorrelation(ctx context.Context, budgetUSD float64) error {
+	factory, err := s.ensureFactory(ctx, "us-east-1")
+	if err != nil {
+		return fmt.Errorf("enable cost correlation: %w", err)
+	}
+	builder, ok := factory.(costExplorerBuilder)
+	if !ok {
+		return errors.New("enable cost correlation: factory does not support Cost Explorer client construction")
+	}
+	s.costExplorerClient = builder.CostExplorer()
+	s.costGovernor = scanner.NewCostBudgetGovernorFromUSD(budgetUSD)
+	return nil
 }

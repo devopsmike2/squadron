@@ -311,3 +311,18 @@ func ParseDecimalToMicroUSD(s string) (MicroUSD, error) {
 	}
 	return micro, nil
 }
+
+// NewCostBudgetGovernorFromUSD builds a governor with the ceiling
+// expressed in whole/fractional US dollars (the operator-facing
+// config unit) over the default 30-day window. budgetUSD <= 0 falls
+// back to the $1.00 default ceiling. Cost-correlation slice 6 chunk 6
+// (v0.89.188) — the opt-in wiring translates the config's
+// MonthlyBudgetUSD through this single helper so the dollars→micro-USD
+// conversion lives in one place.
+func NewCostBudgetGovernorFromUSD(budgetUSD float64) *CostBudgetGovernor {
+	if budgetUSD <= 0 {
+		return NewCostBudgetGovernor(DefaultMonthlyCostBudgetMicroUSD, DefaultCostBudgetWindow)
+	}
+	ceiling := MicroUSD(budgetUSD * float64(MicroUSDPerDollar))
+	return NewCostBudgetGovernor(ceiling, DefaultCostBudgetWindow)
+}
