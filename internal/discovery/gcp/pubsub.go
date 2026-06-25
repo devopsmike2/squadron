@@ -322,14 +322,27 @@ func (s *Scanner) ScanEventSources(ctx context.Context, scope scanner.ScanScope)
 		all = append(all, queues...)
 	}
 
-	// Two-way partial-scan posture: only return an error when BOTH
-	// surfaces failed. Any single-surface failure is silenced at this
-	// layer so an IAM gap on one surface doesn't drop the inventory
-	// the operator actually CAN see on the other. Tests 11 + 12 of
-	// the slice 5 design doc pin the two single-failure directions
-	// plus the both-fail path (test 13).
-	if pubsubErr != nil && ctErr != nil {
-		return all, fmt.Errorf("all gcp event source surfaces failed: pubsub=%v cloudtasks=%w", pubsubErr, ctErr)
+	// Slice 10 chunk 1 (v0.89.159, #801 Stream 198) extends the GCP
+	// dispatcher to three-way (Pub/Sub + Cloud Tasks + Pub/Sub Lite).
+	// Pub/Sub Lite is GCP's partitioned-log primitive, the structural
+	// analog of AWS Kinesis Data Streams and Azure Event Hubs.
+	// CLOSES the cross-cloud event source widening pass at 3-3-3-3 /
+	// 12 surfaces across 4 clouds. See
+	// docs/proposals/event-source-tier-slice10.md §5.
+	liteTopics, pslErr := s.ScanPubSubLiteTopics(ctx, scope)
+	if pslErr == nil {
+		all = append(all, liteTopics...)
+	}
+
+	// Three-way partial-scan posture: only return an error when ALL
+	// THREE surfaces failed. Any one- OR two-surface failure is
+	// silenced at this layer. Combinatorial single-failure paths are
+	// pinned by slice 10 acceptance tests 8 + 9 + 10; two-of-three
+	// failure path by test 11; all-three-fail error-string contract
+	// by test 12. Mirrors slice 8 Azure + slice 9 OCI three-way
+	// dispatchers.
+	if pubsubErr != nil && ctErr != nil && pslErr != nil {
+		return all, fmt.Errorf("all gcp event source surfaces failed: pubsub=%v cloudtasks=%v pubsublite=%w", pubsubErr, ctErr, pslErr)
 	}
 
 	return all, nil
