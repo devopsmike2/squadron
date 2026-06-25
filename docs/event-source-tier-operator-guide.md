@@ -1522,6 +1522,152 @@ Per §13 of the slice 8 design doc:
 - **Private endpoint configuration validation** — deeper
   network access analysis
 
+## Slice 9 SHIPPED in v0.89.155-v0.89.157 — OCI Queue Service
+
+Slice 9 brings OCI to parity with AWS + Azure on the event
+source tier at 3 surfaces. Queue Service is OCI's
+transactional FIFO message queue primitive analogous to AWS
+SQS — distinct from ONS pub/sub fan-out (one consumer per
+message vs. many-consumer fan-out) and from Streaming
+partitioned log analytics intake.
+
+After slice 9, the cross-cloud surface count lands at
+**3-2-3-3**:
+
+- AWS: EventBridge + SNS + SQS (3 surfaces)
+- GCP: Pub/Sub + Cloud Tasks (2 surfaces)
+- Azure: Service Bus + Event Grid + Event Hubs (3 surfaces)
+- OCI: Streaming + Notification Service + Queue Service (3 surfaces)
+
+Total: **11 event source surfaces across 4 clouds.** Only
+GCP at 2 surfaces remains for slice 10+ to close the widening
+pass at **3-3-3-3 / 12 surfaces**.
+
+### New recommendation kind
+
+1 new kind in slice 9:
+
+- `queues-logging-enable` — OCI Queue has no OCI Logging
+  configuration. Without a log group capturing queue
+  delivery events, the operator has no audit trail for
+  which messages were dequeued, processed, or sent to the
+  DLQ — critical for postmortem analysis of consumer-side
+  failures and poison-message investigation. When a message
+  lands in the DLQ at 2am the operator has no record of
+  which consumer attempted it — only that the DLQ count
+  incremented.
+
+The Logging axis mirrors the slice 1 Streaming and slice 7
+ONS patterns exactly via the same OCI Logging `/logs`
+detection helper structure. The slice 1 `listLogsForStream`,
+slice 7 `listLogsForTopic`, and slice 9 `listLogsForQueue`
+helpers are parallel; a future refactor to a shared
+`listLogsForOCID(resource_ocid)` is slice 10+ candidate.
+
+### Terraform Squadron emits
+
+```hcl
+resource "oci_logging_log" "<name>_queue_log" {
+  display_name = "${oci_queue_queue.<name>.display_name}-delivery-log"
+  log_group_id = var.default_log_group_id  # operator provides
+  log_type     = "SERVICE"
+
+  configuration {
+    source {
+      category    = "all"
+      resource    = oci_queue_queue.<name>.id
+      service     = "queue"
+      source_type = "OCISERVICE"
+    }
+    compartment_id = oci_queue_queue.<name>.compartment_id
+  }
+
+  is_enabled         = true
+  retention_duration = 30  # operator may tune
+}
+```
+
+### Decline path
+
+Decline `queues-logging-enable` if your team routes queue
+audit through a non-OCI-Logging destination — Cloud Guard
+custom recipes, OCI Streaming capture, third-party SIEM
+connectors all count. The verdict learning loop records.
+
+### Three-way dispatcher posture
+
+Slice 9 extends `ScanEventSources` from two-way (Streaming
++ Notifications) to three-way (Streaming + Notifications +
+Queues) with combinatorial partial-scan posture mirroring
+the slice 8 Azure three-way pattern:
+
+- Any one of three surfaces fails → other two still surface
+- Any two of three surfaces fail → remaining surface still
+  surfaces
+- All three surfaces fail → dispatcher returns terminal
+  error mentioning all three surface identifiers
+
+The compartment list call is shared across all three OCI
+surface walks. When `/compartments` fails at substrate
+level, all three surfaces fail with the same root cause;
+the dispatcher's all-three-fail error string mentions all
+three surfaces explicitly. Pinned by
+`TestScanEventSources_ThreeWay_OCI_AllFail_ErrorMentionsAllSurfaces`.
+
+### IAM extension
+
+Slice 9 adds one new OCI policy statement:
+
+```
+Allow group SquadronReaders to read queues in compartment <name>
+```
+
+The existing slice 1 Logging read policy covers the
+per-queue Logging detection call without extension.
+
+### The OCI task-processing chain Squadron now sees
+
+After slice 9, the OCI task-processing chain is fully
+visible end-to-end:
+
+1. **Streaming** intake → analytics consumers (slice 1
+   `streaming-logging-enable`)
+2. **ONS topic** → alert distribution (slice 7
+   `ons-logging-enable`)
+3. **Queue** → task processing (this slice
+   `queues-logging-enable`) — operator has no audit of
+   which messages were dequeued or sent to DLQ
+4. **Functions / OKE** consumers without trace primitive
+   (serverless + kubernetes tiers)
+5. **Workload health view** — workload-health dashboard
+   panel from v0.89.131-133
+
+Five layers. One control plane. Three primitives covered on
+OCI.
+
+### Slice 10+ deferrals
+
+Per §13 of the slice 9 design doc:
+- **Third GCP surface** — Cloud Pub/Sub Lite, Cloud
+  Dataflow are candidate primitives to bring GCP to 3
+  surfaces (closing the widening at 3-3-3-3 / 12 surfaces)
+- **DLQ configuration inspection** — per-queue
+  `deadLetterQueueDeliveryCount` + redelivery policy
+  analysis
+- **Per-message visibility timeout analysis** —
+  substrate-level analysis of consumer processing lag vs.
+  visibility timeout
+- **Channel-level inspection** — OCI Queue per-channel
+  routing detection
+- **Streaming-Queue cross-surface correlation** — when an
+  OCI Streaming pipeline routes into an OCI Queue
+  downstream
+- **Per-queue CMEK / vault key rotation validation**
+- **Shared listLogsForOCID helper refactor** — collapse
+  the three parallel listLogsForStream / listLogsForTopic /
+  listLogsForQueue helpers into one shared
+  resource-OCID-agnostic implementation
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —

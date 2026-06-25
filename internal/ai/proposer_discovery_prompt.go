@@ -415,6 +415,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice8EventHubsKindsPromptSection +
 
+	eventSourceTierSlice9QueuesKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -2109,6 +2111,73 @@ utilization / auto-inflate analysis requires substrate
 MetricQuerier integration; slice 9+. Schema Registry
 validation is slice 9+. Private endpoint configuration
 validation is slice 9+.
+
+` + "\n"
+
+// eventSourceTierSlice9QueuesKindsPromptSection — event source tier
+// slice 9 chunk 2 (v0.89.157, #799 Stream 196). One new
+// recommendation kind: queues-logging-enable. Brings OCI to parity
+// with AWS + Azure at 3 event source surfaces; cross-cloud count
+// lands at 3-2-3-3 / 11 surfaces total.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no Queue observations the rendered user message
+// stays byte-identical to v0.89.154 across all four providers.
+const eventSourceTierSlice9QueuesKindsPromptSection = `EVENT SOURCE TIER SLICE 9 — OCI QUEUE SERVICE (v0.89.155-157):
+
+Adds OCI Queue Service as the third OCI event source
+surface alongside Streaming and Notification Service.
+Queue Service is the transactional FIFO message queue
+primitive analogous to AWS SQS — distinct from ONS pub/sub
+fan-out (one consumer per message vs. many-consumer
+fan-out) and from Streaming partitioned log analytics
+intake. After slice 9, OCI has 3 event source surfaces
+matching AWS + Azure.
+
+Cross-cloud after slice 9: AWS 3 (EventBridge + SNS + SQS),
+GCP 2 (Pub/Sub + Cloud Tasks), Azure 3 (Service Bus + Event
+Grid + Event Hubs), OCI 3 (Streaming + Notification Service
++ Queue Service). Total: 11 event source surfaces across 4
+clouds. Only GCP at 2 surfaces remains for slice 10+ to
+close at 3-3-3-3 / 12 surfaces.
+
+The canonical OCI task-processing architecture:
+Queue service -> Functions / OKE consumers with
+dead-letter queues for poison-message isolation.
+
+- queues-logging-enable: OCI Queue has no OCI Logging
+  configuration. Without a log group capturing queue
+  delivery events, the operator has no audit trail for
+  which messages were dequeued, processed, or sent to the
+  DLQ — critical for postmortem analysis of consumer-side
+  failures and poison-message investigation. When a
+  message lands in the DLQ at 2am the operator has no
+  record of which consumer attempted it — only that the
+  DLQ count incremented.
+
+  Mirrors the Streaming streaming-logging-enable
+  (slice 1) and ONS ons-logging-enable (slice 7) patterns.
+  Terraform: oci_logging_log routing queue delivery events
+  to a log group (operator's existing log group via
+  var.default_log_group_id; new log group created if no
+  operator-default is provided).
+
+DECLINE PATH for queues-logging-enable: operators routing
+queue audit through a non-OCI-Logging destination (Cloud
+Guard custom recipe, OCI Streaming capture, third-party
+SIEM connector) should decline. The verdict learning loop
+records.
+
+CAVEAT FOR ALL QUEUE RECOMMENDATIONS:
+Slice 9 covers per-queue Logging axis. DLQ configuration
+inspection (per-queue deadLetterQueueDeliveryCount +
+redelivery policy analysis) is slice 10+ candidate.
+Per-message visibility timeout analysis requires
+substrate-level consumer-processing-lag detection;
+slice 10+. Channel-level inspection (OCI Queue per-channel
+routing) is slice 10+. Per-queue CMEK / vault key rotation
+validation is slice 10+.
 
 ` + "\n"
 
