@@ -122,6 +122,22 @@ type Scanner struct {
 	// runErrorRateDetectionForServerless branch short-circuits.
 	// Same posture as coldStartStore.
 	errorRateStore ErrorRateStore
+
+	// costExplorerClient is the AWS Cost Explorer adapter the
+	// cost-correlation substrate slice 6 chunk 2 (v0.89.184) uses for
+	// the read-only QueryCost body. Nil-tolerant: when nil, QueryCost
+	// returns scanner.ErrCostNotImplemented. Tests inject a fake
+	// satisfying CostExplorerClient; production wires the real
+	// costexplorer.NewFromConfig client. See aws/cost.go.
+	costExplorerClient CostExplorerClient
+
+	// costGovernor caps cumulative per-account spend on the
+	// per-call-PRICED Cost Explorer GetCostAndUsage API (~$0.01/call).
+	// REQUIRED for any charged cost call — QueryCost refuses to issue a
+	// charged request when the governor is nil (the same gate as a nil
+	// client), so a charged call can never be made without spend
+	// accounting. See scanner.CostBudgetGovernor + aws/cost.go.
+	costGovernor *scanner.CostBudgetGovernor
 }
 
 // NewScannerForValidation builds a Scanner suitable for the connector

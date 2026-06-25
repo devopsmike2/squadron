@@ -486,6 +486,20 @@ jump straight to that page.
   at
   [proposals/cost-correlation-substrate-slice6.md](./proposals/cost-correlation-substrate-slice6.md).
 
+  **Chunk 2 (v0.89.184) ships the AWS Cost Explorer `QueryCost`
+  body** — the first per-cloud cost reader, and the one surface
+  that materially charges (~$0.01/call), so the surface that most
+  exercises the governor. It reads `UnblendedCost` for a SERVICE
+  dimension via `GetCostAndUsage`, gated through the
+  `CostBudgetGovernor`, and refuses to issue a charged call
+  without BOTH a wired client and a governor (no charged request
+  can escape spend accounting). Over-budget returns
+  `ErrCostBudgetExceeded` as a graceful skip. Amounts are parsed
+  to integer micro-USD (no float drift). It is NOT wired into any
+  scan in this chunk — no charged Cost Explorer request fires
+  during a scan until the cost-correlation enrichment chunk
+  enables it. Same design doc.
+
   **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
   attribution.** The `DeadletteredMessages` metric is split by
   the `EntityName` dimension (one Azure Monitor call,
