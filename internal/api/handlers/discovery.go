@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -2418,6 +2419,103 @@ type awsGenerateRecommendationsResponse struct {
 //
 // Returns 200 with the typed response on success. 400/404/500 per the
 // flow above.
+// mapEventSourceCandidates converts the shared event-source wire rows
+// into proposer EventSourceCandidates. Used by every cloud's
+// generate-recommendations handler — the wire row and candidate shapes
+// are provider-agnostic. Reads the DLQ-axis Detail keys defensively
+// (Detail is map[string]any; numbers arrive as float64 after a JSON
+// round-trip, so handle int / int64 / float64).
+func mapEventSourceCandidates(rows []eventSourceRow) []ai.EventSourceCandidate {
+	out := make([]ai.EventSourceCandidate, 0, len(rows))
+	for _, es := range rows {
+		cand := ai.EventSourceCandidate{
+			Provider:             es.Provider,
+			Surface:              es.Surface,
+			SourceType:           es.SourceType,
+			ResourceName:         es.ResourceName,
+			ResourceARN:          es.ResourceARN,
+			Region:               es.Region,
+			HasTraceAxis:         es.HasTraceAxis,
+			HasLogAxis:           es.HasLogAxis,
+			HasPropagationConfig: es.HasPropagationConfig,
+			PropagationNotes:     es.PropagationNotes,
+		}
+		if es.Detail != nil {
+			if v, ok := es.Detail["has_dlq"].(bool); ok {
+				cand.HasDLQ = v
+			}
+			if v, ok := es.Detail["redrive_policy_target_arn"].(string); ok {
+				cand.RedrivePolicyTargetARN = v
+			}
+			if v, ok := es.Detail["dlq_retry_count_in_band"].(bool); ok {
+				cand.DLQRetryCountInBand = v
+			}
+			switch v := es.Detail["dlq_retry_count"].(type) {
+			case int:
+				cand.DLQRetryCount = v
+			case int64:
+				cand.DLQRetryCount = int(v)
+			case float64:
+				cand.DLQRetryCount = int(v)
+			}
+		}
+		out = append(out, cand)
+	}
+	return out
+}
+
+// buildDiscoveryRecommendations walks an AI proposal plan into the
+// recommendation envelopes the Recommendations tab renders. Shared by
+// every cloud's generate-recommendations handler — the walk operates on
+// the provider-agnostic ProposalResult, not the cloud-specific scan.
+// Returns an error only if a plan step fails to marshal (should never
+// happen on a struct we just produced); the caller maps it to a 500.
+func buildDiscoveryRecommendations(scanID string, steps []ai.PlanStepCandidate, now time.Time) ([]recommendations.Recommendation, error) {
+	recs := make([]recommendations.Recommendation, 0, len(steps))
+	for i, step := range steps {
+		stepJSON, err := json.Marshal(step)
+		if err != nil {
+			return nil, fmt.Errorf("plan step %d marshal: %w", i, err)
+		}
+		title := step.Name
+		if title == "" {
+			title = "Discovery recommendation"
+		}
+		detail := "AI-emitted instrumentation plan step. Run the Terraform through your IaC pipeline."
+		rec := recommendations.Recommendation{
+			ID:              "discovery-" + scanID + "-" + strconv.Itoa(i),
+			Category:        recommendations.CategoryEmptySignal,
+			Severity:        recommendations.SeverityWarn,
+			Title:           title,
+			Detail:          detail,
+			EstSavingsBytes: 0,
+			GeneratedAt:     now,
+			Source: &recommendations.RecommendationSource{
+				Kind:  recommendations.SourceDiscoveryScan,
+				RefID: scanID,
+			},
+			Action: &recommendations.RecommendationAction{
+				Kind:    recommendations.ActionPlan,
+				Payload: stepJSON,
+			},
+			IaC: &recommendations.IaCSnippet{
+				Format: recommendations.IaCTerraform,
+				Source: step.InlineConfigSnippet,
+			},
+			ResourceKind:      classifyResourceKind(step.Name, step.InlineConfigSnippet),
+			AffectedResources: append([]string(nil), step.AffectedResources...),
+		}
+		if rec.ResourceKind != "" {
+			rec.Disposition = iac.DispositionFor(rec.ResourceKind)
+		}
+		if len(step.HCLPatch) > 0 {
+			rec.HCLPatch = append([]byte(nil), step.HCLPatch...)
+		}
+		recs = append(recs, rec)
+	}
+	return recs, nil
+}
+
 func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 	accountID := strings.TrimSpace(c.Param("id"))
 	if accountID == "" {
@@ -2654,40 +2752,7 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 	// EventSourceCandidate, reading the DLQ-axis Detail keys defensively
 	// (Detail is map[string]any; numbers arrive as float64 after a JSON
 	// round-trip, so handle int / int64 / float64).
-	for _, es := range req.ScanResult.EventSources {
-		cand := ai.EventSourceCandidate{
-			Provider:             es.Provider,
-			Surface:              es.Surface,
-			SourceType:           es.SourceType,
-			ResourceName:         es.ResourceName,
-			ResourceARN:          es.ResourceARN,
-			Region:               es.Region,
-			HasTraceAxis:         es.HasTraceAxis,
-			HasLogAxis:           es.HasLogAxis,
-			HasPropagationConfig: es.HasPropagationConfig,
-			PropagationNotes:     es.PropagationNotes,
-		}
-		if es.Detail != nil {
-			if v, ok := es.Detail["has_dlq"].(bool); ok {
-				cand.HasDLQ = v
-			}
-			if v, ok := es.Detail["redrive_policy_target_arn"].(string); ok {
-				cand.RedrivePolicyTargetARN = v
-			}
-			if v, ok := es.Detail["dlq_retry_count_in_band"].(bool); ok {
-				cand.DLQRetryCountInBand = v
-			}
-			switch v := es.Detail["dlq_retry_count"].(type) {
-			case int:
-				cand.DLQRetryCount = v
-			case int64:
-				cand.DLQRetryCount = int(v)
-			case float64:
-				cand.DLQRetryCount = int(v)
-			}
-		}
-		aiCtx.EventSources = append(aiCtx.EventSources, cand)
-	}
+	aiCtx.EventSources = mapEventSourceCandidates(req.ScanResult.EventSources)
 
 	// v0.89.28 (#643 slice 1) → v0.89.36 (#655 Stream 53, #531 slice
 	// 2 chunk 3) — populate the verdict few-shot block before the
@@ -2761,94 +2826,16 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 	// 2B addition); the Action payload carries the step JSON for the
 	// UI's preview flow.
 	now := time.Now().UTC()
-	recs := make([]recommendations.Recommendation, 0, len(result.Plan.Steps))
-	for i, step := range result.Plan.Steps {
-		stepJSON, err := json.Marshal(step)
-		if err != nil {
-			// Marshal of a Go struct we just produced should never
-			// fail. Surface as 500 so the operator sees a clean
-			// error rather than a half-filled recommendations list.
-			if h.logger != nil {
-				h.logger.Error("aws generate recommendations: plan step marshal failed",
-					zap.Error(err), zap.Int("step_index", i))
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
-				Code:    "PlanStepMarshalFailed",
-				Message: "Squadron could not encode the plan step. The error has been logged.",
-			}})
-			return
+	recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("aws generate recommendations: plan step marshal failed", zap.Error(err))
 		}
-		title := step.Name
-		if title == "" {
-			title = "Discovery recommendation"
-		}
-		// v0.88.4: per-step Detail was previously set to result.Reasoning,
-		// which duplicated the overall proposer-reasoning text into every
-		// step card. The Recommendations tab already renders the overall
-		// reasoning in a single panel at the top of the page; surfacing
-		// the same string on every step was operator-visible noise that
-		// pushed the actual Terraform snippet down the fold. v0.88.4
-		// leaves Detail as a short generic per-step descriptor; the
-		// proposer's overall narrative is read once from the top-level
-		// Reasoning field.
-		detail := "AI-emitted instrumentation plan step. Run the Terraform through your IaC pipeline."
-		rec := recommendations.Recommendation{
-			ID:              "discovery-" + req.ScanResult.ScanID + "-" + strconv.Itoa(i),
-			Category:        recommendations.CategoryEmptySignal, // closest existing semantic match: "resource emits no telemetry"
-			Severity:        recommendations.SeverityWarn,
-			Title:           title,
-			Detail:          detail,
-			EstSavingsBytes: 0,
-			GeneratedAt:     now,
-			Source: &recommendations.RecommendationSource{
-				Kind:  recommendations.SourceDiscoveryScan,
-				RefID: req.ScanResult.ScanID,
-			},
-			Action: &recommendations.RecommendationAction{
-				Kind:    recommendations.ActionPlan,
-				Payload: stepJSON,
-			},
-			IaC: &recommendations.IaCSnippet{
-				Format: recommendations.IaCTerraform,
-				Source: step.InlineConfigSnippet,
-			},
-			// v0.89.3 #603 Stream 19 Phase 4: classify the step into one
-			// of the slice-1 placement-map kinds so the Recommendations
-			// tab's Open-PR button can look up the right placement row.
-			// Empty when the step's snippet doesn't match any known
-			// Terraform resource shape — the UI falls back to Copy-only
-			// in that case.
-			ResourceKind: classifyResourceKind(step.Name, step.InlineConfigSnippet),
-			// v0.89.4 #611 Stream 19 Phase 4 follow-on: thread the
-			// proposer-emitted per-step affected_resources list through
-			// so the Open-PR backend's PR title's "for <N> resources"
-			// count and the body's "Affected resources" bullet list
-			// reflect the actual resource population. Empty slice
-			// when the model didn't emit it — the backend's title
-			// falls back to "for 0 resources" rather than erroring.
-			AffectedResources: append([]string(nil), step.AffectedResources...),
-		}
-		// v0.89.11 #626 Stream 27 (slice 1.5): stamp the canonical
-		// disposition keyed off the classifier result. The proposer
-		// may emit step.Disposition but the handler-side
-		// classification is the authoritative one (structural fact,
-		// not a model judgment). Empty ResourceKind → empty
-		// Disposition so non-Open-PR-eligible recommendations don't
-		// carry a confusing badge.
-		if rec.ResourceKind != "" {
-			rec.Disposition = iac.DispositionFor(rec.ResourceKind)
-		}
-		// v0.89.12 #628 Stream 29 (slice 2): plumb the proposer-
-		// emitted HCL patch through to the recommendation
-		// envelope. Only meaningful on patch_existing kinds; the
-		// Open-PR backend's HCL merger reads it from the request
-		// body. Absent (nil) on slice-1.5-era recommendations and
-		// on new_file kinds; the absence flows through cleanly
-		// and the handler treats it as a fall-back signal.
-		if len(step.HCLPatch) > 0 {
-			rec.HCLPatch = append([]byte(nil), step.HCLPatch...)
-		}
-		recs = append(recs, rec)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "PlanStepMarshalFailed",
+			Message: "Squadron could not encode the plan step. The error has been logged.",
+		}})
+		return
 	}
 
 	// Audit event. Payload deliberately omits the Terraform content —
