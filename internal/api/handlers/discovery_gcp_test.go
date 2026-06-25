@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -657,21 +658,6 @@ func TestScanGCPConnection_HardError_EmitsScanFailedAudit(t *testing.T) {
 	}
 }
 
-// --- Recommendations stub ----------------------------------------------
-
-func TestRecommendationsForGCPScan_NotImplementedStub(t *testing.T) {
-	h, store, key := newGCPTestHandlers(t, nil, nil)
-	r := newGCPRouter(h)
-	conn := seedGCPConnection(t, store, key, "Prod", "sandbox-12345", "us-central1")
-	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections/"+conn.ID+"/recommendations", "{}")
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501; body=%s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "chunk 5") {
-		t.Errorf("body should explain chunk-5 deferral: %s", w.Body.String())
-	}
-}
-
 // --- Trampoline unwired path -------------------------------------------
 
 func TestStoreNotWired_Returns500(t *testing.T) {
@@ -768,5 +754,107 @@ func TestScanGCPConnection_SurfacesEventSources(t *testing.T) {
 	}
 	if len(es.PropagationNotes) != 1 {
 		t.Errorf("propagation_notes len = %d, want 1", len(es.PropagationNotes))
+	}
+}
+
+// TestRecommendationsForGCPScan_HappyPath pins the chunk-5 GCP
+// recommendations endpoint (v0.89.197): the posted scan result becomes
+// a Provider="gcp" DiscoveryScanContext (event sources included) and the
+// proposer's plan is walked into recommendation envelopes.
+func TestRecommendationsForGCPScan_HappyPath(t *testing.T) {
+	mock := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Reasoning: "GCP instrumentation plan",
+			Model:     "claude-test",
+			TokensIn:  10,
+			TokensOut: 20,
+			Plan: ai.PlanCandidate{
+				Steps: []ai.PlanStepCandidate{
+					{
+						Name:                "Preserve traceparent on orders-topic",
+						InlineConfigSnippet: "resource \"google_pubsub_subscription\" \"orders\" {}",
+						AffectedResources:   []string{"orders-topic"},
+					},
+				},
+			},
+		},
+	}
+	h, store, key := newGCPTestHandlers(t, nil, &fakeGCPScannerFactory{scanner: &fakeScanner{}})
+	h.WithGCPAIProposer(mock)
+	r := newGCPRouter(h)
+
+	conn := seedGCPConnection(t, store, key, "Prod", "sandbox-12345", "us-central1")
+
+	body, err := json.Marshal(gcpGenerateRecommendationsRequest{
+		ScanResult: gcpScanResponse{
+			ScanID:    "scan-gcp-recs",
+			ProjectID: "sandbox-12345",
+			Region:    "us-central1",
+			Compute: []scanner.ComputeInstanceSnapshot{
+				{ResourceID: "i-1", InstanceType: "e2-medium", OSFamily: "linux", Region: "us-central1", HasOTel: false},
+			},
+			EventSources: []eventSourceRow{
+				{
+					Provider: "gcp", Surface: "pubsub", SourceType: "topic",
+					ResourceName: "orders-topic", Region: "us-central1",
+					HasTraceAxis: true, HasLogAxis: true,
+					HasPropagationConfig: false,
+					PropagationNotes:     []string{"subscription filter excludes traceparent"},
+				},
+			},
+			InstrumentedCount:   0,
+			UninstrumentedCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections/"+conn.ID+"/recommendations", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !mock.called {
+		t.Fatal("proposer was not called")
+	}
+	// The proposer must have received a GCP-shaped context with the
+	// event source folded in.
+	if mock.gotCtx.Provider != "gcp" {
+		t.Errorf("ctx.Provider = %q, want gcp", mock.gotCtx.Provider)
+	}
+	if mock.gotCtx.ProjectID != "sandbox-12345" {
+		t.Errorf("ctx.ProjectID = %q, want sandbox-12345", mock.gotCtx.ProjectID)
+	}
+	if len(mock.gotCtx.EventSources) != 1 || mock.gotCtx.EventSources[0].ResourceName != "orders-topic" {
+		t.Errorf("ctx.EventSources = %+v, want 1 orders-topic", mock.gotCtx.EventSources)
+	}
+	if mock.gotCtx.EventSources[0].HasPropagationConfig {
+		t.Errorf("event source propagation should be false (gap)")
+	}
+
+	var resp awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if resp.Declined {
+		t.Errorf("declined = true, want false")
+	}
+	if len(resp.Recommendations) != 1 {
+		t.Fatalf("recommendations len = %d, want 1; body=%s", len(resp.Recommendations), w.Body.String())
+	}
+	if resp.Recommendations[0].Title != "Preserve traceparent on orders-topic" {
+		t.Errorf("rec title = %q", resp.Recommendations[0].Title)
+	}
+}
+
+// TestRecommendationsForGCPScan_ProposerNotWired returns 503 when AI
+// assist is off (no proposer wired).
+func TestRecommendationsForGCPScan_ProposerNotWired(t *testing.T) {
+	h, store, key := newGCPTestHandlers(t, nil, &fakeGCPScannerFactory{scanner: &fakeScanner{}})
+	r := newGCPRouter(h)
+	conn := seedGCPConnection(t, store, key, "Prod", "sandbox-12345", "us-central1")
+	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections/"+conn.ID+"/recommendations", `{"scan_result":{"scan_id":"s1","project_id":"sandbox-12345"}}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
 	}
 }

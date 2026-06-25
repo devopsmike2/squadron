@@ -16,9 +16,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -93,6 +95,10 @@ type DiscoveryGCPHandlers struct {
 	// Optional; see DiscoveryHandlers.traceIndex godoc for posture.
 	traceIndex TraceIndexLookup
 	logger     *zap.Logger
+	// aiProposer — chunk 5 (v0.89.197). The discovery-side AI proposer
+	// HandleRecommendationsForGCPScan calls. nil when AI assist is off;
+	// the handler 503s in that case.
+	aiProposer DiscoveryAIProposer
 }
 
 // NewDiscoveryGCPHandlers builds the handler struct. Optional
@@ -139,6 +145,14 @@ func (h *DiscoveryGCPHandlers) WithGCPTraceIndex(idx TraceIndexLookup) *Discover
 
 func (h *DiscoveryGCPHandlers) WithGCPScannerFactory(f GCPScannerFactory) *DiscoveryGCPHandlers {
 	h.scannerFactory = f
+	return h
+}
+
+// WithGCPAIProposer wires the discovery-side AI proposer used by
+// HandleRecommendationsForGCPScan. Production wires s.discoveryAIService;
+// nil leaves recommendations 503-ing.
+func (h *DiscoveryGCPHandlers) WithGCPAIProposer(p DiscoveryAIProposer) *DiscoveryGCPHandlers {
+	h.aiProposer = p
 	return h
 }
 
@@ -1057,11 +1071,191 @@ func (h *DiscoveryGCPHandlers) emitGCPScanFailed(ctx context.Context, conn *gcpc
 // recommendation kind, and the system-prompt extension. Until then,
 // the route returns a humanized "coming in chunk 5" message so the
 // UI can render an empty Recommendations tab without 404ing.
+// gcpGenerateRecommendationsRequest is the POST body for the GCP
+// generate-recommendations endpoint: the gcpScanResponse the operator
+// just received, echoed back so the proposer reasons over the same
+// inventory the Inventory tab rendered.
+type gcpGenerateRecommendationsRequest struct {
+	ScanResult gcpScanResponse `json:"scan_result"`
+}
+
+// HandleRecommendationsForGCPScan — POST
+// /api/v1/discovery/gcp/connections/:id/recommendations (chunk 5,
+// v0.89.197). Builds a Provider="gcp" DiscoveryScanContext from the
+// posted scan result and runs the shared proposer, mirroring the AWS
+// handler. Event sources flow through mapEventSourceCandidates; the
+// plan walks through buildDiscoveryRecommendations.
 func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": &scanner.HumanizedError{
-		Code:    "GCPRecommendationsNotImplemented",
-		Message: "GCP recommendations are coming in chunk 5 of the GCP discovery slice 1 arc (#667). Until then, the GCP scan result is render-only.",
-	}})
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
+		}})
+		return
+	}
+	if h.aiProposer == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "AIProposerNotWired",
+			Message: "Squadron's AI assist is not configured. Set ANTHROPIC_API_KEY and ai.enabled=true to enable discovery recommendations.",
+		}})
+		return
+	}
+
+	conn, err := h.store.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, gcpconnstore.ErrConnectionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code:    "ConnectionNotFound",
+				Message: "No GCP connection exists with that ID. Connect the project from the wizard first.",
+			}})
+			return
+		}
+		if h.logger != nil {
+			h.logger.Error("gcp generate recommendations: store read failed", zap.Error(err), zap.String("id", id))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "StoreReadFailed",
+			Message: "Squadron could not read the connection. The error has been logged; retry in a moment.",
+		}})
+		return
+	}
+
+	var req gcpGenerateRecommendationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message: "Request body could not be parsed as JSON. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.ScanResult.ScanID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingScanID",
+			Message: "scan_result.scan_id is required. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if pid := strings.TrimSpace(req.ScanResult.ProjectID); pid != "" && pid != conn.ProjectID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ProjectIDMismatch",
+			Message: "scan_result.project_id does not match the connection. Re-run the scan against the right connection and retry.",
+		}})
+		return
+	}
+
+	regions := []string{}
+	if r := strings.TrimSpace(req.ScanResult.Region); r != "" {
+		regions = append(regions, r)
+	}
+	aiCtx := &ai.DiscoveryScanContext{
+		ScanID:              req.ScanResult.ScanID,
+		Provider:            "gcp",
+		ProjectID:           conn.ProjectID,
+		Regions:             regions,
+		InstrumentedCount:   req.ScanResult.InstrumentedCount,
+		UninstrumentedCount: req.ScanResult.UninstrumentedCount,
+	}
+	for _, ci := range req.ScanResult.Compute {
+		aiCtx.ComputeInstances = append(aiCtx.ComputeInstances, ai.ComputeResourceCandidate{
+			ResourceID:   ci.ResourceID,
+			InstanceType: ci.InstanceType,
+			Region:       ci.Region,
+			OSFamily:     ci.OSFamily,
+			HasOTel:      ci.HasOTel,
+		})
+	}
+	for _, db := range req.ScanResult.Databases {
+		aiCtx.Databases = append(aiCtx.Databases, ai.DatabaseResourceCandidate{
+			ResourceID:                 db.ResourceID,
+			Engine:                     db.Engine,
+			EngineVersion:              db.EngineVersion,
+			InstanceClass:              db.InstanceClass,
+			PerformanceInsightsEnabled: db.PerformanceInsightsEnabled,
+			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
+			Region:                     db.Region,
+			Provider:                   db.Provider,
+			QueryInsightsEnabled:       db.QueryInsightsEnabled,
+			SQLInsightsDiagEnabled:     db.SQLInsightsDiagEnabled,
+			DatabaseManagementEnabled:  db.DatabaseManagementEnabled,
+		})
+	}
+	for _, cl := range req.ScanResult.Clusters {
+		addonNames := make([]string, 0, len(cl.Addons))
+		for _, a := range cl.Addons {
+			if !strings.EqualFold(a.Status, "ACTIVE") {
+				continue
+			}
+			addonNames = append(addonNames, a.Name)
+		}
+		aiCtx.Clusters = append(aiCtx.Clusters, ai.ClusterCandidate{
+			ResourceID:          cl.ResourceID,
+			Name:                cl.Name,
+			KubernetesVersion:   cl.KubernetesVersion,
+			ControlPlaneLogging: append([]string(nil), cl.ControlPlaneLogging...),
+			AddonNames:          addonNames,
+			Region:              cl.Region,
+		})
+	}
+	aiCtx.EventSources = mapEventSourceCandidates(req.ScanResult.EventSources)
+
+	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("gcp generate recommendations: proposer call failed",
+				zap.Error(err), zap.String("project_id", conn.ProjectID), zap.String("scan_id", aiCtx.ScanID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ProposerCallFailed",
+			Message: "Squadron's AI proposer failed: " + err.Error(),
+		}})
+		return
+	}
+	if result.Declined {
+		c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+			Declined:        true,
+			Reason:          result.Reason,
+			Recommendations: []recommendations.Recommendation{},
+		})
+		return
+	}
+
+	now := time.Now().UTC()
+	recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("gcp generate recommendations: plan step marshal failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "PlanStepMarshalFailed",
+			Message: "Squadron could not encode the plan step. The error has been logged.",
+		}})
+		return
+	}
+
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      services.AuditActorSystem,
+			EventType:  "discovery.gcp.recommendations_generated",
+			TargetType: credstore.TargetTypeCloudConnection,
+			TargetID:   conn.ID,
+			Action:     "recommendations_generated",
+			Payload: map[string]any{
+				"connection_id": conn.ID,
+				"project_id":    conn.ProjectID,
+				"scan_id":       req.ScanResult.ScanID,
+				"step_count":    len(recs),
+				"tokens_in":     result.TokensIn,
+				"tokens_out":    result.TokensOut,
+				"model":         result.Model,
+				"recorded_at":   now,
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+		Reasoning:       result.Reasoning,
+		Recommendations: recs,
+	})
 }
 
 // --- helpers ------------------------------------------------------------
