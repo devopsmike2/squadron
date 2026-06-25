@@ -646,4 +646,3 @@ func (s *Scanner) WithConnectionID(id string) *Scanner {
 func preArmMetricsLimiter() *rate.Limiter {
 	return rate.NewLimiter(rate.Every(time.Second), 1)
 }
-
