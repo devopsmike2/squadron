@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -3581,4 +3582,48 @@ func TestDiscoveryProposer_EventSourcesRendered(t *testing.T) {
 	empty := DiscoveryScanContext{ScanID: "scan-es-002", AccountID: "123456789012", Regions: []string{"us-east-1"}}
 	emptyMsg := buildDiscoveryUserMessage(empty)
 	assert.NotContains(t, emptyMsg, "Event sources", "empty event-source list must render no section (pre-bridge parity)")
+}
+
+// TestDiscoveryProposer_EventSourcePropagationRendered pins the slice-2
+// propagation axis (v0.89.194) flowing through the bridge: a broken bus
+// surfaces propagation_ok=false plus its per-issue note (the reasoning
+// template's "[specific note]" slot for eventbridge-rule-preserves-trace),
+// while a healthy bus renders propagation_ok=true with no note line.
+func TestDiscoveryProposer_EventSourcePropagationRendered(t *testing.T) {
+	ctx := DiscoveryScanContext{
+		ScanID:    "scan-es-prop-001",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+		EventSources: []EventSourceCandidate{
+			{
+				Provider: "aws", Surface: "eventbridge", SourceType: "bus",
+				ResourceName: "orders-bus",
+				ResourceARN:  "arn:aws:events:us-east-1:123456789012:event-bus/orders-bus",
+				Region:       "us-east-1", HasTraceAxis: true, HasLogAxis: true,
+				HasPropagationConfig: false,
+				PropagationNotes: []string{
+					"rule 'order-events' has InputPath '$.detail' that strips trace header",
+				},
+			},
+			{
+				Provider: "aws", Surface: "eventbridge", SourceType: "bus",
+				ResourceName: "healthy-bus",
+				ResourceARN:  "arn:aws:events:us-east-1:123456789012:event-bus/healthy-bus",
+				Region:       "us-east-1", HasTraceAxis: true, HasLogAxis: true,
+				HasPropagationConfig: true,
+			},
+		},
+	}
+	got := buildDiscoveryUserMessage(ctx)
+
+	// Broken bus: propagation_ok=false + the per-issue note line.
+	assert.Contains(t, got, "orders-bus")
+	assert.Contains(t, got, "propagation_ok=false")
+	assert.Contains(t, got, "propagation_note: rule 'order-events' has InputPath '$.detail' that strips trace header")
+
+	// Healthy bus: propagation_ok=true, and exactly one note line in the
+	// whole readout (only the broken bus emits one).
+	assert.Contains(t, got, "healthy-bus")
+	assert.Contains(t, got, "propagation_ok=true")
+	assert.Equal(t, 1, strings.Count(got, "propagation_note:"), "notes render only for the broken bus")
 }

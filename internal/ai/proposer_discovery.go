@@ -62,6 +62,16 @@ type EventSourceCandidate struct {
 	RedrivePolicyTargetARN string
 	DLQRetryCount          int
 	DLQRetryCountInBand    bool
+
+	// Propagation axis (event source tier slice 2). When the
+	// source-level trace axis is on but HasPropagationConfig is false,
+	// the proposer emits the per-message propagation kind for the
+	// surface (eventbridge-rule-preserves-trace / pubsub-* /
+	// servicebus-* / streaming-*). PropagationNotes are the per-issue
+	// strings the propagation reasoning template surfaces as the
+	// "[specific note]" slot.
+	HasPropagationConfig bool
+	PropagationNotes     []string
 }
 
 type DiscoveryScanContext struct {
