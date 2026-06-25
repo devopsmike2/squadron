@@ -296,6 +296,26 @@ jump straight to that page.
   work shifts from per-cloud breadth (3-3-3-3 complete) to
   per-axis depth — consumer lag detection, cross-surface
   correlation, substrate-level cost modeling.
+
+  **DLQ Configuration Analysis slice 1 (v0.89.162-v0.89.166)
+  ships the FIRST per-axis depth slice** across all 4 clouds'
+  queue tier surfaces. Two detection rules per cloud (missing
+  DLQ + retry-count band `[2, 50]`), 7 recommendation kinds
+  routed via existing per-cloud webhook prefixes (NO new
+  prefix routing). Establishes two HONEST FRAMING patterns:
+  §3.1 managed-primitive-absence (GCP Cloud Tasks has no
+  managed DLQ primitive) + §3.2 scanner-coverage-gap (Azure
+  Service Bus per-queue walk deferred to future slice). Both
+  patterns are load-bearing for slice 12+ substrate-dependent
+  depth work where Squadron repeatedly hits detection rules
+  it cannot prove from its current scan view. NO new API
+  calls, NO IAM extension, NO storage migration; additive
+  Detail bag keys only preserve cold-start parity. Design
+  doc at
+  [proposals/dlq-configuration-analysis-slice1.md](./proposals/dlq-configuration-analysis-slice1.md);
+  runbook close in
+  [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
+
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,
