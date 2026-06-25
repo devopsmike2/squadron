@@ -4,6 +4,10 @@
 package oci
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )
 
@@ -91,4 +95,162 @@ func applyOCIQueuePoisonRateDetail(snap *scanner.EventSourceInstanceSnapshot, q 
 	res := detectOCIQueuePoisonRate(q)
 	snap.Detail["poison_rate_per_hour"] = res.RatePerHour
 	snap.Detail["poison_rate_high_band"] = res.HighBand
+}
+
+// --- Poison-rate substrate slice 4 chunk 4 (v0.89.181, #823 Stream
+// 220) — REAL OCI Monitoring-backed detection that closes the OCI
+// §3.3 deferral. This is the FINAL cloud — chunk 4 CLOSES the entire
+// poison-rate substrate arc and retires the last §3.3 deferral. The
+// honest-framing detectOCIQueuePoisonRate above stays as the
+// projection-time default (cold-start parity for the unwired path);
+// the enrichment below overwrites the two Detail keys with real
+// readings when the OCI Monitoring client is wired.
+
+// OCIQueueMetricNamespace is the OCI Monitoring namespace for Queue
+// Service metrics. summarizeMetricsData requires (namespace, MQL
+// query) as a tuple; this is the queue-tier analog of the
+// oci_functions namespace the cold-start substrate uses.
+const OCIQueueMetricNamespace = "oci_queue"
+
+// OCIQueueDeadLetterMessagesMetric is the OCI Monitoring metric for
+// the per-queue dead-letter message count. Poison-rate substrate
+// slice 4 chunk 4 reads this gauge and derives the poison rate as
+// the max-min delta (net dead-letter accumulation) over the window —
+// the same gauge-delta shape the Azure chunk uses, and distinct from
+// the AWS / GCP counter-sum shape (those clouds expose arrival
+// counters; OCI + Azure expose dead-letter DEPTH gauges).
+//
+// HONEST CAVEAT (documented in the design doc §7): the exact OCI
+// Monitoring metric name for queue dead-letter depth should be
+// confirmed against OCI's current Monitoring metric reference for
+// the oci_queue namespace. If the name does not match, OCI returns
+// no datapoints, SampleCount is 0, and DetectOCIQueuePoisonRate
+// falls back to the honest-framing absent sentinel (-1) — a SAFE
+// degradation that never emits false data. The substrate wiring,
+// rate limiter, and enrichment are correct regardless; only the
+// metric-name string is the verification surface.
+const OCIQueueDeadLetterMessagesMetric = "MessagesInDlq"
+
+// OCIQueuePoisonRateWindowHours is the trailing observation window
+// (hours) over which the dead-letter gauge max-min delta is read.
+const OCIQueuePoisonRateWindowHours = 1
+
+// queryOCIQueueDeadletterDelta reads the queue's dead-letter gauge
+// over the window via OCI Monitoring summarizeMetricsData and returns
+// the net accumulation (max - min across the returned per-resolution
+// datapoints, floored at 0) plus the datapoint count.
+//
+// MQL: MessagesInDlq[<window>]{resourceId = "<queueOCID>"}.max() —
+// the .max() reduction gives the per-resolution peak depth; the
+// substrate then takes max-min across resolutions as the net
+// accumulation (the Azure gauge-delta analog). sampleCount==0 means
+// OCI returned no datapoints (queue too new, metric not emitted, or
+// metric-name mismatch) → the caller keeps the absent sentinel.
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3 + §7.
+func (s *Scanner) queryOCIQueueDeadletterDelta(ctx context.Context, compartmentID, queueOCID string) (delta, sampleCount int, err error) {
+	if s.metricsLimiter != nil {
+		if werr := s.metricsLimiter.Wait(ctx); werr != nil {
+			return 0, 0, fmt.Errorf("rate limit: %w", werr)
+		}
+	}
+	endTime := time.Now().UTC()
+	window := time.Duration(OCIQueuePoisonRateWindowHours) * time.Hour
+	startTime := endTime.Add(-window)
+	query := fmt.Sprintf(
+		"%s[%s]{resourceId = %q}.max()",
+		OCIQueueDeadLetterMessagesMetric, ociWindowQuery(window), queueOCID,
+	)
+	points, callErr := s.monitoringClient.SummarizeMetricsData(
+		ctx, compartmentID, OCIQueueMetricNamespace, query, startTime, endTime,
+	)
+	if callErr != nil {
+		return 0, 0, fmt.Errorf("summarize metrics: %w", callErr)
+	}
+	if len(points) == 0 {
+		return 0, 0, nil
+	}
+	maxV, minV := points[0].Value, points[0].Value
+	for _, p := range points {
+		if p.Value > maxV {
+			maxV = p.Value
+		}
+		if p.Value < minV {
+			minV = p.Value
+		}
+	}
+	d := maxV - minV
+	if d < 0 {
+		d = 0
+	}
+	return int(d), len(points), nil
+}
+
+// DetectOCIQueuePoisonRate reads the queue's dead-letter net
+// accumulation via OCI Monitoring and converts it into the
+// poison-rate axis result. This is the REAL detection that replaces
+// the slice 3 §3.3 honest-framing absent sentinel for OCI Queue
+// Service — the FINAL cloud in the substrate arc.
+//
+// Real-zero vs absent (design doc §3.1): sampleCount==0 → absent
+// sentinel (-1). A non-empty series with a flat gauge (delta 0) →
+// real "zero new dead-letters this hour" (0). -1 always means "not
+// measured", never "measured as zero".
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3 + §7.
+func (s *Scanner) DetectOCIQueuePoisonRate(ctx context.Context, compartmentID, queueOCID string) (ociQueuePoisonRateDetectionResult, error) {
+	delta, samples, err := s.queryOCIQueueDeadletterDelta(ctx, compartmentID, queueOCID)
+	if err != nil {
+		return ociQueuePoisonRateDetectionResult{}, fmt.Errorf("poison-rate query: %w", err)
+	}
+	if samples == 0 {
+		return ociQueuePoisonRateDetectionResult{RatePerHour: -1, HighBand: false}, nil
+	}
+	return ociQueuePoisonRateDetectionResult{
+		RatePerHour: delta,
+		HighBand:    delta >= OCIPoisonRatePerHourHighThreshold,
+	}, nil
+}
+
+// enrichOCIQueuePoisonRate is the post-projection enrichment pass
+// that overwrites the honest-framing poison-rate Detail keys with
+// real OCI Monitoring readings. Mirrors the AWS / GCP / Azure
+// enrichment posture: nil-tolerant on monitoringClient, per-row
+// failures swallowed.
+//
+//   - monitoringClient == nil → no-op. The projection's
+//     honest-framing absent sentinels survive byte-identically
+//     (cold-start parity for deployments without the Monitoring
+//     wiring).
+//   - reads compartment_id from the snapshot Detail bag (set by
+//     projectOCIQueue) + the queue OCID from ResourceARN — both are
+//     needed for the summarizeMetricsData call.
+//   - a per-queue query error leaves that snapshot untouched (absent
+//     sentinel preserved) and continues.
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
+func (s *Scanner) enrichOCIQueuePoisonRate(ctx context.Context, snaps []scanner.EventSourceInstanceSnapshot) {
+	if s.monitoringClient == nil {
+		return
+	}
+	for i := range snaps {
+		detail := snaps[i].Detail
+		if detail == nil {
+			continue
+		}
+		queueOCID := snaps[i].ResourceARN
+		if queueOCID == "" {
+			continue
+		}
+		compartmentID, _ := detail["compartment_id"].(string)
+		if compartmentID == "" {
+			continue
+		}
+		res, err := s.DetectOCIQueuePoisonRate(ctx, compartmentID, queueOCID)
+		if err != nil {
+			continue
+		}
+		detail["poison_rate_per_hour"] = res.RatePerHour
+		detail["poison_rate_high_band"] = res.HighBand
+	}
 }

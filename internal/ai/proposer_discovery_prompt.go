@@ -2723,13 +2723,34 @@ CHUNK 3a/3b (v0.89.179-180) — Azure Service Bus is now REAL
   aggregated reading (no worst-queue key); report it as a
   namespace-level signal in that case.
 
-STILL §3.3 HONEST FRAMING (do NOT claim measurement):
+CHUNK 4 (v0.89.181) — OCI Queue Service is now REAL. This is
+the FINAL cloud — the substrate arc is CLOSED and §3.3 is fully
+retired:
 
-- OCI Queue Service (queues-poison-rate-monitor-add).
+- Squadron reads the queue's dead-letter depth gauge
+  (MessagesInDlq) via OCI Monitoring summarizeMetricsData and
+  derives the rate as the max-min delta (net accumulation) over a
+  trailing 1-hour window — the same gauge-delta shape as Azure.
+- poison_rate_per_hour now carries the MEASURED rate for OCI
+  queues; poison_rate_high_band is the real rate >= 60/hour
+  verdict. Same real-zero (0) vs absent (-1) contract.
+- queues-poison-rate-monitor-add reasoning should REPORT the
+  measured rate when poison_rate_per_hour >= 0, else fall back to
+  the §3.3 reasoning.
 
-OCI keeps poison_rate_per_hour = -1 and the slice-3 reasoning
-until chunk 4.4 lands. The mixed state is deliberate — the
-per-cloud traversal is the whole shape of the arc.
+ALL FOUR CLOUDS ARE NOW REAL — no cloud remains on §3.3
+poison-rate honest framing:
+
+- AWS SQS (DLQ NumberOfMessagesSent, counter-sum),
+- GCP Cloud Tasks (failed task_attempt_count, counter-sum),
+- Azure Service Bus (DeadletteredMessages per-queue via
+  EntityName split, gauge-delta),
+- OCI Queue Service (MessagesInDlq, gauge-delta).
+
+When poison_rate_per_hour == -1 it now means a genuine
+"not measured" condition (metric client unwired, queue too new,
+or no datapoints) — NOT a deferred cloud. Report the measured
+rate whenever poison_rate_per_hour >= 0.
 
 NO new IAM (cloudwatch:GetMetricStatistics already granted for
 the Lambda metric paths covers AWS/SQS — the permission is
