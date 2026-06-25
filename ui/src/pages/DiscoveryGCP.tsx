@@ -32,7 +32,6 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
   Cloud,
   Copy,
   ExternalLink,
@@ -58,6 +57,7 @@ import {
   type EventSourceRow,
   type ValidateGCPResponse,
 } from "@/api/discoveryGCP";
+import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -322,7 +322,6 @@ function GCPWizard({ onComplete }: GCPWizardProps) {
 
   const stepCount = GCP_STEP_IDS.length;
   const currentStepID = GCP_STEP_IDS[stepIndex];
-  const isLastStep = stepIndex === stepCount - 1;
 
   // Parsed SA — re-runs on every keystroke. Cheap (a JSON.parse on
   // ~2KB) so no memoization needed; useMemo would just trade a
@@ -455,121 +454,71 @@ function GCPWizard({ onComplete }: GCPWizardProps) {
   }, [submitting, createdConnection, onComplete]);
 
   return (
-    <div className="space-y-6">
-      <WizardHeader stepIndex={stepIndex} stepCount={stepCount} />
+    <WizardShell
+      stepIndex={stepIndex}
+      stepCount={stepCount}
+      stepTitle={GCP_STEP_TITLES[currentStepID]}
+      canAdvance={nextEnabled}
+      submitting={submitting}
+      onBack={handleBack}
+      onNext={handleNext}
+    >
+      {currentStepID === GCP_STEP_PROJECT && (
+        <ProjectStep
+          displayName={displayName}
+          onDisplayNameChange={setDisplayName}
+          projectID={projectID}
+          onProjectIDChange={setProjectID}
+          region={region}
+          onRegionChange={setRegion}
+          projectIDValid={projectIDValid}
+          regionValid={regionValid}
+          showWhyExplainer={showWhyExplainer}
+          onToggleWhyExplainer={() => setShowWhyExplainer((v) => !v)}
+        />
+      )}
 
-      <div className="rounded-lg border bg-card p-6">
-        <h3 className="text-base font-semibold">
-          {GCP_STEP_TITLES[currentStepID]}
-        </h3>
+      {currentStepID === GCP_STEP_SERVICE_ACCOUNT && (
+        <ServiceAccountStep projectID={projectID} onCopy={handleCopy} />
+      )}
 
-        <div className="mt-4">
-          {currentStepID === GCP_STEP_PROJECT && (
-            <ProjectStep
-              displayName={displayName}
-              onDisplayNameChange={setDisplayName}
-              projectID={projectID}
-              onProjectIDChange={setProjectID}
-              region={region}
-              onRegionChange={setRegion}
-              projectIDValid={projectIDValid}
-              regionValid={regionValid}
-              showWhyExplainer={showWhyExplainer}
-              onToggleWhyExplainer={() => setShowWhyExplainer((v) => !v)}
-            />
-          )}
+      {currentStepID === GCP_STEP_KEY_PASTE && (
+        <KeyPasteStep
+          projectID={projectID}
+          saText={saText}
+          onSATextChange={setSAText}
+          saValid={saValid}
+          saError={saError}
+          acknowledged={saAcknowledged}
+          onAcknowledgeChange={setSAAcknowledged}
+          onCopy={handleCopy}
+        />
+      )}
 
-          {currentStepID === GCP_STEP_SERVICE_ACCOUNT && (
-            <ServiceAccountStep projectID={projectID} onCopy={handleCopy} />
-          )}
+      {currentStepID === GCP_STEP_VALIDATE && (
+        <ValidateStep
+          submitting={submitting}
+          submitError={submitError}
+          result={validateResult}
+          connectionProjectID={projectID}
+          saProjectID={saParsed?.project_id ?? ""}
+          onValidate={handleValidate}
+        />
+      )}
 
-          {currentStepID === GCP_STEP_KEY_PASTE && (
-            <KeyPasteStep
-              projectID={projectID}
-              saText={saText}
-              onSATextChange={setSAText}
-              saValid={saValid}
-              saError={saError}
-              acknowledged={saAcknowledged}
-              onAcknowledgeChange={setSAAcknowledged}
-              onCopy={handleCopy}
-            />
-          )}
-
-          {currentStepID === GCP_STEP_VALIDATE && (
-            <ValidateStep
-              submitting={submitting}
-              submitError={submitError}
-              result={validateResult}
-              connectionProjectID={projectID}
-              saProjectID={saParsed?.project_id ?? ""}
-              onValidate={handleValidate}
-            />
-          )}
-
-          {currentStepID === GCP_STEP_SCAN && (
-            <ScanStep
-              submitting={submitting}
-              submitError={submitError}
-              result={scanResult}
-              onScan={handleScan}
-            />
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={handleBack}
-          disabled={stepIndex === 0 || submitting}
-        >
-          <ChevronLeft className="mr-1 h-4 w-4" aria-hidden />
-          Back
-        </Button>
-        {!isLastStep && (
-          <Button
-            type="button"
-            onClick={handleNext}
-            disabled={!nextEnabled || submitting}
-          >
-            Next
-          </Button>
-        )}
-      </div>
-    </div>
+      {currentStepID === GCP_STEP_SCAN && (
+        <ScanStep
+          submitting={submitting}
+          submitError={submitError}
+          result={scanResult}
+          onScan={handleScan}
+        />
+      )}
+    </WizardShell>
   );
 }
 
 // --- Wizard header / progress ---------------------------------------
-
-function WizardHeader({
-  stepIndex,
-  stepCount,
-}: {
-  stepIndex: number;
-  stepCount: number;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs uppercase tracking-wider text-muted-foreground">
-          Step {stepIndex + 1} of {stepCount}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {GCP_STEP_TITLES[GCP_STEP_IDS[stepIndex]]}
-        </span>
-      </div>
-      <div className="h-1 w-full rounded bg-muted">
-        <div
-          className="h-1 rounded bg-primary transition-all"
-          style={{ width: `${((stepIndex + 1) / stepCount) * 100}%` }}
-        />
-      </div>
-    </div>
-  );
-}
 
 // --- Step 1: Connect a GCP project ----------------------------------
 

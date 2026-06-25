@@ -35,7 +35,6 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
   Cloud,
   Copy,
   ExternalLink,
@@ -61,6 +60,7 @@ import {
   type EventSourceRow,
   type ValidateAzureResponse,
 } from "@/api/discoveryAzure";
+import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -317,7 +317,6 @@ function AzureWizard({ onComplete }: AzureWizardProps) {
 
   const stepCount = AZURE_STEP_IDS.length;
   const currentStepID = AZURE_STEP_IDS[stepIndex];
-  const isLastStep = stepIndex === stepCount - 1;
 
   // Step-1 field validation.
   const displayNameValid = displayName.trim() !== "";
@@ -458,125 +457,73 @@ function AzureWizard({ onComplete }: AzureWizardProps) {
   }, [submitting, createdConnection, onComplete]);
 
   return (
-    <div className="space-y-6">
-      <WizardHeader stepIndex={stepIndex} stepCount={stepCount} />
-
-      <div className="rounded-lg border bg-card p-6">
-        <h3 className="text-base font-semibold">
-          {AZURE_STEP_TITLES[currentStepID]}
-        </h3>
-
-        <div className="mt-4">
-          {currentStepID === AZURE_STEP_SUBSCRIPTION && (
-            <SubscriptionStep
-              displayName={displayName}
-              onDisplayNameChange={setDisplayName}
-              tenantID={tenantID}
-              onTenantIDChange={setTenantID}
-              subscriptionID={subscriptionID}
-              onSubscriptionIDChange={setSubscriptionID}
-              location={location}
-              onLocationChange={setLocation}
-              tenantIDValid={tenantIDValid}
-              subscriptionIDValid={subscriptionIDValid}
-              locationValid={locationValid}
-              showWhyExplainer={showWhyExplainer}
-              onToggleWhyExplainer={() => setShowWhyExplainer((v) => !v)}
-            />
-          )}
-
-          {currentStepID === AZURE_STEP_SERVICE_PRINCIPAL && (
-            <ServicePrincipalStep
-              subscriptionID={subscriptionID}
-              onCopy={handleCopy}
-            />
-          )}
-
-          {currentStepID === AZURE_STEP_CREDENTIALS && (
-            <CredentialsStep
-              clientID={clientID}
-              onClientIDChange={setClientID}
-              clientSecret={clientSecret}
-              onClientSecretChange={setClientSecret}
-              clientIDValid={clientIDValid}
-              clientSecretValid={clientSecretValid}
-              acknowledged={secretAcknowledged}
-              onAcknowledgeChange={setSecretAcknowledged}
-            />
-          )}
-
-          {currentStepID === AZURE_STEP_VALIDATE && (
-            <ValidateStep
-              submitting={submitting}
-              submitError={submitError}
-              result={validateResult}
-              connectionTenantID={tenantID}
-              connectionSubscriptionID={subscriptionID}
-              onValidate={handleValidate}
-            />
-          )}
-
-          {currentStepID === AZURE_STEP_SCAN && (
-            <ScanStep
-              submitting={submitting}
-              submitError={submitError}
-              result={scanResult}
-              onScan={handleScan}
-            />
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={handleBack}
-          disabled={stepIndex === 0 || submitting}
-        >
-          <ChevronLeft className="mr-1 h-4 w-4" aria-hidden />
-          Back
-        </Button>
-        {!isLastStep && (
-          <Button
-            type="button"
-            onClick={handleNext}
-            disabled={!nextEnabled || submitting}
-          >
-            Next
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// --- Wizard header / progress ---------------------------------------
-
-function WizardHeader({
-  stepIndex,
-  stepCount,
-}: {
-  stepIndex: number;
-  stepCount: number;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs uppercase tracking-wider text-muted-foreground">
-          Step {stepIndex + 1} of {stepCount}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {AZURE_STEP_TITLES[AZURE_STEP_IDS[stepIndex]]}
-        </span>
-      </div>
-      <div className="h-1 w-full rounded bg-muted">
-        <div
-          className="h-1 rounded bg-primary transition-all"
-          style={{ width: `${((stepIndex + 1) / stepCount) * 100}%` }}
+    <WizardShell
+      stepIndex={stepIndex}
+      stepCount={stepCount}
+      stepTitle={AZURE_STEP_TITLES[currentStepID]}
+      canAdvance={nextEnabled}
+      submitting={submitting}
+      onBack={handleBack}
+      onNext={handleNext}
+    >
+      {currentStepID === AZURE_STEP_SUBSCRIPTION && (
+        <SubscriptionStep
+          displayName={displayName}
+          onDisplayNameChange={setDisplayName}
+          tenantID={tenantID}
+          onTenantIDChange={setTenantID}
+          subscriptionID={subscriptionID}
+          onSubscriptionIDChange={setSubscriptionID}
+          location={location}
+          onLocationChange={setLocation}
+          tenantIDValid={tenantIDValid}
+          subscriptionIDValid={subscriptionIDValid}
+          locationValid={locationValid}
+          showWhyExplainer={showWhyExplainer}
+          onToggleWhyExplainer={() => setShowWhyExplainer((v) => !v)}
         />
-      </div>
-    </div>
+      )}
+
+      {currentStepID === AZURE_STEP_SERVICE_PRINCIPAL && (
+        <ServicePrincipalStep
+          subscriptionID={subscriptionID}
+          onCopy={handleCopy}
+        />
+      )}
+
+      {currentStepID === AZURE_STEP_CREDENTIALS && (
+        <CredentialsStep
+          clientID={clientID}
+          onClientIDChange={setClientID}
+          clientSecret={clientSecret}
+          onClientSecretChange={setClientSecret}
+          clientIDValid={clientIDValid}
+          clientSecretValid={clientSecretValid}
+          acknowledged={secretAcknowledged}
+          onAcknowledgeChange={setSecretAcknowledged}
+        />
+      )}
+
+      {currentStepID === AZURE_STEP_VALIDATE && (
+        <ValidateStep
+          submitting={submitting}
+          submitError={submitError}
+          result={validateResult}
+          connectionTenantID={tenantID}
+          connectionSubscriptionID={subscriptionID}
+          onValidate={handleValidate}
+        />
+      )}
+
+      {currentStepID === AZURE_STEP_SCAN && (
+        <ScanStep
+          submitting={submitting}
+          submitError={submitError}
+          result={scanResult}
+          onScan={handleScan}
+        />
+      )}
+    </WizardShell>
   );
 }
 
