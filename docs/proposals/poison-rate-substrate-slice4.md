@@ -137,8 +137,15 @@ No new permission.
   Cloud Monitoring `task_attempt_count` failed-attempt rate
   (`response_code != "OK"`), measured on the queue itself (no
   DLQ primitive).
-- Chunk 3: Azure Service Bus (Azure Monitor
-  `DeadletteredMessages`).
+- **Chunk 3a (v0.89.179): Azure Service Bus real detection,
+  NAMESPACE granularity** — Azure Monitor `DeadletteredMessages`
+  gauge, rate = max-min delta (net accumulation) over the window.
+  Closes §3.3 (real metric). Per-queue attribution deferred.
+- **Chunk 3b: Azure Service Bus per-queue attribution** — adds
+  the per-queue walk so the `DeadletteredMessages` `EntityName`
+  dimension can be filtered per queue. Closes the §3.2
+  scanner-coverage-gap (split from 3a to keep each release clean:
+  a metric path and a scanner extension are separate concerns).
 - Chunk 4: OCI Queue Service (OCI Monitoring
   dead-letter delivery metric) — CLOSES the substrate arc and
   retires the last §3.3 poison-rate deferral.

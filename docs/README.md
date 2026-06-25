@@ -416,6 +416,25 @@ jump straight to that page.
   design doc
   ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
 
+  **Chunk 3a (v0.89.179) makes Azure Service Bus real at
+  namespace granularity:** Squadron reads each namespace's
+  `DeadletteredMessages` gauge via Azure Monitor and derives
+  the poison rate as the `max(Maximum) - min(Minimum)` delta
+  (net dead-letter accumulation, not standing backlog) over a
+  trailing 1-hour window. This closes §3.3 (real metric) but
+  NOT §3.2 (scanner-coverage-gap): the reading is
+  namespace-aggregated across all queues/topics. Per-queue
+  attribution (the `EntityName`-dimension per-queue walk) is
+  split into **chunk 3b** — real metric now, per-queue
+  attribution next, so neither release is stretched across both
+  a metric path and a scanner extension. Same real-zero (`0`)
+  versus absent (`-1`) contract. OCI Queue Service stays on
+  §3.3 until chunk 4.4. NO new IAM (`microsoft.insights` metrics
+  already granted), NO new webhook prefix; the enrichment is a
+  no-op without an access token, preserving cold-start parity.
+  Same design doc
+  ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
+
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

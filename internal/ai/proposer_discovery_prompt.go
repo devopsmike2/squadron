@@ -2699,14 +2699,32 @@ CHUNK 2 (v0.89.178) — GCP Cloud Tasks is now REAL:
   measured rate when poison_rate_per_hour >= 0, else fall back to
   the §3.3 reasoning.
 
+CHUNK 3a (v0.89.179) — Azure Service Bus is now REAL (namespace
+granularity):
+
+- Squadron reads the namespace's DeadletteredMessages gauge and
+  derives the poison rate as the max(Maximum) - min(Minimum)
+  delta (net dead-letter accumulation) over a trailing 1-hour
+  window via Azure Monitor. DeadletteredMessages is a gauge, so
+  the delta — NOT a sum — is the rate; a constant backlog with no
+  new arrivals reads 0 (real zero), not high.
+- poison_rate_per_hour now carries the MEASURED namespace-level
+  rate; poison_rate_high_band is the real rate >= 60/hour verdict.
+  Same real-zero (0) vs absent (-1) contract as AWS + GCP.
+- IMPORTANT SCOPE: chunk 3a is NAMESPACE-AGGREGATED across all
+  queues/topics. It closes §3.3 (real metric) but NOT §3.2
+  (per-queue attribution) — the per-queue EntityName-dimension
+  walk is chunk 3b. Reasoning for servicebus-poison-rate-monitor-add
+  should report the measured rate as a NAMESPACE-level signal, not
+  attribute it to a specific queue, until 3b lands.
+
 STILL §3.3 HONEST FRAMING (do NOT claim measurement):
 
-- Azure Service Bus (servicebus-poison-rate-monitor-add),
 - OCI Queue Service (queues-poison-rate-monitor-add).
 
-These keep poison_rate_per_hour = -1 and the slice-3 reasoning
-until chunks 4.3 / 4.4 land. The mixed state is deliberate —
-the per-cloud traversal is the whole shape of the arc.
+OCI keeps poison_rate_per_hour = -1 and the slice-3 reasoning
+until chunk 4.4 lands. The mixed state is deliberate — the
+per-cloud traversal is the whole shape of the arc.
 
 NO new IAM (cloudwatch:GetMetricStatistics already granted for
 the Lambda metric paths covers AWS/SQS — the permission is
