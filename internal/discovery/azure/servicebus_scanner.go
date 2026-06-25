@@ -216,16 +216,16 @@ func (s *Scanner) scanServiceBusForDispatcher(ctx context.Context, accessToken, 
 		out = append(out, projectServiceBusNamespace(ns, hasTrace, hasLog, propPreserved, propNote, accountID))
 	}
 
-	// Poison-rate substrate slice 4 chunk 3a (v0.89.179, #821 Stream
-	// 218) — enrich the honest-framing poison-rate Detail keys with
-	// real Azure Monitor readings (DeadletteredMessages max-min delta
-	// over a trailing 1h window) at NAMESPACE granularity. Token-
-	// tolerant: a deployment / path without an access token sees this
-	// as a no-op and keeps the slice-3 §3.3 absent sentinels
-	// (cold-start parity). Per-queue attribution (the §3.2 coverage
-	// gap) is deferred to chunk 3b.
+	// Poison-rate substrate slice 4 chunk 3b (v0.89.180, #822 Stream
+	// 219) — enrich the poison-rate Detail keys with real Azure
+	// Monitor readings, attributed PER-QUEUE via the DeadletteredMessages
+	// EntityName dimension split (worst-offending queue). Closes the
+	// §3.2 scanner-coverage-gap. Falls back to the chunk-3a namespace-
+	// aggregated reading when no per-entity data is returned. Token-
+	// tolerant: a path without an access token is a no-op and keeps the
+	// slice-3 §3.3 absent sentinels (cold-start parity).
 	// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
-	s.enrichServiceBusPoisonRate(ctx, out, accessToken)
+	s.enrichServiceBusPoisonRatePerQueue(ctx, out, accessToken)
 
 	return out, nil
 }

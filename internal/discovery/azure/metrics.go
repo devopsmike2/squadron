@@ -481,6 +481,104 @@ func (s *Scanner) queryServiceBusDeadletterDelta(
 	return result, nil
 }
 
+// AzureServiceBusEntityNameDimension is the Azure Monitor dimension
+// name used to split Service Bus metrics per entity (queue / topic).
+// Poison-rate substrate slice 4 chunk 3b (v0.89.180) filters with
+// "EntityName eq '*'" to retrieve one timeseries per queue in a
+// single call — closing the §3.2 scanner-coverage-gap via the metric
+// dimension the gap named, with no separate ARM queue enumeration.
+const AzureServiceBusEntityNameDimension = "EntityName"
+
+// queryServiceBusDeadletterPerEntity returns each Service Bus entity's
+// net dead-letter accumulation (max(Maximum) - min(Minimum) delta,
+// floored at 0) over the window, keyed by entity (queue / topic)
+// name. Poison-rate substrate slice 4 chunk 3b (v0.89.180).
+//
+// Issues ONE Azure Monitor call with $filter="EntityName eq '*'" and
+// aggregation="Maximum,Minimum"; Azure returns one timeseries per
+// entity, each tagged via metadatavalues with its entityname. This
+// closes §3.2 (per-queue attribution) using the EntityName dimension
+// directly — no per-queue ARM walk.
+//
+// Entities with no parsable name, or no datapoints, are skipped. An
+// empty map means Azure returned no per-entity series (the caller
+// falls back to the namespace-level chunk-3a reading).
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3.
+func (s *Scanner) queryServiceBusDeadletterPerEntity(
+	ctx context.Context,
+	resourceARN string,
+	window time.Duration,
+) (map[string]int, error) {
+	if s.metricsLimiter != nil {
+		if err := s.metricsLimiter.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("rate limit: %w", err)
+		}
+	}
+
+	endTime := time.Now().UTC()
+	startTime := endTime.Add(-window)
+	filter := fmt.Sprintf("%s eq '*'", AzureServiceBusEntityNameDimension)
+
+	out, callErr := s.doAzureMonitorMetricsCall(
+		ctx, resourceARN, ServiceBusDeadletteredMessagesMetric,
+		startTime, endTime, "Maximum,Minimum", filter,
+	)
+	if callErr != nil {
+		return nil, fmt.Errorf("azure monitor metrics: %w", callErr)
+	}
+
+	perEntity := make(map[string]int)
+	if out == nil || len(out.Value) == 0 {
+		return perEntity, nil
+	}
+	for _, ts := range out.Value[0].Timeseries {
+		entity := entityNameFromMetadata(ts.MetadataValues)
+		if entity == "" {
+			continue
+		}
+		var maxVal, minVal float64
+		haveMax, haveMin := false, false
+		samples := 0
+		for _, dp := range ts.Data {
+			if mx, ok := extractAggregateValue(dp, "Maximum"); ok {
+				samples++
+				if !haveMax || mx > maxVal {
+					maxVal, haveMax = mx, true
+				}
+			}
+			if mn, ok := extractAggregateValue(dp, "Minimum"); ok {
+				if !haveMin || mn < minVal {
+					minVal, haveMin = mn, true
+				}
+			}
+		}
+		if samples == 0 {
+			continue
+		}
+		delta := maxVal - minVal
+		if delta < 0 {
+			delta = 0
+		}
+		perEntity[entity] = int(delta)
+	}
+	return perEntity, nil
+}
+
+// entityNameFromMetadata extracts the Service Bus entity (queue /
+// topic) name from a split-by-EntityName timeseries' metadatavalues.
+// Matches the dimension name case-insensitively (Azure lowercases it
+// to "entityname" in metadata). Returns "" when no entity dimension
+// is present.
+func entityNameFromMetadata(mvs []armMetricsMetadataValue) string {
+	for _, mv := range mvs {
+		if strings.EqualFold(mv.Name.Value, AzureServiceBusEntityNameDimension) {
+			return mv.Value
+		}
+	}
+	return ""
+}
+
 // aggregateAzureTimeseriesSum rolls up the value[0].timeseries[].data[]
 // datapoints into a single AggregateMetricResult via SUM rather
 // than MAX. Used by the sampling-rate-slice-1 invocation-count
@@ -855,6 +953,29 @@ type armMetricsValue struct {
 // scalar aggregate.
 type armMetricsTimeseries struct {
 	Data []armMetricsDatapoint `json:"data,omitempty"`
+
+	// MetadataValues carries the dimension values when the query
+	// splits by a dimension (e.g. $filter="EntityName eq '*'" returns
+	// one timeseries per Service Bus entity, each tagged with its
+	// entityname here). Poison-rate substrate slice 4 chunk 3b
+	// (v0.89.180) reads this to attribute per-queue dead-letter rates.
+	// Additive — existing single-series parsing ignores it.
+	MetadataValues []armMetricsMetadataValue `json:"metadatavalues,omitempty"`
+}
+
+// armMetricsMetadataValue is one dimension name/value pair on a
+// split-by-dimension timeseries. For Service Bus DeadletteredMessages
+// split by EntityName, Name.Value is "entityname" and Value is the
+// queue / topic name.
+type armMetricsMetadataValue struct {
+	Name  armMetricsMetadataName `json:"name"`
+	Value string                 `json:"value"`
+}
+
+// armMetricsMetadataName is the inner localized-name envelope Azure
+// Monitor wraps each metadata dimension name in.
+type armMetricsMetadataName struct {
+	Value string `json:"value"`
 }
 
 // armMetricsDatapoint is one bucket inside a timeseries[].data[]
