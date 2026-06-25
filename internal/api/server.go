@@ -1076,6 +1076,15 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 		// recommendations endpoint works. Unconditional: the handler
 		// 503s when the proposer is nil (AI assist off).
 		h.WithGCPAIProposer(s.discoveryAIService)
+		// parity follow-up (v0.89.199) — wire the accepted-recommendations
+		// assembler so the verdict block + discovery_proposal.created event
+		// reach the proposer (cold-start empty until recs are accepted).
+		if s.appStore != nil && s.iacConnStore != nil {
+			h.WithGCPAcceptedAssembler(&discoveryAcceptedAssemblerAdapter{
+				appStore:    s.appStore,
+				connections: s.iacConnStore,
+			})
+		}
 		fn(h, c)
 	}
 }
@@ -1119,6 +1128,15 @@ func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandle
 		// chunk 5 (v0.89.198) — wire the AI proposer for the Azure
 		// recommendations endpoint. Unconditional; the handler 503s on nil.
 		h.WithAzureAIProposer(s.discoveryAIService)
+		// parity follow-up (v0.89.199) — wire the accepted-recommendations
+		// assembler so the verdict block + discovery_proposal.created event
+		// reach the proposer (cold-start empty until recs are accepted).
+		if s.appStore != nil && s.iacConnStore != nil {
+			h.WithAzureAcceptedAssembler(&discoveryAcceptedAssemblerAdapter{
+				appStore:    s.appStore,
+				connections: s.iacConnStore,
+			})
+		}
 		fn(h, c)
 	}
 }
@@ -1162,6 +1180,15 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 		}
 		// chunk 5 (v0.89.198) — wire the AI proposer for OCI recommendations.
 		h.WithOCIAIProposer(s.discoveryAIService)
+		// parity follow-up (v0.89.199) — wire the accepted-recommendations
+		// assembler so the verdict block + discovery_proposal.created event
+		// reach the proposer (cold-start empty until recs are accepted).
+		if s.appStore != nil && s.iacConnStore != nil {
+			h.WithOCIAcceptedAssembler(&discoveryAcceptedAssemblerAdapter{
+				appStore:    s.appStore,
+				connections: s.iacConnStore,
+			})
+		}
 		fn(h, c)
 	}
 }

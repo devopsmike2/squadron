@@ -96,6 +96,10 @@ type DiscoveryAzureHandlers struct {
 	// aiProposer — chunk 5 (v0.89.198). nil when AI assist is off;
 	// HandleRecommendationsForAzureScan 503s in that case.
 	aiProposer DiscoveryAIProposer
+	// acceptedAssembler — parity follow-up (v0.89.199): feeds the
+	// verdict few-shot block + discovery_proposal.created examples.
+	// nil = cold-start empty.
+	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
 }
 
 // NewDiscoveryAzureHandlers builds the handler struct. Optional
@@ -150,6 +154,13 @@ func (h *DiscoveryAzureHandlers) WithAzureScannerFactory(f AzureScannerFactory) 
 // HandleRecommendationsForAzureScan.
 func (h *DiscoveryAzureHandlers) WithAzureAIProposer(p DiscoveryAIProposer) *DiscoveryAzureHandlers {
 	h.aiProposer = p
+	return h
+}
+
+// WithAzureAcceptedAssembler wires the accepted-recommendations assembler (verdict
+// few-shot + discovery_proposal.created examples).
+func (h *DiscoveryAzureHandlers) WithAzureAcceptedAssembler(a DiscoveryAcceptedRecommendationsAssembler) *DiscoveryAzureHandlers {
+	h.acceptedAssembler = a
 	return h
 }
 
@@ -1235,6 +1246,10 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 	}
 	aiCtx.EventSources = mapEventSourceCandidates(req.ScanResult.EventSources)
 
+	verdictBlock, acceptedURLs, acceptedURLsByState := assembleDiscoveryVerdictBlock(
+		c.Request.Context(), h.acceptedAssembler, conn.SubscriptionID, firstRegion(regions), h.logger)
+	aiCtx.VerdictBlock = verdictBlock
+
 	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
 	if err != nil {
 		if h.logger != nil {
@@ -1288,6 +1303,10 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 			},
 		})
 	}
+
+	emitDiscoveryProposalCreated(c.Request.Context(), h.auditService,
+		conn.ID, conn.SubscriptionID, firstRegion(regions), req.ScanResult.ScanID,
+		len(recs), acceptedURLs, acceptedURLsByState)
 
 	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
 		Reasoning:       result.Reasoning,

@@ -779,7 +779,8 @@ func TestRecommendationsForGCPScan_HappyPath(t *testing.T) {
 			},
 		},
 	}
-	h, store, key := newGCPTestHandlers(t, nil, &fakeGCPScannerFactory{scanner: &fakeScanner{}})
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newGCPTestHandlers(t, audit, &fakeGCPScannerFactory{scanner: &fakeScanner{}})
 	h.WithGCPAIProposer(mock)
 	r := newGCPRouter(h)
 
@@ -844,6 +845,16 @@ func TestRecommendationsForGCPScan_HappyPath(t *testing.T) {
 	}
 	if resp.Recommendations[0].Title != "Preserve traceparent on orders-topic" {
 		t.Errorf("rec title = %q", resp.Recommendations[0].Title)
+	}
+
+	var sawProposalCreated bool
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventDiscoveryProposalCreated {
+			sawProposalCreated = true
+		}
+	}
+	if !sawProposalCreated {
+		t.Error("discovery_proposal.created audit event was not emitted")
 	}
 }
 

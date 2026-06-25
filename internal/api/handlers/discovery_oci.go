@@ -111,6 +111,10 @@ type DiscoveryOCIHandlers struct {
 	// aiProposer — chunk 5 (v0.89.198). nil when AI assist is off;
 	// HandleRecommendationsForOCIScan 503s in that case.
 	aiProposer DiscoveryAIProposer
+	// acceptedAssembler — parity follow-up (v0.89.199): feeds the
+	// verdict few-shot block + discovery_proposal.created examples.
+	// nil = cold-start empty.
+	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
 }
 
 // NewDiscoveryOCIHandlers builds the handler struct. Optional
@@ -165,6 +169,13 @@ func (h *DiscoveryOCIHandlers) WithOCIScannerFactory(f OCIScannerFactory) *Disco
 // HandleRecommendationsForOCIScan.
 func (h *DiscoveryOCIHandlers) WithOCIAIProposer(p DiscoveryAIProposer) *DiscoveryOCIHandlers {
 	h.aiProposer = p
+	return h
+}
+
+// WithOCIAcceptedAssembler wires the accepted-recommendations assembler (verdict
+// few-shot + discovery_proposal.created examples).
+func (h *DiscoveryOCIHandlers) WithOCIAcceptedAssembler(a DiscoveryAcceptedRecommendationsAssembler) *DiscoveryOCIHandlers {
+	h.acceptedAssembler = a
 	return h
 }
 
@@ -1251,6 +1262,10 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 	}
 	aiCtx.EventSources = mapEventSourceCandidates(req.ScanResult.EventSources)
 
+	verdictBlock, acceptedURLs, acceptedURLsByState := assembleDiscoveryVerdictBlock(
+		c.Request.Context(), h.acceptedAssembler, conn.TenancyOCID, firstRegion(regions), h.logger)
+	aiCtx.VerdictBlock = verdictBlock
+
 	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
 	if err != nil {
 		if h.logger != nil {
@@ -1304,6 +1319,10 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 			},
 		})
 	}
+
+	emitDiscoveryProposalCreated(c.Request.Context(), h.auditService,
+		conn.ID, conn.TenancyOCID, firstRegion(regions), req.ScanResult.ScanID,
+		len(recs), acceptedURLs, acceptedURLsByState)
 
 	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
 		Reasoning:       result.Reasoning,
