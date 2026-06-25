@@ -102,6 +102,33 @@ const AzureFunctionsInvocationsMetric = "FunctionInvocations"
 // metrics_test.go::TestAzureFunctionsErrorsMetric_Constant.
 const AzureFunctionsErrorsMetric = "FunctionErrors"
 
+// ServiceBusDeadletteredMessagesMetric is the Azure Monitor metric
+// name for Service Bus dead-lettered message count. Poison-rate
+// substrate slice 4 chunk 3a (v0.89.179) reads this on the
+// Microsoft.ServiceBus/namespaces resource to compute the real
+// poison-message rate that slice 3 shipped as a §3.3 honest-framing
+// absent sentinel.
+//
+// DeadletteredMessages is a GAUGE (current count of dead-lettered
+// messages), not an arrival counter like the AWS SQS / GCP Cloud
+// Tasks metrics. So the poison RATE is derived as the positive delta
+// (max - min) over the window — the net dead-letter accumulation,
+// the Azure analog of the slice-3 design's "DeadletteredMessages
+// delta via Azure Monitor metrics."
+//
+// Chunk 3a queries this at the NAMESPACE resource (aggregated across
+// all queues/topics in the namespace) — closing §3.3
+// substrate-metric-dependence. PER-QUEUE attribution (the §3.2
+// scanner-coverage-gap: the metric's EntityName dimension requires
+// walking the per-queue sub-resource the namespace-level scanner
+// does not enumerate) is deferred to chunk 3b. The same
+// microsoft.insights metrics read the cold-start substrate already
+// uses covers this — no new IAM.
+//
+// Pinned by servicebus_poison_rate_substrate_test.go::
+// TestServiceBusDeadletteredMessagesMetric_Constant.
+const ServiceBusDeadletteredMessagesMetric = "DeadletteredMessages"
+
 // azureMonitorMetricsAPIBase is the Azure Resource Manager path
 // segment under which microsoft.insights/metrics is exposed against
 // a Microsoft.Web/sites resource. The full URL is:
@@ -237,6 +264,15 @@ func (s *Scanner) QueryAggregate(
 		return s.queryAzureFunctionCounterTotal(ctx, resourceARN, AzureFunctionsErrorsMetric, window, stat)
 	}
 
+	// Poison-rate substrate slice 4 chunk 3a (v0.89.179): Service Bus
+	// DeadletteredMessages on the namespace resource. Routes into a
+	// dedicated delta helper — the metric is a gauge, so the rate is
+	// max(Maximum) - min(Minimum) over the window rather than a SUM or
+	// MAX rollup. See queryServiceBusDeadletterDelta.
+	if metricName == ServiceBusDeadletteredMessagesMetric {
+		return s.queryServiceBusDeadletterDelta(ctx, resourceARN, window, stat)
+	}
+
 	if metricName != AzureFunctionsExecutionDurationMetric {
 		// Slice 2 substrate scope: FunctionExecutionDuration +
 		// FunctionInvocations + FunctionErrors. Other names short-
@@ -353,6 +389,95 @@ func (s *Scanner) queryAzureFunctionCounterTotal(
 	result.Window = window
 	result.Statistic = stat
 	result.ObservedAt = endTime
+	return result, nil
+}
+
+// queryServiceBusDeadletterDelta computes the Service Bus poison-rate
+// signal from the DeadletteredMessages gauge. Poison-rate substrate
+// slice 4 chunk 3a (v0.89.179).
+//
+// DeadletteredMessages is a point-in-time count of dead-lettered
+// messages, not an arrival counter. To express a per-hour RATE
+// consistent with the AWS SQS / GCP Cloud Tasks chunks (messages
+// entering the poison state per window), this queries both the
+// Maximum and Minimum aggregations over the window in one Azure
+// Monitor call (aggregation="Maximum,Minimum") and returns the
+// positive delta max(Maximum) - min(Minimum), floored at 0 — the net
+// dead-letter accumulation across the window.
+//
+// Semantics note (documented honestly in §3 of the design doc): the
+// delta measures NET accumulation, not standing backlog. A namespace
+// holding a constant 100 dead-lettered messages with no new arrivals
+// reports rate 0 (no NEW poison this hour) — correct for a rate, and
+// distinct from a depth signal a future slice could add separately.
+//
+// Empty timeseries → SampleCount=0 (the absent-sentinel signal the
+// DetectServiceBusPoisonRate caller checks). A non-empty series with
+// a flat gauge → delta 0 with SampleCount>0 (a real "zero new
+// dead-letters" reading).
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3.
+func (s *Scanner) queryServiceBusDeadletterDelta(
+	ctx context.Context,
+	resourceARN string,
+	window time.Duration,
+	stat scanner.MetricStatistic,
+) (scanner.AggregateMetricResult, error) {
+	if s.metricsLimiter != nil {
+		if err := s.metricsLimiter.Wait(ctx); err != nil {
+			return scanner.AggregateMetricResult{}, fmt.Errorf("rate limit: %w", err)
+		}
+	}
+
+	endTime := time.Now().UTC()
+	startTime := endTime.Add(-window)
+
+	out, callErr := s.doAzureMonitorMetricsCall(
+		ctx, resourceARN, ServiceBusDeadletteredMessagesMetric,
+		startTime, endTime, "Maximum,Minimum", "",
+	)
+	if callErr != nil {
+		return scanner.AggregateMetricResult{}, fmt.Errorf("azure monitor metrics: %w", callErr)
+	}
+
+	result := scanner.AggregateMetricResult{
+		ResourceARN: resourceARN,
+		MetricName:  ServiceBusDeadletteredMessagesMetric,
+		Window:      window,
+		Statistic:   stat,
+		ObservedAt:  endTime,
+	}
+	if out == nil || len(out.Value) == 0 {
+		return result, nil
+	}
+
+	var maxVal, minVal float64
+	haveMax, haveMin := false, false
+	sampleCount := 0
+	for _, ts := range out.Value[0].Timeseries {
+		for _, dp := range ts.Data {
+			if mx, ok := extractAggregateValue(dp, "Maximum"); ok {
+				sampleCount++
+				if !haveMax || mx > maxVal {
+					maxVal, haveMax = mx, true
+				}
+			}
+			if mn, ok := extractAggregateValue(dp, "Minimum"); ok {
+				if !haveMin || mn < minVal {
+					minVal, haveMin = mn, true
+				}
+			}
+		}
+	}
+	if sampleCount == 0 {
+		return result, nil
+	}
+	delta := maxVal - minVal
+	if delta < 0 {
+		delta = 0
+	}
+	result.Value = delta
+	result.SampleCount = sampleCount
 	return result, nil
 }
 

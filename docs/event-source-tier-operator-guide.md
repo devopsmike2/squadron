@@ -2144,3 +2144,51 @@ client is not wired (`metricsClient == nil`).
 
 Cross-reference:
 [Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
+
+
+## Poison-Rate Substrate Integration SHIPPED in v0.89.179 — slice 4 chunk 3a (Azure Service Bus real detection, namespace granularity)
+
+Chunk 3a makes **Azure Service Bus real at namespace
+granularity**, the third cloud in the substrate arc (after AWS
+SQS in v0.89.177 and GCP Cloud Tasks in v0.89.178). Squadron
+now reads each Service Bus namespace's `DeadletteredMessages`
+metric via Azure Monitor and derives the poison rate as the
+`max(Maximum) - min(Minimum)` delta — net dead-letter
+accumulation — over a trailing 1-hour window, reusing the
+cold-start slice-2 substrate's per-subscription rate limiter.
+
+`DeadletteredMessages` is a gauge (current dead-letter count),
+not an arrival counter like the AWS SQS / GCP Cloud Tasks
+metrics, so the rate is a delta rather than a sum. This carries
+an honest semantic: the delta measures NET accumulation, not
+standing backlog. A namespace holding a constant 100
+dead-lettered messages with no new arrivals reads rate `0` (no
+NEW poison this hour) — correct for a rate, and distinct from a
+depth signal a future slice could add separately. The same
+real-zero versus absent contract holds: a measured `0` is a
+genuine green signal; `-1` strictly means "not measured" (no
+DeadletteredMessages series, or no access token wired).
+
+**Scope — this is the §3.2 split.** Chunk 3a closes §3.3
+(substrate-metric-dependence): Azure now reads a real metric.
+It does NOT close §3.2 (scanner-coverage-gap): the reading is
+NAMESPACE-AGGREGATED across all queues and topics, because the
+namespace-level scanner does not enumerate the per-queue
+sub-resource where the metric's `EntityName` dimension lives.
+Per-queue attribution is **chunk 3b** — a separate release that
+adds the per-queue walk. This split (real metric now, per-queue
+attribution next) keeps each release clean rather than stretching
+one across both a metric path and a scanner extension.
+
+`servicebus-poison-rate-monitor-add` still fires; its reasoning
+now reports the measured rate as a namespace-level signal. OCI
+Queue Service stays on §3.3 honest framing until chunk 4.4.
+
+NO new IAM (the `microsoft.insights` metrics read the cold-start
+substrate already uses covers the Service Bus namespace metric).
+NO new webhook prefix. Cold-start parity preserved: the
+enrichment overwrites two existing Detail keys and is a no-op
+when no access token is available.
+
+Cross-reference:
+[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).

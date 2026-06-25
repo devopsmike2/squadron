@@ -4,6 +4,10 @@
 package azure
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )
 
@@ -57,4 +61,114 @@ func applyServiceBusPoisonRateDetail(snap *scanner.EventSourceInstanceSnapshot, 
 	res := detectServiceBusPoisonRate(ns)
 	snap.Detail["poison_rate_per_hour"] = res.RatePerHour
 	snap.Detail["poison_rate_high_band"] = res.HighBand
+}
+
+// --- Poison-rate substrate slice 4 chunk 3a (v0.89.179, #821 Stream
+// 218) — REAL Azure Monitor-backed detection that closes the Azure
+// §3.3 deferral at NAMESPACE granularity. The honest-framing
+// detectServiceBusPoisonRate above stays as the projection-time
+// default (cold-start parity for the unwired path); the enrichment
+// below overwrites the two Detail keys with real readings when an
+// access token is available.
+//
+// SCOPE: chunk 3a closes §3.3 (substrate-metric-dependence) — Azure
+// now reads a REAL metric. It does NOT yet close §3.2
+// (scanner-coverage-gap): the reading is namespace-aggregated across
+// all queues/topics. Per-queue attribution (the EntityName-dimension
+// per-queue walk) is chunk 3b.
+
+// ServiceBusPoisonRatePerHourHighThreshold is the inclusive lower
+// bound (net dead-letter accumulation per hour) that flips
+// poison_rate_high_band to true. 60/hour mirrors the AWS + GCP +
+// slice-3 cross-cloud band. Pinned by
+// servicebus_poison_rate_substrate_test.go::TestServiceBusPoisonRatePerHourHighThreshold_Constant.
+const ServiceBusPoisonRatePerHourHighThreshold = 60
+
+// ServiceBusPoisonRateWindowHours is the trailing observation window
+// (hours) over which the DeadletteredMessages max-min delta is read.
+const ServiceBusPoisonRateWindowHours = 1
+
+// DetectServiceBusPoisonRate reads the namespace's DeadletteredMessages
+// max-min delta over the trailing ServiceBusPoisonRateWindowHours
+// window via the Azure MetricQuerier substrate and converts it into
+// the poison-rate axis result. This is the REAL detection that
+// replaces the slice 3 §3.3 honest-framing absent sentinel for Azure
+// Service Bus (at namespace granularity).
+//
+// Real-zero vs absent (design doc §3.1): SampleCount==0 means Azure
+// Monitor returned no DeadletteredMessages series for this namespace
+// (no entities / metric not emitted yet) — absent sentinel (-1). A
+// SampleCount>0 reading with a flat gauge (delta 0) is a REAL "zero
+// new dead-letters this hour" verdict (0). -1 always means "not
+// measured", never "measured as zero".
+//
+// namespaceResourceID is the ARM resource id
+// (/subscriptions/.../providers/Microsoft.ServiceBus/namespaces/{ns},
+// the snapshot's ResourceARN).
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3 + §7.
+func (s *Scanner) DetectServiceBusPoisonRate(ctx context.Context, namespaceResourceID string) (serviceBusPoisonRateDetectionResult, error) {
+	res, err := s.QueryAggregate(
+		ctx, namespaceResourceID, ServiceBusDeadletteredMessagesMetric,
+		time.Duration(ServiceBusPoisonRateWindowHours)*time.Hour,
+		scanner.StatisticSum,
+	)
+	if err != nil {
+		return serviceBusPoisonRateDetectionResult{}, fmt.Errorf("poison-rate metric query: %w", err)
+	}
+	if res.SampleCount == 0 {
+		return serviceBusPoisonRateDetectionResult{RatePerHour: -1, HighBand: false}, nil
+	}
+	rate := int(res.Value)
+	return serviceBusPoisonRateDetectionResult{
+		RatePerHour: rate,
+		HighBand:    rate >= ServiceBusPoisonRatePerHourHighThreshold,
+	}, nil
+}
+
+// enrichServiceBusPoisonRate is the post-projection enrichment pass
+// that overwrites the honest-framing poison-rate Detail keys with
+// real Azure Monitor readings. Mirrors the AWS enrichSQSPoisonRate /
+// GCP enrichCloudTasksPoisonRate posture: token-tolerant, per-row
+// failures swallowed.
+//
+//   - accessToken == "" → no-op. The projection's honest-framing
+//     absent sentinels survive byte-identically (cold-start parity
+//     for deployments / paths without a token).
+//   - The Azure metric substrate authenticates via s.accessToken
+//     (the struct field doAzureMonitorMetricsCall reads). The
+//     dispatcher event-source scan acquires its token locally rather
+//     than storing it, so this wires the in-scope token onto the
+//     Scanner when the field is empty — idempotent (same subscription
+//     token) and mirrors how WithAccessToken arms the cold-start
+//     branch.
+//   - poison rate is read at the NAMESPACE resource (aggregated);
+//     per-queue attribution is chunk 3b.
+//   - A per-namespace query error leaves that snapshot untouched
+//     (absent sentinel preserved) and continues.
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
+func (s *Scanner) enrichServiceBusPoisonRate(ctx context.Context, snaps []scanner.EventSourceInstanceSnapshot, accessToken string) {
+	if accessToken == "" {
+		return
+	}
+	if s.accessToken == "" {
+		s.accessToken = accessToken
+	}
+	for i := range snaps {
+		detail := snaps[i].Detail
+		if detail == nil {
+			continue
+		}
+		arn := snaps[i].ResourceARN
+		if arn == "" {
+			continue
+		}
+		res, err := s.DetectServiceBusPoisonRate(ctx, arn)
+		if err != nil {
+			continue
+		}
+		detail["poison_rate_per_hour"] = res.RatePerHour
+		detail["poison_rate_high_band"] = res.HighBand
+	}
 }
