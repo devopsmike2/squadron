@@ -1010,7 +1010,16 @@ func providerFromRecommendationKind(kind string) string {
 		// Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136)
 		// — Azure Service Bus kinds (servicebus-diagnostics-enable)
 		// route to Azure.
-		strings.HasPrefix(kind, "servicebus-"):
+		strings.HasPrefix(kind, "servicebus-") ||
+		// Event source tier slice 6 chunk 2 (v0.89.148, #788 Stream 186)
+		// — Azure Event Grid kinds (eventgrid-diagnostics-enable,
+		// eventgrid-cloudevent-schema-enforce) route to Azure. Slice 6
+		// widens the Azure event source surface count from 1 (Service
+		// Bus) to 2 (Service Bus + Event Grid); slice 7 will add Event
+		// Hubs + OCI Notification Service. The eventgrid- prefix is
+		// positioned alongside servicebus- so the Azure event source
+		// family stays grouped.
+		strings.HasPrefix(kind, "eventgrid-"):
 		return "azure"
 	case strings.HasPrefix(kind, "compute-") || strings.HasPrefix(kind, "ocidb-") || strings.HasPrefix(kind, "oke-") ||
 		strings.HasPrefix(kind, "ocifunc-") ||

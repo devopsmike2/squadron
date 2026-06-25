@@ -1051,6 +1051,143 @@ Per §13 of the design doc:
   detection via MetricQuerier substrate, per-task execution-
   time analysis, multi-project fan-out coordination
 
+## Slice 6 SHIPPED in v0.89.146-v0.89.148 — Azure Event Grid
+
+Slice 6 continues the widening pass by adding Azure Event Grid
+as the second Azure event source surface alongside Service
+Bus. After slice 6, Azure has 2 event source surfaces matching
+GCP's count (Pub/Sub + Cloud Tasks).
+
+Event Grid is Azure's fan-out distribution layer for cloud
+events (CloudEvents 1.0 schema). The canonical Azure event
+architecture is `Event Grid → Service Bus / Functions / Logic
+Apps`: an Event Grid Topic publishes events; subscribers
+(Service Bus queues, Functions, Logic Apps, custom webhooks)
+consume them via filter rules.
+
+### The new Azure surface — Event Grid
+
+| Cloud | Surface    | Trace axis                                                  | Log axis                                          |
+|-------|------------|-------------------------------------------------------------|----------------------------------------------------|
+| Azure | Event Grid | `properties.inputSchema == "CloudEventSchemaV1_0"`          | diagnostic settings → App Insights OR Log Analytics workspace |
+
+The trace axis uses CloudEvents 1.0 schema enforcement as the
+proxy — CloudEvents 1.0 includes the distributed tracing
+extension (traceparent in event extensions), while the
+proprietary EventGridSchema and CustomEventSchema don't.
+
+The log axis mirrors the slice 1 Service Bus pattern verbatim
+— same Microsoft.Insights/diagnosticSettings child resource +
+same destination check.
+
+### The 2 new recommendation kinds
+
+```
+eventgrid-diagnostics-enable          eventgrid-cloudevent-schema-enforce
+```
+
+Webhook routing: `eventgrid- → azure`.
+
+### eventgrid-diagnostics-enable
+
+Fires on Event Grid Topics without diagnostic settings.
+Terraform: `azurerm_monitor_diagnostic_setting` with 4
+enabled_log categories (PublishFailures, PublishSuccess,
+DeliveryFailures, DeliverySuccess) + AllMetrics, routing to
+a Log Analytics workspace (operator provides workspace ID
+via variable).
+
+Decline if your team uses a non-Insights destination (custom
+webhook capture, etc.).
+
+### eventgrid-cloudevent-schema-enforce — BREAKING CHANGE
+
+Fires on Event Grid Topics with `inputSchema = "EventGridSchema"`
+or `"CustomEventSchema"`. The recommendation drafts a PR
+changing to `"CloudEventSchemaV1_0"`.
+
+⚠ **This is a BREAKING CHANGE for existing subscribers.** The
+wire format changes — subscribers configured to consume the
+proprietary EventGridSchema or CustomEventSchema will fail to
+parse CloudEvents-formatted events.
+
+The reasoning text emphasizes coordination with subscribers
+before merging. Squadron drafts the PR; the operator's review
+must catch the breakage risk. The recommended workflow:
+
+1. Audit all subscribers consuming from the topic
+2. Update each subscriber to consume CloudEvents 1.0 format
+3. Deploy subscriber updates BEFORE merging the topic schema
+   change
+4. OR migrate to a new topic with CloudEventSchemaV1_0 and
+   point subscribers at the new topic in lockstep
+
+If your team has standardized on the proprietary Azure schema
+for ecosystem reasons, decline. The verdict learning loop
+records.
+
+### The CloudEvents trace context extension
+
+CloudEvents 1.0 carries the `traceparent` (and optionally
+`tracestate`) extension in the event envelope. Subscribers
+consuming CloudEvents-formatted events from an Event Grid
+Topic with CloudEventSchemaV1_0 get W3C-standard trace
+context for free — no per-event extraction code needed.
+
+Combined with the trace coverage diagnostic from the existing
+trace integration arc, this means CloudEvents-formatted Event
+Grid → Service Bus → Functions flows propagate trace context
+end-to-end without operator instrumentation.
+
+### Two-way dispatcher partial-scan posture
+
+Slice 6 extends `ScanEventSources` to fan out across Service
+Bus + Event Grid. If Service Bus fails (RBAC propagation lag
+on a connection that predates v0.89.101) AND Event Grid
+succeeds (slice 6's existing read-only RBAC covers), the
+operator still sees Event Grid topics. Same in the other
+direction.
+
+NO IAM extension required — the existing Azure Reader role
+covers `Microsoft.EventGrid/topics/read` + the diagnostic
+settings child read.
+
+### Cost surface
+
+Azure ARM read operations are free. No new operator-facing
+cost decisions per the no-money brief.
+
+### The canonical Azure event distribution chain — fully visible
+
+After slice 6, the Azure event distribution chain is fully
+covered:
+
+1. **Event Grid topic** without diagnostic settings (this
+   slice `eventgrid-diagnostics-enable`) — operator has no
+   per-event delivery audit
+2. **Event Grid topic** with proprietary schema (this slice
+   `eventgrid-cloudevent-schema-enforce`) — events lose
+   cross-vendor interoperability + W3C trace context
+3. **Service Bus namespace** without diagnostic settings
+   (slice 1 `servicebus-diagnostics-enable`) — downstream
+   queue has no audit
+4. **Azure Functions / Logic Apps** without trace primitive
+   (serverless + orchestration tiers)
+5. **Azure Functions cold-start regression** (substrate's
+   three diagnostics) — workload-health view
+
+Five layers. One control plane.
+
+### Slice 7+ deferrals
+
+Per §13 of the design doc:
+- **Slice 7: Azure Event Hubs** — third Azure surface
+- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 8+: Event Grid Domains**, Event Grid System Topics,
+  per-subscription filter rule inspection, per-event
+  CloudEvents payload validation, private endpoint
+  configuration validation
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —
@@ -1075,6 +1212,13 @@ Per §13 of the design doc:
   GCP surface and 2 new recommendation kinds
   (cloudtasks-retry-policy-enable + cloudtasks-logging-enable)
   routed via the new cloudtasks- webhook prefix.
+- [Event source tier slice 6 design doc](./proposals/event-source-tier-slice6.md) —
+  the slice 6 spec that adds Azure Event Grid as the second
+  Azure surface and 2 new recommendation kinds
+  (eventgrid-diagnostics-enable +
+  eventgrid-cloudevent-schema-enforce — the latter is a
+  BREAKING CHANGE for existing subscribers) routed via the
+  new eventgrid- webhook prefix.
 - [Orchestration tier slice 1](./proposals/orchestration-tier-slice1.md) —
   the prior tier-expansion arc this composes with.
 - [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —

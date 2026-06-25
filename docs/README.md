@@ -165,6 +165,24 @@ jump straight to that page.
   v0.89.145.** AWS now has 3 event source surfaces (EventBridge
   + SNS + SQS); GCP now has 2 (Pub/Sub + Cloud Tasks); slices
   6-7 will catch up Azure + OCI.
+  **Slice 6 (v0.89.146-v0.89.148)** continues the widening pass
+  by adding Azure Event Grid as the second Azure event source
+  surface. Event Grid is Azure's fan-out distribution layer for
+  cloud events (CloudEvents 1.0 schema). 2 new recommendation
+  kinds: eventgrid-diagnostics-enable (Terraform:
+  azurerm_monitor_diagnostic_setting with 4 Event Grid log
+  categories) mirrors the Service Bus pattern; +
+  eventgrid-cloudevent-schema-enforce (Terraform: input_schema
+  = "CloudEventSchemaV1_0") is a BREAKING CHANGE for existing
+  subscribers — the reasoning text emphasizes coordination
+  before merging. 1 new webhook prefix: eventgrid- → azure.
+  ScanEventSources dispatcher extends from one-way (Service Bus
+  only) to two-way (Service Bus + Event Grid) with partial-scan
+  posture both directions. NO IAM extension (existing Reader
+  role covers). **Slice 6 SHIPPED in v0.89.148.** AWS: 3 event
+  source surfaces; GCP: 2; Azure: 2; OCI: 1 — slice 7 will add
+  Azure Event Hubs + OCI Notification Service to close the
+  widening pass at 3-2-3-2.
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,
