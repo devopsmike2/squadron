@@ -1380,6 +1380,13 @@ type awsEventSourceRow struct {
 	HasLogAxis   bool           `json:"has_log_axis"`
 	LastSeenAt   *time.Time     `json:"last_seen_at,omitempty"`
 	Detail       map[string]any `json:"detail,omitempty"`
+	// Event source tier slice 2 (propagation axis). Surfaced to the
+	// proposer (the per-message propagation recommendation kinds) and
+	// the UI's propagation column. marshalScanResult dropped these
+	// before v0.89.194, leaving both consumers dark despite real
+	// scanner detection (AWS EventBridge per-rule).
+	HasPropagationConfig bool     `json:"has_propagation_config"`
+	PropagationNotes     []string `json:"propagation_notes,omitempty"`
 }
 
 // marshalScanResult walks the scanner.Result into the snake_case wire
@@ -1587,17 +1594,19 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 	// Service Bus, and OCI Streaming.
 	for _, es := range r.EventSources {
 		out.EventSources = append(out.EventSources, awsEventSourceRow{
-			Provider:     es.Provider,
-			Surface:      es.Surface,
-			AccountID:    es.AccountID,
-			Region:       es.Region,
-			ResourceName: es.ResourceName,
-			ResourceARN:  es.ResourceARN,
-			SourceType:   es.SourceType,
-			HasTraceAxis: es.HasTraceAxis,
-			HasLogAxis:   es.HasLogAxis,
-			LastSeenAt:   es.LastSeenAt,
-			Detail:       es.Detail,
+			Provider:             es.Provider,
+			Surface:              es.Surface,
+			AccountID:            es.AccountID,
+			Region:               es.Region,
+			ResourceName:         es.ResourceName,
+			ResourceARN:          es.ResourceARN,
+			SourceType:           es.SourceType,
+			HasTraceAxis:         es.HasTraceAxis,
+			HasLogAxis:           es.HasLogAxis,
+			LastSeenAt:           es.LastSeenAt,
+			Detail:               es.Detail,
+			HasPropagationConfig: es.HasPropagationConfig,
+			PropagationNotes:     es.PropagationNotes,
 		})
 	}
 	return out
@@ -2634,14 +2643,16 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 	// round-trip, so handle int / int64 / float64).
 	for _, es := range req.ScanResult.EventSources {
 		cand := ai.EventSourceCandidate{
-			Provider:     es.Provider,
-			Surface:      es.Surface,
-			SourceType:   es.SourceType,
-			ResourceName: es.ResourceName,
-			ResourceARN:  es.ResourceARN,
-			Region:       es.Region,
-			HasTraceAxis: es.HasTraceAxis,
-			HasLogAxis:   es.HasLogAxis,
+			Provider:             es.Provider,
+			Surface:              es.Surface,
+			SourceType:           es.SourceType,
+			ResourceName:         es.ResourceName,
+			ResourceARN:          es.ResourceARN,
+			Region:               es.Region,
+			HasTraceAxis:         es.HasTraceAxis,
+			HasLogAxis:           es.HasLogAxis,
+			HasPropagationConfig: es.HasPropagationConfig,
+			PropagationNotes:     es.PropagationNotes,
 		}
 		if es.Detail != nil {
 			if v, ok := es.Detail["has_dlq"].(bool); ok {

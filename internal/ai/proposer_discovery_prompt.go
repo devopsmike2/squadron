@@ -979,9 +979,19 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 			if e.RedrivePolicyTargetARN != "" {
 				redrive = e.RedrivePolicyTargetARN
 			}
-			fmt.Fprintf(&b, "  - %s [%s/%s/%s] region=%s trace_axis=%t log_axis=%t dlq=%s redrive_target=%s retry_count=%d retry_in_band=%t\n",
+			fmt.Fprintf(&b, "  - %s [%s/%s/%s] region=%s trace_axis=%t log_axis=%t propagation_ok=%t dlq=%s redrive_target=%s retry_count=%d retry_in_band=%t\n",
 				e.ResourceName, e.Provider, e.Surface, e.SourceType, e.Region,
-				e.HasTraceAxis, e.HasLogAxis, dlq, redrive, e.DLQRetryCount, e.DLQRetryCountInBand)
+				e.HasTraceAxis, e.HasLogAxis, e.HasPropagationConfig, dlq, redrive, e.DLQRetryCount, e.DLQRetryCountInBand)
+			// Propagation notes only when the config gap exists
+			// (propagation_ok=false), so the reasoning template's
+			// "[specific note]" slot is populated. Kept on continuation
+			// lines so the common (preserved) case stays one row per
+			// source.
+			if !e.HasPropagationConfig {
+				for _, note := range e.PropagationNotes {
+					fmt.Fprintf(&b, "      propagation_note: %s\n", note)
+				}
+			}
 		}
 		if len(in.EventSources) > len(esample) {
 			fmt.Fprintf(&b, "  ... and %d more\n", len(in.EventSources)-len(esample))

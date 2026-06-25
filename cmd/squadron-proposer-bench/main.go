@@ -88,7 +88,7 @@ type seed struct {
 	expectPlan bool                    // hint for the human reading the report; not asserted
 }
 
-// corpus is a hand-curated 19-scenario set covering both proposer
+// corpus is a hand-curated 20-scenario set covering both proposer
 // arcs: 8 cost-spike seeds (the v0.83 originals — #550 truncation,
 // #552 preamble) and 10 discovery seeds (the v0.86 Stream 2F arc,
 // v0.87's RDS seed added when the universal-observation arc grew to
@@ -627,6 +627,47 @@ func corpus() []seed {
 						RedrivePolicyTargetARN: "arn:aws:sqs:us-east-1:111122223333:shared-dlq",
 						DLQRetryCount:          5,
 						DLQRetryCountInBand:    true,
+					},
+				},
+			},
+			expectPlan: true,
+		},
+		{
+			name: "discovery_eventbridge_propagation_gap",
+			kind: seedKindDiscovery,
+			scan: ai.DiscoveryScanContext{
+				ScanID:              "scan-bench-12",
+				AccountID:           "111122223333",
+				Regions:             []string{"us-east-1"},
+				InstrumentedCount:   2,
+				UninstrumentedCount: 0,
+				EventSources: []ai.EventSourceCandidate{
+					{
+						// Source-level trace axis ON, but a rule's InputPath
+						// strips the trace header before downstream consumers
+						// see it -> the propagation config gap that drives
+						// eventbridge-rule-preserves-trace.
+						Provider: "aws", Surface: "eventbridge", SourceType: "bus",
+						ResourceName:         "orders-bus",
+						ResourceARN:          "arn:aws:events:us-east-1:111122223333:event-bus/orders-bus",
+						Region:               "us-east-1",
+						HasTraceAxis:         true,
+						HasLogAxis:           true,
+						HasPropagationConfig: false,
+						PropagationNotes: []string{
+							"rule 'order-events' has InputPath '$.detail' that strips the x-amzn-trace-id header",
+						},
+					},
+					{
+						// Control: trace axis on AND propagation preserved ->
+						// no propagation recommendation expected for this bus.
+						Provider: "aws", Surface: "eventbridge", SourceType: "bus",
+						ResourceName:         "healthy-bus",
+						ResourceARN:          "arn:aws:events:us-east-1:111122223333:event-bus/healthy-bus",
+						Region:               "us-east-1",
+						HasTraceAxis:         true,
+						HasLogAxis:           true,
+						HasPropagationConfig: true,
 					},
 				},
 			},
