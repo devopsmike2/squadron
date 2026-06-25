@@ -27,7 +27,9 @@ import { apiDelete, apiGet, apiPost } from "./base";
 import type {
   EventSourceRow,
   GenerateRecommendationsResponse,
+  RecommendationJobAccepted,
 } from "./discovery";
+import { pollRecommendationJob } from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -391,11 +393,12 @@ export async function scanOCIConnection(id: string): Promise<ScanOCIResponse> {
 // `computes`; the Go recommendations handler binds the wire
 // `ociScanResponse` shape, so this reshapes back so every tier (incl.
 // event sources) reaches the proposer.
-export function generateOCIRecommendations(
+export async function generateOCIRecommendations(
   connectionID: string,
   scan: ScanOCIResponse,
 ): Promise<GenerateRecommendationsResponse> {
-  return apiPost<GenerateRecommendationsResponse>(
+  // v0.89.210 async: kick off the proposer job, then poll to completion.
+  const accepted = await apiPost<RecommendationJobAccepted>(
     `/discovery/oci/connections/${encodeURIComponent(connectionID)}/recommendations`,
     {
       scan_result: {
@@ -411,6 +414,7 @@ export function generateOCIRecommendations(
       },
     },
   );
+  return pollRecommendationJob(accepted.job_id);
 }
 
 // --- Wire-encoding helper ------------------------------------------

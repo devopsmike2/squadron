@@ -24,7 +24,9 @@ import { apiDelete, apiGet, apiPost } from "./base";
 import type {
   EventSourceRow,
   GenerateRecommendationsResponse,
+  RecommendationJobAccepted,
 } from "./discovery";
+import { pollRecommendationJob } from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -335,14 +337,16 @@ export function scanAzureConnection(id: string): Promise<ScanAzureResponse> {
 
 // generateAzureRecommendations asks the discovery proposer to draft an
 // instrumentation plan from an Azure scan result (Provider="azure").
-export function generateAzureRecommendations(
+export async function generateAzureRecommendations(
   connectionID: string,
   scanResult: ScanAzureResponse,
 ): Promise<GenerateRecommendationsResponse> {
-  return apiPost<GenerateRecommendationsResponse>(
+  // v0.89.210 async: kick off the proposer job, then poll to completion.
+  const accepted = await apiPost<RecommendationJobAccepted>(
     `/discovery/azure/connections/${encodeURIComponent(connectionID)}/recommendations`,
     { scan_result: scanResult },
   );
+  return pollRecommendationJob(accepted.job_id);
 }
 
 // --- Wire-encoding helper ------------------------------------------

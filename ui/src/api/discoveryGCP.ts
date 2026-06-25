@@ -21,7 +21,9 @@ import { apiDelete, apiGet, apiPost } from "./base";
 import type {
   EventSourceRow,
   GenerateRecommendationsResponse,
+  RecommendationJobAccepted,
 } from "./discovery";
+import { pollRecommendationJob } from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -351,14 +353,17 @@ export function scanGCPConnection(id: string): Promise<ScanGCPResponse> {
 // generateAWSRecommendations: the browser POSTs the scan it just
 // rendered; the server builds a Provider="gcp" DiscoveryScanContext and
 // walks the plan-kind result into typed Recommendations.
-export function generateGCPRecommendations(
+export async function generateGCPRecommendations(
   connectionID: string,
   scanResult: ScanGCPResponse,
 ): Promise<GenerateRecommendationsResponse> {
-  return apiPost<GenerateRecommendationsResponse>(
+  // v0.89.210 async: kick off the proposer job, then poll the shared
+  // provider-agnostic job-status endpoint to completion.
+  const accepted = await apiPost<RecommendationJobAccepted>(
     `/discovery/gcp/connections/${encodeURIComponent(connectionID)}/recommendations`,
     { scan_result: scanResult },
   );
+  return pollRecommendationJob(accepted.job_id);
 }
 
 // --- Wire-encoding helper ------------------------------------------
