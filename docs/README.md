@@ -255,6 +255,47 @@ jump straight to that page.
   slice 9: **3-2-3-3 / 11 surfaces across 4 clouds** — only
   GCP at 2 surfaces remains for slice 10+ to close the
   widening pass at 3-3-3-3 / 12 surfaces.
+  **Slice 10 (v0.89.158-v0.89.160) CLOSES THE
+  CROSS-CLOUD EVENT SOURCE WIDENING PASS** by adding GCP
+  Pub/Sub Lite as the third GCP surface alongside Pub/Sub
+  and Cloud Tasks. Pub/Sub Lite is GCP's partitioned-log
+  primitive — the structural analog of AWS Kinesis Data
+  Streams and Azure Event Hubs. Distinct from full Pub/Sub
+  in that Lite trades managed routing + global delivery for
+  cost efficiency at high volume — operators self-manage
+  partition capacity via reservations. Zone-pinned by
+  design. 2 new recommendation kinds:
+  `pubsublite-logging-enable` (Terraform:
+  `google_logging_project_sink` filtering on the topic's ID
+  with destination defaulting to a BigQuery dataset) mirrors
+  the slice 1 Pub/Sub pattern via the Cloud Logging sink
+  primitive; + `pubsublite-reservation-attach` (Terraform:
+  creates a NEW `google_pubsub_lite_reservation` resource
+  AND updates the topic's `reservation_config` reference)
+  is the FIRST event source tier recommendation that
+  creates a billable resource — reasoning text emphasizes
+  the cost implication so PR reviewers see it explicitly;
+  default sizing is conservative (4 publish + subscribe
+  units) but operators MUST validate against ACTUAL peak
+  throughput before merging. 1 new webhook prefix:
+  `pubsublite-` → gcp. `ScanEventSources` dispatcher
+  extends from two-way (Pub/Sub + Cloud Tasks) to three-way
+  (Pub/Sub + Cloud Tasks + Pub/Sub Lite) with combinatorial
+  partial-scan posture; zone-pinned per-zone partial-scan
+  handling inside `ScanPubSubLiteTopics`. IAM extension:
+  `pubsublite.topics.list` + `pubsublite.topics.get` +
+  `pubsublite.reservations.list` added to the GCP scanner
+  role. **Slice 10 SHIPPED in v0.89.160. THE CROSS-CLOUD
+  EVENT SOURCE WIDENING PASS IS COMPLETE** at **3-3-3-3 /
+  12 surfaces across 4 clouds** — AWS 3 (EventBridge + SNS
+  + SQS), GCP 3 (Pub/Sub + Cloud Tasks + Pub/Sub Lite),
+  Azure 3 (Service Bus + Event Grid + Event Hubs), OCI 3
+  (Streaming + Notification Service + Queue Service). Every
+  cloud carries every primitive pattern (queue, pub/sub
+  fan-out, partitioned-log intake). Future event source
+  work shifts from per-cloud breadth (3-3-3-3 complete) to
+  per-axis depth — consumer lag detection, cross-surface
+  correlation, substrate-level cost modeling.
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

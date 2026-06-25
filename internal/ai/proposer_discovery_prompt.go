@@ -417,6 +417,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice9QueuesKindsPromptSection +
 
+	eventSourceTierSlice10PubSubLiteKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -2178,6 +2180,101 @@ substrate-level consumer-processing-lag detection;
 slice 10+. Channel-level inspection (OCI Queue per-channel
 routing) is slice 10+. Per-queue CMEK / vault key rotation
 validation is slice 10+.
+
+` + "\n"
+
+// eventSourceTierSlice10PubSubLiteKindsPromptSection — event source
+// tier slice 10 chunk 2 (v0.89.160, #802 Stream 199). Two new
+// recommendation kinds: pubsublite-logging-enable +
+// pubsublite-reservation-attach. CLOSES the cross-cloud event source
+// widening pass at 3-3-3-3 / 12 surfaces.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no Pub/Sub Lite observations the rendered user
+// message stays byte-identical to v0.89.157 across all four
+// providers.
+const eventSourceTierSlice10PubSubLiteKindsPromptSection = `EVENT SOURCE TIER SLICE 10 — GCP PUB/SUB LITE (v0.89.158-160):
+
+Adds GCP Pub/Sub Lite as the third GCP event source surface
+alongside Pub/Sub and Cloud Tasks. CLOSES the cross-cloud
+event source widening pass — after slice 10, all four
+clouds carry 3 event source surfaces each.
+
+CROSS-CLOUD AFTER SLICE 10: AWS 3 (EventBridge + SNS + SQS),
+GCP 3 (Pub/Sub + Cloud Tasks + Pub/Sub Lite), Azure 3
+(Service Bus + Event Grid + Event Hubs), OCI 3 (Streaming
++ Notification Service + Queue Service). Total: 12 event
+source surfaces across 4 clouds at 3-3-3-3 grid.
+
+Pub/Sub Lite is GCP's partitioned-log primitive, the
+structural analog of AWS Kinesis Data Streams and Azure
+Event Hubs. Distinct from full Pub/Sub in that Lite trades
+managed routing + global delivery for cost efficiency at
+high volume — operators self-manage partition capacity via
+reservations. Zone-pinned by design.
+
+The canonical GCP high-throughput analytics architecture:
+Pub/Sub Lite topic -> Dataflow / Cloud Run consumers, with
+reservations managing per-partition capacity.
+
+- pubsublite-logging-enable: Pub/Sub Lite topic has no
+  Cloud Logging sink configured filtering on
+  resource.type="pubsublite_topic" + the topic's ID. Without
+  the sink, the operator has no audit trail for publish
+  failures, per-partition throughput exhaustion events, or
+  reservation-related throttling — the failure modes unique
+  to the Lite tier.
+
+  Mirrors the slice 1 Pub/Sub pattern via the Cloud Logging
+  sink primitive. Terraform: google_logging_project_sink
+  filtering on the topic's ID with destination defaulting
+  to a BigQuery dataset.
+
+- pubsublite-reservation-attach: Pub/Sub Lite topic has NO
+  reservation attached OR the referenced reservation does
+  not exist in the topic's zone. Without a reservation, the
+  topic is throttled to the bare minimum publish + subscribe
+  throughput per partition — typically becoming a silent
+  bottleneck under peak load.
+
+  CRITICAL: this recommendation CREATES A BILLABLE RESOURCE.
+  The proposer's reasoning text MUST emphasize this so PR
+  reviewers see the cost implication explicitly. Default
+  sizing is conservative (4 publish + subscribe units) but
+  the operator MUST validate against ACTUAL peak throughput
+  before merging — under-sized reservations re-create the
+  throttling problem the recommendation solves.
+
+  This is the FIRST recommendation in the event source tier
+  that creates a billable resource. Prior kinds only
+  configured Logging sinks or attached to existing
+  resources.
+
+DECLINE PATH for pubsublite-logging-enable: operators
+routing Lite topic audit through a non-Cloud-Logging
+destination (Stackdriver custom exporter, third-party SIEM)
+should decline. The verdict learning loop records.
+
+DECLINE PATH for pubsublite-reservation-attach: operators
+who deliberately run Lite topics at the minimum-throughput
+floor because the topic is BELOW the per-zone reservation
+breakeven should decline. The verdict learning loop records.
+
+CAVEAT FOR ALL PUB/SUB LITE RECOMMENDATIONS:
+Slice 10 covers per-topic Logging + Reservation axes.
+Per-subscription consumer-side lag detection is slice 11+
+candidate. Cross-region disaster-recovery analysis is
+out of scope (Pub/Sub Lite is zone-pinned by design).
+Schema enforcement is slice 11+. Pub/Sub-to-Lite migration
+recommendations require substrate-level cost modeling;
+slice 11+. Per-message trace context propagation analysis
+is slice 11+ candidate via substrate MetricQuerier.
+
+STRATEGIC NOTE: after slice 10, the event source tier's
+widening pass is COMPLETE. Future event source work is
+per-axis depth (consumer lag, cost modeling, cross-surface
+correlation), NOT per-cloud breadth.
 
 ` + "\n"
 

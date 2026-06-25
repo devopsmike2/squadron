@@ -1668,6 +1668,194 @@ Per §13 of the slice 9 design doc:
   listLogsForQueue helpers into one shared
   resource-OCID-agnostic implementation
 
+## Slice 10 SHIPPED in v0.89.158-v0.89.160 — GCP Pub/Sub Lite — **CLOSES THE WIDENING PASS at 3-3-3-3 / 12 surfaces**
+
+Slice 10 brings GCP to parity with AWS + Azure + OCI at 3
+event source surfaces by adding Pub/Sub Lite as the third
+GCP surface alongside Pub/Sub and Cloud Tasks. **This slice
+closes the cross-cloud event source widening pass.**
+
+Pub/Sub Lite is GCP's partitioned-log primitive — the
+structural analog of AWS Kinesis Data Streams and Azure
+Event Hubs. Distinct from full Pub/Sub in that Lite trades
+managed routing + global delivery for cost efficiency at
+high volume — operators self-manage partition capacity via
+reservations. Zone-pinned by design.
+
+After slice 10, the cross-cloud surface count lands at
+**3-3-3-3 / 12 surfaces across 4 clouds**:
+
+- AWS: EventBridge + SNS + SQS (3 surfaces)
+- GCP: Pub/Sub + Cloud Tasks + Pub/Sub Lite (3 surfaces)
+- Azure: Service Bus + Event Grid + Event Hubs (3 surfaces)
+- OCI: Streaming + Notification Service + Queue Service (3 surfaces)
+
+**Every cloud at 3 surfaces. Widening pass complete.**
+
+### New recommendation kinds
+
+2 new kinds in slice 10:
+
+- `pubsublite-logging-enable` — Pub/Sub Lite topic has no
+  Cloud Logging sink configured filtering on
+  `resource.type="pubsublite_topic"` + the topic's ID.
+  Without the sink, the operator has no audit trail for
+  publish failures, per-partition throughput exhaustion
+  events, or reservation-related throttling — the failure
+  modes unique to the Lite tier.
+
+- `pubsublite-reservation-attach` — Pub/Sub Lite topic has
+  NO reservation attached OR the referenced reservation
+  does not exist in the topic's zone. Without a
+  reservation, the topic is throttled to the bare minimum
+  publish + subscribe throughput per partition — typically
+  becoming a silent bottleneck under peak load.
+
+  **CRITICAL: this recommendation CREATES A BILLABLE
+  RESOURCE.** This is the FIRST event source tier
+  recommendation that creates a billable resource. Default
+  sizing is conservative (4 publish + subscribe units) but
+  the operator MUST validate against ACTUAL peak throughput
+  before merging — under-sized reservations re-create the
+  throttling problem the recommendation solves.
+
+### Terraform Squadron emits
+
+For `pubsublite-logging-enable`:
+
+```hcl
+resource "google_logging_project_sink" "<name>_lite_log_sink" {
+  name        = "pubsublite-${google_pubsub_lite_topic.<name>.name}-audit"
+  destination = "bigquery.googleapis.com/projects/${var.project_id}/datasets/${var.pubsublite_logging_dataset_id}"
+
+  filter = <<-EOT
+    resource.type="pubsublite_topic"
+    resource.labels.topic_id="${google_pubsub_lite_topic.<name>.name}"
+  EOT
+
+  unique_writer_identity = true
+}
+```
+
+For `pubsublite-reservation-attach`:
+
+```hcl
+resource "google_pubsub_lite_reservation" "<name>_reservation" {
+  name    = "${google_pubsub_lite_topic.<name>.name}-reservation"
+  project = var.project_id
+  region  = var.lite_region  # operator provides; must match topic zone
+
+  # CONSERVATIVE DEFAULT: 4 publish + subscribe units. Operator MUST
+  # tune throughput_capacity to match ACTUAL peak before merging.
+  throughput_capacity = 4
+}
+
+resource "google_pubsub_lite_topic" "<name>" {
+  # ... existing fields ...
+
+  reservation_config {
+    throughput_reservation = google_pubsub_lite_reservation.<name>_reservation.name
+  }
+}
+```
+
+### Decline paths
+
+Decline `pubsublite-logging-enable` if your team routes Lite
+topic audit through a non-Cloud-Logging destination
+(Stackdriver custom exporter, third-party SIEM). Decline
+`pubsublite-reservation-attach` if your team deliberately
+runs Lite topics at the minimum-throughput floor because
+the topic is BELOW the per-zone reservation breakeven. The
+verdict learning loop records both.
+
+### Three-way dispatcher posture
+
+Slice 10 extends GCP `ScanEventSources` from two-way
+(Pub/Sub + Cloud Tasks) to three-way (Pub/Sub + Cloud Tasks
++ Pub/Sub Lite) with combinatorial partial-scan posture
+mirroring slice 8 Azure + slice 9 OCI three-way patterns.
+
+### Zone-pinned scope handling
+
+Pub/Sub Lite is zone-scoped (not regional). Per-zone
+partial-scan posture inside `ScanPubSubLiteTopics` handles
+zone-failures independently of the three-way dispatcher
+posture above it. Topics in zones the SA CAN reach surface
+even when other zones fail.
+
+### IAM extension
+
+Slice 10 adds three new GCP IAM permissions:
+
+- `pubsublite.topics.list`
+- `pubsublite.topics.get`
+- `pubsublite.reservations.list`
+
+The existing slice 1 Logging read scope covers per-topic
+detection via the project-wide Cloud Logging sinks list
+call.
+
+### The cross-cloud event source coverage matrix
+
+After slice 10, Squadron's event source tier coverage looks
+like:
+
+```
+            +-----------+-----------+--------------+
+            | Compute / | Pub/Sub / | Partitioned- |
+            | Queue     | Fan-out   | Log Intake   |
++-----------+-----------+-----------+--------------+
+| AWS       | SQS       | SNS       | EventBridge  |
+| GCP       | CloudTasks| Pub/Sub   | Pub/Sub Lite |
+| Azure     | ServiceBus| Event Grid| Event Hubs   |
+| OCI       | Queue     | Notif.    | Streaming    |
++-----------+-----------+-----------+--------------+
+```
+
+3-3-3-3. 12 surfaces. 4 clouds. Every cloud carries every
+primitive pattern.
+
+### Strategic close — what's next
+
+After slice 10, the event source tier's widening pass is
+**COMPLETE**. Future event source work is **per-axis depth**,
+NOT per-cloud breadth:
+
+- Per-subscription consumer-side lag detection (slice 11+)
+- Cross-surface correlation views (Streaming-Queue,
+  Pub/Sub-Lite consumer chains, EventBridge-SQS
+  fan-in/fan-out)
+- Substrate-level cost modeling for migration
+  recommendations (Pub/Sub → Pub/Sub Lite, SQS → SNS+SQS
+  fan-out)
+- Per-message trace context propagation analysis via
+  substrate MetricQuerier
+- Per-message visibility timeout / consumer-processing-lag
+  detection
+- Schema enforcement axes across surfaces with schema
+  registries
+
+The horizon shifts from "do we see every cloud's event
+source surfaces?" (yes — 3-3-3-3) to "do we see what the
+operator actually needs to know about each surface?" The
+substrate (MetricQuerier from cold-start slice 1+2) is the
+primary enabler for the per-axis depth work — most slice
+11+ candidates ride on it.
+
+### Slice 11+ candidates
+
+- **Per-subscription consumer-side lag detection** (all
+  four clouds where applicable)
+- **Cross-region disaster-recovery analysis** for Pub/Sub
+  Lite, Event Hubs Geo-DR pairs, OCI Queue Geo-replication
+- **Schema enforcement** axes for Pub/Sub Lite, Event
+  Hubs Schema Registry
+- **Pub/Sub-to-Lite migration recommendations** (requires
+  substrate cost modeling)
+- **Per-message trace context propagation analysis** via
+  substrate MetricQuerier
+
 ## Cross-references
 
 - [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —
