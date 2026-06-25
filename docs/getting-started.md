@@ -22,7 +22,7 @@ docker run -d \
   -p 4320:4320 \    # OpAMP WebSocket
   -p 4317:4317 \    # OTLP gRPC
   -p 4318:4318 \    # OTLP HTTP
-  -v squadron-data:/data \
+  -v squadron-data:/app/data \
   ghcr.io/devopsmike2/squadron:latest
 
 open http://localhost:8080
@@ -37,13 +37,16 @@ If you'd rather drive everything from a compose file:
 ```bash
 git clone https://github.com/devopsmike2/squadron.git
 cd squadron
-docker compose up -d squadron
+docker compose up -d
 open http://localhost:8080
 ```
 
-The compose file in the repo also defines a development variant that runs
-the Go backend with hot reload and the Vite dev server side by side. See
-the main README for the dev workflow.
+This runs the same published image plus a demo collector, so the
+dashboard lands with a live agent already connected. A separate
+`docker-compose.dev.yml` defines the development variant that builds from
+source with hot reload (Go via Air + the Vite dev server on :5173) — run
+it with `docker compose -f docker-compose.dev.yml up`. See the main
+README for the dev workflow.
 
 ### Without Docker
 

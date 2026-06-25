@@ -258,7 +258,7 @@ make fleetsim
 watch -n 1 'curl -sS http://localhost:8080/api/v1/agents/stats; echo'
 ```
 
-Then open the UI at http://localhost:5173 and exercise:
+Then open the UI at http://localhost:8080 and exercise:
 - Fleet Status dashboard
 - Agents page (cards + table)
 - Fleet Map (pipeline / data flow / fleet tabs)
