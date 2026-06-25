@@ -15,9 +15,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -91,6 +93,9 @@ type DiscoveryAzureHandlers struct {
 	// Optional; see DiscoveryHandlers.traceIndex godoc for posture.
 	traceIndex TraceIndexLookup
 	logger     *zap.Logger
+	// aiProposer — chunk 5 (v0.89.198). nil when AI assist is off;
+	// HandleRecommendationsForAzureScan 503s in that case.
+	aiProposer DiscoveryAIProposer
 }
 
 // NewDiscoveryAzureHandlers builds the handler struct. Optional
@@ -138,6 +143,13 @@ func (h *DiscoveryAzureHandlers) WithAzureTraceIndex(idx TraceIndexLookup) *Disc
 
 func (h *DiscoveryAzureHandlers) WithAzureScannerFactory(f AzureScannerFactory) *DiscoveryAzureHandlers {
 	h.scannerFactory = f
+	return h
+}
+
+// WithAzureAIProposer wires the discovery-side AI proposer used by
+// HandleRecommendationsForAzureScan.
+func (h *DiscoveryAzureHandlers) WithAzureAIProposer(p DiscoveryAIProposer) *DiscoveryAzureHandlers {
+	h.aiProposer = p
 	return h
 }
 
@@ -1098,11 +1110,189 @@ func (h *DiscoveryAzureHandlers) emitAzureScanFailed(ctx context.Context, conn *
 // extension. Until then, the route returns a humanized "coming in
 // chunk 5" message so the UI can render an empty Recommendations
 // tab without 404ing.
+// azureGenerateRecommendationsRequest is the POST body: the
+// azureScanResponse echoed back so the proposer reasons over the same
+// inventory the Inventory tab rendered.
+type azureGenerateRecommendationsRequest struct {
+	ScanResult azureScanResponse `json:"scan_result"`
+}
+
+// HandleRecommendationsForAzureScan — POST
+// /api/v1/discovery/azure/connections/:id/recommendations (chunk 5,
+// v0.89.198). Builds a Provider="azure" DiscoveryScanContext from the
+// posted scan result and runs the shared proposer, mirroring AWS + GCP.
 func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": &scanner.HumanizedError{
-		Code:    "AzureRecommendationsNotImplemented",
-		Message: "Azure recommendations are coming in chunk 5 of the Azure discovery slice 1 arc (#674). Until then, the Azure scan result is render-only.",
-	}})
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
+		}})
+		return
+	}
+	if h.aiProposer == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "AIProposerNotWired",
+			Message: "Squadron's AI assist is not configured. Set ANTHROPIC_API_KEY and ai.enabled=true to enable discovery recommendations.",
+		}})
+		return
+	}
+
+	conn, err := h.store.Get(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, azureconnstore.ErrConnectionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code:    "ConnectionNotFound",
+				Message: "No Azure connection exists with that ID. Connect the subscription from the wizard first.",
+			}})
+			return
+		}
+		if h.logger != nil {
+			h.logger.Error("azure generate recommendations: store read failed", zap.Error(err), zap.String("id", id))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "AzureStoreReadFailed",
+			Message: "Squadron could not read the Azure connection. The error has been logged; retry in a moment.",
+		}})
+		return
+	}
+
+	var req azureGenerateRecommendationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message: "Request body could not be parsed as JSON. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.ScanResult.ScanID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingScanID",
+			Message: "scan_result.scan_id is required. Re-run the scan and retry.",
+		}})
+		return
+	}
+	if sid := strings.TrimSpace(req.ScanResult.SubscriptionID); sid != "" && sid != conn.SubscriptionID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "SubscriptionIDMismatch",
+			Message: "scan_result.subscription_id does not match the connection. Re-run the scan against the right connection and retry.",
+		}})
+		return
+	}
+
+	regions := []string{}
+	if r := strings.TrimSpace(req.ScanResult.Location); r != "" {
+		regions = append(regions, r)
+	}
+	aiCtx := &ai.DiscoveryScanContext{
+		ScanID:              req.ScanResult.ScanID,
+		Provider:            "azure",
+		TenantID:            conn.TenantID,
+		SubscriptionID:      conn.SubscriptionID,
+		Regions:             regions,
+		InstrumentedCount:   req.ScanResult.InstrumentedCount,
+		UninstrumentedCount: req.ScanResult.UninstrumentedCount,
+	}
+	for _, ci := range req.ScanResult.Compute {
+		aiCtx.ComputeInstances = append(aiCtx.ComputeInstances, ai.ComputeResourceCandidate{
+			ResourceID:   ci.ResourceID,
+			InstanceType: ci.InstanceType,
+			Region:       ci.Region,
+			OSFamily:     ci.OSFamily,
+			HasOTel:      ci.HasOTel,
+		})
+	}
+	for _, db := range req.ScanResult.Databases {
+		aiCtx.Databases = append(aiCtx.Databases, ai.DatabaseResourceCandidate{
+			ResourceID:                 db.ResourceID,
+			Engine:                     db.Engine,
+			EngineVersion:              db.EngineVersion,
+			InstanceClass:              db.InstanceClass,
+			PerformanceInsightsEnabled: db.PerformanceInsightsEnabled,
+			EnhancedMonitoringEnabled:  db.EnhancedMonitoringEnabled,
+			Region:                     db.Region,
+			Provider:                   db.Provider,
+			QueryInsightsEnabled:       db.QueryInsightsEnabled,
+			SQLInsightsDiagEnabled:     db.SQLInsightsDiagEnabled,
+			DatabaseManagementEnabled:  db.DatabaseManagementEnabled,
+		})
+	}
+	for _, cl := range req.ScanResult.Clusters {
+		addonNames := make([]string, 0, len(cl.Addons))
+		for _, a := range cl.Addons {
+			if !strings.EqualFold(a.Status, "ACTIVE") {
+				continue
+			}
+			addonNames = append(addonNames, a.Name)
+		}
+		aiCtx.Clusters = append(aiCtx.Clusters, ai.ClusterCandidate{
+			ResourceID:          cl.ResourceID,
+			Name:                cl.Name,
+			KubernetesVersion:   cl.KubernetesVersion,
+			ControlPlaneLogging: append([]string(nil), cl.ControlPlaneLogging...),
+			AddonNames:          addonNames,
+			Region:              cl.Region,
+		})
+	}
+	aiCtx.EventSources = mapEventSourceCandidates(req.ScanResult.EventSources)
+
+	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("azure generate recommendations: proposer call failed",
+				zap.Error(err), zap.String("subscription_id", conn.SubscriptionID), zap.String("scan_id", aiCtx.ScanID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ProposerCallFailed",
+			Message: "Squadron's AI proposer failed: " + err.Error(),
+		}})
+		return
+	}
+	if result.Declined {
+		c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+			Declined:        true,
+			Reason:          result.Reason,
+			Recommendations: []recommendations.Recommendation{},
+		})
+		return
+	}
+
+	now := time.Now().UTC()
+	recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Error("azure generate recommendations: plan step marshal failed", zap.Error(err))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "PlanStepMarshalFailed",
+			Message: "Squadron could not encode the plan step. The error has been logged.",
+		}})
+		return
+	}
+
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      services.AuditActorSystem,
+			EventType:  "discovery.azure.recommendations_generated",
+			TargetType: credstore.TargetTypeCloudConnection,
+			TargetID:   conn.ID,
+			Action:     "recommendations_generated",
+			Payload: map[string]any{
+				"connection_id":   conn.ID,
+				"subscription_id": conn.SubscriptionID,
+				"scan_id":         req.ScanResult.ScanID,
+				"step_count":      len(recs),
+				"tokens_in":       result.TokensIn,
+				"tokens_out":      result.TokensOut,
+				"model":           result.Model,
+				"recorded_at":     now,
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
+		Reasoning:       result.Reasoning,
+		Recommendations: recs,
+	})
 }
 
 // --- helpers ------------------------------------------------------------

@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -714,18 +715,75 @@ func TestScanAzureConnection_HardError_EmitsScanFailedAudit(t *testing.T) {
 	}
 }
 
-// --- Recommendations stub ----------------------------------------------
+// --- Recommendations (chunk 5, v0.89.198) ------------------------------
 
-func TestRecommendationsForAzureScan_NotImplementedStub(t *testing.T) {
+func TestRecommendationsForAzureScan_HappyPath(t *testing.T) {
+	mock := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Reasoning: "Azure instrumentation plan",
+			Model:     "claude-test",
+			Plan: ai.PlanCandidate{
+				Steps: []ai.PlanStepCandidate{
+					{Name: "Preserve traceparent on orders-ns", InlineConfigSnippet: "resource \"azurerm_servicebus_namespace_authorization_rule\" \"r\" {}"},
+				},
+			},
+		},
+	}
+	h, store, key := newAzureTestHandlers(t, nil, nil)
+	h.WithAzureAIProposer(mock)
+	r := newAzureRouter(h)
+	conn := seedAzureConnection(t, store, key, "Prod", azureTestTenantID, azureTestSubscriptionID, azureTestClientID, "eastus")
+
+	body, err := json.Marshal(azureGenerateRecommendationsRequest{
+		ScanResult: azureScanResponse{
+			ScanID:         "scan-azure-recs",
+			SubscriptionID: azureTestSubscriptionID,
+			Location:       "eastus",
+			EventSources: []eventSourceRow{
+				{
+					Provider: "azure", Surface: "servicebus", SourceType: "namespace",
+					ResourceName: "orders-ns", Region: "eastus",
+					HasTraceAxis: true, HasLogAxis: true,
+					HasPropagationConfig: false,
+					PropagationNotes:     []string{"authorization rule blocks traceparent"},
+				},
+			},
+			InstrumentedCount:   0,
+			UninstrumentedCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	w := azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/connections/"+conn.ID+"/recommendations", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if mock.gotCtx.Provider != "azure" {
+		t.Errorf("ctx.Provider = %q, want azure", mock.gotCtx.Provider)
+	}
+	if mock.gotCtx.SubscriptionID != azureTestSubscriptionID {
+		t.Errorf("ctx.SubscriptionID = %q", mock.gotCtx.SubscriptionID)
+	}
+	if len(mock.gotCtx.EventSources) != 1 || mock.gotCtx.EventSources[0].HasPropagationConfig {
+		t.Errorf("event source not threaded with propagation gap: %+v", mock.gotCtx.EventSources)
+	}
+	var resp awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if len(resp.Recommendations) != 1 {
+		t.Fatalf("recommendations len = %d, want 1", len(resp.Recommendations))
+	}
+}
+
+func TestRecommendationsForAzureScan_ProposerNotWired(t *testing.T) {
 	h, store, key := newAzureTestHandlers(t, nil, nil)
 	r := newAzureRouter(h)
 	conn := seedAzureConnection(t, store, key, "Prod", azureTestTenantID, azureTestSubscriptionID, azureTestClientID, "eastus")
-	w := azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/connections/"+conn.ID+"/recommendations", "{}")
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501; body=%s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "chunk 5") {
-		t.Errorf("body should explain chunk-5 deferral: %s", w.Body.String())
+	w := azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/connections/"+conn.ID+"/recommendations", `{"scan_result":{"scan_id":"s1","subscription_id":"`+azureTestSubscriptionID+`"}}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
 	}
 }
 

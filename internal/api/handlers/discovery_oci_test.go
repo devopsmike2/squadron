@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -780,18 +781,75 @@ func TestScanOCIConnection_HardError_EmitsScanFailedAudit(t *testing.T) {
 	}
 }
 
-// --- Recommendations stub ----------------------------------------------
+// --- Recommendations (chunk 5, v0.89.198) ------------------------------
 
-func TestRecommendationsForOCIScan_NotImplementedStub(t *testing.T) {
+func TestRecommendationsForOCIScan_HappyPath(t *testing.T) {
+	mock := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Reasoning: "OCI instrumentation plan",
+			Model:     "claude-test",
+			Plan: ai.PlanCandidate{
+				Steps: []ai.PlanStepCandidate{
+					{Name: "Raise retention on orders-stream", InlineConfigSnippet: "resource \"oci_streaming_stream\" \"s\" {}"},
+				},
+			},
+		},
+	}
+	h, store, key := newOCITestHandlers(t, nil, nil)
+	h.WithOCIAIProposer(mock)
+	r := newOCIRouter(h)
+	conn := seedOCIConnection(t, store, key, "Prod", ociTestTenancyOCID, ociTestUserOCID, ociTestFingerprint, ociTestRegion)
+
+	body, err := json.Marshal(ociGenerateRecommendationsRequest{
+		ScanResult: ociScanResponse{
+			ScanID:      "scan-oci-recs",
+			TenancyOCID: ociTestTenancyOCID,
+			Region:      ociTestRegion,
+			EventSources: []eventSourceRow{
+				{
+					Provider: "oci", Surface: "streaming", SourceType: "stream",
+					ResourceName: "orders-stream", Region: ociTestRegion,
+					HasTraceAxis: true, HasLogAxis: true,
+					HasPropagationConfig: false,
+					PropagationNotes:     []string{"retentionInHours < 24 may truncate traceparent"},
+				},
+			},
+			InstrumentedCount:   0,
+			UninstrumentedCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	w := ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/connections/"+conn.ID+"/recommendations", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if mock.gotCtx.Provider != "oci" {
+		t.Errorf("ctx.Provider = %q, want oci", mock.gotCtx.Provider)
+	}
+	if mock.gotCtx.TenancyOCID != ociTestTenancyOCID {
+		t.Errorf("ctx.TenancyOCID = %q", mock.gotCtx.TenancyOCID)
+	}
+	if len(mock.gotCtx.EventSources) != 1 || mock.gotCtx.EventSources[0].HasPropagationConfig {
+		t.Errorf("event source not threaded with propagation gap: %+v", mock.gotCtx.EventSources)
+	}
+	var resp awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if len(resp.Recommendations) != 1 {
+		t.Fatalf("recommendations len = %d, want 1", len(resp.Recommendations))
+	}
+}
+
+func TestRecommendationsForOCIScan_ProposerNotWired(t *testing.T) {
 	h, store, key := newOCITestHandlers(t, nil, nil)
 	r := newOCIRouter(h)
 	conn := seedOCIConnection(t, store, key, "Prod", ociTestTenancyOCID, ociTestUserOCID, ociTestFingerprint, ociTestRegion)
-	w := ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/connections/"+conn.ID+"/recommendations", "{}")
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501; body=%s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "chunk 5") {
-		t.Errorf("body should explain chunk-5 deferral: %s", w.Body.String())
+	w := ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/connections/"+conn.ID+"/recommendations", `{"scan_result":{"scan_id":"s1","tenancy_ocid":"`+ociTestTenancyOCID+`"}}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
 	}
 }
 
