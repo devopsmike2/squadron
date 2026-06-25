@@ -1072,6 +1072,10 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 		if s.traceIndexLookupForDiscovery != nil {
 			h.WithGCPTraceIndex(s.traceIndexLookupForDiscovery)
 		}
+		// chunk 5 (v0.89.197) — wire the AI proposer so the GCP
+		// recommendations endpoint works. Unconditional: the handler
+		// 503s when the proposer is nil (AI assist off).
+		h.WithGCPAIProposer(s.discoveryAIService)
 		fn(h, c)
 	}
 }
