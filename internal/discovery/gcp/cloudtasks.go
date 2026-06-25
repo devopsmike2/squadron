@@ -461,6 +461,18 @@ func buildCloudTasksSnapshot(accountID, region string, q *cloudTasksQueue) scann
 	// see byte-identical output to v0.89.163.
 	applyCloudTasksDLQDetail(&snap, q)
 
+	// Consumer lag detection slice 2 chunk 2 (v0.89.169, #811
+	// Stream 208) — adds the four GCP Cloud Tasks lag axis Detail
+	// keys (lag_backlog_depth, lag_backlog_depth_high,
+	// lag_consumer_silence_seconds, lag_consumer_silence_high) per
+	// docs/proposals/consumer-lag-detection-slice2.md §3.3 honest
+	// framing (admin API does not surface task count as a metric;
+	// always returns absent sentinels). ADDITIVE only — none of
+	// the slice-5 + slice-1 (DLQ) keys above are modified here, so
+	// callers that have not yet adopted the lag axis keys see
+	// byte-identical output to v0.89.168.
+	applyCloudTasksLagDetail(&snap, q)
+
 	return snap
 }
 
