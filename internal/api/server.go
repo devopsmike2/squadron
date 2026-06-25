@@ -3049,18 +3049,28 @@ func (s *Server) registerRoutes() {
 		// scope covers register, dispatch, revoke, and result
 		// reporting. The runner daemon authenticates with a token
 		// carrying actions:write issued at enrollment.
-		actionsHandler := handlers.NewActionsHandlers(s.appStore, s.actionSigner, nil, s.auditService, s.logger)
 		actionsRead := middleware.RequireScope(services.ScopeActionsRead)
 		actionsWrite := middleware.RequireScope(services.ScopeActionsWrite)
-		v1.POST("/runners/register", actionsWrite, actionsHandler.HandleRegisterRunner)
-		v1.GET("/runners", actionsRead, actionsHandler.HandleListRunners)
-		v1.GET("/runners/:id", actionsRead, actionsHandler.HandleGetRunner)
-		v1.POST("/runners/:id/revoke", actionsWrite, actionsHandler.HandleRevokeRunner)
-		v1.GET("/runners/:id/pending", actionsRead, actionsHandler.HandleRunnerPending)
-		v1.POST("/actions/dispatch", actionsWrite, actionsHandler.HandleDispatchAction)
-		v1.GET("/actions", actionsRead, actionsHandler.HandleListActions)
-		v1.GET("/actions/:id", actionsRead, actionsHandler.HandleGetAction)
-		v1.POST("/actions/:id/result", actionsWrite, actionsHandler.HandlePostActionResult)
+		// v0.89.212 — build the actions handler PER REQUEST so it reads
+		// s.appStore + s.actionSigner at request time. registerRoutes()
+		// runs inside NewServer BEFORE main.go calls
+		// SetActionStoreAndSigner, so an eagerly-built handler captured a
+		// nil store and every /actions + /runners route panicked (nil
+		// deref) -> 500. Same fix as the incidents routes (v0.89.211).
+		actions := func(fn func(*handlers.ActionsHandlers, *gin.Context)) gin.HandlerFunc {
+			return func(c *gin.Context) {
+				fn(handlers.NewActionsHandlers(s.appStore, s.actionSigner, nil, s.auditService, s.logger), c)
+			}
+		}
+		v1.POST("/runners/register", actionsWrite, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleRegisterRunner(c) }))
+		v1.GET("/runners", actionsRead, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleListRunners(c) }))
+		v1.GET("/runners/:id", actionsRead, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleGetRunner(c) }))
+		v1.POST("/runners/:id/revoke", actionsWrite, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleRevokeRunner(c) }))
+		v1.GET("/runners/:id/pending", actionsRead, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleRunnerPending(c) }))
+		v1.POST("/actions/dispatch", actionsWrite, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleDispatchAction(c) }))
+		v1.GET("/actions", actionsRead, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleListActions(c) }))
+		v1.GET("/actions/:id", actionsRead, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandleGetAction(c) }))
+		v1.POST("/actions/:id/result", actionsWrite, actions(func(h *handlers.ActionsHandlers, c *gin.Context) { h.HandlePostActionResult(c) }))
 
 		// v0.54 — incident drafter (Move 3). Read covers the
 		// operator inbox view; write covers edit, dismiss, and
