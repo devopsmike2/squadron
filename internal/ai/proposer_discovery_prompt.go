@@ -423,6 +423,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	consumerLagSlice2KindsPromptSection +
 	poisonRateSlice3KindsPromptSection +
+	poisonRateSubstrateSlice4KindsPromptSection +
 
 	coldStartKindsPromptSection +
 
@@ -2639,6 +2640,66 @@ integration that closes ALL §3.3 deferrals at once
 per-queue cost-per-message correlation. The per-axis-depth
 shape is fixed: each axis adds 2-4 Detail keys per surface
 and 2-6 recommendation kinds across the 4 clouds.
+
+` + "\n"
+
+// poisonRateSubstrateSlice4KindsPromptSection — Poison-rate substrate
+// integration slice 4 chunk 1 (v0.89.177, #819 Stream 216). Converts
+// the AWS SQS poison-rate axis from slice-3 §3.3 honest framing into
+// REAL CloudWatch-backed detection. The other three clouds stay on
+// §3.3 honest framing until their substrate chunks (4.2 GCP, 4.3
+// Azure, 4.4 OCI) land — the model MUST NOT claim measured rates for
+// them.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged.
+const poisonRateSubstrateSlice4KindsPromptSection = `POISON-RATE SUBSTRATE INTEGRATION SLICE 4 — CLOSING THE §3.3 DEFERRALS (v0.89.177+):
+
+Slice 3 shipped the poison-rate axis across all four clouds as
+§3.3 substrate-metric-dependence HONEST FRAMING: the rate was
+never measured (poison_rate_per_hour = -1 always). Slice 4
+builds the per-cloud MetricQuerier integration that actually
+reads the metric, one cloud per chunk — mirroring how the
+cold-start latency arc built the CloudWatch / Cloud Monitoring
+/ Azure Monitor / OCI Monitoring substrate per cloud.
+
+CHUNK 1 (this release) — AWS SQS is now REAL:
+
+- Squadron reads the dead-letter queue's NumberOfMessagesSent
+  SUM over a trailing 1-hour window via CloudWatch
+  GetMetricStatistics (AWS/SQS namespace, QueueName dimension),
+  reusing the cold-start substrate's rate limiter +
+  throttle-retry.
+- poison_rate_per_hour now carries the MEASURED rate for AWS
+  SQS source queues whose DLQ is reachable in the scanned
+  account. poison_rate_high_band is the real
+  rate >= 60/hour (1/min) verdict.
+- Real-zero vs absent: a measured 0 (poison_rate_per_hour = 0)
+  means "zero poison messages this hour" — a genuine green
+  signal. -1 STILL means "not measured" (DLQ too new / no
+  datapoints / unreachable cross-account DLQ / CloudWatch not
+  wired). NEVER read -1 as zero.
+- sqs-poison-rate-monitor-add reasoning text should now REPORT
+  the measured rate when poison_rate_per_hour >= 0, instead of
+  disclaiming the §3.3 gap. When poison_rate_per_hour = -1, fall
+  back to the slice-3 §3.3 honest-framing reasoning.
+
+STILL §3.3 HONEST FRAMING (do NOT claim measurement):
+
+- GCP Cloud Tasks (cloudtasks-poison-rate-monitor-add),
+- Azure Service Bus (servicebus-poison-rate-monitor-add),
+- OCI Queue Service (queues-poison-rate-monitor-add).
+
+These keep poison_rate_per_hour = -1 and the slice-3 reasoning
+until chunks 4.2 / 4.3 / 4.4 land. The mixed state is
+deliberate — the per-cloud traversal is the whole shape of the
+arc.
+
+NO new IAM (cloudwatch:GetMetricStatistics already granted for
+the Lambda metric paths covers AWS/SQS — the permission is
+namespace-agnostic). NO new webhook prefix. Cold-start parity
+preserved: the enrichment overwrites two existing Detail keys
+and is a no-op when CloudWatch is not wired.
 
 ` + "\n"
 

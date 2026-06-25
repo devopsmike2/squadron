@@ -374,6 +374,32 @@ jump straight to that page.
   runbook close in
   [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
 
+  **Poison-Rate Substrate Integration slice 4 (v0.89.177+)
+  closes the §3.3 deferrals that slice 3 shipped as honest
+  framing.** Slice 3 left every cloud's poison-rate axis at
+  the absent sentinel (`poison_rate_per_hour = -1`); slice 4
+  builds the per-cloud MetricQuerier integration that actually
+  reads the metric, one cloud per chunk, mirroring the
+  cold-start latency arc's per-cloud substrate build. **Chunk
+  1 (v0.89.177) makes AWS SQS real:** Squadron reads the DLQ's
+  `NumberOfMessagesSent` SUM over a trailing 1-hour window via
+  CloudWatch `GetMetricStatistics` (reusing the cold-start
+  substrate's rate limiter + throttle-retry) and overwrites
+  the two poison-rate Detail keys with the measured rate for
+  every source queue whose DLQ is reachable in-account.
+  Real-zero (`0`) is now distinguished from absent (`-1`, which
+  strictly means "not measured"). GCP Cloud Tasks, Azure
+  Service Bus, and OCI Queue Service stay on §3.3 honest
+  framing until chunks 4.2 / 4.3 / 4.4 land. NO new IAM
+  (`cloudwatch:GetMetricStatistics` is namespace-agnostic and
+  already granted), NO new webhook prefix; the enrichment
+  overwrites existing Detail keys and is a no-op when
+  CloudWatch is unwired, preserving cold-start parity. Design
+  doc at
+  [proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md);
+  runbook close in
+  [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
+
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

@@ -208,6 +208,16 @@ func (s *Scanner) scanRegionSQS(ctx context.Context, factory ClientFactory, regi
 	for _, qa := range pass1 {
 		out = append(out, buildSQSSnapshot(accountID, region, qa, arnSet))
 	}
+
+	// Poison-rate substrate slice 4 chunk 1 (v0.89.177, #819 Stream
+	// 216) — enrich the honest-framing poison-rate Detail keys with
+	// real CloudWatch readings for every source queue whose DLQ is
+	// reachable in this account's ARN set. Nil-tolerant on cwClient:
+	// deployments without the CloudWatch wiring see this as a no-op
+	// and keep the slice-3 §3.3 absent sentinels (cold-start parity).
+	// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
+	s.enrichSQSPoisonRate(ctx, out, arnSet)
+
 	return out, nil
 }
 
