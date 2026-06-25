@@ -674,17 +674,25 @@ func TestScanEventSources_DispatchesToBothPubSubAndCloudTasks(t *testing.T) {
 		Regions:   []string{region},
 	})
 	require.NoError(t, err)
-	require.Len(t, out, 2, "dispatcher must return BOTH topic AND queue")
+	// Slice 10 (v0.89.159) extended the GCP dispatcher to three-way
+	// (PubSub + CloudTasks + Pub/Sub Lite). The Pub/Sub Lite scanner's
+	// admin endpoint is the same Pub/Sub topics.list shape, so the
+	// embedded handler returns the same single topic to Pub/Sub Lite,
+	// producing a third snapshot (surface=pubsublite). Pinning the
+	// three-way shape avoids a future four-way regression slipping
+	// through silently.
+	require.Len(t, out, 3, "three-way dispatcher must return topic + queue + pubsublite")
 
-	// Verify both surfaces present. Order: Pub/Sub topics first, then
-	// Cloud Tasks queues (matches the dispatcher's sequential
-	// invocation).
+	// Verify all three surfaces present. Order: Pub/Sub topics, Cloud
+	// Tasks queues, Pub/Sub Lite topics (matches the dispatcher's
+	// sequential invocation).
 	surfaces := map[string]bool{}
 	for _, snap := range out {
 		surfaces[snap.Surface] = true
 	}
 	assert.True(t, surfaces[PubSubEventSourceSurface], "pubsub topic must surface")
 	assert.True(t, surfaces[CloudTasksSurface], "cloudtasks queue must surface")
+	assert.True(t, surfaces[PubSubLiteSurface], "pubsublite topic must surface")
 }
 
 // TestScanEventSources_PubSubFails_CloudTasksStillSurfaces — slice 5
