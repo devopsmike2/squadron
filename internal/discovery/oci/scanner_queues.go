@@ -182,6 +182,17 @@ func (s *Scanner) ScanQueues(ctx context.Context, scope scanner.ScanScope) ([]sc
 			snapshots = append(snapshots, snap)
 		}
 	}
+
+	// Poison-rate substrate slice 4 chunk 4 (v0.89.181, #823 Stream
+	// 220) — enrich the honest-framing poison-rate Detail keys with
+	// real OCI Monitoring readings (dead-letter gauge max-min delta
+	// over a trailing 1h window). FINAL cloud — CLOSES the substrate
+	// arc. Nil-tolerant on monitoringClient: deployments without the
+	// Monitoring wiring see this as a no-op and keep the slice-3 §3.3
+	// absent sentinels (cold-start parity).
+	// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
+	s.enrichOCIQueuePoisonRate(ctx, snapshots)
+
 	return snapshots, nil
 }
 

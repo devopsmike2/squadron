@@ -150,9 +150,15 @@ No new permission.
   enumeration was needed, so the planned scanner walk was
   unnecessary. Falls back to the 3a namespace reading when no
   per-entity series is returned.
-- Chunk 4: OCI Queue Service (OCI Monitoring
-  dead-letter delivery metric) — CLOSES the substrate arc and
-  retires the last §3.3 poison-rate deferral.
+- **Chunk 4 (v0.89.181): OCI Queue Service real detection —
+  CLOSES the substrate arc.** OCI Monitoring `MessagesInDlq`
+  dead-letter depth gauge (namespace `oci_queue`), rate = max-min
+  delta over the window (same gauge-delta shape as Azure). Retires
+  the last §3.3 poison-rate deferral — all four clouds now read a
+  real metric. Honest caveat: the exact OCI metric name should be
+  confirmed against OCI's Monitoring reference; a name mismatch
+  returns no datapoints and degrades safely to the absent sentinel
+  (never false data).
 
 ## 8. Acceptance (chunk 1)
 

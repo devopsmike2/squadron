@@ -2238,3 +2238,56 @@ data exists; the unwired path is a byte-identical no-op.
 
 Cross-reference:
 [Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
+
+
+## Poison-Rate Substrate Integration SHIPPED in v0.89.181 — slice 4 chunk 4 (OCI Queue Service real detection) — CLOSES THE SUBSTRATE ARC
+
+Chunk 4 makes **OCI Queue Service real**, the FINAL cloud in the
+substrate arc. With this release every cloud's poison-rate axis
+reads a real metric — the §3.3 substrate-metric-dependence
+honest framing is fully retired.
+
+Squadron reads each queue's dead-letter depth gauge
+(`MessagesInDlq`) via OCI Monitoring `summarizeMetricsData`
+(namespace `oci_queue`, MQL
+`MessagesInDlq[1h]{resourceId = "<queueOCID>"}.max()`) and
+derives the poison rate as the `max - min` delta (net dead-letter
+accumulation) over a trailing 1-hour window, reusing the
+cold-start slice-2 substrate's per-tenancy 10-TPS rate limiter.
+This is the same gauge-delta shape as the Azure chunk (OCI and
+Azure both expose dead-letter DEPTH gauges; AWS and GCP expose
+arrival COUNTERS read via sum).
+
+Honest caveat (also in design doc §7): the exact OCI Monitoring
+metric name for queue dead-letter depth should be confirmed
+against OCI's current Monitoring reference for the `oci_queue`
+namespace. The failure mode is SAFE — if the name does not
+match, OCI returns no datapoints, `SampleCount` is 0, and the
+detector falls back to the honest-framing absent sentinel
+(`-1`). A name mismatch degrades to "not measured", never to
+false data.
+
+Same real-zero versus absent contract: a measured `0` (flat
+gauge, no new dead-letters) is a genuine green signal; `-1`
+strictly means "not measured" (queue too new, no datapoints, or
+Monitoring client unwired).
+
+### Substrate arc complete
+
+| Cloud | Metric | Shape |
+|-------|--------|-------|
+| AWS SQS | DLQ `NumberOfMessagesSent` | counter, sum over 1h |
+| GCP Cloud Tasks | failed `task_attempt_count` | counter, sum over 1h |
+| Azure Service Bus | `DeadletteredMessages` per-queue (EntityName split) | gauge, max-min delta |
+| OCI Queue Service | `MessagesInDlq` | gauge, max-min delta |
+
+All four `*-poison-rate-monitor-add` recommendation kinds now
+report a measured rate instead of disclaiming a §3.3 gap. NO new
+IAM across the whole arc (each cloud's existing metrics-read
+permission covered the new metric). NO new webhook prefixes.
+Cold-start parity preserved on every chunk: enrichment overwrites
+existing Detail keys only when the metric client is wired, and is
+a byte-identical no-op otherwise.
+
+Cross-reference:
+[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).

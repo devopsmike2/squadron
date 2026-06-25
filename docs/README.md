@@ -435,6 +435,23 @@ jump straight to that page.
   Same design doc
   ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
 
+  **Chunk 4 (v0.89.181) makes OCI Queue Service real — CLOSING
+  the substrate arc.** Squadron reads each queue's dead-letter
+  depth gauge (`MessagesInDlq`) via OCI Monitoring
+  `summarizeMetricsData` and derives the rate as the `max-min`
+  delta (net accumulation) over a trailing 1-hour window (the
+  same gauge-delta shape as Azure). With this release every cloud
+  reads a real poison-rate metric — §3.3 substrate-metric-
+  dependence honest framing is fully retired (AWS DLQ
+  `NumberOfMessagesSent` sum, GCP failed `task_attempt_count`
+  sum, Azure per-queue `DeadletteredMessages` delta, OCI
+  `MessagesInDlq` delta). Honest caveat: the exact OCI metric
+  name should be confirmed against OCI's Monitoring reference — a
+  mismatch degrades SAFELY to the absent sentinel (`-1`), never
+  false data. NO new IAM across the entire arc, NO new webhook
+  prefixes; every chunk preserves cold-start parity. Design doc
+  ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
+
   **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
   attribution.** The `DeadletteredMessages` metric is split by
   the `EntityName` dimension (one Azure Monitor call,
