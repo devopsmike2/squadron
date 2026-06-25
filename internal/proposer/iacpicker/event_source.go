@@ -222,3 +222,92 @@ func PickCloudTasksLoggingPattern(row RecommendationContext) (terraform, reasoni
 
 	return
 }
+
+// PickEventGridDiagnosticsPattern emits the Terraform snippet for an
+// eventgrid-diagnostics-enable recommendation per event source tier
+// slice 6 chunk 2 (v0.89.148, #788 Stream 186). Configures diagnostic
+// settings routing to a Log Analytics workspace (operator provides
+// workspace ID via variable) with the 4 enabled_log categories Event
+// Grid supports per §8 of docs/proposals/event-source-tier-slice6.md.
+//
+// Slice 6 widens the Azure event source surface count from 1 (Service
+// Bus) to 2 (Service Bus + Event Grid). The diagnostic-settings axis
+// mirrors the slice 1 Service Bus servicebus-diagnostics-enable
+// pattern verbatim — same Microsoft.Insights/diagnosticSettings child
+// resource shape.
+//
+// row.ResourceTFName is the best-effort Terraform resource name the
+// proposer extracted from the operator's repo. When empty, the
+// snippet falls back to "<name>" so the operator can substitute the
+// real topic name during review (matches the slice 5 chunk 2
+// PickCloudTasksRetryPolicyPattern fallback shape).
+func PickEventGridDiagnosticsPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "azurerm_monitor_diagnostic_setting" "%s_diag" {
+  name                       = "${azurerm_eventgrid_topic.%s.name}-diag"
+  target_resource_id         = azurerm_eventgrid_topic.%s.id
+  log_analytics_workspace_id = var.log_analytics_workspace_id  # operator provides
+
+  enabled_log {
+    category = "PublishFailures"
+  }
+  enabled_log {
+    category = "PublishSuccess"
+  }
+  enabled_log {
+    category = "DeliveryFailures"
+  }
+  enabled_log {
+    category = "DeliverySuccess"
+  }
+
+  metric {
+    category = "AllMetrics"
+    enabled  = true
+  }
+}
+`, name, name, name)
+
+	reasoning = "Event Grid Topics without diagnostic settings have no per-event delivery audit trail. The PR configures Microsoft.Insights/diagnosticSettings routing to a Log Analytics workspace with the 4 Event Grid log categories (PublishFailures, PublishSuccess, DeliveryFailures, DeliverySuccess) + AllMetrics. Decline if your team uses a non-Insights destination — the verdict learning loop records."
+
+	return
+}
+
+// PickEventGridCloudEventSchemaPattern emits the Terraform snippet for
+// an eventgrid-cloudevent-schema-enforce recommendation per event
+// source tier slice 6 chunk 2 (v0.89.148, #788 Stream 186) per §8 of
+// docs/proposals/event-source-tier-slice6.md.
+//
+// CRITICAL: this is a BREAKING CHANGE for existing subscribers — the
+// wire format changes from EventGridSchema / CustomEventSchema to
+// CloudEvents 1.0. The reasoning text emphasizes coordination with
+// subscribers before merging — Squadron drafts the PR but the
+// operator's review catches the breakage risk. The Terraform also
+// carries an inline WARNING comment so the PR review surfaces the
+// breakage even when the operator hasn't read the reasoning.
+//
+// row.ResourceTFName fallback shape mirrors PickEventGridDiagnosticsPattern.
+func PickEventGridCloudEventSchemaPattern(row RecommendationContext) (terraform, reasoning string) {
+	name := row.ResourceTFName
+	if name == "" {
+		name = "<name>"
+	}
+
+	terraform = fmt.Sprintf(`resource "azurerm_eventgrid_topic" "%s" {
+  # ... existing fields ...
+
+  # WARNING: changing input_schema is a BREAKING CHANGE for
+  # existing subscribers — they must consume the new wire
+  # format. Coordinate before merging.
+  input_schema = "CloudEventSchemaV1_0"  # was: EventGridSchema or CustomEventSchema
+}
+`, name)
+
+	reasoning = "Event Grid Topics with proprietary input_schema (EventGridSchema or CustomEventSchema) lose cross-vendor interoperability AND skip the W3C CloudEvents distributed tracing extension (traceparent). Switching to CloudEventSchemaV1_0 is a BREAKING CHANGE for existing subscribers — they must consume the new wire format. Coordinate before merging. Decline if your team has standardized on the proprietary Azure schema."
+
+	return
+}

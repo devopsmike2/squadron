@@ -409,6 +409,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice5CloudTasksKindsPromptSection +
 
+	eventSourceTierSlice6EventGridKindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -1890,6 +1892,77 @@ treats this as configured retry (HasTraceAxis = true).
 Cloud Tasks rate limits at ~10 RPS for listQueues per project;
 substrate's existing GCP rate limiter absorbs the per-region
 scan iteration.
+
+` + "\n"
+
+// eventSourceTierSlice6EventGridKindsPromptSection — event source
+// tier slice 6 chunk 2 (v0.89.148, #788 Stream 186). Adds 2 new Azure
+// Event Grid recommendation kinds atop the slice 1-5 event source
+// catalog. Slice 6 widens the Azure surface count from 1 (Service Bus)
+// to 2 (Service Bus + Event Grid); slice 7 will add Event Hubs +
+// OCI Notification Service. The eventgrid- prefix is NEW — the
+// webhook router gains an eventgrid- → azure case in
+// internal/api/handlers/iac_github_webhook.go.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no eventgrid rows the rendered user message stays
+// byte-identical to v0.89.145 across all four providers. The
+// 4-provider cold-start parity test
+// TestDiscoveryProposer_ColdStart_PromptUnchanged_PostEventSourceSlice6
+// pins this invariant.
+const eventSourceTierSlice6EventGridKindsPromptSection = `EVENT SOURCE TIER SLICE 6 — AZURE EVENT GRID (v0.89.146-148):
+
+Adds Azure Event Grid as the second Azure event source surface
+alongside Service Bus. Event Grid is Azure's fan-out
+distribution layer for cloud events; Service Bus is the queue
+pattern. After slice 6, Azure has 2 event source surfaces
+matching GCP's count (Pub/Sub + Cloud Tasks).
+
+The canonical Azure event distribution architecture:
+Event Grid → Service Bus / Functions / Logic Apps.
+
+- eventgrid-diagnostics-enable: Event Grid Topic has no
+  diagnostic settings configured. Without diagnostic settings
+  routing to App Insights OR a Log Analytics workspace, the
+  operator has no visibility into per-event delivery
+  success/failure for the topic's subscriptions.
+
+  Mirrors the Service Bus servicebus-diagnostics-enable
+  pattern from slice 1. Terraform: azurerm_monitor_diagnostic_setting
+  with enabled_log categories (PublishFailures, PublishSuccess,
+  DeliveryFailures, DeliverySuccess) + AllMetrics.
+
+- eventgrid-cloudevent-schema-enforce: Event Grid Topic has
+  inputSchema = "EventGridSchema" (Azure proprietary) OR
+  "CustomEventSchema" (operator-defined). CloudEvents 1.0 —
+  the W3C standard — is the canonical format for cross-vendor
+  event interoperability AND includes the distributed tracing
+  extension (traceparent in event extensions).
+
+  Terraform: azurerm_eventgrid_topic input_schema =
+  "CloudEventSchemaV1_0".
+
+  WARNING: this is a BREAKING CHANGE for existing subscribers
+  — they must consume the CloudEvents wire format. The
+  reasoning text emphasizes coordination with subscribers
+  before merging. Squadron drafts the PR but the operator's
+  review catches the breakage risk.
+
+DECLINE PATH for eventgrid-diagnostics-enable: operators
+using a non-Insights destination (custom webhook capture,
+etc.) should decline. The verdict learning loop records.
+
+DECLINE PATH for eventgrid-cloudevent-schema-enforce:
+operators standardized on the proprietary Azure schema for
+ecosystem reasons should decline. Verdict learning loop
+records.
+
+CAVEAT FOR ALL EVENT GRID RECOMMENDATIONS:
+Slice 6 covers Custom Topics. Event Grid System Topics
+(auto-created by Azure services like Blob Storage) are slice
+8+ candidate. Event Grid Domains (multi-tenant pattern) are
+also slice 8+.
 
 ` + "\n"
 

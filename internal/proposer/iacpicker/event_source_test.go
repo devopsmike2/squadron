@@ -362,3 +362,163 @@ func TestPickCloudTasksLoggingPattern_EmptyResourceName_FallsBack(t *testing.T) 
 		t.Errorf("expected fallback google_cloud_tasks_queue <name> block, got:\n%s", tf)
 	}
 }
+
+// --- Event source tier slice 6 chunk 2 (v0.89.148, #788 Stream 186) -
+
+// TestPickEventGridDiagnosticsPattern_IncludesDiagnosticSettingResource
+// — event source tier slice 6 chunk 2. The Terraform snippet MUST
+// emit an azurerm_monitor_diagnostic_setting resource block targeting
+// the Event Grid topic per §8 of the design doc
+// (docs/proposals/event-source-tier-slice6.md). Mirrors the slice 1
+// Service Bus diagnostic settings pattern.
+func TestPickEventGridDiagnosticsPattern_IncludesDiagnosticSettingResource(t *testing.T) {
+	tf, _ := PickEventGridDiagnosticsPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "order_events",
+	})
+	if !strings.Contains(tf, `resource "azurerm_monitor_diagnostic_setting" "order_events_diag"`) {
+		t.Errorf("expected azurerm_monitor_diagnostic_setting resource block for order_events, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, "target_resource_id         = azurerm_eventgrid_topic.order_events.id") {
+		t.Errorf("expected target_resource_id pointing to the azurerm_eventgrid_topic, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, "log_analytics_workspace_id = var.log_analytics_workspace_id") {
+		t.Errorf("expected log_analytics_workspace_id wired through var.log_analytics_workspace_id, got:\n%s", tf)
+	}
+}
+
+// TestPickEventGridDiagnosticsPattern_IncludesAllFourLogCategories — the
+// Terraform snippet MUST include all 4 enabled_log categories Event
+// Grid supports (PublishFailures, PublishSuccess, DeliveryFailures,
+// DeliverySuccess) plus the AllMetrics metric block per §8 of the
+// design doc. The picker emits all 4 unconditionally so the operator
+// gets the complete delivery audit trail.
+func TestPickEventGridDiagnosticsPattern_IncludesAllFourLogCategories(t *testing.T) {
+	tf, _ := PickEventGridDiagnosticsPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "events",
+	})
+	for _, cat := range []string{
+		`category = "PublishFailures"`,
+		`category = "PublishSuccess"`,
+		`category = "DeliveryFailures"`,
+		`category = "DeliverySuccess"`,
+		`category = "AllMetrics"`,
+	} {
+		if !strings.Contains(tf, cat) {
+			t.Errorf("expected category line %q in the snippet, got:\n%s", cat, tf)
+		}
+	}
+}
+
+// TestPickEventGridDiagnosticsPattern_ReasoningMentionsDeclinePath —
+// the reasoning string MUST surface the slice 6 honest-framing pattern:
+// operators using a non-Insights destination (custom webhook capture,
+// etc.) should decline. The verdict learning loop records.
+func TestPickEventGridDiagnosticsPattern_ReasoningMentionsDeclinePath(t *testing.T) {
+	_, reasoning := PickEventGridDiagnosticsPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "topic_a",
+	})
+	for _, token := range []string{
+		"Decline",
+		"non-Insights destination",
+		"verdict learning loop",
+		"per-event delivery audit",
+	} {
+		if !strings.Contains(reasoning, token) {
+			t.Errorf("reasoning missing %q, got: %s", token, reasoning)
+		}
+	}
+}
+
+// TestPickEventGridDiagnosticsPattern_EmptyResourceName_FallsBack — when
+// the proposer cannot recover the Terraform resource name, the snippet
+// falls back to "<name>".
+func TestPickEventGridDiagnosticsPattern_EmptyResourceName_FallsBack(t *testing.T) {
+	tf, _ := PickEventGridDiagnosticsPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "",
+	})
+	if !strings.Contains(tf, `resource "azurerm_monitor_diagnostic_setting" "<name>_diag"`) {
+		t.Errorf("expected fallback azurerm_monitor_diagnostic_setting <name>_diag block, got:\n%s", tf)
+	}
+}
+
+// TestPickEventGridCloudEventSchemaPattern_SetsInputSchemaToV1 — event
+// source tier slice 6 chunk 2. The Terraform snippet MUST set
+// input_schema = "CloudEventSchemaV1_0" on the azurerm_eventgrid_topic
+// resource per §8 of the design doc. CloudEvents 1.0 is the W3C
+// standard format that carries the distributed tracing extension
+// (traceparent).
+func TestPickEventGridCloudEventSchemaPattern_SetsInputSchemaToV1(t *testing.T) {
+	tf, _ := PickEventGridCloudEventSchemaPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "orders",
+	})
+	if !strings.Contains(tf, `resource "azurerm_eventgrid_topic" "orders"`) {
+		t.Errorf("expected azurerm_eventgrid_topic resource block for orders, got:\n%s", tf)
+	}
+	if !strings.Contains(tf, `input_schema = "CloudEventSchemaV1_0"`) {
+		t.Errorf("expected input_schema = \"CloudEventSchemaV1_0\", got:\n%s", tf)
+	}
+}
+
+// TestPickEventGridCloudEventSchemaPattern_TerraformIncludesBreakingChangeWarning
+// — the Terraform snippet MUST include an inline WARNING comment
+// flagging the BREAKING CHANGE for existing subscribers per §8 of the
+// design doc. The comment is load-bearing — the operator's PR review
+// must catch the breakage risk even when the reasoning text isn't
+// surfaced.
+func TestPickEventGridCloudEventSchemaPattern_TerraformIncludesBreakingChangeWarning(t *testing.T) {
+	tf, _ := PickEventGridCloudEventSchemaPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "orders",
+	})
+	for _, token := range []string{
+		"WARNING",
+		"BREAKING CHANGE",
+		"existing subscribers",
+		"Coordinate before merging",
+	} {
+		if !strings.Contains(tf, token) {
+			t.Errorf("Terraform snippet missing breaking-change warning token %q, got:\n%s", token, tf)
+		}
+	}
+}
+
+// TestPickEventGridCloudEventSchemaPattern_ReasoningMentionsCoordinationBeforeMerge
+// — the reasoning string MUST emphasize coordination with subscribers
+// before merging per §8 of the design doc. Squadron drafts the PR but
+// the operator's review catches the breakage risk.
+func TestPickEventGridCloudEventSchemaPattern_ReasoningMentionsCoordinationBeforeMerge(t *testing.T) {
+	_, reasoning := PickEventGridCloudEventSchemaPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "orders",
+	})
+	for _, token := range []string{
+		"BREAKING CHANGE",
+		"existing subscribers",
+		"Coordinate before merging",
+		"CloudEventSchemaV1_0",
+		"traceparent",
+		"Decline",
+	} {
+		if !strings.Contains(reasoning, token) {
+			t.Errorf("reasoning missing %q, got: %s", token, reasoning)
+		}
+	}
+}
+
+// TestPickEventGridCloudEventSchemaPattern_EmptyResourceName_FallsBack
+// — when the proposer cannot recover the Terraform resource name, the
+// snippet falls back to "<name>".
+func TestPickEventGridCloudEventSchemaPattern_EmptyResourceName_FallsBack(t *testing.T) {
+	tf, _ := PickEventGridCloudEventSchemaPattern(RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: "",
+	})
+	if !strings.Contains(tf, `resource "azurerm_eventgrid_topic" "<name>"`) {
+		t.Errorf("expected fallback azurerm_eventgrid_topic <name> block, got:\n%s", tf)
+	}
+}

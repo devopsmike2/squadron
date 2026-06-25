@@ -3433,6 +3433,87 @@ func TestProviderFromRecommendationKind_EventSourceSlice5Extension(t *testing.T)
 	}
 }
 
+// TestWebhook_EventGridKinds_RouteToAzure — event source tier slice 6
+// chunk 2. The 2 new Azure Event Grid recommendation kinds
+// (eventgrid-diagnostics-enable + eventgrid-cloudevent-schema-enforce)
+// must route through the webhook receiver as provider=azure with the
+// parsed subscription_id surfaced on the audit payload. Table-driven
+// to cover BOTH kinds — same shape as the slice 5 Cloud Tasks routing
+// test. Pins design doc §11 acceptance tests 14 + 15.
+func TestWebhook_EventGridKinds_RouteToAzure(t *testing.T) {
+	for _, kind := range []string{
+		"eventgrid-diagnostics-enable",
+		"eventgrid-cloudevent-schema-enforce",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			audit := &discoveryRecordingAudit{}
+			h, store := newTestWebhookHandler(t, audit, webhookTestSecret)
+			connectionID := seedConnection(t, store, "octo/widgets")
+
+			branch := "squadron/rec/" + kind + "/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/eastus/abc123"
+			body := makePREventBody(t, "closed", true, "octo/widgets", 42,
+				branch, "2026-06-24T12:34:56Z", "alice")
+			sig := signGitHubWebhook(t, body, webhookTestSecret)
+
+			w := doWebhookRequest(t, h, body, sig, "pull_request")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if len(audit.entries) != 1 {
+				t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+			}
+			e := audit.entries[0]
+			if e.TargetID != connectionID {
+				t.Errorf("target_id = %q, want %q", e.TargetID, connectionID)
+			}
+			pay := e.Payload
+			if pay["recommendation_kind"] != kind {
+				t.Errorf("payload.recommendation_kind = %v, want %s", pay["recommendation_kind"], kind)
+			}
+			if pay["provider"] != "azure" {
+				t.Errorf("payload.provider = %v, want azure", pay["provider"])
+			}
+			if pay["subscription_id"] != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+				t.Errorf("payload.subscription_id = %v, want aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pay["subscription_id"])
+			}
+		})
+	}
+}
+
+// TestProviderFromRecommendationKind_EventSourceSlice6Extension —
+// pins the dispatch table for the 2 new Event Grid kinds and
+// reasserts prior-tier routing remains green. Same shape as the slice
+// 5 Cloud Tasks extension test.
+func TestProviderFromRecommendationKind_EventSourceSlice6Extension(t *testing.T) {
+	cases := []struct {
+		kind string
+		want string
+	}{
+		{kind: "eventgrid-diagnostics-enable", want: "azure"},
+		{kind: "eventgrid-cloudevent-schema-enforce", want: "azure"},
+		// Prior-tier sanity — slice 1-5 event source kinds, orchestration,
+		// and serverless kinds still route correctly.
+		{kind: "cloudtasks-retry-policy-enable", want: "gcp"},
+		{kind: "sqs-redrive-policy-enable", want: "aws"},
+		{kind: "sns-subscriptions-attach", want: "aws"},
+		{kind: "eventbridge-xray-enable", want: "aws"},
+		{kind: "pubsub-trace-enable", want: "gcp"},
+		{kind: "servicebus-diagnostics-enable", want: "azure"},
+		{kind: "streaming-logging-enable", want: "oci"},
+		{kind: "resmgr-logging-enable", want: "oci"},
+		{kind: "stepfunc-xray-active", want: "aws"},
+		{kind: "lambda-otel-layer", want: "aws"},
+		// Boundary case — bare prefix without trailing hyphen falls
+		// through to AWS via the switch default.
+		{kind: "eventgrid", want: "aws"},
+	}
+	for _, tc := range cases {
+		if got := providerFromRecommendationKind(tc.kind); got != tc.want {
+			t.Errorf("providerFromRecommendationKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+}
+
 // TestProviderFromRecommendationKind_EventSourceSlice4Extension —
 // pins the dispatch table for the 2 new SQS kinds and reasserts
 // prior-tier routing remains green. Same shape as the slice 3
