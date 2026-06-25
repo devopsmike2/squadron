@@ -2388,6 +2388,17 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAITrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGenerateRecommendations(c) }))
 
+		// v0.89.209 — async recommendations poll. The kick-off (the POST
+		// above) returns 202 + a job_id; the UI polls this until the job
+		// is succeeded (carries the recommendations) or failed. Provider-
+		// agnostic: the job id is globally unique, so one route serves
+		// every cloud. Pure read of the in-process job store (agents:read);
+		// runs on discoveryTrampoline, which shares the process-wide
+		// default job store with the kick-off handler.
+		v1.GET("/discovery/recommendations/jobs/:jobID",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleRecommendationJobStatus(c) }))
+
 		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-
 		// set exclusion endpoint. The Recommendations tab POSTs here
 		// when the operator clicks the "Don't propose this again"

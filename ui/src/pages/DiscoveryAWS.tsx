@@ -1184,6 +1184,12 @@ function ScanResultPanel({
                 : "Generate recommendations"}
             </Button>
           </div>
+          {generating && (
+            <p className="text-xs text-muted-foreground">
+              The proposer is drafting your plan — for large inventories this
+              can take up to a couple of minutes. You can leave this tab open.
+            </p>
+          )}
           {genError && (
             <p className="text-xs text-destructive">
               Recommendation generation failed: {genError}

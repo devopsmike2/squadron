@@ -673,14 +673,73 @@ export interface GenerateRecommendationsResponse {
 // Recommendations tab when the response lands". The server emits a
 // discovery.aws.recommendations_generated audit event on success and
 // no audit event on declined.
-export function generateAWSRecommendations(
+// v0.89.209 — async. The proposer call (sonnet-4-6 @ 8192 tokens) can take
+// 30s-120s+, so the POST is now a kick-off that returns 202 + a job_id; the
+// browser polls the provider-agnostic job-status endpoint until the job
+// finishes. The Promise resolves with the recommendations (or rejects with
+// the humanized error) exactly as the old synchronous call did, so callers
+// are unchanged.
+export interface RecommendationJobAccepted {
+  job_id: string;
+  status: string;
+}
+
+export interface RecommendationJobStatusResponse {
+  job_id: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  result?: GenerateRecommendationsResponse;
+  error?: { code?: string; message?: string };
+}
+
+// RECS_POLL_INTERVAL_MS / RECS_POLL_CEILING_MS bound the poll loop. The
+// ceiling is generous (3 min) because a large discovery plan genuinely can
+// run past 2 minutes; the UI shows an honest "this can take a while" pending
+// state for the duration.
+export const RECS_POLL_INTERVAL_MS = 2000;
+export const RECS_POLL_CEILING_MS = 180_000;
+
+export async function generateAWSRecommendations(
   accountID: string,
   scanResult: ScanResult,
 ): Promise<GenerateRecommendationsResponse> {
-  return apiPost<GenerateRecommendationsResponse>(
+  const accepted = await apiPost<RecommendationJobAccepted>(
     `/discovery/aws/connections/${encodeURIComponent(accountID)}/recommendations`,
     { scan_result: scanResult },
   );
+  return pollRecommendationJob(accepted.job_id);
+}
+
+// pollRecommendationJob polls the shared, provider-agnostic job-status
+// endpoint until the async proposer run is terminal. Reused by every cloud's
+// recommendations flow.
+export async function pollRecommendationJob(
+  jobID: string,
+  intervalMs: number = RECS_POLL_INTERVAL_MS,
+  ceilingMs: number = RECS_POLL_CEILING_MS,
+): Promise<GenerateRecommendationsResponse> {
+  const deadline = Date.now() + ceilingMs;
+  for (;;) {
+    const status = await apiGet<RecommendationJobStatusResponse>(
+      `/discovery/recommendations/jobs/${encodeURIComponent(jobID)}`,
+    );
+    if (status.status === "succeeded") {
+      if (!status.result) {
+        throw new Error("Recommendation job finished without a result.");
+      }
+      return status.result;
+    }
+    if (status.status === "failed") {
+      throw new Error(
+        status.error?.message ?? "Recommendation generation failed.",
+      );
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        "Recommendation generation is taking longer than expected — try again.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }
 
 // --- Recommendation-exclusion endpoint (v0.89.38 #658 Stream 56) -----
