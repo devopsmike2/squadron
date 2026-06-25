@@ -40,9 +40,13 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 
+import { RecommendationsTab as AWSRecommendationsTab } from "./DiscoveryAWS";
+
+import type { GenerateRecommendationsResponse } from "@/api/discovery";
 import {
   createGCPConnection,
   encodeServiceAccountForWire,
+  generateGCPRecommendations,
   listGCPConnections,
   scanGCPConnection,
   validateGCPConnection,
@@ -233,7 +237,10 @@ export default function DiscoveryGCPPage() {
           />
         </TabsContent>
         <TabsContent value={RECS_TAB} className="mt-4">
-          <RecommendationsTab />
+          <RecommendationsTab
+            scan={selectedScan}
+            connectionID={selectedConnectionID}
+          />
         </TabsContent>
       </Tabs>
     </div>
@@ -1648,18 +1655,63 @@ function OrchestrationAxisCheck({ ok }: { ok: boolean }) {
 
 // --- Recommendations tab --------------------------------------------
 
-function RecommendationsTab() {
+function RecommendationsTab({
+  scan,
+  connectionID,
+}: {
+  scan?: ScanGCPResponse;
+  connectionID: string;
+}) {
+  const [recs, setRecs] = useState<GenerateRecommendationsResponse | null>(
+    null,
+  );
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+
+  const onGenerate = useCallback(async () => {
+    if (!scan || generating) return;
+    setGenerating(true);
+    setGenError(null);
+    try {
+      const r = await generateGCPRecommendations(connectionID, scan);
+      setRecs(r);
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenerating(false);
+    }
+  }, [scan, connectionID, generating]);
+
+  if (!scan) {
+    return (
+      <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+        Run a scan from the Inventory tab first — recommendations are drafted
+        from the latest GCP scan result.
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-      <p>
-        Recommendations are pending — proposer integration ships in chunk 5 of
-        this arc.
-      </p>
-      <p className="mt-2 text-xs">
-        Chunk 5 extends the discovery proposer with a Provider discriminator and
-        the gce-otel-label recommendation kind, then wires this tab to the same
-        generate-recommendations flow the AWS page uses.
-      </p>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          Draft an instrumentation plan from the latest scan of this project.
+        </p>
+        <Button onClick={onGenerate} disabled={generating}>
+          {generating ? "Generating…" : "Generate recommendations"}
+        </Button>
+      </div>
+      {genError && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+          {genError}
+        </div>
+      )}
+      <AWSRecommendationsTab
+        recs={recs}
+        accountID={scan.project_id}
+        scanID={scan.scan_id}
+        region={scan.region}
+      />
     </div>
   );
 }

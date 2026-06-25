@@ -142,7 +142,14 @@ const mockedListExcludedRecommendations = vi.mocked(
 function renderPage(initialEntries: string[] = ["/discovery/aws?account=all"]) {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
       </SWRConfig>
     );
@@ -1592,7 +1599,14 @@ describe("DiscoveryAWSPage", () => {
     // Aggregate view: badge present, showing the trailing four
     // digits of the account id.
     const { unmount } = render(
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter>
           <DiscoveryRecommendationCard
             rec={rec}
@@ -1612,7 +1626,14 @@ describe("DiscoveryAWSPage", () => {
 
     // Single-account view: badge suppressed.
     render(
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter>
           <DiscoveryRecommendationCard
             rec={rec}
@@ -1647,7 +1668,14 @@ describe("DiscoveryAWSPage", () => {
     const onPick = vi.fn();
     const user = userEvent.setup();
     render(
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter>
           <DiscoveryRecommendationCard
             rec={rec}
@@ -1711,7 +1739,14 @@ describe("DiscoveryAWSPage", () => {
   ) {
     const { RecommendationsTab } = await import("./DiscoveryAWS");
     return render(
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter>
           <RecommendationsTab
             recs={recs}
@@ -2107,7 +2142,14 @@ describe("DiscoveryAWSPage", () => {
 
     const { RecommendationsTab } = await import("./DiscoveryAWS");
     render(
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          revalidateOnReconnect: false,
+        }}
+      >
         <MemoryRouter>
           <RecommendationsTab
             recs={recs}
