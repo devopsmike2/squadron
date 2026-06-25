@@ -132,10 +132,18 @@ SampleCount), and `ObservedAt`.
   fires in a scan until an operator opts in. At most one charged call
   per scan, and only when a DLQ exists to correlate. The proposer
   prompt enforces honest, non-editorializing, service-level reporting.
-- Chunk 4+: remaining per-cloud `QueryCost` bodies (GCP / Azure /
-  OCI — all effectively free per call) + their cost-correlation
-  enrichment, and the production opt-in wiring path (Cost Explorer
-  client + governor construction behind an explicit operator switch).
+- **Chunk 4 (v0.89.186): Azure Service Bus cost reader.** Cost
+  Management `/query` (free per call), governor-gated as the opt-in
+  signal. One read-only POST per scan, ServiceName=Service Bus
+  filter, columns found by name. Attaches service_cost_* to Service
+  Bus namespace snapshots. Reuses the Azure bearer-token ARM
+  plumbing — no new SDK.
+- Chunk 5+: GCP (BigQuery billing export — heavier, operator-setup-
+  dependent; may ship as honest-framed pending operator export
+  config) + OCI (usage-report objects) cost readers, and the
+  production opt-in wiring path (cost client + governor construction
+  behind an explicit operator switch — the step that makes any
+  substrate, cost or metric, actually run in production).
 
 ## 7. IAM
 

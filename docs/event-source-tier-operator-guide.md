@@ -2382,3 +2382,42 @@ well under the governor ceiling.
 
 Cross-reference:
 [Cost-correlation substrate slice 6 design doc](./proposals/cost-correlation-substrate-slice6.md).
+
+
+## Cost-Correlation SHIPPED in v0.89.186 — slice 6 chunk 4 (Azure Service Bus cost reader)
+
+Chunk 4 adds the **Azure Cost Management** cost reader — the
+second cloud after AWS — and attaches Service Bus service cost to
+namespace snapshots, so a Service Bus poison-rate / dead-letter
+recommendation can carry the same spend context AWS SQS now does.
+
+Azure Cost Management `/query` is **free per call** (throttle-
+limited, not billed), so the per-call cost is `0` and the governor
+authorizes it unconditionally. The governor is still REQUIRED as
+the opt-in "cost correlation enabled" signal — Azure cost queries
+(and the extra ARM calls they make) never run by default, only
+when explicitly wired. Like the rest of the substrate, no
+production code wires it by default.
+
+The reader issues exactly one read-only `Microsoft.CostManagement/query`
+POST per scan, filtered to the `Service Bus` ServiceName dimension,
+and finds the Cost + Currency columns by name (order-independent).
+Amounts are parsed to integer micro-USD (no float). Cost is
+attributed at the SERVICE level (account-wide Service Bus spend) —
+the same honest `service_cost_scope="service"` label as AWS;
+per-resource cost (Azure can do it, unlike AWS) is a future
+refinement.
+
+Detail keys added on a Covered reading (absent otherwise):
+`service_cost_monthly_micro_usd`, `service_cost_currency` (the
+source billing currency, preserved honestly for non-USD accounts),
+`service_cost_scope="service"`. The proposer prompt's existing
+report-don't-editorialize rule covers both clouds.
+
+Cost reader status: AWS SQS (Cost Explorer, ~$0.01/call) + Azure
+Service Bus (Cost Management, free). GCP (BigQuery billing export —
+heavier, operator-setup-dependent) and OCI (usage-report objects)
+land in later chunks.
+
+Cross-reference:
+[Cost-correlation substrate slice 6 design doc](./proposals/cost-correlation-substrate-slice6.md).
