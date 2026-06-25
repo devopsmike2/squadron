@@ -93,6 +93,34 @@ const LambdaInvocationsMetricName = "Invocations"
 // metrics_test.go::TestLambdaErrorsMetricName_Constant.
 const LambdaErrorsMetricName = "Errors"
 
+// SQSMetricNamespace is the CloudWatch namespace for AWS SQS queue
+// metrics. Poison-rate substrate slice 4 chunk 1 (v0.89.177) reads
+// the dead-letter queue's message-arrival metric from this
+// namespace to compute the real poison-message rate that slice 3
+// shipped as a §3.3 honest-framing absent sentinel. The same
+// cloudwatch:GetMetricStatistics permission that covers AWS/Lambda
+// covers AWS/SQS — GetMetricStatistics is namespace-agnostic at the
+// IAM layer, so no new permission is required.
+//
+// Pinned to "AWS/SQS" by
+// metrics_test.go::TestSQSMetricNamespace_Constant.
+const SQSMetricNamespace = "AWS/SQS"
+
+// SQSNumberOfMessagesSentMetricName is the CloudWatch metric name
+// for messages arriving in an SQS queue. Poison-rate substrate
+// slice 4 chunk 1 queries this on the DEAD-LETTER queue: the SUM
+// over a trailing 1-hour window is the proxy for "poison messages
+// arriving in the DLQ per hour" that the
+// docs/proposals/poison-rate-substrate-slice4.md §3 detection rule
+// reasons over.
+//
+// CloudWatch reports this metric as a counter (Statistics=["Sum"]),
+// so the query routes into the existing queryLambdaCounterSum-shaped
+// SUM-across-periods path rather than the percentile path. Pinned to
+// "NumberOfMessagesSent" by
+// metrics_test.go::TestSQSNumberOfMessagesSentMetricName_Constant.
+const SQSNumberOfMessagesSentMetricName = "NumberOfMessagesSent"
+
 // cloudWatchMetricPeriodSeconds is the 5-minute aggregation period
 // the slice 1 substrate uses for every CloudWatch GetMetricStatistics
 // call. The design doc §3 step 1 names this number: "5-minute period
@@ -227,6 +255,17 @@ func (s *Scanner) QueryAggregate(
 	// for the shared aggregation.
 	if metricName == LambdaErrorsMetricName {
 		return s.queryLambdaCounterSum(ctx, resourceARN, LambdaErrorsMetricName, window, stat)
+	}
+
+	// Poison-rate substrate slice 4 chunk 1 (v0.89.177): the SQS
+	// dead-letter NumberOfMessagesSent metric lives in the AWS/SQS
+	// namespace with a QueueName dimension (not AWS/Lambda /
+	// FunctionName), so it routes into a dedicated counter-sum helper
+	// rather than queryLambdaCounterSum. The two share the same
+	// rate-limiter + throttle-retry + SUM-across-periods scaffold;
+	// only the namespace + dimension differ.
+	if metricName == SQSNumberOfMessagesSentMetricName {
+		return s.querySQSCounterSum(ctx, resourceARN, SQSNumberOfMessagesSentMetricName, window, stat)
 	}
 
 	if metricName != LambdaInitDurationMetricName {
@@ -451,6 +490,121 @@ func (s *Scanner) queryLambdaCounterSum(
 	result.SampleCount = sampleCount
 	result.Unit = unit
 	return result, nil
+}
+
+// querySQSCounterSum is the AWS/SQS sibling of queryLambdaCounterSum.
+// Poison-rate substrate slice 4 chunk 1 (v0.89.177) reads an SQS
+// queue counter metric (NumberOfMessagesSent on a DLQ) via
+// CloudWatch GetMetricStatistics with Statistics=["Sum"] and a SUM
+// rollup across per-period datapoints over the requested window.
+//
+// Differs from queryLambdaCounterSum in exactly two ways: the
+// namespace is AWS/SQS (not AWS/Lambda) and the single dimension is
+// QueueName (not FunctionName), extracted from the queue ARN via
+// extractSQSQueueName. Everything else — the per-account rate-limiter
+// Wait, the throttle-retry loop, the empty-result SampleCount=0
+// semantics — is reused verbatim so the SQS path inherits the
+// proven cold-start substrate behaviour.
+//
+// Empty datapoint handling matches the Lambda counter path: zero
+// datapoints in the window returns Value=0 / SampleCount=0 with no
+// error. The DetectSQSPoisonRate caller checks SampleCount to
+// distinguish "no datapoints (keep absent sentinel)" from "real
+// zero poison messages this hour".
+//
+// See docs/proposals/poison-rate-substrate-slice4.md §3.
+func (s *Scanner) querySQSCounterSum(
+	ctx context.Context,
+	resourceARN, metricName string,
+	window time.Duration,
+	stat scanner.MetricStatistic,
+) (scanner.AggregateMetricResult, error) {
+	queueName, err := extractSQSQueueName(resourceARN)
+	if err != nil {
+		return scanner.AggregateMetricResult{}, fmt.Errorf("extract queue name: %w", err)
+	}
+
+	if s.cwRateLimiter != nil {
+		if err := s.cwRateLimiter.Wait(ctx); err != nil {
+			return scanner.AggregateMetricResult{}, fmt.Errorf("rate limit: %w", err)
+		}
+	}
+
+	endTime := time.Now().UTC()
+	startTime := endTime.Add(-window)
+	periodSeconds := int32(cloudWatchMetricPeriodSeconds)
+
+	input := &cloudwatch.GetMetricStatisticsInput{
+		Namespace:  awssdk.String(SQSMetricNamespace),
+		MetricName: awssdk.String(metricName),
+		Dimensions: []cwtypes.Dimension{{
+			Name:  awssdk.String("QueueName"),
+			Value: awssdk.String(queueName),
+		}},
+		StartTime:  awssdk.Time(startTime),
+		EndTime:    awssdk.Time(endTime),
+		Period:     &periodSeconds,
+		Statistics: []cwtypes.Statistic{cwtypes.StatisticSum},
+	}
+
+	out, callErr := s.callGetMetricStatisticsWithRetry(ctx, input)
+	if callErr != nil {
+		return scanner.AggregateMetricResult{}, fmt.Errorf("cloudwatch get metric statistics: %w", callErr)
+	}
+
+	result := scanner.AggregateMetricResult{
+		ResourceARN: resourceARN,
+		MetricName:  metricName,
+		Window:      window,
+		Statistic:   stat,
+		ObservedAt:  endTime,
+	}
+	if len(out.Datapoints) == 0 {
+		return result, nil
+	}
+
+	totalCount := 0.0
+	sampleCount := 0
+	unit := ""
+	for _, dp := range out.Datapoints {
+		if dp.Sum != nil {
+			totalCount += *dp.Sum
+		}
+		if dp.SampleCount != nil {
+			sampleCount += int(*dp.SampleCount)
+		}
+		if dp.Unit != "" && unit == "" {
+			unit = string(dp.Unit)
+		}
+	}
+	result.Value = totalCount
+	result.SampleCount = sampleCount
+	result.Unit = unit
+	return result, nil
+}
+
+// extractSQSQueueName parses the queue name segment out of an SQS
+// queue ARN. ARN format per the AWS docs:
+//
+//	arn:aws:sqs:<region>:<account>:<queuename>
+//
+// Returns an error when the ARN doesn't match the expected shape —
+// most commonly when the caller passed a non-SQS ARN (a Lambda
+// function ARN, an SNS topic ARN, etc.). The error message includes
+// the offending ARN so the enrichment pass's log surface points at
+// the specific DLQ reference that misfired.
+//
+// Pinned by metrics_test.go::TestExtractSQSQueueName.
+func extractSQSQueueName(arn string) (string, error) {
+	parts := strings.Split(arn, ":")
+	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "sqs" {
+		return "", fmt.Errorf("not an SQS queue ARN: %q", arn)
+	}
+	name := parts[5]
+	if name == "" {
+		return "", fmt.Errorf("not an SQS queue ARN: %q", arn)
+	}
+	return name, nil
 }
 
 // callGetMetricStatisticsWithRetry wraps the SDK call with a small

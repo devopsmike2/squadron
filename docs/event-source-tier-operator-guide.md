@@ -2057,3 +2057,48 @@ Cold-start parity preserved (additive Detail bag keys only).
 
 Cross-reference:
 [Poison-message rate analysis slice 3 design doc](./proposals/poison-message-rate-slice3.md).
+
+
+## Poison-Rate Substrate Integration SHIPPED in v0.89.177 — slice 4 chunk 1 (AWS SQS real detection)
+
+Slice 3 (v0.89.172-176) shipped the poison-rate axis across
+all four clouds as §3.3 honest framing — the rate was never
+actually measured (`poison_rate_per_hour = -1` always). Slice
+4 builds the per-cloud MetricQuerier integration that closes
+that deferral, one cloud per chunk, mirroring the cold-start
+latency arc's per-cloud substrate build.
+
+Chunk 1 makes **AWS SQS real**. Squadron now reads the
+dead-letter queue's `NumberOfMessagesSent` SUM over a trailing
+1-hour window via CloudWatch `GetMetricStatistics` (AWS/SQS
+namespace, QueueName dimension), reusing the cold-start
+substrate's per-account rate limiter and throttle-retry loop.
+For every SQS source queue whose DLQ is reachable in the
+scanned account, the `poison_rate_per_hour` +
+`poison_rate_high_band` Detail keys are overwritten with the
+measured rate and the real `rate >= 60/hour` (1/min) verdict.
+
+Real-zero versus absent is load-bearing: a measured
+`poison_rate_per_hour = 0` is a genuine "zero poison messages
+this hour" green signal; `-1` still strictly means "not
+measured" (DLQ too new with no datapoints, cross-account /
+dangling DLQ we did not enumerate, or CloudWatch client not
+wired). Operators must never read `-1` as zero.
+
+`sqs-poison-rate-monitor-add` still fires (operators still
+want the Terraform-generated CloudWatch alarm), but its
+reasoning now reports the measured rate instead of disclaiming
+the §3.3 gap. GCP Cloud Tasks, Azure Service Bus, and OCI
+Queue Service stay on §3.3 honest framing until chunks 4.2 /
+4.3 / 4.4 land — the mixed state is the deliberate shape of
+the per-cloud traversal.
+
+NO new IAM (`cloudwatch:GetMetricStatistics`, already granted
+for the Lambda metric paths, is namespace-agnostic and covers
+AWS/SQS). NO new webhook prefix. Cold-start parity preserved:
+the enrichment overwrites two existing Detail keys and is a
+no-op when the CloudWatch client is not wired
+(`cwClient == nil`).
+
+Cross-reference:
+[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
