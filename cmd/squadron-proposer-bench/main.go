@@ -685,15 +685,16 @@ type seedResult struct {
 	// (ProposeFromDiscoveryScan). v0.86 added the discovery arc; the
 	// field distinguishes the two in the per-seed table and the
 	// ByKind aggregate.
-	SeedKind     string  `json:"seed_kind"`
-	Outcome      string  `json:"outcome"`
-	Kind         string  `json:"kind,omitempty"` // proposal kind (rollout / plan), from ai.ProposalResult
-	StepCount    int     `json:"step_count,omitempty"`
-	TokensIn     int     `json:"tokens_in"`
-	TokensOut    int     `json:"tokens_out"`
-	LatencyMs    int     `json:"latency_ms"`
-	EstimatedUSD float64 `json:"estimated_usd"`
-	Error        string  `json:"error,omitempty"`
+	SeedKind     string   `json:"seed_kind"`
+	Outcome      string   `json:"outcome"`
+	Kind         string   `json:"kind,omitempty"` // proposal kind (rollout / plan), from ai.ProposalResult
+	StepCount    int      `json:"step_count,omitempty"`
+	StepNames    []string `json:"step_names,omitempty"`
+	TokensIn     int      `json:"tokens_in"`
+	TokensOut    int      `json:"tokens_out"`
+	LatencyMs    int      `json:"latency_ms"`
+	EstimatedUSD float64  `json:"estimated_usd"`
+	Error        string   `json:"error,omitempty"`
 }
 
 // classify maps the proposer's (result, err) pair to one of the
@@ -855,6 +856,9 @@ func renderText(a aggregate, w *strings.Builder) {
 	for _, r := range a.Results {
 		fmt.Fprintf(w, "%-32s  %-12s  %-22s  %-8d  %-8d  %-7d  %.4f\n",
 			r.Seed, r.SeedKind, r.Outcome, r.TokensIn, r.TokensOut, r.LatencyMs, r.EstimatedUSD)
+		for _, sn := range r.StepNames {
+			fmt.Fprintf(w, "      - %s\n", sn)
+		}
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Aggregate\n")
@@ -961,6 +965,9 @@ func main() {
 			}
 			if res.Kind == ai.ProposalKindPlan {
 				r.StepCount = len(res.Plan.Steps)
+				for _, st := range res.Plan.Steps {
+					r.StepNames = append(r.StepNames, st.Name)
+				}
 			}
 		}
 		results = append(results, r)
