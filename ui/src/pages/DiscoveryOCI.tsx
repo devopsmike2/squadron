@@ -39,7 +39,6 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
   Cloud,
   Copy,
   ExternalLink,
@@ -65,6 +64,7 @@ import {
   type EventSourceRow,
   type ValidateOCIResponse,
 } from "@/api/discoveryOCI";
+import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -331,7 +331,6 @@ function OCIWizard({ onComplete }: OCIWizardProps) {
 
   const stepCount = OCI_STEP_IDS.length;
   const currentStepID = OCI_STEP_IDS[stepIndex];
-  const isLastStep = stepIndex === stepCount - 1;
 
   // Step-1 field validation.
   const displayNameValid = displayName.trim() !== "";
@@ -380,7 +379,7 @@ function OCIWizard({ onComplete }: OCIWizardProps) {
     case OCI_STEP_VALIDATE_SCAN:
       // Validate+scan step's primary actions are the Validate and
       // Scan buttons in the step body — the global Next is unused on
-      // the last step (it disappears via isLastStep).
+      // the last step (the shell suppresses Next there).
       nextEnabled = false;
       break;
   }
@@ -480,117 +479,65 @@ function OCIWizard({ onComplete }: OCIWizardProps) {
   }, [submitting, createdConnection, onComplete]);
 
   return (
-    <div className="space-y-6">
-      <WizardHeader stepIndex={stepIndex} stepCount={stepCount} />
-
-      <div className="rounded-lg border bg-card p-6">
-        <h3 className="text-base font-semibold">
-          {OCI_STEP_TITLES[currentStepID]}
-        </h3>
-
-        <div className="mt-4">
-          {currentStepID === OCI_STEP_TENANCY && (
-            <TenancyStep
-              displayName={displayName}
-              onDisplayNameChange={setDisplayName}
-              tenancyOCID={tenancyOCID}
-              onTenancyOCIDChange={setTenancyOCID}
-              userOCID={userOCID}
-              onUserOCIDChange={setUserOCID}
-              region={region}
-              onRegionChange={setRegion}
-              tenancyOCIDValid={tenancyOCIDValid}
-              userOCIDValid={userOCIDValid}
-              regionValid={regionValid}
-              showWhyExplainer={showWhyExplainer}
-              onToggleWhyExplainer={() => setShowWhyExplainer((v) => !v)}
-            />
-          )}
-
-          {currentStepID === OCI_STEP_GENERATE_KEY && (
-            <GenerateKeyStep onCopy={handleCopy} />
-          )}
-
-          {currentStepID === OCI_STEP_UPLOAD_KEY && <UploadKeyStep />}
-
-          {currentStepID === OCI_STEP_CREDENTIALS && (
-            <CredentialsStep
-              fingerprint={fingerprint}
-              onFingerprintChange={setFingerprint}
-              privateKey={privateKey}
-              onPrivateKeyChange={setPrivateKey}
-              fingerprintValid={fingerprintValid}
-              privateKeyValid={privateKeyValid}
-              acknowledged={keyAcknowledged}
-              onAcknowledgeChange={setKeyAcknowledged}
-            />
-          )}
-
-          {currentStepID === OCI_STEP_VALIDATE_SCAN && (
-            <ValidateScanStep
-              submitting={submitting}
-              submitError={submitError}
-              validateResult={validateResult}
-              scanResult={scanResult}
-              connectionRegion={region}
-              connectionTenancyOCID={tenancyOCID}
-              onValidate={handleValidate}
-              onScan={handleScan}
-            />
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={handleBack}
-          disabled={stepIndex === 0 || submitting}
-        >
-          <ChevronLeft className="mr-1 h-4 w-4" aria-hidden />
-          Back
-        </Button>
-        {!isLastStep && (
-          <Button
-            type="button"
-            onClick={handleNext}
-            disabled={!nextEnabled || submitting}
-          >
-            Next
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// --- Wizard header / progress ---------------------------------------
-
-function WizardHeader({
-  stepIndex,
-  stepCount,
-}: {
-  stepIndex: number;
-  stepCount: number;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs uppercase tracking-wider text-muted-foreground">
-          Step {stepIndex + 1} of {stepCount}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {OCI_STEP_TITLES[OCI_STEP_IDS[stepIndex]]}
-        </span>
-      </div>
-      <div className="h-1 w-full rounded bg-muted">
-        <div
-          className="h-1 rounded bg-primary transition-all"
-          style={{ width: `${((stepIndex + 1) / stepCount) * 100}%` }}
+    <WizardShell
+      stepIndex={stepIndex}
+      stepCount={stepCount}
+      stepTitle={OCI_STEP_TITLES[currentStepID]}
+      canAdvance={nextEnabled}
+      submitting={submitting}
+      onBack={handleBack}
+      onNext={handleNext}
+    >
+      {currentStepID === OCI_STEP_TENANCY && (
+        <TenancyStep
+          displayName={displayName}
+          onDisplayNameChange={setDisplayName}
+          tenancyOCID={tenancyOCID}
+          onTenancyOCIDChange={setTenancyOCID}
+          userOCID={userOCID}
+          onUserOCIDChange={setUserOCID}
+          region={region}
+          onRegionChange={setRegion}
+          tenancyOCIDValid={tenancyOCIDValid}
+          userOCIDValid={userOCIDValid}
+          regionValid={regionValid}
+          showWhyExplainer={showWhyExplainer}
+          onToggleWhyExplainer={() => setShowWhyExplainer((v) => !v)}
         />
-      </div>
-    </div>
+      )}
+
+      {currentStepID === OCI_STEP_GENERATE_KEY && (
+        <GenerateKeyStep onCopy={handleCopy} />
+      )}
+
+      {currentStepID === OCI_STEP_UPLOAD_KEY && <UploadKeyStep />}
+
+      {currentStepID === OCI_STEP_CREDENTIALS && (
+        <CredentialsStep
+          fingerprint={fingerprint}
+          onFingerprintChange={setFingerprint}
+          privateKey={privateKey}
+          onPrivateKeyChange={setPrivateKey}
+          fingerprintValid={fingerprintValid}
+          privateKeyValid={privateKeyValid}
+          acknowledged={keyAcknowledged}
+          onAcknowledgeChange={setKeyAcknowledged}
+        />
+      )}
+
+      {currentStepID === OCI_STEP_VALIDATE_SCAN && (
+        <ValidateScanStep
+          submitting={submitting}
+          submitError={submitError}
+          validateResult={validateResult}
+          scanResult={scanResult}
+          connectionRegion={region}
+          connectionTenancyOCID={tenancyOCID}
+          onValidate={handleValidate}
+          onScan={handleScan}
+        />
+      )}
+    </WizardShell>
   );
 }
 
