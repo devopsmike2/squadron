@@ -1,0 +1,110 @@
+// Copyright (c) 2024 Squadron Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package gcp
+
+import (
+	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+)
+
+// Consumer lag detection slice 2 chunk 2 (v0.89.169, #811
+// Stream 208) — GCP Cloud Tasks lag axis with §3.1 honest framing.
+//
+// CLOUD TASKS LAG SPECIAL CASE (design doc §3.3):
+// The Cloud Tasks admin API does NOT surface task count as a
+// directly-queryable metric. The list endpoint paginates over
+// tasks with a maximum page size of 1000; counting requires
+// walking every page (which is too expensive for routine
+// scans + violates the "no new API calls" constraint).
+//
+// Slice 2 chunk 2 ships the Cloud Tasks lag axis with HONEST
+// FRAMING (same posture as the DLQ slice 1 chunk 2 §3.1 pattern):
+//   - lag_backlog_depth is ALWAYS -1 (absent sentinel).
+//   - lag_backlog_depth_high is ALWAYS false.
+//   - lag_consumer_silence_seconds is ALWAYS -1 (absent sentinel).
+//   - lag_consumer_silence_high is ALWAYS false.
+//   - The recommendation cloudtasks-backlog-monitor-add fires
+//     per Cloud Tasks queue with reasoning text explicitly
+//     calling out that Squadron CANNOT verify the consumer is
+//     keeping up; the operator wires Cloud Monitoring's
+//     cloudtasks.googleapis.com/queue/task_count metric to an
+//     alerting policy.
+//
+// This is the THIRD application of the §3.1 honest-framing
+// pattern (managed-primitive-absence). DLQ slice 1 chunk 2
+// established it (Cloud Tasks has no managed DLQ primitive).
+// DLQ slice 1 chunk 3 established the §3.2 variant
+// (scanner-coverage-gap, Azure Service Bus). Slice 2 chunk 2
+// REUSES §3.1 for Cloud Tasks lag detection. The repeated
+// reuse validates the pattern's load-bearing role for the
+// per-axis depth horizon.
+//
+// Cold-start parity invariant: the chunk 2 patch is ADDITIVE
+// only. The slice-5 (Event source) + slice-1 (DLQ) Cloud Tasks
+// Detail keys survive byte-identically. A caller that has not
+// yet adopted the new lag axis keys sees byte-identical output
+// to v0.89.168.
+
+// cloudTasksLagDetectionResult is the bare result of
+// detectCloudTasksLag. Four fields mirror the four Detail keys
+// the chunk 2 projection writes — all hard-coded to the
+// honest-framing absent state in slice 2.
+type cloudTasksLagDetectionResult struct {
+	BacklogDepth           int
+	BacklogDepthHigh       bool
+	ConsumerSilenceSeconds int
+	ConsumerSilenceHigh    bool
+}
+
+// detectCloudTasksLag inspects a cloudTasksQueue and returns the
+// four namespace-level honest-framing lag axis signals.
+//
+// In slice 2, all four fields are constant regardless of queue
+// shape because the per-queue task count + consumer activity
+// signals the design doc §3 detection rules reference are not
+// surfaced by the Cloud Tasks admin API. The honest framing is
+// the load-bearing pattern: the cloudtasks-backlog-monitor-add
+// recommendation explicitly calls out the gap in its reasoning
+// text + prompts the operator to wire Cloud Monitoring's
+// queue/task_count metric to an alerting policy.
+//
+// The queue argument is unused in slice 2 but accepted so the
+// signature matches the future slice 3+ extension that reads
+// per-queue metrics from a substrate MetricQuerier call.
+func detectCloudTasksLag(_ *cloudTasksQueue) cloudTasksLagDetectionResult {
+	return cloudTasksLagDetectionResult{
+		BacklogDepth:           -1,
+		BacklogDepthHigh:       false,
+		ConsumerSilenceSeconds: -1,
+		ConsumerSilenceHigh:    false,
+	}
+}
+
+// applyCloudTasksLagDetail writes the four slice 2 honest-framing
+// lag axis Detail keys onto an already-initialized snapshot. The
+// caller (buildCloudTasksSnapshot) is responsible for initializing
+// snap.Detail or accepting a nil map and letting this helper
+// initialize it.
+//
+// Cold-start parity invariant: this function ADDS keys but never
+// touches the slice-5 + slice-1 (DLQ) existing keys
+// (max_attempts, max_retry_duration, stackdriver_sampling_ratio,
+// max_dispatches_per_second, max_concurrent_dispatches,
+// max_burst_size, state, purge_time, has_dlq_pattern_likely,
+// dlq_retry_count, dlq_retry_count_in_band).
+//
+// Pattern mirrors applyCloudTasksDLQDetail in the same package
+// + applySQSLagDetail in the aws package. All chunk authors
+// share the slice 2 lag axis shape (four Detail keys); the
+// semantic differences (real detection vs. §3.1 honest framing)
+// live in the per-cloud detect* helpers.
+func applyCloudTasksLagDetail(snap *scanner.EventSourceInstanceSnapshot, q *cloudTasksQueue) {
+	res := detectCloudTasksLag(q)
+	if snap.Detail == nil {
+		snap.Detail = map[string]any{}
+	}
+	snap.Detail["lag_backlog_depth"] = res.BacklogDepth
+	snap.Detail["lag_backlog_depth_high"] = res.BacklogDepthHigh
+	snap.Detail["lag_consumer_silence_seconds"] = res.ConsumerSilenceSeconds
+	snap.Detail["lag_consumer_silence_high"] = res.ConsumerSilenceHigh
+}
