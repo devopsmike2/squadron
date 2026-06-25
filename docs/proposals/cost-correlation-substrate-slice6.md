@@ -115,10 +115,20 @@ SampleCount), and `ObservedAt`.
 - **Chunk 1 (this slice, v0.89.183): substrate + guardrails.**
   `CostQuerier` interface, `CostResult`, `CostBudgetGovernor`,
   sentinels, per-call-cost surface table. NO per-cloud integration.
-- Chunk 2+: per-cloud `QueryCost` bodies (AWS Cost Explorer first —
-  the per-call-cost surface that most needs the governor), then
-  cost-correlation enrichment that joins cost against the
-  poison-rate / lag / DLQ axes ("this DLQ costs ~$X/mo").
+- **Chunk 2 (v0.89.184): AWS Cost Explorer `QueryCost` body.**
+  Reads UnblendedCost for a SERVICE dimension over the window via
+  GetCostAndUsage, gated through the CostBudgetGovernor
+  (~$0.01/call). Refuses to issue a charged call without BOTH a
+  client and a governor; over-budget returns
+  `ErrCostBudgetExceeded` as a graceful skip. NOT wired into any
+  scan yet — no charged request fires during a scan until the
+  enrichment chunk enables it. Money parsed to integer micro-USD
+  (no float).
+- Chunk 3+: remaining per-cloud `QueryCost` bodies (GCP / Azure /
+  OCI — all effectively free per call), then the cost-correlation
+  enrichment that joins cost against the poison-rate / lag / DLQ
+  axes ("this DLQ costs ~$X/mo") and wires the production Cost
+  Explorer client + governor into the scan flow.
 
 ## 7. IAM
 
