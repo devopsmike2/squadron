@@ -167,6 +167,49 @@ For the retry-count axis on Cloud Tasks, the standard
 detection rule applies (`maxAttempts` outside `[2, 50]`
 fires `cloudtasks-retry-count-bound`).
 
+### §3.2 Azure Service Bus scanner-coverage-gap (revised in v0.89.165)
+
+The Azure Service Bus scanner walks Microsoft.ServiceBus
+**namespaces** — NOT individual queues. The queue-level DLQ
+fields (`forwardDeadLetteredMessagesTo`,
+`enableDeadLetteringOnMessageExpiration`, `maxDeliveryCount`)
+sit at the `Microsoft.ServiceBus/namespaces/queues` ARM
+sub-resource which the slice 1 chunk 3 scanner has not yet
+walked. The pre-revision design doc incorrectly claimed these
+fields were already read; chunk 3 revision establishes the
+HONEST SCOPE.
+
+Slice 1 chunk 3 ships Azure Service Bus DLQ axes at the
+**namespace level** with HONEST FRAMING:
+- `has_dlq` is replaced by `has_dlq_queue_walk_available`
+  which is always **false** in slice 1 (the queue walk has
+  not yet shipped). The Detail bag carries the field
+  uniformly so the proposer prompt and UI render generically.
+- `dlq_retry_count` = -1 (the absent sentinel) +
+  `dlq_retry_count_in_band` = false.
+- The recommendation `servicebus-dlq-queue-walk-prerequisite`
+  fires per-namespace with reasoning text that explicitly
+  calls out the scanner coverage gap and frames the
+  prerequisite for a future slice 2 chunk that adds the
+  Microsoft.ServiceBus/namespaces/queues walk.
+
+This is the SECOND HONEST FRAMING precedent. §3.1 establishes
+the pattern for **managed-primitive-absence** (Cloud Tasks
+has no DLQ primitive Squadron can detect). §3.2 establishes
+the pattern for **scanner-coverage-gap** (Squadron's current
+scan view doesn't reach the per-resource layer where the
+field lives). Both patterns are load-bearing for slice 12+
+substrate-dependent depth work where Squadron will
+repeatedly hit detection rules it cannot prove from its
+current scan view.
+
+The per-queue DLQ detection arrives in a future slice (slice
+1.5 candidate: `servicebus-dlq-slice-15` or slice 2 chunk
+prefix `azure-queue-walk-`) that explicitly adds the queue
+walk. The slice 1 §11.9-13 acceptance tests are deferred to
+that slice; chunk 3 ships only the namespace-level
+honest-framing axis tests.
+
 ## 4. Storage schema
 
 NO migration. The existing `event_source_instance` table

@@ -530,6 +530,19 @@ func projectServiceBusNamespace(ns armServiceBusNamespace, hasTrace, hasLog, pro
 	if propagationNote != "" {
 		snap.PropagationNotes = []string{propagationNote}
 	}
+
+	// DLQ configuration analysis slice 1 chunk 3 (v0.89.165, #807
+	// Stream 204) — adds the three Azure Service Bus DLQ axis
+	// Detail keys (has_dlq_queue_walk_available, dlq_retry_count,
+	// dlq_retry_count_in_band) per
+	// docs/proposals/dlq-configuration-analysis-slice1.md §3.2
+	// honest framing (namespace-level scope; per-queue walk is a
+	// future slice prerequisite).
+	// ADDITIVE only — none of the slice-1 + slice-2 keys above are
+	// modified here, so callers that have not yet adopted the DLQ
+	// axis keys see byte-identical output to v0.89.164.
+	applyServiceBusDLQDetail(&snap, ns)
+
 	return snap
 }
 
