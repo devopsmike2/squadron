@@ -2461,6 +2461,19 @@ export function RecommendationsTab({
   // SPAN QUALITY panel deeplinks here so operators land on the
   // filtered drafts.
   const [spanQualityFilter, setSpanQualityFilter] = useState(false);
+  // v0.89.204 — render a filter chip only when the current
+  // recommendations actually contain that kind, so the chips are
+  // contextual rather than permanent dead controls. Matters now that
+  // the tab is reused by GCP/Azure/OCI (whose kinds never start with
+  // trace-emission-/span-quality-), and cleans up AWS runs with no
+  // such drafts too.
+  const recList = recs?.recommendations ?? [];
+  const hasTraceEmissionRecs = recList.some((r) =>
+    (r.resource_kind ?? "").startsWith("trace-emission-"),
+  );
+  const hasSpanQualityRecs = recList.some((r) =>
+    (r.resource_kind ?? "").startsWith("span-quality-"),
+  );
   // v0.89.40 hydrate from the GET endpoint on mount and whenever the
   // scope tuple changes. The proposer's `connection_id` is today
   // equal to accountID (matching the substrate's connection_id
@@ -2690,45 +2703,50 @@ export function RecommendationsTab({
         deeplinks here so the operator lands on the same drafts the
         fleet-wide count refers to.
       */}
-      <div
-        className="flex items-center gap-2"
-        data-testid="trace-emission-filter-row"
-      >
-        <button
-          type="button"
-          onClick={() => setTraceEmissionFilter((v) => !v)}
-          data-testid="trace-emission-filter-chip"
-          data-active={traceEmissionFilter ? "true" : "false"}
-          aria-pressed={traceEmissionFilter}
-          className={
-            traceEmissionFilter
-              ? "rounded-full bg-amber-500/20 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
-              : "rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground"
-          }
+      {(hasTraceEmissionRecs || hasSpanQualityRecs) && (
+        <div
+          className="flex items-center gap-2"
+          data-testid="trace-emission-filter-row"
         >
-          Show only trace-emission
-        </button>
-        {/*
-          v0.89.88 (#719 Stream 117) — span quality slice 1 chunk 4
-          sibling chip. Toggles independently of the trace-emission
-          chip; if both are active, the list shows the union (rows
-          whose resource_kind starts with EITHER prefix).
-        */}
-        <button
-          type="button"
-          onClick={() => setSpanQualityFilter((v) => !v)}
-          data-testid="span-quality-filter-chip"
-          data-active={spanQualityFilter ? "true" : "false"}
-          aria-pressed={spanQualityFilter}
-          className={
-            spanQualityFilter
-              ? "rounded-full bg-amber-500/20 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
-              : "rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground"
-          }
-        >
-          Show only span-quality
-        </button>
-      </div>
+          {hasTraceEmissionRecs && (
+            <button
+              type="button"
+              onClick={() => setTraceEmissionFilter((v) => !v)}
+              data-testid="trace-emission-filter-chip"
+              data-active={traceEmissionFilter ? "true" : "false"}
+              aria-pressed={traceEmissionFilter}
+              className={
+                traceEmissionFilter
+                  ? "rounded-full bg-amber-500/20 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+                  : "rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground"
+              }
+            >
+              Show only trace-emission
+            </button>
+          )}
+          {/*
+            span quality sibling chip — toggles independently; if both
+            are active the list shows the union (rows whose
+            resource_kind starts with EITHER prefix).
+          */}
+          {hasSpanQualityRecs && (
+            <button
+              type="button"
+              onClick={() => setSpanQualityFilter((v) => !v)}
+              data-testid="span-quality-filter-chip"
+              data-active={spanQualityFilter ? "true" : "false"}
+              aria-pressed={spanQualityFilter}
+              className={
+                spanQualityFilter
+                  ? "rounded-full bg-amber-500/20 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+                  : "rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground"
+              }
+            >
+              Show only span-quality
+            </button>
+          )}
+        </div>
+      )}
       <ul className="space-y-3">
         {(() => {
           const anyFilter = traceEmissionFilter || spanQualityFilter;
