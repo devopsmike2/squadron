@@ -81,14 +81,31 @@ const ServiceIDQueue = "queues"
 // Pagination follows the opc-next-page response header (see
 // listQueuesAll below), same convention as Streaming + ONS.
 type ociQueue struct {
-	ID                            string `json:"id"`
-	DisplayName                   string `json:"displayName"`
-	CompartmentID                 string `json:"compartmentId"`
-	LifecycleState                string `json:"lifecycleState"`
-	VisibilityInSeconds           int    `json:"visibilityInSeconds,omitempty"`
-	RetentionInSeconds            int    `json:"retentionInSeconds,omitempty"`
-	DeadLetterQueueDeliveryCount  int    `json:"deadLetterQueueDeliveryCount,omitempty"`
-	CustomEncryptionKeyID         string `json:"customEncryptionKeyId,omitempty"`
+	ID                            string                  `json:"id"`
+	DisplayName                   string                  `json:"displayName"`
+	CompartmentID                 string                  `json:"compartmentId"`
+	LifecycleState                string                  `json:"lifecycleState"`
+	VisibilityInSeconds           int                     `json:"visibilityInSeconds,omitempty"`
+	RetentionInSeconds            int                     `json:"retentionInSeconds,omitempty"`
+	DeadLetterQueueDeliveryCount  int                     `json:"deadLetterQueueDeliveryCount,omitempty"`
+	CustomEncryptionKeyID         string                  `json:"customEncryptionKeyId,omitempty"`
+	// Consumer lag detection slice 2 chunk 4 (v0.89.171, #813
+	// Stream 210) — runtimeMetadata carries the lag axis source
+	// fields (visibleMessages + timeStateLastChanged). Optional in
+	// the list response; absent values surface as the absent
+	// sentinel through detectOCIQueueLag.
+	RuntimeMetadata *ociQueueRuntimeMetadata `json:"runtimeMetadata,omitempty"`
+}
+
+// ociQueueRuntimeMetadata is the OCI Queue Service per-queue
+// runtimeMetadata block. Slice 2 chunk 4 reads visibleMessages
+// (backlog depth surrogate) + timeStateLastChanged (consumer
+// silence surrogate). Other runtimeMetadata fields are not yet
+// used; if OCI extends the payload they can be added here without
+// breaking existing parsing (additive shape).
+type ociQueueRuntimeMetadata struct {
+	VisibleMessages       int    `json:"visibleMessages,omitempty"`
+	TimeStateLastChanged  string `json:"timeStateLastChanged,omitempty"`
 }
 
 // ociQueueList is the JSON envelope returned by the Queue Service
@@ -299,6 +316,16 @@ func (s *Scanner) projectOCIQueue(ctx context.Context, sk *SigningKey, queue oci
 	// modified here, so callers that have not yet adopted the DLQ
 	// axis keys see byte-identical output to v0.89.165.
 	applyOCIQueueDLQDetail(&snap, queue)
+
+	// Consumer lag detection slice 2 chunk 4 (v0.89.171, #813
+	// Stream 210) — adds the four OCI Queue Service lag axis
+	// Detail keys (lag_backlog_depth, lag_backlog_depth_high,
+	// lag_consumer_silence_seconds, lag_consumer_silence_high) per
+	// docs/proposals/consumer-lag-detection-slice2.md §3 + §11.7-8.
+	// ADDITIVE only — none of the slice-9 + slice-1-DLQ keys above
+	// are modified here, so callers that have not yet adopted the
+	// lag axis keys see byte-identical output to v0.89.170.
+	applyOCIQueueLagDetail(&snap, queue)
 
 	return snap
 }

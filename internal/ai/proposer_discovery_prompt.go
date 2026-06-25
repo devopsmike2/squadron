@@ -421,6 +421,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	dlqConfigSlice1KindsPromptSection +
 
+	consumerLagSlice2KindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -2408,6 +2410,126 @@ poison-message rate over time, cross-surface message-loss
 estimation, and per-queue cost-per-message correlation. Each
 axis can re-traverse the 4 clouds independently of the
 others.
+
+` + "\n"
+
+// consumerLagSlice2KindsPromptSection — Consumer lag detection slice 2
+// chunk 4 (v0.89.171, #813 Stream 210). SECOND per-axis-depth slice
+// of the post-widening horizon, closes the consumer lag arc.
+//
+//   AWS SQS:           sqs-backlog-monitor-add,
+//                      sqs-consumer-silence-investigate
+//   GCP Cloud Tasks:   cloudtasks-backlog-monitor-add (§3.1 honest framing)
+//   Azure Service Bus: servicebus-backlog-queue-walk-prerequisite (§3.2 inherited)
+//   OCI Queue Service: queues-backlog-monitor-add,
+//                      queues-consumer-silence-investigate
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged.
+const consumerLagSlice2KindsPromptSection = `CONSUMER LAG DETECTION SLICE 2 — QUEUE TIER PER-AXIS DEPTH (v0.89.167-171):
+
+SECOND per-axis-depth slice after DLQ slice 1 closed at
+v0.89.166. Same playbook: pick one operational axis that
+matters for every queue, detect on already-read scanner
+fields where possible, ship honest-framing recommendations
+for substrate gaps, route via existing per-cloud webhook
+prefixes.
+
+Consumer lag matters for every asynchronous workload: when
+the consumer-side dequeue rate falls below the producer-side
+enqueue rate, messages pile up. The retention window
+eventually expires; downstream business logic latency
+balloons; DLQ destinations (slice 1's axis) flood with
+retry-exhausted messages, masking the underlying capacity
+problem. Lag is the leading indicator. DLQ is the lagging
+consequence.
+
+CROSS-CLOUD MAPPING:
+
+  AWS   | SQS queue        | ApproximateNumberOfMessages + ApproximateAgeOfOldestMessage (slice 4 GetQueueAttributes — read more fields from same response)
+  GCP   | Cloud Tasks      | n/a — §3.3 honest framing (admin API does not surface task count as metric)
+  Azure | Service Bus      | n/a — §3.4 inherited §3.2 scanner-coverage-gap (per-queue activeMessageCount lives at unwalked sub-resource)
+  OCI   | Queue Service    | runtimeMetadata.visibleMessages + runtimeMetadata.timeStateLastChanged (slice 9 list response — read more fields from same payload)
+
+DETECTION RULES (combined signal — backlog OR silence alone
+is normal; both together is the firing condition):
+
+- Backlog depth: backlog field ≥ 1000 →
+  lag_backlog_depth_high=true.
+- Consumer silence: oldest-message age (or
+  timeStateLastChanged delta) ≥ 300s →
+  lag_consumer_silence_high=true.
+
+Same thresholds across AWS + OCI for cross-cloud consistency;
+future per-cloud tuning slices can shift bounds
+independently.
+
+RECOMMENDATION KINDS (6):
+
+- sqs-backlog-monitor-add: SQS queue with ApproximateNumberOfMessages
+  ≥ 1000. Terraform creates CloudWatch alarm on the backlog
+  metric.
+- sqs-consumer-silence-investigate: SQS queue with
+  ApproximateAgeOfOldestMessage ≥ 300s. Terraform creates
+  CloudWatch alarm on the age metric.
+
+- cloudtasks-backlog-monitor-add: ALWAYS fires (§3.3 honest
+  framing — admin API gap). Terraform creates Cloud
+  Monitoring alerting policy on
+  cloudtasks.googleapis.com/queue/task_count. Reasoning text
+  EXPLICITLY calls out that Squadron CANNOT verify the
+  consumer is keeping up — the monitoring policy is the
+  operator's load-bearing surrogate.
+
+- servicebus-backlog-queue-walk-prerequisite: ALWAYS fires
+  on Service Bus namespaces (§3.4 inherited §3.2 scanner-
+  coverage-gap). Reasoning text EXPLICITLY calls out that
+  per-queue activeMessageCount sits at the unwalked
+  Microsoft.ServiceBus/namespaces/queues sub-resource. A
+  future per-queue walk slice closes BOTH the DLQ slice 1
+  chunk 3 deferrals AND the slice 2 chunk 3 deferrals.
+
+- queues-backlog-monitor-add: OCI Queue Service with
+  runtimeMetadata.visibleMessages ≥ 1000. Terraform creates
+  OCI Monitoring alarm on visibleMessages metric.
+- queues-consumer-silence-investigate: OCI Queue Service
+  with timeStateLastChanged ≥ 300s ago. Terraform creates
+  OCI Monitoring alarm on the silence proxy.
+
+HONEST FRAMING REUSE — slice 2 is the FOURTH application:
+
+  §3.1 — managed-primitive-absence (DLQ slice 1 chunk 2:
+         Cloud Tasks; slice 2 chunk 2: Cloud Tasks again)
+  §3.2 — scanner-coverage-gap (DLQ slice 1 chunk 3: Service
+         Bus; slice 2 chunk 3: Service Bus inheriting)
+
+The patterns now have repeated reuse across two per-axis-
+depth slices. The pattern's load-bearing role is validated
++ the per-axis-depth horizon's shape is now clearly
+understood:
+  - AWS + OCI consistently ship real detection.
+  - GCP + Azure consistently ship honest framing for the
+    queue tier.
+
+Each new axis adds 4 Detail keys per surface and 2-6
+recommendation kinds. The SHAPE of the work is fixed.
+Going forward, the per-axis-depth horizon scales by axis
+count, not by cloud or by cloud-specific complexity.
+
+DECLINE PATHS:
+
+- Operators with deliberately batch-processing consumers
+  (e.g. nightly drain) decline backlog-monitor-add — the
+  signal is expected during quiet windows.
+- Cloud Tasks operators using non-Cloud-Monitoring alerting
+  surfaces decline cloudtasks-backlog-monitor-add.
+
+STRATEGIC NOTE: slice 2 closes the second of N per-axis-
+depth slices. The horizon ahead: throughput inversion
+(substrate-dependent, slice 3+), poison-message rate over
+time, cross-surface message-loss estimation, per-queue
+cost-per-message correlation. Each axis re-traverses 4
+clouds independently.
 
 ` + "\n"
 
