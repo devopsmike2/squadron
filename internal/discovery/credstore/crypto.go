@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // EnvVarSecretsKey is the environment variable Squadron reads the
@@ -84,6 +86,64 @@ func LoadKeyFromEnv() (*Key, error) {
 			ErrSecretsKeyMalformed, len(decoded), keyByteLen)
 	}
 	return NewKey(decoded)
+}
+
+// SecretsKeyFileName is the file (under the data dir) where Squadron
+// persists an auto-generated secrets key when SQUADRON_SECRETS_KEY is
+// unset, so the credential substrate works out of the box and the key
+// survives restarts.
+const SecretsKeyFileName = "secrets.key"
+
+// LoadOrGenerateKey resolves the credstore key with a seamless,
+// secure-by-default precedence:
+//
+//  1. SQUADRON_SECRETS_KEY set            -> use it (operator override;
+//     the right choice for production, multi-replica, or rotation).
+//  2. SQUADRON_SECRETS_KEY set but bad    -> hard error (fail loud — a
+//     typo'd key must not silently fall back and orphan sealed data).
+//  3. unset, <dataDir>/secrets.key exists -> load the persisted key.
+//  4. unset, no persisted key             -> generate a fresh 32-byte
+//     key, persist it 0600 to <dataDir>/secrets.key, and use it.
+//
+// The persisted key lives in the same data dir as credstore.db, so it
+// and the sealed secrets share a lifecycle (a wiped/ephemeral data dir
+// loses both together — no orphaned ciphertext). This is what lets
+// discovery work after a plain `docker run` / `docker compose up` /
+// binary boot with nothing configured, while still honoring an explicit
+// SQUADRON_SECRETS_KEY override. `generated` reports whether a brand-new
+// key was created so the caller can log a one-time notice.
+func LoadOrGenerateKey(dataDir string) (key *Key, generated bool, err error) {
+	// 1 + 2: an explicit env key wins, and a malformed one fails loud.
+	if raw := os.Getenv(EnvVarSecretsKey); strings.TrimSpace(raw) != "" {
+		k, lerr := LoadKeyFromEnv()
+		return k, false, lerr
+	}
+	keyPath := filepath.Join(dataDir, SecretsKeyFileName)
+	// 3: a key persisted by a previous boot.
+	if b, rerr := os.ReadFile(keyPath); rerr == nil {
+		decoded, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
+		if derr == nil && len(decoded) == keyByteLen {
+			k, nerr := NewKey(decoded)
+			return k, false, nerr
+		}
+		// A corrupt persisted key is fatal: silently regenerating would
+		// orphan every secret sealed under the old key.
+		return nil, false, fmt.Errorf("%w: persisted key at %s is corrupt", ErrSecretsKeyMalformed, keyPath)
+	}
+	// 4: first run — generate + persist.
+	raw := make([]byte, keyByteLen)
+	if _, gerr := rand.Read(raw); gerr != nil {
+		return nil, false, fmt.Errorf("credstore: generate key: %w", gerr)
+	}
+	if mkerr := os.MkdirAll(dataDir, 0o700); mkerr != nil {
+		return nil, false, fmt.Errorf("credstore: create data dir %s: %w", dataDir, mkerr)
+	}
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	if werr := os.WriteFile(keyPath, []byte(encoded+"\n"), 0o600); werr != nil {
+		return nil, false, fmt.Errorf("credstore: persist key to %s: %w", keyPath, werr)
+	}
+	k, nerr := NewKey(raw)
+	return k, true, nerr
 }
 
 // NewKey builds a Key from a 32-byte raw key. Returns an error only if
