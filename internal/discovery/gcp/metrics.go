@@ -137,6 +137,25 @@ const CloudRunRequestCount5xxMetricType = "run.googleapis.com/request_count#5xx"
 // Pinned by metrics_test.go::TestCloudFunctionsExecutionCountErrorMetricType_Constant.
 const CloudFunctionsExecutionCountErrorMetricType = "cloudfunctions.googleapis.com/function/execution_count#error"
 
+// CloudTasksTaskAttemptCountMetricType is the Cloud Monitoring metric
+// type for Cloud Tasks task delivery attempts. Poison-rate substrate
+// slice 4 chunk 2 (v0.89.178) reads this on a Cloud Tasks QUEUE,
+// filtered to FAILED attempts (response_code != "OK"), to compute the
+// real poison-message rate that slice 3 shipped as a §3.3
+// honest-framing absent sentinel. The SUM of failed attempts over a
+// trailing 1-hour window is the proxy for "tasks repeatedly failing
+// delivery per hour" — the Cloud Tasks analog of the AWS SQS DLQ
+// arrival rate (Cloud Tasks has no DLQ primitive, so a failed-attempt
+// rate is the closest poison signal).
+//
+// Routed as a count metric (ALIGN_DELTA + SUM rollup) for kind
+// "queues". The same monitoring.timeSeries.list permission that
+// covers the cold-start / sampling-rate / error-rate metrics covers
+// this one — no new IAM. Pinned to
+// "cloudtasks.googleapis.com/queue/task_attempt_count" by
+// metrics_test.go::TestCloudTasksTaskAttemptCountMetricType_Constant.
+const CloudTasksTaskAttemptCountMetricType = "cloudtasks.googleapis.com/queue/task_attempt_count"
+
 // cloudMonitoringMetricUnit is the unit string the slice 2
 // substrate stamps on the AggregateMetricResult.Unit field for
 // Cloud Run / Cloud Functions latency metrics. Both surfaces emit
@@ -366,6 +385,25 @@ func (s *Scanner) QueryAggregate(
 		filter = fmt.Sprintf(
 			`metric.type = %q AND resource.labels.function_name = %q AND metric.labels.status != "ok"`,
 			CloudFunctionsExecutionCountMetricType, name)
+		isCountMetric = true
+	case CloudTasksTaskAttemptCountMetricType:
+		// Poison-rate substrate slice 4 chunk 2 (v0.89.178) §3. The
+		// Cloud Tasks queue resource name parses to kind "queues";
+		// the filter scopes to the queue_id and counts FAILED
+		// delivery attempts (response_code != "OK"). Routed as a
+		// count metric: ALIGN_DELTA per period + SUM across periods
+		// gives total failed attempts in the window = poison rate.
+		if kind != "queues" {
+			return scanner.AggregateMetricResult{
+				ResourceARN: resourceARN,
+				MetricName:  metricName,
+				Window:      window,
+				Statistic:   stat,
+			}, nil
+		}
+		filter = fmt.Sprintf(
+			`metric.type = %q AND resource.labels.queue_id = %q AND metric.labels.response_code != "OK"`,
+			CloudTasksTaskAttemptCountMetricType, name)
 		isCountMetric = true
 	default:
 		// Slice 2 substrate scope: Cloud Run + Cloud Functions

@@ -400,6 +400,22 @@ jump straight to that page.
   runbook close in
   [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
 
+  **Chunk 2 (v0.89.178) makes GCP Cloud Tasks real:** Squadron
+  reads each queue's FAILED `task_attempt_count`
+  (`response_code != "OK"`) SUM over a trailing 1-hour window
+  via Cloud Monitoring `timeSeries.list` and overwrites the two
+  poison-rate Detail keys with the measured failed-attempt
+  rate. Cloud Tasks has no DLQ primitive, so the rate is
+  measured on the queue itself (no reachability gate, unlike
+  AWS SQS). Same real-zero (`0`) versus absent (`-1`) contract.
+  Azure Service Bus and OCI Queue Service stay on §3.3 honest
+  framing until chunks 4.3 / 4.4 land. NO new IAM
+  (`monitoring.timeSeries.list` already granted), NO new
+  webhook prefix; the enrichment is a no-op when Cloud
+  Monitoring is unwired, preserving cold-start parity. Same
+  design doc
+  ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
+
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,

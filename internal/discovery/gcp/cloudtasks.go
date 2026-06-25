@@ -272,6 +272,17 @@ func (s *Scanner) ScanCloudTasksQueues(ctx context.Context, scope scanner.ScanSc
 	// fail) records a partial failure against the cloudtasks surface.
 	// When at least one region succeeded, the walk returns nil error
 	// even when other regions failed.
+	// Poison-rate substrate slice 4 chunk 2 (v0.89.178, #820 Stream
+	// 217) — enrich the honest-framing poison-rate Detail keys with
+	// real Cloud Monitoring readings (failed task_attempt_count over a
+	// trailing 1h window). Nil-tolerant on metricsClient: deployments
+	// without the Cloud Monitoring wiring see this as a no-op and keep
+	// the slice-3 §3.3 absent sentinels (cold-start parity). The
+	// poison rate is measured on each queue itself, so no DLQ /
+	// reachability gate is needed (unlike AWS SQS).
+	// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
+	s.enrichCloudTasksPoisonRate(ctx, all)
+
 	if successes == 0 && lastErr != nil {
 		return all, lastErr
 	}

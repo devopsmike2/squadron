@@ -2102,3 +2102,45 @@ no-op when the CloudWatch client is not wired
 
 Cross-reference:
 [Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
+
+
+## Poison-Rate Substrate Integration SHIPPED in v0.89.178 — slice 4 chunk 2 (GCP Cloud Tasks real detection)
+
+Chunk 2 makes **GCP Cloud Tasks real**, the second cloud in
+the substrate arc (after AWS SQS in v0.89.177). Squadron now
+reads each Cloud Tasks queue's FAILED `task_attempt_count`
+(`response_code != "OK"`) SUM over a trailing 1-hour window
+via Cloud Monitoring `timeSeries.list` (ALIGN_DELTA per period
++ SUM across periods), reusing the cold-start slice-2
+substrate's per-project rate limiter.
+
+Cloud Tasks has no dead-letter-queue primitive, so — unlike
+AWS SQS, where the poison rate is read off a separate DLQ with
+a reachability check — the failed-delivery-attempt rate is
+measured on the queue itself. Every Cloud Tasks queue snapshot
+is queried directly; there is no DLQ/reachability gate.
+
+For each queue, `poison_rate_per_hour` + `poison_rate_high_band`
+are overwritten with the measured failed-attempt rate and the
+real `rate >= 60/hour` (1/min) verdict. The same real-zero
+versus absent contract holds: a measured `0` is a genuine
+"zero failed attempts this hour" green signal; `-1` strictly
+means "not measured" (queue too new with no series yet, or
+Cloud Monitoring client not wired).
+
+`cloudtasks-poison-rate-monitor-add` still fires (operators
+still want the Terraform-generated Cloud Monitoring alerting
+policy), but its reasoning now reports the measured rate
+instead of disclaiming the §3.3 gap. Azure Service Bus and OCI
+Queue Service stay on §3.3 honest framing until chunks 4.3 /
+4.4 land.
+
+NO new IAM (`monitoring.timeSeries.list`, already granted for
+the cold-start / sampling-rate / error-rate metric paths,
+covers the Cloud Tasks metric). NO new webhook prefix.
+Cold-start parity preserved: the enrichment overwrites two
+existing Detail keys and is a no-op when the Cloud Monitoring
+client is not wired (`metricsClient == nil`).
+
+Cross-reference:
+[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
