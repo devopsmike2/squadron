@@ -1976,7 +1976,39 @@ func doRecsRequest(h *DiscoveryHandlers, accountID, body string) *httptest.Respo
 	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	return w
+	// Async (v0.89.209): a successful kick-off returns 202 + a job_id;
+	// the result arrives via the poll endpoint. For test ergonomics, await
+	// the job here and synthesize the ResponseRecorder the synchronous
+	// handler used to return, so the existing assertions (200 + recs body,
+	// or the failure status + error) hold unchanged.
+	if w.Code != http.StatusAccepted {
+		return w // validation error (4xx/503) — surfaced synchronously
+	}
+	var acc recommendationJobAcceptedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &acc); err != nil || acc.JobID == "" || h.recJobs == nil {
+		return w
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		job, ok := h.recJobs.Get(acc.JobID)
+		if ok && (job.Status == RecJobSucceeded || job.Status == RecJobFailed) {
+			synth := httptest.NewRecorder()
+			synth.Header().Set("Content-Type", "application/json")
+			if job.Status == RecJobSucceeded {
+				synth.Code = http.StatusOK
+				synth.Body.Write(job.ResultJSON)
+			} else {
+				synth.Code = job.HTTPStatus
+				eb, _ := json.Marshal(gin.H{"error": job.Err})
+				synth.Body.Write(eb)
+			}
+			return synth
+		}
+		if time.Now().After(deadline) {
+			return w // timed out — return the 202 so the test fails loudly
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // newRecsHandlers wires the recommendations handler with a stored
@@ -2957,5 +2989,133 @@ func TestHandleAWSRunScan_EventSourceTierAllowed_NotPartial(t *testing.T) {
 	}
 	if len(resp.FailedServices) != 0 {
 		t.Errorf("failed_services = %v, want empty when no tier failed", resp.FailedServices)
+	}
+}
+
+// --- async recommendations contract (v0.89.209) ----------------------
+
+func minimalProposerPlan() *ai.ProposalResult {
+	return &ai.ProposalResult{
+		Kind:      ai.ProposalKindPlan,
+		Reasoning: "one lambda lacks otel",
+		Plan: ai.PlanCandidate{
+			Steps: []ai.PlanStepCandidate{
+				{
+					Name:                "instrument hello",
+					GroupID:             "123456789012",
+					InlineConfigSnippet: "resource \"null_resource\" \"x\" {}\n",
+					Stages:              []ai.RolloutStageCandidate{{Mode: "percent", Percentage: 100}},
+					AffectedResources:   []string{"arn:aws:lambda:us-east-1:123:function:hello"},
+				},
+			},
+		},
+	}
+}
+
+func pollJobUntilDone(t *testing.T, h *DiscoveryHandlers, jobID string) recommendationJobStatusResponse {
+	t.Helper()
+	r := gin.New()
+	r.GET("/api/v1/discovery/recommendations/jobs/:jobID", h.HandleRecommendationJobStatus)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/recommendations/jobs/"+jobID, nil)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("poll status = %d; body=%s", w.Code, w.Body.String())
+		}
+		var resp recommendationJobStatusResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("poll unmarshal: %v", err)
+		}
+		if resp.Status == string(RecJobSucceeded) || resp.Status == string(RecJobFailed) {
+			return resp
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s did not finish; last status=%s", jobID, resp.Status)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func kickOffRecs(t *testing.T, h *DiscoveryHandlers, accountID string) recommendationJobAcceptedResponse {
+	t.Helper()
+	r := gin.New()
+	r.POST("/api/v1/discovery/aws/connections/:id/recommendations", h.HandleAWSGenerateRecommendations)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/discovery/aws/connections/"+accountID+"/recommendations",
+		bytes.NewBufferString(sampleRecsScanResultBody(accountID)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("kick-off status = %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+	var acc recommendationJobAcceptedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &acc); err != nil {
+		t.Fatalf("accepted unmarshal: %v", err)
+	}
+	if acc.JobID == "" {
+		t.Fatal("kick-off must return a job_id")
+	}
+	if acc.Status != string(RecJobPending) {
+		t.Errorf("kick-off status = %q, want pending", acc.Status)
+	}
+	return acc
+}
+
+func TestHandleAWSGenerateRecommendations_Async_KickOffThenPoll(t *testing.T) {
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	mp := &mockAIProposer{result: minimalProposerPlan()}
+	h := newRecsHandlers(t, conn, mp, nil)
+	h.WithRecommendationJobStore(newRecommendationJobStore()) // isolate
+
+	acc := kickOffRecs(t, h, "123456789012")
+	resp := pollJobUntilDone(t, h, acc.JobID)
+	if resp.Status != string(RecJobSucceeded) {
+		t.Fatalf("job status = %s, want succeeded; error=%+v", resp.Status, resp.Error)
+	}
+	var body awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(resp.Result, &body); err != nil {
+		t.Fatalf("result unmarshal: %v", err)
+	}
+	if len(body.Recommendations) != 1 {
+		t.Errorf("recommendation count = %d, want 1", len(body.Recommendations))
+	}
+	if !mp.called {
+		t.Error("proposer should have run in the background job")
+	}
+}
+
+func TestHandleRecommendationJobStatus_UnknownJob404(t *testing.T) {
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	h := newRecsHandlers(t, conn, &mockAIProposer{}, nil)
+	h.WithRecommendationJobStore(newRecommendationJobStore())
+	r := gin.New()
+	r.GET("/api/v1/discovery/recommendations/jobs/:jobID", h.HandleRecommendationJobStatus)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/discovery/recommendations/jobs/does-not-exist", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "JobNotFound") {
+		t.Errorf("404 should name JobNotFound: %s", w.Body.String())
+	}
+}
+
+func TestHandleAWSGenerateRecommendations_Async_ProposerErrorFailsJob(t *testing.T) {
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	mp := &mockAIProposer{err: errors.New("anthropic call: context deadline exceeded")}
+	h := newRecsHandlers(t, conn, mp, nil)
+	h.WithRecommendationJobStore(newRecommendationJobStore())
+
+	acc := kickOffRecs(t, h, "123456789012")
+	resp := pollJobUntilDone(t, h, acc.JobID)
+	if resp.Status != string(RecJobFailed) {
+		t.Fatalf("job status = %s, want failed", resp.Status)
+	}
+	if resp.Error == nil || resp.Error.Code != "ProposerCallFailed" {
+		t.Errorf("failed job should carry ProposerCallFailed; got %+v", resp.Error)
 	}
 }

@@ -136,7 +136,10 @@ type AWSScannerFactory func(conn *credstore.CloudConnection) (DiscoveryScanner, 
 // for the same reason as auditService — discovery_test.go's mock path
 // short-circuits the encryption via WithCredentialMarshaller below.
 type DiscoveryHandlers struct {
-	credStore         credstore.Store
+	credStore credstore.Store
+	// recJobs backs async discovery recommendations (v0.89.209). Never
+	// nil after NewDiscoveryHandlers; the kick-off + poll handlers use it.
+	recJobs           *recommendationJobStore
 	awsValidatorFor   AWSValidatorFactory
 	awsCredMarshaller AWSCredMarshaller
 	awsScannerFor     AWSScannerFactory
@@ -313,6 +316,7 @@ func NewDiscoveryHandlers(credStore credstore.Store, logger *zap.Logger) *Discov
 		credStore:       credStore,
 		awsValidatorFor: defaultAWSValidatorFactory,
 		logger:          logger,
+		recJobs:         defaultRecommendationJobStore,
 	}
 }
 
@@ -2897,118 +2901,128 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		}
 	}
 
-	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.Warn("aws generate recommendations: proposer call failed",
-				zap.Error(err), zap.String("account_id", accountID), zap.String("scan_id", aiCtx.ScanID))
+	// v0.89.209 async: the proposer call (sonnet-4-6 @ 8192 tokens) can run
+	// 30s-120s+, past any sane HTTP timeout. Kick it off in a background job
+	// and return 202 + a job_id the UI polls. Everything below runs in the
+	// job on a context detached from this request, so returning does not
+	// cancel the proposer.
+	job := h.recJobs.Create("aws", accountID)
+	h.recJobs.Run(job.ID, func(ctx context.Context) (json.RawMessage, *scanner.HumanizedError, int) {
+		result, err := h.aiProposer.ProposeFromDiscoveryScan(ctx, aiCtx)
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Warn("aws generate recommendations: proposer call failed",
+					zap.Error(err), zap.String("account_id", accountID), zap.String("scan_id", aiCtx.ScanID))
+			}
+			return nil, &scanner.HumanizedError{
+				Code:    "ProposerCallFailed",
+				Message: "Squadron's AI proposer failed: " + err.Error(),
+			}, http.StatusInternalServerError
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
-			Code:    "ProposerCallFailed",
-			Message: "Squadron's AI proposer failed: " + err.Error(),
-		}})
-		return
-	}
 
-	if result.Declined {
-		// Surface the model's reason; no audit event for
-		// recommendations_generated (nothing was generated). An empty
-		// Recommendations array — never null — so the UI's branch on
-		// .length stays simple.
-		c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
-			Declined:        true,
-			Reason:          result.Reason,
-			Recommendations: []recommendations.Recommendation{},
+		if result.Declined {
+			// Surface the model's reason; no audit event for
+			// recommendations_generated (nothing was generated). An empty
+			// Recommendations array — never null — so the UI's branch on
+			// .length stays simple.
+			return marshalRecResult(awsGenerateRecommendationsResponse{
+				Declined:        true,
+				Reason:          result.Reason,
+				Recommendations: []recommendations.Recommendation{},
+			})
+		}
+
+		// Walk the plan-kind result into one Recommendation per step. Each
+		// step's Terraform lands in the typed IaC field (the v0.85 Stream
+		// 2B addition); the Action payload carries the step JSON for the
+		// UI's preview flow.
+		now := time.Now().UTC()
+		recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Error("aws generate recommendations: plan step marshal failed", zap.Error(err))
+			}
+			return nil, &scanner.HumanizedError{
+				Code:    "PlanStepMarshalFailed",
+				Message: "Squadron could not encode the plan step. The error has been logged.",
+			}, http.StatusInternalServerError
+		}
+
+		// Audit event. Payload deliberately omits the Terraform content —
+		// audit rows shouldn't grow with snippet size. step_count +
+		// scan_id + token metering are what an auditor needs to
+		// reconstruct "what was generated and how much did it cost".
+		if h.auditService != nil {
+			_ = h.auditService.Record(ctx, services.AuditEntry{
+				Actor:      "system",
+				EventType:  "discovery.aws.recommendations_generated",
+				TargetType: credstore.TargetTypeCloudConnection,
+				TargetID:   accountID,
+				Action:     "recommendations_generated",
+				Payload: map[string]any{
+					"account_id":  accountID,
+					"scan_id":     req.ScanResult.ScanID,
+					"step_count":  len(recs),
+					"tokens_in":   result.TokensIn,
+					"tokens_out":  result.TokensOut,
+					"model":       result.Model,
+					"recorded_at": now,
+				},
+			})
+
+			// v0.89.28 (#643 slice 1) — discovery_proposal.created event.
+			// Mirrors the cost-spike side's proposal.created posture but
+			// the verdict_examples_used field carries PR URLs (the
+			// identifying handle for accepted discovery recommendations,
+			// per §11 Q5 of the spec) rather than rollout IDs. ALWAYS
+			// present (never omitted) — empty array on cold start so
+			// SIEM consumers can filter on the empty slice.
+			examplesUsed := acceptedURLs
+			if examplesUsed == nil {
+				examplesUsed = []string{}
+			}
+			region := ""
+			if len(req.ScanResult.Regions) > 0 {
+				region = req.ScanResult.Regions[0]
+			}
+			discoveryPayload := map[string]any{
+				"scan_id":               req.ScanResult.ScanID,
+				"connection_id":         "", // slice 1: handler doesn't see IaC connection_id
+				"account_id":            accountID,
+				"region":                region,
+				"recommendation_count":  len(recs),
+				"verdict_examples_used": examplesUsed,
+			}
+			// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6) — extended
+			// payload with verdict_examples_used_by_state. Emitted only
+			// when at least one bucket is non-empty so cold-start /
+			// opt-out / recency-empty audit rows stay byte-for-byte
+			// identical to the v0.89.28 shape (the existing flat
+			// verdict_examples_used: [] field remains the cold-start
+			// signal SIEM consumers already filter on). Spec §8 (c).
+			if hasAnyDiscoveryByState(acceptedURLsByState) {
+				discoveryPayload["verdict_examples_used_by_state"] = acceptedURLsByState
+			}
+			_ = h.auditService.Record(ctx, services.AuditEntry{
+				Actor:      "ai-proposer",
+				EventType:  services.AuditEventDiscoveryProposalCreated,
+				TargetType: credstore.TargetTypeCloudConnection,
+				TargetID:   accountID,
+				Action:     "discovery_proposal_created",
+				Payload:    discoveryPayload,
+			})
+		}
+
+		return marshalRecResult(awsGenerateRecommendationsResponse{
+			Declined:        false,
+			Reasoning:       result.Reasoning,
+			Recommendations: recs,
 		})
-		return
-	}
+	})
 
-	// Walk the plan-kind result into one Recommendation per step. Each
-	// step's Terraform lands in the typed IaC field (the v0.85 Stream
-	// 2B addition); the Action payload carries the step JSON for the
-	// UI's preview flow.
-	now := time.Now().UTC()
-	recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.Error("aws generate recommendations: plan step marshal failed", zap.Error(err))
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
-			Code:    "PlanStepMarshalFailed",
-			Message: "Squadron could not encode the plan step. The error has been logged.",
-		}})
-		return
-	}
-
-	// Audit event. Payload deliberately omits the Terraform content —
-	// audit rows shouldn't grow with snippet size. step_count +
-	// scan_id + token metering are what an auditor needs to
-	// reconstruct "what was generated and how much did it cost".
-	if h.auditService != nil {
-		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
-			Actor:      "system",
-			EventType:  "discovery.aws.recommendations_generated",
-			TargetType: credstore.TargetTypeCloudConnection,
-			TargetID:   accountID,
-			Action:     "recommendations_generated",
-			Payload: map[string]any{
-				"account_id":  accountID,
-				"scan_id":     req.ScanResult.ScanID,
-				"step_count":  len(recs),
-				"tokens_in":   result.TokensIn,
-				"tokens_out":  result.TokensOut,
-				"model":       result.Model,
-				"recorded_at": now,
-			},
-		})
-
-		// v0.89.28 (#643 slice 1) — discovery_proposal.created event.
-		// Mirrors the cost-spike side's proposal.created posture but
-		// the verdict_examples_used field carries PR URLs (the
-		// identifying handle for accepted discovery recommendations,
-		// per §11 Q5 of the spec) rather than rollout IDs. ALWAYS
-		// present (never omitted) — empty array on cold start so
-		// SIEM consumers can filter on the empty slice.
-		examplesUsed := acceptedURLs
-		if examplesUsed == nil {
-			examplesUsed = []string{}
-		}
-		region := ""
-		if len(req.ScanResult.Regions) > 0 {
-			region = req.ScanResult.Regions[0]
-		}
-		discoveryPayload := map[string]any{
-			"scan_id":               req.ScanResult.ScanID,
-			"connection_id":         "", // slice 1: handler doesn't see IaC connection_id
-			"account_id":            accountID,
-			"region":                region,
-			"recommendation_count":  len(recs),
-			"verdict_examples_used": examplesUsed,
-		}
-		// v0.89.37 (#657 Stream 55, #531 slice 2 chunk 6) — extended
-		// payload with verdict_examples_used_by_state. Emitted only
-		// when at least one bucket is non-empty so cold-start /
-		// opt-out / recency-empty audit rows stay byte-for-byte
-		// identical to the v0.89.28 shape (the existing flat
-		// verdict_examples_used: [] field remains the cold-start
-		// signal SIEM consumers already filter on). Spec §8 (c).
-		if hasAnyDiscoveryByState(acceptedURLsByState) {
-			discoveryPayload["verdict_examples_used_by_state"] = acceptedURLsByState
-		}
-		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
-			Actor:      "ai-proposer",
-			EventType:  services.AuditEventDiscoveryProposalCreated,
-			TargetType: credstore.TargetTypeCloudConnection,
-			TargetID:   accountID,
-			Action:     "discovery_proposal_created",
-			Payload:    discoveryPayload,
-		})
-	}
-
-	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
-		Declined:        false,
-		Reasoning:       result.Reasoning,
-		Recommendations: recs,
+	c.JSON(http.StatusAccepted, recommendationJobAcceptedResponse{
+		JobID:  job.ID,
+		Status: string(RecJobPending),
 	})
 }
 
