@@ -543,6 +543,19 @@ func projectServiceBusNamespace(ns armServiceBusNamespace, hasTrace, hasLog, pro
 	// axis keys see byte-identical output to v0.89.164.
 	applyServiceBusDLQDetail(&snap, ns)
 
+	// Consumer lag detection slice 2 chunk 3 (v0.89.170, #812
+	// Stream 209) — adds the four Azure Service Bus lag axis
+	// Detail keys (lag_backlog_depth, lag_backlog_depth_high,
+	// lag_consumer_silence_seconds, lag_consumer_silence_high) per
+	// docs/proposals/consumer-lag-detection-slice2.md §3.4
+	// (§3.2-inherited scanner-coverage-gap honest framing —
+	// per-queue activeMessageCount sits at the unwalked
+	// Microsoft.ServiceBus/namespaces/queues sub-resource). ADDITIVE
+	// only — none of the slice-1 + slice-2 + slice-1-DLQ keys above
+	// are modified here, so callers that have not yet adopted the
+	// lag axis keys see byte-identical output to v0.89.169.
+	applyServiceBusLagDetail(&snap, ns)
+
 	return snap
 }
 
