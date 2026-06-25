@@ -475,50 +475,50 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`      dynamodb-contributor-insights → new_file       (aws_dynamodb_contributor_insights is new top-level)` + "\n" +
 	`      ecs-container-insights        → patch_existing (aws_ecs_cluster.setting nested block on existing)` + "\n" +
 	`  - For EVERY patch_existing step, ALSO emit an "hcl_patch" field carrying a STRUCTURED ` +
-		`description of the per-attribute / per-nested-block edits the Open-PR handler should apply ` +
-		`to the existing Terraform resource block. The handler's HCL-aware merger (v0.89.12 slice 2) ` +
-		`consumes this to produce a clean drop-in PR; absence falls back to slice-1.5 append-only ` +
-		`with a manual-merge label. The patch lives alongside the inline_config_snippet — emit BOTH ` +
-		`so the slice-1.5 fallback also has the verbatim HCL to append.` + "\n" +
-		`    hcl_patch SCHEMA (locked):` + "\n" +
-		`      {` + "\n" +
-		`        "kind": "<one of the 5 patch_existing kinds>",` + "\n" +
-		`        "disposition": "patch_existing",` + "\n" +
-		`        "target_resource_address": "<aws_resource_type>.<resource_name>",` + "\n" +
-		`        "patches": [ { "attribute_path": [...], "op": "...", "value": ..., "block_key": "", "block_key_value": "" } ]` + "\n" +
-		`      }` + "\n" +
-		`    The "op" enum is LOCKED — do not invent new values:` + "\n" +
-		`      scalar_set                  — overwrite a scalar (string/bool/int)` + "\n" +
-		`      list_append_dedupe          — append to a list, case-sensitive dedupe, original order first` + "\n" +
-		`      nested_block_set            — set attrs on a singleton nested block; create if absent` + "\n" +
-		`      nested_block_find_or_create — find a repeated nested block by key, update OR append` + "\n" +
-		`      map_merge                   — set named keys on a map attribute without disturbing siblings` + "\n" +
-		`    PER-KIND patch shape (locked — do not improvise op choices):` + "\n" +
-		`      lambda-otel-layer:` + "\n" +
-		`        patches: [` + "\n" +
-		`          {attribute_path:["layers"], op:"list_append_dedupe", value:["<the OTel layer ARN>"]},` + "\n" +
-		`          {attribute_path:["environment","variables"], op:"map_merge", value:{"AWS_LAMBDA_EXEC_WRAPPER":"/opt/otel-handler"}}` + "\n" +
-		`        ]` + "\n" +
-		`      rds-pi-em (bundle of scalar_sets — emit only the levers your snippet enables):` + "\n" +
-		`        patches: [` + "\n" +
-		`          {attribute_path:["performance_insights_enabled"], op:"scalar_set", value:true},` + "\n" +
-		`          {attribute_path:["performance_insights_retention_period"], op:"scalar_set", value:7},` + "\n" +
-		`          {attribute_path:["monitoring_interval"], op:"scalar_set", value:30},` + "\n" +
-		`          {attribute_path:["monitoring_role_arn"], op:"scalar_set", value:"<the EM role ARN>"}` + "\n" +
-		`        ]` + "\n" +
-		`      alb-access-logs (singleton nested block):` + "\n" +
-		`        patches: [` + "\n" +
-		`          {attribute_path:["access_logs"], op:"nested_block_set", value:{"bucket":"<bucket>","enabled":true,"prefix":"<prefix>"}}` + "\n" +
-		`        ]` + "\n" +
-		`      eks-cluster-logging (list append-dedupe):` + "\n" +
-		`        patches: [` + "\n" +
-		`          {attribute_path:["enabled_cluster_log_types"], op:"list_append_dedupe", value:["api","audit","authenticator","controllerManager","scheduler"]}` + "\n" +
-		`        ]` + "\n" +
-		`      ecs-container-insights (repeated nested block, find or create by name=containerInsights):` + "\n" +
-		`        patches: [` + "\n" +
-		`          {attribute_path:["setting"], op:"nested_block_find_or_create", block_key:"name", block_key_value:"containerInsights", value:{"set":{"value":"enabled"}}}` + "\n" +
-		`        ]` + "\n" +
-		`    Omit hcl_patch entirely on new_file steps (the handler doesn't read it for them).` + "\n" +
+	`description of the per-attribute / per-nested-block edits the Open-PR handler should apply ` +
+	`to the existing Terraform resource block. The handler's HCL-aware merger (v0.89.12 slice 2) ` +
+	`consumes this to produce a clean drop-in PR; absence falls back to slice-1.5 append-only ` +
+	`with a manual-merge label. The patch lives alongside the inline_config_snippet — emit BOTH ` +
+	`so the slice-1.5 fallback also has the verbatim HCL to append.` + "\n" +
+	`    hcl_patch SCHEMA (locked):` + "\n" +
+	`      {` + "\n" +
+	`        "kind": "<one of the 5 patch_existing kinds>",` + "\n" +
+	`        "disposition": "patch_existing",` + "\n" +
+	`        "target_resource_address": "<aws_resource_type>.<resource_name>",` + "\n" +
+	`        "patches": [ { "attribute_path": [...], "op": "...", "value": ..., "block_key": "", "block_key_value": "" } ]` + "\n" +
+	`      }` + "\n" +
+	`    The "op" enum is LOCKED — do not invent new values:` + "\n" +
+	`      scalar_set                  — overwrite a scalar (string/bool/int)` + "\n" +
+	`      list_append_dedupe          — append to a list, case-sensitive dedupe, original order first` + "\n" +
+	`      nested_block_set            — set attrs on a singleton nested block; create if absent` + "\n" +
+	`      nested_block_find_or_create — find a repeated nested block by key, update OR append` + "\n" +
+	`      map_merge                   — set named keys on a map attribute without disturbing siblings` + "\n" +
+	`    PER-KIND patch shape (locked — do not improvise op choices):` + "\n" +
+	`      lambda-otel-layer:` + "\n" +
+	`        patches: [` + "\n" +
+	`          {attribute_path:["layers"], op:"list_append_dedupe", value:["<the OTel layer ARN>"]},` + "\n" +
+	`          {attribute_path:["environment","variables"], op:"map_merge", value:{"AWS_LAMBDA_EXEC_WRAPPER":"/opt/otel-handler"}}` + "\n" +
+	`        ]` + "\n" +
+	`      rds-pi-em (bundle of scalar_sets — emit only the levers your snippet enables):` + "\n" +
+	`        patches: [` + "\n" +
+	`          {attribute_path:["performance_insights_enabled"], op:"scalar_set", value:true},` + "\n" +
+	`          {attribute_path:["performance_insights_retention_period"], op:"scalar_set", value:7},` + "\n" +
+	`          {attribute_path:["monitoring_interval"], op:"scalar_set", value:30},` + "\n" +
+	`          {attribute_path:["monitoring_role_arn"], op:"scalar_set", value:"<the EM role ARN>"}` + "\n" +
+	`        ]` + "\n" +
+	`      alb-access-logs (singleton nested block):` + "\n" +
+	`        patches: [` + "\n" +
+	`          {attribute_path:["access_logs"], op:"nested_block_set", value:{"bucket":"<bucket>","enabled":true,"prefix":"<prefix>"}}` + "\n" +
+	`        ]` + "\n" +
+	`      eks-cluster-logging (list append-dedupe):` + "\n" +
+	`        patches: [` + "\n" +
+	`          {attribute_path:["enabled_cluster_log_types"], op:"list_append_dedupe", value:["api","audit","authenticator","controllerManager","scheduler"]}` + "\n" +
+	`        ]` + "\n" +
+	`      ecs-container-insights (repeated nested block, find or create by name=containerInsights):` + "\n" +
+	`        patches: [` + "\n" +
+	`          {attribute_path:["setting"], op:"nested_block_find_or_create", block_key:"name", block_key_value:"containerInsights", value:{"set":{"value":"enabled"}}}` + "\n" +
+	`        ]` + "\n" +
+	`    Omit hcl_patch entirely on new_file steps (the handler doesn't read it for them).` + "\n" +
 	`  - You may decline (declined: true) if the scan returned zero uninstrumented ` +
 	`resources, or if every resource is so heterogeneous that no batch shares an ` +
 	`instrumentation strategy. State the reason briefly.` + "\n\n" +
@@ -2292,12 +2292,12 @@ correlation), NOT per-cloud breadth.
 // surfaces. Recommendation kinds added (7 total — one cloud uses
 // honest-framing namespace-level prerequisite kind):
 //
-//   AWS SQS:        sqs-dlq-attach, sqs-dlq-retry-count-bound
-//   GCP Cloud Tasks: cloudtasks-dlq-pattern-add,
-//                    cloudtasks-retry-count-bound (§3.1 honest framing)
-//   Azure Service Bus: servicebus-dlq-queue-walk-prerequisite
-//                      (§3.2 honest framing — scanner-coverage-gap)
-//   OCI Queue Service: queues-dlq-attach, queues-dlq-retry-count-bound
+//	AWS SQS:        sqs-dlq-attach, sqs-dlq-retry-count-bound
+//	GCP Cloud Tasks: cloudtasks-dlq-pattern-add,
+//	                 cloudtasks-retry-count-bound (§3.1 honest framing)
+//	Azure Service Bus: servicebus-dlq-queue-walk-prerequisite
+//	                   (§3.2 honest framing — scanner-coverage-gap)
+//	OCI Queue Service: queues-dlq-attach, queues-dlq-retry-count-bound
 //
 // COLD-START PARITY INVARIANT: the section lives ONLY in the system
 // prompt. The user-message renderer is unchanged, so when the scan
@@ -2421,12 +2421,12 @@ others.
 // chunk 4 (v0.89.171, #813 Stream 210). SECOND per-axis-depth slice
 // of the post-widening horizon, closes the consumer lag arc.
 //
-//   AWS SQS:           sqs-backlog-monitor-add,
-//                      sqs-consumer-silence-investigate
-//   GCP Cloud Tasks:   cloudtasks-backlog-monitor-add (§3.1 honest framing)
-//   Azure Service Bus: servicebus-backlog-queue-walk-prerequisite (§3.2 inherited)
-//   OCI Queue Service: queues-backlog-monitor-add,
-//                      queues-consumer-silence-investigate
+//	AWS SQS:           sqs-backlog-monitor-add,
+//	                   sqs-consumer-silence-investigate
+//	GCP Cloud Tasks:   cloudtasks-backlog-monitor-add (§3.1 honest framing)
+//	Azure Service Bus: servicebus-backlog-queue-walk-prerequisite (§3.2 inherited)
+//	OCI Queue Service: queues-backlog-monitor-add,
+//	                   queues-consumer-silence-investigate
 //
 // COLD-START PARITY INVARIANT: the section lives ONLY in the system
 // prompt. The user-message renderer is unchanged.
@@ -2543,10 +2543,10 @@ clouds independently.
 // poison-message rate arc. ALL FOUR clouds ship §3.3
 // substrate-metric-dependence honest framing (no mixed shape).
 //
-//   AWS SQS:           sqs-poison-rate-monitor-add        (§3.3 honest framing)
-//   GCP Cloud Tasks:   cloudtasks-poison-rate-monitor-add (§3.3 honest framing)
-//   Azure Service Bus: servicebus-poison-rate-monitor-add (§3.3 honest framing)
-//   OCI Queue Service: queues-poison-rate-monitor-add     (§3.3 honest framing)
+//	AWS SQS:           sqs-poison-rate-monitor-add        (§3.3 honest framing)
+//	GCP Cloud Tasks:   cloudtasks-poison-rate-monitor-add (§3.3 honest framing)
+//	Azure Service Bus: servicebus-poison-rate-monitor-add (§3.3 honest framing)
+//	OCI Queue Service: queues-poison-rate-monitor-add     (§3.3 honest framing)
 //
 // COLD-START PARITY INVARIANT: the section lives ONLY in the system
 // prompt. The user-message renderer is unchanged.

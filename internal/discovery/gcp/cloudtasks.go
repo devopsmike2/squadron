@@ -67,8 +67,8 @@ const CloudTasksSourceTypeQueue = "queue"
 // maxAttempts > 0 AND maxAttempts == -1 (unlimited) as configured
 // retry per docs/proposals/event-source-tier-slice5.md §3:
 //
-//   "Has retry config | retryConfig.maxAttempts > 0
-//    (or -1 for unlimited; slice 5 treats both as configured)"
+//	"Has retry config | retryConfig.maxAttempts > 0
+//	 (or -1 for unlimited; slice 5 treats both as configured)"
 //
 // A queue with maxAttempts == 0 (or no retryConfig at all) drops
 // tasks SILENTLY on the first HTTP target failure — the GCP equivalent

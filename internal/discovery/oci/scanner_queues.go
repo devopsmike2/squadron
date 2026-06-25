@@ -81,14 +81,14 @@ const ServiceIDQueue = "queues"
 // Pagination follows the opc-next-page response header (see
 // listQueuesAll below), same convention as Streaming + ONS.
 type ociQueue struct {
-	ID                            string                  `json:"id"`
-	DisplayName                   string                  `json:"displayName"`
-	CompartmentID                 string                  `json:"compartmentId"`
-	LifecycleState                string                  `json:"lifecycleState"`
-	VisibilityInSeconds           int                     `json:"visibilityInSeconds,omitempty"`
-	RetentionInSeconds            int                     `json:"retentionInSeconds,omitempty"`
-	DeadLetterQueueDeliveryCount  int                     `json:"deadLetterQueueDeliveryCount,omitempty"`
-	CustomEncryptionKeyID         string                  `json:"customEncryptionKeyId,omitempty"`
+	ID                           string `json:"id"`
+	DisplayName                  string `json:"displayName"`
+	CompartmentID                string `json:"compartmentId"`
+	LifecycleState               string `json:"lifecycleState"`
+	VisibilityInSeconds          int    `json:"visibilityInSeconds,omitempty"`
+	RetentionInSeconds           int    `json:"retentionInSeconds,omitempty"`
+	DeadLetterQueueDeliveryCount int    `json:"deadLetterQueueDeliveryCount,omitempty"`
+	CustomEncryptionKeyID        string `json:"customEncryptionKeyId,omitempty"`
 	// Consumer lag detection slice 2 chunk 4 (v0.89.171, #813
 	// Stream 210) — runtimeMetadata carries the lag axis source
 	// fields (visibleMessages + timeStateLastChanged). Optional in
@@ -104,8 +104,8 @@ type ociQueue struct {
 // used; if OCI extends the payload they can be added here without
 // breaking existing parsing (additive shape).
 type ociQueueRuntimeMetadata struct {
-	VisibleMessages       int    `json:"visibleMessages,omitempty"`
-	TimeStateLastChanged  string `json:"timeStateLastChanged,omitempty"`
+	VisibleMessages      int    `json:"visibleMessages,omitempty"`
+	TimeStateLastChanged string `json:"timeStateLastChanged,omitempty"`
 }
 
 // ociQueueList is the JSON envelope returned by the Queue Service
