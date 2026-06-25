@@ -1943,3 +1943,52 @@ Cold-start parity preserved (additive Detail bag keys only).
 
 Cross-reference:
 [DLQ configuration analysis slice 1 design doc](./proposals/dlq-configuration-analysis-slice1.md).
+
+## Consumer Lag Detection SHIPPED in v0.89.167-v0.89.171 — Queue tier per-axis depth slice 2 (post-DLQ)
+
+Slice 2 of the per-axis depth horizon. Same playbook as DLQ
+slice 1: 4-chunk arc + design doc, additive Detail bag keys,
+honest-framing patterns reused for substrate gaps.
+
+Two detection rules: backlog depth ≥ 1000 + consumer
+silence ≥ 300s. Both signals together is the firing
+condition; either alone is normal.
+
+Per-cloud field mapping: AWS SQS uses
+`ApproximateNumberOfMessages` +
+`ApproximateAgeOfOldestMessage` (already in the slice 4
+GetQueueAttributes response — read more fields from same
+payload). GCP Cloud Tasks uses §3.3 honest framing (admin
+API gap). Azure Service Bus uses §3.4 inherited §3.2
+scanner-coverage-gap. OCI Queue Service uses
+`runtimeMetadata.visibleMessages` +
+`runtimeMetadata.timeStateLastChanged` (already in the
+slice 9 queue list response).
+
+Recommendation kinds (6 total):
+`sqs-backlog-monitor-add`,
+`sqs-consumer-silence-investigate`,
+`cloudtasks-backlog-monitor-add` (§3.3),
+`servicebus-backlog-queue-walk-prerequisite` (§3.4),
+`queues-backlog-monitor-add`,
+`queues-consumer-silence-investigate`. All routed via
+existing per-cloud webhook prefixes — NO new prefix
+routing.
+
+Honest framing patterns reused (FOURTH application across
+the per-axis-depth horizon):
+- §3.1 managed-primitive-absence (Cloud Tasks lag, slice
+  2 chunk 2).
+- §3.2 scanner-coverage-gap (Service Bus lag, slice 2
+  chunk 3 inherits from DLQ slice 1 chunk 3).
+
+A future Azure Service Bus per-queue walk slice closes
+BOTH the DLQ slice 1 chunk 3 + the consumer lag slice 2
+chunk 3 deferrals in a single API extension.
+
+NO new API calls. NO IAM extension. NO storage migration.
+Cold-start parity preserved (additive Detail bag keys
+only).
+
+Cross-reference:
+[Consumer lag detection slice 2 design doc](./proposals/consumer-lag-detection-slice2.md).

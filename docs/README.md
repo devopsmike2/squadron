@@ -316,6 +316,33 @@ jump straight to that page.
   runbook close in
   [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
 
+  **Consumer Lag Detection slice 2 (v0.89.167-v0.89.171)
+  ships the SECOND per-axis depth slice** with identical
+  shape to DLQ slice 1 (4 chunks + design doc). Two
+  detection rules: backlog depth ≥ 1000 + consumer
+  silence ≥ 300s (combined signal — both together is the
+  firing condition). 6 recommendation kinds across all 4
+  clouds; AWS SQS reads
+  `ApproximateNumberOfMessages` +
+  `ApproximateAgeOfOldestMessage` from the existing
+  GetQueueAttributes response, OCI Queue Service reads
+  `runtimeMetadata.visibleMessages` +
+  `runtimeMetadata.timeStateLastChanged` from the existing
+  queue list response, GCP Cloud Tasks reuses §3.1 honest
+  framing, Azure Service Bus reuses §3.2 inherited scanner-
+  coverage-gap. The honest-framing patterns are now applied
+  ACROSS two per-axis-depth slices — the per-axis-depth
+  horizon's predictable shape is established: AWS + OCI
+  ship real detection; GCP + Azure ship honest framing.
+  All recommendation kinds route via existing per-cloud
+  webhook prefixes — NO new prefix routing. NO new API
+  calls, NO IAM extension, NO storage migration; additive
+  Detail bag keys only preserve cold-start parity. Design
+  doc at
+  [proposals/consumer-lag-detection-slice2.md](./proposals/consumer-lag-detection-slice2.md);
+  runbook close in
+  [event-source-tier-operator-guide.md](./event-source-tier-operator-guide.md).
+
   Squadron's claim
   grows a sixth tier: "scans AWS, GCP, Azure, AND Oracle
   Cloud across COMPUTE, DATABASE, KUBERNETES, SERVERLESS,
