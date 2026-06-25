@@ -816,6 +816,7 @@ type azureScanResponse struct {
 	PartialReason       string                             `json:"partial_reason,omitempty"`
 	FailedServices      []string                           `json:"failed_services,omitempty"`
 	ScanID              string                             `json:"scan_id"`
+	EventSources        []eventSourceRow                   `json:"event_sources,omitempty"`
 }
 
 // HandleScanAzureConnection — POST
@@ -1008,6 +1009,35 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "azure", conn.SubscriptionID, result.Clusters, h.logger)
 	}
 
+	// Event-source tier (v0.89.195) — gated dispatch mirroring the AWS
+	// + GCP paths. When the tier list includes event_source (the default
+	// set does) and the Azure scanner implements
+	// EventSourceDiscoveryScanner, walk Service Bus event sources and
+	// fold them into the result so the response surfaces them with the
+	// slice-2 propagation axis. The Azure Inventory tab's Event-sources
+	// sub-tab already renders scan.event_sources.
+	var scanReq struct {
+		Tiers []string `json:"tiers,omitempty"`
+	}
+	_ = c.ShouldBindJSON(&scanReq)
+	if tierListContains(parseTiersOrDefault(scanReq.Tiers), TierEventSource) {
+		if esScanner, ok := scn.(EventSourceDiscoveryScanner); ok {
+			esOut, esErr := esScanner.ScanEventSources(scanCtx, scanner.ScanScope{
+				AccountID: conn.SubscriptionID,
+				Regions:   regions,
+			})
+			if esErr != nil {
+				if h.logger != nil {
+					h.logger.Warn("azure scan: event source scan failed",
+						zap.Error(esErr), zap.String("subscription_id", conn.SubscriptionID))
+				}
+			}
+			if len(esOut) > 0 {
+				result.EventSources = append(result.EventSources, esOut...)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, azureScanResponse{
 		ConnectionID:        conn.ID,
 		SubscriptionID:      conn.SubscriptionID,
@@ -1021,6 +1051,7 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		PartialReason:       result.PartialReason,
 		FailedServices:      result.FailedServices,
 		ScanID:              result.ScanID,
+		EventSources:        marshalEventSourceRows(result.EventSources),
 	})
 }
 

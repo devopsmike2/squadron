@@ -67,6 +67,8 @@ type fakeAzureScanner struct {
 	// result is returned on Scan() unless err is set.
 	result *scanner.Result
 	err    error
+	// eventSources is returned by ScanEventSources (event-source tier).
+	eventSources []scanner.EventSourceInstanceSnapshot
 }
 
 func (f *fakeAzureScanner) Provider() credstore.Provider {
@@ -86,6 +88,13 @@ func (f *fakeAzureScanner) Scan(_ context.Context, _ *credstore.CloudConnection,
 }
 func (f *fakeAzureScanner) Validate(_ context.Context, _ *credstore.CloudConnection) (*scanner.ValidationResult, error) {
 	return &scanner.ValidationResult{AssumeRoleOK: true}, nil
+}
+
+// ScanEventSources satisfies EventSourceDiscoveryScanner so the Azure
+// scan handler's tier-gated event-source dispatch (v0.89.195) folds the
+// returned snapshots into the response.
+func (f *fakeAzureScanner) ScanEventSources(_ context.Context, _ scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
+	return f.eventSources, nil
 }
 
 // fakeAzureScannerFactory satisfies AzureScannerFactory by returning
@@ -764,4 +773,58 @@ func TestClassifyAzureScanError(t *testing.T) {
 	}
 	// Avoid unused-import lint when time imports aren't otherwise hit.
 	_ = time.Now
+}
+
+// TestScanAzureConnection_SurfacesEventSources pins the v0.89.195
+// event-source-tier wiring for Azure Service Bus, including the
+// slice-2 propagation axis.
+func TestScanAzureConnection_SurfacesEventSources(t *testing.T) {
+	fs := &fakeAzureScanner{
+		result: &scanner.Result{
+			ScanID:              "scan-es-azure",
+			InstrumentedCount:   1,
+			UninstrumentedCount: 0,
+			Compute: []scanner.ComputeInstanceSnapshot{
+				{ResourceID: "vm-1", HasOTel: true},
+			},
+		},
+		eventSources: []scanner.EventSourceInstanceSnapshot{
+			{
+				Provider: "azure", Surface: "servicebus", SourceType: "namespace",
+				ResourceName:         "orders-ns",
+				ResourceARN:          "/subscriptions/" + azureTestSubscriptionID + "/resourceGroups/rg/providers/Microsoft.ServiceBus/namespaces/orders-ns",
+				Region:               "eastus",
+				HasTraceAxis:         true,
+				HasLogAxis:           true,
+				HasPropagationConfig: false,
+				PropagationNotes:     []string{"authorization rule restricts ApplicationProperties, blocking traceparent"},
+			},
+		},
+	}
+	factory := &fakeAzureScannerFactory{scanner: fs}
+	h, store, key := newAzureTestHandlers(t, nil, factory)
+	r := newAzureRouter(h)
+
+	conn := seedAzureConnection(t, store, key, "Prod", azureTestTenantID, azureTestSubscriptionID, azureTestClientID, "eastus")
+	w := azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp azureScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if len(resp.EventSources) != 1 {
+		t.Fatalf("event_sources len = %d, want 1; body=%s", len(resp.EventSources), w.Body.String())
+	}
+	es := resp.EventSources[0]
+	if es.ResourceName != "orders-ns" {
+		t.Errorf("resource_name = %q, want orders-ns", es.ResourceName)
+	}
+	if es.HasPropagationConfig {
+		t.Errorf("has_propagation_config = true, want false (propagation gap)")
+	}
+	if len(es.PropagationNotes) != 1 {
+		t.Errorf("propagation_notes len = %d, want 1", len(es.PropagationNotes))
+	}
 }

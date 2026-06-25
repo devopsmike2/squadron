@@ -52,7 +52,7 @@ func TestScanHandler_DefaultTierListIncludesEventSource(t *testing.T) {
 }
 
 // TestMarshalScanResult_IncludesEventSources — a Result with
-// EventSources entries surfaces them on the wire as awsEventSourceRow
+// EventSources entries surfaces them on the wire as eventSourceRow
 // values with the universal columns + per-surface Detail bag. Mirrors
 // the orchestration variant.
 func TestMarshalScanResult_IncludesEventSources(t *testing.T) {
@@ -116,7 +116,7 @@ func TestInventoryHandler_ResponseIncludesEventSourcesField(t *testing.T) {
 	}
 	out := marshalScanResult(r)
 	if out.EventSources == nil {
-		t.Errorf("EventSources = nil, want []awsEventSourceRow{}")
+		t.Errorf("EventSources = nil, want []eventSourceRow{}")
 	}
 
 	raw, err := json.Marshal(out)
