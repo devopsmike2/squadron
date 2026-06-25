@@ -3067,14 +3067,24 @@ func (s *Server) registerRoutes() {
 		// publish. Publish is a stamping operation in the MVP
 		// (clipboard provider); real provider plug ins land in a
 		// follow-up chunk.
-		incidentsHandler := handlers.NewIncidentsHandlers(s.appStore, s.auditService, s.incidentsPublishers, s.logger)
 		incidentsRead := middleware.RequireScope(services.ScopeIncidentsRead)
 		incidentsWrite := middleware.RequireScope(services.ScopeIncidentsWrite)
-		v1.GET("/incidents/drafts", incidentsRead, incidentsHandler.HandleListDrafts)
-		v1.GET("/incidents/drafts/:id", incidentsRead, incidentsHandler.HandleGetDraft)
-		v1.PATCH("/incidents/drafts/:id", incidentsWrite, incidentsHandler.HandlePatchDraft)
-		v1.POST("/incidents/drafts/:id/dismiss", incidentsWrite, incidentsHandler.HandleDismissDraft)
-		v1.POST("/incidents/drafts/:id/publish", incidentsWrite, incidentsHandler.HandlePublishDraft)
+		// v0.89.211 — build the incidents handler PER REQUEST so it reads
+		// s.appStore at request time. registerRoutes() runs inside
+		// NewServer (above) BEFORE main.go calls SetActionStoreAndSigner,
+		// so capturing s.appStore eagerly here bound a nil store and every
+		// incidents route panicked (nil deref) -> 500. The discovery routes
+		// already read their stores lazily via trampolines; this matches.
+		incidents := func(fn func(*handlers.IncidentsHandlers, *gin.Context)) gin.HandlerFunc {
+			return func(c *gin.Context) {
+				fn(handlers.NewIncidentsHandlers(s.appStore, s.auditService, s.incidentsPublishers, s.logger), c)
+			}
+		}
+		v1.GET("/incidents/drafts", incidentsRead, incidents(func(h *handlers.IncidentsHandlers, c *gin.Context) { h.HandleListDrafts(c) }))
+		v1.GET("/incidents/drafts/:id", incidentsRead, incidents(func(h *handlers.IncidentsHandlers, c *gin.Context) { h.HandleGetDraft(c) }))
+		v1.PATCH("/incidents/drafts/:id", incidentsWrite, incidents(func(h *handlers.IncidentsHandlers, c *gin.Context) { h.HandlePatchDraft(c) }))
+		v1.POST("/incidents/drafts/:id/dismiss", incidentsWrite, incidents(func(h *handlers.IncidentsHandlers, c *gin.Context) { h.HandleDismissDraft(c) }))
+		v1.POST("/incidents/drafts/:id/publish", incidentsWrite, incidents(func(h *handlers.IncidentsHandlers, c *gin.Context) { h.HandlePublishDraft(c) }))
 
 		// v0.27.1 Quickstart. Pure config-generation; no state.
 		// All read-only so ScopeAgentsRead is the natural gate.

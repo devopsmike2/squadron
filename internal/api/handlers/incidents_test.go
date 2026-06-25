@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -297,4 +298,40 @@ func TestPublishDraft_GitHubFailureReturns502(t *testing.T) {
 
 	stored, _ := store.GetIncidentDraft(context.Background(), d.ID)
 	assert.Equal(t, "draft", stored.Status, "draft must stay in status=draft when publisher fails")
+}
+
+// TestIncidentsHandlers_NilStore_503NotPanic pins the v0.89.211 defense:
+// a handler whose store is nil (the eager-wiring bug captured a nil
+// s.appStore before SetActionStoreAndSigner ran) must return a clean 503,
+// never a nil-pointer panic -> 500. All five routes share the guard.
+func TestIncidentsHandlers_NilStore_503NotPanic(t *testing.T) {
+	h := NewIncidentsHandlers(nil, nil, nil, zap.NewNop())
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		route  string
+		fn     gin.HandlerFunc
+	}{
+		{"list", http.MethodGet, "/incidents/drafts", "/incidents/drafts", h.HandleListDrafts},
+		{"get", http.MethodGet, "/incidents/drafts/x", "/incidents/drafts/:id", h.HandleGetDraft},
+		{"dismiss", http.MethodPost, "/incidents/drafts/x/dismiss", "/incidents/drafts/:id/dismiss", h.HandleDismissDraft},
+		{"publish", http.MethodPost, "/incidents/drafts/x/publish", "/incidents/drafts/:id/publish", h.HandlePublishDraft},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := gin.New()
+			r.Handle(tc.method, tc.route, tc.fn)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			r.ServeHTTP(w, req) // must not panic
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("%s: status = %d, want 503; body=%s", tc.name, w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "incidents store not configured") {
+				t.Errorf("%s: 503 should name the cause; got %s", tc.name, w.Body.String())
+			}
+		})
+	}
 }
