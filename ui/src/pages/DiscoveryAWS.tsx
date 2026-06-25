@@ -275,7 +275,7 @@ export default function DiscoveryAWSPage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value={ACCOUNT_TAB}>Account</TabsTrigger>
+          <TabsTrigger value={ACCOUNT_TAB}>Wizard</TabsTrigger>
           <TabsTrigger value={INVENTORY_TAB}>Inventory</TabsTrigger>
           <TabsTrigger value={RECS_TAB}>Recommendations</TabsTrigger>
         </TabsList>
@@ -791,102 +791,73 @@ function AccountTab() {
     "/discovery/aws/connections",
     () => listAWSConnections(),
   );
-  const [open, setOpen] = useState(false);
-  // resumeMode threads through to the wizard. The connections-list
-  // "Resume an existing connection" entry point sets this true before
-  // opening the dialog; the wizard then renders an "Existing
-  // ExternalId (optional)" field on step 1 (#622, fix for #621).
+  // resumeMode threads through to the wizard. The "Resume an existing
+  // connection" toggle sets this true; the wizard then renders an
+  // "Existing ExternalId (optional)" field on step 1 (#622, fix for
+  // #621) so an operator recovering a prior deployment can paste their
+  // old UUID before the wizard generates a fresh one.
   const [resumeMode, setResumeMode] = useState(false);
 
   const connections = data?.connections ?? [];
 
-  const openWizardFresh = useCallback(() => {
-    setResumeMode(false);
-    setOpen(true);
-  }, []);
-  const openWizardWithResume = useCallback(() => {
-    setResumeMode(true);
-    setOpen(true);
-  }, []);
-
   const onWizardComplete = useCallback(() => {
     // Refresh the SWR cache so the new connection card lands without a
-    // page reload. The dialog auto-closes after a short delay so the
-    // operator can read the wizard's success card.
+    // page reload, then reset resumeMode so the next connect lands on
+    // the standard fresh-UUID path.
     void mutate();
-    setOpen(false);
-    // Reset resumeMode so the next "Connect new account" click lands
-    // on the standard fresh-UUID path.
     setResumeMode(false);
   }, [mutate]);
 
-  const handleOpenChange = useCallback((next: boolean) => {
-    setOpen(next);
-    if (!next) setResumeMode(false);
-  }, []);
-
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-base font-semibold">Connected accounts</h2>
-          <p className="text-xs text-muted-foreground">
-            One row per AWS account Squadron is configured to scan.
-          </p>
-        </div>
-        <Dialog open={open} onOpenChange={handleOpenChange}>
-          <div className="flex flex-col items-end gap-1">
-            <Button onClick={openWizardFresh}>Connect new account</Button>
-            {/* Secondary "resume an existing connection" entry point.
-                Surfaces the #578 ExternalId-resume path from the
-                connections list so an operator recovering from a
-                previous deployment (Docker→local swap, reinstall,
-                etc.) can paste their old UUID before the wizard
-                generates a fresh one. #621 → #622. */}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-auto p-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
-              onClick={openWizardWithResume}
-            >
-              {connections.length > 0
+      {/* Inline connect wizard — matches the GCP / Azure / OCI flow:
+          the wizard lives in the Wizard tab, not behind a modal. */}
+      <div className="space-y-3">
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-base font-semibold">Connect an AWS account</h2>
+            <p className="text-xs text-muted-foreground">
+              Grant Squadron read-only access via IAM assume-role.
+            </p>
+          </div>
+          {/* Resume entry point (#578 / #621 / #622): an operator
+              recovering from a previous deployment can toggle this to
+              paste an existing ExternalId before the wizard generates a
+              fresh UUID. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-auto p-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
+            onClick={() => setResumeMode((v) => !v)}
+          >
+            {resumeMode
+              ? "Use a fresh ExternalId instead"
+              : connections.length > 0
                 ? "Resume an existing connection"
                 : "Already have an ExternalId? Resume an existing connection"}
-            </Button>
-          </div>
-          {/*
-           * Height-bounded flex column so the wizard body scrolls inside
-           * the viewport instead of clipping the dialog header and footer
-           * on shorter screens (#620, same class as the IaC wizard fix
-           * in #618). DialogContent itself has a max-h-[90vh] default from
-           * the shared component, but the per-instance flex column with
-           * a min-h-0 overflow-y-auto body keeps the DialogHeader pinned
-           * at top while the wizard's internal Back/Next + step body
-           * scroll together inside the bounded body section.
-           */}
-          <DialogContent className="flex max-w-2xl flex-col overflow-hidden">
-            <DialogHeader className="shrink-0">
-              <DialogTitle>Connect AWS account</DialogTitle>
-              <DialogDescription>
-                Walk through the five steps to grant Squadron read-only access
-                via IAM assume-role.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-              <ConnectorWizard
-                wizard={awsWizard}
-                onValidate={(req) => validateAWSConnection(req)}
-                onSave={(req) =>
-                  saveAWSConnection(req).then((r) => ({
-                    connection_id: r.connection_id,
-                  }))
-                }
-                onComplete={onWizardComplete}
-                resumeMode={resumeMode}
-              />
-            </div>
-          </DialogContent>
-        </Dialog>
+          </Button>
+        </div>
+        <ConnectorWizard
+          // Remount on resume toggle so step 1 restarts with the right
+          // field set (and a fresh ExternalId on the standard path).
+          key={resumeMode ? "resume" : "fresh"}
+          wizard={awsWizard}
+          onValidate={(req) => validateAWSConnection(req)}
+          onSave={(req) =>
+            saveAWSConnection(req).then((r) => ({
+              connection_id: r.connection_id,
+            }))
+          }
+          onComplete={onWizardComplete}
+          resumeMode={resumeMode}
+        />
+      </div>
+
+      <div>
+        <h2 className="text-base font-semibold">Connected accounts</h2>
+        <p className="text-xs text-muted-foreground">
+          One row per AWS account Squadron is configured to scan.
+        </p>
       </div>
 
       {error && (
@@ -955,7 +926,7 @@ function AccountEmptyState() {
             No accounts connected yet.
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Click &quot;Connect new account&quot; to start.
+            Use the wizard above to connect your first account.
           </p>
         </div>
         <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">

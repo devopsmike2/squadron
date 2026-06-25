@@ -1,7 +1,7 @@
 // Vitest coverage for the v0.85 Stream 2E /discovery/aws page.
 //
 // Scope: the tab structure, the Account empty + populated states, the
-// wizard dialog open path, and the Inventory tab's Run-scan -> result-
+// inline wizard path, and the Inventory tab's Run-scan -> result-
 // panel happy path. These tests do NOT exercise the underlying network
 // — the discovery module is mocked at the module boundary so the page
 // can be rendered in isolation without an Squadron server.
@@ -315,7 +315,7 @@ describe("DiscoveryAWSPage", () => {
     mockedListAWSConnections.mockResolvedValue({ connections: [] });
     renderPage();
     // Tabs render as buttons with role tab.
-    expect(screen.getByRole("tab", { name: /Account/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Inventory/i })).toBeInTheDocument();
     expect(
       screen.getByRole("tab", { name: /Recommendations/i }),
@@ -356,27 +356,19 @@ describe("DiscoveryAWSPage", () => {
     expect(screen.getByText("Staging AWS")).toBeInTheDocument();
   });
 
-  it("Connect new account button opens the wizard dialog", async () => {
+  it("renders the connect wizard inline in the Wizard tab (no modal)", async () => {
     mockedListAWSConnections.mockResolvedValue({ connections: [] });
     renderPage();
-    // Wait for the page to settle on the empty state so the dialog
-    // trigger button has rendered.
-    await waitFor(() => {
-      expect(
-        screen.getByText(/No accounts connected yet/i),
-      ).toBeInTheDocument();
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: /Connect new account/i }),
-    );
-    // The wizard's first step title from awsWizard.ts — verifies the
-    // dialog mounted the ConnectorWizard component, not just an empty
-    // shell.
+    // The wizard now lives inline in the Wizard tab — its first step
+    // (awsWizard.ts step 1) is present without any click, matching the
+    // GCP / Azure / OCI flow.
     await waitFor(() => {
       expect(
         screen.getByText(/Enter your AWS account ID/i),
       ).toBeInTheDocument();
     });
+    // The connected-accounts section still renders below the wizard.
+    expect(screen.getByText(/No accounts connected yet/i)).toBeInTheDocument();
   });
 
   // --- #622 connections-list resume entry point ----------------
@@ -444,17 +436,12 @@ describe("DiscoveryAWSPage", () => {
     expect(screen.getByPlaceholderText("123456789012")).toBeInTheDocument();
   });
 
-  it("Connect new account button (without resume) does NOT show the Existing ExternalId field", async () => {
+  it("inline wizard (without resume) does NOT show the Existing ExternalId field", async () => {
     mockedListAWSConnections.mockResolvedValue({ connections: [] });
     renderPage();
-    await waitFor(() => {
-      expect(
-        screen.getByText(/No accounts connected yet/i),
-      ).toBeInTheDocument();
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: /^Connect new account$/i }),
-    );
+    // Default (fresh) path: step 1 is visible inline and the resume-
+    // only "Existing ExternalId" field is absent until the operator
+    // toggles "Resume an existing connection".
     await waitFor(() => {
       expect(
         screen.getByText(/Enter your AWS account ID/i),
