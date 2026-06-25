@@ -124,11 +124,18 @@ SampleCount), and `ObservedAt`.
   scan yet — no charged request fires during a scan until the
   enrichment chunk enables it. Money parsed to integer micro-USD
   (no float).
-- Chunk 3+: remaining per-cloud `QueryCost` bodies (GCP / Azure /
-  OCI — all effectively free per call), then the cost-correlation
-  enrichment that joins cost against the poison-rate / lag / DLQ
-  axes ("this DLQ costs ~$X/mo") and wires the production Cost
-  Explorer client + governor into the scan flow.
+- **Chunk 3 (v0.89.185): AWS SQS cost-correlation enrichment.**
+  Joins SQS service cost onto DLQ-bearing queue snapshots
+  (service_cost_monthly_micro_usd + currency + scope="service").
+  Plumbed but GATED — no-op unless a Cost Explorer client + governor
+  are wired (no production wiring by default), so no charged call
+  fires in a scan until an operator opts in. At most one charged call
+  per scan, and only when a DLQ exists to correlate. The proposer
+  prompt enforces honest, non-editorializing, service-level reporting.
+- Chunk 4+: remaining per-cloud `QueryCost` bodies (GCP / Azure /
+  OCI — all effectively free per call) + their cost-correlation
+  enrichment, and the production opt-in wiring path (Cost Explorer
+  client + governor construction behind an explicit operator switch).
 
 ## 7. IAM
 

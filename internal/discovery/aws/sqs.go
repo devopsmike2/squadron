@@ -156,7 +156,19 @@ func (s *Scanner) ScanSQSQueues(ctx context.Context, scope scanner.ScanScope) ([
 	if accountID == "" {
 		accountID = s.accountID
 	}
-	return s.scanRegionSQS(ctx, factory, region, accountID)
+	snaps, err := s.scanRegionSQS(ctx, factory, region, accountID)
+	if err != nil {
+		return snaps, err
+	}
+
+	// Cost-correlation enrichment slice 6 chunk 3 (v0.89.185, #827
+	// Stream 224) — attach SQS service cost to DLQ-bearing snapshots.
+	// NO-OP unless a Cost Explorer client + budget governor are wired
+	// (no production code wires them by default), and at most one
+	// charged GetCostAndUsage call per scan. See aws/cost.go.
+	s.enrichSQSCost(ctx, snaps)
+
+	return snaps, nil
 }
 
 // scanRegionSQS runs the per-region two-pass list + per-queue

@@ -423,6 +423,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	consumerLagSlice2KindsPromptSection +
 	consumerLagSubstrateSlice5KindsPromptSection +
+	costCorrelationSlice6KindsPromptSection +
 	poisonRateSlice3KindsPromptSection +
 	poisonRateSubstrateSlice4KindsPromptSection +
 
@@ -2804,6 +2805,46 @@ poison-rate chunk 3b built).
 
 NO new IAM (monitoring.timeSeries.list already granted). NO new
 webhook prefix. Cold-start parity preserved.
+
+` + "\n"
+
+// costCorrelationSlice6KindsPromptSection — Cost-correlation substrate
+// slice 6 chunk 3 (v0.89.185, #827 Stream 224). When the cost
+// substrate is wired, DLQ-bearing AWS SQS snapshots carry service-level
+// cost in their Detail bag. This section tells the model how to surface
+// it HONESTLY.
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged.
+const costCorrelationSlice6KindsPromptSection = `COST CORRELATION (cost-correlation substrate slice 6, v0.89.185+):
+
+When the read-only cost substrate is wired, DLQ-bearing AWS SQS
+queue snapshots carry these Detail keys:
+
+  - service_cost_monthly_micro_usd: the account's Amazon SQS spend
+    over the trailing 30 days, in MICRO-USD (divide by 1,000,000 for
+    dollars; e.g. 42_500_000 = $42.50).
+  - service_cost_currency: the billing currency (usually USD).
+  - service_cost_scope: always "service" — this is the SERVICE total,
+    NOT a per-queue cost.
+
+HOW TO SURFACE IT (honest framing, load-bearing):
+
+  - Report the figure plainly as supporting context on a DLQ /
+    poison-rate recommendation: e.g. "Amazon SQS is costing ~$42.50/mo
+    on this account; draining this DLQ reduces wasted spend."
+  - ALWAYS label it as SERVICE-LEVEL cost, never attribute the whole
+    figure to a single queue (service_cost_scope = "service" is the
+    honest scope). Resource-level per-queue cost is a paid Cost
+    Explorer opt-in Squadron deliberately does not use.
+  - DO NOT editorialize about whether the cost is high or low, do not
+    moralize, do not inflate. State the number and the actionable next
+    step (drain the DLQ / fix the poison source) — nothing more.
+  - When the keys are ABSENT (cost substrate not wired, over budget, or
+    not measured), say nothing about cost — never guess a figure.
+
+Only AWS SQS carries cost keys today; other clouds' cost readers land
+in later chunks.
 
 ` + "\n"
 

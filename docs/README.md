@@ -500,6 +500,18 @@ jump straight to that page.
   during a scan until the cost-correlation enrichment chunk
   enables it. Same design doc.
 
+  **Chunk 3 (v0.89.185) ships the AWS SQS cost-correlation
+  enrichment** — joins SQS service cost onto DLQ-bearing queue
+  snapshots (`service_cost_monthly_micro_usd` + currency + a
+  `service_cost_scope="service"` honest label) so a DLQ /
+  poison-rate recommendation can carry "Amazon SQS is costing
+  ~$X/mo; draining this DLQ reduces wasted spend." Still gated:
+  a no-op unless a Cost Explorer client + governor are wired (no
+  production wiring by default), at most one charged call per
+  scan, and only when a DLQ exists to correlate (zero cost calls
+  otherwise). The proposer prompt enforces service-level,
+  non-editorializing reporting. Same design doc.
+
   **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
   attribution.** The `DeadletteredMessages` metric is split by
   the `EntityName` dimension (one Azure Monitor call,

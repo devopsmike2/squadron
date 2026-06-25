@@ -2336,3 +2336,49 @@ otherwise.
 
 Cross-reference:
 [Consumer-lag substrate integration slice 5 design doc](./proposals/consumer-lag-substrate-slice5.md).
+
+
+## Cost-Correlation Enrichment SHIPPED in v0.89.185 — slice 6 chunk 3 (AWS SQS service cost on DLQ-bearing queues)
+
+Chunk 3 joins AWS SQS service cost onto DLQ-bearing queue
+snapshots, so a poison-rate / DLQ recommendation can carry the
+operator-facing spend context: "Amazon SQS is costing ~$X/mo on
+this account; draining this DLQ reduces wasted spend."
+
+**Safety posture — plumbed but gated, no spend by default.** Like
+the entire metric substrate, `enrichSQSCost` is a no-op unless
+BOTH a Cost Explorer client and a `CostBudgetGovernor` are wired
+onto the scanner (`WithCostExplorerClient` + `WithCostBudgetGovernor`).
+No production code wires them by default, so **no charged Cost
+Explorer call fires during a scan until an operator explicitly
+opts in at that wiring step** — that is where the decision to
+spend lives. When wired, the governor caps spend at the default
+$1/30-day-window/account.
+
+**Spend hygiene.** At most ONE charged `GetCostAndUsage` call per
+scan, and only when at least one queue actually has a DLQ to
+correlate cost to — a scan with no DLQ-bearing queues makes zero
+cost calls. Cost is attributed at the SERVICE level (account-wide
+SQS spend), not per-queue: resource-level cost is a paid Cost
+Explorer opt-in the substrate deliberately avoids. The figure is
+surfaced as context on queues that have an actionable DLQ.
+
+Detail keys added (only on a Covered reading; absent otherwise):
+`service_cost_monthly_micro_usd` (integer micro-USD; divide by
+1,000,000 for dollars), `service_cost_currency`, and
+`service_cost_scope` = `"service"` — an explicit honest label that
+the figure is the service total, not a per-queue attribution.
+
+**Reporting rule (enforced in the proposer prompt).** The model
+reports the figure plainly, always labeled service-level, with no
+editorializing about whether the cost is high or low — just the
+number and the actionable next step. When the keys are absent it
+says nothing about cost rather than guessing.
+
+Per-call cost surface: AWS Cost Explorer `GetCostAndUsage` is
+~$0.01/request (see the design doc §3 table). At one call per scan
+and a daily cadence, SQS cost correlation is ~$0.30/mo/account —
+well under the governor ceiling.
+
+Cross-reference:
+[Cost-correlation substrate slice 6 design doc](./proposals/cost-correlation-substrate-slice6.md).

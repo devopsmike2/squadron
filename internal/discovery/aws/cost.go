@@ -249,3 +249,98 @@ func (s *Scanner) WithCostBudgetGovernor(g *scanner.CostBudgetGovernor) *Scanner
 	s.costGovernor = g
 	return s
 }
+
+// --- Cost-correlation enrichment slice 6 chunk 3 (v0.89.185, #827
+// Stream 224) — joins AWS SQS service cost onto DLQ-bearing queue
+// snapshots so a poison-rate / DLQ recommendation can carry the
+// operator-facing spend context ("Amazon SQS is costing ~$X/mo").
+//
+// SAFETY: like the entire metric substrate, this is plumbed but gated.
+// enrichSQSCost is a NO-OP unless BOTH a Cost Explorer client and a
+// budget governor are wired onto the Scanner (WithCostExplorerClient +
+// WithCostBudgetGovernor) — and no production code wires them by
+// default, so no charged Cost Explorer call fires in a scan until an
+// operator explicitly opts in. The spend decision lives entirely at
+// that wiring step.
+//
+// SPEND HYGIENE: at most ONE charged GetCostAndUsage call per scan,
+// and only when at least one snapshot actually has a DLQ to correlate
+// — a scan with no DLQ-bearing queues makes zero cost calls.
+
+// AWSSQSCostServiceDimension is the Cost Explorer SERVICE dimension
+// value for Amazon SQS. Cost is attributed at the service level (not
+// per-queue — resource-level cost is a paid Cost Explorer opt-in the
+// substrate deliberately avoids), so the figure is the account's total
+// SQS spend, surfaced as context on queues that have an actionable DLQ.
+const AWSSQSCostServiceDimension = "Amazon Simple Queue Service"
+
+// AWSCostCorrelationWindowHours is the trailing window the cost figure
+// covers (30 days), reported as a monthly figure.
+const AWSCostCorrelationWindowHours = 30 * 24
+
+// enrichSQSCost attaches the SQS service monthly cost to the Detail
+// bag of every snapshot that has a DLQ (has_dlq == true) — the queues
+// where "drain the DLQ to reduce spend" reasoning applies. Attaches
+// three keys, clearly scoped:
+//
+//   - service_cost_monthly_micro_usd: the account's SQS spend over the
+//     window, in micro-USD (integer).
+//   - service_cost_currency: the source billing currency.
+//   - service_cost_scope: always "service" — a HONEST label that this
+//     is the SERVICE total, not a per-queue attribution.
+//
+// No-op (no charged call) when the cost client/governor are unwired,
+// when no snapshot has a DLQ, or when the cost query is not Covered /
+// over budget / errors. Keys are added only on a Covered reading, so
+// the unwired path is byte-identical (cold-start parity).
+//
+// See docs/proposals/cost-correlation-substrate-slice6.md §6.
+func (s *Scanner) enrichSQSCost(ctx context.Context, snaps []scanner.EventSourceInstanceSnapshot) {
+	if s.costExplorerClient == nil || s.costGovernor == nil {
+		return
+	}
+	// Spend hygiene: only issue the charged call if there is at least
+	// one DLQ-bearing snapshot worth correlating cost to.
+	anyDLQ := false
+	for i := range snaps {
+		if hasDLQ(snaps[i]) {
+			anyDLQ = true
+			break
+		}
+	}
+	if !anyDLQ {
+		return
+	}
+
+	res, err := s.QueryCost(
+		ctx, AWSSQSCostServiceDimension, AWSSQSCostServiceDimension,
+		time.Duration(AWSCostCorrelationWindowHours)*time.Hour,
+	)
+	if err != nil || !res.Covered {
+		// Over budget / not measured / error → graceful skip, no keys.
+		return
+	}
+
+	for i := range snaps {
+		if !hasDLQ(snaps[i]) {
+			continue
+		}
+		if snaps[i].Detail == nil {
+			continue
+		}
+		snaps[i].Detail["service_cost_monthly_micro_usd"] = res.AmountMicroUSD
+		snaps[i].Detail["service_cost_currency"] = res.Currency
+		snaps[i].Detail["service_cost_scope"] = "service"
+	}
+}
+
+// hasDLQ reports whether a snapshot's Detail bag carries has_dlq=true
+// (set by applySQSDLQDetail). Defensive against a nil Detail or a
+// non-bool value.
+func hasDLQ(snap scanner.EventSourceInstanceSnapshot) bool {
+	if snap.Detail == nil {
+		return false
+	}
+	v, ok := snap.Detail["has_dlq"].(bool)
+	return ok && v
+}
