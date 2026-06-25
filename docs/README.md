@@ -468,6 +468,24 @@ jump straight to that page.
   is a byte-identical no-op (cold-start parity). Design doc at
   [proposals/consumer-lag-substrate-slice5.md](./proposals/consumer-lag-substrate-slice5.md).
 
+  **Cost-Correlation Substrate slice 6 (v0.89.183+)** begins the
+  cost-correlation work under explicit read-only guardrails.
+  **Chunk 1 (v0.89.183) ships the money-touching plumbing in
+  isolation** — a read-only `CostQuerier` interface, a `CostResult`
+  shape (integer micro-USD money, never float), and a thread-safe
+  `CostBudgetGovernor` that caps per-account spend on charged
+  cost-reporting APIs at a default $1/30-day-window ceiling and
+  rejects calls that would exceed it (`ErrCostBudgetExceeded`,
+  treated as a graceful skip). NO per-cloud billing integration in
+  this chunk — per-cloud `QueryCost` bodies fan out from the
+  substrate in later chunks, AWS Cost Explorer (~$0.01/call, the
+  one surface that materially charges) first. The per-call-cost
+  surface is documented upfront in the design doc; cost data will
+  surface in recommendations as a plain figure with no
+  editorializing about whether a number is high or low. Design doc
+  at
+  [proposals/cost-correlation-substrate-slice6.md](./proposals/cost-correlation-substrate-slice6.md).
+
   **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
   attribution.** The `DeadletteredMessages` metric is split by
   the `EntityName` dimension (one Azure Monitor call,
