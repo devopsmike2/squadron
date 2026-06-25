@@ -1192,17 +1192,40 @@ function ScanResultPanel({
         </CardContent>
       </Card>
 
-      {/* Partial warning */}
-      {result.partial && (
-        <Card className="border-yellow-500/50 bg-yellow-500/5">
-          <CardContent className="p-4 text-sm">
-            <span className="font-medium">Scan was partial:</span>{" "}
-            {result.partial_reason ??
-              "the walk did not cover the full inventory"}
-            . Re-run to capture missed resources.
-          </CardContent>
-        </Card>
-      )}
+      {/* Partial warning. A denied tier (e.g. an IAM gap on the
+          event-source scanners) must read as "permissions problem,
+          fix and re-scan" — not "you have none." (v0.89.208) */}
+      {result.partial &&
+        (() => {
+          const reason =
+            result.partial_reason ??
+            "the walk did not cover the full inventory";
+          const tiers = result.failed_services ?? [];
+          const looksDenied =
+            /accessdenied|not authorized|denied|forbidden/i.test(reason);
+          return (
+            <Card className="border-yellow-500/50 bg-yellow-500/5">
+              <CardContent className="space-y-1 p-4 text-sm">
+                <div>
+                  <span className="font-medium">Scan was partial</span>
+                  {tiers.length > 0 && (
+                    <>
+                      {" — degraded: "}
+                      <span className="font-mono">{tiers.join(", ")}</span>
+                    </>
+                  )}
+                  .
+                </div>
+                <div className="text-muted-foreground">{reason}</div>
+                <div>
+                  {looksDenied
+                    ? "This is a permissions gap, not missing resources — confirm the SquadronDiscovery role grants the required read-only actions (see the AWS setup guide), then re-scan."
+                    : "Re-run to capture missed resources."}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
       {/* Compute section */}
       <ComputeSection compute={result.compute} />

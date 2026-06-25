@@ -551,6 +551,10 @@ export interface ScanResult {
   uninstrumented_count: number;
   partial: boolean;
   partial_reason?: string;
+  // failed_services lists the service/tier ids whose walk errored this
+  // scan (e.g. "event_source", "orchestration"). Mirrors partial_reason
+  // in structured form so the UI can name the degraded tiers. (v0.89.208)
+  failed_services?: string[];
 }
 
 // runAWSScan triggers an on-demand scan against the supplied

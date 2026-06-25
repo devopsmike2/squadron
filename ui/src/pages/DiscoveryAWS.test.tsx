@@ -831,6 +831,44 @@ describe("DiscoveryAWSPage", () => {
     });
   }
 
+  it("partial scan with a denied event-source tier shows a permissions banner", async () => {
+    // v0.89.208 regression: a denied tier must read as a permissions
+    // gap naming the degraded tier — not a silent empty inventory.
+    const user = userEvent.setup();
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue({
+      ...sampleScan,
+      partial: true,
+      partial_reason:
+        "event_source discovery failed: event sources scan failures: " +
+        "sqs=AccessDenied: not authorized to perform: sqs:ListQueues",
+      failed_services: ["event_source"],
+    });
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", {
+      name: /Connected account/i,
+    });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Scan was partial/i)).toBeInTheDocument();
+    expect(screen.getByText("event_source")).toBeInTheDocument();
+    expect(screen.getByText(/permissions gap/i)).toBeInTheDocument();
+  });
+
   it("RecommendationCard_renders_Copy_only_when_no_iac_connections", async () => {
     mockedListIaCConnections.mockResolvedValue({ connections: [] });
     const user = userEvent.setup();

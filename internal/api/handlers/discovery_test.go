@@ -2842,3 +2842,120 @@ func eventTypes(entries []services.AuditEntry) []string {
 	}
 	return out
 }
+
+// eventSourceMockScanner implements DiscoveryScanner +
+// EventSourceDiscoveryScanner. Scan() returns a clean (partial:false)
+// result; ScanEventSources() returns the configured error/rows so the
+// handler's event-source tier dispatch can be exercised in both
+// directions. Backs the v0.89.208 regression: a denied tier walk must
+// mark the scan partial instead of presenting an empty inventory as if
+// the account genuinely had no event sources.
+type eventSourceMockScanner struct {
+	result *scanner.Result
+	esErr  error
+	esRows []scanner.EventSourceInstanceSnapshot
+}
+
+func (m *eventSourceMockScanner) Scan(_ context.Context, _ *credstore.CloudConnection, _ []string) (*scanner.Result, error) {
+	return m.result, nil
+}
+
+func (m *eventSourceMockScanner) ScanEventSources(_ context.Context, _ scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
+	if m.esErr != nil {
+		return nil, m.esErr
+	}
+	return m.esRows, nil
+}
+
+func newEventSourceScanHandler(t *testing.T, ms DiscoveryScanner) *DiscoveryHandlers {
+	t.Helper()
+	conn := &credstore.CloudConnection{
+		AccountID:      "123456789012",
+		Provider:       credstore.ProviderAWS,
+		ConnectionType: credstore.ConnectionAPIDiscovered,
+		Regions:        []string{"us-east-1"},
+		Credentials:    []byte("ciphertext"),
+		CreatedAt:      time.Now().UTC(),
+	}
+	h := NewDiscoveryHandlers(&spyStore{getResult: conn}, zap.NewNop())
+	h.WithAWSScannerFactory(func(_ *credstore.CloudConnection) (DiscoveryScanner, error) {
+		return ms, nil
+	})
+	return h
+}
+
+func cleanAWSResult() *scanner.Result {
+	return &scanner.Result{
+		ScanID:    "test-scan-uuid",
+		Provider:  credstore.ProviderAWS,
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+	}
+}
+
+// A denied event-source tier walk must mark the scan partial and name
+// the tier in failed_services, carrying the denial detail in
+// partial_reason — so the operator reads "permissions gap", not "you
+// have no event sources." (v0.89.208 — found via real-AWS e2e.)
+func TestHandleAWSRunScan_EventSourceTierDenied_MarksPartial(t *testing.T) {
+	ms := &eventSourceMockScanner{
+		result: cleanAWSResult(),
+		esErr: errors.New("event sources scan failures: sqs=list sqs queues: " +
+			"AccessDenied: not authorized to perform: sqs:ListQueues"),
+	}
+	h := newEventSourceScanHandler(t, ms)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Partial        bool     `json:"partial"`
+		PartialReason  string   `json:"partial_reason"`
+		FailedServices []string `json:"failed_services"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !resp.Partial {
+		t.Error("partial must be true when the event-source tier is denied")
+	}
+	foundTier := false
+	for _, s := range resp.FailedServices {
+		if s == "event_source" {
+			foundTier = true
+		}
+	}
+	if !foundTier {
+		t.Errorf("failed_services = %v, want it to contain \"event_source\"", resp.FailedServices)
+	}
+	if !strings.Contains(resp.PartialReason, "sqs:ListQueues") {
+		t.Errorf("partial_reason should carry the denial detail; got %q", resp.PartialReason)
+	}
+}
+
+// The other direction: when the event-source walk succeeds, the scan
+// must NOT be marked partial and failed_services stays empty — so a
+// genuinely-empty inventory is reported honestly as complete.
+func TestHandleAWSRunScan_EventSourceTierAllowed_NotPartial(t *testing.T) {
+	ms := &eventSourceMockScanner{result: cleanAWSResult()} // esErr nil
+	h := newEventSourceScanHandler(t, ms)
+
+	w := doScanRequest(h, "123456789012", `{"regions":["us-east-1"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Partial        bool     `json:"partial"`
+		FailedServices []string `json:"failed_services"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Partial {
+		t.Error("partial must be false when every tier walk succeeds")
+	}
+	if len(resp.FailedServices) != 0 {
+		t.Errorf("failed_services = %v, want empty when no tier failed", resp.FailedServices)
+	}
+}
