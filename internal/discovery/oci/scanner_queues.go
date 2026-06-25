@@ -289,6 +289,17 @@ func (s *Scanner) projectOCIQueue(ctx context.Context, sk *SigningKey, queue oci
 		"dead_letter_queue_delivery_count": queue.DeadLetterQueueDeliveryCount,
 		"kms_key_id_set":                   queue.CustomEncryptionKeyID != "",
 	}
+
+	// DLQ configuration analysis slice 1 chunk 4 (v0.89.166, #808
+	// Stream 205) — adds the three OCI Queue Service DLQ axis
+	// Detail keys (has_dlq, dlq_retry_count,
+	// dlq_retry_count_in_band) per
+	// docs/proposals/dlq-configuration-analysis-slice1.md §3 +
+	// §11.14-16. ADDITIVE only — none of the slice-9 keys above are
+	// modified here, so callers that have not yet adopted the DLQ
+	// axis keys see byte-identical output to v0.89.165.
+	applyOCIQueueDLQDetail(&snap, queue)
+
 	return snap
 }
 

@@ -1895,3 +1895,51 @@ primary enabler for the per-axis depth work — most slice
   the span quality arc whose orphan-span detector catches
   the symptom event sources surface the cause of.
 - [Audit log](./audit-log.md) — full catalog of event types.
+
+## DLQ Configuration Analysis SHIPPED in v0.89.162-v0.89.166 — Queue tier per-axis depth slice 1 (post-widening, FIRST per-axis depth slice)
+
+After slice 10 closes the cross-cloud event source widening
+pass at 3-3-3-3 / 12 surfaces, Squadron transitions to PER-AXIS
+DEPTH. Slice 1 of the post-widening horizon is DLQ
+(Dead-Letter Queue) configuration analysis across all 4
+clouds' queue tier surfaces (AWS SQS, GCP Cloud Tasks, Azure
+Service Bus, OCI Queue Service).
+
+Detection rules (each cloud's chunk pinned the same band
+`[2, 50]`): missing DLQ + inappropriate retry count.
+
+Per-cloud field mapping: AWS SQS uses
+`RedrivePolicy.maxReceiveCount`; GCP Cloud Tasks uses
+`retryConfig.maxAttempts` with §3.1 honest framing (no
+managed DLQ primitive); Azure Service Bus uses §3.2 honest
+framing (namespace-level scan; queue walk deferred to future
+slice); OCI Queue Service uses
+`deadLetterQueueDeliveryCount` (one field gates both
+presence + retry count).
+
+Recommendation kinds (7 total): `sqs-dlq-attach`,
+`sqs-dlq-retry-count-bound`, `cloudtasks-dlq-pattern-add`,
+`cloudtasks-retry-count-bound`,
+`servicebus-dlq-queue-walk-prerequisite`,
+`queues-dlq-attach`, `queues-dlq-retry-count-bound`. All
+routed via existing per-cloud webhook prefixes (`sqs-`,
+`cloudtasks-`, `servicebus-`, `queues-`) — NO new prefix
+routing.
+
+Honest framing patterns established:
+- **§3.1 managed-primitive-absence** (Cloud Tasks, v0.89.164):
+  GCP has no managed DLQ primitive Squadron can detect from
+  the admin API.
+- **§3.2 scanner-coverage-gap** (Service Bus, v0.89.165):
+  scanner walks namespaces but not the per-queue sub-resource
+  where DLQ fields live.
+
+Both patterns are load-bearing for slice 12+ substrate-
+dependent depth work where Squadron repeatedly hits
+detection rules it cannot prove from its current scan view.
+
+NO new API calls. NO IAM extension. NO storage migration.
+Cold-start parity preserved (additive Detail bag keys only).
+
+Cross-reference:
+[DLQ configuration analysis slice 1 design doc](./proposals/dlq-configuration-analysis-slice1.md).

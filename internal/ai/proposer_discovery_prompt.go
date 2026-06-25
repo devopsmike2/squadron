@@ -419,6 +419,8 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 
 	eventSourceTierSlice10PubSubLiteKindsPromptSection +
 
+	dlqConfigSlice1KindsPromptSection +
+
 	coldStartKindsPromptSection +
 
 	`Rules that apply to every plan step:` + "\n" +
@@ -2275,6 +2277,137 @@ STRATEGIC NOTE: after slice 10, the event source tier's
 widening pass is COMPLETE. Future event source work is
 per-axis depth (consumer lag, cost modeling, cross-surface
 correlation), NOT per-cloud breadth.
+
+` + "\n"
+
+// dlqConfigSlice1KindsPromptSection — DLQ configuration analysis
+// slice 1 chunk 4 (v0.89.166, #808 Stream 205). FIRST per-axis-depth
+// slice; ships DLQ detection across all 4 clouds' queue tier
+// surfaces. Recommendation kinds added (7 total — one cloud uses
+// honest-framing namespace-level prerequisite kind):
+//
+//   AWS SQS:        sqs-dlq-attach, sqs-dlq-retry-count-bound
+//   GCP Cloud Tasks: cloudtasks-dlq-pattern-add,
+//                    cloudtasks-retry-count-bound (§3.1 honest framing)
+//   Azure Service Bus: servicebus-dlq-queue-walk-prerequisite
+//                      (§3.2 honest framing — scanner-coverage-gap)
+//   OCI Queue Service: queues-dlq-attach, queues-dlq-retry-count-bound
+//
+// COLD-START PARITY INVARIANT: the section lives ONLY in the system
+// prompt. The user-message renderer is unchanged, so when the scan
+// context carries no DLQ-axis observations the rendered user
+// message stays byte-identical to v0.89.165 across all four
+// providers.
+const dlqConfigSlice1KindsPromptSection = `DLQ CONFIGURATION ANALYSIS SLICE 1 — QUEUE TIER PER-AXIS DEPTH (v0.89.162-166):
+
+FIRST PER-AXIS DEPTH SLICE following the cross-cloud event
+source widening pass close at 3-3-3-3 / 12 surfaces. Squadron
+graduates from "Squadron sees N surfaces per cloud" to "for
+each surface, Squadron audits M axes of operational quality."
+
+Slice 1 ships DLQ (Dead-Letter Queue) detection across all
+4 clouds' queue tier surfaces. The DLQ axis matters for any
+asynchronous workload: queues without DLQ destinations leak
+poison messages back into the consumer worker pool
+indefinitely, wasting consumer-side processing budget and
+silently dropping work that should route for human review.
+
+CROSS-CLOUD MAPPING:
+
+  AWS   | SQS queue        | RedrivePolicy.deadLetterTargetArn (slice 4)
+  GCP   | Cloud Tasks queue| retryConfig.maxAttempts        (slice 5)
+  Azure | Service Bus      | namespace-level walk           (slice 1+2)
+  OCI   | Queue Service    | deadLetterQueueDeliveryCount   (slice 9)
+
+DETECTION RULES (each cloud's chunk pinned the band [2, 50]):
+
+- Missing DLQ: poison messages redeliver indefinitely.
+- Inappropriate retry count: maxReceiveCount / maxAttempts /
+  deadLetterQueueDeliveryCount outside [2, 50] inclusive.
+  Below 2 sends transient failures straight to the DLQ;
+  above 50 defers DLQ routing past the typical consumer
+  restart-and-retry horizon.
+
+RECOMMENDATION KINDS (7):
+
+- sqs-dlq-attach: SQS queue with no RedrivePolicy.
+  Terraform creates a sibling SQS DLQ + attaches via
+  redrive_policy with conservative maxReceiveCount=5.
+
+- sqs-dlq-retry-count-bound: SQS queue with DLQ but
+  maxReceiveCount outside [2, 50]. Terraform updates the
+  existing redrive_policy block to a conservative value.
+
+- cloudtasks-dlq-pattern-add: ALWAYS fires on Cloud Tasks
+  queues (§3.1 HONEST FRAMING — GCP Cloud Tasks has NO
+  managed DLQ primitive; the canonical pattern is consumer-
+  side dead-letter routing the operator must wire from the
+  HTTP target's final-retry failure handler). Terraform
+  creates a sibling Cloud Tasks queue named
+  ${original}-dlq + reasoning text EXPLICITLY calls out
+  that Squadron CANNOT verify the consumer-side wiring —
+  the operator PR review is load-bearing.
+
+- cloudtasks-retry-count-bound: Cloud Tasks queue with
+  retryConfig.maxAttempts outside [2, 50] OR set to -1
+  (unlimited — operationally indistinguishable from absent
+  for DLQ purposes). Terraform updates retryConfig.maxAttempts
+  to a conservative value.
+
+- servicebus-dlq-queue-walk-prerequisite: ALWAYS fires on
+  Service Bus namespaces (§3.2 HONEST FRAMING —
+  scanner-coverage-gap. The slice 1 + slice 2 Azure scanner
+  walks Microsoft.ServiceBus/namespaces but NOT the per-queue
+  Microsoft.ServiceBus/namespaces/queues sub-resource where
+  forwardDeadLetteredMessagesTo,
+  enableDeadLetteringOnMessageExpiration, and
+  maxDeliveryCount actually live). Reasoning text EXPLICITLY
+  calls out that the per-queue DLQ detection requires a
+  future slice that adds the queue walk; until then the
+  operator should manually audit per-queue DLQ config in the
+  Azure portal.
+
+- queues-dlq-attach: OCI Queue Service queue with
+  deadLetterQueueDeliveryCount == 0 (or negative —
+  defensive). Terraform updates the queue's
+  dead_letter_queue_delivery_count to a conservative
+  positive value (default 5).
+
+- queues-dlq-retry-count-bound: OCI Queue Service queue with
+  deadLetterQueueDeliveryCount outside [2, 50]. Terraform
+  updates the value to a conservative number.
+
+HONEST FRAMING PATTERNS ESTABLISHED:
+
+  §3.1 — managed-primitive-absence (Cloud Tasks).
+  §3.2 — scanner-coverage-gap (Azure Service Bus namespace).
+
+Both patterns are load-bearing for slice 12+ substrate-
+dependent depth work where Squadron will repeatedly hit
+detection rules it cannot prove from its current scan view.
+The honest framing IS the value: rather than pretending the
+scanner sees more than it does, Squadron explicitly scopes
+its recommendation reasoning to what it can prove, surfaces
+operator review as load-bearing, and records decline-path
+reasoning the verdict learning loop can cite.
+
+DECLINE PATHS:
+
+- Operators with deliberately tight (≤1) retry counts route
+  transient failures straight to DLQ on the first failure —
+  honest decline case for retry-count-bound recommendations.
+- Operators with manual replay tooling / consumer-side
+  side-channel write-out can decline DLQ-attach kinds.
+- Cloud Tasks operators using non-Cloud-Tasks dead-letter
+  destinations (Pub/Sub topic, Cloud Storage, BigQuery
+  streaming) decline cloudtasks-dlq-pattern-add.
+
+STRATEGIC NOTE: per-axis depth is the post-widening horizon.
+After slice 1 (DLQ), candidate axes include consumer lag,
+poison-message rate over time, cross-surface message-loss
+estimation, and per-queue cost-per-message correlation. Each
+axis can re-traverse the 4 clouds independently of the
+others.
 
 ` + "\n"
 
