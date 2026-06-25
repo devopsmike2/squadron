@@ -228,11 +228,11 @@ func (p *AnsibleTowerProvider) LatestRunSince(ctx context.Context, target *appty
 	if err := p.do(ctx, http.MethodGet, u, pat, nil, &resp); err != nil {
 		return nil, err
 	}
-	for _, j := range resp.Results {
-		if j.Created.Before(since) {
-			break
+	if len(resp.Results) > 0 {
+		j := resp.Results[0]
+		if !j.Created.Before(since) {
+			return j.toRunStatus(base), nil
 		}
-		return j.toRunStatus(base), nil
 	}
 	return nil, nil
 }

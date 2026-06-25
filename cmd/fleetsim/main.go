@@ -89,7 +89,6 @@ type stats struct {
 func main() {
 	cfg := parseFlags()
 
-	rand.Seed(time.Now().UnixNano())
 	log.SetFlags(log.Ltime)
 
 	st := &stats{}

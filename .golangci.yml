@@ -1,0 +1,16 @@
+# golangci-lint configuration (consumed by CI's `make lint`).
+#
+# The `unused` linter is disabled deliberately. This codebase
+# intentionally carries build-ahead scaffolding — per-cloud metric/cost
+# substrate that is plumbed and tested before its production
+# orchestration is wired (e.g. the cost-correlation readers, several
+# per-cloud helpers/types reserved for upcoming slices). `unused` flags
+# that scaffolding as dead code, producing false-positive CI friction.
+#
+# Trade-off: genuinely dead code also stops being flagged. Re-enable
+# `unused` (and prune) once the scaffolding is wired or abandoned. All
+# other default linters (errcheck, gosimple, staticcheck, govet,
+# ineffassign) remain active.
+linters:
+  disable:
+    - unused

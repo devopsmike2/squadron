@@ -68,7 +68,7 @@ func TestPublisher_PublishAuditEvent_AttributesMatchSchema(t *testing.T) {
 	// dashboards, Tempo searches) will break on. Catch them at test
 	// time so the schema doc and the code stay in sync.
 	p, exporter := publisherWithInMemoryExporter(t)
-	defer p.Shutdown(context.Background())
+	defer func() { _ = p.Shutdown(context.Background()) }()
 
 	p.PublishAuditEvent(context.Background(), AuditEntry{
 		Actor:      "operator:ci-bot",
@@ -113,7 +113,7 @@ func TestPublisher_PublishAuditEvent_PointEventShape(t *testing.T) {
 	// 0 because the SDK records monotonic nanos which usually differ
 	// by 1-100ns.
 	p, exporter := publisherWithInMemoryExporter(t)
-	defer p.Shutdown(context.Background())
+	defer func() { _ = p.Shutdown(context.Background()) }()
 
 	p.PublishAuditEvent(context.Background(), AuditEntry{EventType: "tick"})
 

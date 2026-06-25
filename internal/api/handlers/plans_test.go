@@ -106,8 +106,7 @@ func TestHandleGetPlan_HappyPath(t *testing.T) {
 	h, _, gid, cfgID := setupPlanHandler(t)
 
 	// Seed via the service to get a real PlanID.
-	svc, ok := h.rolloutService.(services.RolloutService)
-	require.True(t, ok)
+	svc := h.rolloutService
 	_, planID, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
 		{Name: "S0", GroupID: gid, TargetConfigID: cfgID,
 			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},
@@ -151,8 +150,7 @@ func TestHandleListRollouts_FiltersByPlanID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, _, gid, cfgID := setupPlanHandler(t)
 
-	svc, ok := h.rolloutService.(services.RolloutService)
-	require.True(t, ok)
+	svc := h.rolloutService
 	// Two plans, two steps each.
 	_, plan1, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
 		{Name: "P1S0", GroupID: gid, TargetConfigID: cfgID,
@@ -193,8 +191,7 @@ func TestHandleListPlans_HappyPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, _, gid, cfgID := setupPlanHandler(t)
 
-	svc, ok := h.rolloutService.(services.RolloutService)
-	require.True(t, ok)
+	svc := h.rolloutService
 	// Two plans, both in the same group so the default list sees both.
 	_, planA, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
 		{Name: "A0", GroupID: gid, TargetConfigID: cfgID,
@@ -253,8 +250,7 @@ func TestHandleListPlans_GroupIDFilter(t *testing.T) {
 	cfg2 := &types.Config{ID: "cfg2", Name: "C2", Content: "x", GroupID: &gid2, CreatedAt: time.Now()}
 	require.NoError(t, store.CreateConfig(t.Context(), cfg2))
 
-	svc, ok := h.rolloutService.(services.RolloutService)
-	require.True(t, ok)
+	svc := h.rolloutService
 	_, planMain, err := svc.CreatePlan(t.Context(), []services.RolloutInput{
 		{Name: "M", GroupID: gid, TargetConfigID: cfgID,
 			Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100}}},

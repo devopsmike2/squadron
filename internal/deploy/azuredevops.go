@@ -252,11 +252,11 @@ func (p *AzureDevOpsProvider) LatestRunSince(ctx context.Context, target *apptyp
 	if err := p.do(ctx, http.MethodGet, u, pat, nil, &resp); err != nil {
 		return nil, err
 	}
-	for _, r := range resp.Value {
-		if r.CreatedDate.Before(since) {
-			break
+	if len(resp.Value) > 0 {
+		r := resp.Value[0]
+		if !r.CreatedDate.Before(since) {
+			return r.toRunStatus(), nil // most-recent matching
 		}
-		return r.toRunStatus(), nil // most-recent matching
 	}
 	return nil, nil
 }
