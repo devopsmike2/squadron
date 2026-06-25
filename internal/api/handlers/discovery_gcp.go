@@ -99,6 +99,10 @@ type DiscoveryGCPHandlers struct {
 	// HandleRecommendationsForGCPScan calls. nil when AI assist is off;
 	// the handler 503s in that case.
 	aiProposer DiscoveryAIProposer
+	// acceptedAssembler — parity follow-up (v0.89.199): feeds the
+	// verdict few-shot block + discovery_proposal.created examples.
+	// nil = cold-start empty.
+	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
 }
 
 // NewDiscoveryGCPHandlers builds the handler struct. Optional
@@ -153,6 +157,13 @@ func (h *DiscoveryGCPHandlers) WithGCPScannerFactory(f GCPScannerFactory) *Disco
 // nil leaves recommendations 503-ing.
 func (h *DiscoveryGCPHandlers) WithGCPAIProposer(p DiscoveryAIProposer) *DiscoveryGCPHandlers {
 	h.aiProposer = p
+	return h
+}
+
+// WithGCPAcceptedAssembler wires the accepted-recommendations assembler (verdict
+// few-shot + discovery_proposal.created examples).
+func (h *DiscoveryGCPHandlers) WithGCPAcceptedAssembler(a DiscoveryAcceptedRecommendationsAssembler) *DiscoveryGCPHandlers {
+	h.acceptedAssembler = a
 	return h
 }
 
@@ -1198,6 +1209,10 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 	}
 	aiCtx.EventSources = mapEventSourceCandidates(req.ScanResult.EventSources)
 
+	verdictBlock, acceptedURLs, acceptedURLsByState := assembleDiscoveryVerdictBlock(
+		c.Request.Context(), h.acceptedAssembler, conn.ProjectID, firstRegion(regions), h.logger)
+	aiCtx.VerdictBlock = verdictBlock
+
 	result, err := h.aiProposer.ProposeFromDiscoveryScan(c.Request.Context(), aiCtx)
 	if err != nil {
 		if h.logger != nil {
@@ -1251,6 +1266,10 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 			},
 		})
 	}
+
+	emitDiscoveryProposalCreated(c.Request.Context(), h.auditService,
+		conn.ID, conn.ProjectID, firstRegion(regions), req.ScanResult.ScanID,
+		len(recs), acceptedURLs, acceptedURLsByState)
 
 	c.JSON(http.StatusOK, awsGenerateRecommendationsResponse{
 		Reasoning:       result.Reasoning,

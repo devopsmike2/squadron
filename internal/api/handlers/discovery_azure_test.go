@@ -729,7 +729,8 @@ func TestRecommendationsForAzureScan_HappyPath(t *testing.T) {
 			},
 		},
 	}
-	h, store, key := newAzureTestHandlers(t, nil, nil)
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newAzureTestHandlers(t, audit, nil)
 	h.WithAzureAIProposer(mock)
 	r := newAzureRouter(h)
 	conn := seedAzureConnection(t, store, key, "Prod", azureTestTenantID, azureTestSubscriptionID, azureTestClientID, "eastus")
@@ -774,6 +775,16 @@ func TestRecommendationsForAzureScan_HappyPath(t *testing.T) {
 	}
 	if len(resp.Recommendations) != 1 {
 		t.Fatalf("recommendations len = %d, want 1", len(resp.Recommendations))
+	}
+
+	var sawProposalCreated bool
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventDiscoveryProposalCreated {
+			sawProposalCreated = true
+		}
+	}
+	if !sawProposalCreated {
+		t.Error("discovery_proposal.created audit event was not emitted")
 	}
 }
 

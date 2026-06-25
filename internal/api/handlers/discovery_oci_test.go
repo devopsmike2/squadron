@@ -795,7 +795,8 @@ func TestRecommendationsForOCIScan_HappyPath(t *testing.T) {
 			},
 		},
 	}
-	h, store, key := newOCITestHandlers(t, nil, nil)
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newOCITestHandlers(t, audit, nil)
 	h.WithOCIAIProposer(mock)
 	r := newOCIRouter(h)
 	conn := seedOCIConnection(t, store, key, "Prod", ociTestTenancyOCID, ociTestUserOCID, ociTestFingerprint, ociTestRegion)
@@ -840,6 +841,16 @@ func TestRecommendationsForOCIScan_HappyPath(t *testing.T) {
 	}
 	if len(resp.Recommendations) != 1 {
 		t.Fatalf("recommendations len = %d, want 1", len(resp.Recommendations))
+	}
+
+	var sawProposalCreated bool
+	for _, e := range audit.entries {
+		if e.EventType == services.AuditEventDiscoveryProposalCreated {
+			sawProposalCreated = true
+		}
+	}
+	if !sawProposalCreated {
+		t.Error("discovery_proposal.created audit event was not emitted")
 	}
 }
 

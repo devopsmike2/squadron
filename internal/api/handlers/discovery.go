@@ -2516,6 +2516,77 @@ func buildDiscoveryRecommendations(scanID string, steps []ai.PlanStepCandidate, 
 	return recs, nil
 }
 
+// firstRegion returns the first region of a scan's region list, or ""
+// when empty. The discovery verdict + audit machinery is single-region
+// per the slice-1 scope tuple.
+func firstRegion(regions []string) string {
+	if len(regions) > 0 {
+		return regions[0]
+	}
+	return ""
+}
+
+// assembleDiscoveryVerdictBlock runs the accepted-recommendations
+// few-shot assembler for a scan's scope, returning the verdict prompt
+// block (the caller sets it on the DiscoveryScanContext) plus the
+// accepted-PR URLs + per-state buckets for the discovery_proposal.created
+// audit event. Shared by every cloud's generate-recommendations handler.
+// A nil assembler or any assembler error degrades to cold-start empty:
+// the proposer still runs, the prompt stays byte-identical to the
+// no-verdict path, and the audit event carries an empty examples list.
+func assembleDiscoveryVerdictBlock(ctx context.Context, assembler DiscoveryAcceptedRecommendationsAssembler, scopeID, region string, logger *zap.Logger) (block string, urls []string, byState map[string][]string) {
+	if assembler == nil {
+		return "", nil, nil
+	}
+	b, u, bs, err := assembler.AssembleVerdictBlockWithByState(ctx, scopeID, region)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("discovery recommendations: assemble verdict block failed; cold-start",
+				zap.Error(err), zap.String("scope_id", scopeID))
+		}
+		return "", nil, nil
+	}
+	return b, u, bs
+}
+
+// emitDiscoveryProposalCreated records the discovery_proposal.created
+// audit event shared by every cloud's generate-recommendations handler.
+// targetID is the audit target (the connection identifier); scopeID is
+// the provider scope written to the account_id payload field (AWS
+// account / GCP project / Azure subscription / OCI tenancy). Safe to
+// call with a nil audit service. verdict_examples_used is always present
+// (empty array on cold start) so SIEM consumers can filter on it; the
+// by-state map is added only when non-empty to preserve the cold-start
+// byte shape.
+func emitDiscoveryProposalCreated(ctx context.Context, audit services.AuditService, targetID, scopeID, region, scanID string, recCount int, urls []string, byState map[string][]string) {
+	if audit == nil {
+		return
+	}
+	examplesUsed := urls
+	if examplesUsed == nil {
+		examplesUsed = []string{}
+	}
+	payload := map[string]any{
+		"scan_id":               scanID,
+		"connection_id":         "",
+		"account_id":            scopeID,
+		"region":                region,
+		"recommendation_count":  recCount,
+		"verdict_examples_used": examplesUsed,
+	}
+	if hasAnyDiscoveryByState(byState) {
+		payload["verdict_examples_used_by_state"] = byState
+	}
+	_ = audit.Record(ctx, services.AuditEntry{
+		Actor:      "ai-proposer",
+		EventType:  services.AuditEventDiscoveryProposalCreated,
+		TargetType: credstore.TargetTypeCloudConnection,
+		TargetID:   targetID,
+		Action:     "discovery_proposal_created",
+		Payload:    payload,
+	})
+}
+
 func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 	accountID := strings.TrimSpace(c.Param("id"))
 	if accountID == "" {
