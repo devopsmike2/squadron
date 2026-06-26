@@ -34,8 +34,12 @@ import (
 	"github.com/devopsmike2/squadron/internal/costspikes"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery"
+	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
+	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
+	"github.com/devopsmike2/squadron/internal/discovery/scannerfactory"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
@@ -811,6 +815,43 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			zap.Duration("retention", 7*24*time.Hour),
 			zap.Duration("gc_interval", 24*time.Hour),
 		)
+
+		// v0.89.219 — per-cloud discovery connection substrates +
+		// production scanner factories. AWS discovery rides the
+		// universal credstore wired above; GCP / Azure / OCI each
+		// carry a dedicated connection store + a ScannerFactory the
+		// discovery trampolines in server.go late-bind. Composing them
+		// here is the deferred "main.go composes the concrete factory
+		// once both chunks land" step (see the
+		// Set{GCP,Azure,OCI}DiscoveryScannerFactory godoc) — without it
+		// the GCP / Azure / OCI discovery surfaces 503 with "<cloud>
+		// discovery is not configured", which is what every release
+		// since v0.89.47 / .52 / .57 shipped. Each store shares the
+		// SQUADRON_SECRETS_KEY wired above (secrets sealed under the
+		// same Key); each lives in its own SQLite DB so wiping one
+		// cloud's connections never touches another's.
+		discoveryBaseDir := filepath.Dir(config.Storage.App.Path)
+		if gcpStore, gerr := gcpconnstore.NewSQLiteStore(gcpconnstore.Config{DBPath: filepath.Join(discoveryBaseDir, "gcpconnstore.db"), Logger: logger}); gerr != nil {
+			logger.Warn("gcp discovery substrate: NewSQLiteStore failed; GCP discovery disabled", zap.Error(gerr))
+		} else {
+			apiServer.SetGCPDiscoveryStore(gcpStore)
+			apiServer.SetGCPDiscoveryScannerFactory(scannerfactory.GCPFactory{})
+			logger.Info("gcp discovery substrate wired", zap.String("path", filepath.Join(discoveryBaseDir, "gcpconnstore.db")))
+		}
+		if azStore, aerr := azureconnstore.NewSQLiteStore(azureconnstore.Config{DBPath: filepath.Join(discoveryBaseDir, "azureconnstore.db"), Logger: logger}); aerr != nil {
+			logger.Warn("azure discovery substrate: NewSQLiteStore failed; Azure discovery disabled", zap.Error(aerr))
+		} else {
+			apiServer.SetAzureDiscoveryStore(azStore)
+			apiServer.SetAzureDiscoveryScannerFactory(scannerfactory.AzureFactory{})
+			logger.Info("azure discovery substrate wired", zap.String("path", filepath.Join(discoveryBaseDir, "azureconnstore.db")))
+		}
+		if ociStore, oerr := ociconnstore.NewSQLiteStore(ociconnstore.Config{DBPath: filepath.Join(discoveryBaseDir, "ociconnstore.db"), Logger: logger}); oerr != nil {
+			logger.Warn("oci discovery substrate: NewSQLiteStore failed; OCI discovery disabled", zap.Error(oerr))
+		} else {
+			apiServer.SetOCIDiscoveryStore(ociStore)
+			apiServer.SetOCIDiscoveryScannerFactory(scannerfactory.OCIFactory{})
+			logger.Info("oci discovery substrate wired", zap.String("path", filepath.Join(discoveryBaseDir, "ociconnstore.db")))
+		}
 	}
 
 	// v0.85 Stream 2F — wire the AI service onto the discovery
