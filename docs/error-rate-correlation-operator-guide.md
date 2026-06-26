@@ -151,13 +151,18 @@ The substrate from cold-start + sampling rate already wired
 per-cloud `MetricQuerier`. Slice 1 of error rate adds ONE
 NEW METRIC NAME per cloud:
 
+> **⚠️ Detection coverage correction (v0.89.231).** Azure Monitor has no native
+> per-function error metric — `FunctionErrors` below does not exist, so Azure
+> error-rate requires Application Insights. The OCI row is corrected to the real
+> `oci_faas` metric. See [detection-coverage.md](./detection-coverage.md).
+
 | Cloud | Surface         | Error metric                                              |
 |-------|-----------------|-----------------------------------------------------------|
 | AWS   | Lambda          | `AWS/Lambda Errors` (Sum)                                 |
 | GCP   | Cloud Run       | `run.googleapis.com/request_count` filtered by `response_code_class = "5xx"` |
 | GCP   | Cloud Functions | `cloudfunctions.googleapis.com/function/execution_count` filtered by `status != "ok"` |
-| Azure | Functions       | `FunctionErrors` (Total aggregation)                      |
-| OCI   | Functions       | `function_invocation_count` filtered by `result = "error"` |
+| Azure | Functions       | **none native** — needs Application Insights (`FunctionErrors` does not exist in Azure Monitor) |
+| OCI   | Functions       | `FunctionResponseCount` (`oci_faas` error responses; fixed v0.89.229) |
 
 All five reuse the existing cold-start / sampling rate IAM —
 no new permissions. The substrate's rate limiters absorb the
