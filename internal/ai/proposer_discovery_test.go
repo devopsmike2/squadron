@@ -3742,3 +3742,20 @@ func TestDiscoverySystemPrompt_AzureMonitorAgent_OSDerived(t *testing.T) {
 	assert.NotContains(t, p, "Terraform: AzureMonitorLinuxAgent extension.",
 		"the hardcoded Linux-only agent line must be gone")
 }
+
+// TestDiscoverySystemPrompt_SnippetParityFixes guards the prompt against the
+// same silent-correctness bugs fixed in the deterministic iacpicker snippets:
+// sampling needs OTEL_TRACES_SAMPLER (not just the ARG); Event Grid must not
+// reference the invalid success-variant categories; Cloud Run minScale must be
+// placed on the revision template.
+func TestDiscoverySystemPrompt_SnippetParityFixes(t *testing.T) {
+	p := DiscoverySystemPromptForTest()
+	assert.Contains(t, p, "OTEL_TRACES_SAMPLER=parentbased_traceidratio",
+		"sampling guidance must set the ratio sampler, not just the ARG (else no-op)")
+	assert.NotContains(t, p, "DeliverySuccess",
+		"Event Grid guidance must not reference the invalid DeliverySuccess category")
+	assert.NotContains(t, p, "PublishSuccess,",
+		"Event Grid guidance must not reference the invalid PublishSuccess category")
+	assert.Contains(t, p, "template.metadata.annotations",
+		"Cloud Run minScale guidance must specify the revision template placement")
+}
