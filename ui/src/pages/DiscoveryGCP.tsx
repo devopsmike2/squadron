@@ -410,10 +410,16 @@ function GCPWizard({ onComplete }: GCPWizardProps) {
     setSubmitError(null);
     setValidateResult(null);
     try {
-      // If we already created the connection on a prior validate
-      // attempt, reuse it — don't create a duplicate row.
+      // Reuse the connection created on a prior validate ONLY if that
+      // validate succeeded. If it failed, the operator is fixing the
+      // credentials (e.g. a rotated or mistyped secret), so re-create
+      // with the corrected values — otherwise the re-validate silently
+      // re-tests the stale connection and can never recover (the
+      // credentials_invalid remediation loop is a dead end). Failed rows
+      // are left in place, matching the existing don't-delete-on-failure
+      // posture.
       let conn = createdConnection;
-      if (!conn) {
+      if (!conn || validateResult?.ok === false) {
         conn = await createGCPConnection({
           display_name: displayName.trim(),
           project_id: projectID,
@@ -433,6 +439,7 @@ function GCPWizard({ onComplete }: GCPWizardProps) {
     submitting,
     saParsed,
     createdConnection,
+    validateResult,
     displayName,
     projectID,
     saText,

@@ -374,6 +374,50 @@ describe("DiscoveryAzure", () => {
     expect(screen.getByRole("button", { name: /^Next$/i })).toBeDisabled();
   });
 
+  it("TestDiscoveryAzure_WizardStep4_ReValidateAfterFailure_RecreatesConnection", async () => {
+    // Regression (v0.89.221): handleValidate reused the connection created
+    // on the first validate ("let conn = createdConnection; if (!conn)"),
+    // so after a credentials_invalid failure the operator's corrected
+    // secret was ignored — every re-validate silently re-tested the stale
+    // connection and could never recover. The fix re-creates the
+    // connection whenever the prior validate failed.
+    const user = userEvent.setup();
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection
+      .mockResolvedValueOnce({
+        ok: false,
+        error_kind: "credentials_invalid",
+        message: "AADSTS7000215: Invalid client secret provided.",
+      })
+      .mockResolvedValueOnce({ ok: true, instance_count: 2 });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Re-check the Client ID and Client Secret/i),
+      ).toBeInTheDocument();
+    });
+    expect(mockedCreateAzureConnection).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 2 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+    expect(mockedCreateAzureConnection).toHaveBeenCalledTimes(2);
+  });
+
   it("TestDiscoveryAzure_WizardStep5_ScanSuccess_TransitionsToInventory", async () => {
     const user = userEvent.setup();
     mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
