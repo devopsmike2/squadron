@@ -73,7 +73,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`aws_lambda_function.layers and sets the AWS_LAMBDA_EXEC_WRAPPER environment variable. The wrapper value is RUNTIME-SPECIFIC, not a constant: /opt/otel-handler for nodejs and java, /opt/otel-instrument for python and dotnet; for go runtimes OMIT the wrapper (Go is manual instrumentation). Putting /opt/otel-handler on a python or dotnet function silently breaks instrumentation, so derive the wrapper from the runtime.` + "\n" +
 	`  - EC2 instances: install the ADOT (AWS Distro for OpenTelemetry) collector via ` +
 	`SSM Run Command or a user-data block — the Terraform attaches the SSM document or ` +
-	`templates the user-data, scoped by tag.` + "\n" +
+	`templates the user-data, scoped by tag. ARCHITECTURE-MATCH the collector build to the instance: Graviton/arm64 families (instance types with a trailing 'g' such as t4g, m6g, m7g, c7g, r7g, c8g) need the arm64 ADOT collector build; all others need x86_64. Installing an x86_64 collector on an arm64 instance fails silently at service start (wrong binary), leaving the host uninstrumented even though the Terraform applied. Prefer the SSM AWS-managed package path, which selects the correct architecture automatically, over a hand-templated user-data download; if you must template a user-data download, pick the build from the candidate's instance_type.` + "\n" +
 	`  - RDS databases: enable Performance Insights AND Enhanced Monitoring. An RDS ` +
 	`instance is covered when BOTH are on; treat them as INDEPENDENT levers — each has ` +
 	`its own IAM permission and its own ModifyDBInstance request shape, so when only one ` +
