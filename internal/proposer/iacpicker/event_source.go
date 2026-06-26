@@ -252,17 +252,17 @@ func PickEventGridDiagnosticsPattern(row RecommendationContext) (terraform, reas
   target_resource_id         = azurerm_eventgrid_topic.%s.id
   log_analytics_workspace_id = var.log_analytics_workspace_id  # operator provides
 
-  enabled_log {
-    category = "PublishFailures"
-  }
-  enabled_log {
-    category = "PublishSuccess"
-  }
+  # Event Grid topics support DeliveryFailures / PublishFailures /
+  # DataPlaneRequests only. The success-variant categories are NOT valid and
+  # make terraform apply fail with "category not supported".
   enabled_log {
     category = "DeliveryFailures"
   }
   enabled_log {
-    category = "DeliverySuccess"
+    category = "PublishFailures"
+  }
+  enabled_log {
+    category = "DataPlaneRequests"
   }
 
   metric {
@@ -272,7 +272,7 @@ func PickEventGridDiagnosticsPattern(row RecommendationContext) (terraform, reas
 }
 `, name, name, name)
 
-	reasoning = "Event Grid Topics without diagnostic settings have no per-event delivery audit trail. The PR configures Microsoft.Insights/diagnosticSettings routing to a Log Analytics workspace with the 4 Event Grid log categories (PublishFailures, PublishSuccess, DeliveryFailures, DeliverySuccess) + AllMetrics. Decline if your team uses a non-Insights destination — the verdict learning loop records."
+	reasoning = "Event Grid Topics without diagnostic settings have no per-event delivery audit trail. The PR configures Microsoft.Insights/diagnosticSettings routing to a Log Analytics workspace with the valid Event Grid log categories (DeliveryFailures, PublishFailures, DataPlaneRequests) + AllMetrics. Decline if your team uses a non-Insights destination — the verdict learning loop records."
 
 	return
 }
