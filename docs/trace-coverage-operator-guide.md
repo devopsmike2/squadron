@@ -354,7 +354,7 @@ and the verdict learning loop records it.
 
 1. **SDK not deployed.** The most common cause. The Terraform
    PR installs the cloud-native auto-instrumentation agent
-   (CloudWatch Agent with ADOT for EC2, AzureMonitorAgent
+   (the ADOT Collector via the AWS-managed SSM package for EC2, AzureMonitorAgent
    extension for Azure VMs, etc.). Merge if this is your case.
 
 2. **SDK deployed but exporter misconfigured.** The agent is
@@ -441,7 +441,10 @@ these into your IaC review checklist:
 
 - **AWS EC2** (`trace-emission-aws-compute`):
   `aws_ssm_association` with the `AWS-ConfigureAWSPackage` doc
-  installing CloudWatch Agent (includes ADOT collector binary).
+  installing the ADOT Collector via the AWS-managed
+  `AWSDistroOTel-Collector` package (auto-selects arm64/amd64). This
+  is the ADOT Collector, not the CloudWatch Agent — the latter does
+  not emit OpenTelemetry traces.
 - **AWS RDS** (`trace-emission-aws-db`):
   `performance_insights_retention_period = 731` on
   `aws_db_instance` (LTR tier).

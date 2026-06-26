@@ -138,9 +138,11 @@ records why for the next proposal cycle.
 
 ### 4.1 AWS — trace-emission-aws-compute (EC2)
 
-Terraform pattern: add the CloudWatch Agent with ADOT collector
-sidecar as a Systems Manager Run Document, applied to the
-target EC2 instance via tag-based association.
+Terraform pattern: install the ADOT Collector via the AWS-managed
+`AWSDistroOTel-Collector` SSM Distributor package, applied to the
+target EC2 instance via tag-based association. (The CloudWatch Agent
+is a different agent that does not emit OTel traces; the managed
+package auto-selects the correct arm64/amd64 build.)
 
 ```hcl
 resource "aws_ssm_association" "otel_collector_install" {
@@ -153,7 +155,7 @@ resource "aws_ssm_association" "otel_collector_install" {
   
   parameters = {
     action = "Install"
-    name   = "AmazonCloudWatchAgent"
+    name   = "AWSDistroOTel-Collector"
   }
 }
 ```
