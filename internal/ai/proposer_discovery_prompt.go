@@ -2708,26 +2708,17 @@ reads the metric, one cloud per chunk — mirroring how the
 cold-start latency arc built the CloudWatch / Cloud Monitoring
 / Azure Monitor / OCI Monitoring substrate per cloud.
 
-CHUNK 1 (this release) — AWS SQS is now REAL:
+CHUNK 1 — AWS SQS poison-rate is NOT measurable at scan time (reverted v0.89.229):
 
-- Squadron reads the dead-letter queue's NumberOfMessagesSent
-  SUM over a trailing 1-hour window via CloudWatch
-  GetMetricStatistics (AWS/SQS namespace, QueueName dimension),
-  reusing the cold-start substrate's rate limiter +
-  throttle-retry.
-- poison_rate_per_hour now carries the MEASURED rate for AWS
-  SQS source queues whose DLQ is reachable in the scanned
-  account. poison_rate_high_band is the real
-  rate >= 60/hour (1/min) verdict.
-- Real-zero vs absent: a measured 0 (poison_rate_per_hour = 0)
-  means "zero poison messages this hour" — a genuine green
-  signal. -1 STILL means "not measured" (DLQ too new / no
-  datapoints / unreachable cross-account DLQ / CloudWatch not
-  wired). NEVER read -1 as zero.
-- sqs-poison-rate-monitor-add reasoning text should now REPORT
-  the measured rate when poison_rate_per_hour >= 0, instead of
-  disclaiming the §3.3 gap. When poison_rate_per_hour = -1, fall
-  back to the slice-3 §3.3 honest-framing reasoning.
+- The earlier NumberOfMessagesSent approach was WRONG: messages moved to a
+  DLQ by the redrive policy (the actual poison messages) are NOT counted by
+  NumberOfMessagesSent — only manual SendMessage calls are. So it reported a
+  confident 0/hour for DLQs filling via the normal failed-processing path.
+- There is no native CloudWatch counter for "messages moved to a DLQ", so AWS
+  SQS stays on §3.3 honest framing: poison_rate_per_hour = -1 (absent),
+  poison_rate_high_band = false, and sqs-poison-rate-monitor-add fires with the
+  §3.3 reasoning telling the operator to wire a CloudWatch alarm on the DLQ's
+  ApproximateNumberOfMessages metric. A depth-based detection is the planned fix.
 
 CHUNK 2 (v0.89.178) — GCP Cloud Tasks is now REAL:
 
@@ -2783,10 +2774,10 @@ retired:
   measured rate when poison_rate_per_hour >= 0, else fall back to
   the §3.3 reasoning.
 
-ALL FOUR CLOUDS ARE NOW REAL — no cloud remains on §3.3
-poison-rate honest framing:
+THREE OF FOUR CLOUDS COMPUTE A REAL poison-rate. AWS SQS remains on §3.3
+honest framing (no native DLQ-additions counter — reverted v0.89.229):
 
-- AWS SQS (DLQ NumberOfMessagesSent, counter-sum),
+- AWS SQS — §3.3 honest framing: absent sentinel + monitor recommendation,
 - GCP Cloud Tasks (failed task_attempt_count, counter-sum),
 - Azure Service Bus (DeadletteredMessages per-queue via
   EntityName split, gauge-delta),

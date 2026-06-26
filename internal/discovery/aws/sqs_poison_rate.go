@@ -5,8 +5,6 @@ package aws
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 )
@@ -137,24 +135,23 @@ const SQSPoisonRateWindowHours = 1
 // reachability.
 //
 // See docs/proposals/poison-rate-substrate-slice4.md §3.
-func (s *Scanner) DetectSQSPoisonRate(ctx context.Context, dlqARN string) (sqsPoisonRateDetectionResult, error) {
-	res, err := s.QueryAggregate(
-		ctx, dlqARN, SQSNumberOfMessagesSentMetricName,
-		time.Duration(SQSPoisonRateWindowHours)*time.Hour,
-		scanner.StatisticSum,
-	)
-	if err != nil {
-		return sqsPoisonRateDetectionResult{}, fmt.Errorf("poison-rate metric query: %w", err)
-	}
-	if res.SampleCount == 0 {
-		// No datapoints — keep the honest-framing absent sentinel.
-		return sqsPoisonRateDetectionResult{RatePerHour: -1, HighBand: false}, nil
-	}
-	rate := int(res.Value)
-	return sqsPoisonRateDetectionResult{
-		RatePerHour: rate,
-		HighBand:    rate >= PoisonRatePerHourHighThreshold,
-	}, nil
+func (s *Scanner) DetectSQSPoisonRate(_ context.Context, _ string) (sqsPoisonRateDetectionResult, error) {
+	// CORRECTNESS (reverted v0.89.177's NumberOfMessagesSent path): messages
+	// moved to a DLQ by the redrive policy — i.e. the actual poison messages —
+	// are NOT counted by the DLQ's NumberOfMessagesSent metric. Per AWS, only
+	// manual SendMessage calls increment it ("NumberOfMessagesSent ... isn't
+	// captured ... if a message is sent to a DLQ as a result of a failed
+	// processing attempt"). So the prior code read a confident 0/hr for a DLQ
+	// filling via the normal failed-processing path — worse than the honest
+	// "absent" sentinel because it asserted a measured zero.
+	//
+	// There is no native CloudWatch COUNTER for "messages moved to a DLQ". The
+	// AWS-recommended signal is the DLQ's ApproximateNumberOfMessagesVisible
+	// depth gauge; a depth-based detection is filed as an enhancement (see
+	// docs/audit/detection-metric-availability.md). Until then we return the
+	// honest absent sentinel — the sqs-poison-rate-monitor-add recommendation
+	// already advises wiring a CloudWatch alarm on ApproximateNumberOfMessages.
+	return sqsPoisonRateDetectionResult{RatePerHour: -1, HighBand: false}, nil
 }
 
 // enrichSQSPoisonRate is the post-projection enrichment pass that
@@ -176,34 +173,11 @@ func (s *Scanner) DetectSQSPoisonRate(ctx context.Context, dlqARN string) (sqsPo
 //     (absent sentinel preserved) and continues.
 //
 // See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
-func (s *Scanner) enrichSQSPoisonRate(ctx context.Context, snaps []scanner.EventSourceInstanceSnapshot, arnSet map[string]struct{}) {
-	if s.cwClient == nil {
-		return
-	}
-	for i := range snaps {
-		detail := snaps[i].Detail
-		if detail == nil {
-			continue
-		}
-		targetRaw, ok := detail["redrive_policy_target_arn"]
-		if !ok {
-			continue
-		}
-		dlqARN, ok := targetRaw.(string)
-		if !ok || dlqARN == "" {
-			continue
-		}
-		if _, reachable := arnSet[dlqARN]; !reachable {
-			// Cross-account / dangling DLQ — cannot read its metrics.
-			continue
-		}
-		res, err := s.DetectSQSPoisonRate(ctx, dlqARN)
-		if err != nil {
-			// Transient CloudWatch error — keep the absent sentinel
-			// for this row and move on.
-			continue
-		}
-		detail["poison_rate_per_hour"] = res.RatePerHour
-		detail["poison_rate_high_band"] = res.HighBand
-	}
+func (s *Scanner) enrichSQSPoisonRate(_ context.Context, _ []scanner.EventSourceInstanceSnapshot, _ map[string]struct{}) {
+	// No-op. The prior NumberOfMessagesSent-based enrichment was removed
+	// because that metric does not capture redrive-moved messages (see
+	// DetectSQSPoisonRate). The honest absent sentinels written at projection
+	// time stand. This function is retained as the wiring seam for the future
+	// ApproximateNumberOfMessagesVisible depth-based detection
+	// (docs/audit/detection-metric-availability.md).
 }
