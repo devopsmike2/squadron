@@ -1320,7 +1320,7 @@ const samplingRateKindsPromptSection = `SAMPLING RATE KIND (slice 1 of sampling 
       Squadron selectively keeps spans, observed_span_count
       legitimately undercounts. Decline if intentional.
 
-  Terraform per-cloud: OTEL_TRACES_SAMPLER_ARG=0.5 env var
+  Terraform per-cloud: set OTEL_TRACES_SAMPLER=parentbased_traceidratio AND OTEL_TRACES_SAMPLER_ARG=0.5 env vars (the ARG ALONE is a NO-OP — the SDK default sampler ignores it; the ratio sampler must be set too)
   injection (default raise target; OPERATOR TUNES from there).
   Same pattern across AWS Lambda / Cloud Run / Cloud Functions /
   Azure Functions / OCI Functions — each cloud's env
@@ -1989,8 +1989,8 @@ Event Grid → Service Bus / Functions / Logic Apps.
 
   Mirrors the Service Bus servicebus-diagnostics-enable
   pattern from slice 1. Terraform: azurerm_monitor_diagnostic_setting
-  with enabled_log categories (PublishFailures, PublishSuccess,
-  DeliveryFailures, DeliverySuccess) + AllMetrics.
+  with enabled_log categories (DeliveryFailures, PublishFailures,
+  DataPlaneRequests) + AllMetrics (the success-variant categories are NOT valid Event Grid log categories).
 
 - eventgrid-cloudevent-schema-enforce: Event Grid Topic has
   inputSchema = "EventGridSchema" (Azure proprietary) OR
@@ -2947,7 +2947,7 @@ Functions.
   permanently-warm services may show false positives.
   Decline if your service uses min-instances and stays warm.
   Terraform: google_cloud_run_service annotations
-  autoscaling.knative.dev/minScale = 1.
+  autoscaling.knative.dev/minScale = 1 on the REVISION template (template.metadata.annotations) — on the service-level metadata Cloud Run ignores it.
 
 - cloudfunc-cold-start-baseline: Cloud Functions execution
   time exceeds baseline + floor. Same warm-path caveat as
