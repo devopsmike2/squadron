@@ -287,6 +287,45 @@ func TestCreateGCPConnection_HappyPath(t *testing.T) {
 	}
 }
 
+func TestCreateGCPConnection_KeylessAuthorizedUser_Accepted(t *testing.T) {
+	// Keyless auth (v0.89.223): Google disables Service Account key
+	// creation by default (constraints/iam.disableServiceAccountKey
+	// Creation), so the connector must accept non-service_account
+	// credential JSON. authorized_user is the shape `gcloud auth
+	// application-default login` produces — no downloadable key.
+	audit := &discoveryRecordingAudit{}
+	h, store, _ := newGCPTestHandlers(t, audit, nil)
+	r := newGCPRouter(h)
+
+	adc := `{"type":"authorized_user","client_id":"x.apps.googleusercontent.com","client_secret":"s","refresh_token":"1//rt"}`
+	body := `{"display_name":"Keyless GCP","project_id":"sandbox-12345","sealed_sa":"` + encodeSA([]byte(adc)) + `","region":"us-central1"}`
+	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("keyless authorized_user credential rejected: status=%d body=%s", w.Code, w.Body.String())
+	}
+	conns, _ := store.List(context.Background())
+	if len(conns) != 1 || len(conns[0].SealedSA) == 0 {
+		t.Fatalf("keyless credential not persisted/sealed: %+v", conns)
+	}
+}
+
+func TestCreateGCPConnection_UnsupportedCredentialType_Returns400(t *testing.T) {
+	// A credential type the GCP loader can't use (e.g. a bare OAuth
+	// token doc) is still rejected with an actionable message.
+	h, store, _ := newGCPTestHandlers(t, nil, nil)
+	r := newGCPRouter(h)
+	bad := `{"type":"magic_beans"}`
+	body := `{"display_name":"Bad","project_id":"sandbox-12345","sealed_sa":"` + encodeSA([]byte(bad)) + `","region":"us-central1"}`
+	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "does not support") {
+		t.Errorf("expected unsupported-type message, got: %s", w.Body.String())
+	}
+	_ = store
+}
+
 func TestCreateGCPConnection_MissingFields_Returns400(t *testing.T) {
 	h, store, _ := newGCPTestHandlers(t, nil, nil)
 	r := newGCPRouter(h)

@@ -75,6 +75,15 @@ still create SA keys, which the README/runbook should state plainly.
 
 ## Status
 
+**Implemented v0.89.223** (option 1+ via the polymorphic loader): the GCP
+scanner now builds its token source with `google.CredentialsFromJSON`
+instead of `JWTConfigFromJSON`, so it accepts `service_account`,
+`external_account` (Workload Identity Federation), `impersonated_service_account`,
+and `authorized_user` (gcloud ADC). The handler validator and the wizard's
+client-side validator accept the same set. Operators on tenants that forbid
+SA keys can now connect with WIF / impersonation / ADC — no downloadable key.
+WIF setup runbook + a wizard auth-method picker remain as polish follow-ups.
+
 Filed 2026-06-26 from live GCP-connection testing. Blocking real GCP
 onboarding for default-configured projects. No code change in this
 commit — design only, mirroring the adot-arn-freshness-design.md

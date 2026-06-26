@@ -620,7 +620,16 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 		// production-path branches in the builders don't run.
 		return nil, nil
 	}
-	cfg, err := google.JWTConfigFromJSON(
+	// CredentialsFromJSON (not JWTConfigFromJSON) so the connector
+	// accepts every GCP credential JSON shape, not only downloadable
+	// Service Account keys: service_account, external_account (Workload
+	// Identity Federation — keyless), impersonated_service_account, and
+	// authorized_user (gcloud ADC). Google disables SA-key creation by
+	// default on new projects (constraints/iam.disableServiceAccountKey
+	// Creation), so a key-only connector locks those tenants out. The
+	// returned TokenSource mints short-lived tokens for any shape.
+	creds, err := google.CredentialsFromJSON(
+		ctx,
 		s.SAJSON,
 		compute.ComputeReadonlyScope,
 		sqladmin.SqlserviceAdminScope,
@@ -641,10 +650,9 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 		CloudFunctionsPlatformScope,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: parse SA JSON: %w", err)
+		return nil, fmt.Errorf("gcp: parse credential JSON: %w", err)
 	}
-	ts := cfg.TokenSource(ctx)
-	return oauth2.NewClient(ctx, ts), nil
+	return oauth2.NewClient(ctx, creds.TokenSource), nil
 }
 
 // buildComputeClient constructs a compute.Service using either the
