@@ -1311,14 +1311,25 @@ func validateGCPServiceAccountJSON(saJSON []byte) error {
 	if strings.TrimSpace(parsed.Type) == "" {
 		return errors.New("Service Account JSON is missing the required \"type\" field. Re-download the key file from the GCP console.")
 	}
-	if parsed.Type != "service_account" {
-		return errors.New("Service Account JSON \"type\" field is " + parsed.Type + ", not \"service_account\". Verify you exported a Service Account key, not an OAuth or user credential.")
-	}
-	if strings.TrimSpace(parsed.ClientEmail) == "" {
-		return errors.New("Service Account JSON is missing the required \"client_email\" field. Re-download the key file from the GCP console.")
-	}
-	if !strings.HasSuffix(parsed.ClientEmail, gcpSAClientEmailSuffix) {
-		return errors.New("Service Account client_email does not end in " + gcpSAClientEmailSuffix + ". Verify you exported a Service Account key from the correct project.")
+	switch parsed.Type {
+	case "service_account":
+		// Downloadable SA key: keep the client_email shape checks so a
+		// truncated or wrong-project key is caught early.
+		if strings.TrimSpace(parsed.ClientEmail) == "" {
+			return errors.New("service_account credential is missing the required \"client_email\" field. Re-download the key file from the GCP console.")
+		}
+		if !strings.HasSuffix(parsed.ClientEmail, gcpSAClientEmailSuffix) {
+			return errors.New("service_account client_email does not end in " + gcpSAClientEmailSuffix + ". Verify you exported a key from the correct project.")
+		}
+	case "external_account", "impersonated_service_account", "authorized_user":
+		// Keyless / federated credentials (Workload Identity Federation,
+		// SA impersonation, or gcloud ADC). They carry no client_email;
+		// the Go credential loader validates the type-specific fields
+		// at token-mint time, so accept the shape here. This is the path
+		// for tenants where constraints/iam.disableServiceAccountKey
+		// Creation forbids downloadable keys.
+	default:
+		return errors.New("Credential JSON \"type\" is \"" + parsed.Type + "\", which the GCP connector does not support. Use service_account, external_account (Workload Identity Federation), impersonated_service_account, or authorized_user.")
 	}
 	return nil
 }

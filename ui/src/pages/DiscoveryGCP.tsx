@@ -792,7 +792,7 @@ function KeyPasteStep({
           id="gcp-sa-json"
           value={saText}
           onChange={(e) => onSATextChange(e.target.value)}
-          placeholder='{ "type": "service_account", "project_id": "...", "client_email": "...", "private_key": "..." }'
+          placeholder='{ "type": "service_account" | "external_account" | "authorized_user", ... }  — a SA key, a Workload Identity Federation config, or gcloud ADC'
           rows={10}
           className="font-mono text-xs"
           aria-invalid={saText !== "" && !saValid}

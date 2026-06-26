@@ -128,15 +128,25 @@ export function substituteProject(template: string, projectID: string): string {
 //                    configured project_id. Required so the mismatch
 //                    can be detected client-side too in a future
 //                    enhancement.
-export const SA_REQUIRED_FIELDS = [
-  "client_email",
-  "private_key",
-  "project_id",
+// GCP_SUPPORTED_CRED_TYPES are the credential JSON "type" values the
+// connector accepts. "service_account" is the downloadable SA key;
+// "external_account" (Workload Identity Federation), "impersonated_service_account",
+// and "authorized_user" (gcloud ADC) are the keyless shapes — needed
+// because Google disables SA-key creation by default on new projects
+// (constraints/iam.disableServiceAccountKeyCreation).
+export const GCP_SUPPORTED_CRED_TYPES = [
+  "service_account",
+  "external_account",
+  "impersonated_service_account",
+  "authorized_user",
 ] as const;
 
 // ParsedServiceAccount is the typed projection of a valid SA JSON
 // blob — the wizard renderer reads this rather than re-parsing.
 export interface ParsedServiceAccount {
+  // type is the credential kind; the keyless shapes leave
+  // client_email/private_key empty and often carry no project_id.
+  type: string;
   client_email: string;
   private_key: string;
   project_id: string;
@@ -200,24 +210,50 @@ export function parseServiceAccount(
     };
   }
   const obj = parsed as Record<string, unknown>;
-  for (const f of SA_REQUIRED_FIELDS) {
-    const v = obj[f];
-    if (typeof v !== "string" || v.trim() === "") {
-      return {
-        ok: false,
-        err: {
-          kind: "missing-field",
-          message: `The pasted JSON is missing the "${f}" field. Make sure you copied the full key.json contents.`,
-        },
-      };
+  const credType =
+    typeof obj["type"] === "string" ? (obj["type"] as string).trim() : "";
+  if (credType === "") {
+    return {
+      ok: false,
+      err: {
+        kind: "missing-field",
+        message:
+          'The pasted JSON is missing the "type" field. Paste a full GCP credential JSON (a Service Account key, a Workload Identity Federation config, or gcloud ADC output).',
+      },
+    };
+  }
+  if (!(GCP_SUPPORTED_CRED_TYPES as readonly string[]).includes(credType)) {
+    return {
+      ok: false,
+      err: {
+        kind: "missing-field",
+        message: `Credential type "${credType}" isn't supported. Use a Service Account key, a Workload Identity Federation config (external_account), impersonated_service_account, or gcloud ADC (authorized_user).`,
+      },
+    };
+  }
+  if (credType === "service_account") {
+    for (const f of ["client_email", "private_key"] as const) {
+      const v = obj[f];
+      if (typeof v !== "string" || v.trim() === "") {
+        return {
+          ok: false,
+          err: {
+            kind: "missing-field",
+            message: `The service-account JSON is missing the "${f}" field. Make sure you copied the full key.json contents.`,
+          },
+        };
+      }
     }
   }
+  const strField = (k: string): string =>
+    typeof obj[k] === "string" ? (obj[k] as string) : "";
   return {
     ok: true,
     sa: {
-      client_email: obj["client_email"] as string,
-      private_key: obj["private_key"] as string,
-      project_id: obj["project_id"] as string,
+      type: credType,
+      client_email: strField("client_email"),
+      private_key: strField("private_key"),
+      project_id: strField("project_id"),
     },
   };
 }
