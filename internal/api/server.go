@@ -1854,7 +1854,21 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.httpServer.Shutdown(shutdownCtx)
 }
 
-// registerRoutes registers all API routes
+// registerRoutes registers all API routes.
+//
+// WIRING-ORDER GOTCHA (see v0.89.211/212): registerRoutes runs inside
+// NewServer(), BEFORE main.go wires the post-construction stores via the
+// Set* methods (e.g. SetActionStoreAndSigner sets s.appStore;
+// SetDiscoveryCredStore, SetAIService, ...). A handler built EAGERLY here
+// that reads one of those still-nil fields captures the nil and panics at
+// request time (-> 500). Two real bugs came from exactly this: the
+// incidents and actions handlers. Rule: a handler that depends on a
+// post-construction store MUST be built lazily — per request, via a
+// closure/trampoline that reads s.<field> when the request arrives (see
+// the discovery trampolines and the incidents/actions route closures
+// below), and should nil-guard the store as defense-in-depth. Handlers
+// that use only NewServer constructor params (agentService,
+// telemetryService, alertService, broker, ...) are safe to build eagerly.
 func (s *Server) registerRoutes() {
 	// Initialize handlers
 	agentHandlers := handlers.NewAgentHandlersWithTracer(s.agentService, s.commander, s.configsTracer, s.logger)
