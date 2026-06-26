@@ -1185,7 +1185,7 @@ function InventoryTab({
           </TabsTrigger>
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
-          <InventoryTable rows={scan.computes} />
+          <InventoryTable rows={scan.computes ?? []} />
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_DATABASES} className="mt-3">
           <DatabaseInventoryTable rows={scan.databases ?? []} />
