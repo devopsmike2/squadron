@@ -3662,3 +3662,20 @@ func TestProposeFromDiscoveryScanSystemPrompt_EKSCertManagerPrereq(t *testing.T)
 			"system prompt must teach the EKS adot cert-manager prerequisite: %q", want)
 	}
 }
+
+// TestProposeFromDiscoveryScanSystemPrompt_EC2ArchMatch pins the v0.89.215
+// fix: the EC2 ADOT collector build must match the instance architecture
+// (arm64 for Graviton families, x86_64 otherwise). An x86_64 collector on
+// a Graviton instance fails silently at service start, so a merged PR
+// leaves the host uninstrumented. A regression that drops the arch
+// guidance reintroduces that silent failure for arm64 fleets.
+func TestProposeFromDiscoveryScanSystemPrompt_EC2ArchMatch(t *testing.T) {
+	for _, want := range []string{
+		"ARCHITECTURE-MATCH",
+		"Graviton",
+		"arm64",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt must teach EC2 collector architecture matching: %q", want)
+	}
+}
