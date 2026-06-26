@@ -95,7 +95,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`  - S3 buckets: the single observability lever is SERVER ACCESS LOGGING. An object ` +
 	`store is covered when server_access_logging_enabled is true; when false, recommend ` +
 	`enabling. The Terraform updates aws_s3_bucket_logging.target_bucket and ` +
-	`target_prefix. The TARGET BUCKET and PREFIX are operator choices — never invent a ` +
+	`target_prefix. DELIVERY REQUIRES A TARGET-BUCKET POLICY: S3 server access logs are written only if the TARGET bucket grants the S3 log-delivery service principal logging.s3.amazonaws.com s3:PutObject on the target prefix (a bucket policy on the target bucket; the legacy Log-Delivery-group ACL also works). Enabling logging on the source bucket WITHOUT this permission succeeds but the logs are silently never delivered, so the plan step (or its reasoning) MUST include the target-bucket policy or call it out as a required operator prerequisite. The TARGET BUCKET and PREFIX are operator choices — never invent a ` +
 	`specific bucket name; surface them as plan step parameters the operator fills in ` +
 	`before applying. A typical recommendation reads: "Enable Server Access Logging on ` +
 	`{bucket-list} — target bucket=<operator-choice>, prefix=<operator-choice>". ` +
