@@ -70,7 +70,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`Instrumentation strategy by category:` + "\n" +
 	`  - Lambda functions: attach an OpenTelemetry layer matched to the runtime ` +
 	`(aws-otel-nodejs / aws-otel-python / aws-otel-go / etc.). The Terraform updates ` +
-	`aws_lambda_function.layers and sets the AWS_LAMBDA_EXEC_WRAPPER environment variable.` + "\n" +
+	`aws_lambda_function.layers and sets the AWS_LAMBDA_EXEC_WRAPPER environment variable. The wrapper value is RUNTIME-SPECIFIC, not a constant: /opt/otel-handler for nodejs and java, /opt/otel-instrument for python and dotnet; for go runtimes OMIT the wrapper (Go is manual instrumentation). Putting /opt/otel-handler on a python or dotnet function silently breaks instrumentation, so derive the wrapper from the runtime.` + "\n" +
 	`  - EC2 instances: install the ADOT (AWS Distro for OpenTelemetry) collector via ` +
 	`SSM Run Command or a user-data block — the Terraform attaches the SSM document or ` +
 	`templates the user-data, scoped by tag.` + "\n" +
@@ -497,7 +497,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`      lambda-otel-layer:` + "\n" +
 	`        patches: [` + "\n" +
 	`          {attribute_path:["layers"], op:"list_append_dedupe", value:["<the OTel layer ARN>"]},` + "\n" +
-	`          {attribute_path:["environment","variables"], op:"map_merge", value:{"AWS_LAMBDA_EXEC_WRAPPER":"/opt/otel-handler"}}` + "\n" +
+	`          {attribute_path:["environment","variables"], op:"map_merge", value:{"AWS_LAMBDA_EXEC_WRAPPER":"<runtime-specific: /opt/otel-handler for nodejs|java, /opt/otel-instrument for python|dotnet; OMIT this patch for go>"}}` + "\n" +
 	`        ]` + "\n" +
 	`      rds-pi-em (bundle of scalar_sets — emit only the levers your snippet enables):` + "\n" +
 	`        patches: [` + "\n" +
@@ -1448,7 +1448,7 @@ For AWS Lambda:
   layers = [...existing, "arn:aws:lambda:<region>:901920570463:layer:aws-otel-{lang}-{ver}"]
 - lambda-otel-wrapper: function missing AWS_LAMBDA_EXEC_WRAPPER
   env var. Terraform: aws_lambda_function environment {
-  variables { AWS_LAMBDA_EXEC_WRAPPER = "/opt/otel-instrument" } }.
+  variables { AWS_LAMBDA_EXEC_WRAPPER = "<runtime-specific: /opt/otel-handler for nodejs|java, /opt/otel-instrument for python|dotnet; none for go (manual)>" } }.
 
 For GCP Cloud Run:
 - cloudrun-trace-enable: service without the
