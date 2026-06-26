@@ -525,3 +525,24 @@ By contributing to Squadron, you agree that your contributions will be licensed 
 
 **Thank you for contributing to Squadron!** Every contribution, no matter how small, makes a difference. We're excited to work with you! 🚀
 
+
+## Adding API routes — wiring-order gotcha
+
+`Server.registerRoutes()` runs inside `NewServer()`, **before** `main.go`
+wires the post-construction stores through the `Set*` methods
+(`SetActionStoreAndSigner` sets `s.appStore`; `SetDiscoveryCredStore`,
+`SetAIService`, etc.). A handler **built eagerly** in `registerRoutes()`
+that reads one of those fields captures a `nil` store and panics at
+request time (→ 500). This caused real bugs in the incidents and actions
+handlers (fixed in v0.89.211 / v0.89.212).
+
+When you add a route whose handler depends on a post-construction store:
+
+- **Build the handler lazily** — per request, via a closure/trampoline
+  that reads `s.<field>` when the request arrives (see the discovery
+  trampolines and the incidents/actions route closures).
+- **Nil-guard the store** in the handler as defense-in-depth so a missing
+  dependency degrades to a clean 503, never a panic.
+- Handlers that use only `NewServer` constructor params (`agentService`,
+  `telemetryService`, `alertService`, `broker`, …) are safe to build
+  eagerly.
