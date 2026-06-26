@@ -387,26 +387,30 @@ func TestPickEventGridDiagnosticsPattern_IncludesDiagnosticSettingResource(t *te
 	}
 }
 
-// TestPickEventGridDiagnosticsPattern_IncludesAllFourLogCategories — the
-// Terraform snippet MUST include all 4 enabled_log categories Event
-// Grid supports (PublishFailures, PublishSuccess, DeliveryFailures,
-// DeliverySuccess) plus the AllMetrics metric block per §8 of the
-// design doc. The picker emits all 4 unconditionally so the operator
-// gets the complete delivery audit trail.
-func TestPickEventGridDiagnosticsPattern_IncludesAllFourLogCategories(t *testing.T) {
+// TestPickEventGridDiagnosticsPattern_IncludesValidLogCategories — the
+// Terraform snippet MUST include the enabled_log categories Event Grid
+// actually supports (DeliveryFailures, PublishFailures, DataPlaneRequests)
+// plus the AllMetrics metric block. The earlier revision emitted
+// PublishSuccess / DeliverySuccess, which are NOT valid Event Grid
+// categories and fail terraform apply — see the v0.89.227 audit fix.
+func TestPickEventGridDiagnosticsPattern_IncludesValidLogCategories(t *testing.T) {
 	tf, _ := PickEventGridDiagnosticsPattern(RecommendationContext{
 		Provider:       "azure",
 		ResourceTFName: "events",
 	})
 	for _, cat := range []string{
-		`category = "PublishFailures"`,
-		`category = "PublishSuccess"`,
 		`category = "DeliveryFailures"`,
-		`category = "DeliverySuccess"`,
+		`category = "PublishFailures"`,
+		`category = "DataPlaneRequests"`,
 		`category = "AllMetrics"`,
 	} {
 		if !strings.Contains(tf, cat) {
 			t.Errorf("expected category line %q in the snippet, got:\n%s", cat, tf)
+		}
+	}
+	for _, bad := range []string{`category = "PublishSuccess"`, `category = "DeliverySuccess"`} {
+		if strings.Contains(tf, bad) {
+			t.Errorf("invalid Event Grid category %q must not appear, got:\n%s", bad, tf)
 		}
 	}
 }

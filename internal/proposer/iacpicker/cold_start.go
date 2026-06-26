@@ -48,6 +48,9 @@ func PickColdStartProvisionedConcurrencyPattern(ctx RecommendationContext) Picke
 	terraform := fmt.Sprintf(`resource "aws_lambda_provisioned_concurrency_config" "%s" {
   function_name                     = aws_lambda_function.%s.function_name
   provisioned_concurrent_executions = 1  # operator tunes
+  # qualifier must be a PUBLISHED version or alias — provisioned concurrency
+  # cannot target $LATEST. .version resolves to a real version only when the
+  # aws_lambda_function has publish = true.
   qualifier                         = aws_lambda_function.%s.version
 }
 `, name, name, name)
@@ -90,9 +93,13 @@ func PickCloudRunColdStartPattern(ctx RecommendationContext) PickedPattern {
 	}
 	terraform := fmt.Sprintf(`resource "google_cloud_run_service" "%s" {
   # ... existing fields ...
-  metadata {
-    annotations = {
-      "autoscaling.knative.dev/minScale" = "1"  # operator tunes; pin baseline warm instances
+  template {
+    metadata {
+      # minScale is a REVISION annotation — it must live on template.metadata,
+      # not the service-level metadata, or Cloud Run ignores it (no warm floor).
+      annotations = {
+        "autoscaling.knative.dev/minScale" = "1"  # operator tunes; pin baseline warm instances
+      }
     }
   }
 }

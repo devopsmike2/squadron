@@ -60,3 +60,34 @@ func TestOCICompute_NoFabricatedInstallerURL(t *testing.T) {
 		t.Errorf("reasoning should flag that no public installer URL exists; got: %q", p.Reasoning)
 	}
 }
+
+// TestCloudRunColdStart_MinScaleOnTemplate guards the audit fix: the
+// autoscaling.knative.dev/minScale annotation is revision-scoped and must sit
+// on template.metadata.annotations — on the service-level metadata Cloud Run
+// ignores it, so the warm-floor recommendation silently does nothing.
+func TestCloudRunColdStart_MinScaleOnTemplate(t *testing.T) {
+	p := PickCloudRunColdStartPattern(RecommendationContext{ResourceTFName: "svc"})
+	tf := p.PrimaryTerraform
+	idxTemplate := strings.Index(tf, "template {")
+	idxMinScale := strings.Index(tf, "autoscaling.knative.dev/minScale")
+	if idxTemplate == -1 || idxMinScale == -1 || idxMinScale < idxTemplate {
+		t.Errorf("minScale must appear inside the template block; got:\n%s", tf)
+	}
+}
+
+// TestEventGridDiagnostics_ValidLogCategories guards the audit fix: Event Grid
+// topics only support DeliveryFailures / PublishFailures / DataPlaneRequests.
+// PublishSuccess and DeliverySuccess are not valid categories and fail apply.
+func TestEventGridDiagnostics_ValidLogCategories(t *testing.T) {
+	tf, _ := PickEventGridDiagnosticsPattern(RecommendationContext{ResourceTFName: "topic"})
+	for _, bad := range []string{`category = "PublishSuccess"`, `category = "DeliverySuccess"`} {
+		if strings.Contains(tf, bad) {
+			t.Errorf("Event Grid snippet must not use invalid category %q; got:\n%s", bad, tf)
+		}
+	}
+	for _, good := range []string{"DeliveryFailures", "PublishFailures"} {
+		if !strings.Contains(tf, good) {
+			t.Errorf("Event Grid snippet should include valid category %q; got:\n%s", good, tf)
+		}
+	}
+}
