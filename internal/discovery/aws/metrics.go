@@ -42,6 +42,13 @@ const AWSCloudWatchRateLimitRPS = 10
 //
 // Pinned to "InitDuration" by
 // metrics_test.go::TestLambdaInitDurationMetricName_Constant.
+// AVAILABILITY WARNING: InitDuration is NOT a native CloudWatch metric in the
+// AWS/Lambda namespace — it is a CloudWatch Logs REPORT field. A
+// GetMetricStatistics call against AWS/Lambda returns empty datapoints, so the
+// Lambda cold-start detection never accumulates samples and never fires. Making
+// it functional requires Lambda Insights (LambdaInsights/init_duration) or a
+// Logs metric-filter — a data-source decision deferred per
+// docs/audit/detection-metric-availability.md.
 const LambdaInitDurationMetricName = "InitDuration"
 
 // LambdaMetricNamespace is the CloudWatch namespace for AWS Lambda

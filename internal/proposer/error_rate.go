@@ -237,7 +237,7 @@ func errorMetricFor(surface string) (string, bool) {
 	case "azfunc":
 		return azure.AzureFunctionsErrorsMetric, true
 	case "ocifunc":
-		return oci.OCIFunctionsInvocationCountErrorMetric, true
+		return oci.OCIFunctionsErrorResponseCountMetric, true
 	}
 	return "", false
 }

@@ -82,13 +82,13 @@ func TestOCIMonitoringRateLimitTPS_Constant(t *testing.T) {
 // metric names. The chunk-4 proposer + chunk-5 runbook reference
 // these strings.
 func TestOCIFunctionsConstants_Stable(t *testing.T) {
-	if OCIFunctionsMetricNamespace != "oci_functions" {
+	if OCIFunctionsMetricNamespace != "oci_faas" {
 		t.Errorf("OCIFunctionsMetricNamespace = %q, want %q",
-			OCIFunctionsMetricNamespace, "oci_functions")
+			OCIFunctionsMetricNamespace, "oci_faas")
 	}
-	if OCIFunctionsFunctionDurationMetric != "function_duration" {
+	if OCIFunctionsFunctionDurationMetric != "FunctionExecutionDuration" {
 		t.Errorf("OCIFunctionsFunctionDurationMetric = %q, want %q",
-			OCIFunctionsFunctionDurationMetric, "function_duration")
+			OCIFunctionsFunctionDurationMetric, "FunctionExecutionDuration")
 	}
 	if OCIFunctionsColdStartCountMetric != "cold_start_count" {
 		t.Errorf("OCIFunctionsColdStartCountMetric = %q, want %q",
@@ -169,7 +169,7 @@ func TestOCIQueryAggregate_FunctionDuration_ReturnsP95(t *testing.T) {
 		t.Fatalf("expected 1 query, got %d", len(mf.receivedQuery))
 	}
 	q := mf.receivedQuery[0]
-	if !strings.Contains(q, "function_duration") {
+	if !strings.Contains(q, OCIFunctionsFunctionDurationMetric) {
 		t.Errorf("query %q missing metric name", q)
 	}
 	if !strings.Contains(q, ".percentile(0.95)") {
@@ -422,8 +422,8 @@ func TestOCIQueryAggregate_ErrorPropagation(t *testing.T) {
 // Monitoring counter name for function_invocation_count — the
 // sampling-rate-slice-1 denominator (§4.5).
 func TestOCIFunctionsInvocationCountMetric_Constant(t *testing.T) {
-	if OCIFunctionsInvocationCountMetric != "function_invocation_count" {
-		t.Fatalf("OCIFunctionsInvocationCountMetric = %q, want function_invocation_count",
+	if OCIFunctionsInvocationCountMetric != "FunctionInvocationCount" {
+		t.Fatalf("OCIFunctionsInvocationCountMetric = %q, want FunctionInvocationCount",
 			OCIFunctionsInvocationCountMetric)
 	}
 }
@@ -481,16 +481,15 @@ func TestOCIQueryAggregate_InvocationCount_ReturnsSumOverWindow(t *testing.T) {
 
 // -- v0.89.127 error rate slice 1 chunk 1 additions ----------------------
 
-// TestOCIFunctionsInvocationCountErrorMetric_Constant pins the
-// synthetic "#error" suffix variant constant. Squadron's internal
-// router signal — the suffix is stripped before the MQL query hits
-// OCI Monitoring; the metric name in the MQL expression is the base
-// OCIFunctionsInvocationCountMetric. A rename would silently break
-// the error-rate detection branch.
-func TestOCIFunctionsInvocationCountErrorMetric_Constant(t *testing.T) {
-	if OCIFunctionsInvocationCountErrorMetric != "function_invocation_count#error" {
-		t.Fatalf("OCIFunctionsInvocationCountErrorMetric = %q, want %q",
-			OCIFunctionsInvocationCountErrorMetric, "function_invocation_count#error")
+// TestOCIFunctionsErrorResponseCountMetric_Constant pins the OCI
+// Monitoring error metric. FunctionResponseCount (oci_faas) counts
+// requests that returned an error response (error codes + 429
+// throttles), so it is the error-rate numerator directly. A rename
+// would silently break the error-rate detection branch.
+func TestOCIFunctionsErrorResponseCountMetric_Constant(t *testing.T) {
+	if OCIFunctionsErrorResponseCountMetric != "FunctionResponseCount" {
+		t.Fatalf("OCIFunctionsErrorResponseCountMetric = %q, want %q",
+			OCIFunctionsErrorResponseCountMetric, "FunctionResponseCount")
 	}
 }
 
@@ -511,7 +510,7 @@ func TestOCIQueryAggregate_InvocationCountError_ReturnsSumOverWindow(t *testing.
 	res, err := s.QueryAggregate(
 		context.Background(),
 		"ocid1.fnfunc.oc1.phx.xxx",
-		OCIFunctionsInvocationCountErrorMetric,
+		OCIFunctionsErrorResponseCountMetric,
 		24*time.Hour,
 		scanner.StatisticSum,
 	)
@@ -524,26 +523,24 @@ func TestOCIQueryAggregate_InvocationCountError_ReturnsSumOverWindow(t *testing.
 	if res.SampleCount != 3 {
 		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
 	}
-	if res.MetricName != OCIFunctionsInvocationCountErrorMetric {
+	if res.MetricName != OCIFunctionsErrorResponseCountMetric {
 		t.Errorf("MetricName = %q, want %q (suffix variant echoed verbatim)",
-			res.MetricName, OCIFunctionsInvocationCountErrorMetric)
+			res.MetricName, OCIFunctionsErrorResponseCountMetric)
 	}
 }
 
-// TestOCIQueryAggregate_InvocationCountError_MQLFiltersByResultError
-// pins the MQL filter shape: the synthetic "#error" suffix
-// translates into a result = "error" dimension filter alongside
-// the resourceId filter, while the metric name in the MQL
-// expression is the suffix-stripped base form. The "#error"
-// suffix is a Squadron router signal and never appears in the
-// outgoing MQL.
+// TestOCIQueryAggregate_ErrorResponseCount_MQLUsesFunctionResponseCount
+// pins the error-path MQL: FunctionResponseCount is a real oci_faas
+// metric, so the query selects it directly with a .sum() rollup and a
+// resourceId filter — no synthetic result="error" tag (which was never
+// a valid oci_faas dimension) and no "#error" suffix on the wire.
 func TestOCIQueryAggregate_InvocationCountError_MQLFiltersByResultError(t *testing.T) {
 	mf := &monitoringFake{respondWith: []ociMetricDataPoint{}}
 	s := newMetricsTestScanner(t, mf)
 	_, err := s.QueryAggregate(
 		context.Background(),
 		"ocid1.fnfunc.oc1.phx.xxx",
-		OCIFunctionsInvocationCountErrorMetric,
+		OCIFunctionsErrorResponseCountMetric,
 		24*time.Hour,
 		scanner.StatisticSum,
 	)
@@ -554,17 +551,16 @@ func TestOCIQueryAggregate_InvocationCountError_MQLFiltersByResultError(t *testi
 		t.Fatalf("calls = %d, want 1", len(mf.receivedQuery))
 	}
 	q := mf.receivedQuery[0]
-	// Base metric name (suffix stripped) — the MQL must NOT carry
-	// the synthetic "#error" suffix onto the wire.
-	if !strings.HasPrefix(q, OCIFunctionsInvocationCountMetric+"[") {
-		t.Errorf("query %q must start with base metric name (suffix-stripped)", q)
+	// The error path queries the real FunctionResponseCount metric directly.
+	if !strings.HasPrefix(q, OCIFunctionsErrorResponseCountMetric+"[") {
+		t.Errorf("query %q must start with the FunctionResponseCount metric", q)
 	}
 	if strings.Contains(q, "#error") {
-		t.Errorf("query %q leaks the synthetic #error suffix onto the wire", q)
+		t.Errorf("query %q leaks a synthetic #error suffix onto the wire", q)
 	}
-	// result = "error" tag inside the resourceId filter block.
-	if !strings.Contains(q, `result = "error"`) {
-		t.Errorf("query %q missing result=\"error\" dimension filter", q)
+	// FunctionResponseCount IS the error metric — no result="error" tag.
+	if strings.Contains(q, `result = "error"`) {
+		t.Errorf("query %q must not synthesise a result=\"error\" tag (not a valid oci_faas dimension)", q)
 	}
 	if !strings.Contains(q, `resourceId = "ocid1.fnfunc.oc1.phx.xxx"`) {
 		t.Errorf("query %q missing quoted resourceId filter", q)
@@ -587,10 +583,10 @@ func TestSplitOCIMetricSuffix_Variants(t *testing.T) {
 		description string
 	}{
 		{
-			in:          OCIFunctionsInvocationCountErrorMetric,
-			wantBase:    OCIFunctionsInvocationCountMetric,
-			wantFilter:  `result = "error"`,
-			description: "error rate slice 1 #error suffix",
+			in:          OCIFunctionsErrorResponseCountMetric,
+			wantBase:    OCIFunctionsErrorResponseCountMetric,
+			wantFilter:  "",
+			description: "FunctionResponseCount passes through verbatim (no synthetic suffix)",
 		},
 		{
 			in:          OCIFunctionsInvocationCountMetric,

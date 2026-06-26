@@ -77,7 +77,7 @@ func (s *Scanner) DetectErrorRate(
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: current invocation count query: %w", err)
 	}
-	currErr, err := s.QueryAggregate(ctx, resourceARN, OCIFunctionsInvocationCountErrorMetric, currentWindow, scanner.StatisticSum)
+	currErr, err := s.QueryAggregate(ctx, resourceARN, OCIFunctionsErrorResponseCountMetric, currentWindow, scanner.StatisticSum)
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: current error count query: %w", err)
 	}
@@ -85,7 +85,7 @@ func (s *Scanner) DetectErrorRate(
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: baseline invocation count query: %w", err)
 	}
-	baseErr, err := s.QueryAggregate(ctx, resourceARN, OCIFunctionsInvocationCountErrorMetric, baselineWindow, scanner.StatisticSum)
+	baseErr, err := s.QueryAggregate(ctx, resourceARN, OCIFunctionsErrorResponseCountMetric, baselineWindow, scanner.StatisticSum)
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: baseline error count query: %w", err)
 	}

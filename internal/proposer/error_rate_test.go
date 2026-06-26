@@ -221,7 +221,7 @@ func TestErrorMetricFor_AllFiveSurfaces(t *testing.T) {
 		"cloudrun":  gcp.CloudRunRequestCount5xxMetricType,
 		"cloudfunc": gcp.CloudFunctionsExecutionCountErrorMetricType,
 		"azfunc":    azure.AzureFunctionsErrorsMetric,
-		"ocifunc":   oci.OCIFunctionsInvocationCountErrorMetric,
+		"ocifunc":   oci.OCIFunctionsErrorResponseCountMetric,
 	}
 	for surface, want := range cases {
 		got, ok := errorMetricFor(surface)

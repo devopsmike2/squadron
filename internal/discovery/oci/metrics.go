@@ -28,7 +28,7 @@ const OCIMonitoringRateLimitTPS = 10
 // Functions metrics. The summarizeMetricsData API requires the
 // namespace + the per-metric MQL query as a tuple; the constant
 // keeps the namespace single-sourced for the chunk-3 routing.
-const OCIFunctionsMetricNamespace = "oci_functions"
+const OCIFunctionsMetricNamespace = "oci_faas"
 
 // OCIFunctionsFunctionDurationMetric is the metric name for
 // per-function execution duration. Slice 2 uses this as the proxy
@@ -38,13 +38,18 @@ const OCIFunctionsMetricNamespace = "oci_functions"
 // cold_start_count counter — when the counter is zero the
 // duration's cold-start contribution is also zero, and the
 // detection short-circuits.
-const OCIFunctionsFunctionDurationMetric = "function_duration"
+const OCIFunctionsFunctionDurationMetric = "FunctionExecutionDuration"
 
 // OCIFunctionsColdStartCountMetric is the counter Squadron uses to
 // verify the function actually experienced cold starts in the
 // window. When this counter is 0, slice 2 skips the detection (no
 // cold starts = no signal). See cold_start.go::
 // DetectColdStartRegression for the gate.
+// AVAILABILITY WARNING: oci_faas has no cold-start counter metric (only
+// FunctionInvocationCount / FunctionExecutionDuration / FunctionResponseCount /
+// AllocatedProvisionedConcurrency). This name does not resolve, so the OCI
+// cold-start gate is unsatisfiable — detection redesign deferred per
+// docs/audit/detection-metric-availability.md.
 const OCIFunctionsColdStartCountMetric = "cold_start_count"
 
 // OCIFunctionsInvocationCountMetric is the OCI Monitoring counter
@@ -64,9 +69,9 @@ const OCIFunctionsColdStartCountMetric = "cold_start_count"
 //
 // Pinned to "function_invocation_count" by
 // metrics_test.go::TestOCIFunctionsInvocationCountMetric_Constant.
-const OCIFunctionsInvocationCountMetric = "function_invocation_count"
+const OCIFunctionsInvocationCountMetric = "FunctionInvocationCount"
 
-// OCIFunctionsInvocationCountErrorMetric is the Squadron-internal
+// OCIFunctionsErrorResponseCountMetric is the Squadron-internal
 // synthetic-suffix variant of OCIFunctionsInvocationCountMetric
 // that the error-rate-correlation slice 1 chunk 1 (v0.89.127)
 // routes through with a result = "error" dimension filter on the
@@ -94,8 +99,8 @@ const OCIFunctionsInvocationCountMetric = "function_invocation_count"
 // new metric query flows through the existing 10 TPS limiter.
 //
 // Pinned to "function_invocation_count#error" by
-// metrics_test.go::TestOCIFunctionsInvocationCountErrorMetric_Constant.
-const OCIFunctionsInvocationCountErrorMetric = "function_invocation_count#error"
+// metrics_test.go::TestOCIFunctionsErrorResponseCountMetric_Constant.
+const OCIFunctionsErrorResponseCountMetric = "FunctionResponseCount"
 
 // ociMonitoringAPIVersion pins the OCI Monitoring
 // summarizeMetricsData API path version. OCI versions live in the
@@ -258,7 +263,7 @@ func (s *Scanner) QueryAggregate(
 	case OCIFunctionsFunctionDurationMetric,
 		OCIFunctionsColdStartCountMetric,
 		OCIFunctionsInvocationCountMetric,
-		OCIFunctionsInvocationCountErrorMetric:
+		OCIFunctionsErrorResponseCountMetric:
 		// Supported — fall through to the real call. Sampling rate
 		// slice 1 chunk 1 (v0.89.122) adds the InvocationCount
 		// entry; error rate slice 1 chunk 1 (v0.89.127) adds the
@@ -297,11 +302,11 @@ func (s *Scanner) QueryAggregate(
 
 	// Resolve the metric name + dimension filter the MQL query
 	// expression carries. The synthetic-suffix variants
-	// (OCIFunctionsInvocationCountErrorMetric) strip the
+	// (OCIFunctionsErrorResponseCountMetric) strip the
 	// "#error" suffix to recover the base metric name and add a
 	// result = "error" tag to the resource filter. The base
 	// (non-suffix) variants pass through verbatim.
-	baseMetric, dimensionFilter := splitOCIMetricSuffix(metricName)
+	baseMetric, _ := splitOCIMetricSuffix(metricName)
 
 	var query string
 	switch metricName {
@@ -318,15 +323,17 @@ func (s *Scanner) QueryAggregate(
 			"%s[%s]{resourceId = %q}.sum()",
 			baseMetric, ociWindowQuery(window), functionOCID,
 		)
-	case OCIFunctionsInvocationCountErrorMetric:
-		// Error rate slice 1 (v0.89.127) §4.5. The MQL filter
-		// gains a result = "error" tag alongside the resourceId
-		// filter; the base metric name + .sum() rollup match the
-		// sampling-rate denominator path so the error-rate
-		// numerator and denominator stay symmetric.
+	case OCIFunctionsErrorResponseCountMetric:
+		// Error-response count. OCI's FunctionResponseCount metric
+		// counts requests that returned an error response (error code
+		// + 429 throttles), so it IS the error numerator directly —
+		// no result-tag filter needed (the prior code synthesised a
+		// result = "error" tag on FunctionInvocationCount, which is
+		// not a valid oci_faas dimension). .sum() rollup matches the
+		// sampling-rate denominator path.
 		query = fmt.Sprintf(
-			"%s[%s]{resourceId = %q, %s}.sum()",
-			baseMetric, ociWindowQuery(window), functionOCID, dimensionFilter,
+			"%s[%s]{resourceId = %q}.sum()",
+			baseMetric, ociWindowQuery(window), functionOCID,
 		)
 	}
 
@@ -367,7 +374,7 @@ func (s *Scanner) QueryAggregate(
 		}
 	case OCIFunctionsColdStartCountMetric,
 		OCIFunctionsInvocationCountMetric,
-		OCIFunctionsInvocationCountErrorMetric:
+		OCIFunctionsErrorResponseCountMetric:
 		// Counter rollup: SUM across periods = total events
 		// across the window. Mirrors the cold_start_count path —
 		// the invocation count uses the same MQL .sum() reduction
@@ -451,15 +458,13 @@ func parseOCIFunctionARN(arn, fallbackCompartment string) (string, string, error
 // QueryAggregate switch.
 //
 // Returns ("function_invocation_count", `result = "error"`) for
-// the OCIFunctionsInvocationCountErrorMetric input; returns the
+// the OCIFunctionsErrorResponseCountMetric input; returns the
 // input verbatim with an empty filter for any non-suffix metric.
 func splitOCIMetricSuffix(metricName string) (baseMetric, dimensionFilter string) {
-	switch metricName {
-	case OCIFunctionsInvocationCountErrorMetric:
-		return OCIFunctionsInvocationCountMetric, `result = "error"`
-	default:
-		return metricName, ""
-	}
+	// No synthetic-suffix variants remain: the error path now uses the
+	// real FunctionResponseCount metric directly. Kept as a pass-through
+	// seam for any future tag-filtered variants.
+	return metricName, ""
 }
 
 // ociWindowQuery formats the MQL window suffix. OCI's MQL accepts

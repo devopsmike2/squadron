@@ -50,6 +50,10 @@ const AzureMonitorMetricsAPIVersion = "2024-02-01"
 // informational note per design doc §3.3).
 //
 // Pinned by metrics_test.go::TestAzureFunctionsExecutionDurationMetric_Constant.
+// AVAILABILITY WARNING: Azure Monitor has no native per-function duration
+// metric — duration requires Application Insights (requests/duration). This
+// name returns empty, so Azure cold-start detection never fires. Deferred per
+// docs/audit/detection-metric-availability.md.
 const AzureFunctionsExecutionDurationMetric = "FunctionExecutionDuration"
 
 // AzureFunctionsIsAfterColdStartDimension is the dimension name Azure
@@ -78,6 +82,10 @@ const AzureFunctionsIsAfterColdStartDimension = "IsAfterColdStart"
 //
 // Pinned to "FunctionInvocations" by
 // metrics_test.go::TestAzureFunctionsInvocationsMetric_Constant.
+// AVAILABILITY WARNING: the real Azure Monitor invocation metric is
+// FunctionExecutionCount; "FunctionInvocations" does not exist. See
+// docs/audit/detection-metric-availability.md (rename deferred with the Azure
+// error/duration data-source decision).
 const AzureFunctionsInvocationsMetric = "FunctionInvocations"
 
 // AzureFunctionsErrorsMetric is the Azure Monitor metric name for
@@ -100,6 +108,9 @@ const AzureFunctionsInvocationsMetric = "FunctionInvocations"
 //
 // Pinned to "FunctionErrors" by
 // metrics_test.go::TestAzureFunctionsErrorsMetric_Constant.
+// AVAILABILITY WARNING: Azure Monitor has no native per-function error metric —
+// errors require Application Insights (requests/failed). This name returns
+// empty. Deferred per docs/audit/detection-metric-availability.md.
 const AzureFunctionsErrorsMetric = "FunctionErrors"
 
 // ServiceBusDeadletteredMessagesMetric is the Azure Monitor metric
