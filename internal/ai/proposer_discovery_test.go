@@ -3679,3 +3679,19 @@ func TestProposeFromDiscoveryScanSystemPrompt_EC2ArchMatch(t *testing.T) {
 			"system prompt must teach EC2 collector architecture matching: %q", want)
 	}
 }
+
+// TestProposeFromDiscoveryScanSystemPrompt_S3LogDeliveryPolicy pins the
+// v0.89.216 fix: S3 server access logs are only delivered if the TARGET
+// bucket grants logging.s3.amazonaws.com write access. Enabling logging
+// on the source without it succeeds but silently delivers nothing, so the
+// prompt must require the target-bucket policy. A regression that drops it
+// ships PRs that look done but never produce logs.
+func TestProposeFromDiscoveryScanSystemPrompt_S3LogDeliveryPolicy(t *testing.T) {
+	for _, want := range []string{
+		"logging.s3.amazonaws.com",
+		"TARGET-BUCKET POLICY",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt must require the S3 log-delivery target-bucket policy: %q", want)
+	}
+}
