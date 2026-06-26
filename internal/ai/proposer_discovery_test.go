@@ -3695,3 +3695,21 @@ func TestProposeFromDiscoveryScanSystemPrompt_S3LogDeliveryPolicy(t *testing.T) 
 			"system prompt must require the S3 log-delivery target-bucket policy: %q", want)
 	}
 }
+
+// TestProposeFromDiscoveryScanSystemPrompt_ALBLogDeliveryPolicy pins the
+// v0.89.217 fix: enabling aws_lb access_logs does a test write at apply
+// time, so the target bucket must already grant the ELB log-delivery
+// principal write access or the apply fails — and that principal is
+// region-dependent (service principal in current regions, regional ELB
+// account ID in older ones). A regression that drops this ships PRs that
+// fail to apply or hardcode the wrong region's principal.
+func TestProposeFromDiscoveryScanSystemPrompt_ALBLogDeliveryPolicy(t *testing.T) {
+	for _, want := range []string{
+		"logdelivery.elasticloadbalancing.amazonaws.com",
+		"REGION-DEPENDENT",
+		"Access Denied for bucket",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt must require the ALB log-delivery target-bucket policy: %q", want)
+	}
+}

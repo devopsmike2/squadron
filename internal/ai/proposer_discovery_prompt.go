@@ -109,7 +109,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`  - Application / Network Load Balancers (ALB / NLB): the single observability ` +
 	`lever is ACCESS LOGS, which writes to an S3 bucket. A load balancer is covered ` +
 	`when access_logs_enabled is true; when false, recommend enabling. The Terraform ` +
-	`updates aws_lb.access_logs.bucket and aws_lb.access_logs.enabled = true. The ` +
+	`updates aws_lb.access_logs.bucket and aws_lb.access_logs.enabled = true. REQUIRED TARGET-BUCKET POLICY (apply-time and region-specific): enabling aws_lb access_logs triggers a test write at apply time, so the target bucket MUST already grant the ELB log-delivery principal s3:PutObject or the terraform apply FAILS with Access Denied for bucket — NOT silent, the PR will not apply. The principal is REGION-DEPENDENT: in current regions use the service principal logdelivery.elasticloadbalancing.amazonaws.com; in older opt-in regions use that region's ELB account ID — never hardcode one region's account. The plan step (or its reasoning) MUST include the target-bucket policy for the load balancer's region, or name an existing bucket that already grants it. The ` +
 	`TARGET BUCKET is an operator choice with one cross-reference rule: WHEN THE ` +
 	`SCAN'S INVENTORY CONTAINS S3 BUCKETS (the "Object stores" section in the user ` +
 	`message), PREFER NAMING AN EXISTING INSTRUMENTED BUCKET as the target rather ` +
