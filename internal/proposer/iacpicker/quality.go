@@ -351,12 +351,16 @@ func malformedTraceparentComputeTerraformFor(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "aws":
 		return `# Pin the AWS Distro for OpenTelemetry Lambda layer to the latest
-# W3C-compliant release. The operator picks the layer ARN matching
-# the function's runtime; the example below uses the nodejs amd64
-# layer at a placeholder version.
+# W3C-compliant release. The layer ARN is version-pinned and changes with
+# every ADOT release; the value below is a best-known placeholder (nodejs /
+# amd64) and is very likely STALE.
+# VERIFY: confirm the current ARN for this function's runtime AND
+# architecture before applying — see
+# https://aws-otel.github.io/docs/getting-started/lambda
 resource "aws_lambda_function" "target" {
   # ... existing fields ...
   layers = [
+    # Replace with the current aws-otel-<runtime>-<arch> layer ARN for your region.
     "arn:aws:lambda:${var.region}:901920570463:layer:aws-otel-nodejs-amd64-ver-1-32-0:1",
   ]
 }

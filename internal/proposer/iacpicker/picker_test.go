@@ -109,7 +109,7 @@ func TestPick_AWS_EC2_DefaultPattern(t *testing.T) {
 		"aws_ssm_association",
 		"AWS-ConfigureAWSPackage",
 		`key    = "tag:otel-collector"`,
-		`name   = "AmazonCloudWatchAgent"`,
+		`name   = "AWSDistroOTel-Collector"`,
 	}
 	for _, want := range expected {
 		if !strings.Contains(p.PrimaryTerraform, want) {

@@ -88,9 +88,17 @@ func Pick(ctx RecommendationContext, iacContent string) PickedPattern {
 
 // --- AWS ---
 
-// AWS EC2 (§4.1) — install the CloudWatch Agent with ADOT collector via
-// Systems Manager Run Document. Tag-based association so the operator
-// scopes coverage by tag rather than by individual instance.
+// AWS EC2 (§4.1) — install the ADOT (AWS Distro for OpenTelemetry)
+// Collector via the AWS-managed SSM Distributor package
+// AWSDistroOTel-Collector. Tag-based association so the operator scopes
+// coverage by tag rather than by individual instance.
+//
+// This installs the ADOT Collector — NOT AmazonCloudWatchAgent, which is a
+// different agent that does not emit OpenTelemetry traces. The AWS-managed
+// package auto-selects the correct arm64/amd64 build for the target's
+// architecture, so this path is correct on Graviton/arm64 and x86_64 alike
+// with no hand-rolled arch-match (the reason §4.1 prefers it). Targets need
+// the SSM agent and AmazonSSMManagedInstanceCore on their instance role.
 func pickAWSCompute(_ RecommendationContext, _ string) PickedPattern {
 	return PickedPattern{
 		PrimaryTerraform: `resource "aws_ssm_association" "otel_collector_install" {
@@ -103,11 +111,12 @@ func pickAWSCompute(_ RecommendationContext, _ string) PickedPattern {
 
   parameters = {
     action = "Install"
-    name   = "AmazonCloudWatchAgent"
+    # AWS-managed ADOT Collector package; auto-selects arm64/amd64.
+    name   = "AWSDistroOTel-Collector"
   }
 }
 `,
-		Reasoning: "AWS EC2 trace-emission: introducing aws_ssm_association with AWS-ConfigureAWSPackage to install the CloudWatch Agent (ADOT collector binary) per §4.1.",
+		Reasoning: "AWS EC2 trace-emission: introducing aws_ssm_association with the AWS-managed SSM Distributor package AWSDistroOTel-Collector to install the ADOT Collector (auto arch-selected, so it is correct on Graviton/arm64 and x86_64 alike) per §4.1. This is the ADOT Collector, not the CloudWatch Agent — the latter does not emit OpenTelemetry traces.",
 	}
 }
 
