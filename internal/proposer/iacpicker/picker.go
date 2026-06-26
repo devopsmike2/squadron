@@ -276,7 +276,9 @@ func pickAzureK8s(ctx RecommendationContext, iacContent string) PickedPattern {
 	monitorMetrics := `resource "azurerm_kubernetes_cluster" "` + name + `" {
   # ... existing fields ...
   monitor_metrics {
-    annotations_allowed = ["service.name", "service.instance.id"]
+    # azurerm monitor_metrics.annotations_allowed is a COMMA-SEPARATED STRING,
+    # not a list — a list value fails terraform plan with a type error.
+    annotations_allowed = "service.name,service.instance.id"
   }
 }
 `
@@ -345,16 +347,26 @@ func pickOCICompute(ctx RecommendationContext, _ string) PickedPattern {
 		PrimaryTerraform: `resource "oci_core_instance" "` + name + `" {
   # ... existing fields ...
   metadata = {
+    # OCI APM uses the Java agent (Linux + JVM workloads only). There is NO
+    # public curl|bash installer. The real flow: download
+    # apm-java-agent-installer-<ver>.jar from your APM domain (Console:
+    # Observability & Management -> Application Performance Monitoring ->
+    # Administration -> Download APM Agents -> Java), stage it on the host,
+    # provision it against the domain, then add -javaagent to the app's JVM.
     user_data = base64encode(<<-EOT
       #!/bin/bash
-      # OCI APM Java agent install — runs on first boot only.
-      curl -sSL https://apm-agent-installer.oraclecloud.com/install.sh | bash
+      # Stage apm-java-agent-installer-<ver>.jar on the host first (e.g. from
+      # Object Storage), then provision against your APM domain. Fill in the
+      # private-data-key and data-upload-endpoint from the APM domain.
+      java -jar /opt/apm/apm-java-agent-installer-<ver>.jar provision-agent -service-name "<service-name>" -destination /opt/apm -private-data-key "<APM_PRIVATE_DATA_KEY>" -data-upload-endpoint "<APM_DATA_UPLOAD_ENDPOINT>"
+      # Then attach to the app's JVM startup:
+      #   -javaagent:/opt/apm/oracle-apm-agent/bootstrap/ApmAgent.jar
     EOT
     )
   }
 }
 `,
-		Reasoning: "OCI Compute trace-emission: extending oci_core_instance.metadata.user_data with cloud-init script installing the OCI APM agent per §4.10. NOTE: cloud-init only runs on first boot; flag this as upgrade-during-maintenance.",
+		Reasoning: "OCI Compute trace-emission: extending oci_core_instance.metadata.user_data to provision the OCI APM Java agent per §4.10. The installer JAR is downloaded from your APM domain (no public curl|bash URL exists) and provisioned with the APM private-data-key + data-upload-endpoint, then attached via -javaagent. Linux + JVM workloads only; cloud-init runs on first boot, so flag this as upgrade-during-maintenance.",
 	}
 }
 

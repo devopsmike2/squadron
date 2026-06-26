@@ -61,7 +61,8 @@ func PickSamplingRateTerraform(provider, surface, resourceTFName string) string 
   # ... existing fields ...
   environment {
     variables = {
-      OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron's sampling-rate analysis
+      OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"  # ratio sampler — REQUIRED for the ARG below to take effect (default sampler ignores it)
+      OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron\'s sampling-rate analysis
     }
   }
 }
@@ -76,6 +77,10 @@ func PickSamplingRateTerraform(provider, surface, resourceTFName string) string 
   template {
     spec {
       containers {
+        env {
+          name  = "OTEL_TRACES_SAMPLER"
+          value = "parentbased_traceidratio"  # ratio sampler — REQUIRED for the ARG below to take effect (default sampler ignores it)
+        }
         env {
           name  = "OTEL_TRACES_SAMPLER_ARG"
           value = "0.5"  # operator tunes; starting point per Squadron's sampling-rate analysis
@@ -94,7 +99,8 @@ func PickSamplingRateTerraform(provider, surface, resourceTFName string) string 
   # ... existing fields ...
   service_config {
     environment_variables = {
-      OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron's sampling-rate analysis
+      OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"  # ratio sampler — REQUIRED for the ARG below to take effect (default sampler ignores it)
+      OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron\'s sampling-rate analysis
     }
   }
 }
@@ -108,7 +114,8 @@ func PickSamplingRateTerraform(provider, surface, resourceTFName string) string 
 		return fmt.Sprintf(`resource "azurerm_linux_function_app" "%s" {
   # ... existing fields ...
   app_settings = {
-    OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron's sampling-rate analysis
+    OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"  # ratio sampler — REQUIRED for the ARG below to take effect (default sampler ignores it)
+    OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron\'s sampling-rate analysis
   }
 }
 `, name)
@@ -120,7 +127,8 @@ func PickSamplingRateTerraform(provider, surface, resourceTFName string) string 
 		return fmt.Sprintf(`resource "oci_functions_function" "%s" {
   # ... existing fields ...
   config = {
-    OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron's sampling-rate analysis
+    OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"  # ratio sampler — REQUIRED for the ARG below to take effect (default sampler ignores it)
+    OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes; starting point per Squadron\'s sampling-rate analysis
   }
 }
 `, name)
