@@ -139,7 +139,7 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`into separate steps for the same cluster (operators applying enable-logging without ` +
 	`enable-addon end up half-covered, which is the exact failure mode the composite rule ` +
 	`exists to prevent). The Terraform updates aws_eks_cluster.enabled_cluster_log_types and ` +
-	`creates an aws_eks_addon resource pinned to the cluster. The ADOT add-on is ` +
+	`creates an aws_eks_addon resource pinned to the cluster. CRITICAL PREREQUISITE: the adot EKS managed add-on requires cert-manager installed in the cluster FIRST — the ADOT operator uses admission webhooks whose TLS certs cert-manager provisions, so without it the add-on goes CREATE_FAILED/DEGRADED and the cluster stays uninstrumented even though the Terraform applied cleanly. Every adot-add-on recommendation MUST surface this prerequisite in the step reasoning so the operator installs cert-manager (Helm chart or the upstream manifests) before/with the add-on. This prerequisite does NOT apply to amazon-cloudwatch-observability. The ADOT add-on is ` +
 	`PREFERRED over amazon-cloudwatch-observability because it gives the operator a ` +
 	`vendor-neutral OTel collector path; only recommend cloudwatch-observability when the ` +
 	`operator's reasoning explicitly calls for the CloudWatch Container Insights enhanced ` +
