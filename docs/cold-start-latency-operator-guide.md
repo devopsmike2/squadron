@@ -14,6 +14,15 @@ analysis introduces a third dimension: **measurement** of
 latency outliers against expected baselines. Squadron's
 universal claim gains a fifth verb: "MEASURES."
 
+> **⚠️ Detection coverage correction (v0.89.231).** The "MEASURES cold-start
+> across all four clouds" framing in this guide overstated native metric
+> availability. AWS Lambda `InitDuration` is a CloudWatch **Logs** REPORT field,
+> not an `AWS/Lambda` metric; Azure Monitor has no native per-function duration
+> metric (or `IsAfterColdStart` dimension); OCI `oci_faas` has no cold-start
+> counter. So cold-start detection works natively only on **GCP**; **AWS** needs
+> Lambda Insights, **Azure** needs Application Insights, and **OCI** is deferred.
+> See [detection-coverage.md](./detection-coverage.md) for the honest matrix.
+
 For a first test, the walkthrough takes about 25 minutes —
 most of it spent confirming the AWS connection has the
 additional CloudWatch read permission AND letting Squadron
@@ -383,8 +392,8 @@ only the metric source varies per cloud.
 |-------|-----------------|-------------------------------------------------------------------|-----------------------------------------------------------|
 | GCP   | Cloud Run       | `run.googleapis.com/request_latencies` filtered by `response_code_class = "2xx"` | includes warm-path invocations            |
 | GCP   | Cloud Functions | `cloudfunctions.googleapis.com/function/execution_times` filtered by `status = "ok"` | includes warm invocations              |
-| Azure | Functions       | `FunctionExecutionDuration` filtered by `IsAfterColdStart eq 'true'`              | older runtimes don't emit IsAfterColdStart dimension      |
-| OCI   | Functions       | `function_duration` + `cold_start_count` counter                  | function_duration not cold-start-isolated                 |
+| Azure | Functions       | **none native** — needs Application Insights (Azure Monitor has no `FunctionExecutionDuration` metric or `IsAfterColdStart` dimension) | ⚠️ requires App Insights |
+| OCI   | Functions       | **no native cold-start counter** (`oci_faas` has `FunctionExecutionDuration` but no `cold_start_count`) | ⛔ deferred |
 
 Each surface populates the same `cold_start_observation`
 table from slice 1 with a different `provider` + `surface`
@@ -708,7 +717,7 @@ its qualification asterisk:
 > latency across all four clouds against expected baselines,
 > AND drafts the IaC PRs that close the gaps it finds.
 
-**Five verbs. Four clouds for all five.** The substrate
+**Five verbs.** MEASURES is native-4-cloud only for the metrics that exist on each cloud's base monitoring API; see the coverage correction above and [detection-coverage.md](./detection-coverage.md). The substrate
 work in slice 1 was the load-bearing investment; slice 2
 is mostly translation work. The architectural bet paid off
 — each cloud's MetricQuerier implementation took roughly

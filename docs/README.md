@@ -679,6 +679,11 @@ jump straight to that page.
   has 5 layers (event source primitive → event source
   config → W3C trace context → cold-start latency →
   sampling rate).
+- [**Detection coverage & requirements**](./detection-coverage.md) — honest
+  per-cloud matrix of what each metric-based detection (cold-start, error-rate,
+  poison-rate) reads, requires, and whether it works on native metrics or needs
+  Lambda Insights / Application Insights. **Read this before relying on a
+  metric-based detection on AWS, Azure, or OCI.**
 - [Cold-start latency — operator guide](./cold-start-latency-operator-guide.md) —
   v0.89.112 through v0.89.120 operator runbook for the
   cold-start latency analysis arc. Slice 2 (design at
