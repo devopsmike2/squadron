@@ -3713,3 +3713,20 @@ func TestProposeFromDiscoveryScanSystemPrompt_ALBLogDeliveryPolicy(t *testing.T)
 			"system prompt must require the ALB log-delivery target-bucket policy: %q", want)
 	}
 }
+
+// TestProposeFromDiscoveryScanSystemPrompt_ARNVerifyFraming pins the
+// v0.89.218 honest-framing fix: the model cannot know the current ADOT
+// layer version, so it must NOT present the layer ARN as authoritative —
+// it must emit a VERIFY annotation and tell the operator to confirm the
+// current ARN. This is the interim until a propose/scan-time ARN resolver
+// lands (see docs/proposals/adot-arn-freshness-design.md). A regression
+// that drops it lets stale ARNs ship as if current.
+func TestProposeFromDiscoveryScanSystemPrompt_ARNVerifyFraming(t *testing.T) {
+	for _, want := range []string{
+		"VERIFY: ADOT layer version may be stale",
+		"CANNOT know the current version",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt must frame the layer ARN as verify-this, not authoritative: %q", want)
+	}
+}
