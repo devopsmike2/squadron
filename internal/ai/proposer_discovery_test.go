@@ -3645,3 +3645,20 @@ func TestProposeFromDiscoveryScanSystemPrompt_RuntimeSpecificExecWrapper(t *test
 			"system prompt must teach the runtime-specific exec wrapper: %q", want)
 	}
 }
+
+// TestProposeFromDiscoveryScanSystemPrompt_EKSCertManagerPrereq pins the
+// v0.89.214 fix: the adot EKS managed add-on requires cert-manager
+// installed first, or it goes CREATE_FAILED/DEGRADED and the cluster
+// stays uninstrumented despite a clean Terraform apply. The prompt must
+// teach the model to surface this prerequisite in every adot-add-on
+// recommendation. A regression that drops it ships syntactically-valid
+// PRs that silently fail to instrument EKS clusters.
+func TestProposeFromDiscoveryScanSystemPrompt_EKSCertManagerPrereq(t *testing.T) {
+	for _, want := range []string{
+		"cert-manager",
+		"PREREQUISITE",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt must teach the EKS adot cert-manager prerequisite: %q", want)
+	}
+}
