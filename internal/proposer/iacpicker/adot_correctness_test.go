@@ -58,3 +58,23 @@ func TestMalformedTraceparent_AWS_LambdaARN_HonestFraming(t *testing.T) {
 		t.Errorf("AWS Lambda ARN snippet should still emit a best-known ADOT layer ARN; got:\n%s", tf)
 	}
 }
+
+// TestPick_Azure_Compute_FlagsWindowsAgentVariant guards the #114 fix: the
+// Azure Monitor Agent extension is OS-specific (AzureMonitorLinuxAgent vs
+// AzureMonitorWindowsAgent), and installing the Linux agent on a Windows VM
+// fails to provision. The deterministic snippet can't see the VM's OSFamily,
+// so it must at least surface the Windows variant rather than silently
+// hardcoding Linux.
+func TestPick_Azure_Compute_FlagsWindowsAgentVariant(t *testing.T) {
+	p := Pick(RecommendationContext{Provider: "azure", Tier: "compute", ResourceTFName: "prod"}, "")
+
+	if !strings.Contains(p.PrimaryTerraform, "AzureMonitorWindowsAgent") {
+		t.Errorf("Azure compute snippet must surface the Windows agent variant; got:\n%s", p.PrimaryTerraform)
+	}
+	if !strings.Contains(p.PrimaryTerraform, "azurerm_windows_virtual_machine") {
+		t.Errorf("Azure compute snippet must mention azurerm_windows_virtual_machine for Windows VMs; got:\n%s", p.PrimaryTerraform)
+	}
+	if !strings.Contains(p.Reasoning, "AzureMonitorWindowsAgent") {
+		t.Errorf("reasoning must flag the Windows agent swap; got: %q", p.Reasoning)
+	}
+}

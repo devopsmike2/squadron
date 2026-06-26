@@ -214,6 +214,14 @@ func pickGCPK8s(_ RecommendationContext, _ string) PickedPattern {
 // --- Azure ---
 
 // Azure VM (§4.7) — Azure Monitor Agent extension.
+//
+// The Azure Monitor Agent extension is OS-SPECIFIC: Linux VMs take
+// AzureMonitorLinuxAgent (on azurerm_linux_virtual_machine), Windows VMs
+// take AzureMonitorWindowsAgent (on azurerm_windows_virtual_machine).
+// Installing the Linux agent extension on a Windows VM fails to provision.
+// The deterministic picker can't see the candidate's OSFamily, so the
+// snippet defaults to the Linux agent and the comment + reasoning flag the
+// Windows swap; the LLM discovery path derives the variant from os_family.
 func pickAzureCompute(ctx RecommendationContext, _ string) PickedPattern {
 	name := ctx.ResourceTFName
 	if name == "" {
@@ -221,6 +229,10 @@ func pickAzureCompute(ctx RecommendationContext, _ string) PickedPattern {
 	}
 	return PickedPattern{
 		PrimaryTerraform: `resource "azurerm_virtual_machine_extension" "azure_monitor_agent" {
+  # OS-SPECIFIC — this is the LINUX agent. For a WINDOWS VM set both name and
+  # type to "AzureMonitorWindowsAgent" and point virtual_machine_id at
+  # azurerm_windows_virtual_machine.` + name + `.id — the Linux agent
+  # extension fails to provision on a Windows VM.
   name                 = "AzureMonitorLinuxAgent"
   virtual_machine_id   = azurerm_linux_virtual_machine.` + name + `.id
   publisher            = "Microsoft.Azure.Monitor"
@@ -228,7 +240,7 @@ func pickAzureCompute(ctx RecommendationContext, _ string) PickedPattern {
   type_handler_version = "1.0"
 }
 `,
-		Reasoning: "Azure VM trace-emission: introducing azurerm_virtual_machine_extension AzureMonitorLinuxAgent per §4.7.",
+		Reasoning: "Azure VM trace-emission: introducing azurerm_virtual_machine_extension with the Azure Monitor Agent per §4.7. OS-specific: the snippet defaults to the LINUX agent (AzureMonitorLinuxAgent); for a Windows VM swap both name and type to AzureMonitorWindowsAgent on azurerm_windows_virtual_machine — the wrong-OS agent extension fails to provision.",
 	}
 }
 

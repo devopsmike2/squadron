@@ -1111,7 +1111,7 @@ For GCP:
 
 For Azure:
 - trace-emission-azure-compute: VM with otel-collector tag but
-  no recent spans. Terraform: AzureMonitorLinuxAgent extension.
+  no recent spans. Terraform: azurerm_virtual_machine_extension Azure Monitor Agent, OS-derived from the VM's OSFamily (linux -> name/type AzureMonitorLinuxAgent on azurerm_linux_virtual_machine; windows -> AzureMonitorWindowsAgent on azurerm_windows_virtual_machine); the wrong-OS agent extension fails to provision, so never emit the Linux agent for a Windows VM.
 - trace-emission-azure-db: Azure SQL with SQLInsights routing
   but no application correlation. Terraform:
   extended_auditing_policy log_monitoring_enabled.
