@@ -1154,8 +1154,9 @@ function ScanResultPanel({
           <CardDescription>
             Regions {result.regions.join(", ") || "(none)"} · completed{" "}
             {formatTime(result.scan_completed_at)} · scanned{" "}
-            {result.compute.length} compute instances, {result.functions.length}{" "}
-            functions, {(result.databases ?? []).length} databases,{" "}
+            {(result.compute ?? []).length} compute instances,{" "}
+            {(result.functions ?? []).length} functions,{" "}
+            {(result.databases ?? []).length} databases,{" "}
             {(result.object_stores ?? []).length} object stores,{" "}
             {(result.load_balancers ?? []).length} load balancers, and{" "}
             {(result.clusters ?? []).length} clusters.

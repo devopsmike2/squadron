@@ -424,6 +424,60 @@ describe("DiscoveryAzure", () => {
     expect(mockedScanAzureConnection).toHaveBeenCalledWith(sampleConnection.id);
   });
 
+  it("TestDiscoveryAzure_WizardStep5_ScanWithNullCompute_DoesNotCrash", async () => {
+    // Regression (v0.89.220): a fresh subscription with zero VMs makes the
+    // Go scanner marshal `compute` as JSON null. ScanStep read
+    // `result.compute.length` unguarded, threw "Cannot read properties of
+    // null (reading 'length')", and white-screened the page. Guarded with
+    // `?? []` to match the sibling inventory arrays.
+    const user = userEvent.setup();
+    mockedCreateAzureConnection.mockResolvedValue(sampleConnection);
+    mockedValidateAzureConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 0,
+    });
+    const emptyScan = {
+      ...sampleScan,
+      compute: null,
+      instrumented_count: 0,
+      uninstrumented_count: 0,
+    } as unknown as ScanAzureResponse;
+    mockedScanAzureConnection.mockResolvedValue(emptyScan);
+    mockedListAzureConnections.mockResolvedValueOnce([]);
+    mockedListAzureConnections.mockResolvedValue([sampleConnection]);
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 0 virtual machines visible/i),
+      ).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Run scan/i }),
+      ).toBeInTheDocument();
+    });
+    // Before the fix, this click threw and unmounted the tree.
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+
+    // The page survives and auto-switches to Inventory rather than crashing.
+    await waitFor(() => {
+      const inventoryTab = screen.getByRole("tab", { name: /Inventory/i });
+      expect(inventoryTab).toHaveAttribute("data-state", "active");
+    });
+    expect(screen.queryByText("web-1")).not.toBeInTheDocument();
+  });
+
   it("TestDiscoveryAzure_InventoryTab_RendersTable", async () => {
     const user = userEvent.setup();
     mockedListAzureConnections.mockResolvedValue([sampleConnection]);

@@ -1017,7 +1017,7 @@ function ScanStep({
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" aria-hidden />
             <span className="font-medium">
-              Scan complete: {result.compute.length} virtual machines (
+              Scan complete: {(result.compute ?? []).length} virtual machines (
               {result.instrumented_count} instrumented,{" "}
               {result.uninstrumented_count} uninstrumented). View Inventory →
             </span>
@@ -1091,7 +1091,7 @@ function InventoryTab({
           </TabsTrigger>
         </TabsList>
         <TabsContent value={INVENTORY_SUBTAB_COMPUTE} className="mt-3">
-          <InventoryTable rows={scan.compute} />
+          <InventoryTable rows={scan.compute ?? []} />
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_DATABASES} className="mt-3">
           <DatabaseInventoryTable rows={scan.databases ?? []} />
@@ -1120,7 +1120,7 @@ function InventorySummary({ scan }: { scan: ScanAzureResponse }) {
         Subscription: <code className="text-xs">{scan.subscription_id}</code>
       </span>
       <span>Location: {scan.location || "all"}</span>
-      <span>VMs: {scan.compute.length}</span>
+      <span>VMs: {(scan.compute ?? []).length}</span>
       <span>Instrumented: {scan.instrumented_count}</span>
       <span>Uninstrumented: {scan.uninstrumented_count}</span>
       {scan.partial && (
