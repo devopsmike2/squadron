@@ -3627,3 +3627,21 @@ func TestDiscoveryProposer_EventSourcePropagationRendered(t *testing.T) {
 	assert.Contains(t, got, "propagation_ok=true")
 	assert.Equal(t, 1, strings.Count(got, "propagation_note:"), "notes render only for the broken bus")
 }
+
+// TestProposeFromDiscoveryScanSystemPrompt_RuntimeSpecificExecWrapper pins
+// the v0.89.213 fix: AWS_LAMBDA_EXEC_WRAPPER is RUNTIME-SPECIFIC
+// (/opt/otel-handler for nodejs|java, /opt/otel-instrument for
+// python|dotnet, none for go). The prompt previously hardcoded
+// /opt/otel-handler in the locked lambda-otel-layer patch shape, which
+// silently misconfigured python/dotnet Lambda instrumentation in every
+// generated PR. A regression that drops the mapping reintroduces that.
+func TestProposeFromDiscoveryScanSystemPrompt_RuntimeSpecificExecWrapper(t *testing.T) {
+	for _, want := range []string{
+		"RUNTIME-SPECIFIC",
+		"/opt/otel-instrument for python",
+		"/opt/otel-handler for nodejs",
+	} {
+		assert.Contains(t, proposeFromDiscoveryScanSystem, want,
+			"system prompt must teach the runtime-specific exec wrapper: %q", want)
+	}
+}
