@@ -22,6 +22,7 @@ no-ops.
 | Azure | `FunctionExecutionDuration` | **No** — no native per-function duration metric; requires Application Insights. | Cold-start detection never fires. |
 | OCI | namespace `oci_functions`, `function_invocation_count`, `function_duration`, `function_invocation_count` + `result="error"` | **Misnamed** — real namespace is `oci_faas`; metrics are `FunctionInvocationCount`, `FunctionExecutionDuration`, `FunctionResponseCount` (error responses). No `result` dimension. | All OCI Functions detection queried a non-existent namespace. **Fixed v0.89.229.** |
 | OCI | `cold_start_count` | **No** — `oci_faas` has no cold-start counter (only FunctionInvocationCount / FunctionExecutionDuration / FunctionResponseCount / AllocatedProvisionedConcurrency). | OCI cold-start gate unsatisfiable. |
+| AWS | SQS poison-rate via DLQ `NumberOfMessagesSent` (SUM) | **Wrong metric** — redrive-moved messages (the poison) are not counted by `NumberOfMessagesSent`; only manual SendMessage is. Reported a confident 0/hr. **Reverted v0.89.229** to the honest absent sentinel; depth-based (`ApproximateNumberOfMessagesVisible`) detection is the planned fix. |
 | GCP | `run.googleapis.com/request_latencies`, `.../execution_times`, `cloudtasks.googleapis.com/queue/{task_attempt_count,depth}` | **Yes** — valid Cloud Monitoring metric types. | OK. |
 | AWS | `AWS/Lambda` → `Invocations`, `Errors`; `AWS/SQS` → `NumberOfMessagesSent` | **Yes** | OK. |
 

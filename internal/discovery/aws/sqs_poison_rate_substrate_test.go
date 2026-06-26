@@ -92,9 +92,12 @@ func TestQuerySQSCounterSum_SumsOverWindow(t *testing.T) {
 	}
 }
 
-// --- §8.3 DetectSQSPoisonRate: real rate / real-zero / absent ---
+// --- §8.3 DetectSQSPoisonRate: honest absent sentinel (v0.89.229 revert) ---
+// NumberOfMessagesSent does not capture redrive-moved DLQ messages, so
+// DetectSQSPoisonRate returns the honest absent sentinel regardless of any
+// CloudWatch reading and issues no metric query. See sqs_poison_rate.go.
 
-func TestDetectSQSPoisonRate_RealRateFiresHighBand(t *testing.T) {
+func TestDetectSQSPoisonRate_AlwaysHonestSentinel(t *testing.T) {
 	cw := &cwFake{
 		respondWith: &cloudwatch.GetMetricStatisticsOutput{
 			Datapoints: []cwtypes.Datapoint{
@@ -105,36 +108,9 @@ func TestDetectSQSPoisonRate_RealRateFiresHighBand(t *testing.T) {
 	s := newMetricsTestScannerWithCW(t, cw)
 	res, err := s.DetectSQSPoisonRate(context.Background(), testDLQARN)
 	assert.NoError(t, err)
-	assert.Equal(t, 120, res.RatePerHour)
-	assert.True(t, res.HighBand, "120/hr >= PoisonRatePerHourHighThreshold=%d", PoisonRatePerHourHighThreshold)
-}
-
-func TestDetectSQSPoisonRate_RealZeroIsNotAbsent(t *testing.T) {
-	cw := &cwFake{
-		respondWith: &cloudwatch.GetMetricStatisticsOutput{
-			Datapoints: []cwtypes.Datapoint{
-				{Sum: awssdk.Float64(0.0), SampleCount: awssdk.Float64(1), Unit: cwtypes.StandardUnitCount},
-			},
-		},
-	}
-	s := newMetricsTestScannerWithCW(t, cw)
-	res, err := s.DetectSQSPoisonRate(context.Background(), testDLQARN)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, res.RatePerHour, "SampleCount>0 with SUM 0 is a REAL zero, not the absent sentinel")
+	assert.Equal(t, -1, res.RatePerHour, "poison rate is not measurable from NumberOfMessagesSent; honest absent sentinel")
 	assert.False(t, res.HighBand)
-}
-
-func TestDetectSQSPoisonRate_NoDatapointsKeepsAbsentSentinel(t *testing.T) {
-	cw := &cwFake{
-		respondWith: &cloudwatch.GetMetricStatisticsOutput{
-			Datapoints: []cwtypes.Datapoint{},
-		},
-	}
-	s := newMetricsTestScannerWithCW(t, cw)
-	res, err := s.DetectSQSPoisonRate(context.Background(), testDLQARN)
-	assert.NoError(t, err)
-	assert.Equal(t, -1, res.RatePerHour, "SampleCount==0 → honest-framing absent sentinel, never measured-as-zero")
-	assert.False(t, res.HighBand)
+	assert.Empty(t, cw.receivedInputs, "DetectSQSPoisonRate must not issue a CloudWatch query")
 }
 
 // --- §8.4 enrichSQSPoisonRate -----------------------------------
@@ -152,7 +128,7 @@ func snapWithDLQ(dlqARN string) scanner.EventSourceInstanceSnapshot {
 	}
 }
 
-func TestEnrichSQSPoisonRate_OverwritesForReachableDLQ(t *testing.T) {
+func TestEnrichSQSPoisonRate_PreservesSentinelNoOp(t *testing.T) {
 	cw := &cwFake{
 		respondWith: &cloudwatch.GetMetricStatisticsOutput{
 			Datapoints: []cwtypes.Datapoint{
@@ -166,8 +142,10 @@ func TestEnrichSQSPoisonRate_OverwritesForReachableDLQ(t *testing.T) {
 
 	s.enrichSQSPoisonRate(context.Background(), snaps, arnSet)
 
-	assert.Equal(t, 90, snaps[0].Detail["poison_rate_per_hour"], "real reading overwrites the -1 sentinel")
-	assert.Equal(t, true, snaps[0].Detail["poison_rate_high_band"])
+	// Reverted to a no-op: honest absent sentinels survive, no CloudWatch query.
+	assert.Equal(t, -1, snaps[0].Detail["poison_rate_per_hour"])
+	assert.Equal(t, false, snaps[0].Detail["poison_rate_high_band"])
+	assert.Empty(t, cw.receivedInputs, "enrichment must not query CloudWatch")
 }
 
 func TestEnrichSQSPoisonRate_NilClientNoOp(t *testing.T) {

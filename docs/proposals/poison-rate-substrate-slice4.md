@@ -2,6 +2,16 @@
 
 Status: chunk 1 shipping in v0.89.177 (#819 Stream 216).
 
+> **CORRECTION (v0.89.229):** Chunk 1's AWS SQS "real" detection was reverted.
+> It read the DLQ's `NumberOfMessagesSent` SUM as the poison rate, but messages
+> moved to a DLQ by the redrive policy (the actual poison messages) are NOT
+> counted by `NumberOfMessagesSent` — only manual `SendMessage` calls are (AWS
+> docs). So it reported a confident 0/hour for DLQs filling via the normal
+> failed-processing path. AWS SQS is back on §3.3 honest framing (absent
+> sentinel + monitor recommendation). A depth-based detection using the
+> DLQ's `ApproximateNumberOfMessagesVisible` gauge is the planned fix — see
+> docs/audit/detection-metric-availability.md.
+
 ## 1. Why this arc exists
 
 Poison-message rate analysis slice 3 (v0.89.172-176) shipped
