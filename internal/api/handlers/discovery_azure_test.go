@@ -70,6 +70,8 @@ type fakeAzureScanner struct {
 	err    error
 	// eventSources is returned by ScanEventSources (event-source tier).
 	eventSources []scanner.EventSourceInstanceSnapshot
+	// orchestrations is returned by ScanOrchestrations (orchestration tier).
+	orchestrations []scanner.OrchestrationInstanceSnapshot
 }
 
 func (f *fakeAzureScanner) Provider() credstore.Provider {
@@ -96,6 +98,12 @@ func (f *fakeAzureScanner) Validate(_ context.Context, _ *credstore.CloudConnect
 // returned snapshots into the response.
 func (f *fakeAzureScanner) ScanEventSources(_ context.Context, _ scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
 	return f.eventSources, nil
+}
+
+// ScanOrchestrations satisfies OrchestrationDiscoveryScanner so the Azure
+// scan handler's orchestration fold (v0.89.222) surfaces Logic Apps.
+func (f *fakeAzureScanner) ScanOrchestrations(_ context.Context, _ scanner.ScanScope) ([]scanner.OrchestrationInstanceSnapshot, error) {
+	return f.orchestrations, nil
 }
 
 // fakeAzureScannerFactory satisfies AzureScannerFactory by returning
@@ -673,6 +681,42 @@ func TestScanAzureConnection_HappyPath(t *testing.T) {
 	}
 	if completed.Payload["instrumented_count"].(int) != 3 {
 		t.Errorf("payload.instrumented_count = %v, want 3", completed.Payload["instrumented_count"])
+	}
+}
+
+func TestScanAzureConnection_FoldsOrchestrations(t *testing.T) {
+	// Regression (v0.89.222): HandleScanAzureConnection never invoked
+	// ScanOrchestrations, so deployed Logic Apps were silently dropped
+	// (orchestrations always empty) even though the scanner supports them.
+	audit := &discoveryRecordingAudit{}
+	fs := &fakeAzureScanner{
+		result: &scanner.Result{ScanID: "scan-orch"},
+		orchestrations: []scanner.OrchestrationInstanceSnapshot{
+			{Provider: "azure", Surface: "logicapps", ResourceName: "wf-otel", Region: "eastus", HasTraceAxis: true, HasLogAxis: true},
+			{Provider: "azure", Surface: "logicapps", ResourceName: "wf-bare", Region: "eastus"},
+		},
+	}
+	factory := &fakeAzureScannerFactory{scanner: fs}
+	h, store, key := newAzureTestHandlers(t, audit, factory)
+	r := newAzureRouter(h)
+	conn := seedAzureConnection(t, store, key, "Prod", azureTestTenantID, azureTestSubscriptionID, azureTestClientID, "eastus")
+
+	w := azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp azureScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Orchestrations) != 2 {
+		t.Fatalf("orchestrations = %d, want 2 (Logic Apps must fold into the response)", len(resp.Orchestrations))
+	}
+	if resp.Orchestrations[0].Surface != "logicapps" || resp.Orchestrations[0].ResourceName != "wf-otel" {
+		t.Errorf("orchestration row mismapped: %+v", resp.Orchestrations[0])
+	}
+	if !resp.Orchestrations[0].HasTraceAxis || resp.Orchestrations[1].HasTraceAxis {
+		t.Errorf("trace axis not threaded: %+v", resp.Orchestrations)
 	}
 }
 

@@ -841,6 +841,7 @@ type azureScanResponse struct {
 	FailedServices      []string                           `json:"failed_services,omitempty"`
 	ScanID              string                             `json:"scan_id"`
 	EventSources        []eventSourceRow                   `json:"event_sources,omitempty"`
+	Orchestrations      []awsOrchestrationRow              `json:"orchestrations,omitempty"`
 }
 
 // HandleScanAzureConnection — POST
@@ -1062,6 +1063,30 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		}
 	}
 
+	// Orchestration-tier (Logic Apps): the Azure scanner satisfies
+	// OrchestrationDiscoveryScanner via the embedded chunk-2 scanner, but
+	// unlike the AWS handler this one never invoked it, so Logic Apps were
+	// silently dropped from every Azure scan (orchestrations always empty).
+	// Mirror the event-source fold above so the Inventory tab's
+	// Orchestration sub-tab populates.
+	if tierListContains(parseTiersOrDefault(scanReq.Tiers), TierOrchestration) {
+		if orchScanner, ok := scn.(OrchestrationDiscoveryScanner); ok {
+			orchOut, orchErr := orchScanner.ScanOrchestrations(scanCtx, scanner.ScanScope{
+				AccountID: conn.SubscriptionID,
+				Regions:   regions,
+			})
+			if orchErr != nil {
+				if h.logger != nil {
+					h.logger.Warn("azure scan: orchestration scan failed",
+						zap.Error(orchErr), zap.String("subscription_id", conn.SubscriptionID))
+				}
+			}
+			if len(orchOut) > 0 {
+				result.Orchestrations = append(result.Orchestrations, orchOut...)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, azureScanResponse{
 		ConnectionID:        conn.ID,
 		SubscriptionID:      conn.SubscriptionID,
@@ -1076,6 +1101,7 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		FailedServices:      result.FailedServices,
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
+		Orchestrations:      marshalOrchestrationRows(result.Orchestrations),
 	})
 }
 
@@ -1362,4 +1388,29 @@ func classifyAzureScanError(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// marshalOrchestrationRows converts scanner orchestration snapshots into
+// the snake_case wire rows (shared awsOrchestrationRow shape). Added with
+// the v0.89.222 fix that taught HandleScanAzureConnection to invoke
+// ScanOrchestrations — the orchestration fold it had been missing, which
+// left Logic Apps undiscoverable on every Azure scan.
+func marshalOrchestrationRows(snaps []scanner.OrchestrationInstanceSnapshot) []awsOrchestrationRow {
+	rows := make([]awsOrchestrationRow, 0, len(snaps))
+	for _, oc := range snaps {
+		rows = append(rows, awsOrchestrationRow{
+			Provider:     oc.Provider,
+			Surface:      oc.Surface,
+			AccountID:    oc.AccountID,
+			Region:       oc.Region,
+			ResourceName: oc.ResourceName,
+			ResourceARN:  oc.ResourceARN,
+			WorkflowType: oc.WorkflowType,
+			HasTraceAxis: oc.HasTraceAxis,
+			HasLogAxis:   oc.HasLogAxis,
+			LastSeenAt:   oc.LastSeenAt,
+			Detail:       oc.Detail,
+		})
+	}
+	return rows
 }
