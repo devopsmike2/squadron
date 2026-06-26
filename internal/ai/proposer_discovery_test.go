@@ -3730,3 +3730,15 @@ func TestProposeFromDiscoveryScanSystemPrompt_ARNVerifyFraming(t *testing.T) {
 			"system prompt must frame the layer ARN as verify-this, not authoritative: %q", want)
 	}
 }
+
+// TestDiscoverySystemPrompt_AzureMonitorAgent_OSDerived guards #114: the
+// Azure VM trace-emission guidance must OS-derive the Azure Monitor Agent
+// extension (AzureMonitorWindowsAgent for Windows VMs) rather than hardcoding
+// the Linux agent, which fails to provision on a Windows VM.
+func TestDiscoverySystemPrompt_AzureMonitorAgent_OSDerived(t *testing.T) {
+	p := DiscoverySystemPromptForTest()
+	assert.Contains(t, p, "AzureMonitorWindowsAgent",
+		"Azure VM agent guidance must cover the Windows agent variant")
+	assert.NotContains(t, p, "Terraform: AzureMonitorLinuxAgent extension.",
+		"the hardcoded Linux-only agent line must be gone")
+}
