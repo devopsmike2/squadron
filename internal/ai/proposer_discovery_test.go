@@ -3759,3 +3759,24 @@ func TestDiscoverySystemPrompt_SnippetParityFixes(t *testing.T) {
 	assert.Contains(t, p, "template.metadata.annotations",
 		"Cloud Run minScale guidance must specify the revision template placement")
 }
+
+// TestDiscoveryPrompt_ServerlessAddOnEnablement asserts the proposer prompt
+// instructs recommending the detection-prerequisite paid add-ons (Lambda
+// Insights / Application Insights) with the why + cost framing — the decided
+// approach for the serverless cold-start/error data-source gap (#152/#153).
+func TestDiscoveryPrompt_ServerlessAddOnEnablement(t *testing.T) {
+	p := DiscoverySystemPromptForTest()
+	for _, want := range []string{
+		"lambda-insights-enable",
+		"CloudWatchLambdaInsightsExecutionRolePolicy",
+		"PREREQUISITE for cold-start",
+		"PAID add-ons",
+		"metric-filter", // the cheaper AWS alternative
+		"azfunc-appinsights-enable",
+		"billed on data\n  ingestion", // App Insights cost framing
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("discovery prompt missing expected add-on guidance: %q", want)
+		}
+	}
+}
