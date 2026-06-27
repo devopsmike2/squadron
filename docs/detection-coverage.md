@@ -49,6 +49,21 @@ by metric availability.
 | Azure | Service Bus | Yes — `DeadletteredMessages` gauge delta. | ✅ (delta approximation). |
 | OCI | Queue | **No** — `oci_queue` has no dead-letter depth metric (`MessagesInDlq` does not exist; verified v0.89.236). | ⛔ Deferred — honest absent sentinel + monitor recommendation; depth-based signal via the `deadLetterQueueDeliveryCount` attribute is the planned fix. |
 
+## Consumer-lag and cost-correlation
+
+**Consumer-lag** detection does not depend on Monitoring metric *names* and so
+is not subject to the availability gaps above. It reads queue **attributes**
+directly — AWS SQS `ApproximateNumberOfMessages` + `ApproximateAgeOfOldestMessage`
+(GetQueueAttributes), OCI `visibleMessages` + `timeStateLastChanged` (queue
+list) — or GCP's verified `cloudtasks.googleapis.com/queue/depth` metric. Azure
+Service Bus lag is honest-framed at the namespace level (absent sentinel + a
+per-namespace queue-walk-prerequisite recommendation) until the per-queue ARM
+walk lands. Verified v0.89.236.
+
+**Cost-correlation** is opt-in (off by default) and reads each cloud's billing
+/ cost-management API (AWS Cost Explorer, Azure Cost Management, GCP billing),
+not the Monitoring namespaces — a separate surface from this matrix.
+
 ## Why some detections need an add-on
 
 Cloud providers expose cold-start init duration and per-function error/duration
