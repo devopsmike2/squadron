@@ -2494,6 +2494,15 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/gcp/connections",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleCreateGCPConnection(c) }))
+		// v0.89.243 first-user onboarding — GCP demo connection (parity
+		// with /discovery/demo/*). Enable provisions a credential-free demo
+		// project that serves canned sample inventory + recommendations.
+		v1.POST("/discovery/gcp/demo/enable",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPDemoEnable(c) }))
+		v1.DELETE("/discovery/gcp/demo",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPDemoDisable(c) }))
 		v1.GET("/discovery/gcp/connections",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleListGCPConnections(c) }))
