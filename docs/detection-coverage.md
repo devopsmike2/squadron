@@ -55,7 +55,7 @@ by metric availability.
 | AWS | SQS | **No** native poison RATE — but DLQ DEPTH is available. | ✅ **Depth/presence (v0.89.259, #156):** the source queue reads its DLQ's current `ApproximateNumberOfMessages` (free from the scan's attribute walk; same-account/region DLQs) and surfaces `poison_dlq_depth` + `poison_dlq_nonempty`. A non-empty DLQ ⇒ poison present. Proxy, not a rate: a drained DLQ reads empty. |
 | GCP | Cloud Tasks | Yes — failed `task_attempt_count`. | ✅ |
 | Azure | Service Bus | Yes — `DeadletteredMessages` gauge delta. | ✅ (delta approximation). |
-| OCI | Queue | **No** — `oci_queue` has no dead-letter depth metric (`MessagesInDlq` does not exist; verified v0.89.236). | ⛔ Deferred — honest absent sentinel + monitor recommendation; depth-based signal via the `deadLetterQueueDeliveryCount` attribute is the planned fix. |
+| OCI | Queue | **No** Monitoring metric — verified the `oci_queue` namespace has no dead-letter metric, and `deadLetterQueueDeliveryCount` is a config threshold, not a poison count. | ⛔ Honest-absent today. Correct signal (v0.89.260, #159): DLQ depth from the data-plane GetStats call (`dlqStats.visibleMessages`), mirroring AWS #156. Implementation requires wiring the OCI Queue data-plane endpoint — next. |
 
 ## Consumer-lag and cost-correlation
 

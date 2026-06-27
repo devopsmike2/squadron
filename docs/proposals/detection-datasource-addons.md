@@ -46,8 +46,21 @@ dormant deterministic branch.
   the scan's attribute walk (no extra call, no CloudWatch; same-account/region
   DLQs). Surfaces poison_dlq_depth + poison_dlq_nonempty. Honest proxy: a
   drained DLQ reads empty.
-- **Slice 3 — OCI queue poison via deadLetterQueueDeliveryCount delta over scan
-  history (#159):** first consumer of persisted scan history for a derived rate.
+- **Slice 3 — OCI queue poison (#159): premise corrected.** The original plan
+  (deadLetterQueueDeliveryCount delta over scan history) is NOT viable —
+  verified that field is a CONFIG threshold (delivery attempts before
+  dead-lettering), not a poison counter. Also verified the OCI Monitoring
+  oci_queue namespace has NO dead-letter metric (QueueSize / MessagesInQueueCount
+  / MessagesCount / RequestSuccess / RequestsLatency / RequestsThroughput /
+  ConsumerLag / DroppedMessagesCount only). The REAL signal is DLQ DEPTH from the
+  data-plane GetStats call ({messagesEndpoint}/20210201/queues/{id}/stats), whose
+  response carries `stats` (queue) + `dlqStats` (DLQ), each with visibleMessages
+  — so `dlqStats.visibleMessages` is the honest poison-present signal, mirroring
+  AWS DLQ-depth (#156). v0.89.260 corrects the false OCI-Monitoring claim in the
+  code + docs and records this verified design; IMPLEMENTATION requires wiring
+  the OCI Queue data-plane endpoint (new — the scanner uses only the control
+  plane today) and is best done with live OCI verification (failure mode is safe:
+  honest-absent, never a fabricated number).
 
 ## Honest framing
 

@@ -17,13 +17,27 @@ import (
 // slice 3; CLOSES the poison-message rate arc.
 //
 // SUBSTRATE-METRIC-DEPENDENCE (design doc §3.2 + §3.3):
-// The per-queue poison-message rate over a rolling 1-hour window
-// requires the dead-letter delivery-count delta over time, which
-// on OCI is only readable via the OCI Monitoring
-// SummarizeMetricsData API (oci_queue namespace). Slice 3 chunk 4
-// does NOT yet integrate with the OCI Monitoring substrate
-// (mirrors how the cold-start latency slice 1 + 2 arc built the
-// MetricQuerier substrate per cloud).
+// CORRECTION (v0.89.260, #159): an earlier version of this comment
+// claimed the poison signal was readable via OCI Monitoring's
+// SummarizeMetricsData on the oci_queue namespace. That is FALSE —
+// verified against the published OCI Queue metrics
+// (docs.oracle.com/iaas/Content/queue/metrics.htm): the oci_queue
+// namespace exposes QueueSize / MessagesInQueueCount / MessagesCount /
+// RequestSuccess / RequestsLatency / RequestsThroughput / ConsumerLag /
+// DroppedMessagesCount — and NO dead-letter metric. The
+// deadLetterQueueDeliveryCount field on the queue is a CONFIG threshold
+// (delivery attempts before a message is dead-lettered), not a count of
+// poisoned messages, so it cannot drive a rate either.
+//
+// The REAL OCI poison signal is DLQ DEPTH from the data-plane GetStats
+// call ({messagesEndpoint}/20210201/queues/{id}/stats): the response
+// carries two Stats objects — `stats` (the queue) and `dlqStats` (its
+// dead letter queue) — each with visibleMessages. dlqStats.visibleMessages
+// is the honest poison-present signal (mirrors the AWS SQS DLQ-depth
+// approach, #156/v0.89.259). Implementing it requires wiring the OCI
+// Queue DATA-PLANE endpoint (the scanner currently uses only the
+// control-plane list + Logging calls); tracked as the slice-3 follow-up.
+// Until then this stays honest-absent (-1), NOT a fabricated rate.
 //
 // Slice 3 chunk 4 ships the OCI Queue Service poison-rate axis
 // with HONEST FRAMING — identical shape to AWS chunk 1, GCP
