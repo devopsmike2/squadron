@@ -46,11 +46,12 @@ week vs. what is inferred from the code. Confidence is flagged per item.
 - **Discovery scans: persistence shipped (v0.89.250), scheduling still
   pending.** As of continuous-discovery slice 1, AWS scans are persisted
   (whole-scan records + `GET .../scans` history + `GET .../scans/:scanID`
-  detail). What remains for a true "continuous" story: (a) GCP/Azure/OCI
-  persist parity (slice 2 — mechanical, shares `recordScan`); (b) the scan is
-  still SYNCHRONOUS (blocks the HTTP request) — async + scheduled re-scans is
-  slice 3; (c) drift (diffing successive scans) is not built yet. So today an
-  adopter gets AWS scan history but not yet scheduled re-scans or drift.
+  detail). As of slice 2 (v0.89.251) ALL FOUR clouds persist + expose scan
+  history (`GET .../scans` + `.../scans/:scanID`). What remains for a true
+  "continuous" story: (a) scans are still SYNCHRONOUS (block the HTTP request) —
+  async + scheduled re-scans is slice 3; (b) drift (diffing successive scans) is
+  not built yet. So today an adopter gets scan history on every cloud, but not
+  yet scheduled re-scans or drift.
 - **Single region per connection (slice 1).** The credstore + scanner are
   multi-region-shaped but ship single-entry region lists. A multi-region account
   needs one connection per region. CONFIRM current state.

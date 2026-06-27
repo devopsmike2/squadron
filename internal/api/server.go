@@ -1092,6 +1092,9 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 				connections: s.iacConnStore,
 			})
 		}
+		if s.appStore != nil {
+			h.WithGCPScanStore(s.appStore)
+		}
 		fn(h, c)
 	}
 }
@@ -1144,6 +1147,9 @@ func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandle
 				connections: s.iacConnStore,
 			})
 		}
+		if s.appStore != nil {
+			h.WithAzureScanStore(s.appStore)
+		}
 		fn(h, c)
 	}
 }
@@ -1195,6 +1201,9 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 				appStore:    s.appStore,
 				connections: s.iacConnStore,
 			})
+		}
+		if s.appStore != nil {
+			h.WithOCIScanStore(s.appStore)
 		}
 		fn(h, c)
 	}
@@ -2542,6 +2551,13 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/gcp/connections/:id/scan",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleScanGCPConnection(c) }))
+		// v0.89.251 continuous-discovery slice 2 — persisted scan history.
+		v1.GET("/discovery/gcp/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPListScans(c) }))
+		v1.GET("/discovery/gcp/connections/:id/scans/:scanID",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPGetScan(c) }))
 		v1.POST("/discovery/gcp/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleRecommendationsForGCPScan(c) }))
@@ -2589,6 +2605,12 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/azure/connections/:id/scan",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleScanAzureConnection(c) }))
+		v1.GET("/discovery/azure/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureListScans(c) }))
+		v1.GET("/discovery/azure/connections/:id/scans/:scanID",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureGetScan(c) }))
 		v1.POST("/discovery/azure/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleRecommendationsForAzureScan(c) }))
@@ -2637,6 +2659,12 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/oci/connections/:id/scan",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleScanOCIConnection(c) }))
+		v1.GET("/discovery/oci/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIListScans(c) }))
+		v1.GET("/discovery/oci/connections/:id/scans/:scanID",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIGetScan(c) }))
 		v1.POST("/discovery/oci/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleRecommendationsForOCIScan(c) }))

@@ -16,13 +16,16 @@ import (
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
-// Continuous-discovery slice 1 (v0.89.250) — persisted scan history.
+// Continuous-discovery — persisted scan history.
 //
-// Scans were synchronous + non-persisted: the only durable trace was the
-// scan_completed audit event (summary counts, no inventory). This adds a
-// whole-scan record so an operator gets scan history + a basis for drift.
-// Slice 1 persists + exposes history for AWS; the store + record shape are
-// provider-neutral so GCP/Azure/OCI follow mechanically in slice 2.
+// slice 1 (v0.89.250) added the store + AWS persist + AWS history endpoints.
+// slice 2 (v0.89.251) extends the persist + history endpoints to GCP / Azure /
+// OCI via the shared writeScanList / writeScanDetail / recordScan helpers
+// below — each cloud handler is a thin wrapper.
+//
+// ScopeID convention: it is the discovery route's own `:id` path parameter for
+// that cloud — account_id for AWS, connection ID for GCP/Azure/OCI — so the
+// history endpoints query by `:id` uniformly with no extra connection lookup.
 
 // DiscoveryScanStore is the slim persistence surface the discovery handlers
 // need. The application store satisfies it directly; tests substitute a fake.
@@ -32,9 +35,9 @@ type DiscoveryScanStore interface {
 	GetDiscoveryScan(ctx context.Context, scanID string) (*types.ScanRecord, error)
 }
 
-// scanHistoryListLimit caps a history listing. Generous for slice 1 (no
-// retention cap yet); the list endpoint never returns the inventory blobs so
-// the payload stays small even at the cap.
+// scanHistoryListLimit caps a history listing. Generous for now (no retention
+// cap yet); the list endpoint never returns inventory blobs so the payload
+// stays small even at the cap.
 const scanHistoryListLimit = 50
 
 // scanSummary projects the per-category counts an operator wants in a listing.
@@ -56,17 +59,17 @@ func scanSummary(r *scanner.Result) map[string]int {
 	}
 }
 
-// recordScan best-effort persists a completed scan. Nil store or result is a
-// no-op; persistence failure logs but never propagates (the scan already
-// succeeded for the caller).
-func recordScan(ctx context.Context, store DiscoveryScanStore, logger *zap.Logger, provider string, r *scanner.Result, resultJSON []byte) {
+// recordScan best-effort persists a completed scan under the given provider +
+// scope (the route's :id). Nil store or result is a no-op; persistence failure
+// logs but never propagates (the scan already succeeded for the caller).
+func recordScan(ctx context.Context, store DiscoveryScanStore, logger *zap.Logger, provider, scopeID string, r *scanner.Result, resultJSON []byte) {
 	if store == nil || r == nil {
 		return
 	}
 	rec := &types.ScanRecord{
 		ScanID:        r.ScanID,
 		Provider:      provider,
-		ScopeID:       r.AccountID,
+		ScopeID:       scopeID,
 		Regions:       r.Regions,
 		StartedAt:     r.ScanStartedAt,
 		CompletedAt:   r.ScanCompletedAt,
@@ -81,28 +84,27 @@ func recordScan(ctx context.Context, store DiscoveryScanStore, logger *zap.Logge
 	}
 }
 
-// HandleAWSListScans — GET /api/v1/discovery/aws/connections/:id/scans.
-// Newest-first scan history for the account (summary rows, no inventory blob).
-func (h *DiscoveryHandlers) HandleAWSListScans(c *gin.Context) {
-	accountID := strings.TrimSpace(c.Param("id"))
-	if accountID == "" {
+// writeScanList serves a newest-first scan history for (provider, scopeID).
+// Shared by all four cloud list handlers.
+func writeScanList(c *gin.Context, store DiscoveryScanStore, logger *zap.Logger, provider, scopeID string) {
+	if scopeID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
-			Code:    "MissingAccountID",
-			Message: "Account ID path parameter is required.",
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
 		}})
 		return
 	}
-	if h.scanStore == nil {
+	if store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
 			Code:    "ScanHistoryNotConfigured",
 			Message: "Scan history isn't enabled on this deployment.",
 		}})
 		return
 	}
-	recs, err := h.scanStore.ListDiscoveryScans(c.Request.Context(), "aws", accountID, scanHistoryListLimit)
+	recs, err := store.ListDiscoveryScans(c.Request.Context(), provider, scopeID, scanHistoryListLimit)
 	if err != nil {
-		if h.logger != nil {
-			h.logger.Error("aws list scans failed", zap.Error(err), zap.String("account_id", accountID))
+		if logger != nil {
+			logger.Error("list scans failed", zap.Error(err), zap.String("provider", provider), zap.String("scope_id", scopeID))
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
 			Code:    "ScanHistoryReadFailed",
@@ -116,11 +118,11 @@ func (h *DiscoveryHandlers) HandleAWSListScans(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"scans": recs})
 }
 
-// HandleAWSGetScan — GET /api/v1/discovery/aws/connections/:id/scans/:scanID.
-// One scan including the full marshaled inventory.
-func (h *DiscoveryHandlers) HandleAWSGetScan(c *gin.Context) {
-	accountID := strings.TrimSpace(c.Param("id"))
-	scanID := strings.TrimSpace(c.Param("scanID"))
+// writeScanDetail serves one scan including the full inventory. 404s when the
+// scan is missing OR belongs to a different provider/scope than the path —
+// prevents cross-scope ID guessing from leaking a record. Shared by all four
+// cloud get handlers.
+func writeScanDetail(c *gin.Context, store DiscoveryScanStore, logger *zap.Logger, provider, scopeID, scanID string) {
 	if scanID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
 			Code:    "MissingScanID",
@@ -128,17 +130,17 @@ func (h *DiscoveryHandlers) HandleAWSGetScan(c *gin.Context) {
 		}})
 		return
 	}
-	if h.scanStore == nil {
+	if store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
 			Code:    "ScanHistoryNotConfigured",
 			Message: "Scan history isn't enabled on this deployment.",
 		}})
 		return
 	}
-	rec, err := h.scanStore.GetDiscoveryScan(c.Request.Context(), scanID)
+	rec, err := store.GetDiscoveryScan(c.Request.Context(), scanID)
 	if err != nil {
-		if h.logger != nil {
-			h.logger.Error("aws get scan failed", zap.Error(err), zap.String("scan_id", scanID))
+		if logger != nil {
+			logger.Error("get scan failed", zap.Error(err), zap.String("scan_id", scanID))
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
 			Code:    "ScanHistoryReadFailed",
@@ -146,12 +148,10 @@ func (h *DiscoveryHandlers) HandleAWSGetScan(c *gin.Context) {
 		}})
 		return
 	}
-	// 404 when missing OR when the scan belongs to a different provider/scope
-	// than the path — prevents cross-scope ID guessing from leaking a record.
-	if rec == nil || rec.Provider != "aws" || rec.ScopeID != accountID {
+	if rec == nil || rec.Provider != provider || rec.ScopeID != scopeID {
 		c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
 			Code:    "ScanNotFound",
-			Message: "No scan with that ID exists for this account.",
+			Message: "No scan with that ID exists for this connection.",
 		}})
 		return
 	}
@@ -173,4 +173,17 @@ func (h *DiscoveryHandlers) HandleAWSGetScan(c *gin.Context) {
 		out["result"] = json.RawMessage(rec.ResultJSON)
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// --- AWS history endpoints (DiscoveryHandlers) ---
+
+// HandleAWSListScans — GET /api/v1/discovery/aws/connections/:id/scans.
+func (h *DiscoveryHandlers) HandleAWSListScans(c *gin.Context) {
+	writeScanList(c, h.scanStore, h.logger, "aws", strings.TrimSpace(c.Param("id")))
+}
+
+// HandleAWSGetScan — GET /api/v1/discovery/aws/connections/:id/scans/:scanID.
+func (h *DiscoveryHandlers) HandleAWSGetScan(c *gin.Context) {
+	writeScanDetail(c, h.scanStore, h.logger, "aws",
+		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
 }

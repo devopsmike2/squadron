@@ -102,6 +102,9 @@ type DiscoveryAzureHandlers struct {
 	// verdict few-shot block + discovery_proposal.created examples.
 	// nil = cold-start empty.
 	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
+	// scanStore — continuous-discovery slice 2 (v0.89.251). Persists
+	// completed scans + backs the history endpoints. Nil = non-persisted.
+	scanStore DiscoveryScanStore
 }
 
 // NewDiscoveryAzureHandlers builds the handler struct. Optional
@@ -145,6 +148,23 @@ func (h *DiscoveryAzureHandlers) WithAzureCredstoreKey(k *credstore.Key) *Discov
 func (h *DiscoveryAzureHandlers) WithAzureTraceIndex(idx TraceIndexLookup) *DiscoveryAzureHandlers {
 	h.traceIndex = idx
 	return h
+}
+
+// WithAzureScanStore wires the persisted scan-history store (slice 2).
+func (h *DiscoveryAzureHandlers) WithAzureScanStore(s DiscoveryScanStore) *DiscoveryAzureHandlers {
+	h.scanStore = s
+	return h
+}
+
+// HandleAzureListScans — GET /api/v1/discovery/azure/connections/:id/scans.
+func (h *DiscoveryAzureHandlers) HandleAzureListScans(c *gin.Context) {
+	writeScanList(c, h.scanStore, h.logger, "azure", strings.TrimSpace(c.Param("id")))
+}
+
+// HandleAzureGetScan — GET /api/v1/discovery/azure/connections/:id/scans/:scanID.
+func (h *DiscoveryAzureHandlers) HandleAzureGetScan(c *gin.Context) {
+	writeScanDetail(c, h.scanStore, h.logger, "azure",
+		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
 }
 
 func (h *DiscoveryAzureHandlers) WithAzureScannerFactory(f AzureScannerFactory) *DiscoveryAzureHandlers {
@@ -1117,7 +1137,7 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, azureScanResponse{
+	resp := azureScanResponse{
 		ConnectionID:        conn.ID,
 		SubscriptionID:      conn.SubscriptionID,
 		Location:            conn.Location,
@@ -1132,7 +1152,18 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
 		Orchestrations:      marshalOrchestrationRows(result.Orchestrations),
-	})
+	}
+	// slice 2 (v0.89.251) — persist the completed scan (best-effort). Scope
+	// is the route :id (connection ID). Demo path returned earlier.
+	if h.scanStore != nil {
+		if rj, err := json.Marshal(resp); err == nil {
+			recordScan(c.Request.Context(), h.scanStore, h.logger, "azure", conn.ID, result, rj)
+		} else if h.logger != nil {
+			h.logger.Warn("azure scan: marshal for persistence failed",
+				zap.Error(err), zap.String("scan_id", result.ScanID))
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // emitAzureScanFailed records a discovery.azure.scan_failed audit

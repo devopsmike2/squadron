@@ -49,9 +49,11 @@ it is mostly serialization.
 
 ## Scope / honest framing
 
-- **AWS only in slice 1.** The store + ScanRecord are provider-neutral; slice 2
-  wires the persist call + history endpoints for GCP/Azure/OCI (small,
-  mechanical — they share `recordScan`).
+- **AWS in slice 1; GCP/Azure/OCI in slice 2 (v0.89.251, shipped).** All four
+  clouds now persist + expose `GET .../scans` + `.../scans/:scanID` via the
+  shared `recordScan` / `writeScanList` / `writeScanDetail` helpers. ScopeID is
+  the route's `:id` (account_id for AWS; connection ID for GCP/Azure/OCI) so the
+  history endpoints query uniformly with no extra connection lookup.
 - **Still synchronous.** This slice persists results; it does NOT make scans
   async or scheduled. That is slice 3 (a scheduled-scan engine). The route
   shape stays stable so slice 3 can shrink the POST to "scan_id, queued".
