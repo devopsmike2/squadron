@@ -61,7 +61,13 @@ standalone secrets, not config fields:
   first sweep fires after one interval (not at startup). After each scheduled
   scan Squadron diffs it against the previous one and, on any change, records a
   `discovery.scan_drift_detected` audit event (forwards via SIEM like any audit
-  event) — proactive drift without polling.
+  event) — proactive drift without polling. The event payload carries the
+  change totals, capped added/removed resource id lists, and
+  instrumentation_regressions (resources whose OTel turned off).
+- `SQUADRON_DISCOVERY_DRIFT_COOLDOWN` — opt-in (default off). A Go duration
+  that caps how often a single scope emits a drift event. Useful when scanning
+  frequently but wanting fewer drift alerts (e.g. scan every 15m, alert at most
+  hourly). Unset / <=0 means every changed sweep emits.
 - `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
   Bearer token enforcement. Do NOT set this in production.
 
