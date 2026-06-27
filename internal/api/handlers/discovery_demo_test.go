@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
+	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -89,5 +91,44 @@ func TestHandleDemoEnable_NoStore(t *testing.T) {
 	w := doDemoRequest(h, http.MethodPost, "/api/v1/discovery/demo/enable", h.HandleDemoEnable)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 when store unwired", w.Code)
+	}
+}
+
+// TestHandleAWSGenerateRecommendations_DemoSeeded verifies the demo connection
+// produces seeded recommendations through the normal async job + poll flow,
+// WITHOUT ever calling the AI proposer — so a first-time operator with no
+// ANTHROPIC_API_KEY still gets an end-to-end Inventory -> Recommendations flow.
+func TestHandleAWSGenerateRecommendations_DemoSeeded(t *testing.T) {
+	conn := &credstore.CloudConnection{AccountID: demo.SentinelAccountID, Provider: credstore.ProviderAWS}
+	mp := &mockAIProposer{result: minimalProposerPlan()}
+	h := newRecsHandlers(t, conn, mp, nil)
+	h.WithRecommendationJobStore(newRecommendationJobStore())
+
+	acc := kickOffRecs(t, h, demo.SentinelAccountID)
+	resp := pollJobUntilDone(t, h, acc.JobID)
+	if resp.Status != string(RecJobSucceeded) {
+		t.Fatalf("job status = %s, want succeeded; error=%+v", resp.Status, resp.Error)
+	}
+
+	var body awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(resp.Result, &body); err != nil {
+		t.Fatalf("result unmarshal: %v", err)
+	}
+	if len(body.Recommendations) != 4 {
+		t.Fatalf("recommendation count = %d, want 4", len(body.Recommendations))
+	}
+	if mp.called {
+		t.Error("demo recommendations must NOT call the AI proposer")
+	}
+	for i, rec := range body.Recommendations {
+		if rec.Source == nil || rec.Source.Kind != recommendations.SourceDiscoveryScan {
+			t.Errorf("rec[%d] source = %+v, want discovery_scan", i, rec.Source)
+		}
+		if rec.IaC == nil || rec.IaC.Source == "" {
+			t.Errorf("rec[%d] has no IaC snippet", i)
+		}
+		if rec.Title == "" {
+			t.Errorf("rec[%d] has empty title", i)
+		}
 	}
 }

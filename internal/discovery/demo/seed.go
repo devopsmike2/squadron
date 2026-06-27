@@ -29,6 +29,10 @@ const SentinelAccountID = "demo-000000000000"
 // Region is the single region the demo inventory lives in.
 const Region = "us-east-1"
 
+// ScanID is the stable scan identifier for the demo inventory. Recommendation
+// IDs derive from it, so they are deterministic across runs.
+const ScanID = "demo-scan-0001"
+
 // DisplayName is the operator-facing label for the demo connection.
 const DisplayName = "Demo Account (sample data)"
 
@@ -64,7 +68,7 @@ func BuildResult() *scanner.Result {
 	started := now.Add(-2 * time.Second)
 
 	return &scanner.Result{
-		ScanID:          "demo-scan-0001",
+		ScanID:          ScanID,
 		ScanStartedAt:   started,
 		ScanCompletedAt: now,
 		Provider:        credstore.ProviderAWS,
