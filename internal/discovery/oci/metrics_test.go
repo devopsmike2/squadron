@@ -90,10 +90,6 @@ func TestOCIFunctionsConstants_Stable(t *testing.T) {
 		t.Errorf("OCIFunctionsFunctionDurationMetric = %q, want %q",
 			OCIFunctionsFunctionDurationMetric, "FunctionExecutionDuration")
 	}
-	if OCIFunctionsColdStartCountMetric != "cold_start_count" {
-		t.Errorf("OCIFunctionsColdStartCountMetric = %q, want %q",
-			OCIFunctionsColdStartCountMetric, "cold_start_count")
-	}
 }
 
 // TestScannerSatisfiesMetricQuerier — compile-time pin that the OCI
@@ -177,44 +173,6 @@ func TestOCIQueryAggregate_FunctionDuration_ReturnsP95(t *testing.T) {
 	}
 	if !strings.Contains(q, "resourceId = \"ocid1.fnfunc.oc1.phx.xxx\"") {
 		t.Errorf("query %q missing resourceId filter", q)
-	}
-}
-
-// TestOCIQueryAggregate_ColdStartCount_ReturnsCount — slice 2 chunk 3
-// acceptance test 9 helper: cold_start_count with non-zero datapoints
-// returns the SUM (total cold starts in the window).
-func TestOCIQueryAggregate_ColdStartCount_ReturnsCount(t *testing.T) {
-	mf := &monitoringFake{
-		respondWith: []ociMetricDataPoint{
-			{Timestamp: time.Now().Add(-20 * time.Minute), Value: 3.0, SampleCount: 1},
-			{Timestamp: time.Now().Add(-15 * time.Minute), Value: 7.0, SampleCount: 1},
-			{Timestamp: time.Now().Add(-10 * time.Minute), Value: 2.0, SampleCount: 1},
-		},
-	}
-	s := newMetricsTestScanner(t, mf)
-	res, err := s.QueryAggregate(
-		context.Background(),
-		"ocid1.fnfunc.oc1.phx.xxx",
-		OCIFunctionsColdStartCountMetric,
-		24*time.Hour,
-		scanner.StatisticSum,
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res.Value != 12.0 {
-		t.Errorf("Value = %v, want SUM across datapoints (12.0)", res.Value)
-	}
-	if res.SampleCount != 3 {
-		t.Errorf("SampleCount = %d, want 3", res.SampleCount)
-	}
-	// The MQL query should embed the SUM aggregation.
-	q := mf.receivedQuery[0]
-	if !strings.Contains(q, "cold_start_count") {
-		t.Errorf("query %q missing metric name", q)
-	}
-	if !strings.Contains(q, ".sum()") {
-		t.Errorf("query %q missing sum() aggregation", q)
 	}
 }
 

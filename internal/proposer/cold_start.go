@@ -372,18 +372,6 @@ type ColdStartDetectionFindingPerCloud struct {
 	// upgrading for cold-start-isolated metrics. Only meaningful for
 	// the Azure helper; the GCP / OCI helpers ignore this field.
 	UsedFallback bool
-
-	// Skipped signals the OCI cold_start_count was zero in the
-	// window — defensive gate. The OCI helper rejects the draft
-	// when this is true (the chunk-3 ShouldFireRecommendation
-	// predicate already bakes the gate in; this is a defense-in-
-	// depth check).
-	Skipped bool
-
-	// CurrentColdStartCount surfaced for the OCI reasoning text so
-	// the operator sees the underlying cold-start count when a
-	// detection fires (or doesn't).
-	CurrentColdStartCount int
 }
 
 // checkPerCloudColdStartExcluded consults the exclusion store for a
@@ -544,10 +532,7 @@ func CheckAzureFunctionsColdStart(
 }
 
 // CheckOCIFunctionsColdStart is the per-cloud detection branch for
-// the ocifunc-cold-start-baseline kind. Skipped findings (no cold
-// starts in the window) are defensively rejected here — the chunk-3
-// ShouldFireRecommendation predicate already bakes the gate in but
-// the defensive check keeps the per-cloud invariant explicit.
+// the ocifunc-cold-start-baseline kind.
 func CheckOCIFunctionsColdStart(
 	ctx context.Context,
 	row ColdStartInventoryRow,
@@ -556,13 +541,6 @@ func CheckOCIFunctionsColdStart(
 	exclusions ColdStartExclusionStore,
 ) (*ColdStartRecommendationDraft, error) {
 	if finding == nil || !finding.ShouldFire {
-		return nil, nil
-	}
-	// Defensive: per slice 2 §3.4 the OCI ShouldFireRecommendation
-	// predicate already gates on !Skipped, but a malformed wiring
-	// path could in principle pre-compute ShouldFire=true alongside
-	// Skipped=true. Reject defensively.
-	if finding.Skipped {
 		return nil, nil
 	}
 	if row.Surface != "" && row.Surface != "ocifunc" {
@@ -699,13 +677,12 @@ func formatOCIFunctionsColdStartReasoning(
 ) string {
 	var b strings.Builder
 	fmt.Fprintf(&b,
-		"This OCI Function's 24-hour P95 function_duration is %.0fms, %.2fx its 7-day baseline of %.0fms (current samples=%d, baseline samples=%d; cold_start_count=%d in the current window).\n\n",
+		"This OCI Function's 24-hour P95 FunctionExecutionDuration is %.0fms, %.2fx its 7-day baseline of %.0fms (current samples=%d, baseline samples=%d).\n\n",
 		finding.CurrentP95Ms, finding.Ratio, finding.BaselineP95Ms,
 		finding.CurrentSampleCount, finding.BaselineSampleCount,
-		finding.CurrentColdStartCount,
 	)
 	fmt.Fprintf(&b, "Resource: %s (provider=%s, region=%s).\n\n", row.ResourceID, row.Provider, row.Region)
-	b.WriteString("Squadron flags this when cold_start_count > 0 AND the ratio exceeds 1.5x AND the absolute value exceeds 500ms. CAVEAT: OCI Functions doesn't have an isolated cold-start latency metric; function_duration is the proxy when cold_start_count > 0 — the P95 above is across all invocations in the window, not cold-start-isolated. Three common causes to evaluate:\n")
+	b.WriteString("Squadron flags this when the current P95 exceeds 1.5x the baseline AND is above 500ms. CAVEAT: OCI's oci_faas namespace has no isolated cold-start latency metric (and no cold-start counter), so this is a FunctionExecutionDuration P95-regression heuristic — the P95 is across ALL invocations in the window, not cold-start-isolated. A spike may be a cold start OR a slow downstream dependency. Three common causes to evaluate:\n")
 	b.WriteString("  1. Init script regression: a recent deployment added heavy imports / startup work.\n")
 	b.WriteString("  2. Cold-start frequency increase: reduced invocation rate or scale-to-zero events.\n")
 	b.WriteString("  3. Architecture change: runtime / memory updates can shift cold-start behavior.\n\n")

@@ -435,35 +435,15 @@ func TestCheckAzureFunctionsColdStart_UsedFallback_RecorderInformationalNote(t *
 	}
 }
 
-// TestCheckOCIFunctionsColdStart_SkippedWhenNoColdStarts_NoRecommendation
-// — when the OCI finding's ShouldFire was set to true but Skipped
-// is also true, the defensive gate rejects the draft. In production
-// the chunk-3 ShouldFireRecommendation predicate already gates on
-// !Skipped, but this test pins the defensive belt-and-suspenders
-// behavior at the proposer boundary.
-func TestCheckOCIFunctionsColdStart_SkippedWhenNoColdStarts_NoRecommendation(t *testing.T) {
+// TestCheckOCIFunctionsColdStart_NotFiring_NoRecommendation — when the
+// finding's ShouldFire is false (the production gate already rejected it),
+// no draft is emitted.
+func TestCheckOCIFunctionsColdStart_NotFiring_NoRecommendation(t *testing.T) {
 	row := newOCIFuncRow()
-	finding := &ColdStartDetectionFindingPerCloud{
-		// Production wiring would never reach this combination
-		// because the chunk-3 ShouldFireRecommendation predicate
-		// short-circuits on Skipped. Test pins defensive behavior.
-		ShouldFire: true,
-		Skipped:    true,
-	}
-	draft, err := CheckOCIFunctionsColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
-	if err != nil {
-		t.Fatalf("CheckOCIFunctionsColdStart: %v", err)
-	}
-	if draft != nil {
-		t.Errorf("draft != nil when Skipped=true; got: %+v", draft)
-	}
-
-	// Also pin: when ShouldFire is false (the production case),
-	// no draft emits even when Skipped is false.
 	notFiring := &ColdStartDetectionFindingPerCloud{
 		ShouldFire: false,
 	}
-	draft, err = CheckOCIFunctionsColdStart(context.Background(), row, notFiring, newColdStartScope(), &fakeExclusionStore{})
+	draft, err := CheckOCIFunctionsColdStart(context.Background(), row, notFiring, newColdStartScope(), &fakeExclusionStore{})
 	if err != nil {
 		t.Fatalf("CheckOCIFunctionsColdStart: %v", err)
 	}
@@ -473,18 +453,17 @@ func TestCheckOCIFunctionsColdStart_SkippedWhenNoColdStarts_NoRecommendation(t *
 }
 
 // TestCheckOCIFunctionsColdStart_ShouldFire_EmitsRecommendation — OCI
-// happy path. The reasoning text surfaces the cold_start_count
-// honesty caveat: function_duration is not cold-start-isolated.
+// happy path. The reasoning honestly frames the FunctionExecutionDuration
+// P95-regression heuristic as not cold-start-isolated.
 func TestCheckOCIFunctionsColdStart_ShouldFire_EmitsRecommendation(t *testing.T) {
 	row := newOCIFuncRow()
 	finding := &ColdStartDetectionFindingPerCloud{
-		ShouldFire:            true,
-		CurrentP95Ms:          2100,
-		BaselineP95Ms:         1300,
-		Ratio:                 1.62,
-		CurrentSampleCount:    80,
-		BaselineSampleCount:   560,
-		CurrentColdStartCount: 14,
+		ShouldFire:          true,
+		CurrentP95Ms:        2100,
+		BaselineP95Ms:       1300,
+		Ratio:               1.62,
+		CurrentSampleCount:  80,
+		BaselineSampleCount: 560,
 	}
 	draft, err := CheckOCIFunctionsColdStart(context.Background(), row, finding, newColdStartScope(), &fakeExclusionStore{})
 	if err != nil {
@@ -503,8 +482,7 @@ func TestCheckOCIFunctionsColdStart_ShouldFire_EmitsRecommendation(t *testing.T)
 		"2100ms",
 		"1.62x",
 		"1300ms",
-		"cold_start_count=14",
-		"function_duration",
+		"FunctionExecutionDuration",
 		"not cold-start-isolated",
 		"WARMUP_DELAY",
 		"preview",

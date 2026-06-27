@@ -30,27 +30,12 @@ const OCIMonitoringRateLimitTPS = 10
 // keeps the namespace single-sourced for the chunk-3 routing.
 const OCIFunctionsMetricNamespace = "oci_faas"
 
-// OCIFunctionsFunctionDurationMetric is the metric name for
-// per-function execution duration. Slice 2 uses this as the proxy
-// for cold-start latency when cold_start_count > 0. OCI doesn't
-// expose an isolated cold-start latency metric, so the design doc's
-// §3.4 detection joins function_duration P95 with the
-// cold_start_count counter — when the counter is zero the
-// duration's cold-start contribution is also zero, and the
-// detection short-circuits.
+// OCIFunctionsFunctionDurationMetric is the per-function execution
+// duration metric. OCI's oci_faas namespace has no isolated cold-start
+// latency metric (and no cold-start counter), so the OCI cold-start
+// detection is a P95-regression heuristic over this duration metric —
+// not cold-start-isolated. See cold_start.go::DetectColdStartRegression.
 const OCIFunctionsFunctionDurationMetric = "FunctionExecutionDuration"
-
-// OCIFunctionsColdStartCountMetric is the counter Squadron uses to
-// verify the function actually experienced cold starts in the
-// window. When this counter is 0, slice 2 skips the detection (no
-// cold starts = no signal). See cold_start.go::
-// DetectColdStartRegression for the gate.
-// AVAILABILITY WARNING: oci_faas has no cold-start counter metric (only
-// FunctionInvocationCount / FunctionExecutionDuration / FunctionResponseCount /
-// AllocatedProvisionedConcurrency). This name does not resolve, so the OCI
-// cold-start gate is unsatisfiable — detection redesign deferred per
-// docs/audit/detection-metric-availability.md.
-const OCIFunctionsColdStartCountMetric = "cold_start_count"
 
 // OCIFunctionsInvocationCountMetric is the OCI Monitoring counter
 // for per-function invocation count. Sampling rate analysis slice 1
@@ -221,9 +206,6 @@ type ociAggregatedDatapoint struct {
 //   - metricName == OCIFunctionsFunctionDurationMetric → real OCI
 //     Monitoring call with the MQL query
 //     "function_duration[<window>]{resourceId = \"<ocid>\"}.percentile(95)".
-//   - metricName == OCIFunctionsColdStartCountMetric → real OCI
-//     Monitoring call with the MQL query
-//     "cold_start_count[<window>]{resourceId = \"<ocid>\"}.sum()".
 //   - Any other metricName → returns an empty
 //     AggregateMetricResult with SampleCount=0 and no error
 //     (matches the AWS chunk-2 contract for unsupported names).
@@ -261,7 +243,6 @@ func (s *Scanner) QueryAggregate(
 
 	switch metricName {
 	case OCIFunctionsFunctionDurationMetric,
-		OCIFunctionsColdStartCountMetric,
 		OCIFunctionsInvocationCountMetric,
 		OCIFunctionsErrorResponseCountMetric:
 		// Supported — fall through to the real call. Sampling rate
@@ -315,7 +296,7 @@ func (s *Scanner) QueryAggregate(
 			"%s[%s]{resourceId = %q}.percentile(0.95)",
 			baseMetric, ociWindowQuery(window), functionOCID,
 		)
-	case OCIFunctionsColdStartCountMetric, OCIFunctionsInvocationCountMetric:
+	case OCIFunctionsInvocationCountMetric:
 		// Both counter metrics use .sum() — the per-period
 		// datapoints already carry the per-resolution count, and
 		// the substrate's cross-period rollup below also SUMs.
@@ -372,8 +353,7 @@ func (s *Scanner) QueryAggregate(
 			}
 			totalSamples += p.SampleCount
 		}
-	case OCIFunctionsColdStartCountMetric,
-		OCIFunctionsInvocationCountMetric,
+	case OCIFunctionsInvocationCountMetric,
 		OCIFunctionsErrorResponseCountMetric:
 		// Counter rollup: SUM across periods = total events
 		// across the window. Mirrors the cold_start_count path —

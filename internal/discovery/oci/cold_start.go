@@ -75,13 +75,13 @@ type ColdStartStore interface {
 	LatestColdStartObservation(ctx context.Context, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error)
 }
 
-// ColdStartDetectionResult captures the outcome of one detection
-// comparison for a single OCI Function. Mirrors the AWS slice-1
-// shape with two additions for the OCI-specific signal: a
-// CurrentColdStartCount counter (from the cold_start_count metric)
-// and a Skipped boolean signaling the §3.4 short-circuit (no cold
-// starts in the window means no detection — return early without
-// firing).
+// ColdStartDetectionResult captures the outcome of one detection comparison
+// for a single OCI Function.
+//
+// NOTE: OCI's oci_faas namespace has no cold-start counter metric, so OCI
+// cold-start detection is a FunctionExecutionDuration P95-regression heuristic
+// (current vs 7-day baseline). It cannot isolate cold-start latency
+// specifically — a duration spike may be a cold start OR a slow dependency.
 type ColdStartDetectionResult struct {
 	// ResourceARN is the OCI Function OCID this result applies to.
 	ResourceARN string
@@ -121,21 +121,6 @@ type ColdStartDetectionResult struct {
 	CurrentSampleCount  int
 	BaselineSampleCount int
 
-	// CurrentColdStartCount is the SUM of cold_start_count over the
-	// current window. Slice 2 §3.4 uses this as the short-circuit
-	// gate: a function with zero cold starts in the window has no
-	// cold-start signal to detect, so the detection skips
-	// regardless of how the duration P95 compares to the baseline.
-	CurrentColdStartCount int
-
-	// Skipped signals that the detection short-circuited because
-	// the current-window cold_start_count was zero. When true,
-	// ShouldFireRecommendation always returns false and the
-	// CurrentP95Ms / BaselineP95Ms / Ratio fields are left at
-	// their zero values (the duration queries are not even
-	// dispatched — saves the rate-limiter budget).
-	Skipped bool
-
 	// ObservedAt is the reference timestamp the detection ran.
 	ObservedAt time.Time
 }
@@ -145,18 +130,14 @@ type ColdStartDetectionResult struct {
 // ocifunc-cold-start-baseline recommendation. Four sub-rules must
 // all hold:
 //
-//  1. Skipped is false — cold_start_count > 0 in the window,
-//  2. ExceedsThreshold — current is at least 1.5x baseline,
-//  3. ExceedsFloor — current is at least 500ms (the absolute floor),
-//  4. BaselineSampleCount >= ColdStartBaselineMinimumSamples — the
+//  1. ExceedsThreshold — current is at least 1.5x baseline,
+//  2. ExceedsFloor — current is at least 500ms (the absolute floor),
+//  3. BaselineSampleCount >= ColdStartBaselineMinimumSamples — the
 //     baseline is statistically trustworthy.
 //
 // See docs/proposals/cold-start-latency-slice2.md §3.4 + §11
 // acceptance tests 8-9.
 func (r ColdStartDetectionResult) ShouldFireRecommendation() bool {
-	if r.Skipped {
-		return false
-	}
 	if !r.ExceedsThreshold {
 		return false
 	}
@@ -169,63 +150,32 @@ func (r ColdStartDetectionResult) ShouldFireRecommendation() bool {
 	return true
 }
 
-// DetectColdStartRegression runs the per-function cold-start
-// regression comparison for a single OCI Function. Per §3.4 the
-// detection is a three-step query:
+// DetectColdStartRegression runs the per-function cold-start regression
+// comparison for a single OCI Function as a FunctionExecutionDuration
+// P95-regression heuristic (oci_faas has no cold-start counter metric).
+// Two queries: current 24h P95 vs 7-day baseline P95.
 //
-//  1. Query cold_start_count over the current window. If the SUM
-//     is zero, return immediately with Skipped=true — no cold
-//     starts means no signal to detect, regardless of duration.
-//  2. Query function_duration P95 over the current window.
-//  3. Query function_duration P95 over the baseline window.
+// Returns the ColdStartDetectionResult unconditionally — the caller decides
+// whether to fire via ShouldFireRecommendation. A zero baseline (function
+// younger than 7 days / no datapoints) short-circuits the ratio to zero, and
+// ShouldFireRecommendation returns false because BaselineSampleCount is below
+// the minimum.
 //
-// Returns the ColdStartDetectionResult unconditionally — the caller
-// decides whether to fire a recommendation via the result's
-// ShouldFireRecommendation predicate.
-//
-// Per the MetricQuerier contract, a function that has emitted no
-// datapoints in a window returns a zero Value + zero SampleCount
-// with no error. The detection threads that through cleanly:
-// zero baseline value short-circuits the ratio computation to zero
-// (Ratio stays 0, ExceedsThreshold stays false), and
-// ShouldFireRecommendation returns false because
-// BaselineSampleCount is below the minimum.
-//
-// See docs/proposals/cold-start-latency-slice2.md §3.4 + §11.
+// NOTE: duration-regression, not cold-start-isolated — a duration spike may be
+// a cold start OR a slow downstream dependency. See the type doc.
 func (s *Scanner) DetectColdStartRegression(
 	ctx context.Context,
 	resourceARN string,
 ) (ColdStartDetectionResult, error) {
 	observedAt := time.Now().UTC()
 
-	// Step 1: cold_start_count over the current window. The §3.4
-	// short-circuit: zero cold starts means no signal — return
-	// Skipped=true without dispatching the duration queries.
-	csCount, err := s.QueryAggregate(
-		ctx, resourceARN, OCIFunctionsColdStartCountMetric,
-		time.Duration(ColdStartCurrentWindowHours)*time.Hour,
-		scanner.StatisticSum,
-	)
-	if err != nil {
-		return ColdStartDetectionResult{}, fmt.Errorf("cold-start count query: %w", err)
-	}
-
 	result := ColdStartDetectionResult{
-		ResourceARN:           resourceARN,
-		Surface:               ColdStartSurfaceOCIFunc,
-		CurrentColdStartCount: int(csCount.Value),
-		ObservedAt:            observedAt,
-	}
-	if csCount.Value <= 0 {
-		// §3.4 short-circuit: no cold starts in the current
-		// window. The duration queries would tell us nothing
-		// about cold-start latency (since no cold starts
-		// happened), so we skip them entirely.
-		result.Skipped = true
-		return result, nil
+		ResourceARN: resourceARN,
+		Surface:     ColdStartSurfaceOCIFunc,
+		ObservedAt:  observedAt,
 	}
 
-	// Step 2: function_duration P95 over the current window.
+	// Step 1: FunctionExecutionDuration P95 over the current window.
 	current, err := s.QueryAggregate(
 		ctx, resourceARN, OCIFunctionsFunctionDurationMetric,
 		time.Duration(ColdStartCurrentWindowHours)*time.Hour,
@@ -235,7 +185,7 @@ func (s *Scanner) DetectColdStartRegression(
 		return ColdStartDetectionResult{}, fmt.Errorf("current window query: %w", err)
 	}
 
-	// Step 3: function_duration P95 over the baseline window.
+	// Step 2: FunctionExecutionDuration P95 over the baseline window.
 	baseline, err := s.QueryAggregate(
 		ctx, resourceARN, OCIFunctionsFunctionDurationMetric,
 		time.Duration(ColdStartBaselineWindowHours)*time.Hour,
@@ -291,11 +241,6 @@ func (s *Scanner) runColdStartDetectionForServerless(ctx context.Context, result
 					snap.ResourceARN, err.Error()))
 			continue
 		}
-		if detection.Skipped {
-			// §3.4: no cold starts in window — nothing to
-			// persist, nothing to recommend on.
-			continue
-		}
 		s.persistColdStartObservation(ctx, snap, detection,
 			ColdStartCurrentWindowHours,
 			detection.CurrentP95Ms, detection.CurrentSampleCount, result)
@@ -319,14 +264,13 @@ func (s *Scanner) persistColdStartObservation(
 	result *scanner.Result,
 ) {
 	snapshotJSON, err := json.Marshal(map[string]any{
-		"resource_arn":             snap.ResourceARN,
-		"metric_name":              OCIFunctionsFunctionDurationMetric,
-		"window_hours":             windowHours,
-		"statistic":                string(scanner.StatisticP95),
-		"value":                    p95Ms,
-		"sample_count":             sampleCount,
-		"observed_at":              detection.ObservedAt,
-		"current_cold_start_count": detection.CurrentColdStartCount,
+		"resource_arn": snap.ResourceARN,
+		"metric_name":  OCIFunctionsFunctionDurationMetric,
+		"window_hours": windowHours,
+		"statistic":    string(scanner.StatisticP95),
+		"value":        p95Ms,
+		"sample_count": sampleCount,
+		"observed_at":  detection.ObservedAt,
 	})
 	if err != nil {
 		snapshotJSON = []byte("{}")

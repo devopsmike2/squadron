@@ -29,7 +29,7 @@ by metric availability.
 | AWS | Lambda | **No** — `InitDuration` is a CloudWatch **Logs** REPORT field, not an `AWS/Lambda` metric. | ⚠️ Requires **Lambda Insights** (`LambdaInsights`/`init_duration`) or a Logs metric-filter. |
 | GCP | Cloud Run / Functions | Yes — `request_latencies` / `execution_times`. | ✅ (includes warm-path invocations; a permanently-warm service can show false positives). |
 | Azure | Functions | **No** — Azure Monitor exposes only `FunctionExecutionCount` / `FunctionExecutionUnits`; there is no per-function duration metric and no `IsAfterColdStart` dimension. | ⚠️ Requires **Application Insights** (`requests`/duration). |
-| OCI | Functions | **No** — `oci_faas` has `FunctionInvocationCount` / `FunctionExecutionDuration` / `FunctionResponseCount` but no cold-start counter. | ⛔ Deferred (no cold-start gate metric). |
+| OCI | Functions | Duration only — `oci_faas` has `FunctionExecutionDuration` but no cold-start counter. | ✅ Duration-regression heuristic (P95 current vs 7-day baseline); **not cold-start-isolated** — a spike may be a cold start or a slow dependency (v0.89.232). |
 
 ## Error rate
 
