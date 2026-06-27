@@ -130,13 +130,19 @@ The substrate from cold-start slice 1+2 already wired per-cloud
 `MetricQuerier`. Slice 1 of sampling rate adds ONE NEW METRIC
 NAME per cloud:
 
+> **⚠️ Accuracy note (v0.89.232).** The Azure invocation metric below should be
+> `FunctionExecutionCount` (`FunctionInvocations` does not exist in Azure
+> Monitor); the code rename is pending — see
+> [detection-coverage.md](./detection-coverage.md). The OCI metric was corrected
+> to `FunctionInvocationCount` in v0.89.229.
+
 | Cloud | Surface         | Invocation metric                                          |
 |-------|-----------------|------------------------------------------------------------|
 | AWS   | Lambda          | `AWS/Lambda Invocations` (Sum statistic)                   |
 | GCP   | Cloud Run       | `run.googleapis.com/request_count` filtered by `response_code_class != "5xx"` |
 | GCP   | Cloud Functions | `cloudfunctions.googleapis.com/function/execution_count` filtered by `status = "ok"` |
-| Azure | Functions       | `FunctionInvocations` (Total aggregation)                  |
-| OCI   | Functions       | `function_invocation_count` (Sum)                          |
+| Azure | Functions       | `FunctionExecutionCount` (Total aggregation)              |
+| OCI   | Functions       | `FunctionInvocationCount` (Sum)                            |
 
 All five metrics fold into the existing rate limiter for each
 cloud — the substrate adds 1 metric query per resource per
@@ -200,8 +206,10 @@ per-resource "tail-sampling intentional" flag.
 
 ## Per-cloud Terraform patterns
 
-All 5 surfaces use the same env var (`OTEL_TRACES_SAMPLER_ARG`)
-just with different injection mechanisms.
+All 5 surfaces set the same TWO env vars — `OTEL_TRACES_SAMPLER` (a ratio
+sampler) AND `OTEL_TRACES_SAMPLER_ARG` (the ratio) — just with different
+injection mechanisms. Setting the ARG alone is a NO-OP: the OTel SDK's default
+sampler (parentbased_always_on) ignores it.
 
 ### AWS Lambda
 
@@ -209,6 +217,7 @@ just with different injection mechanisms.
 resource "aws_lambda_function" "<name>" {
   environment {
     variables = {
+      OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"
       OTEL_TRACES_SAMPLER_ARG = "0.5"  # operator tunes
     }
   }
@@ -222,6 +231,10 @@ resource "google_cloud_run_service" "<name>" {
   template {
     spec {
       containers {
+        env {
+          name  = "OTEL_TRACES_SAMPLER"
+          value = "parentbased_traceidratio"
+        }
         env {
           name  = "OTEL_TRACES_SAMPLER_ARG"
           value = "0.5"
@@ -238,6 +251,7 @@ resource "google_cloud_run_service" "<name>" {
 resource "google_cloudfunctions2_function" "<name>" {
   service_config {
     environment_variables = {
+      OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"
       OTEL_TRACES_SAMPLER_ARG = "0.5"
     }
   }
@@ -249,6 +263,7 @@ resource "google_cloudfunctions2_function" "<name>" {
 ```hcl
 resource "azurerm_linux_function_app" "<name>" {
   app_settings = {
+    OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"
     OTEL_TRACES_SAMPLER_ARG = "0.5"
   }
 }
@@ -259,6 +274,7 @@ resource "azurerm_linux_function_app" "<name>" {
 ```hcl
 resource "oci_functions_function" "<name>" {
   config = {
+    OTEL_TRACES_SAMPLER     = "parentbased_traceidratio"
     OTEL_TRACES_SAMPLER_ARG = "0.5"
   }
 }

@@ -2059,7 +2059,7 @@ Cross-reference:
 [Poison-message rate analysis slice 3 design doc](./proposals/poison-message-rate-slice3.md).
 
 
-## Poison-Rate Substrate Integration SHIPPED in v0.89.177 — slice 4 chunk 1 (AWS SQS real detection)
+## Poison-Rate Substrate Integration — AWS SQS reverted to honest framing (v0.89.230)
 
 Slice 3 (v0.89.172-176) shipped the poison-rate axis across
 all four clouds as §3.3 honest framing — the rate was never
@@ -2068,215 +2068,21 @@ actually measured (`poison_rate_per_hour = -1` always). Slice
 that deferral, one cloud per chunk, mirroring the cold-start
 latency arc's per-cloud substrate build.
 
-Chunk 1 makes **AWS SQS real**. Squadron now reads the
-dead-letter queue's `NumberOfMessagesSent` SUM over a trailing
-1-hour window via CloudWatch `GetMetricStatistics` (AWS/SQS
-namespace, QueueName dimension), reusing the cold-start
-substrate's per-account rate limiter and throttle-retry loop.
-For every SQS source queue whose DLQ is reachable in the
-scanned account, the `poison_rate_per_hour` +
-`poison_rate_high_band` Detail keys are overwritten with the
-measured rate and the real `rate >= 60/hour` (1/min) verdict.
-
-Real-zero versus absent is load-bearing: a measured
-`poison_rate_per_hour = 0` is a genuine "zero poison messages
-this hour" green signal; `-1` still strictly means "not
-measured" (DLQ too new with no datapoints, cross-account /
-dangling DLQ we did not enumerate, or CloudWatch client not
-wired). Operators must never read `-1` as zero.
-
-`sqs-poison-rate-monitor-add` still fires (operators still
-want the Terraform-generated CloudWatch alarm), but its
-reasoning now reports the measured rate instead of disclaiming
-the §3.3 gap. GCP Cloud Tasks, Azure Service Bus, and OCI
-Queue Service stay on §3.3 honest framing until chunks 4.2 /
-4.3 / 4.4 land — the mixed state is the deliberate shape of
-the per-cloud traversal.
-
-NO new IAM (`cloudwatch:GetMetricStatistics`, already granted
-for the Lambda metric paths, is namespace-agnostic and covers
-AWS/SQS). NO new webhook prefix. Cold-start parity preserved:
-the enrichment overwrites two existing Detail keys and is a
-no-op when the CloudWatch client is not wired
-(`cwClient == nil`).
-
-Cross-reference:
-[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
-
-
-## Poison-Rate Substrate Integration SHIPPED in v0.89.178 — slice 4 chunk 2 (GCP Cloud Tasks real detection)
-
-Chunk 2 makes **GCP Cloud Tasks real**, the second cloud in
-the substrate arc (after AWS SQS in v0.89.177). Squadron now
-reads each Cloud Tasks queue's FAILED `task_attempt_count`
-(`response_code != "OK"`) SUM over a trailing 1-hour window
-via Cloud Monitoring `timeSeries.list` (ALIGN_DELTA per period
-+ SUM across periods), reusing the cold-start slice-2
-substrate's per-project rate limiter.
-
-Cloud Tasks has no dead-letter-queue primitive, so — unlike
-AWS SQS, where the poison rate is read off a separate DLQ with
-a reachability check — the failed-delivery-attempt rate is
-measured on the queue itself. Every Cloud Tasks queue snapshot
-is queried directly; there is no DLQ/reachability gate.
-
-For each queue, `poison_rate_per_hour` + `poison_rate_high_band`
-are overwritten with the measured failed-attempt rate and the
-real `rate >= 60/hour` (1/min) verdict. The same real-zero
-versus absent contract holds: a measured `0` is a genuine
-"zero failed attempts this hour" green signal; `-1` strictly
-means "not measured" (queue too new with no series yet, or
-Cloud Monitoring client not wired).
-
-`cloudtasks-poison-rate-monitor-add` still fires (operators
-still want the Terraform-generated Cloud Monitoring alerting
-policy), but its reasoning now reports the measured rate
-instead of disclaiming the §3.3 gap. Azure Service Bus and OCI
-Queue Service stay on §3.3 honest framing until chunks 4.3 /
-4.4 land.
-
-NO new IAM (`monitoring.timeSeries.list`, already granted for
-the cold-start / sampling-rate / error-rate metric paths,
-covers the Cloud Tasks metric). NO new webhook prefix.
-Cold-start parity preserved: the enrichment overwrites two
-existing Detail keys and is a no-op when the Cloud Monitoring
-client is not wired (`metricsClient == nil`).
-
-Cross-reference:
-[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
-
-
-## Poison-Rate Substrate Integration SHIPPED in v0.89.179 — slice 4 chunk 3a (Azure Service Bus real detection, namespace granularity)
-
-Chunk 3a makes **Azure Service Bus real at namespace
-granularity**, the third cloud in the substrate arc (after AWS
-SQS in v0.89.177 and GCP Cloud Tasks in v0.89.178). Squadron
-now reads each Service Bus namespace's `DeadletteredMessages`
-metric via Azure Monitor and derives the poison rate as the
-`max(Maximum) - min(Minimum)` delta — net dead-letter
-accumulation — over a trailing 1-hour window, reusing the
-cold-start slice-2 substrate's per-subscription rate limiter.
-
-`DeadletteredMessages` is a gauge (current dead-letter count),
-not an arrival counter like the AWS SQS / GCP Cloud Tasks
-metrics, so the rate is a delta rather than a sum. This carries
-an honest semantic: the delta measures NET accumulation, not
-standing backlog. A namespace holding a constant 100
-dead-lettered messages with no new arrivals reads rate `0` (no
-NEW poison this hour) — correct for a rate, and distinct from a
-depth signal a future slice could add separately. The same
-real-zero versus absent contract holds: a measured `0` is a
-genuine green signal; `-1` strictly means "not measured" (no
-DeadletteredMessages series, or no access token wired).
-
-**Scope — this is the §3.2 split.** Chunk 3a closes §3.3
-(substrate-metric-dependence): Azure now reads a real metric.
-It does NOT close §3.2 (scanner-coverage-gap): the reading is
-NAMESPACE-AGGREGATED across all queues and topics, because the
-namespace-level scanner does not enumerate the per-queue
-sub-resource where the metric's `EntityName` dimension lives.
-Per-queue attribution is **chunk 3b** — a separate release that
-adds the per-queue walk. This split (real metric now, per-queue
-attribution next) keeps each release clean rather than stretching
-one across both a metric path and a scanner extension.
-
-`servicebus-poison-rate-monitor-add` still fires; its reasoning
-now reports the measured rate as a namespace-level signal. OCI
-Queue Service stays on §3.3 honest framing until chunk 4.4.
-
-NO new IAM (the `microsoft.insights` metrics read the cold-start
-substrate already uses covers the Service Bus namespace metric).
-NO new webhook prefix. Cold-start parity preserved: the
-enrichment overwrites two existing Detail keys and is a no-op
-when no access token is available.
-
-Cross-reference:
-[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
-
-
-## Poison-Rate Substrate Integration SHIPPED in v0.89.180 — slice 4 chunk 3b (Azure Service Bus per-queue attribution, CLOSES §3.2)
-
-Chunk 3b closes the **§3.2 scanner-coverage-gap** for Azure
-Service Bus poison-rate: the rate is now attributed to the
-specific worst-offending queue, not just the namespace
-aggregate that chunk 3a shipped.
-
-The closure uses the `DeadletteredMessages` metric's
-`EntityName` dimension directly — the dimension the §3.2 gap
-named. A single Azure Monitor call with
-`$filter="EntityName eq '*'"` returns one timeseries per
-queue/topic (tagged with its entity name in `metadatavalues`),
-so Squadron computes a per-queue `max(Maximum) - min(Minimum)`
-delta from one call. This deliberately avoids a separate ARM
-per-queue enumeration — the metric dimension split is the
-cleaner reach into the per-queue layer the namespace scanner
-didn't previously touch.
-
-Attribution: `poison_rate_per_hour` now carries the worst
-queue's rate; `poison_rate_high_band` is its `>= 60/hour`
-verdict. Two Detail keys are added when per-queue data exists:
-`poison_rate_worst_queue` (the offending queue name) and
-`poison_rate_measured_queue_count` (how many entities carried
-data). `servicebus-poison-rate-monitor-add` reasoning can now
-name the specific queue an operator should investigate.
-
-Fallback: when Azure returns no per-entity series, the
-enrichment falls back to the chunk-3a namespace-aggregated
-reading (no worst-queue key) — so no capability is lost on
-older API surfaces or namespaces with no per-entity breakdown.
-
-This completes the Azure cloud in the substrate arc (§3.3 in
-3a, §3.2 in 3b). OCI Queue Service is the last remaining cloud,
-on §3.3 honest framing until chunk 4.4.
-
-NO new IAM (the `microsoft.insights` metrics read already
-granted covers the EntityName-split query — splitting is a
-query parameter, not a new permission). NO new webhook prefix.
-Cold-start parity preserved: the enrichment overwrites/adds
-Detail keys only when an access token is wired AND per-entity
-data exists; the unwired path is a byte-identical no-op.
-
-Cross-reference:
-[Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
-
-
-## Poison-Rate Substrate Integration SHIPPED in v0.89.181 — slice 4 chunk 4 (OCI Queue Service real detection) — CLOSES THE SUBSTRATE ARC
-
-Chunk 4 makes **OCI Queue Service real**, the FINAL cloud in the
-substrate arc. With this release every cloud's poison-rate axis
-reads a real metric — the §3.3 substrate-metric-dependence
-honest framing is fully retired.
-
-Squadron reads each queue's dead-letter depth gauge
-(`MessagesInDlq`) via OCI Monitoring `summarizeMetricsData`
-(namespace `oci_queue`, MQL
-`MessagesInDlq[1h]{resourceId = "<queueOCID>"}.max()`) and
-derives the poison rate as the `max - min` delta (net dead-letter
-accumulation) over a trailing 1-hour window, reusing the
-cold-start slice-2 substrate's per-tenancy 10-TPS rate limiter.
-This is the same gauge-delta shape as the Azure chunk (OCI and
-Azure both expose dead-letter DEPTH gauges; AWS and GCP expose
-arrival COUNTERS read via sum).
-
-Honest caveat (also in design doc §7): the exact OCI Monitoring
-metric name for queue dead-letter depth should be confirmed
-against OCI's current Monitoring reference for the `oci_queue`
-namespace. The failure mode is SAFE — if the name does not
-match, OCI returns no datapoints, `SampleCount` is 0, and the
-detector falls back to the honest-framing absent sentinel
-(`-1`). A name mismatch degrades to "not measured", never to
-false data.
-
-Same real-zero versus absent contract: a measured `0` (flat
-gauge, no new dead-letters) is a genuine green signal; `-1`
-strictly means "not measured" (queue too new, no datapoints, or
-Monitoring client unwired).
+**CORRECTION (v0.89.230): AWS SQS poison-rate was reverted to §3.3 honest
+framing.** The `NumberOfMessagesSent` approach described above was wrong —
+messages moved to a DLQ by the redrive policy (the actual poison messages) are
+NOT counted by `NumberOfMessagesSent`; only manual SendMessage calls are. So it
+reported a confident 0/hour for DLQs filling via the normal failed-processing
+path. AWS SQS `poison_rate_per_hour` is once again the absent sentinel (`-1`),
+and `sqs-poison-rate-monitor-add` recommends wiring a CloudWatch alarm on the
+DLQ's `ApproximateNumberOfMessages` metric. GCP Cloud Tasks, Azure Service Bus,
+and OCI Queue remain real. See [detection-coverage.md](../detection-coverage.md).
 
 ### Substrate arc complete
 
 | Cloud | Metric | Shape |
 |-------|--------|-------|
-| AWS SQS | DLQ `NumberOfMessagesSent` | counter, sum over 1h |
+| AWS SQS | §3.3 honest framing (no native DLQ-additions counter; reverted v0.89.230) | absent sentinel + monitor rec |
 | GCP Cloud Tasks | failed `task_attempt_count` | counter, sum over 1h |
 | Azure Service Bus | `DeadletteredMessages` per-queue (EntityName split) | gauge, max-min delta |
 | OCI Queue Service | `MessagesInDlq` | gauge, max-min delta |
