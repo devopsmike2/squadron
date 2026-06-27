@@ -1009,6 +1009,54 @@ func humanizeEventType(eventType, action string) string {
 		return "AWS scan completed"
 	case "discovery.aws.scan_all_completed":
 		return "Multi-account AWS scan completed"
+	// v0.89.234 — discovery lifecycle humanizer coverage. The
+	// v0.89.25 cleanup covered only 3 AWS discovery events; the rest
+	// of the AWS lifecycle and the GCP / Azure / OCI connectors
+	// (added in later slices) emitted audit events that fell through
+	// to the raw event_type display on the Timeline. These flat
+	// lifecycle events belong in the table alongside their AWS peers.
+	case "discovery.aws.scan_started":
+		return "AWS scan started"
+	case "discovery.aws.recommendations_generated":
+		return "AWS recommendations generated"
+	case "discovery.aws.connection_read":
+		return "AWS connection accessed"
+	case "discovery.gcp.connection_created":
+		return "GCP connection created"
+	case "discovery.gcp.connection_deleted":
+		return "GCP connection deleted"
+	case "discovery.gcp.scan_started":
+		return "GCP scan started"
+	case "discovery.gcp.scan_completed":
+		return "GCP scan completed"
+	case "discovery.gcp.scan_failed":
+		return "GCP scan failed"
+	case "discovery.gcp.recommendations_generated":
+		return "GCP recommendations generated"
+	case "discovery.azure.connection_created":
+		return "Azure connection created"
+	case "discovery.azure.connection_deleted":
+		return "Azure connection deleted"
+	case "discovery.azure.scan_started":
+		return "Azure scan started"
+	case "discovery.azure.scan_completed":
+		return "Azure scan completed"
+	case "discovery.azure.scan_failed":
+		return "Azure scan failed"
+	case "discovery.azure.recommendations_generated":
+		return "Azure recommendations generated"
+	case "discovery.oci.connection_created":
+		return "OCI connection created"
+	case "discovery.oci.connection_deleted":
+		return "OCI connection deleted"
+	case "discovery.oci.scan_started":
+		return "OCI scan started"
+	case "discovery.oci.scan_completed":
+		return "OCI scan completed"
+	case "discovery.oci.scan_failed":
+		return "OCI scan failed"
+	case "discovery.oci.recommendations_generated":
+		return "OCI recommendations generated"
 	// v0.89.28 (#643 slice 1) — discovery proposal lifecycle. The
 	// payload-aware path at handleIaCAuditEvent above renders the
 	// enriched title when verdict_examples_used is populated; this

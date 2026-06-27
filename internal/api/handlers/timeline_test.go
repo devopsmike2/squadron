@@ -65,6 +65,29 @@ func TestHumanizeEventType(t *testing.T) {
 		{"discovery.aws.connection_created", "discovery.aws.connection_created", "create", "AWS connection created"},
 		{"discovery.aws.scan_completed", "discovery.aws.scan_completed", "scan", "AWS scan completed"},
 		{"discovery.aws.scan_all_completed", "discovery.aws.scan_all_completed", "scan", "Multi-account AWS scan completed"},
+		// v0.89.234 — discovery lifecycle coverage for the events the
+		// v0.89.25 cleanup missed + the GCP/Azure/OCI connectors.
+		{"discovery.aws.scan_started", "discovery.aws.scan_started", "scan", "AWS scan started"},
+		{"discovery.aws.recommendations_generated", "discovery.aws.recommendations_generated", "recommend", "AWS recommendations generated"},
+		{"discovery.aws.connection_read", "discovery.aws.connection_read", "read", "AWS connection accessed"},
+		{"discovery.gcp.connection_created", "discovery.gcp.connection_created", "create", "GCP connection created"},
+		{"discovery.gcp.connection_deleted", "discovery.gcp.connection_deleted", "delete", "GCP connection deleted"},
+		{"discovery.gcp.scan_started", "discovery.gcp.scan_started", "scan", "GCP scan started"},
+		{"discovery.gcp.scan_completed", "discovery.gcp.scan_completed", "scan", "GCP scan completed"},
+		{"discovery.gcp.scan_failed", "discovery.gcp.scan_failed", "scan", "GCP scan failed"},
+		{"discovery.gcp.recommendations_generated", "discovery.gcp.recommendations_generated", "recommend", "GCP recommendations generated"},
+		{"discovery.azure.connection_created", "discovery.azure.connection_created", "create", "Azure connection created"},
+		{"discovery.azure.connection_deleted", "discovery.azure.connection_deleted", "delete", "Azure connection deleted"},
+		{"discovery.azure.scan_started", "discovery.azure.scan_started", "scan", "Azure scan started"},
+		{"discovery.azure.scan_completed", "discovery.azure.scan_completed", "scan", "Azure scan completed"},
+		{"discovery.azure.scan_failed", "discovery.azure.scan_failed", "scan", "Azure scan failed"},
+		{"discovery.azure.recommendations_generated", "discovery.azure.recommendations_generated", "recommend", "Azure recommendations generated"},
+		{"discovery.oci.connection_created", "discovery.oci.connection_created", "create", "OCI connection created"},
+		{"discovery.oci.connection_deleted", "discovery.oci.connection_deleted", "delete", "OCI connection deleted"},
+		{"discovery.oci.scan_started", "discovery.oci.scan_started", "scan", "OCI scan started"},
+		{"discovery.oci.scan_completed", "discovery.oci.scan_completed", "scan", "OCI scan completed"},
+		{"discovery.oci.scan_failed", "discovery.oci.scan_failed", "scan", "OCI scan failed"},
+		{"discovery.oci.recommendations_generated", "discovery.oci.recommendations_generated", "recommend", "OCI recommendations generated"},
 		// v0.89.26 (#642 Stream 43) — per-rollout exclude-from-
 		// learning toggle. Table-test entry pins the default
 		// (cold-path / payload-missing) text. The payload-aware
