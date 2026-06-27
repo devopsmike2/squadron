@@ -2321,6 +2321,20 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSSaveConnection(c) }))
 
+		// v0.89.239 first-user onboarding — demo connection. Enable
+		// provisions a reserved, credential-free AWS connection that
+		// serves a canned sample inventory on scan (runAWSScan short-
+		// circuits on the demo sentinel). This lets a first-time
+		// operator explore the Inventory + Recommendations surfaces
+		// without configuring a real cloud account. Disable removes it.
+		// agents:write mirrors the Save/Delete connection scope.
+		v1.POST("/discovery/demo/enable",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleDemoEnable(c) }))
+		v1.DELETE("/discovery/demo",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleDemoDisable(c) }))
+
 		// v0.85 Stream 2E — connector list endpoint. Returns the
 		// display fields of every stored AWS connection so the
 		// /discovery/aws page's Account tab can render its connection
