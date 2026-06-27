@@ -1057,6 +1057,40 @@ func humanizeEventType(eventType, action string) string {
 		return "OCI scan failed"
 	case "discovery.oci.recommendations_generated":
 		return "OCI recommendations generated"
+	// v0.89.235 — humanizer coverage completeness pass. A diff of all
+	// emitted audit EventType literals against this table surfaced
+	// these lifecycle + discovery-request events that still fell
+	// through to the raw event_type display. (recommendation.pr_* are
+	// intentionally absent — they render via the payload-aware
+	// humanizeIaCAuditEvent path above.)
+	case "agent.decommissioned":
+		return "Agent decommissioned"
+	case "api_token.issued":
+		return "API token issued"
+	case "api_token.revoked":
+		return "API token revoked"
+	case "config.created":
+		return "Config created"
+	case "config.lint_evaluated":
+		return "Config lint evaluated"
+	case "incident.published":
+		return "Incident published"
+	case "incident.dismissed":
+		return "Incident dismissed"
+	case "plan.step_cancelled":
+		return "Plan step cancelled"
+	case "rollout.advanced":
+		return "Rollout advanced"
+	case "rollout.rollback_requested":
+		return "Rollout rollback requested"
+	case "discovery.summary.requested":
+		return "Discovery summary requested"
+	case "discovery.trace_coverage.requested":
+		return "Trace-coverage report requested"
+	case "discovery.span_quality.requested":
+		return "Span-quality report requested"
+	case "discovery.workload_health.requested":
+		return "Workload-health report requested"
 	// v0.89.28 (#643 slice 1) — discovery proposal lifecycle. The
 	// payload-aware path at handleIaCAuditEvent above renders the
 	// enriched title when verdict_examples_used is populated; this

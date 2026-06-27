@@ -88,6 +88,21 @@ func TestHumanizeEventType(t *testing.T) {
 		{"discovery.oci.scan_completed", "discovery.oci.scan_completed", "scan", "OCI scan completed"},
 		{"discovery.oci.scan_failed", "discovery.oci.scan_failed", "scan", "OCI scan failed"},
 		{"discovery.oci.recommendations_generated", "discovery.oci.recommendations_generated", "recommend", "OCI recommendations generated"},
+		// v0.89.235 — humanizer completeness pass (lifecycle + discovery requests).
+		{"agent.decommissioned", "agent.decommissioned", "decommission", "Agent decommissioned"},
+		{"api_token.issued", "api_token.issued", "issue", "API token issued"},
+		{"api_token.revoked", "api_token.revoked", "revoke", "API token revoked"},
+		{"config.created", "config.created", "create", "Config created"},
+		{"config.lint_evaluated", "config.lint_evaluated", "lint", "Config lint evaluated"},
+		{"incident.published", "incident.published", "publish", "Incident published"},
+		{"incident.dismissed", "incident.dismissed", "dismiss", "Incident dismissed"},
+		{"plan.step_cancelled", "plan.step_cancelled", "cancel", "Plan step cancelled"},
+		{"rollout.advanced", "rollout.advanced", "advance", "Rollout advanced"},
+		{"rollout.rollback_requested", "rollout.rollback_requested", "request_rollback", "Rollout rollback requested"},
+		{"discovery.summary.requested", "discovery.summary.requested", "request", "Discovery summary requested"},
+		{"discovery.trace_coverage.requested", "discovery.trace_coverage.requested", "request", "Trace-coverage report requested"},
+		{"discovery.span_quality.requested", "discovery.span_quality.requested", "request", "Span-quality report requested"},
+		{"discovery.workload_health.requested", "discovery.workload_health.requested", "request", "Workload-health report requested"},
 		// v0.89.26 (#642 Stream 43) — per-rollout exclude-from-
 		// learning toggle. Table-test entry pins the default
 		// (cold-path / payload-missing) text. The payload-aware
