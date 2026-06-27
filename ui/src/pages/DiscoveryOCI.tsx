@@ -258,7 +258,7 @@ export default function DiscoveryOCIPage() {
           <TabsTrigger value={RECS_TAB}>Recommendations</TabsTrigger>
         </TabsList>
 
-        <TabsContent value={WIZARD_TAB} className="mt-4">
+        <TabsContent value={WIZARD_TAB} forceMount className="mt-4">
           <OCIWizard onComplete={handleWizardSuccess} />
         </TabsContent>
         <TabsContent value={INVENTORY_TAB} className="mt-4">

@@ -281,7 +281,7 @@ export default function DiscoveryAWSPage() {
           <TabsTrigger value={RECS_TAB}>Recommendations</TabsTrigger>
         </TabsList>
 
-        <TabsContent value={ACCOUNT_TAB} className="mt-4">
+        <TabsContent value={ACCOUNT_TAB} forceMount className="mt-4">
           <AccountTab />
         </TabsContent>
         <TabsContent value={INVENTORY_TAB} className="mt-4">

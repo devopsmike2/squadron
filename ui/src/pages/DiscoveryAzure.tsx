@@ -244,7 +244,7 @@ export default function DiscoveryAzurePage() {
           <TabsTrigger value={RECS_TAB}>Recommendations</TabsTrigger>
         </TabsList>
 
-        <TabsContent value={WIZARD_TAB} className="mt-4">
+        <TabsContent value={WIZARD_TAB} forceMount className="mt-4">
           <AzureWizard onComplete={handleWizardSuccess} />
         </TabsContent>
         <TabsContent value={INVENTORY_TAB} className="mt-4">
