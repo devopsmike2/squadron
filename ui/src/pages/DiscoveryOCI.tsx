@@ -45,6 +45,7 @@ import {
   Copy,
   ExternalLink,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import useSWR from "swr";
@@ -56,6 +57,7 @@ import {
   createOCIConnection,
   encodePrivateKeyForWire,
   generateOCIRecommendations,
+  enableOCIDemoConnection,
   listOCIConnections,
   scanOCIConnection,
   validateOCIConnection,
@@ -205,6 +207,26 @@ export default function DiscoveryOCIPage() {
     [mutateConnections],
   );
 
+  // Demo mode (v0.89.245): provision the credential-free demo tenancy and
+  // refresh the list so its row appears and can be scanned.
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
+  const handleTryDemo = useCallback(async () => {
+    setDemoBusy(true);
+    setDemoError(null);
+    try {
+      const conn = await enableOCIDemoConnection();
+      await mutateConnections();
+      setSelectedConnectionID(conn.id);
+    } catch (e) {
+      setDemoError(
+        e instanceof Error ? e.message : "Could not start the demo.",
+      );
+    } finally {
+      setDemoBusy(false);
+    }
+  }, [mutateConnections]);
+
   const selectedScan = scanResultByConn[selectedConnectionID];
 
   return (
@@ -224,6 +246,9 @@ export default function DiscoveryOCIPage() {
         connections={conns}
         selectedID={selectedConnectionID}
         onSelect={handleConnectionPicked}
+        onTryDemo={handleTryDemo}
+        demoBusy={demoBusy}
+        demoError={demoError}
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -260,15 +285,33 @@ function ConnectionSelectorBar({
   connections,
   selectedID,
   onSelect,
+  onTryDemo,
+  demoBusy,
+  demoError,
 }: {
   connections: OCIConnection[];
   selectedID: string;
   onSelect: (id: string) => void;
+  onTryDemo: () => void;
+  demoBusy: boolean;
+  demoError: string | null;
 }) {
   if (connections.length === 0) {
     return (
-      <div className="rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
-        No OCI tenancies connected yet. Use the Wizard tab to connect one.
+      <div className="flex flex-col gap-3 rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+        <span>
+          No OCI tenancies connected yet. Use the Wizard tab to connect one — or
+          explore a sample inventory and recommendations with no cloud account:
+        </span>
+        <div className="flex items-center gap-3">
+          <Button onClick={onTryDemo} disabled={demoBusy} size="sm">
+            <Sparkles className="mr-2 h-4 w-4" aria-hidden />
+            {demoBusy ? "Starting demo…" : "Try the demo"}
+          </Button>
+          {demoError && (
+            <span className="text-xs text-destructive">{demoError}</span>
+          )}
+        </div>
       </div>
     );
   }

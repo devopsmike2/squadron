@@ -18,6 +18,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/recommendations"
@@ -919,6 +920,35 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		return
 	}
 
+	// Demo mode (v0.89.245, first-user onboarding): the reserved demo tenancy
+	// serves a canned sample inventory. Short-circuit after the store read (the
+	// row is real) but before any private-key decrypt or scanner build — no OCI
+	// credentials, no cloud calls.
+	if demo.IsOCIDemoTenancy(conn.TenancyOCID) {
+		r := demo.OCIResult()
+		instr, uninstr := 0, 0
+		for _, ci := range r.Compute {
+			if ci.HasOTel {
+				instr++
+			} else {
+				uninstr++
+			}
+		}
+		c.JSON(http.StatusOK, ociScanResponse{
+			ConnectionID:        conn.ID,
+			TenancyOCID:         conn.TenancyOCID,
+			Region:              conn.Region,
+			Compute:             r.Compute,
+			Databases:           r.Databases,
+			Clusters:            r.Clusters,
+			InstrumentedCount:   instr,
+			UninstrumentedCount: uninstr,
+			Partial:             false,
+			ScanID:              r.ScanID,
+		})
+		return
+	}
+
 	// scan_started fires BEFORE any scanner call so a forensic
 	// reader can correlate a stranded scan_started (no matching
 	// scan_completed / scan_failed) with an unhandled crash.
@@ -1159,6 +1189,35 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 		}})
 		return
 	}
+	// Demo mode (v0.89.245): the reserved demo tenancy serves seeded
+	// recommendations through the same buildDiscoveryRecommendations walk —
+	// no LLM, no API key. Resolve the connection early so the demo is detected
+	// before the aiProposer wiring check (a keyless first-user has nil).
+	if h.store != nil {
+		if conn, err := h.store.Get(c.Request.Context(), id); err == nil && conn != nil && demo.IsOCIDemoTenancy(conn.TenancyOCID) {
+			job := defaultRecommendationJobStore.Create("oci", conn.TenancyOCID)
+			defaultRecommendationJobStore.Run(job.ID, func(_ context.Context) (json.RawMessage, *scanner.HumanizedError, int) {
+				now := time.Now().UTC()
+				recs, bErr := buildDiscoveryRecommendations(demo.OCIScanID, demo.OCIRecommendationSteps(), now)
+				if bErr != nil {
+					if h.logger != nil {
+						h.logger.Error("oci demo recommendations: plan step marshal failed", zap.Error(bErr))
+					}
+					return nil, &scanner.HumanizedError{
+						Code:    "PlanStepMarshalFailed",
+						Message: "Squadron could not encode the demo plan step. The error has been logged.",
+					}, http.StatusInternalServerError
+				}
+				return marshalRecResult(awsGenerateRecommendationsResponse{Recommendations: recs})
+			})
+			c.JSON(http.StatusAccepted, recommendationJobAcceptedResponse{
+				JobID:  job.ID,
+				Status: string(RecJobPending),
+			})
+			return
+		}
+	}
+
 	if h.aiProposer == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
 			Code:    "AIProposerNotWired",

@@ -21,6 +21,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -978,5 +979,70 @@ func TestScanOCIConnection_SurfacesEventSources(t *testing.T) {
 	}
 	if len(es.PropagationNotes) != 1 {
 		t.Errorf("propagation_notes len = %d, want 1", len(es.PropagationNotes))
+	}
+}
+
+// TestOCIDemo_EnableScanDisable exercises the credential-free OCI demo:
+// enable provisions the demo tenancy, scan short-circuits to the canned sample
+// inventory (no key decrypt, no scanner Build), enable is idempotent, and
+// disable removes it.
+func TestOCIDemo_EnableScanDisable(t *testing.T) {
+	h, store, _ := newOCITestHandlers(t, nil, &fakeOCIScannerFactory{})
+	r := gin.New()
+	r.POST("/api/v1/discovery/oci/demo/enable", h.HandleOCIDemoEnable)
+	r.DELETE("/api/v1/discovery/oci/demo", h.HandleOCIDemoDisable)
+	r.POST("/api/v1/discovery/oci/connections/:id/scan", h.HandleScanOCIConnection)
+
+	w := ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/demo/enable", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("enable status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var conn struct {
+		ID          string `json:"id"`
+		TenancyOCID string `json:"tenancy_ocid"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &conn); err != nil {
+		t.Fatalf("enable unmarshal: %v", err)
+	}
+	if conn.TenancyOCID != demo.OCITenancyOCID {
+		t.Errorf("tenancy_ocid = %q, want %q", conn.TenancyOCID, demo.OCITenancyOCID)
+	}
+
+	w = ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("scan status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var scanResp ociScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &scanResp); err != nil {
+		t.Fatalf("scan unmarshal: %v", err)
+	}
+	if len(scanResp.Compute) != 3 {
+		t.Errorf("compute rows = %d, want 3", len(scanResp.Compute))
+	}
+	if len(scanResp.Databases) != 2 {
+		t.Errorf("database rows = %d, want 2", len(scanResp.Databases))
+	}
+
+	_ = ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/demo/enable", "")
+	conns, _ := store.List(context.Background())
+	demoCount := 0
+	for _, c := range conns {
+		if c != nil && demo.IsOCIDemoTenancy(c.TenancyOCID) {
+			demoCount++
+		}
+	}
+	if demoCount != 1 {
+		t.Errorf("demo connections after double-enable = %d, want 1", demoCount)
+	}
+
+	w = ociDoRequest(r, http.MethodDelete, "/api/v1/discovery/oci/demo", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("disable status = %d, want 200", w.Code)
+	}
+	conns, _ = store.List(context.Background())
+	for _, c := range conns {
+		if c != nil && demo.IsOCIDemoTenancy(c.TenancyOCID) {
+			t.Error("demo connection still present after disable")
+		}
 	}
 }

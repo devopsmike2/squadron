@@ -78,6 +78,12 @@ export interface CreateOCIConnectionRequest {
   region: string;
 }
 
+// enableOCIDemoConnection provisions the built-in credential-free demo OCI
+// tenancy (v0.89.245 first-user onboarding parity).
+export function enableOCIDemoConnection(): Promise<OCIConnection> {
+  return apiPost<OCIConnection>("/discovery/oci/demo/enable", {});
+}
+
 export function createOCIConnection(
   req: CreateOCIConnectionRequest,
 ): Promise<OCIConnection> {

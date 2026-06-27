@@ -129,12 +129,12 @@ sees the key.
 
 Squadron's cloud discovery — inventory plus instrumentation-gap
 recommendations — normally needs a connected AWS / GCP / Azure / OCI
-account. To try it with zero credentials, open the **AWS** page under
-Discovery and click **Try the demo**. Squadron loads a built-in sample
-inventory (a mix of instrumented and uninstrumented EC2 instances, Lambda
-functions, and RDS databases) and generates the matching Terraform
-recommendations — no cloud account, no API key, no cloud calls. Remove it
-any time from the connection list.
+account. To try it with zero credentials, open **any** of the four cloud
+pages under Discovery (AWS, GCP, Azure, or OCI) and click **Try the demo**.
+Squadron loads a built-in sample inventory for that cloud — a mix of
+instrumented and uninstrumented compute and databases — and generates the
+matching Terraform recommendations, with no cloud account, no API key, and
+no cloud calls. Remove it any time from the connection list.
 
 ## The Squadron stack
 
