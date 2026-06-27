@@ -43,6 +43,18 @@ type DiscoveryVerdictStore interface {
 		connectionID, accountID, region string,
 		limit int,
 	) ([]applicationstore.ExcludedRecommendation, error)
+
+	// ListCrossScopeDiscoveryVerdicts — cross-cloud citations
+	// (v0.89.248). Recent verdicts from connections OTHER than
+	// excludeConnectionID, each tagged with origin Provider + ScopeID,
+	// so a decline recorded on one cloud can surface (origin-labeled)
+	// in another cloud's verdict block where the proposer correlates by
+	// recommendation_kind.
+	ListCrossScopeDiscoveryVerdicts(
+		ctx context.Context,
+		excludeConnectionID string,
+		since time.Time, limit int,
+	) ([]*applicationstore.DiscoveryVerdict, error)
 }
 
 // DiscoveryConnectionStore is the slice of iacconnstore.Store the
@@ -173,7 +185,19 @@ func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 		return nil, nil, nil, fmt.Errorf("discovery bridge: list excluded recommendations: %w", err)
 	}
 
-	if len(rows) == 0 && len(excluded) == 0 {
+	// Cross-cloud citations (v0.89.248): recent verdicts from OTHER
+	// scopes, origin-labeled, so a decline on one cloud surfaces in this
+	// scan's verdict block. Gated by the SAME opt-out as same-scope (the
+	// short-circuit above already ran). Fetched before the empty-check so
+	// a cloud with no local verdicts still gets cross-cloud citations.
+	crossRows, err := b.store.ListCrossScopeDiscoveryVerdicts(
+		ctx, connectionID, since, verdictsel.DefaultMaxTotal*4,
+	)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("discovery bridge: list cross-scope verdicts: %w", err)
+	}
+
+	if len(rows) == 0 && len(excluded) == 0 && len(crossRows) == 0 {
 		return nil, nil, nil, nil
 	}
 
@@ -253,9 +277,6 @@ func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 		MaxPerKind: verdictsel.DefaultMaxPerKind,
 		PreferNeg:  false,
 	})
-	if len(selected) == 0 {
-		return nil, nil, nil, nil
-	}
 
 	// Split selected into approved + rejected slices for
 	// verdictprompt.Render. Walk in order to build exampleURLs so the
@@ -271,6 +292,72 @@ func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 		case verdictsel.StateRejected, verdictsel.StateClosedNotMerged, verdictsel.StateOperatorExcluded:
 			rejected = append(rejected, v)
 		}
+	}
+
+	// Project + select cross-scope verdicts. Capped at DefaultMaxTotal/2
+	// (MaxPerKind=1) so same-scope verdicts dominate the block and the
+	// cross-cloud citations stay a small accent. The origin rides in the
+	// Body ("[seen on <provider>/<scope>]") so verdictprompt's reason:
+	// line attributes the citation to the right cloud.
+	crossVerdicts := make([]verdictsel.Verdict, 0, len(crossRows))
+	for _, r := range crossRows {
+		if r == nil {
+			continue
+		}
+		var state, body string
+		switch r.State {
+		case "merged":
+			state = verdictsel.StateMerged
+			if r.MergedBy != "" {
+				body = "merged by " + r.MergedBy
+			} else {
+				body = "operator merged the PR"
+			}
+		case "closed_not_merged":
+			state = verdictsel.StateClosedNotMerged
+			if r.MergedBy != "" {
+				body = "closed by " + r.MergedBy
+			} else {
+				body = "operator closed PR without merging"
+			}
+		default:
+			continue
+		}
+		origin := r.Provider
+		if r.ScopeID != "" {
+			origin = r.Provider + " / " + r.ScopeID
+		}
+		body = body + " [seen on " + origin + "]"
+		crossVerdicts = append(crossVerdicts, verdictsel.Verdict{
+			ID:        r.PRURL,
+			Kind:      r.RecommendationKind,
+			State:     state,
+			Timestamp: r.PRMergedAt,
+			Body:      body,
+		})
+	}
+	crossSelected := verdictsel.Select(crossVerdicts, verdictsel.SelectOpts{
+		Now:        now,
+		Window:     verdictsel.DefaultWindow,
+		HotWindow:  verdictsel.DefaultHotWindow,
+		MaxTotal:   verdictsel.DefaultMaxTotal / 2,
+		MaxPerKind: 1,
+		PreferNeg:  false,
+	})
+	for _, v := range crossSelected {
+		if v.ID != "" {
+			exampleURLs = append(exampleURLs, v.ID)
+		}
+		switch v.State {
+		case verdictsel.StateApproved, verdictsel.StateMerged:
+			approved = append(approved, v)
+		case verdictsel.StateRejected, verdictsel.StateClosedNotMerged, verdictsel.StateOperatorExcluded:
+			rejected = append(rejected, v)
+		}
+	}
+
+	if len(approved) == 0 && len(rejected) == 0 {
+		return nil, nil, nil, nil
 	}
 	return approved, rejected, exampleURLs, nil
 }

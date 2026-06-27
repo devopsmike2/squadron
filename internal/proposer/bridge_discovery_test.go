@@ -251,12 +251,34 @@ func TestDiscoveryProposerLearning_ScopeFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	if len(approved) != 1 || len(rejected) != 0 {
-		t.Fatalf("expected exactly 1 approved + 0 rejected; got %d / %d",
+	// v0.89.248 cross-cloud citations: same-CONNECTION rows are still
+	// scope-filtered (pull/2, /3 region mismatch; pull/4 account mismatch —
+	// all same connectionID so excluded from the cross-scope pool too). But
+	// pull/5 is a DIFFERENT connection, so it now surfaces as a cross-scope
+	// citation (origin-labeled). Expect pull/1 (same-scope) + pull/5 (cross).
+	if len(approved) != 2 || len(rejected) != 0 {
+		t.Fatalf("expected 2 approved (same-scope + cross-scope) + 0 rejected; got %d / %d",
 			len(approved), len(rejected))
 	}
-	if urls[0] != "https://github.com/octo/widgets/pull/1" {
-		t.Errorf("leaked the wrong row: %v", urls)
+	var foundSame, foundCross bool
+	for _, v := range approved {
+		switch v.ID {
+		case "https://github.com/octo/widgets/pull/1":
+			foundSame = true
+			if strings.Contains(v.Body, "[seen on ") {
+				t.Errorf("same-scope row should NOT be origin-labeled: %q", v.Body)
+			}
+		case "https://github.com/octo/widgets/pull/5":
+			foundCross = true
+			if !strings.Contains(v.Body, "[seen on ") {
+				t.Errorf("cross-scope citation not origin-labeled: %q", v.Body)
+			}
+		default:
+			t.Errorf("unexpected row leaked: %q", v.ID)
+		}
+	}
+	if !foundSame || !foundCross {
+		t.Errorf("missing same-scope (%v) or cross-scope (%v); urls=%v", foundSame, foundCross, urls)
 	}
 }
 
@@ -1009,5 +1031,53 @@ func TestAssembleDiscoveryVerdicts_FourProviderIsolation(t *testing.T) {
 	}
 	if awsURLs[0] != "https://github.com/octo/widgets/pull/aws" {
 		t.Errorf("AWS scope leaked another provider's row: %v", awsURLs)
+	}
+}
+
+// TestDiscoveryProposerLearning_CrossCloudCitation — the published
+// "citation crosses clouds" scenario (v0.89.248). A decline is recorded on an
+// AWS connection; a DIFFERENT, fresh connection (a GCP project with zero local
+// verdicts) assembles its verdict block and the AWS decline surfaces as a
+// cross-scope, origin-labeled citation. This is the integrity proof that the
+// claim is reproducible from the repo.
+func TestDiscoveryProposerLearning_CrossCloudCitation(t *testing.T) {
+	f := newDiscoveryBridgeFixture(t, true)
+	now := time.Now().UTC().Add(-2 * 24 * time.Hour)
+
+	// AWS connection declines a high-cardinality metrics-volume drop.
+	f.seedPRClosedNotMerged(t, f.connectionID, f.accountID, f.region, "metrics-volume-drop",
+		"https://github.com/octo/widgets/pull/aws-decline", now)
+
+	// A fresh GCP connection — no verdicts of its own.
+	gcpConn := &iacconnstore.IaCConnection{
+		Provider: iacconnstore.ProviderGitHub, AuthKind: iacconnstore.AuthKindPAT,
+		RepoFullName: "octo/gcp-infra", DefaultBranch: "main",
+		RepoLayout: iacconnstore.RepoLayoutMono, CredCiphertext: []byte("opaque"),
+		LearnFromAcceptedRecommendations: true,
+	}
+	if err := f.conns.Create(context.Background(), gcpConn); err != nil {
+		t.Fatalf("seed gcp connection: %v", err)
+	}
+
+	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+		context.Background(), gcpConn.ConnectionID, "squadron-demo-project", "europe-west1",
+	)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(approved) != 0 || len(rejected) != 1 {
+		t.Fatalf("expected 0 approved + 1 cross-cloud rejected citation; got %d / %d (urls=%v)",
+			len(approved), len(rejected), urls)
+	}
+	cite := rejected[0]
+	if cite.ID != "https://github.com/octo/widgets/pull/aws-decline" {
+		t.Errorf("cross-cloud citation ID = %q", cite.ID)
+	}
+	if cite.Kind != "metrics-volume-drop" {
+		t.Errorf("citation kind = %q, want metrics-volume-drop (the cross-cloud pattern)", cite.Kind)
+	}
+	wantOrigin := "[seen on aws / " + f.accountID + "]"
+	if !strings.Contains(cite.Body, wantOrigin) {
+		t.Errorf("citation not origin-labeled: Body=%q want substring %q", cite.Body, wantOrigin)
 	}
 }
