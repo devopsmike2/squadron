@@ -88,12 +88,14 @@ type ApplicationStore interface {
 	) ([]*DiscoveryVerdict, error)
 
 	// ListCrossScopeDiscoveryVerdicts — cross-cloud citations (v0.89.248).
-	// Recent verdicts from connections OTHER than excludeConnectionID, each
-	// tagged with origin Provider + ScopeID, so a decline on one cloud can
-	// surface (origin-labeled) in another cloud's verdict block.
+	// Recent verdicts from scopes OTHER than excludeScopeID (a different
+	// cloud account / project / subscription / tenancy), each tagged with
+	// origin Provider + ScopeID, so a decline on one cloud can surface
+	// (origin-labeled) in another cloud's verdict block. Keyed on scope, not
+	// connection — one IaC repo serves PRs for multiple clouds.
 	ListCrossScopeDiscoveryVerdicts(
 		ctx context.Context,
-		excludeConnectionID string,
+		excludeScopeID string,
 		since time.Time, limit int,
 	) ([]*DiscoveryVerdict, error)
 

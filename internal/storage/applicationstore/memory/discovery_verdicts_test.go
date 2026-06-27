@@ -146,8 +146,8 @@ func TestListCrossScopeDiscoveryVerdicts_ReturnsOtherScopesLabeled(t *testing.T)
 
 	since := now.Add(-7 * 24 * time.Hour)
 
-	// GCP connection's cross-scope view: should see the AWS decline, origin-labeled.
-	got, err := s.ListCrossScopeDiscoveryVerdicts(ctx, "conn-gcp", since, 10)
+	// From the GCP scope's view (exclude GCP project): should see the AWS decline, origin-labeled.
+	got, err := s.ListCrossScopeDiscoveryVerdicts(ctx, "demo-proj", since, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,8 +161,8 @@ func TestListCrossScopeDiscoveryVerdicts_ReturnsOtherScopesLabeled(t *testing.T)
 		t.Errorf("verdict = kind %q state %q", got[0].RecommendationKind, got[0].State)
 	}
 
-	// AWS connection's cross-scope view: should see the GCP merge.
-	got2, err := s.ListCrossScopeDiscoveryVerdicts(ctx, "conn-aws", since, 10)
+	// From the AWS scope's view (exclude AWS account): should see the GCP merge.
+	got2, err := s.ListCrossScopeDiscoveryVerdicts(ctx, "111111111111", since, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

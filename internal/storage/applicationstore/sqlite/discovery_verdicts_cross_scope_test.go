@@ -54,7 +54,7 @@ func TestListCrossScopeDiscoveryVerdicts_sqlite(t *testing.T) {
 
 	since := now.Add(-7 * 24 * time.Hour)
 
-	got, err := store.ListCrossScopeDiscoveryVerdicts(ctx, "conn-gcp", since, 10)
+	got, err := store.ListCrossScopeDiscoveryVerdicts(ctx, "demo-proj", since, 10)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "gcp-perspective cross-scope")
 	require.Equal(t, "aws", got[0].Provider)
@@ -62,7 +62,7 @@ func TestListCrossScopeDiscoveryVerdicts_sqlite(t *testing.T) {
 	require.Equal(t, "metrics-volume-drop", got[0].RecommendationKind)
 	require.Equal(t, "closed_not_merged", got[0].State)
 
-	got2, err := store.ListCrossScopeDiscoveryVerdicts(ctx, "conn-aws", since, 10)
+	got2, err := store.ListCrossScopeDiscoveryVerdicts(ctx, "111111111111", since, 10)
 	require.NoError(t, err)
 	require.Len(t, got2, 1, "aws-perspective cross-scope")
 	require.Equal(t, "gcp", got2[0].Provider)

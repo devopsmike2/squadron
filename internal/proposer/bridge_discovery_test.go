@@ -251,34 +251,17 @@ func TestDiscoveryProposerLearning_ScopeFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	// v0.89.248 cross-cloud citations: same-CONNECTION rows are still
-	// scope-filtered (pull/2, /3 region mismatch; pull/4 account mismatch —
-	// all same connectionID so excluded from the cross-scope pool too). But
-	// pull/5 is a DIFFERENT connection, so it now surfaces as a cross-scope
-	// citation (origin-labeled). Expect pull/1 (same-scope) + pull/5 (cross).
-	if len(approved) != 2 || len(rejected) != 0 {
-		t.Fatalf("expected 2 approved (same-scope + cross-scope) + 0 rejected; got %d / %d",
+	// Cross-cloud citations are keyed on SCOPE: pull/2,/3 (region mismatch)
+	// and pull/4 (account mismatch, same connection) drop from same-scope;
+	// pull/5 is a different connection but the SAME account (f.accountID) as
+	// the scan's scope, so it is NOT a cross-cloud citation and is excluded
+	// from the cross-scope pool too. Only pull/1 (exact same-scope) remains.
+	if len(approved) != 1 || len(rejected) != 0 {
+		t.Fatalf("expected exactly 1 approved + 0 rejected; got %d / %d",
 			len(approved), len(rejected))
 	}
-	var foundSame, foundCross bool
-	for _, v := range approved {
-		switch v.ID {
-		case "https://github.com/octo/widgets/pull/1":
-			foundSame = true
-			if strings.Contains(v.Body, "[seen on ") {
-				t.Errorf("same-scope row should NOT be origin-labeled: %q", v.Body)
-			}
-		case "https://github.com/octo/widgets/pull/5":
-			foundCross = true
-			if !strings.Contains(v.Body, "[seen on ") {
-				t.Errorf("cross-scope citation not origin-labeled: %q", v.Body)
-			}
-		default:
-			t.Errorf("unexpected row leaked: %q", v.ID)
-		}
-	}
-	if !foundSame || !foundCross {
-		t.Errorf("missing same-scope (%v) or cross-scope (%v); urls=%v", foundSame, foundCross, urls)
+	if urls[0] != "https://github.com/octo/widgets/pull/1" {
+		t.Errorf("leaked the wrong row: %v", urls)
 	}
 }
 
@@ -1059,7 +1042,7 @@ func TestDiscoveryProposerLearning_CrossCloudCitation(t *testing.T) {
 		t.Fatalf("seed gcp connection: %v", err)
 	}
 
-	approved, rejected, urls, err := f.bridge.AssembleDiscoveryVerdicts(
+	approved, rejected, urls, err := f.bridge.WithCrossCloudCitations(true).AssembleDiscoveryVerdicts(
 		context.Background(), gcpConn.ConnectionID, "squadron-demo-project", "europe-west1",
 	)
 	if err != nil {

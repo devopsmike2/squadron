@@ -1019,8 +1019,9 @@ func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin
 		// deployment scope so the iteration cost is trivial.
 		if s.appStore != nil && s.iacConnStore != nil {
 			adapter := &discoveryAcceptedAssemblerAdapter{
-				appStore:    s.appStore,
-				connections: s.iacConnStore,
+				appStore:            s.appStore,
+				connections:         s.iacConnStore,
+				crossCloudCitations: os.Getenv("SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS") == "true",
 			}
 			h.WithAcceptedRecommendationsAssembler(adapter)
 		}
@@ -1521,6 +1522,11 @@ func (s *Server) SetErrorRateObservationReader(reader handlers.ErrorRateObservat
 type discoveryAcceptedAssemblerAdapter struct {
 	appStore    applicationstore.ApplicationStore
 	connections iacconnstore.Store
+	// crossCloudCitations mirrors the SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS
+	// env flag (default off). When on, per-connection bridges pool verdicts
+	// across cloud scopes (origin-labeled, capped); off preserves
+	// per-provider verdict isolation.
+	crossCloudCitations bool
 }
 
 // AssembleForDiscoveryScope walks every IaC connection, builds a
@@ -1600,7 +1606,8 @@ func (a *discoveryAcceptedAssemblerAdapter) AssembleVerdictBlockWithByState(
 		if conn == nil {
 			continue
 		}
-		b := proposer.NewDiscoveryBridge(a.appStore, a.connections)
+		b := proposer.NewDiscoveryBridge(a.appStore, a.connections).
+			WithCrossCloudCitations(a.crossCloudCitations)
 		lastBridge = b
 		approved, rejected, prURLs, err := b.AssembleDiscoveryVerdicts(ctx, conn.ConnectionID, accountID, region)
 		if err != nil {
