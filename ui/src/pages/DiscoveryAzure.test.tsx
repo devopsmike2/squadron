@@ -25,6 +25,7 @@ import DiscoveryAzurePage from "./DiscoveryAzure";
 
 import {
   createAzureConnection,
+  enableAzureDemoConnection,
   listAzureConnections,
   scanAzureConnection,
   validateAzureConnection,
@@ -56,6 +57,7 @@ vi.mock("@/api/discoveryAzure", async () => {
   return {
     ...actual,
     listAzureConnections: vi.fn(),
+    enableAzureDemoConnection: vi.fn(),
     createAzureConnection: vi.fn(),
     validateAzureConnection: vi.fn(),
     scanAzureConnection: vi.fn(),
@@ -63,6 +65,7 @@ vi.mock("@/api/discoveryAzure", async () => {
 });
 
 const mockedListAzureConnections = vi.mocked(listAzureConnections);
+const mockedEnableAzureDemo = vi.mocked(enableAzureDemoConnection);
 const mockedCreateAzureConnection = vi.mocked(createAzureConnection);
 const mockedValidateAzureConnection = vi.mocked(validateAzureConnection);
 const mockedScanAzureConnection = vi.mocked(scanAzureConnection);
@@ -162,6 +165,31 @@ describe("DiscoveryAzure", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListAzureConnections.mockResolvedValue([]);
+  });
+
+  it("Try the demo provisions the demo subscription and refreshes the list", async () => {
+    mockedListAzureConnections.mockResolvedValue([]);
+    mockedEnableAzureDemo.mockResolvedValue({
+      id: "demo-azure",
+      display_name: "Demo Subscription (sample data)",
+      tenant_id: "demo-tenant",
+      subscription_id: "demo-subscription",
+      client_id: "demo-client",
+      location: "eastus",
+      learn_from_accepted_recommendations: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as AzureConnection);
+    const user = userEvent.setup();
+    renderPage();
+    const demoBtn = await screen.findByRole("button", {
+      name: /Try the demo/i,
+    });
+    await user.click(demoBtn);
+    await waitFor(() => expect(mockedEnableAzureDemo).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mockedListAzureConnections.mock.calls.length).toBeGreaterThan(1),
+    );
   });
 
   it("TestDiscoveryAzure_WizardStep1_TenantIDValidation", async () => {

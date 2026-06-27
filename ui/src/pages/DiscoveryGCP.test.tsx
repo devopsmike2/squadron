@@ -25,6 +25,7 @@ import DiscoveryGCPPage from "./DiscoveryGCP";
 
 import {
   createGCPConnection,
+  enableGCPDemoConnection,
   listGCPConnections,
   scanGCPConnection,
   validateGCPConnection,
@@ -57,6 +58,7 @@ vi.mock("@/api/discoveryGCP", async () => {
   return {
     ...actual,
     listGCPConnections: vi.fn(),
+    enableGCPDemoConnection: vi.fn(),
     createGCPConnection: vi.fn(),
     validateGCPConnection: vi.fn(),
     scanGCPConnection: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock("@/api/discoveryGCP", async () => {
 });
 
 const mockedListGCPConnections = vi.mocked(listGCPConnections);
+const mockedEnableGCPDemo = vi.mocked(enableGCPDemoConnection);
 const mockedCreateGCPConnection = vi.mocked(createGCPConnection);
 const mockedValidateGCPConnection = vi.mocked(validateGCPConnection);
 const mockedScanGCPConnection = vi.mocked(scanGCPConnection);
@@ -178,6 +181,29 @@ describe("DiscoveryGCP", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListGCPConnections.mockResolvedValue([]);
+  });
+
+  it("Try the demo provisions the demo project and refreshes the list", async () => {
+    mockedListGCPConnections.mockResolvedValue([]);
+    mockedEnableGCPDemo.mockResolvedValue({
+      id: "demo-gcp",
+      display_name: "Demo Project (sample data)",
+      project_id: "squadron-demo",
+      region: "us-central1",
+      learn_from_accepted_recommendations: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as GCPConnection);
+    const user = userEvent.setup();
+    renderPage();
+    const demoBtn = await screen.findByRole("button", {
+      name: /Try the demo/i,
+    });
+    await user.click(demoBtn);
+    await waitFor(() => expect(mockedEnableGCPDemo).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mockedListGCPConnections.mock.calls.length).toBeGreaterThan(1),
+    );
   });
 
   it("TestDiscoveryGCP_WizardStep1_ProjectIDValidation", async () => {
