@@ -2591,6 +2591,13 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/oci/connections",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleCreateOCIConnection(c) }))
+		// v0.89.245 first-user onboarding — OCI demo connection.
+		v1.POST("/discovery/oci/demo/enable",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIDemoEnable(c) }))
+		v1.DELETE("/discovery/oci/demo",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIDemoDisable(c) }))
 		v1.GET("/discovery/oci/connections",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleListOCIConnections(c) }))
