@@ -46,6 +46,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import useSWR from "swr";
 
 import {
+  enableDemoConnection,
   generateAWSRecommendations,
   listAWSConnections,
   listExcludedRecommendations,
@@ -808,6 +809,26 @@ function AccountTab() {
     setResumeMode(false);
   }, [mutate]);
 
+  // Demo mode (v0.89.241): "Try the demo" provisions the built-in
+  // credential-free demo connection, then refreshes the list so its card
+  // appears and the operator can scan it like any other connection.
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
+  const onTryDemo = useCallback(async () => {
+    setDemoBusy(true);
+    setDemoError(null);
+    try {
+      await enableDemoConnection();
+      await mutate();
+    } catch (e) {
+      setDemoError(
+        e instanceof Error ? e.message : "Could not start the demo.",
+      );
+    } finally {
+      setDemoBusy(false);
+    }
+  }, [mutate]);
+
   return (
     <div className="space-y-4">
       {/* Inline connect wizard — matches the GCP / Azure / OCI flow:
@@ -875,7 +896,13 @@ function AccountTab() {
         </div>
       )}
 
-      {!isLoading && connections.length === 0 && <AccountEmptyState />}
+      {!isLoading && connections.length === 0 && (
+        <AccountEmptyState
+          onTryDemo={onTryDemo}
+          busy={demoBusy}
+          error={demoError}
+        />
+      )}
 
       {!isLoading && connections.length > 0 && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -916,7 +943,15 @@ function ConnectionCard({ conn }: { conn: CloudConnection }) {
   );
 }
 
-function AccountEmptyState() {
+function AccountEmptyState({
+  onTryDemo,
+  busy,
+  error,
+}: {
+  onTryDemo: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-3 p-8 text-center">
@@ -929,6 +964,23 @@ function AccountEmptyState() {
             Use the wizard above to connect your first account.
           </p>
         </div>
+
+        {/* No AWS account handy? Let a first-time operator explore the full
+            Inventory + Recommendations flow against a built-in sample
+            inventory — no credentials, no cloud calls, no API key. */}
+        <div className="flex w-full max-w-sm flex-col items-center gap-2 rounded-md border border-dashed p-4">
+          <p className="text-sm font-medium">No AWS account handy?</p>
+          <p className="text-xs text-muted-foreground">
+            Explore a sample inventory and recommendations without connecting a
+            cloud account.
+          </p>
+          <Button onClick={onTryDemo} disabled={busy} className="mt-1">
+            <Sparkles className="mr-2 h-4 w-4" aria-hidden />
+            {busy ? "Starting demo…" : "Try the demo"}
+          </Button>
+          {error && <p className="text-xs text-destructive">{error}</p>}
+        </div>
+
         <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
           <Sparkles
             className="mr-1 inline-block h-3 w-3 text-violet-500"
