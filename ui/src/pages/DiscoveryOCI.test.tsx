@@ -199,6 +199,25 @@ describe("DiscoveryOCI", () => {
     );
   });
 
+  it("TestDiscoveryOCI_WizardState_SurvivesTabSwitch", async () => {
+    // Regression (v0.89.257): the wizard's TabsContent unmounted when the
+    // operator switched to Inventory/Recommendations, wiping the in-progress
+    // form. forceMount keeps it mounted (hidden) so state survives.
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText(/Display name/i), {
+      target: { value: "Persisted Tenancy" },
+    });
+    // Switch away to Inventory, then back to the Wizard tab.
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    await user.click(screen.getByRole("tab", { name: /Wizard/i }));
+    // The in-progress value must still be there (would be "" pre-fix).
+    expect(screen.getByLabelText(/Display name/i)).toHaveValue("Persisted Tenancy");
+  });
+
   it("TestDiscoveryOCI_WizardStep1_TenancyOCIDValidation", async () => {
     renderPage();
     await waitFor(() => {
