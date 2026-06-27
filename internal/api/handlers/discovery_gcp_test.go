@@ -21,6 +21,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -937,5 +938,74 @@ func TestRecommendationsForGCPScan_ProposerNotWired(t *testing.T) {
 	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections/"+conn.ID+"/recommendations", `{"scan_result":{"scan_id":"s1","project_id":"sandbox-12345"}}`)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestGCPDemo_EnableScanDisable exercises the credential-free GCP demo:
+// enable provisions the demo project, scan short-circuits to the canned
+// sample inventory (no SA decrypt, no scanner Build), enable is idempotent,
+// and disable removes it.
+func TestGCPDemo_EnableScanDisable(t *testing.T) {
+	h, store, _ := newGCPTestHandlers(t, nil, &fakeGCPScannerFactory{})
+	r := gin.New()
+	r.POST("/api/v1/discovery/gcp/demo/enable", h.HandleGCPDemoEnable)
+	r.DELETE("/api/v1/discovery/gcp/demo", h.HandleGCPDemoDisable)
+	r.POST("/api/v1/discovery/gcp/connections/:id/scan", h.HandleScanGCPConnection)
+
+	// Enable.
+	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/demo/enable", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("enable status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var conn struct {
+		ID        string `json:"id"`
+		ProjectID string `json:"project_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &conn); err != nil {
+		t.Fatalf("enable unmarshal: %v", err)
+	}
+	if conn.ProjectID != demo.GCPProjectID {
+		t.Errorf("project_id = %q, want %q", conn.ProjectID, demo.GCPProjectID)
+	}
+
+	// Scan the demo connection → canned inventory.
+	w = gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("scan status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var scanResp gcpScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &scanResp); err != nil {
+		t.Fatalf("scan unmarshal: %v", err)
+	}
+	if len(scanResp.Compute) != 3 {
+		t.Errorf("compute rows = %d, want 3", len(scanResp.Compute))
+	}
+	if len(scanResp.Databases) != 2 {
+		t.Errorf("database rows = %d, want 2", len(scanResp.Databases))
+	}
+
+	// Enable again — idempotent, no duplicate row.
+	_ = gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/demo/enable", "")
+	conns, _ := store.List(context.Background())
+	demoCount := 0
+	for _, c := range conns {
+		if c != nil && demo.IsGCPDemoProject(c.ProjectID) {
+			demoCount++
+		}
+	}
+	if demoCount != 1 {
+		t.Errorf("demo connections after double-enable = %d, want 1", demoCount)
+	}
+
+	// Disable.
+	w = gcpDoRequest(r, http.MethodDelete, "/api/v1/discovery/gcp/demo", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("disable status = %d, want 200", w.Code)
+	}
+	conns, _ = store.List(context.Background())
+	for _, c := range conns {
+		if c != nil && demo.IsGCPDemoProject(c.ProjectID) {
+			t.Error("demo connection still present after disable")
+		}
 	}
 }

@@ -62,6 +62,13 @@ export interface CreateGCPConnectionRequest {
   region: string;
 }
 
+// enableGCPDemoConnection provisions the built-in credential-free demo GCP
+// project (v0.89.243 first-user onboarding parity). Returns the demo
+// connection so the caller can refresh the list and scan it.
+export function enableGCPDemoConnection(): Promise<GCPConnection> {
+  return apiPost<GCPConnection>("/discovery/gcp/demo/enable", {});
+}
+
 export function createGCPConnection(
   req: CreateGCPConnectionRequest,
 ): Promise<GCPConnection> {

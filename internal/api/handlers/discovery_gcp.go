@@ -18,6 +18,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/recommendations"
@@ -865,6 +866,35 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 		return
 	}
 
+	// Demo mode (v0.89.243, first-user onboarding): the reserved demo
+	// project serves a canned sample inventory. Short-circuit after the
+	// store read (the row is real) but before any SA decrypt or scanner
+	// build — no GCP credentials, no cloud calls.
+	if demo.IsGCPDemoProject(conn.ProjectID) {
+		r := demo.GCPResult()
+		instr, uninstr := 0, 0
+		for _, ci := range r.Compute {
+			if ci.HasOTel {
+				instr++
+			} else {
+				uninstr++
+			}
+		}
+		c.JSON(http.StatusOK, gcpScanResponse{
+			ConnectionID:        conn.ID,
+			ProjectID:           conn.ProjectID,
+			Region:              conn.Region,
+			Compute:             r.Compute,
+			Databases:           r.Databases,
+			Clusters:            r.Clusters,
+			InstrumentedCount:   instr,
+			UninstrumentedCount: uninstr,
+			Partial:             false,
+			ScanID:              r.ScanID,
+		})
+		return
+	}
+
 	// scan_started fires BEFORE any scanner call so a forensic
 	// reader can correlate a stranded scan_started (no matching
 	// scan_completed / scan_failed) with an unhandled crash. Mirrors
@@ -1105,6 +1135,36 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 		}})
 		return
 	}
+	// Demo mode (v0.89.243): the reserved demo project serves seeded
+	// recommendations through the same buildDiscoveryRecommendations walk —
+	// no LLM, no API key. Resolve the connection early so we can detect the
+	// demo sentinel before the aiProposer wiring check (a keyless first-user
+	// has aiProposer == nil).
+	if h.store != nil {
+		if conn, err := h.store.Get(c.Request.Context(), id); err == nil && conn != nil && demo.IsGCPDemoProject(conn.ProjectID) {
+			job := defaultRecommendationJobStore.Create("gcp", conn.ProjectID)
+			defaultRecommendationJobStore.Run(job.ID, func(_ context.Context) (json.RawMessage, *scanner.HumanizedError, int) {
+				now := time.Now().UTC()
+				recs, bErr := buildDiscoveryRecommendations(demo.GCPScanID, demo.GCPRecommendationSteps(), now)
+				if bErr != nil {
+					if h.logger != nil {
+						h.logger.Error("gcp demo recommendations: plan step marshal failed", zap.Error(bErr))
+					}
+					return nil, &scanner.HumanizedError{
+						Code:    "PlanStepMarshalFailed",
+						Message: "Squadron could not encode the demo plan step. The error has been logged.",
+					}, http.StatusInternalServerError
+				}
+				return marshalRecResult(awsGenerateRecommendationsResponse{Recommendations: recs})
+			})
+			c.JSON(http.StatusAccepted, recommendationJobAcceptedResponse{
+				JobID:  job.ID,
+				Status: string(RecJobPending),
+			})
+			return
+		}
+	}
+
 	if h.aiProposer == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
 			Code:    "AIProposerNotWired",
