@@ -4150,3 +4150,115 @@ func scanSiemDestination(sc scanner) (*types.SiemDestination, error) {
 	}
 	return d, nil
 }
+
+// inferDiscoveryProviderScope derives origin cloud + scope id from a verdict
+// audit payload by which scope key is set. Backs cross-cloud citations.
+func inferDiscoveryProviderScope(p map[string]any) (provider, scopeID string) {
+	if v, _ := p["account_id"].(string); v != "" {
+		return "aws", v
+	}
+	if v, _ := p["project_id"].(string); v != "" {
+		return "gcp", v
+	}
+	if v, _ := p["subscription_id"].(string); v != "" {
+		return "azure", v
+	}
+	if v, _ := p["tenancy_ocid"].(string); v != "" {
+		return "oci", v
+	}
+	return "", ""
+}
+
+// ListCrossScopeDiscoveryVerdicts returns recent recommendation verdicts
+// (pr_merged / pr_closed_not_merged) from connections OTHER than
+// excludeConnectionID, each tagged with origin Provider + ScopeID. Substrate
+// for cross-cloud citations (v0.89.247): a decline on one cloud surfaces,
+// origin-labeled, in another cloud's verdict block. The current connection's
+// rows are excluded — the caller includes them via the same-scope path.
+func (s *Storage) ListCrossScopeDiscoveryVerdicts(
+	ctx context.Context,
+	excludeConnectionID string,
+	since time.Time, limit int,
+) ([]*types.DiscoveryVerdict, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
+		WHERE event_type IN (?, ?)
+		  AND timestamp >= ?
+		  AND json_extract(payload, '$.connection_id') != ?
+		ORDER BY timestamp DESC
+		LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, stmt,
+		"recommendation.pr_merged",
+		"recommendation.pr_closed_not_merged",
+		since,
+		excludeConnectionID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list cross-scope discovery verdicts: %w", err)
+	}
+	defer rows.Close()
+	var out []*types.DiscoveryVerdict
+	for rows.Next() {
+		var ts time.Time
+		var eventType string
+		var payloadStr sql.NullString
+		if err := rows.Scan(&ts, &eventType, &payloadStr); err != nil {
+			return nil, fmt.Errorf("failed to scan cross-scope verdict: %w", err)
+		}
+		var state, actorKey, tsKey string
+		switch eventType {
+		case "recommendation.pr_merged":
+			state = "merged"
+			actorKey, tsKey = "merged_by", "merged_at"
+		case "recommendation.pr_closed_not_merged":
+			state = "closed_not_merged"
+			actorKey, tsKey = "closed_by", "closed_at"
+		default:
+			continue
+		}
+		if !payloadStr.Valid || payloadStr.String == "" {
+			continue
+		}
+		var p map[string]any
+		if err := json.Unmarshal([]byte(payloadStr.String), &p); err != nil {
+			continue
+		}
+		provider, scopeID := inferDiscoveryProviderScope(p)
+		if scopeID == "" {
+			continue
+		}
+		kind, _ := p["recommendation_kind"].(string)
+		if kind == "" {
+			continue
+		}
+		rec := &types.DiscoveryVerdict{
+			State:              state,
+			PRMergedAt:         ts,
+			RecommendationKind: kind,
+			Provider:           provider,
+			ScopeID:            scopeID,
+		}
+		if v, ok := p["pr_url"].(string); ok {
+			rec.PRURL = v
+		}
+		if v, ok := p["branch"].(string); ok {
+			rec.Branch = v
+		}
+		if v, ok := p[actorKey].(string); ok {
+			rec.MergedBy = v
+		}
+		if v, ok := p[tsKey].(string); ok && v != "" {
+			if parsed, perr := time.Parse(time.RFC3339, v); perr == nil {
+				rec.PRMergedAt = parsed
+			}
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}

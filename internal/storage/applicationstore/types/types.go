@@ -830,6 +830,15 @@ type DiscoveryVerdict struct {
 	Branch             string
 	MergedBy           string // merged_by OR closed_by depending on State
 	RecommendationKind string
+
+	// Provider + ScopeID identify the ORIGIN cloud of a cross-scope
+	// verdict (cross-cloud citations). Empty on same-scope rows from
+	// ListDiscoveryVerdicts; populated by ListCrossScopeDiscoveryVerdicts
+	// (Provider in {aws,gcp,azure,oci}; ScopeID = the account / project /
+	// subscription / tenancy the verdict was recorded against). The
+	// discovery bridge renders these as the citation's origin label.
+	Provider string
+	ScopeID  string
 }
 
 // ExcludedRecommendation — v0.89.37 (#656 Stream 54, #531 slice 2

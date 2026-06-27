@@ -106,3 +106,67 @@ func TestListDiscoveryVerdicts_ReturnsMergedAndClosed(t *testing.T) {
 		t.Errorf("out-of-scope rows = %d, want 0", len(rows))
 	}
 }
+
+// TestListCrossScopeDiscoveryVerdicts_ReturnsOtherScopesLabeled — cross-cloud
+// citations (v0.89.247). Seeds a declined verdict on an AWS connection and a
+// merged verdict on a GCP connection, then asserts each connection's
+// cross-scope query returns ONLY the other scope's verdict, tagged with the
+// correct origin Provider + ScopeID.
+func TestListCrossScopeDiscoveryVerdicts_ReturnsOtherScopesLabeled(t *testing.T) {
+	s := NewStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seed := func(eventType, connID, scopeKey, scopeVal, region, kind, url, actorKey, actorVal, tsKey string, age time.Duration) {
+		ts := now.Add(-age)
+		ev := &types.AuditEvent{
+			ID:         "a-" + url,
+			Timestamp:  ts,
+			Actor:      "github_webhook",
+			EventType:  eventType,
+			TargetType: "iac_recommendation",
+			TargetID:   connID,
+			Payload: map[string]any{
+				"pr_url":              url,
+				"recommendation_kind": kind,
+				"connection_id":       connID,
+				scopeKey:              scopeVal,
+				"region":              region,
+				actorKey:              actorVal,
+				tsKey:                 ts.Format(time.RFC3339),
+			},
+		}
+		if err := s.CreateAuditEvent(ctx, ev); err != nil {
+			t.Fatalf("seed %s: %v", eventType, err)
+		}
+	}
+	seed("recommendation.pr_closed_not_merged", "conn-aws", "account_id", "111111111111",
+		"us-east-1", "metrics-volume-drop", "https://github.com/o/r/pull/1", "closed_by", "alice", "closed_at", 2*time.Hour)
+	seed("recommendation.pr_merged", "conn-gcp", "project_id", "demo-proj",
+		"us-central1", "gce-ops-agent", "https://github.com/o/r/pull/2", "merged_by", "bob", "merged_at", 1*time.Hour)
+
+	since := now.Add(-7 * 24 * time.Hour)
+
+	// GCP connection's cross-scope view: should see the AWS decline, origin-labeled.
+	got, err := s.ListCrossScopeDiscoveryVerdicts(ctx, "conn-gcp", since, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("gcp-perspective cross-scope = %d rows, want 1", len(got))
+	}
+	if got[0].Provider != "aws" || got[0].ScopeID != "111111111111" {
+		t.Errorf("origin = %q/%q, want aws/111111111111", got[0].Provider, got[0].ScopeID)
+	}
+	if got[0].RecommendationKind != "metrics-volume-drop" || got[0].State != "closed_not_merged" {
+		t.Errorf("verdict = kind %q state %q", got[0].RecommendationKind, got[0].State)
+	}
+
+	// AWS connection's cross-scope view: should see the GCP merge.
+	got2, err := s.ListCrossScopeDiscoveryVerdicts(ctx, "conn-aws", since, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got2) != 1 || got2[0].Provider != "gcp" || got2[0].ScopeID != "demo-proj" {
+		t.Fatalf("aws-perspective cross-scope = %+v, want one gcp/demo-proj row", got2)
+	}
+}

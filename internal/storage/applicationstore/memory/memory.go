@@ -1903,3 +1903,104 @@ func (s *Store) UpdateSiemDestinationStatus(ctx context.Context, id string, sent
 	existing.LastErrorAt = errAt
 	return nil
 }
+
+// inferDiscoveryProviderScope derives the origin cloud + scope id from a
+// recommendation verdict audit payload by which scope key is populated.
+// Cross-cloud citations (v0.89.247) use this so a verdict surfaced on a
+// different cloud can be labeled with where it actually came from.
+func inferDiscoveryProviderScope(payload map[string]any) (provider, scopeID string) {
+	if v, _ := payload["account_id"].(string); v != "" {
+		return "aws", v
+	}
+	if v, _ := payload["project_id"].(string); v != "" {
+		return "gcp", v
+	}
+	if v, _ := payload["subscription_id"].(string); v != "" {
+		return "azure", v
+	}
+	if v, _ := payload["tenancy_ocid"].(string); v != "" {
+		return "oci", v
+	}
+	return "", ""
+}
+
+// ListCrossScopeDiscoveryVerdicts returns recent recommendation verdicts
+// (pr_merged / pr_closed_not_merged) recorded against connections OTHER than
+// excludeConnectionID, each tagged with its origin Provider + ScopeID. This
+// is the substrate behind cross-cloud citations (v0.89.247): a decline
+// recorded on one cloud can surface, origin-labeled, in another cloud's
+// verdict block, where the proposer correlates by recommendation_kind. The
+// current connection's rows are excluded because the caller already includes
+// them via the same-scope ListDiscoveryVerdicts path.
+func (s *Store) ListCrossScopeDiscoveryVerdicts(
+	ctx context.Context,
+	excludeConnectionID string,
+	since time.Time, limit int,
+) ([]*types.DiscoveryVerdict, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*types.DiscoveryVerdict
+	for i := len(s.auditEvents) - 1; i >= 0; i-- {
+		e := s.auditEvents[i]
+		var state, actorKey, tsKey string
+		switch e.EventType {
+		case "recommendation.pr_merged":
+			state = "merged"
+			actorKey, tsKey = "merged_by", "merged_at"
+		case "recommendation.pr_closed_not_merged":
+			state = "closed_not_merged"
+			actorKey, tsKey = "closed_by", "closed_at"
+		default:
+			continue
+		}
+		if e.Timestamp.Before(since) {
+			continue
+		}
+		if e.Payload == nil {
+			continue
+		}
+		if v, _ := e.Payload["connection_id"].(string); v == excludeConnectionID {
+			continue
+		}
+		provider, scopeID := inferDiscoveryProviderScope(e.Payload)
+		if scopeID == "" {
+			continue
+		}
+		kind, _ := e.Payload["recommendation_kind"].(string)
+		if kind == "" {
+			continue
+		}
+		rec := &types.DiscoveryVerdict{
+			State:              state,
+			PRMergedAt:         e.Timestamp,
+			RecommendationKind: kind,
+			Provider:           provider,
+			ScopeID:            scopeID,
+		}
+		if v, ok := e.Payload["pr_url"].(string); ok {
+			rec.PRURL = v
+		}
+		if v, ok := e.Payload["branch"].(string); ok {
+			rec.Branch = v
+		}
+		if v, ok := e.Payload[actorKey].(string); ok {
+			rec.MergedBy = v
+		}
+		if v, ok := e.Payload[tsKey].(string); ok && v != "" {
+			if parsed, perr := time.Parse(time.RFC3339, v); perr == nil {
+				rec.PRMergedAt = parsed
+			}
+		}
+		out = append(out, rec)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
