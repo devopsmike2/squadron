@@ -2642,6 +2642,38 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		return
 	}
 
+	// Demo mode (v0.89.240, first-user onboarding): the reserved demo
+	// connection serves canned sample recommendations — built through the
+	// SAME buildDiscoveryRecommendations walk as live proposer output, so
+	// the envelopes are shape-identical. Short-circuit before the credStore
+	// + aiProposer wiring checks: demo recs need neither, which is the whole
+	// point (a first-time operator with no ANTHROPIC_API_KEY still sees an
+	// end-to-end Inventory -> Recommendations flow).
+	if demo.IsDemo(accountID) {
+		job := h.recJobs.Create("aws", accountID)
+		h.recJobs.Run(job.ID, func(_ context.Context) (json.RawMessage, *scanner.HumanizedError, int) {
+			now := time.Now().UTC()
+			recs, err := buildDiscoveryRecommendations(demo.ScanID, demo.RecommendationSteps(), now)
+			if err != nil {
+				if h.logger != nil {
+					h.logger.Error("demo recommendations: plan step marshal failed", zap.Error(err))
+				}
+				return nil, &scanner.HumanizedError{
+					Code:    "PlanStepMarshalFailed",
+					Message: "Squadron could not encode the demo plan step. The error has been logged.",
+				}, http.StatusInternalServerError
+			}
+			return marshalRecResult(awsGenerateRecommendationsResponse{
+				Recommendations: recs,
+			})
+		})
+		c.JSON(http.StatusAccepted, recommendationJobAcceptedResponse{
+			JobID:  job.ID,
+			Status: string(RecJobPending),
+		})
+		return
+	}
+
 	if h.credStore == nil {
 		// Belt-and-braces — the trampoline already 503s when credStore
 		// is nil. Surfaced as 500 here for the struct-literal path.
