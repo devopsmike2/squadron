@@ -19,6 +19,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/ai"
 	awsorch "github.com/devopsmike2/squadron/internal/discovery/aws"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/iac"
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
@@ -1762,6 +1763,15 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 // posture (TestHandleAWSRunScan_NotFound asserts zero audit entries
 // for a 404).
 func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, requestedRegions []string, requestedTiers []string, scanAllID string) (*scanner.Result, *scanner.HumanizedError, int) {
+	// Demo mode (v0.89.239, first-user onboarding): the reserved demo
+	// connection serves a canned sample inventory so a first-time operator
+	// can explore the Inventory tab without configuring real AWS
+	// credentials. Short-circuit before any credstore lookup or scanner
+	// construction. This also makes scan-all demo-safe — the orchestrator
+	// drives this same per-account path.
+	if demo.IsDemo(accountID) {
+		return demo.BuildResult(), nil, 0
+	}
 	if h.credStore == nil {
 		return nil, &scanner.HumanizedError{
 			Code:          "CredStoreNotWired",
