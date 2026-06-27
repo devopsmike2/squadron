@@ -27,6 +27,14 @@ by metric availability.
 | Cloud | Surface | Native metric? | Status |
 |-------|---------|----------------|--------|
 | AWS | Lambda | **No** — `InitDuration` is a CloudWatch **Logs** REPORT field, not an `AWS/Lambda` metric. | ⚠️ Requires **Lambda Insights** (`LambdaInsights`/`init_duration`) or a Logs metric-filter. |
+
+> **v0.89.258:** when a serverless function lacks its detection-prerequisite
+> add-on (Lambda Insights / Application Insights), the discovery proposer now
+> emits a recommendation to enable it — explaining that without it Squadron is
+> blind to that function's cold-start latency + error rate, and noting the
+> add-on is paid (Lambda Insights per function-month; App Insights on
+> ingestion). For AWS a cheaper CloudWatch Logs metric-filter alternative is
+> offered. Kinds: `lambda-insights-enable`, `azfunc-appinsights-enable`.
 | GCP | Cloud Run / Functions | Yes — `request_latencies` / `execution_times`. | ✅ (includes warm-path invocations; a permanently-warm service can show false positives). |
 | Azure | Functions | **No** — Azure Monitor exposes only `FunctionExecutionCount` / `FunctionExecutionUnits`; there is no per-function duration metric and no `IsAfterColdStart` dimension. | ⚠️ Requires **Application Insights** (`requests`/duration). |
 | OCI | Functions | Duration only — `oci_faas` has `FunctionExecutionDuration` but no cold-start counter. | ✅ Duration-regression heuristic (P95 current vs 7-day baseline); **not cold-start-isolated** — a spike may be a cold start or a slow dependency (v0.89.232). |

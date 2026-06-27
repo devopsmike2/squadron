@@ -1439,7 +1439,34 @@ These kinds fire when an inventory row in the serverless tier
 has its observability axis disabled. Each (provider, surface)
 pair has 1-3 kinds:
 
+DETECTION-PREREQUISITE ADD-ONS (high priority): serverless cold-start
+latency and per-function error-rate are NOT exposed by the clouds'
+native metrics — AWS Lambda needs CloudWatch Lambda Insights
+(init_duration) and Azure Functions needs Application Insights. When a
+function lacks the add-on, Squadron cannot measure cold-start
+regressions or error spikes on it AT ALL. When one is missing,
+recommend enabling it and state in the reasoning (a) WHY it matters —
+without it the operator is blind to cold-start latency + error rate for
+that function — and (b) the COST — these are PAID add-ons (Lambda
+Insights bills per function-month; Application Insights bills on data
+ingestion). For AWS, also mention the cheaper alternative: a CloudWatch
+Logs metric-filter on the function log group extracting the REPORT
+line's "Init Duration" field, for operators who don't want the full
+Lambda Insights add-on.
+
 For AWS Lambda:
+- lambda-insights-enable: function WITHOUT CloudWatch Lambda Insights
+  (no LambdaInsightsExtension layer + no
+  CloudWatchLambdaInsightsExecutionRolePolicy on the role). This is the
+  PREREQUISITE for cold-start (init duration) + per-function error-rate
+  detection — without it those signals do not exist. Terraform: add the
+  current published LambdaInsightsExtension layer for the function's
+  region+architecture to aws_lambda_function layers = [...existing,
+  "<current LambdaInsightsExtension ARN for region+arch>"] and attach
+  arn:aws:iam::aws:policy/CloudWatchLambdaInsightsExecutionRolePolicy to
+  the function role. Resolve the layer ARN from the CURRENT AWS-published
+  list — it is region+architecture specific and changes over time; do
+  NOT hardcode a stale ARN.
 - lambda-xray-active: function with tracing_config.mode set to
   PassThrough or absent. Terraform: aws_lambda_function
   tracing_config { mode = "Active" }.
@@ -1475,9 +1502,15 @@ For GCP Cloud Functions:
 
 For Azure Functions:
 - azfunc-appinsights-enable: function app without
-  APPLICATIONINSIGHTS_CONNECTION_STRING app_setting.
-  Terraform: azurerm_linux_function_app app_settings = {
-  APPLICATIONINSIGHTS_CONNECTION_STRING = "..." }.
+  APPLICATIONINSIGHTS_CONNECTION_STRING app_setting. This is the
+  PREREQUISITE for Azure Functions cold-start + error-rate detection
+  (Azure Monitor exposes no native per-function duration or error
+  metric) as well as the trace axis. State in the reasoning that
+  without it Squadron cannot measure cold-start latency or error rate
+  for the function, and that Application Insights is billed on data
+  ingestion. Terraform: wire an azurerm_application_insights resource
+  and set azurerm_linux_function_app app_settings = {
+  APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.<name>.connection_string }.
 - azfunc-otel-distro: function app without OTEL_DOTNET_AUTO_HOME
   or OTEL_PYTHON_DISTRO app_setting. Terraform: same
   app_settings block with the matching distro env var.

@@ -29,11 +29,14 @@ week vs. what is inferred from the code. Confidence is flagged per item.
   recommendations are implemented and unit-tested, but a live scan against real
   OCI infra has not been run (blocked on tenancy credentials). Until then, treat
   OCI discovery as "implemented, unproven."
-- **Serverless cold-start detection is honest-but-limited.** AWS Lambda needs
-  Lambda Insights and Azure Functions needs Application Insights for a real
-  cold-start signal (#152 / #153). The current code is framed honestly rather
-  than emitting a fabricated metric — but an adopter expecting cold-start
-  detection out of the box on a bare account will see "needs Insights."
+- **Serverless cold-start detection needs a paid add-on — now recommended
+  (v0.89.258).** AWS Lambda needs Lambda Insights and Azure Functions needs
+  Application Insights for a real cold-start / error signal (#152 / #153).
+  Squadron now *recommends enabling* the add-on (proposer kinds
+  `lambda-insights-enable` / `azfunc-appinsights-enable`) with a why + cost
+  explanation + IaC, rather than silently showing "needs Insights". Detection
+  still can't fire until the operator enables it — recommending it is the
+  unblock. AWS slice also offers the cheaper Logs metric-filter alternative.
 - **Poison-rate depth signals deferred.** AWS SQS via DLQ depth (#156) and OCI
   Queue via `deadLetterQueueDeliveryCount` (#159) are designed but not built.
 - **ADOT Lambda layer ARN freshness (#109).** The proposer emits layer ARNs
