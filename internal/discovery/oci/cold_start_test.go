@@ -43,19 +43,6 @@ func newDetectionMockMonitoring() *detectionMockMonitoring {
 	}
 }
 
-func (m *detectionMockMonitoring) setCount(window string, count float64) {
-	if _, ok := m.byMetric[OCIFunctionsColdStartCountMetric]; !ok {
-		m.byMetric[OCIFunctionsColdStartCountMetric] = map[string][]ociMetricDataPoint{}
-	}
-	if count == 0 {
-		m.byMetric[OCIFunctionsColdStartCountMetric][window] = []ociMetricDataPoint{}
-		return
-	}
-	m.byMetric[OCIFunctionsColdStartCountMetric][window] = []ociMetricDataPoint{
-		{Timestamp: time.Now(), Value: count, SampleCount: 1},
-	}
-}
-
 func (m *detectionMockMonitoring) setDuration(window string, p95Ms float64, sampleCount int) {
 	if _, ok := m.byMetric[OCIFunctionsFunctionDurationMetric]; !ok {
 		m.byMetric[OCIFunctionsFunctionDurationMetric] = map[string][]ociMetricDataPoint{}
@@ -86,10 +73,7 @@ func (m *detectionMockMonitoring) SummarizeMetricsData(
 ) ([]ociMetricDataPoint, error) {
 	// Determine which metric the query is asking about.
 	var metricName string
-	switch {
-	case containsSubstring(query, OCIFunctionsColdStartCountMetric):
-		metricName = OCIFunctionsColdStartCountMetric
-	case containsSubstring(query, OCIFunctionsFunctionDurationMetric):
+	if containsSubstring(query, OCIFunctionsFunctionDurationMetric) {
 		metricName = OCIFunctionsFunctionDurationMetric
 	}
 	if err, ok := m.errOn[metricName]; ok {
@@ -170,77 +154,12 @@ func TestOCIColdStartThresholdsMatchAWS(t *testing.T) {
 	}
 }
 
-// TestOCIDetectColdStartRegression_ColdStartCountZero_Skipped — slice
-// 2 chunk 3 acceptance test 9: when cold_start_count = 0 over the
-// current window, the detection short-circuits. The duration queries
-// MUST NOT be dispatched (saves rate-limiter budget), Skipped is
-// true, and ShouldFireRecommendation returns false.
-func TestOCIDetectColdStartRegression_ColdStartCountZero_Skipped(t *testing.T) {
-	mock := newDetectionMockMonitoring()
-	mock.setCount("24h", 0)
-	// Even if the duration data were set to extreme values, the
-	// short-circuit must prevent the queries from running.
-	mock.setDuration("24h", 9999.0, 100)
-	mock.setDuration("168h", 100.0, 100)
-
-	dispatchedDuration := false
-	mock.errOn[OCIFunctionsFunctionDurationMetric] = nil
-	// Wrap with a recording proxy.
-	recorder := &recordingMonitoring{
-		inner: mock,
-		onCall: func(metric string) {
-			if metric == OCIFunctionsFunctionDurationMetric {
-				dispatchedDuration = true
-			}
-		},
-	}
-
-	s := newColdStartTestScanner(t, recorder)
-	res, err := s.DetectColdStartRegression(context.Background(),
-		"ocid1.fnfunc.oc1.phx.xxx")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !res.Skipped {
-		t.Errorf("Skipped = false, want true (cold_start_count = 0)")
-	}
-	if res.ShouldFireRecommendation() {
-		t.Error("ShouldFireRecommendation = true, want false (Skipped)")
-	}
-	if dispatchedDuration {
-		t.Error("function_duration queries dispatched despite cold_start_count = 0")
-	}
-}
-
-// recordingMonitoring wraps a MonitoringClient and records which
-// metric names are queried. Used by the Skipped test to verify the
-// short-circuit avoids dispatching duration queries.
-type recordingMonitoring struct {
-	inner  MonitoringClient
-	onCall func(metric string)
-}
-
-func (r *recordingMonitoring) SummarizeMetricsData(
-	ctx context.Context,
-	compartmentID, namespace, query string,
-	startTime, endTime time.Time,
-) ([]ociMetricDataPoint, error) {
-	switch {
-	case containsSubstring(query, OCIFunctionsColdStartCountMetric):
-		r.onCall(OCIFunctionsColdStartCountMetric)
-	case containsSubstring(query, OCIFunctionsFunctionDurationMetric):
-		r.onCall(OCIFunctionsFunctionDurationMetric)
-	}
-	return r.inner.SummarizeMetricsData(ctx, compartmentID, namespace, query, startTime, endTime)
-}
-
 // TestOCIDetectColdStartRegression_ExceedsThreshold — a function
 // with non-zero cold starts whose current P95 is well above the
 // 1.5x baseline ratio and above the 500ms floor + has enough
 // baseline samples should fire.
 func TestOCIDetectColdStartRegression_ExceedsThreshold(t *testing.T) {
 	mock := newDetectionMockMonitoring()
-	mock.setCount("24h", 12)             // > 0, detection runs
 	mock.setDuration("24h", 2400.0, 60)  // current p95 high
 	mock.setDuration("168h", 800.0, 100) // baseline p95 lower
 	s := newColdStartTestScanner(t, mock)
@@ -249,12 +168,6 @@ func TestOCIDetectColdStartRegression_ExceedsThreshold(t *testing.T) {
 		"ocid1.fnfunc.oc1.phx.xxx")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if res.Skipped {
-		t.Errorf("Skipped = true, want false (cold_start_count > 0)")
-	}
-	if res.CurrentColdStartCount != 12 {
-		t.Errorf("CurrentColdStartCount = %d, want 12", res.CurrentColdStartCount)
 	}
 	if res.CurrentP95Ms != 2400.0 {
 		t.Errorf("CurrentP95Ms = %v, want 2400.0", res.CurrentP95Ms)
@@ -290,7 +203,6 @@ func TestOCIDetectColdStartRegression_ExceedsThreshold(t *testing.T) {
 // operator).
 func TestOCIDetectColdStartRegression_BelowFloor_DoesNotFire(t *testing.T) {
 	mock := newDetectionMockMonitoring()
-	mock.setCount("24h", 5)
 	mock.setDuration("24h", 320.0, 60) // 1.6x ratio but < 500ms
 	mock.setDuration("168h", 200.0, 100)
 	s := newColdStartTestScanner(t, mock)
@@ -318,7 +230,6 @@ func TestOCIDetectColdStartRegression_BelowFloor_DoesNotFire(t *testing.T) {
 // Mirrors the AWS BaselineSampleBelowMinimum case.
 func TestOCIDetectColdStartRegression_InsufficientBaselineSamples(t *testing.T) {
 	mock := newDetectionMockMonitoring()
-	mock.setCount("24h", 8)
 	mock.setDuration("24h", 1800.0, 30)
 	mock.setDuration("168h", 600.0, 20) // < 50 samples
 	s := newColdStartTestScanner(t, mock)
@@ -348,26 +259,12 @@ func TestOCIDetectColdStartRegression_InsufficientBaselineSamples(t *testing.T) 
 // per-step prefixes.
 func TestOCIDetectColdStartRegression_QueryError(t *testing.T) {
 	mock := newDetectionMockMonitoring()
-	mock.errOn[OCIFunctionsColdStartCountMetric] = errors.New("HTTP 500")
+	mock.errOn[OCIFunctionsFunctionDurationMetric] = errors.New("HTTP 500")
 	s := newColdStartTestScanner(t, mock)
 	_, err := s.DetectColdStartRegression(context.Background(),
 		"ocid1.fnfunc.oc1.phx.xxx")
 	if err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-// TestOCIShouldFireRecommendation_SkippedAlwaysFalse pins the
-// Skipped=true gate.
-func TestOCIShouldFireRecommendation_SkippedAlwaysFalse(t *testing.T) {
-	r := ColdStartDetectionResult{
-		Skipped:             true,
-		ExceedsThreshold:    true,
-		ExceedsFloor:        true,
-		BaselineSampleCount: 1000,
-	}
-	if r.ShouldFireRecommendation() {
-		t.Error("Skipped=true must short-circuit ShouldFireRecommendation")
 	}
 }
 

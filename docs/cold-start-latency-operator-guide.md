@@ -393,7 +393,7 @@ only the metric source varies per cloud.
 | GCP   | Cloud Run       | `run.googleapis.com/request_latencies` filtered by `response_code_class = "2xx"` | includes warm-path invocations            |
 | GCP   | Cloud Functions | `cloudfunctions.googleapis.com/function/execution_times` filtered by `status = "ok"` | includes warm invocations              |
 | Azure | Functions       | **none native** — needs Application Insights (Azure Monitor has no `FunctionExecutionDuration` metric or `IsAfterColdStart` dimension) | ⚠️ requires App Insights |
-| OCI   | Functions       | **no native cold-start counter** (`oci_faas` has `FunctionExecutionDuration` but no `cold_start_count`) | ⛔ deferred |
+| OCI   | Functions       | `FunctionExecutionDuration` P95-regression (no cold-start counter exists) | ✅ duration-regression, not cold-start-isolated |
 
 Each surface populates the same `cold_start_observation`
 table from slice 1 with a different `provider` + `surface`
