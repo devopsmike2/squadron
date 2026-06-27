@@ -5,6 +5,13 @@ OpenTelemetry fleets — agent management over OpAMP, a built-in telemetry
 backend, safe staged rollouts, and an operator UI, all in a single self-hosted
 binary.
 
+> **Detection-metric accuracy (v0.89.229–232).** Some historical slice entries
+> below describe metrics that were later corrected (AWS SQS poison-rate reverted;
+> Azure Function metrics need Application Insights; OCI metric names fixed; OCI
+> cold-start is now duration-regression). For the authoritative, current status
+> of every metric-based detection, see
+> [detection-coverage.md](./detection-coverage.md).
+
 If you're new, start with [Getting started](./getting-started.md). If you
 already have Squadron running and want to understand a specific subsystem,
 jump straight to that page.
