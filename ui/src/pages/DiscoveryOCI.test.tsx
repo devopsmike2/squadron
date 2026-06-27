@@ -25,6 +25,7 @@ import DiscoveryOCIPage from "./DiscoveryOCI";
 
 import {
   createOCIConnection,
+  enableOCIDemoConnection,
   listOCIConnections,
   scanOCIConnection,
   validateOCIConnection,
@@ -57,6 +58,7 @@ vi.mock("@/api/discoveryOCI", async () => {
   return {
     ...actual,
     listOCIConnections: vi.fn(),
+    enableOCIDemoConnection: vi.fn(),
     createOCIConnection: vi.fn(),
     validateOCIConnection: vi.fn(),
     scanOCIConnection: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock("@/api/discoveryOCI", async () => {
 });
 
 const mockedListOCIConnections = vi.mocked(listOCIConnections);
+const mockedEnableOCIDemo = vi.mocked(enableOCIDemoConnection);
 const mockedCreateOCIConnection = vi.mocked(createOCIConnection);
 const mockedValidateOCIConnection = vi.mocked(validateOCIConnection);
 const mockedScanOCIConnection = vi.mocked(scanOCIConnection);
@@ -169,6 +172,31 @@ describe("DiscoveryOCI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListOCIConnections.mockResolvedValue([]);
+  });
+
+  it("Try the demo provisions the demo tenancy and refreshes the list", async () => {
+    mockedListOCIConnections.mockResolvedValue([]);
+    mockedEnableOCIDemo.mockResolvedValue({
+      id: "demo-oci",
+      display_name: "Demo Tenancy (sample data)",
+      tenancy_ocid: "ocid1.tenancy.oc1..demo",
+      user_ocid: "ocid1.user.oc1..demo",
+      fingerprint: "00:00",
+      region: "us-ashburn-1",
+      learn_from_accepted_recommendations: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as OCIConnection);
+    const user = userEvent.setup();
+    renderPage();
+    const demoBtn = await screen.findByRole("button", {
+      name: /Try the demo/i,
+    });
+    await user.click(demoBtn);
+    await waitFor(() => expect(mockedEnableOCIDemo).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(mockedListOCIConnections.mock.calls.length).toBeGreaterThan(1),
+    );
   });
 
   it("TestDiscoveryOCI_WizardStep1_TenancyOCIDValidation", async () => {
