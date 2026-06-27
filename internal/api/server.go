@@ -2396,6 +2396,9 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/aws/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGetScan(c) }))
+		v1.GET("/discovery/aws/connections/:id/drift",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSScanDrift(c) }))
 
 		// v0.89.7a Stream 21 (#616) — multi-account AWS scan-all.
 		// Fans out per-account scans across every stored AWS
@@ -2558,6 +2561,9 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/gcp/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPGetScan(c) }))
+		v1.GET("/discovery/gcp/connections/:id/drift",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPScanDrift(c) }))
 		v1.POST("/discovery/gcp/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleRecommendationsForGCPScan(c) }))
@@ -2611,6 +2617,9 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/azure/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureGetScan(c) }))
+		v1.GET("/discovery/azure/connections/:id/drift",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureScanDrift(c) }))
 		v1.POST("/discovery/azure/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleRecommendationsForAzureScan(c) }))
@@ -2665,6 +2674,9 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/oci/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIGetScan(c) }))
+		v1.GET("/discovery/oci/connections/:id/drift",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIScanDrift(c) }))
 		v1.POST("/discovery/oci/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleRecommendationsForOCIScan(c) }))

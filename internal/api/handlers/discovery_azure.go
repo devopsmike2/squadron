@@ -167,6 +167,11 @@ func (h *DiscoveryAzureHandlers) HandleAzureGetScan(c *gin.Context) {
 		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
 }
 
+// HandleAzureScanDrift — GET /api/v1/discovery/azure/connections/:id/drift.
+func (h *DiscoveryAzureHandlers) HandleAzureScanDrift(c *gin.Context) {
+	writeDrift(c, h.scanStore, h.logger, "azure", strings.TrimSpace(c.Param("id")))
+}
+
 func (h *DiscoveryAzureHandlers) WithAzureScannerFactory(f AzureScannerFactory) *DiscoveryAzureHandlers {
 	h.scannerFactory = f
 	return h

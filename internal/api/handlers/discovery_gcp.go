@@ -168,6 +168,11 @@ func (h *DiscoveryGCPHandlers) HandleGCPGetScan(c *gin.Context) {
 		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
 }
 
+// HandleGCPScanDrift — GET /api/v1/discovery/gcp/connections/:id/drift.
+func (h *DiscoveryGCPHandlers) HandleGCPScanDrift(c *gin.Context) {
+	writeDrift(c, h.scanStore, h.logger, "gcp", strings.TrimSpace(c.Param("id")))
+}
+
 func (h *DiscoveryGCPHandlers) WithGCPScannerFactory(f GCPScannerFactory) *DiscoveryGCPHandlers {
 	h.scannerFactory = f
 	return h

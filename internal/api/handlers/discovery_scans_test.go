@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -56,6 +57,7 @@ func (f *fakeScanStore) ListDiscoveryScans(_ context.Context, provider, scopeID 
 			out = append(out, &cp)
 		}
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
 	return out, nil
 }
 
@@ -210,5 +212,75 @@ func TestRunScanForAccount_UnwiredCredstoreErrors(t *testing.T) {
 	h := NewDiscoveryHandlers(nil, zap.NewNop())
 	if err := h.RunScanForAccount(context.Background(), "123456789012"); err == nil {
 		t.Fatal("expected an error when credstore is not wired")
+	}
+}
+
+func TestHandleAWSScanDrift_LatestTwo(t *testing.T) {
+	store := newFakeScanStore()
+	older := time.Now().Add(-2 * time.Hour)
+	newer := time.Now().Add(-1 * time.Hour)
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "old", Provider: "aws", ScopeID: "111", StartedAt: older,
+		ResultJSON: `{"compute":[{"resource_id":"i-1","has_otel":false}]}`,
+	})
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "new", Provider: "aws", ScopeID: "111", StartedAt: newer,
+		ResultJSON: `{"compute":[{"resource_id":"i-1","has_otel":true},{"resource_id":"i-2","has_otel":false}]}`,
+	})
+	h := NewDiscoveryHandlers(nil, zap.NewNop()).WithScanStore(store)
+	r := gin.New()
+	r.GET("/discovery/aws/connections/:id/drift", h.HandleAWSScanDrift)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/discovery/aws/connections/111/drift", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		FromScanID string `json:"from_scan_id"`
+		ToScanID   string `json:"to_scan_id"`
+		Drift      struct {
+			TotalAdded                  int `json:"total_added"`
+			TotalInstrumentationChanged int `json:"total_instrumentation_changed"`
+		} `json:"drift"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.FromScanID != "old" || resp.ToScanID != "new" {
+		t.Errorf("from/to = %s/%s, want old/new", resp.FromScanID, resp.ToScanID)
+	}
+	if resp.Drift.TotalAdded != 1 || resp.Drift.TotalInstrumentationChanged != 1 {
+		t.Errorf("drift totals added=%d flips=%d, want 1/1", resp.Drift.TotalAdded, resp.Drift.TotalInstrumentationChanged)
+	}
+}
+
+func TestHandleAWSScanDrift_InsufficientHistory(t *testing.T) {
+	store := newFakeScanStore()
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "only", Provider: "aws", ScopeID: "111", StartedAt: time.Now(), ResultJSON: `{}`,
+	})
+	h := NewDiscoveryHandlers(nil, zap.NewNop()).WithScanStore(store)
+	r := gin.New()
+	r.GET("/discovery/aws/connections/:id/drift", h.HandleAWSScanDrift)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/discovery/aws/connections/111/drift", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	var resp map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["insufficient_history"] != true {
+		t.Errorf("expected insufficient_history=true, got %v", resp)
+	}
+}
+
+func TestHandleAWSScanDrift_UnwiredStore503(t *testing.T) {
+	h := NewDiscoveryHandlers(nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/discovery/aws/connections/:id/drift", h.HandleAWSScanDrift)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/discovery/aws/connections/111/drift", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("want 503, got %d", w.Code)
 	}
 }

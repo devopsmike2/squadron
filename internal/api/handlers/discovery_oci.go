@@ -182,6 +182,11 @@ func (h *DiscoveryOCIHandlers) HandleOCIGetScan(c *gin.Context) {
 		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
 }
 
+// HandleOCIScanDrift — GET /api/v1/discovery/oci/connections/:id/drift.
+func (h *DiscoveryOCIHandlers) HandleOCIScanDrift(c *gin.Context) {
+	writeDrift(c, h.scanStore, h.logger, "oci", strings.TrimSpace(c.Param("id")))
+}
+
 func (h *DiscoveryOCIHandlers) WithOCIScannerFactory(f OCIScannerFactory) *DiscoveryOCIHandlers {
 	h.scannerFactory = f
 	return h
