@@ -41,9 +41,12 @@ the slice-1 scan store.
 - **Opt-in, default OFF — deliberately.** Auto-scanning real cloud accounts on
   a timer has cost + API-rate implications. Operators must set the interval
   explicitly. The env doc states this plainly.
-- **AWS only (slice 3a).** GCP/Azure/OCI scheduling is slice 3b (mechanical —
-  the scheduler is provider-agnostic; only the per-cloud handler + list
-  function differ). The sync + history endpoints already work on all four.
+- **All four clouds.** AWS (slice 3a) uses the cleanly-extracted
+  RunScanForAccount entry; GCP/Azure/OCI (slice 3b, v0.89.254) reuse their
+  existing scan handlers verbatim via an internal synthetic gin context
+  (invokeScanHandler) — full parity (audit + tiers + persist) with no risky
+  extraction of three large gin-coupled handlers. Replacing that dispatch with
+  a handler-extracted core is a noted future cleanup; behavior is identical.
 - **Reuses the synchronous scan path in a goroutine.** This is NOT the async
   scan HTTP API (returning a job id from POST) — that's a separate concern; the
   on-demand POST endpoint stays blocking. The scheduler simply doesn't run on

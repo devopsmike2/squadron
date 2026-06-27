@@ -57,8 +57,8 @@ standalone secrets, not config fields:
   automatically. Unset / `<=0` keeps scans on-demand only. NOTE:
   auto-scanning real cloud accounts on a timer has cost + API-rate
   implications — set it deliberately. Values below 15m are raised to
-  the 15m floor. AWS only for now; the first sweep fires after one
-  interval (not at startup).
+  the 15m floor. Covers all four clouds (AWS/GCP/Azure/OCI); the
+  first sweep fires after one interval (not at startup).
 - `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
   Bearer token enforcement. Do NOT set this in production.
 

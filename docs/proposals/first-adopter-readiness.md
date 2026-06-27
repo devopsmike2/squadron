@@ -49,8 +49,8 @@ week vs. what is inferred from the code. Confidence is flagged per item.
   detail). As of slice 2 (v0.89.251) ALL FOUR clouds persist + expose scan
   history (`GET .../scans` + `.../scans/:scanID`). What remains for a true
   "continuous" story: (a) scheduled re-scans now EXIST as of slice 3a
-  (v0.89.252) — opt-in via SQUADRON_DISCOVERY_SCAN_INTERVAL, AWS only, default
-  off; GCP/Azure/OCI scheduling is slice 3b; (b) the on-demand POST scan is
+  (v0.89.252) — opt-in via SQUADRON_DISCOVERY_SCAN_INTERVAL, all four clouds (slice 3b,
+  v0.89.254), default off; (b) the on-demand POST scan is
   still synchronous (async-job HTTP API is separate); (c) drift shipped (slice 4, v0.89.253) — GET .../connections/:id/drift diffs
   the latest two scans (added/removed/instrumentation-flipped) on all four
   clouds. Remaining: cross-cloud scheduling (3b) and drift notifications.
