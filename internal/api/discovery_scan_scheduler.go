@@ -5,7 +5,12 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -14,60 +19,182 @@ import (
 )
 
 // StartDiscoveryScanScheduler launches the opt-in continuous-discovery
-// scheduler (slice 3a) in a background goroutine. It re-runs + persists AWS
-// scans on the given interval so scan history accrues automatically.
+// scheduler (slice 3) in background goroutines — one per cloud whose substrate
+// is wired. It re-runs + persists discovery scans on the given interval so scan
+// history accrues automatically.
 //
-// Prerequisites mirror the AWS scan path: the credstore + its encryption key
-// must be wired (the key also installs the production AWS scanner factory via
-// WithCredstoreKey). When either is missing, the scheduler logs and does not
-// start — the on-demand scan endpoints are unaffected.
+// AWS (slice 3a) uses the cleanly-extracted RunScanForAccount entry. GCP /
+// Azure / OCI (slice 3b) reuse their existing scan handlers verbatim by
+// invoking them through an internal synthetic gin context — this preserves full
+// parity with on-demand scans (audit events, tier dispatch, persistence)
+// without a risky extraction of three large gin-coupled handlers. Replacing the
+// synthetic-context dispatch with a handler-extracted core is a noted future
+// cleanup; the behavior is identical either way.
 //
-// The scheduler reuses runAWSScan (audit + persistence included) via the
-// exported RunScanForAccount; it adds no new scan logic. The demo account is
-// excluded — its scan short-circuits before persistence and would be wasted
-// work.
-//
-// The goroutine stops when ctx is cancelled (wire it to process shutdown).
+// Each goroutine stops when ctx is cancelled (wire it to process shutdown).
 func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		return
 	}
-	if s.discoveryCredStore == nil || s.discoveryCredKey == nil {
-		if s.logger != nil {
-			s.logger.Warn("discovery scan scheduler not started: credstore or key not wired")
+
+	// --- AWS (slice 3a) ---
+	if s.discoveryCredStore != nil && s.discoveryCredKey != nil {
+		h := handlers.NewDiscoveryHandlers(s.discoveryCredStore, s.logger).
+			WithCredstoreKey(s.discoveryCredKey)
+		if s.auditService != nil {
+			h.WithAuditService(s.auditService)
 		}
-		return
-	}
-
-	h := handlers.NewDiscoveryHandlers(s.discoveryCredStore, s.logger).
-		WithCredstoreKey(s.discoveryCredKey)
-	if s.auditService != nil {
-		h.WithAuditService(s.auditService)
-	}
-	if s.appStore != nil {
-		h.WithScanStore(s.appStore)
-	}
-
-	credStore := s.discoveryCredStore
-	logger := s.logger
-	sched := &scanscheduler.Scheduler{
-		Interval: interval,
-		Logger:   logger,
-		ListAccounts: func(ctx context.Context) ([]string, error) {
-			conns, err := credStore.ListConnections(ctx, credstore.ListFilter{Provider: credstore.ProviderAWS})
-			if err != nil {
-				return nil, err
-			}
-			ids := make([]string, 0, len(conns))
-			for _, conn := range conns {
-				if conn == nil || conn.AccountID == "" || demo.IsDemo(conn.AccountID) {
-					continue
+		if s.appStore != nil {
+			h.WithScanStore(s.appStore)
+		}
+		credStore := s.discoveryCredStore
+		sched := &scanscheduler.Scheduler{
+			Interval: interval,
+			Logger:   s.logger,
+			ListAccounts: func(ctx context.Context) ([]string, error) {
+				conns, err := credStore.ListConnections(ctx, credstore.ListFilter{Provider: credstore.ProviderAWS})
+				if err != nil {
+					return nil, err
 				}
-				ids = append(ids, conn.AccountID)
-			}
-			return ids, nil
-		},
-		ScanAccount: h.RunScanForAccount,
+				ids := make([]string, 0, len(conns))
+				for _, conn := range conns {
+					if conn == nil || conn.AccountID == "" || demo.IsDemo(conn.AccountID) {
+						continue
+					}
+					ids = append(ids, conn.AccountID)
+				}
+				return ids, nil
+			},
+			ScanAccount: h.RunScanForAccount,
+		}
+		go sched.Run(ctx)
+	} else if s.logger != nil {
+		s.logger.Warn("discovery scan scheduler: AWS not started (credstore or key not wired)")
 	}
-	go sched.Run(ctx)
+
+	// --- GCP (slice 3b) ---
+	if s.discoveryGCPStore != nil && s.discoveryCredKey != nil && s.discoveryGCPScannerFactory != nil {
+		h := handlers.NewDiscoveryGCPHandlers(s.discoveryGCPStore, s.logger).
+			WithGCPCredstoreKey(s.discoveryCredKey).
+			WithGCPScannerFactory(s.discoveryGCPScannerFactory)
+		if s.auditService != nil {
+			h.WithGCPAuditService(s.auditService)
+		}
+		if s.appStore != nil {
+			h.WithGCPScanStore(s.appStore)
+		}
+		store := s.discoveryGCPStore
+		sched := &scanscheduler.Scheduler{
+			Interval: interval,
+			Logger:   s.logger,
+			ListAccounts: func(ctx context.Context) ([]string, error) {
+				conns, err := store.List(ctx)
+				if err != nil {
+					return nil, err
+				}
+				ids := make([]string, 0, len(conns))
+				for _, conn := range conns {
+					if conn == nil || conn.ID == "" || demo.IsGCPDemoProject(conn.ProjectID) {
+						continue
+					}
+					ids = append(ids, conn.ID)
+				}
+				return ids, nil
+			},
+			ScanAccount: func(ctx context.Context, id string) error {
+				return invokeScanHandler(ctx, id, h.HandleScanGCPConnection)
+			},
+		}
+		go sched.Run(ctx)
+	}
+
+	// --- Azure (slice 3b) ---
+	if s.discoveryAzureStore != nil && s.discoveryCredKey != nil && s.discoveryAzureScannerFactory != nil {
+		h := handlers.NewDiscoveryAzureHandlers(s.discoveryAzureStore, s.logger).
+			WithAzureCredstoreKey(s.discoveryCredKey).
+			WithAzureScannerFactory(s.discoveryAzureScannerFactory)
+		if s.auditService != nil {
+			h.WithAzureAuditService(s.auditService)
+		}
+		if s.appStore != nil {
+			h.WithAzureScanStore(s.appStore)
+		}
+		store := s.discoveryAzureStore
+		sched := &scanscheduler.Scheduler{
+			Interval: interval,
+			Logger:   s.logger,
+			ListAccounts: func(ctx context.Context) ([]string, error) {
+				conns, err := store.List(ctx)
+				if err != nil {
+					return nil, err
+				}
+				ids := make([]string, 0, len(conns))
+				for _, conn := range conns {
+					if conn == nil || conn.ID == "" || demo.IsAzureDemoSubscription(conn.SubscriptionID) {
+						continue
+					}
+					ids = append(ids, conn.ID)
+				}
+				return ids, nil
+			},
+			ScanAccount: func(ctx context.Context, id string) error {
+				return invokeScanHandler(ctx, id, h.HandleScanAzureConnection)
+			},
+		}
+		go sched.Run(ctx)
+	}
+
+	// --- OCI (slice 3b) ---
+	if s.discoveryOCIStore != nil && s.discoveryCredKey != nil && s.discoveryOCIScannerFactory != nil {
+		h := handlers.NewDiscoveryOCIHandlers(s.discoveryOCIStore, s.logger).
+			WithOCICredstoreKey(s.discoveryCredKey).
+			WithOCIScannerFactory(s.discoveryOCIScannerFactory)
+		if s.auditService != nil {
+			h.WithOCIAuditService(s.auditService)
+		}
+		if s.appStore != nil {
+			h.WithOCIScanStore(s.appStore)
+		}
+		store := s.discoveryOCIStore
+		sched := &scanscheduler.Scheduler{
+			Interval: interval,
+			Logger:   s.logger,
+			ListAccounts: func(ctx context.Context) ([]string, error) {
+				conns, err := store.List(ctx)
+				if err != nil {
+					return nil, err
+				}
+				ids := make([]string, 0, len(conns))
+				for _, conn := range conns {
+					if conn == nil || conn.ID == "" || demo.IsOCIDemoTenancy(conn.TenancyOCID) {
+						continue
+					}
+					ids = append(ids, conn.ID)
+				}
+				return ids, nil
+			},
+			ScanAccount: func(ctx context.Context, id string) error {
+				return invokeScanHandler(ctx, id, h.HandleScanOCIConnection)
+			},
+		}
+		go sched.Run(ctx)
+	}
+}
+
+// invokeScanHandler drives a per-cloud scan handler outside the HTTP path by
+// building a synthetic gin context (connection id as the :id param, empty body
+// so the handler's tier parse falls back to defaults, the scheduler's context
+// for cancellation). The handler's persistence + audit side effects run
+// exactly as on-demand; the recorded response is discarded. A >=400 status
+// surfaces as an error the scheduler counts + logs.
+func invokeScanHandler(ctx context.Context, connID string, handler func(*gin.Context)) error {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx)
+	c.Params = gin.Params{{Key: "id", Value: connID}}
+	handler(c)
+	if rec.Code >= http.StatusBadRequest {
+		return fmt.Errorf("scan %s: http %d", connID, rec.Code)
+	}
+	return nil
 }
