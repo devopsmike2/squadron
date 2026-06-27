@@ -28,8 +28,11 @@ type Store struct {
 	savedQueries map[string]*types.SavedQuery
 	alertRules   map[string]*types.AlertRule
 	auditEvents  []*types.AuditEvent // append-only; sorted newest-first on read
-	rollouts     map[string]*types.Rollout
-	apiTokens    map[string]*types.APIToken // keyed by ID; secondary index built on the fly for hash lookup
+	// v0.89.250 continuous-discovery slice 1 — persisted scans, append-only,
+	// sorted newest-first on read.
+	discoveryScans []*types.ScanRecord
+	rollouts       map[string]*types.Rollout
+	apiTokens      map[string]*types.APIToken // keyed by ID; secondary index built on the fly for hash lookup
 	// v0.25: recommendation dismissals — keyed by the engine's
 	// deterministic recommendation_id hash.
 	recDismissals map[string]*types.RecommendationDismissal
@@ -2000,4 +2003,68 @@ func (s *Store) ListCrossScopeDiscoveryVerdicts(
 		}
 	}
 	return out, nil
+}
+
+// --- Discovery scan persistence (v0.89.250, continuous-discovery slice 1) ---
+
+// SaveDiscoveryScan records a completed scan. Upserts on ScanID.
+func (s *Store) SaveDiscoveryScan(ctx context.Context, rec *types.ScanRecord) error {
+	if rec == nil || rec.ScanID == "" {
+		return fmt.Errorf("memory: SaveDiscoveryScan requires a non-empty ScanID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *rec
+	if rec.CreatedAt.IsZero() {
+		cp.CreatedAt = time.Now().UTC()
+	}
+	for i, existing := range s.discoveryScans {
+		if existing.ScanID == rec.ScanID {
+			s.discoveryScans[i] = &cp
+			return nil
+		}
+	}
+	s.discoveryScans = append(s.discoveryScans, &cp)
+	return nil
+}
+
+// ListDiscoveryScans returns the newest-first scan history for a scope.
+// ResultJSON is omitted to keep list responses small. A blank scopeID lists
+// every scan for the provider.
+func (s *Store) ListDiscoveryScans(ctx context.Context, provider, scopeID string, limit int) ([]*types.ScanRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*types.ScanRecord
+	for _, rec := range s.discoveryScans {
+		if rec.Provider != provider {
+			continue
+		}
+		if scopeID != "" && rec.ScopeID != scopeID {
+			continue
+		}
+		cp := *rec
+		cp.ResultJSON = ""
+		out = append(out, &cp)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// GetDiscoveryScan returns one scan including the full inventory (ResultJSON).
+// Returns (nil, nil) when no scan matches.
+func (s *Store) GetDiscoveryScan(ctx context.Context, scanID string) (*types.ScanRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, rec := range s.discoveryScans {
+		if rec.ScanID == scanID {
+			cp := *rec
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }

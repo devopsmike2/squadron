@@ -952,6 +952,9 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		if s.appStore != nil {
 			h.WithExclusionStore(s.appStore)
 		}
+		if s.appStore != nil {
+			h.WithScanStore(s.appStore)
+		}
 		// v0.89.44 (#665 Stream 63, slice 1 chunk 4 of the GitHub Checks
 		// API back-signal arc). Wire the chunk-4 PATCH-to-neutral
 		// follow-up surfaces onto the exclusion handler. All four are
@@ -1032,6 +1035,9 @@ func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin
 		// under discoveryTrampoline also picks it up consistently.
 		if s.appStore != nil {
 			h.WithExclusionStore(s.appStore)
+		}
+		if s.appStore != nil {
+			h.WithScanStore(s.appStore)
 		}
 		fn(h, c)
 	}
@@ -2373,6 +2379,14 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/aws/connections/:id/scan",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSRunScan(c) }))
+
+		// v0.89.250 continuous-discovery slice 1 — persisted scan history.
+		v1.GET("/discovery/aws/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSListScans(c) }))
+		v1.GET("/discovery/aws/connections/:id/scans/:scanID",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGetScan(c) }))
 
 		// v0.89.7a Stream 21 (#616) — multi-account AWS scan-all.
 		// Fans out per-account scans across every stored AWS

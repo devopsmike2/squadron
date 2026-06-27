@@ -99,6 +99,15 @@ type ApplicationStore interface {
 		since time.Time, limit int,
 	) ([]*DiscoveryVerdict, error)
 
+	// Discovery scan persistence (v0.89.250, continuous-discovery slice 1).
+	// SaveDiscoveryScan records a completed scan; ListDiscoveryScans returns
+	// the newest-first history for a scope (result_json omitted for cheap
+	// listing); GetDiscoveryScan returns one scan including the full inventory
+	// (result_json). A nil/zero scopeID lists all scans for the provider.
+	SaveDiscoveryScan(ctx context.Context, rec *ScanRecord) error
+	ListDiscoveryScans(ctx context.Context, provider, scopeID string, limit int) ([]*ScanRecord, error)
+	GetDiscoveryScan(ctx context.Context, scanID string) (*ScanRecord, error)
+
 	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
 	// exclusion infrastructure for discovery recommendations. The
 	// "Don't propose this again" affordance on the Recommendations tab
@@ -1261,4 +1270,23 @@ type IncidentDraftFilter struct {
 	RolloutID       string
 	Status          string // "", "draft", "published", "dismissed"
 	Limit           int
+}
+
+// ScanRecord is a persisted discovery scan (v0.89.250, continuous-discovery
+// slice 1). The scanner.Result is self-describing, so most fields are a
+// straight projection; Summary holds the per-category counts for cheap listing
+// and ResultJSON holds the full marshaled inventory for the detail view +
+// future drift diffing. ResultJSON is omitted from list responses.
+type ScanRecord struct {
+	ScanID        string         `json:"scan_id"`
+	Provider      string         `json:"provider"`
+	ScopeID       string         `json:"scope_id"`
+	Regions       []string       `json:"regions"`
+	StartedAt     time.Time      `json:"started_at"`
+	CompletedAt   time.Time      `json:"completed_at"`
+	Partial       bool           `json:"partial"`
+	PartialReason string         `json:"partial_reason,omitempty"`
+	Summary       map[string]int `json:"summary"`
+	ResultJSON    string         `json:"result_json,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
