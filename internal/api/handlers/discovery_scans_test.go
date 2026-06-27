@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -190,5 +191,24 @@ func TestHandleAWSGetScan_CrossScope404(t *testing.T) {
 	scanRouter(h).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/discovery/aws/connections/111/scans/s1", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404 for cross-scope, got %d", w.Code)
+	}
+}
+
+// TestRunScanForAccount_DemoHappyPath: the demo account short-circuits inside
+// runAWSScan (no credstore/scanner needed) so the exported scheduler entry
+// returns nil.
+func TestRunScanForAccount_DemoHappyPath(t *testing.T) {
+	h := NewDiscoveryHandlers(nil, zap.NewNop())
+	if err := h.RunScanForAccount(context.Background(), demo.SentinelAccountID); err != nil {
+		t.Fatalf("demo scan should succeed, got %v", err)
+	}
+}
+
+// TestRunScanForAccount_UnwiredCredstoreErrors: a real account with no credstore
+// wired surfaces an error the scheduler will log + count.
+func TestRunScanForAccount_UnwiredCredstoreErrors(t *testing.T) {
+	h := NewDiscoveryHandlers(nil, zap.NewNop())
+	if err := h.RunScanForAccount(context.Background(), "123456789012"); err == nil {
+		t.Fatal("expected an error when credstore is not wired")
 	}
 }

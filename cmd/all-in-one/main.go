@@ -768,6 +768,24 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// v0.89.252 continuous-discovery slice 3a — opt-in scheduled re-scans.
+		// SQUADRON_DISCOVERY_SCAN_INTERVAL (Go duration, e.g. "6h"); unset or
+		// <=0 disables it (the default). Auto-scanning real cloud accounts on a
+		// timer has cost + API-rate implications, so it is strictly opt-in. The
+		// scheduler reuses the AWS scan + persistence path and stops on
+		// shutdown. No-op when the credstore/key are not wired.
+		if raw := strings.TrimSpace(os.Getenv("SQUADRON_DISCOVERY_SCAN_INTERVAL")); raw != "" {
+			if d, derr := time.ParseDuration(raw); derr == nil && d > 0 {
+				scanSchedCtx, scanSchedCancel := context.WithCancel(context.Background())
+				apiServer.StartDiscoveryScanScheduler(scanSchedCtx, d)
+				defer scanSchedCancel()
+				logger.Info("discovery scan scheduler enabled", zap.Duration("interval", d))
+			} else {
+				logger.Warn("SQUADRON_DISCOVERY_SCAN_INTERVAL set but invalid; scheduler disabled",
+					zap.String("value", raw))
+			}
+		}
+
 		// v0.89.3 Stream 19 (#603) — Connect IaC repo substrate.
 		// Shares the same SQUADRON_SECRETS_KEY as the credstore
 		// above (the GitHub PAT is sealed by the same Key the AWS
