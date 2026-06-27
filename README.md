@@ -125,6 +125,17 @@ docker compose restart squadron
 The AI buttons appear in the UI as soon as `/api/v1/ai/status`
 sees the key.
 
+### Explore cloud discovery without a cloud account
+
+Squadron's cloud discovery — inventory plus instrumentation-gap
+recommendations — normally needs a connected AWS / GCP / Azure / OCI
+account. To try it with zero credentials, open the **AWS** page under
+Discovery and click **Try the demo**. Squadron loads a built-in sample
+inventory (a mix of instrumented and uninstrumented EC2 instances, Lambda
+functions, and RDS databases) and generates the matching Terraform
+recommendations — no cloud account, no API key, no cloud calls. Remove it
+any time from the connection list.
+
 ## The Squadron stack
 
 Squadron runs as a single process composed of:
