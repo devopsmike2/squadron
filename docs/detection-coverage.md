@@ -52,7 +52,7 @@ by metric availability.
 
 | Cloud | Surface | Native metric? | Status |
 |-------|---------|----------------|--------|
-| AWS | SQS | **No** — there is no native counter for messages moved to a DLQ by the redrive policy. `NumberOfMessagesSent` excludes them (only manual SendMessage counts). | ⛔ Deferred (reverted v0.89.230) — monitor recommendation on the DLQ's `ApproximateNumberOfMessages`. Depth-based detection planned (#156). |
+| AWS | SQS | **No** native poison RATE — but DLQ DEPTH is available. | ✅ **Depth/presence (v0.89.259, #156):** the source queue reads its DLQ's current `ApproximateNumberOfMessages` (free from the scan's attribute walk; same-account/region DLQs) and surfaces `poison_dlq_depth` + `poison_dlq_nonempty`. A non-empty DLQ ⇒ poison present. Proxy, not a rate: a drained DLQ reads empty. |
 | GCP | Cloud Tasks | Yes — failed `task_attempt_count`. | ✅ |
 | Azure | Service Bus | Yes — `DeadletteredMessages` gauge delta. | ✅ (delta approximation). |
 | OCI | Queue | **No** — `oci_queue` has no dead-letter depth metric (`MessagesInDlq` does not exist; verified v0.89.236). | ⛔ Deferred — honest absent sentinel + monitor recommendation; depth-based signal via the `deadLetterQueueDeliveryCount` attribute is the planned fix. |

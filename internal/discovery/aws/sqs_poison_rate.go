@@ -98,6 +98,21 @@ func applySQSPoisonRateDetail(snap *scanner.EventSourceInstanceSnapshot, qa queu
 	snap.Detail["poison_rate_high_band"] = res.HighBand
 }
 
+// applySQSPoisonDepthDetail writes the depth/presence poison signal (#156,
+// v0.89.259). Unlike the CloudWatch-gated rate above, this is ALWAYS available
+// — the DLQ's current message count comes free from the pass-1 GetQueueAttributes
+// walk. Honest semantics:
+//   - poison_dlq_depth: the DLQ's current ApproximateNumberOfMessages, or -1
+//     when the DLQ is cross-account / dangling (unreachable this scan).
+//   - poison_dlq_nonempty: true when the reachable DLQ currently holds >=1
+//     message — a direct "poison present" signal (a non-empty DLQ means messages
+//     failed processing and were redriven). It is a depth proxy, NOT a rate: a
+//     drained DLQ reads empty even if a burst occurred earlier.
+func applySQSPoisonDepthDetail(snap *scanner.EventSourceInstanceSnapshot, dlqDepth int) {
+	snap.Detail["poison_dlq_depth"] = dlqDepth
+	snap.Detail["poison_dlq_nonempty"] = dlqDepth > 0
+}
+
 // --- Poison-rate substrate slice 4 chunk 1 (v0.89.177, #819 Stream
 // 216) — REAL CloudWatch-backed detection that closes the AWS §3.3
 // deferral. The honest-framing detectSQSPoisonRate above stays as
@@ -173,7 +188,7 @@ func (s *Scanner) DetectSQSPoisonRate(_ context.Context, _ string) (sqsPoisonRat
 //     (absent sentinel preserved) and continues.
 //
 // See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
-func (s *Scanner) enrichSQSPoisonRate(_ context.Context, _ []scanner.EventSourceInstanceSnapshot, _ map[string]struct{}) {
+func (s *Scanner) enrichSQSPoisonRate(_ context.Context, _ []scanner.EventSourceInstanceSnapshot, _ map[string]int) {
 	// No-op. The prior NumberOfMessagesSent-based enrichment was removed
 	// because that metric does not capture redrive-moved messages (see
 	// DetectSQSPoisonRate). The honest absent sentinels written at projection

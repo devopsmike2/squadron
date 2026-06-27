@@ -41,9 +41,11 @@ dormant deterministic branch.
   the existing **azfunc-appinsights-enable** kind to state the cold-start/error
   rationale + cost. Layer ARNs are framed as "resolve the current published ARN"
   (not hardcoded) per the #109/#111 freshness fix.
-- **Slice 2 — AWS SQS DLQ depth detection (#156):** poll the DLQ's
-  ApproximateNumberOfMessagesVisible, report presence/depth honestly (governor-
-  gated extra call).
+- **Slice 2 (shipped v0.89.259) — AWS SQS DLQ depth detection (#156):** the
+  source queue reads its DLQ's current ApproximateNumberOfMessages directly from
+  the scan's attribute walk (no extra call, no CloudWatch; same-account/region
+  DLQs). Surfaces poison_dlq_depth + poison_dlq_nonempty. Honest proxy: a
+  drained DLQ reads empty.
 - **Slice 3 — OCI queue poison via deadLetterQueueDeliveryCount delta over scan
   history (#159):** first consumer of persisted scan history for a derived rate.
 

@@ -138,7 +138,7 @@ func TestEnrichSQSPoisonRate_PreservesSentinelNoOp(t *testing.T) {
 	}
 	s := newMetricsTestScannerWithCW(t, cw)
 	snaps := []scanner.EventSourceInstanceSnapshot{snapWithDLQ(testDLQARN)}
-	arnSet := map[string]struct{}{testDLQARN: {}}
+	arnSet := map[string]int{testDLQARN: 0}
 
 	s.enrichSQSPoisonRate(context.Background(), snaps, arnSet)
 
@@ -151,7 +151,7 @@ func TestEnrichSQSPoisonRate_PreservesSentinelNoOp(t *testing.T) {
 func TestEnrichSQSPoisonRate_NilClientNoOp(t *testing.T) {
 	s := newMetricsTestScanner() // no CloudWatch client wired
 	snaps := []scanner.EventSourceInstanceSnapshot{snapWithDLQ(testDLQARN)}
-	arnSet := map[string]struct{}{testDLQARN: {}}
+	arnSet := map[string]int{testDLQARN: 0}
 
 	s.enrichSQSPoisonRate(context.Background(), snaps, arnSet)
 
@@ -170,7 +170,7 @@ func TestEnrichSQSPoisonRate_UnreachableDLQSkipped(t *testing.T) {
 	}
 	s := newMetricsTestScannerWithCW(t, cw)
 	snaps := []scanner.EventSourceInstanceSnapshot{snapWithDLQ(testDLQARN)}
-	arnSet := map[string]struct{}{} // DLQ NOT reachable (cross-account / dangling)
+	arnSet := map[string]int{} // DLQ NOT reachable (cross-account / dangling)
 
 	s.enrichSQSPoisonRate(context.Background(), snaps, arnSet)
 
@@ -199,7 +199,7 @@ func TestEnrichSQSPoisonRate_NoDLQSkipped(t *testing.T) {
 	}
 	snaps := []scanner.EventSourceInstanceSnapshot{snap}
 
-	s.enrichSQSPoisonRate(context.Background(), snaps, map[string]struct{}{})
+	s.enrichSQSPoisonRate(context.Background(), snaps, map[string]int{})
 
 	assert.Equal(t, -1, snaps[0].Detail["poison_rate_per_hour"])
 	assert.Empty(t, cw.receivedInputs, "no DLQ → no CloudWatch call")

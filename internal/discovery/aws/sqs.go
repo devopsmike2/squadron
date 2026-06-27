@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -208,17 +209,25 @@ func (s *Scanner) scanRegionSQS(ctx context.Context, factory ClientFactory, regi
 	// whose attribute fetch failed contribute nothing to the set
 	// (their own DLQ axis stays false, AND their ARN can't be matched
 	// as another queue's DLQ).
-	arnSet := make(map[string]struct{}, len(pass1))
+	// v0.89.259 (#156) — map each ARN to its current message count so a
+	// source queue can read its DLQ's depth (the DLQ is just another
+	// pass-1 queue). Absent/unparseable counts map to 0; membership (the
+	// reachability check) is unchanged from the prior ARN set.
+	arnDepth := make(map[string]int, len(pass1))
 	for _, qa := range pass1 {
 		if qa.ARN != "" {
-			arnSet[qa.ARN] = struct{}{}
+			d := 0
+			if v, err := strconv.Atoi(qa.Attributes[SQSApproximateNumberOfMessagesAttr]); err == nil {
+				d = v
+			}
+			arnDepth[qa.ARN] = d
 		}
 	}
 
 	// Pass 2: build snapshots with DLQ reachability detection.
 	out := make([]scanner.EventSourceInstanceSnapshot, 0, len(pass1))
 	for _, qa := range pass1 {
-		out = append(out, buildSQSSnapshot(accountID, region, qa, arnSet))
+		out = append(out, buildSQSSnapshot(accountID, region, qa, arnDepth))
 	}
 
 	// Poison-rate substrate slice 4 chunk 1 (v0.89.177, #819 Stream
@@ -228,7 +237,7 @@ func (s *Scanner) scanRegionSQS(ctx context.Context, factory ClientFactory, regi
 	// deployments without the CloudWatch wiring see this as a no-op
 	// and keep the slice-3 §3.3 absent sentinels (cold-start parity).
 	// See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
-	s.enrichSQSPoisonRate(ctx, out, arnSet)
+	s.enrichSQSPoisonRate(ctx, out, arnDepth)
 
 	return out, nil
 }
@@ -333,7 +342,7 @@ func describeSQSQueue(ctx context.Context, client SQSClient, queueURL string) qu
 //     content_based_deduplication flag only surfaces when both FifoQueue
 //     and ContentBasedDeduplication are "true" (per §3 informational
 //     FIFO-dedup signal).
-func buildSQSSnapshot(accountID, region string, qa queueAttributes, arnSet map[string]struct{}) scanner.EventSourceInstanceSnapshot {
+func buildSQSSnapshot(accountID, region string, qa queueAttributes, arnDepth map[string]int) scanner.EventSourceInstanceSnapshot {
 	snap := scanner.EventSourceInstanceSnapshot{
 		Provider:     string(credstore.ProviderAWS),
 		Surface:      SQSSurface,
@@ -349,6 +358,11 @@ func buildSQSSnapshot(accountID, region string, qa queueAttributes, arnSet map[s
 		return snap
 	}
 
+	// dlqDepth is the current message count of this queue's DLQ, read from
+	// the pass-1 attributes via the redrive target ARN. -1 = the DLQ is
+	// cross-account / dangling (unreachable this scan) → poison depth absent.
+	dlqDepth := -1
+
 	// §3 axis 1: has redrive policy → HasTraceAxis.
 	if qa.HasRedrivePolicy {
 		snap.HasTraceAxis = true
@@ -359,8 +373,9 @@ func buildSQSSnapshot(accountID, region string, qa queueAttributes, arnSet map[s
 		// lookup. Cross-account / dangling targets leave the axis
 		// false; the chunk-2 sqs-deadletter-queue-attach kind
 		// surfaces the audit-only review path.
-		if _, ok := arnSet[qa.RedrivePolicy.DeadLetterTargetArn]; ok {
+		if depth, ok := arnDepth[qa.RedrivePolicy.DeadLetterTargetArn]; ok {
 			snap.HasLogAxis = true
+			dlqDepth = depth
 		}
 	}
 
@@ -406,6 +421,11 @@ func buildSQSSnapshot(accountID, region string, qa queueAttributes, arnSet map[s
 	// callers that have not yet adopted the poison-rate axis keys
 	// see byte-identical output to v0.89.172.
 	applySQSPoisonRateDetail(&snap, qa)
+
+	// v0.89.259 (#156) — always-available depth/presence signal from the
+	// DLQ's current message count (no CloudWatch needed). dlqDepth is -1
+	// when the DLQ is cross-account / dangling (unreachable in this scan).
+	applySQSPoisonDepthDetail(&snap, dlqDepth)
 
 	return snap
 }
