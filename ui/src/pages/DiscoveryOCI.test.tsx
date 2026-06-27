@@ -1315,9 +1315,10 @@ describe("DiscoveryOCI", () => {
   // aria-label); Radix opens the listbox on click; the option text
   // includes the region id + label so we filter on the id substring.
   async function selectRegion(user: ReturnType<typeof userEvent.setup>) {
-    const regionTrigger = screen.getByRole("combobox", { name: /OCI region/i });
+    // The region picker is a searchable cmdk combobox: a button trigger that
+    // opens a filterable list of role="option" items.
+    const regionTrigger = screen.getByRole("button", { name: /OCI region/i });
     await user.click(regionTrigger);
-    // Radix renders options as role="option" inside the listbox.
     const option = await screen.findByRole("option", {
       name: new RegExp(REGION, "i"),
     });

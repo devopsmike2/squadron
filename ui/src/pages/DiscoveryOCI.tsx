@@ -36,9 +36,11 @@
 // the RSA private key is the strongest credential type Squadron
 // handles, so this posture is non-negotiable per design doc §12.
 
+import { Command } from "cmdk";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Cloud,
   Copy,
   ExternalLink,
@@ -555,6 +557,80 @@ function OCIWizard({ onComplete }: OCIWizardProps) {
   );
 }
 
+// OCIRegionCombobox is a searchable, scrollable region picker. OCI has ~28
+// regions — a plain dropdown overflows the viewport and isn't filterable, so
+// this uses cmdk for type-to-filter + keyboard nav, a height-capped scrollable
+// list, and a click-outside backdrop to dismiss.
+function OCIRegionCombobox({
+  value,
+  onChange,
+  invalid,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  invalid: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = OCI_REGIONS.find((r) => r.id === value);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        id="oci-region"
+        aria-label="OCI region"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-invalid={invalid}
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 aria-[invalid=true]:border-destructive"
+      >
+        <span className={selected ? "" : "text-muted-foreground"}>
+          {selected
+            ? `${selected.id} — ${selected.label}`
+            : "Select an OCI region"}
+        </span>
+        <ChevronDown className="h-4 w-4 opacity-50" />
+      </button>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            aria-hidden="true"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-md">
+            <Command label="OCI region" className="flex flex-col">
+              <Command.Input
+                autoFocus
+                placeholder="Search regions (e.g. ashburn, us-, tokyo)…"
+                className="w-full border-b border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground"
+              />
+              <Command.List className="max-h-60 overflow-y-auto p-1">
+                <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  No matching region.
+                </Command.Empty>
+                {OCI_REGIONS.map((r) => (
+                  <Command.Item
+                    key={r.id}
+                    value={`${r.id} ${r.label}`}
+                    onSelect={() => {
+                      onChange(r.id);
+                      setOpen(false);
+                    }}
+                    className="cursor-pointer rounded px-2 py-1.5 text-sm data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+                  >
+                    {r.id} — {r.label}
+                  </Command.Item>
+                ))}
+              </Command.List>
+            </Command>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // --- Step 1: Connect an OCI tenancy ---------------------------------
 
 function TenancyStep({
@@ -661,22 +737,11 @@ function TenancyStep({
 
       <div className="space-y-2">
         <Label htmlFor="oci-region">Region</Label>
-        <Select value={region} onValueChange={onRegionChange}>
-          <SelectTrigger
-            id="oci-region"
-            aria-label="OCI region"
-            aria-invalid={region !== "" && !regionValid}
-          >
-            <SelectValue placeholder="Select an OCI region" />
-          </SelectTrigger>
-          <SelectContent>
-            {OCI_REGIONS.map((r) => (
-              <SelectItem key={r.id} value={r.id}>
-                {r.id} — {r.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <OCIRegionCombobox
+          value={region}
+          onChange={onRegionChange}
+          invalid={region !== "" && !regionValid}
+        />
         <p className="text-xs text-muted-foreground">
           Unlike AWS / GCP / Azure, OCI requires a region — OCI&apos;s API
           endpoints are regional, so the scanner has to know where to query.
