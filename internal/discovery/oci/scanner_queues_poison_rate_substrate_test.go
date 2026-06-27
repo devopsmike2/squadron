@@ -113,15 +113,19 @@ func ociQueueSnap() scanner.EventSourceInstanceSnapshot {
 	}
 }
 
-func TestEnrichOCIQueuePoisonRate_OverwritesWithRealReading(t *testing.T) {
-	mf := &monitoringFake{respondWith: dlqPoints(0, 80)} // delta 80
+func TestEnrichOCIQueuePoisonRate_NoOpPreservesSentinel(t *testing.T) {
+	// Reverted to a no-op (v0.89.236): "MessagesInDlq" is not a valid
+	// oci_queue metric, so the honest absent sentinels stand and no
+	// OCI Monitoring query is issued.
+	mf := &monitoringFake{respondWith: dlqPoints(0, 80)}
 	s := newMetricsTestScanner(t, mf)
 	snaps := []scanner.EventSourceInstanceSnapshot{ociQueueSnap()}
 
 	s.enrichOCIQueuePoisonRate(context.Background(), snaps)
 
-	assert.Equal(t, 80, snaps[0].Detail["poison_rate_per_hour"], "real reading overwrites the -1 sentinel")
-	assert.Equal(t, true, snaps[0].Detail["poison_rate_high_band"])
+	assert.Equal(t, -1, snaps[0].Detail["poison_rate_per_hour"])
+	assert.Equal(t, false, snaps[0].Detail["poison_rate_high_band"])
+	assert.Equal(t, 0, mf.calls, "enrichment must not query OCI Monitoring")
 }
 
 func TestEnrichOCIQueuePoisonRate_NilClientNoOp(t *testing.T) {

@@ -2075,8 +2075,9 @@ NOT counted by `NumberOfMessagesSent`; only manual SendMessage calls are. So it
 reported a confident 0/hour for DLQs filling via the normal failed-processing
 path. AWS SQS `poison_rate_per_hour` is once again the absent sentinel (`-1`),
 and `sqs-poison-rate-monitor-add` recommends wiring a CloudWatch alarm on the
-DLQ's `ApproximateNumberOfMessages` metric. GCP Cloud Tasks, Azure Service Bus,
-and OCI Queue remain real. See [detection-coverage.md](../detection-coverage.md).
+DLQ's `ApproximateNumberOfMessages` metric. GCP Cloud Tasks and Azure Service
+Bus remain real; OCI Queue was also reverted (see below). See
+[detection-coverage.md](../detection-coverage.md).
 
 ### Substrate arc complete
 
@@ -2085,10 +2086,10 @@ and OCI Queue remain real. See [detection-coverage.md](../detection-coverage.md)
 | AWS SQS | §3.3 honest framing (no native DLQ-additions counter; reverted v0.89.230) | absent sentinel + monitor rec |
 | GCP Cloud Tasks | failed `task_attempt_count` | counter, sum over 1h |
 | Azure Service Bus | `DeadletteredMessages` per-queue (EntityName split) | gauge, max-min delta |
-| OCI Queue Service | `MessagesInDlq` | gauge, max-min delta |
+| OCI Queue Service | §3.3 honest framing (`MessagesInDlq` is not a valid oci_queue metric; reverted v0.89.236) | absent sentinel + monitor rec |
 
-All four `*-poison-rate-monitor-add` recommendation kinds now
-report a measured rate instead of disclaiming a §3.3 gap. NO new
+The GCP + Azure `*-poison-rate-monitor-add` kinds report a measured rate; AWS
+SQS and OCI Queue disclaim the §3.3 gap (no usable native DLQ metric). NO new
 IAM across the whole arc (each cloud's existing metrics-read
 permission covered the new metric). NO new webhook prefixes.
 Cold-start parity preserved on every chunk: enrichment overwrites

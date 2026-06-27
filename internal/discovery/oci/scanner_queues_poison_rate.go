@@ -120,15 +120,16 @@ const OCIQueueMetricNamespace = "oci_queue"
 // the AWS / GCP counter-sum shape (those clouds expose arrival
 // counters; OCI + Azure expose dead-letter DEPTH gauges).
 //
-// HONEST CAVEAT (documented in the design doc §7): the exact OCI
-// Monitoring metric name for queue dead-letter depth should be
-// confirmed against OCI's current Monitoring metric reference for
-// the oci_queue namespace. If the name does not match, OCI returns
-// no datapoints, SampleCount is 0, and DetectOCIQueuePoisonRate
-// falls back to the honest-framing absent sentinel (-1) — a SAFE
-// degradation that never emits false data. The substrate wiring,
-// rate limiter, and enrichment are correct regardless; only the
-// metric-name string is the verification surface.
+// AVAILABILITY WARNING (verified v0.89.236 against OCI's Queue Metrics
+// reference): "MessagesInDlq" is NOT a metric in the oci_queue namespace.
+// The namespace exposes QueueSize, MessagesInQueueCount, MessagesCount,
+// RequestSuccess, RequestsLatency, RequestsThroughput, ConsumerLag, and
+// DroppedMessagesCount — none is a dead-letter DEPTH gauge. So this query
+// always returns no datapoints and the detection safe-degrades to the
+// honest absent sentinel; it never actually fires. enrichOCIQueuePoisonRate
+// is therefore a no-op (below). A future depth-based signal can use the
+// queue's deadLetterQueueDeliveryCount attribute (already read by the
+// scanner) — see docs/audit/detection-metric-availability.md.
 const OCIQueueDeadLetterMessagesMetric = "MessagesInDlq"
 
 // OCIQueuePoisonRateWindowHours is the trailing observation window
@@ -229,28 +230,13 @@ func (s *Scanner) DetectOCIQueuePoisonRate(ctx context.Context, compartmentID, q
 //     sentinel preserved) and continues.
 //
 // See docs/proposals/poison-rate-substrate-slice4.md §3-§5.
-func (s *Scanner) enrichOCIQueuePoisonRate(ctx context.Context, snaps []scanner.EventSourceInstanceSnapshot) {
-	if s.monitoringClient == nil {
-		return
-	}
-	for i := range snaps {
-		detail := snaps[i].Detail
-		if detail == nil {
-			continue
-		}
-		queueOCID := snaps[i].ResourceARN
-		if queueOCID == "" {
-			continue
-		}
-		compartmentID, _ := detail["compartment_id"].(string)
-		if compartmentID == "" {
-			continue
-		}
-		res, err := s.DetectOCIQueuePoisonRate(ctx, compartmentID, queueOCID)
-		if err != nil {
-			continue
-		}
-		detail["poison_rate_per_hour"] = res.RatePerHour
-		detail["poison_rate_high_band"] = res.HighBand
-	}
+func (s *Scanner) enrichOCIQueuePoisonRate(_ context.Context, _ []scanner.EventSourceInstanceSnapshot) {
+	// No-op. OCI's oci_queue namespace has no dead-letter DEPTH metric
+	// (OCIQueueDeadLetterMessagesMetric / "MessagesInDlq" does not exist —
+	// see the constant's AVAILABILITY WARNING), so the substrate query
+	// always returned no datapoints and safe-degraded to the absent
+	// sentinel. The honest absent sentinels written at projection time
+	// stand. DetectOCIQueuePoisonRate + queryOCIQueueDeadletterDelta remain
+	// as the wiring seam for a future depth-based signal (e.g. via the
+	// deadLetterQueueDeliveryCount attribute the scanner already reads).
 }
