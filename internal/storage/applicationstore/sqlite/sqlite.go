@@ -4170,14 +4170,13 @@ func inferDiscoveryProviderScope(p map[string]any) (provider, scopeID string) {
 }
 
 // ListCrossScopeDiscoveryVerdicts returns recent recommendation verdicts
-// (pr_merged / pr_closed_not_merged) from connections OTHER than
-// excludeConnectionID, each tagged with origin Provider + ScopeID. Substrate
+// (pr_merged / pr_closed_not_merged) from scopes OTHER than excludeScopeID, each tagged with origin Provider + ScopeID. Substrate
 // for cross-cloud citations (v0.89.247): a decline on one cloud surfaces,
 // origin-labeled, in another cloud's verdict block. The current connection's
 // rows are excluded — the caller includes them via the same-scope path.
 func (s *Storage) ListCrossScopeDiscoveryVerdicts(
 	ctx context.Context,
-	excludeConnectionID string,
+	excludeScopeID string,
 	since time.Time, limit int,
 ) ([]*types.DiscoveryVerdict, error) {
 	if limit <= 0 {
@@ -4186,17 +4185,24 @@ func (s *Storage) ListCrossScopeDiscoveryVerdicts(
 	if limit > 1000 {
 		limit = 1000
 	}
+	// Exclude the current scan's own scope (any of the four provider scope
+	// keys). Keyed on SCOPE, not connection: one IaC repo serves PRs for
+	// multiple clouds, so a cross-cloud verdict can share the current
+	// connection_id and must still surface.
 	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
 		WHERE event_type IN (?, ?)
 		  AND timestamp >= ?
-		  AND json_extract(payload, '$.connection_id') != ?
+		  AND COALESCE(json_extract(payload, '$.account_id'), '') != ?
+		  AND COALESCE(json_extract(payload, '$.project_id'), '') != ?
+		  AND COALESCE(json_extract(payload, '$.subscription_id'), '') != ?
+		  AND COALESCE(json_extract(payload, '$.tenancy_ocid'), '') != ?
 		ORDER BY timestamp DESC
 		LIMIT ?`
 	rows, err := s.db.QueryContext(ctx, stmt,
 		"recommendation.pr_merged",
 		"recommendation.pr_closed_not_merged",
 		since,
-		excludeConnectionID,
+		excludeScopeID, excludeScopeID, excludeScopeID, excludeScopeID,
 		limit,
 	)
 	if err != nil {

@@ -1,6 +1,6 @@
 # Cross-cloud verdict citations
 
-Status: shipped v0.89.248 (store slice 1 = v0.89.247). Author: autonomous session.
+Status: shipped + corrected v0.89.249 (store slice 1 = v0.89.247; first cut v0.89.248 was inert — see Correction). Author: autonomous session.
 
 ## Problem
 
@@ -38,8 +38,9 @@ adds at most a couple of citations so the block stays tight.
 1. **types.DiscoveryVerdict** gains `Provider` + `ScopeID` (origin). Empty
    for same-scope rows; populated for cross-scope.
 2. **Store** (memory + sqlite): `ListCrossScopeDiscoveryVerdicts(ctx,
-   excludeConnectionID, since, limit)` — recent pr_merged / pr_closed_not_
-   merged audit rows from connections != excludeConnectionID, projecting
+   excludeScopeID, since, limit)` — recent pr_merged / pr_closed_not_
+   merged audit rows whose scope (account/project/subscription/tenancy) !=
+   excludeScopeID, projecting
    origin Provider (inferred from which scope key is set: account_id→aws,
    project_id→gcp, subscription_id→azure, tenancy_ocid→oci) + ScopeID +
    kind.
@@ -51,6 +52,32 @@ adds at most a couple of citations so the block stays tight.
    renders on the existing `reason:` line. (A dedicated `seen on:` line is a
    possible slice-2 polish.)
 
+## Correction (v0.89.249) — exclude by scope, not connection; opt-in flag
+
+Preparing the live e2e surfaced that the first cut (v0.89.248) was **inert in
+the common deployment**: it excluded cross-scope verdicts by *connection_id*.
+But one IaC GitHub repo serves PRs for every cloud, so with a single connected
+repo the cross-scope query always returned empty — the citation never crossed
+clouds. The v0.89.248 unit test passed only because it used a separate
+connection per cloud, an unrealistic shape that masked the bug.
+
+Two corrections:
+
+1. **Exclude by SCOPE, not connection.** `ListCrossScopeDiscoveryVerdicts`
+   now excludes rows whose scope (account/project/subscription/tenancy) equals
+   the current scan's scope. A decline on AWS (account X) surfaces on a GCP
+   scan (project Y) even when both ran through the same IaC repo.
+2. **Opt-in flag.** Cross-cloud pooling relaxes a deliberately-tested
+   per-provider isolation invariant (`*ProviderIsolation` tests). Rather than
+   flip that default for every deployment, it is gated behind the
+   `SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS` env flag (default off). Off
+   preserves isolation (those tests pass unchanged); on enables pooling.
+
+Proof: `TestDiscoveryProposerLearning_CrossCloudCitation` (bridge) and
+`TestAdapterCrossCloudCitation_WiredPath` (production assembly adapter, single
+shared IaC connection, both flag states) are deterministic. The released claim
+("the citation crosses clouds") is reproducible by setting the flag.
+
 ## Scope / honest framing
 
 - Slice 1 gates on the *current* connection's opt-in only; a source
@@ -58,5 +85,9 @@ adds at most a couple of citations so the block stays tight.
   tenant, one control plane — acceptable for slice 1, noted for follow-up).
 - Redaction/truncation unchanged (verdictprompt.reasonField, 240-char cap,
   RedactSecrets).
-- Release notes will state plainly that cross-cloud citation shipped after
-  the post that described it.
+- Release notes state plainly that (a) cross-cloud citation shipped after
+  the post that described it, and (b) the first cut (v0.89.248) was inert and
+  v0.89.249 made it actually work behind an opt-in flag.
+- Default is OFF: operators opt in via SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS.
+  Same-cloud, cross-repo verdicts (same scope, different connection) are out of
+  scope and not surfaced as cross-cloud citations.

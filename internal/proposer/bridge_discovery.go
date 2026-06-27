@@ -45,14 +45,15 @@ type DiscoveryVerdictStore interface {
 	) ([]applicationstore.ExcludedRecommendation, error)
 
 	// ListCrossScopeDiscoveryVerdicts — cross-cloud citations
-	// (v0.89.248). Recent verdicts from connections OTHER than
-	// excludeConnectionID, each tagged with origin Provider + ScopeID,
-	// so a decline recorded on one cloud can surface (origin-labeled)
-	// in another cloud's verdict block where the proposer correlates by
-	// recommendation_kind.
+	// (v0.89.248). Recent verdicts from scopes OTHER than excludeScopeID
+	// (a different cloud account / project / subscription / tenancy), each
+	// tagged with origin Provider + ScopeID, so a decline recorded on one
+	// cloud can surface (origin-labeled) in another cloud's verdict block
+	// where the proposer correlates by recommendation_kind. Keyed on SCOPE,
+	// not connection — one IaC repo serves PRs for multiple clouds.
 	ListCrossScopeDiscoveryVerdicts(
 		ctx context.Context,
-		excludeConnectionID string,
+		excludeScopeID string,
 		since time.Time, limit int,
 	) ([]*applicationstore.DiscoveryVerdict, error)
 }
@@ -75,6 +76,23 @@ type DiscoveryConnectionStore interface {
 type DiscoveryBridge struct {
 	store       DiscoveryVerdictStore
 	connections DiscoveryConnectionStore
+	// crossCloudCitations gates cross-cloud verdict pooling (v0.89.249).
+	// Default false preserves per-provider verdict isolation; when true the
+	// bridge also surfaces recent verdicts from OTHER cloud scopes,
+	// origin-labeled and capped, so a decline on one cloud can be cited on
+	// another. Set via WithCrossCloudCitations from the operator-facing
+	// SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS env flag.
+	crossCloudCitations bool
+}
+
+// WithCrossCloudCitations enables cross-cloud verdict pooling on the bridge
+// and returns the bridge for chaining. Off by default (per-provider
+// isolation).
+func (b *DiscoveryBridge) WithCrossCloudCitations(on bool) *DiscoveryBridge {
+	if b != nil {
+		b.crossCloudCitations = on
+	}
+	return b
 }
 
 // NewDiscoveryBridge constructs a DiscoveryBridge. Both stores are
@@ -190,11 +208,14 @@ func (b *DiscoveryBridge) AssembleDiscoveryVerdicts(
 	// scan's verdict block. Gated by the SAME opt-out as same-scope (the
 	// short-circuit above already ran). Fetched before the empty-check so
 	// a cloud with no local verdicts still gets cross-cloud citations.
-	crossRows, err := b.store.ListCrossScopeDiscoveryVerdicts(
-		ctx, connectionID, since, verdictsel.DefaultMaxTotal*4,
-	)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("discovery bridge: list cross-scope verdicts: %w", err)
+	var crossRows []*applicationstore.DiscoveryVerdict
+	if b.crossCloudCitations {
+		crossRows, err = b.store.ListCrossScopeDiscoveryVerdicts(
+			ctx, accountID, since, verdictsel.DefaultMaxTotal*4,
+		)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("discovery bridge: list cross-scope verdicts: %w", err)
+		}
 	}
 
 	if len(rows) == 0 && len(excluded) == 0 && len(crossRows) == 0 {

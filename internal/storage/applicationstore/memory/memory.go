@@ -1934,7 +1934,7 @@ func inferDiscoveryProviderScope(payload map[string]any) (provider, scopeID stri
 // them via the same-scope ListDiscoveryVerdicts path.
 func (s *Store) ListCrossScopeDiscoveryVerdicts(
 	ctx context.Context,
-	excludeConnectionID string,
+	excludeScopeID string,
 	since time.Time, limit int,
 ) ([]*types.DiscoveryVerdict, error) {
 	if limit <= 0 {
@@ -1965,11 +1965,8 @@ func (s *Store) ListCrossScopeDiscoveryVerdicts(
 		if e.Payload == nil {
 			continue
 		}
-		if v, _ := e.Payload["connection_id"].(string); v == excludeConnectionID {
-			continue
-		}
 		provider, scopeID := inferDiscoveryProviderScope(e.Payload)
-		if scopeID == "" {
+		if scopeID == "" || scopeID == excludeScopeID {
 			continue
 		}
 		kind, _ := e.Payload["recommendation_kind"].(string)

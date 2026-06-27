@@ -40,6 +40,16 @@ standalone secrets, not config fields:
   silent no-op. See
   [webhook-listener.md](./webhook-listener.md) for the full
   setup walkthrough.
+- `SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS` — opt-in (default
+  off). When set to `true`, the discovery proposer's
+  verdict-learning loop pools a small, capped, origin-labeled set
+  of recent decline/merge verdicts from OTHER cloud scopes, so a
+  decline recorded on (say) AWS can be cited on a later GCP
+  recommendation that shares the pattern (`recommendation_kind`).
+  Off preserves strict per-provider verdict isolation. Bounded:
+  at most a couple of cross-cloud citations per block, each
+  labeled `[seen on <provider> / <scope>]`, and still gated by the
+  connection's existing learn opt-out.
 - `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
   Bearer token enforcement. Do NOT set this in production.
 
