@@ -74,6 +74,12 @@ export interface CreateAzureConnectionRequest {
   location: string;
 }
 
+// enableAzureDemoConnection provisions the built-in credential-free demo Azure
+// subscription (v0.89.244 first-user onboarding parity).
+export function enableAzureDemoConnection(): Promise<AzureConnection> {
+  return apiPost<AzureConnection>("/discovery/azure/demo/enable", {});
+}
+
 export function createAzureConnection(
   req: CreateAzureConnectionRequest,
 ): Promise<AzureConnection> {

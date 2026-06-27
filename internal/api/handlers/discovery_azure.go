@@ -19,6 +19,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -903,6 +904,35 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		return
 	}
 
+	// Demo mode (v0.89.244, first-user onboarding): the reserved demo
+	// subscription serves a canned sample inventory. Short-circuit after the
+	// store read (the row is real) but before any client-secret decrypt or
+	// scanner build — no Azure credentials, no cloud calls.
+	if demo.IsAzureDemoSubscription(conn.SubscriptionID) {
+		r := demo.AzureResult()
+		instr, uninstr := 0, 0
+		for _, ci := range r.Compute {
+			if ci.HasOTel {
+				instr++
+			} else {
+				uninstr++
+			}
+		}
+		c.JSON(http.StatusOK, azureScanResponse{
+			ConnectionID:        conn.ID,
+			SubscriptionID:      conn.SubscriptionID,
+			Location:            conn.Location,
+			Compute:             r.Compute,
+			Databases:           r.Databases,
+			Clusters:            r.Clusters,
+			InstrumentedCount:   instr,
+			UninstrumentedCount: uninstr,
+			Partial:             false,
+			ScanID:              r.ScanID,
+		})
+		return
+	}
+
 	// scan_started fires BEFORE any scanner call so a forensic
 	// reader can correlate a stranded scan_started (no matching
 	// scan_completed / scan_failed) with an unhandled crash.
@@ -1168,6 +1198,35 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 		}})
 		return
 	}
+	// Demo mode (v0.89.244): the reserved demo subscription serves seeded
+	// recommendations through the same buildDiscoveryRecommendations walk —
+	// no LLM, no API key. Resolve the connection early so the demo is detected
+	// before the aiProposer wiring check (a keyless first-user has nil).
+	if h.store != nil {
+		if conn, err := h.store.Get(c.Request.Context(), id); err == nil && conn != nil && demo.IsAzureDemoSubscription(conn.SubscriptionID) {
+			job := defaultRecommendationJobStore.Create("azure", conn.SubscriptionID)
+			defaultRecommendationJobStore.Run(job.ID, func(_ context.Context) (json.RawMessage, *scanner.HumanizedError, int) {
+				now := time.Now().UTC()
+				recs, bErr := buildDiscoveryRecommendations(demo.AzureScanID, demo.AzureRecommendationSteps(), now)
+				if bErr != nil {
+					if h.logger != nil {
+						h.logger.Error("azure demo recommendations: plan step marshal failed", zap.Error(bErr))
+					}
+					return nil, &scanner.HumanizedError{
+						Code:    "PlanStepMarshalFailed",
+						Message: "Squadron could not encode the demo plan step. The error has been logged.",
+					}, http.StatusInternalServerError
+				}
+				return marshalRecResult(awsGenerateRecommendationsResponse{Recommendations: recs})
+			})
+			c.JSON(http.StatusAccepted, recommendationJobAcceptedResponse{
+				JobID:  job.ID,
+				Status: string(RecJobPending),
+			})
+			return
+		}
+	}
+
 	if h.aiProposer == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
 			Code:    "AIProposerNotWired",

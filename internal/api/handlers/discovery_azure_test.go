@@ -22,6 +22,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
+	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -970,5 +971,70 @@ func TestScanAzureConnection_SurfacesEventSources(t *testing.T) {
 	}
 	if len(es.PropagationNotes) != 1 {
 		t.Errorf("propagation_notes len = %d, want 1", len(es.PropagationNotes))
+	}
+}
+
+// TestAzureDemo_EnableScanDisable exercises the credential-free Azure demo:
+// enable provisions the demo subscription, scan short-circuits to the canned
+// sample inventory (no secret decrypt, no scanner Build), enable is idempotent,
+// and disable removes it.
+func TestAzureDemo_EnableScanDisable(t *testing.T) {
+	h, store, _ := newAzureTestHandlers(t, nil, &fakeAzureScannerFactory{})
+	r := gin.New()
+	r.POST("/api/v1/discovery/azure/demo/enable", h.HandleAzureDemoEnable)
+	r.DELETE("/api/v1/discovery/azure/demo", h.HandleAzureDemoDisable)
+	r.POST("/api/v1/discovery/azure/connections/:id/scan", h.HandleScanAzureConnection)
+
+	w := azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/demo/enable", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("enable status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var conn struct {
+		ID             string `json:"id"`
+		SubscriptionID string `json:"subscription_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &conn); err != nil {
+		t.Fatalf("enable unmarshal: %v", err)
+	}
+	if conn.SubscriptionID != demo.AzureSubscriptionID {
+		t.Errorf("subscription_id = %q, want %q", conn.SubscriptionID, demo.AzureSubscriptionID)
+	}
+
+	w = azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("scan status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var scanResp azureScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &scanResp); err != nil {
+		t.Fatalf("scan unmarshal: %v", err)
+	}
+	if len(scanResp.Compute) != 3 {
+		t.Errorf("compute rows = %d, want 3", len(scanResp.Compute))
+	}
+	if len(scanResp.Databases) != 2 {
+		t.Errorf("database rows = %d, want 2", len(scanResp.Databases))
+	}
+
+	_ = azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/demo/enable", "")
+	conns, _ := store.List(context.Background())
+	demoCount := 0
+	for _, c := range conns {
+		if c != nil && demo.IsAzureDemoSubscription(c.SubscriptionID) {
+			demoCount++
+		}
+	}
+	if demoCount != 1 {
+		t.Errorf("demo connections after double-enable = %d, want 1", demoCount)
+	}
+
+	w = azureDoRequest(r, http.MethodDelete, "/api/v1/discovery/azure/demo", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("disable status = %d, want 200", w.Code)
+	}
+	conns, _ = store.List(context.Background())
+	for _, c := range conns {
+		if c != nil && demo.IsAzureDemoSubscription(c.SubscriptionID) {
+			t.Error("demo connection still present after disable")
+		}
 	}
 }
