@@ -168,6 +168,13 @@ type DiscoveryHandlers struct {
 	// tests substitute a fake.
 	exclusionStore DiscoveryExclusionStore
 
+	// v0.89.250 continuous-discovery slice 1 — persisted scan history.
+	// Optional: nil means the scan endpoints don't persist and the
+	// history routes 503 with a clear "not wired" message. Production
+	// wires the application store (which satisfies the slim
+	// DiscoveryScanStore interface); tests substitute a fake.
+	scanStore DiscoveryScanStore
+
 	// v0.89.44 (#665 Stream 63, slice 1 chunk 4 of the GitHub Checks
 	// API back-signal arc). All four fields are optional: when any one
 	// is nil/empty the chunk-4 PATCH-to-neutral follow-up inside
@@ -406,6 +413,14 @@ func (h *DiscoveryHandlers) WithAcceptedRecommendationsAssembler(a DiscoveryAcce
 // returning 503 with a clear "not wired" message.
 func (h *DiscoveryHandlers) WithExclusionStore(s DiscoveryExclusionStore) *DiscoveryHandlers {
 	h.exclusionStore = s
+	return h
+}
+
+// WithScanStore wires the persisted scan-history store (v0.89.250,
+// continuous-discovery slice 1). Nil keeps scans non-persisted and the
+// history endpoints 503ing — the pre-v0.89.250 posture.
+func (h *DiscoveryHandlers) WithScanStore(s DiscoveryScanStore) *DiscoveryHandlers {
+	h.scanStore = s
 	return h
 }
 
@@ -2092,6 +2107,20 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 	// serializes. Nil store short-circuits.
 	if h.errorRateStore != nil && result != nil {
 		AnnotateServerlessWithErrorRate(ctx, h.errorRateStore, result.Serverless, h.logger)
+	}
+
+	// v0.89.250 continuous-discovery slice 1 — persist the completed scan
+	// (best-effort, after all annotation passes so the stored inventory
+	// matches the HTTP response). Failure logs but never fails the scan,
+	// mirroring the audit-emission fail-open posture. Runs for the demo
+	// connection too — harmless, gives the demo a history entry.
+	if h.scanStore != nil && result != nil {
+		if rj, err := json.Marshal(marshalScanResult(result)); err == nil {
+			recordScan(ctx, h.scanStore, h.logger, "aws", result, rj)
+		} else if h.logger != nil {
+			h.logger.Warn("aws run scan: marshal for persistence failed",
+				zap.Error(err), zap.String("scan_id", result.ScanID))
+		}
 	}
 
 	return result, nil, 0

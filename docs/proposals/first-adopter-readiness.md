@@ -43,13 +43,14 @@ week vs. what is inferred from the code. Confidence is flagged per item.
 
 ## Gaps to weigh before calling it adopter-ready (medium confidence — partly inferred from code/comments, worth confirming)
 
-- **Discovery scans look synchronous + non-persisted (slice 1).** Handler
-  comments describe scans as blocking the HTTP request with "no persisted
-  Squadron state … slice 3's scheduled-scan engine will move to async with
-  persisted results." Implication for an adopter: no scan history, no scheduled
-  re-scans, no discovery drift over time — every scan recomputes from scratch.
-  CONFIRM whether this is still the case before promising "continuous" cloud
-  discovery.
+- **Discovery scans: persistence shipped (v0.89.250), scheduling still
+  pending.** As of continuous-discovery slice 1, AWS scans are persisted
+  (whole-scan records + `GET .../scans` history + `GET .../scans/:scanID`
+  detail). What remains for a true "continuous" story: (a) GCP/Azure/OCI
+  persist parity (slice 2 — mechanical, shares `recordScan`); (b) the scan is
+  still SYNCHRONOUS (blocks the HTTP request) — async + scheduled re-scans is
+  slice 3; (c) drift (diffing successive scans) is not built yet. So today an
+  adopter gets AWS scan history but not yet scheduled re-scans or drift.
 - **Single region per connection (slice 1).** The credstore + scanner are
   multi-region-shaped but ship single-entry region lists. A multi-region account
   needs one connection per region. CONFIRM current state.

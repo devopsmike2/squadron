@@ -927,6 +927,26 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_errorrate_resource ON error_rate_observation(resource_arn)`,
 		`CREATE INDEX IF NOT EXISTS idx_errorrate_observed ON error_rate_observation(observed_at)`,
+
+		// v0.89.250 — continuous-discovery slice 1: persisted scan history.
+		// One row per completed scan. summary holds per-category counts (JSON)
+		// for cheap listing; result_json holds the full marshaled inventory for
+		// the detail view + future drift diffing. Indexed by (provider,
+		// scope_id, started_at DESC) — the list endpoint's exact access path.
+		`CREATE TABLE IF NOT EXISTS discovery_scans (
+			scan_id TEXT PRIMARY KEY,
+			provider TEXT NOT NULL,
+			scope_id TEXT NOT NULL,
+			regions TEXT NOT NULL,
+			started_at DATETIME NOT NULL,
+			completed_at DATETIME NOT NULL,
+			partial INTEGER NOT NULL,
+			partial_reason TEXT,
+			summary TEXT NOT NULL,
+			result_json TEXT,
+			created_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_discovery_scans_scope ON discovery_scans(provider, scope_id, started_at DESC)`,
 	}
 
 	for _, migration := range migrations {
