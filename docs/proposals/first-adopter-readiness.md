@@ -1,0 +1,80 @@
+# First-adopter readiness — honest gap analysis
+
+Status: living notes. Written for Michael to read, not a spec. The goal is an
+honest "what would actually break or disappoint the first real OSS adopter who
+tries the cloud-discovery path," grounded in what was verified end-to-end this
+week vs. what is inferred from the code. Confidence is flagged per item.
+
+## What's verified working (high confidence — exercised e2e this week)
+
+- **Cloud discovery, three of four clouds.** AWS, GCP, and Azure connection
+  wizards → live scan against real terraform-provisioned infra → inventory
+  verified against the known oracle (instrumented vs uninstrumented instances).
+  Test repos exist (`squadron-test-{azure,gcp,oci}-terraform`).
+- **Recommendations against the real LLM.** AWS (EC2 Graviton, Windows-bare)
+  and the async job + poll flow produce shape-correct, deployable-ish Terraform.
+  The sync-call HTTP-timeout bug is fixed (async job store, v0.89.209+).
+- **First-run onboarding.** One-port `8080`, prod-like default compose + a dev
+  variant, a default dev `SQUADRON_SECRETS_KEY`, AWS-creds mount documented.
+- **First-user 500 sweep.** The incidents-handler nil-store class of
+  eager-wiring bugs was found and fixed; a GET-endpoint sweep ran.
+- **Demo mode (new, v0.89.239-241).** A first-user with NO cloud account and
+  NO API key can click "Try the demo" on the AWS page and get a populated
+  Inventory tab + seeded recommendations. Removes the single biggest trial
+  barrier. AWS-only for now.
+
+## Known backlog, already filed (high confidence — honest deferrals)
+
+- **OCI is the one cloud not yet e2e-validated.** Connector + scanner +
+  recommendations are implemented and unit-tested, but a live scan against real
+  OCI infra has not been run (blocked on tenancy credentials). Until then, treat
+  OCI discovery as "implemented, unproven."
+- **Serverless cold-start detection is honest-but-limited.** AWS Lambda needs
+  Lambda Insights and Azure Functions needs Application Insights for a real
+  cold-start signal (#152 / #153). The current code is framed honestly rather
+  than emitting a fabricated metric — but an adopter expecting cold-start
+  detection out of the box on a bare account will see "needs Insights."
+- **Poison-rate depth signals deferred.** AWS SQS via DLQ depth (#156) and OCI
+  Queue via `deadLetterQueueDeliveryCount` (#159) are designed but not built.
+- **ADOT Lambda layer ARN freshness (#109).** The proposer emits layer ARNs
+  free-form (frozen at the model's training time). A durable resolver (SSM
+  public-parameter lookup) is designed but blocked on confirming the SSM path
+  + adding an IAM action.
+
+## Gaps to weigh before calling it adopter-ready (medium confidence — partly inferred from code/comments, worth confirming)
+
+- **Discovery scans look synchronous + non-persisted (slice 1).** Handler
+  comments describe scans as blocking the HTTP request with "no persisted
+  Squadron state … slice 3's scheduled-scan engine will move to async with
+  persisted results." Implication for an adopter: no scan history, no scheduled
+  re-scans, no discovery drift over time — every scan recomputes from scratch.
+  CONFIRM whether this is still the case before promising "continuous" cloud
+  discovery.
+- **Single region per connection (slice 1).** The credstore + scanner are
+  multi-region-shaped but ship single-entry region lists. A multi-region account
+  needs one connection per region. CONFIRM current state.
+- **Demo mode is AWS-only.** The other three clouds' empty states don't yet
+  offer it. Cheap follow-up if the demo lands well: the demo connection is
+  AWS-shaped, so GCP/Azure/OCI parity needs provider-shaped demo connections.
+- **AI recommendations require `ANTHROPIC_API_KEY`.** Expected for a BYO-LLM
+  product, and demo mode now covers the no-key trial — but worth stating plainly
+  in onboarding so a keyless adopter isn't surprised when the live (non-demo)
+  Recommendations button 503s.
+- **AuthZ maturity.** Routes use scope middleware (`agents:read` / `:write`),
+  but I have NOT audited the auth story for a multi-user / multi-tenant adopter
+  (token issuance, RBAC granularity, default-open vs default-closed). CONFIRM
+  before any shared deployment.
+
+## Suggested sequencing for "first real adopter"
+
+1. Close OCI e2e (needs Michael's credentials) so all four clouds are proven.
+2. Confirm the scan persistence / scheduling story and either build it or set
+   expectations in docs — this is the biggest "is it actually continuous?" gap.
+3. Decide on the cold-start / poison-rate data-source items (#152/#153/#156/
+   #159) — these are the recurring "honest-but-limited" detection gaps.
+4. Extend demo mode to the other clouds if AWS demo telemetry shows uptake.
+
+Nothing here is a blocker for a curious adopter kicking the tires (demo mode +
+AWS/GCP/Azure discovery all work today). The items above are about the gap
+between "impressive demo" and "I'd run this against my production account
+continuously."
