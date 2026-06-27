@@ -33,6 +33,7 @@ import DiscoveryAWSPage from "./DiscoveryAWS";
 import {
   generateAWSRecommendations,
   listAWSConnections,
+  enableDemoConnection,
   listExcludedRecommendations,
   runAWSScan,
   setRecommendationExclusion,
@@ -79,6 +80,7 @@ vi.mock("@/api/discovery", async () => {
   return {
     ...actual,
     listAWSConnections: vi.fn(),
+    enableDemoConnection: vi.fn(),
     runAWSScan: vi.fn(),
     saveAWSConnection: vi.fn(),
     validateAWSConnection: vi.fn(),
@@ -120,6 +122,7 @@ vi.mock("@/api/iacGithub", async () => {
 });
 
 const mockedListAWSConnections = vi.mocked(listAWSConnections);
+const mockedEnableDemoConnection = vi.mocked(enableDemoConnection);
 const mockedRunAWSScan = vi.mocked(runAWSScan);
 const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
 const mockedListIaCConnections = vi.mocked(listIaCGitHubConnections);
@@ -334,6 +337,32 @@ describe("DiscoveryAWSPage", () => {
       expect(
         screen.getByText(/No accounts connected yet/i),
       ).toBeInTheDocument();
+    });
+  });
+
+  it("Try the demo provisions the demo connection and refreshes the list", async () => {
+    mockedListAWSConnections.mockResolvedValue({ connections: [] });
+    mockedEnableDemoConnection.mockResolvedValue({
+      account_id: "demo-000000000000",
+      display_name: "Demo Account (sample data)",
+      regions: ["us-east-1"],
+      created_at: new Date().toISOString(),
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    const demoBtn = await screen.findByRole("button", {
+      name: /Try the demo/i,
+    });
+    await user.click(demoBtn);
+
+    await waitFor(() => {
+      expect(mockedEnableDemoConnection).toHaveBeenCalledTimes(1);
+    });
+    // The list is re-fetched (SWR mutate) after enabling.
+    await waitFor(() => {
+      expect(mockedListAWSConnections.mock.calls.length).toBeGreaterThan(1);
     });
   });
 

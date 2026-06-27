@@ -124,6 +124,15 @@ export function listAWSConnections(): Promise<ListConnectionsResponse> {
   return apiGet<ListConnectionsResponse>("/discovery/aws/connections");
 }
 
+// --- Demo connection (v0.89.241 first-user onboarding) --------------
+// Provisions the built-in, credential-free demo connection so a first-time
+// operator can explore the Inventory + Recommendations surfaces without a real
+// cloud account. Returns the same display row the connection list emits, so the
+// caller can refresh the list and the demo card renders like any other.
+export function enableDemoConnection(): Promise<CloudConnection> {
+  return apiPost<CloudConnection>("/discovery/demo/enable", {});
+}
+
 // --- Scan endpoint shapes (Stream 2E) -------------------------------
 
 // RowSpanQuality — v0.89.87 span quality slice 1 chunk 3. Compact
