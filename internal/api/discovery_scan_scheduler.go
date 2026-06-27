@@ -11,11 +11,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
+	"github.com/devopsmike2/squadron/internal/discovery/discoverydrift"
 	"github.com/devopsmike2/squadron/internal/discovery/scanscheduler"
+	"github.com/devopsmike2/squadron/internal/services"
 )
 
 // StartDiscoveryScanScheduler launches the opt-in continuous-discovery
@@ -65,7 +68,7 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: h.RunScanForAccount,
+			ScanAccount: s.scanAccountWithDrift("aws", h.RunScanForAccount),
 		}
 		go sched.Run(ctx)
 	} else if s.logger != nil {
@@ -101,9 +104,9 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: func(ctx context.Context, id string) error {
+			ScanAccount: s.scanAccountWithDrift("gcp", func(ctx context.Context, id string) error {
 				return invokeScanHandler(ctx, id, h.HandleScanGCPConnection)
-			},
+			}),
 		}
 		go sched.Run(ctx)
 	}
@@ -137,9 +140,9 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: func(ctx context.Context, id string) error {
+			ScanAccount: s.scanAccountWithDrift("azure", func(ctx context.Context, id string) error {
 				return invokeScanHandler(ctx, id, h.HandleScanAzureConnection)
-			},
+			}),
 		}
 		go sched.Run(ctx)
 	}
@@ -173,11 +176,93 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: func(ctx context.Context, id string) error {
+			ScanAccount: s.scanAccountWithDrift("oci", func(ctx context.Context, id string) error {
 				return invokeScanHandler(ctx, id, h.HandleScanOCIConnection)
-			},
+			}),
 		}
 		go sched.Run(ctx)
+	}
+}
+
+// scanAccountWithDrift wraps a scan function so that, after a successful
+// scheduled scan, drift versus the previous scan is computed and (when anything
+// changed) recorded as an audit event. This turns the continuous engine from
+// "history accrues" into a proactive "what changed" signal that rides the
+// existing audit timeline + SIEM forwarding — no polling required.
+func (s *Server) scanAccountWithDrift(provider string, scan func(context.Context, string) error) func(context.Context, string) error {
+	return func(ctx context.Context, id string) error {
+		if err := scan(ctx, id); err != nil {
+			return err
+		}
+		emitDriftIfChanged(ctx, s.appStore, s.auditService, s.logger, provider, id)
+		return nil
+	}
+}
+
+// emitDriftIfChanged diffs the two most recent persisted scans for
+// (provider, scopeID) and records a discovery.scan_drift_detected audit event
+// when something changed. No-op when fewer than two scans exist (the first
+// scheduled scan has nothing to compare against, so it does not emit an
+// everything-is-new event), or when the store / audit service is unwired.
+// instrumentation_regressions surfaces the highest-signal subset: resources
+// whose OTel instrumentation turned OFF between scans.
+func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, audit services.AuditService, logger *zap.Logger, provider, scopeID string) {
+	if store == nil || audit == nil {
+		return
+	}
+	recs, err := store.ListDiscoveryScans(ctx, provider, scopeID, 2)
+	if err != nil || len(recs) < 2 {
+		return
+	}
+	newer, err := store.GetDiscoveryScan(ctx, recs[0].ScanID)
+	if err != nil || newer == nil {
+		return
+	}
+	older, err := store.GetDiscoveryScan(ctx, recs[1].ScanID)
+	if err != nil || older == nil {
+		return
+	}
+	diff, err := discoverydrift.Between(older.ResultJSON, newer.ResultJSON)
+	if err != nil {
+		return
+	}
+	if diff.TotalAdded == 0 && diff.TotalRemoved == 0 && diff.TotalInstrumentationChanged == 0 {
+		return
+	}
+	regressions := []string{}
+	for _, f := range diff.Compute.InstrumentationChanged {
+		if !f.Now {
+			regressions = append(regressions, f.ResourceID)
+		}
+	}
+	for _, f := range diff.Functions.InstrumentationChanged {
+		if !f.Now {
+			regressions = append(regressions, f.ResourceID)
+		}
+	}
+	_ = audit.Record(ctx, services.AuditEntry{
+		Actor:      services.AuditActorSystem,
+		EventType:  "discovery.scan_drift_detected",
+		TargetType: credstore.TargetTypeCloudConnection,
+		TargetID:   scopeID,
+		Action:     "scan_drift_detected",
+		Payload: map[string]any{
+			"provider":                      provider,
+			"scope_id":                      scopeID,
+			"from_scan_id":                  older.ScanID,
+			"to_scan_id":                    newer.ScanID,
+			"total_added":                   diff.TotalAdded,
+			"total_removed":                 diff.TotalRemoved,
+			"total_instrumentation_changed": diff.TotalInstrumentationChanged,
+			"instrumentation_regressions":   regressions,
+			"recorded_at":                   time.Now().UTC(),
+		},
+	})
+	if logger != nil {
+		logger.Info("discovery scan drift detected",
+			zap.String("provider", provider), zap.String("scope_id", scopeID),
+			zap.Int("added", diff.TotalAdded), zap.Int("removed", diff.TotalRemoved),
+			zap.Int("instrumentation_changed", diff.TotalInstrumentationChanged))
 	}
 }
 

@@ -53,7 +53,7 @@ week vs. what is inferred from the code. Confidence is flagged per item.
   v0.89.254), default off; (b) the on-demand POST scan is
   still synchronous (async-job HTTP API is separate); (c) drift shipped (slice 4, v0.89.253) — GET .../connections/:id/drift diffs
   the latest two scans (added/removed/instrumentation-flipped) on all four
-  clouds. Remaining: cross-cloud scheduling (3b) and drift notifications.
+  clouds. Remaining: drift de-dup/digest + routing drift events to a notification channel (audit events already forward to SIEM).
 - **Single region per connection (slice 1).** The credstore + scanner are
   multi-region-shaped but ship single-entry region lists. A multi-region account
   needs one connection per region. CONFIRM current state.
