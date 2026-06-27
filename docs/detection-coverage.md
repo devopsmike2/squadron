@@ -47,7 +47,7 @@ by metric availability.
 | AWS | SQS | **No** — there is no native counter for messages moved to a DLQ by the redrive policy. `NumberOfMessagesSent` excludes them (only manual SendMessage counts). | ⛔ Deferred (reverted v0.89.230) — monitor recommendation on the DLQ's `ApproximateNumberOfMessages`. Depth-based detection planned (#156). |
 | GCP | Cloud Tasks | Yes — failed `task_attempt_count`. | ✅ |
 | Azure | Service Bus | Yes — `DeadletteredMessages` gauge delta. | ✅ (delta approximation). |
-| OCI | Queue | Per implementation (`oci_queue` depth gauge delta). | ✅ (not independently re-verified in the v0.89.229–231 audit). |
+| OCI | Queue | **No** — `oci_queue` has no dead-letter depth metric (`MessagesInDlq` does not exist; verified v0.89.236). | ⛔ Deferred — honest absent sentinel + monitor recommendation; depth-based signal via the `deadLetterQueueDeliveryCount` attribute is the planned fix. |
 
 ## Why some detections need an add-on
 

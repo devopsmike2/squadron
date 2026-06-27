@@ -2759,29 +2759,28 @@ CHUNK 3a/3b (v0.89.179-180) — Azure Service Bus is now REAL
   aggregated reading (no worst-queue key); report it as a
   namespace-level signal in that case.
 
-CHUNK 4 (v0.89.181) — OCI Queue Service is now REAL. This is
-the FINAL cloud — the substrate arc is CLOSED and §3.3 is fully
-retired:
+CHUNK 4 — OCI Queue Service poison-rate is NOT measurable (reverted v0.89.236):
 
-- Squadron reads the queue's dead-letter depth gauge
-  (MessagesInDlq) via OCI Monitoring summarizeMetricsData and
-  derives the rate as the max-min delta (net accumulation) over a
-  trailing 1-hour window — the same gauge-delta shape as Azure.
-- poison_rate_per_hour now carries the MEASURED rate for OCI
-  queues; poison_rate_high_band is the real rate >= 60/hour
-  verdict. Same real-zero (0) vs absent (-1) contract.
-- queues-poison-rate-monitor-add reasoning should REPORT the
-  measured rate when poison_rate_per_hour >= 0, else fall back to
-  the §3.3 reasoning.
+- MessagesInDlq does NOT exist in OCI's oci_queue namespace (verified against
+  OCI's Queue Metrics reference: the namespace has QueueSize,
+  MessagesInQueueCount, MessagesCount, RequestSuccess, RequestsLatency,
+  RequestsThroughput, ConsumerLag, DroppedMessagesCount — none is a dead-letter
+  DEPTH gauge). The query always returned no datapoints and safe-degraded to
+  the absent sentinel, so the detection never fired.
+- OCI Queue stays on §3.3 honest framing: poison_rate_per_hour = -1,
+  queues-poison-rate-monitor-add recommends an OCI Monitoring alarm. A future
+  depth-based signal can use the queue's deadLetterQueueDeliveryCount attribute.
 
-THREE OF FOUR CLOUDS COMPUTE A REAL poison-rate. AWS SQS remains on §3.3
-honest framing (no native DLQ-additions counter — reverted v0.89.229):
+TWO OF FOUR CLOUDS COMPUTE A REAL poison-rate. AWS SQS and OCI Queue remain on
+§3.3 honest framing (neither has a usable native DLQ metric — reverted
+v0.89.230 and v0.89.236):
 
 - AWS SQS — §3.3 honest framing: absent sentinel + monitor recommendation,
 - GCP Cloud Tasks (failed task_attempt_count, counter-sum),
 - Azure Service Bus (DeadletteredMessages per-queue via
   EntityName split, gauge-delta),
-- OCI Queue Service (MessagesInDlq, gauge-delta).
+- OCI Queue Service — §3.3 honest framing: MessagesInDlq is not a valid
+  oci_queue metric.
 
 When poison_rate_per_hour == -1 it now means a genuine
 "not measured" condition (metric client unwired, queue too new,
