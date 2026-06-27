@@ -48,10 +48,13 @@ week vs. what is inferred from the code. Confidence is flagged per item.
   (whole-scan records + `GET .../scans` history + `GET .../scans/:scanID`
   detail). As of slice 2 (v0.89.251) ALL FOUR clouds persist + expose scan
   history (`GET .../scans` + `.../scans/:scanID`). What remains for a true
-  "continuous" story: (a) scans are still SYNCHRONOUS (block the HTTP request) —
-  async + scheduled re-scans is slice 3; (b) drift (diffing successive scans) is
-  not built yet. So today an adopter gets scan history on every cloud, but not
-  yet scheduled re-scans or drift.
+  "continuous" story: (a) scheduled re-scans now EXIST as of slice 3a
+  (v0.89.252) — opt-in via SQUADRON_DISCOVERY_SCAN_INTERVAL, AWS only, default
+  off; GCP/Azure/OCI scheduling is slice 3b; (b) the on-demand POST scan is
+  still synchronous (async-job HTTP API is separate); (c) drift (diffing
+  successive scans) is not built yet. So an adopter can now turn on automatic
+  recurring AWS scans + persisted history; cross-cloud scheduling and drift
+  remain.
 - **Single region per connection (slice 1).** The credstore + scanner are
   multi-region-shaped but ship single-entry region lists. A multi-region account
   needs one connection per region. CONFIRM current state.

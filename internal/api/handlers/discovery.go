@@ -1751,6 +1751,19 @@ func (h *DiscoveryHandlers) HandleAWSRunScan(c *gin.Context) {
 	c.JSON(http.StatusOK, marshalScanResult(result))
 }
 
+// RunScanForAccount runs + persists a scan for one AWS account outside the HTTP
+// path — the entry the continuous-discovery scheduler (slice 3a) calls on its
+// interval. It drives the same runAWSScan the handler uses (audit + persistence
+// included), with the connection's stored regions + default tiers. Returns an
+// error on a hard failure so the scheduler can count + log it.
+func (h *DiscoveryHandlers) RunScanForAccount(ctx context.Context, accountID string) error {
+	_, herr, _ := h.runAWSScan(ctx, accountID, nil, nil, "" /* scanAllID */)
+	if herr != nil {
+		return fmt.Errorf("scan %s failed: %s", accountID, herr.Code)
+	}
+	return nil
+}
+
 // runAWSScan is the reusable per-account scan body — extracted from
 // HandleAWSRunScan in v0.89.7a (#616 Stream 21) so the multi-account
 // orchestrator can drive the same path without re-implementing the

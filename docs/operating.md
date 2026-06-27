@@ -50,6 +50,15 @@ standalone secrets, not config fields:
   at most a couple of cross-cloud citations per block, each
   labeled `[seen on <provider> / <scope>]`, and still gated by the
   connection's existing learn opt-out.
+- `SQUADRON_DISCOVERY_SCAN_INTERVAL` — opt-in (default off). A Go
+  duration (e.g. `6h`) that turns on the continuous-discovery
+  scheduler: Squadron re-runs + persists AWS discovery scans for
+  every connected account on this cadence, so scan history accrues
+  automatically. Unset / `<=0` keeps scans on-demand only. NOTE:
+  auto-scanning real cloud accounts on a timer has cost + API-rate
+  implications — set it deliberately. Values below 15m are raised to
+  the 15m floor. AWS only for now; the first sweep fires after one
+  interval (not at startup).
 - `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
   Bearer token enforcement. Do NOT set this in production.
 
