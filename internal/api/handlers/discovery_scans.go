@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/discovery/discoverydrift"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -175,6 +176,107 @@ func writeScanDetail(c *gin.Context, store DiscoveryScanStore, logger *zap.Logge
 	c.JSON(http.StatusOK, out)
 }
 
+// writeDrift computes the inventory diff between two persisted scans for a
+// scope. With explicit ?from=&to= scan ids it diffs those (404 if either is
+// missing or belongs to a different provider/scope); otherwise it diffs the two
+// most recent scans (older -> newer). Returns 200 with insufficient_history
+// when fewer than two scans exist. Shared by all four cloud drift handlers.
+func writeDrift(c *gin.Context, store DiscoveryScanStore, logger *zap.Logger, provider, scopeID string) {
+	if scopeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code: "MissingConnectionID", Message: "Connection ID path parameter is required.",
+		}})
+		return
+	}
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code: "ScanHistoryNotConfigured", Message: "Scan history isn't enabled on this deployment.",
+		}})
+		return
+	}
+	ctx := c.Request.Context()
+	readErr := func() {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code: "ScanHistoryReadFailed", Message: "Squadron could not read scan history. The error has been logged; retry in a moment.",
+		}})
+	}
+	// fetchScoped gets a scan by id and enforces it belongs to this provider+scope.
+	fetchScoped := func(id string) (*types.ScanRecord, bool) {
+		rec, err := store.GetDiscoveryScan(ctx, id)
+		if err != nil {
+			if logger != nil {
+				logger.Error("drift: get scan failed", zap.Error(err), zap.String("scan_id", id))
+			}
+			readErr()
+			return nil, false
+		}
+		if rec == nil || rec.Provider != provider || rec.ScopeID != scopeID {
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code: "ScanNotFound", Message: "No scan with that ID exists for this connection.",
+			}})
+			return nil, false
+		}
+		return rec, true
+	}
+
+	fromID := strings.TrimSpace(c.Query("from"))
+	toID := strings.TrimSpace(c.Query("to"))
+	var fromRec, toRec *types.ScanRecord
+	if fromID != "" && toID != "" {
+		var ok bool
+		if fromRec, ok = fetchScoped(fromID); !ok {
+			return
+		}
+		if toRec, ok = fetchScoped(toID); !ok {
+			return
+		}
+	} else {
+		recs, err := store.ListDiscoveryScans(ctx, provider, scopeID, 2)
+		if err != nil {
+			if logger != nil {
+				logger.Error("drift: list scans failed", zap.Error(err), zap.String("scope_id", scopeID))
+			}
+			readErr()
+			return
+		}
+		if len(recs) < 2 {
+			c.JSON(http.StatusOK, gin.H{
+				"insufficient_history": true,
+				"scans_available":      len(recs),
+				"message":              "Need at least two scans to compute drift.",
+			})
+			return
+		}
+		// Listing omits result_json; re-fetch the two newest in full.
+		var ok bool
+		if toRec, ok = fetchScoped(recs[0].ScanID); !ok {
+			return
+		}
+		if fromRec, ok = fetchScoped(recs[1].ScanID); !ok {
+			return
+		}
+	}
+
+	diff, err := discoverydrift.Between(fromRec.ResultJSON, toRec.ResultJSON)
+	if err != nil {
+		if logger != nil {
+			logger.Error("drift: diff failed", zap.Error(err),
+				zap.String("from", fromRec.ScanID), zap.String("to", toRec.ScanID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code: "DriftComputeFailed", Message: "Squadron could not compute the drift between these scans.",
+		}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"from_scan_id":    fromRec.ScanID,
+		"to_scan_id":      toRec.ScanID,
+		"from_started_at": fromRec.StartedAt,
+		"to_started_at":   toRec.StartedAt,
+		"drift":           diff,
+	})
+}
+
 // --- AWS history endpoints (DiscoveryHandlers) ---
 
 // HandleAWSListScans — GET /api/v1/discovery/aws/connections/:id/scans.
@@ -186,4 +288,9 @@ func (h *DiscoveryHandlers) HandleAWSListScans(c *gin.Context) {
 func (h *DiscoveryHandlers) HandleAWSGetScan(c *gin.Context) {
 	writeScanDetail(c, h.scanStore, h.logger, "aws",
 		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
+}
+
+// HandleAWSScanDrift — GET /api/v1/discovery/aws/connections/:id/drift.
+func (h *DiscoveryHandlers) HandleAWSScanDrift(c *gin.Context) {
+	writeDrift(c, h.scanStore, h.logger, "aws", strings.TrimSpace(c.Param("id")))
 }
