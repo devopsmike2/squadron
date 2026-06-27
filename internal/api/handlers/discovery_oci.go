@@ -117,6 +117,9 @@ type DiscoveryOCIHandlers struct {
 	// verdict few-shot block + discovery_proposal.created examples.
 	// nil = cold-start empty.
 	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
+	// scanStore — continuous-discovery slice 2 (v0.89.251). Persists
+	// completed scans + backs the history endpoints. Nil = non-persisted.
+	scanStore DiscoveryScanStore
 }
 
 // NewDiscoveryOCIHandlers builds the handler struct. Optional
@@ -160,6 +163,23 @@ func (h *DiscoveryOCIHandlers) WithOCICredstoreKey(k *credstore.Key) *DiscoveryO
 func (h *DiscoveryOCIHandlers) WithOCITraceIndex(idx TraceIndexLookup) *DiscoveryOCIHandlers {
 	h.traceIndex = idx
 	return h
+}
+
+// WithOCIScanStore wires the persisted scan-history store (slice 2).
+func (h *DiscoveryOCIHandlers) WithOCIScanStore(s DiscoveryScanStore) *DiscoveryOCIHandlers {
+	h.scanStore = s
+	return h
+}
+
+// HandleOCIListScans — GET /api/v1/discovery/oci/connections/:id/scans.
+func (h *DiscoveryOCIHandlers) HandleOCIListScans(c *gin.Context) {
+	writeScanList(c, h.scanStore, h.logger, "oci", strings.TrimSpace(c.Param("id")))
+}
+
+// HandleOCIGetScan — GET /api/v1/discovery/oci/connections/:id/scans/:scanID.
+func (h *DiscoveryOCIHandlers) HandleOCIGetScan(c *gin.Context) {
+	writeScanDetail(c, h.scanStore, h.logger, "oci",
+		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
 }
 
 func (h *DiscoveryOCIHandlers) WithOCIScannerFactory(f OCIScannerFactory) *DiscoveryOCIHandlers {
@@ -1108,7 +1128,7 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, ociScanResponse{
+	resp := ociScanResponse{
 		ConnectionID:        conn.ID,
 		TenancyOCID:         conn.TenancyOCID,
 		Region:              conn.Region,
@@ -1122,7 +1142,18 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		FailedServices:      result.FailedServices,
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
-	})
+	}
+	// slice 2 (v0.89.251) — persist the completed scan (best-effort). Scope
+	// is the route :id (connection ID). Demo path returned earlier.
+	if h.scanStore != nil {
+		if rj, err := json.Marshal(resp); err == nil {
+			recordScan(c.Request.Context(), h.scanStore, h.logger, "oci", conn.ID, result, rj)
+		} else if h.logger != nil {
+			h.logger.Warn("oci scan: marshal for persistence failed",
+				zap.Error(err), zap.String("scan_id", result.ScanID))
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // emitOCIScanFailed records a discovery.oci.scan_failed audit event

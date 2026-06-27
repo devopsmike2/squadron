@@ -90,7 +90,7 @@ func TestRecordScan_ProjectsResultFields(t *testing.T) {
 		Partial:         true,
 		PartialReason:   "throttled",
 	}
-	recordScan(context.Background(), store, zap.NewNop(), "aws", r, []byte(`{"scan_id":"scan-1"}`))
+	recordScan(context.Background(), store, zap.NewNop(), "aws", "123456789012", r, []byte(`{"scan_id":"scan-1"}`))
 	if len(store.saved) != 1 {
 		t.Fatalf("expected 1 saved record, got %d", len(store.saved))
 	}
@@ -110,7 +110,7 @@ func TestRecordScan_ProjectsResultFields(t *testing.T) {
 }
 
 func TestRecordScan_NilStoreNoPanic(t *testing.T) {
-	recordScan(context.Background(), nil, zap.NewNop(), "aws", &scanner.Result{ScanID: "x"}, nil)
+	recordScan(context.Background(), nil, zap.NewNop(), "aws", "x", &scanner.Result{ScanID: "x"}, nil)
 }
 
 func TestHandleAWSListScans_ReturnsHistory(t *testing.T) {

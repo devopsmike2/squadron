@@ -2116,7 +2116,7 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 	// connection too — harmless, gives the demo a history entry.
 	if h.scanStore != nil && result != nil {
 		if rj, err := json.Marshal(marshalScanResult(result)); err == nil {
-			recordScan(ctx, h.scanStore, h.logger, "aws", result, rj)
+			recordScan(ctx, h.scanStore, h.logger, "aws", accountID, result, rj)
 		} else if h.logger != nil {
 			h.logger.Warn("aws run scan: marshal for persistence failed",
 				zap.Error(err), zap.String("scan_id", result.ScanID))

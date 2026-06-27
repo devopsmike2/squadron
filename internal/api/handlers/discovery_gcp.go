@@ -104,6 +104,9 @@ type DiscoveryGCPHandlers struct {
 	// verdict few-shot block + discovery_proposal.created examples.
 	// nil = cold-start empty.
 	acceptedAssembler DiscoveryAcceptedRecommendationsAssembler
+	// scanStore — continuous-discovery slice 2 (v0.89.251). Persists
+	// completed scans + backs the history endpoints. Nil = non-persisted.
+	scanStore DiscoveryScanStore
 }
 
 // NewDiscoveryGCPHandlers builds the handler struct. Optional
@@ -146,6 +149,23 @@ func (h *DiscoveryGCPHandlers) WithGCPCredstoreKey(k *credstore.Key) *DiscoveryG
 func (h *DiscoveryGCPHandlers) WithGCPTraceIndex(idx TraceIndexLookup) *DiscoveryGCPHandlers {
 	h.traceIndex = idx
 	return h
+}
+
+// WithGCPScanStore wires the persisted scan-history store (slice 2).
+func (h *DiscoveryGCPHandlers) WithGCPScanStore(s DiscoveryScanStore) *DiscoveryGCPHandlers {
+	h.scanStore = s
+	return h
+}
+
+// HandleGCPListScans — GET /api/v1/discovery/gcp/connections/:id/scans.
+func (h *DiscoveryGCPHandlers) HandleGCPListScans(c *gin.Context) {
+	writeScanList(c, h.scanStore, h.logger, "gcp", strings.TrimSpace(c.Param("id")))
+}
+
+// HandleGCPGetScan — GET /api/v1/discovery/gcp/connections/:id/scans/:scanID.
+func (h *DiscoveryGCPHandlers) HandleGCPGetScan(c *gin.Context) {
+	writeScanDetail(c, h.scanStore, h.logger, "gcp",
+		strings.TrimSpace(c.Param("id")), strings.TrimSpace(c.Param("scanID")))
 }
 
 func (h *DiscoveryGCPHandlers) WithGCPScannerFactory(f GCPScannerFactory) *DiscoveryGCPHandlers {
@@ -1054,7 +1074,7 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gcpScanResponse{
+	resp := gcpScanResponse{
 		ConnectionID:        conn.ID,
 		ProjectID:           conn.ProjectID,
 		Region:              conn.Region,
@@ -1068,7 +1088,19 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 		FailedServices:      result.FailedServices,
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
-	})
+	}
+	// slice 2 (v0.89.251) — persist the completed scan (best-effort). Scope
+	// is the route :id (connection ID). Demo path returned earlier, so demo
+	// scans are not persisted.
+	if h.scanStore != nil {
+		if rj, err := json.Marshal(resp); err == nil {
+			recordScan(c.Request.Context(), h.scanStore, h.logger, "gcp", conn.ID, result, rj)
+		} else if h.logger != nil {
+			h.logger.Warn("gcp scan: marshal for persistence failed",
+				zap.Error(err), zap.String("scan_id", result.ScanID))
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // emitGCPScanFailed records a discovery.gcp.scan_failed audit event
