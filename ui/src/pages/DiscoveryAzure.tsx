@@ -39,6 +39,7 @@ import {
   Copy,
   ExternalLink,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import useSWR from "swr";
@@ -50,6 +51,7 @@ import {
   createAzureConnection,
   encodeClientSecretForWire,
   generateAzureRecommendations,
+  enableAzureDemoConnection,
   listAzureConnections,
   scanAzureConnection,
   validateAzureConnection,
@@ -192,6 +194,26 @@ export default function DiscoveryAzurePage() {
     [mutateConnections],
   );
 
+  // Demo mode (v0.89.244): provision the credential-free demo subscription
+  // and refresh the list so its row appears and can be scanned.
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
+  const handleTryDemo = useCallback(async () => {
+    setDemoBusy(true);
+    setDemoError(null);
+    try {
+      const conn = await enableAzureDemoConnection();
+      await mutateConnections();
+      setSelectedConnectionID(conn.id);
+    } catch (e) {
+      setDemoError(
+        e instanceof Error ? e.message : "Could not start the demo.",
+      );
+    } finally {
+      setDemoBusy(false);
+    }
+  }, [mutateConnections]);
+
   const selectedScan = scanResultByConn[selectedConnectionID];
 
   return (
@@ -210,6 +232,9 @@ export default function DiscoveryAzurePage() {
         connections={conns}
         selectedID={selectedConnectionID}
         onSelect={handleConnectionPicked}
+        onTryDemo={handleTryDemo}
+        demoBusy={demoBusy}
+        demoError={demoError}
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -246,15 +271,34 @@ function ConnectionSelectorBar({
   connections,
   selectedID,
   onSelect,
+  onTryDemo,
+  demoBusy,
+  demoError,
 }: {
   connections: AzureConnection[];
   selectedID: string;
   onSelect: (id: string) => void;
+  onTryDemo: () => void;
+  demoBusy: boolean;
+  demoError: string | null;
 }) {
   if (connections.length === 0) {
     return (
-      <div className="rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
-        No Azure subscriptions connected yet. Use the Wizard tab to connect one.
+      <div className="flex flex-col gap-3 rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+        <span>
+          No Azure subscriptions connected yet. Use the Wizard tab to connect
+          one — or explore a sample inventory and recommendations with no cloud
+          account:
+        </span>
+        <div className="flex items-center gap-3">
+          <Button onClick={onTryDemo} disabled={demoBusy} size="sm">
+            <Sparkles className="mr-2 h-4 w-4" aria-hidden />
+            {demoBusy ? "Starting demo…" : "Try the demo"}
+          </Button>
+          {demoError && (
+            <span className="text-xs text-destructive">{demoError}</span>
+          )}
+        </div>
       </div>
     );
   }

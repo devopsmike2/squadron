@@ -2543,6 +2543,13 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/azure/connections",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleCreateAzureConnection(c) }))
+		// v0.89.244 first-user onboarding — Azure demo connection.
+		v1.POST("/discovery/azure/demo/enable",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureDemoEnable(c) }))
+		v1.DELETE("/discovery/azure/demo",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureDemoDisable(c) }))
 		v1.GET("/discovery/azure/connections",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleListAzureConnections(c) }))
