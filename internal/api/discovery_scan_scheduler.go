@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -35,10 +36,11 @@ import (
 // cleanup; the behavior is identical either way.
 //
 // Each goroutine stops when ctx is cancelled (wire it to process shutdown).
-func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.Duration) {
+func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval, driftCooldown time.Duration) {
 	if interval <= 0 {
 		return
 	}
+	emitter := newDriftEmitter(driftCooldown)
 
 	// --- AWS (slice 3a) ---
 	if s.discoveryCredStore != nil && s.discoveryCredKey != nil {
@@ -68,7 +70,7 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift("aws", h.RunScanForAccount),
+			ScanAccount: s.scanAccountWithDrift(emitter, "aws", h.RunScanForAccount),
 		}
 		go sched.Run(ctx)
 	} else if s.logger != nil {
@@ -104,7 +106,7 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift("gcp", func(ctx context.Context, id string) error {
+			ScanAccount: s.scanAccountWithDrift(emitter, "gcp", func(ctx context.Context, id string) error {
 				return invokeScanHandler(ctx, id, h.HandleScanGCPConnection)
 			}),
 		}
@@ -140,7 +142,7 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift("azure", func(ctx context.Context, id string) error {
+			ScanAccount: s.scanAccountWithDrift(emitter, "azure", func(ctx context.Context, id string) error {
 				return invokeScanHandler(ctx, id, h.HandleScanAzureConnection)
 			}),
 		}
@@ -176,7 +178,7 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift("oci", func(ctx context.Context, id string) error {
+			ScanAccount: s.scanAccountWithDrift(emitter, "oci", func(ctx context.Context, id string) error {
 				return invokeScanHandler(ctx, id, h.HandleScanOCIConnection)
 			}),
 		}
@@ -189,14 +191,59 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval time.
 // changed) recorded as an audit event. This turns the continuous engine from
 // "history accrues" into a proactive "what changed" signal that rides the
 // existing audit timeline + SIEM forwarding — no polling required.
-func (s *Server) scanAccountWithDrift(provider string, scan func(context.Context, string) error) func(context.Context, string) error {
+func (s *Server) scanAccountWithDrift(emitter *driftEmitter, provider string, scan func(context.Context, string) error) func(context.Context, string) error {
 	return func(ctx context.Context, id string) error {
 		if err := scan(ctx, id); err != nil {
 			return err
 		}
-		emitDriftIfChanged(ctx, s.appStore, s.auditService, s.logger, provider, id)
+		emitDriftIfChanged(ctx, s.appStore, s.auditService, s.logger, emitter, provider, id)
 		return nil
 	}
+}
+
+// driftEmitter rate-limits drift events per scope. With a positive cooldown it
+// suppresses a scope's drift events that land within the window of the last
+// emitted one — letting an operator scan frequently but be alerted less often.
+// A zero cooldown disables suppression (every changed sweep emits). In-memory:
+// rate-limiting that resets on restart is acceptable.
+type driftEmitter struct {
+	cooldown time.Duration
+	mu       sync.Mutex
+	last     map[string]time.Time
+}
+
+func newDriftEmitter(cooldown time.Duration) *driftEmitter {
+	return &driftEmitter{cooldown: cooldown, last: map[string]time.Time{}}
+}
+
+// allow reports whether a drift event for key may emit now, recording the time
+// when it may. Called only when there IS a change, so the cooldown advances on
+// real emits, never on quiet sweeps.
+func (e *driftEmitter) allow(key string, now time.Time) bool {
+	if e == nil || e.cooldown <= 0 {
+		return true
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if t, ok := e.last[key]; ok && now.Sub(t) < e.cooldown {
+		return false
+	}
+	e.last[key] = now
+	return true
+}
+
+// cappedIDs flattens a category diff field across categories, capped.
+func cappedIDs(lists [][]string, cap int) []string {
+	out := []string{}
+	for _, l := range lists {
+		for _, id := range l {
+			if len(out) >= cap {
+				return out
+			}
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // emitDriftIfChanged diffs the two most recent persisted scans for
@@ -206,7 +253,7 @@ func (s *Server) scanAccountWithDrift(provider string, scan func(context.Context
 // everything-is-new event), or when the store / audit service is unwired.
 // instrumentation_regressions surfaces the highest-signal subset: resources
 // whose OTel instrumentation turned OFF between scans.
-func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, audit services.AuditService, logger *zap.Logger, provider, scopeID string) {
+func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, audit services.AuditService, logger *zap.Logger, emitter *driftEmitter, provider, scopeID string) {
 	if store == nil || audit == nil {
 		return
 	}
@@ -227,6 +274,13 @@ func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, 
 		return
 	}
 	if diff.TotalAdded == 0 && diff.TotalRemoved == 0 && diff.TotalInstrumentationChanged == 0 {
+		return
+	}
+	if !emitter.allow(provider+"/"+scopeID, time.Now()) {
+		if logger != nil {
+			logger.Debug("discovery scan drift suppressed by cooldown",
+				zap.String("provider", provider), zap.String("scope_id", scopeID))
+		}
 		return
 	}
 	regressions := []string{}
@@ -254,6 +308,8 @@ func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, 
 			"total_added":                   diff.TotalAdded,
 			"total_removed":                 diff.TotalRemoved,
 			"total_instrumentation_changed": diff.TotalInstrumentationChanged,
+			"added":                         cappedIDs([][]string{diff.Compute.Added, diff.Functions.Added, diff.Databases.Added, diff.Clusters.Added}, 20),
+			"removed":                       cappedIDs([][]string{diff.Compute.Removed, diff.Functions.Removed, diff.Databases.Removed, diff.Clusters.Removed}, 20),
 			"instrumentation_regressions":   regressions,
 			"recorded_at":                   time.Now().UTC(),
 		},

@@ -37,6 +37,7 @@ gets drift in whatever channel already consumes Squadron's audit stream.
 - **Audit event, not a bespoke channel.** Routing it to Slack/email/PagerDuty is
   the SIEM/notification layer's job (audit events already forward there); this
   slice produces the signal, not a new delivery mechanism.
-- **No de-dup/suppression yet.** Every sweep with a change emits; a high-churn
-  account on a tight interval emits each sweep. A digest / threshold / cooldown
-  is a possible follow-up.
+- **Cooldown (v0.89.256).** SQUADRON_DISCOVERY_DRIFT_COOLDOWN caps per-scope
+  drift-event frequency below the scan cadence (in-memory, resets on restart).
+  Default off. The payload also carries capped added/removed resource id lists
+  so a notification is self-contained.

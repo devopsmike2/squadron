@@ -776,10 +776,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// shutdown. No-op when the credstore/key are not wired.
 		if raw := strings.TrimSpace(os.Getenv("SQUADRON_DISCOVERY_SCAN_INTERVAL")); raw != "" {
 			if d, derr := time.ParseDuration(raw); derr == nil && d > 0 {
+				// Optional drift-event cooldown: cap drift notifications per
+				// scope below the scan cadence. Unset/<=0 disables suppression.
+				var driftCooldown time.Duration
+				if cdRaw := strings.TrimSpace(os.Getenv("SQUADRON_DISCOVERY_DRIFT_COOLDOWN")); cdRaw != "" {
+					if cd, cderr := time.ParseDuration(cdRaw); cderr == nil && cd > 0 {
+						driftCooldown = cd
+					} else {
+						logger.Warn("SQUADRON_DISCOVERY_DRIFT_COOLDOWN set but invalid; ignoring",
+							zap.String("value", cdRaw))
+					}
+				}
 				scanSchedCtx, scanSchedCancel := context.WithCancel(context.Background())
-				apiServer.StartDiscoveryScanScheduler(scanSchedCtx, d)
+				apiServer.StartDiscoveryScanScheduler(scanSchedCtx, d, driftCooldown)
 				defer scanSchedCancel()
-				logger.Info("discovery scan scheduler enabled", zap.Duration("interval", d))
+				logger.Info("discovery scan scheduler enabled",
+					zap.Duration("interval", d), zap.Duration("drift_cooldown", driftCooldown))
 			} else {
 				logger.Warn("SQUADRON_DISCOVERY_SCAN_INTERVAL set but invalid; scheduler disabled",
 					zap.String("value", raw))

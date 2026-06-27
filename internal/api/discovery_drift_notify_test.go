@@ -60,7 +60,7 @@ func TestEmitDriftIfChanged_RecordsOnChange(t *testing.T) {
 		`{"compute":[{"resource_id":"i-1","has_otel":false},{"resource_id":"i-2","has_otel":false}]}`,
 	)
 	audit := &driftFakeAudit{}
-	emitDriftIfChanged(context.Background(), store, audit, zap.NewNop(), "aws", "111")
+	emitDriftIfChanged(context.Background(), store, audit, zap.NewNop(), newDriftEmitter(0), "aws", "111")
 	if len(audit.recorded) != 1 {
 		t.Fatalf("expected 1 audit event, got %d", len(audit.recorded))
 	}
@@ -76,12 +76,37 @@ func TestEmitDriftIfChanged_RecordsOnChange(t *testing.T) {
 	if len(regs) != 1 || regs[0] != "i-1" {
 		t.Errorf("regressions = %v, want [i-1]", regs)
 	}
+	added, _ := e.Payload["added"].([]string)
+	if len(added) != 1 || added[0] != "i-2" {
+		t.Errorf("added payload = %v, want [i-2]", added)
+	}
+}
+
+func TestEmitDriftIfChanged_CooldownSuppressesSecond(t *testing.T) {
+	mk := func() *driftFakeScanStore {
+		return twoScans(
+			`{"compute":[{"resource_id":"i-1","has_otel":true}]}`,
+			`{"compute":[{"resource_id":"i-1","has_otel":false}]}`,
+		)
+	}
+	audit := &driftFakeAudit{}
+	emitter := newDriftEmitter(time.Hour)
+	emitDriftIfChanged(context.Background(), mk(), audit, zap.NewNop(), emitter, "aws", "111")
+	emitDriftIfChanged(context.Background(), mk(), audit, zap.NewNop(), emitter, "aws", "111")
+	if len(audit.recorded) != 1 {
+		t.Fatalf("cooldown should suppress the 2nd event; got %d", len(audit.recorded))
+	}
+	// A different scope is not suppressed.
+	emitDriftIfChanged(context.Background(), mk(), audit, zap.NewNop(), emitter, "aws", "222")
+	if len(audit.recorded) != 2 {
+		t.Errorf("different scope should emit; got %d", len(audit.recorded))
+	}
 }
 
 func TestEmitDriftIfChanged_NoEventOnNoChange(t *testing.T) {
 	inv := `{"compute":[{"resource_id":"i-1","has_otel":true}]}`
 	audit := &driftFakeAudit{}
-	emitDriftIfChanged(context.Background(), twoScans(inv, inv), audit, zap.NewNop(), "aws", "111")
+	emitDriftIfChanged(context.Background(), twoScans(inv, inv), audit, zap.NewNop(), newDriftEmitter(0), "aws", "111")
 	if len(audit.recorded) != 0 {
 		t.Errorf("expected no audit event for identical scans, got %d", len(audit.recorded))
 	}
@@ -93,13 +118,13 @@ func TestEmitDriftIfChanged_NoEventWithSingleScan(t *testing.T) {
 		byID: map[string]*types.ScanRecord{},
 	}
 	audit := &driftFakeAudit{}
-	emitDriftIfChanged(context.Background(), store, audit, zap.NewNop(), "aws", "111")
+	emitDriftIfChanged(context.Background(), store, audit, zap.NewNop(), newDriftEmitter(0), "aws", "111")
 	if len(audit.recorded) != 0 {
 		t.Errorf("first scan should not emit drift, got %d events", len(audit.recorded))
 	}
 }
 
 func TestEmitDriftIfChanged_NilStoreOrAuditNoPanic(t *testing.T) {
-	emitDriftIfChanged(context.Background(), nil, &driftFakeAudit{}, zap.NewNop(), "aws", "111")
-	emitDriftIfChanged(context.Background(), twoScans("{}", "{}"), nil, zap.NewNop(), "aws", "111")
+	emitDriftIfChanged(context.Background(), nil, &driftFakeAudit{}, zap.NewNop(), newDriftEmitter(0), "aws", "111")
+	emitDriftIfChanged(context.Background(), twoScans("{}", "{}"), nil, zap.NewNop(), newDriftEmitter(0), "aws", "111")
 }
