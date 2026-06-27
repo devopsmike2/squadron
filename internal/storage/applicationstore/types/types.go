@@ -87,6 +87,16 @@ type ApplicationStore interface {
 		since time.Time, limit int,
 	) ([]*DiscoveryVerdict, error)
 
+	// ListCrossScopeDiscoveryVerdicts — cross-cloud citations (v0.89.248).
+	// Recent verdicts from connections OTHER than excludeConnectionID, each
+	// tagged with origin Provider + ScopeID, so a decline on one cloud can
+	// surface (origin-labeled) in another cloud's verdict block.
+	ListCrossScopeDiscoveryVerdicts(
+		ctx context.Context,
+		excludeConnectionID string,
+		since time.Time, limit int,
+	) ([]*DiscoveryVerdict, error)
+
 	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
 	// exclusion infrastructure for discovery recommendations. The
 	// "Don't propose this again" affordance on the Recommendations tab

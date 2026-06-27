@@ -1,6 +1,6 @@
 # Cross-cloud verdict citations
 
-Status: building (slice 1). Author: autonomous session.
+Status: shipped v0.89.248 (store slice 1 = v0.89.247). Author: autonomous session.
 
 ## Problem
 
