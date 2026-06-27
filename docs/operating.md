@@ -58,7 +58,10 @@ standalone secrets, not config fields:
   auto-scanning real cloud accounts on a timer has cost + API-rate
   implications — set it deliberately. Values below 15m are raised to
   the 15m floor. Covers all four clouds (AWS/GCP/Azure/OCI); the
-  first sweep fires after one interval (not at startup).
+  first sweep fires after one interval (not at startup). After each scheduled
+  scan Squadron diffs it against the previous one and, on any change, records a
+  `discovery.scan_drift_detected` audit event (forwards via SIEM like any audit
+  event) — proactive drift without polling.
 - `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
   Bearer token enforcement. Do NOT set this in production.
 
