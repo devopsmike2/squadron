@@ -2584,6 +2584,11 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleRecommendationsForGCPScan(c) }))
 
+		// env->TF slice 3c — gcp import-block preview (deterministic).
+		v1.POST("/discovery/gcp/connections/:id/terraform-import",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleGCPGenerateTerraformImport(c) }))
+
 		// v0.89.52 (#676 Stream 74, Azure discovery slice 1 chunk 3) —
 		// Azure-side mirror of the /discovery/aws/* and /discovery/gcp/*
 		// surfaces. Per design doc §7 the route shapes mirror the AWS /
@@ -2639,6 +2644,11 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/azure/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleRecommendationsForAzureScan(c) }))
+
+		// env->TF slice 3c — azure import-block preview (deterministic).
+		v1.POST("/discovery/azure/connections/:id/terraform-import",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAzureGenerateTerraformImport(c) }))
 
 		// v0.89.57 (#683 Stream 81, OCI discovery slice 1 chunk 3) —
 		// OCI-side mirror of the /discovery/aws/*, /discovery/gcp/*,
@@ -2696,6 +2706,11 @@ func (s *Server) registerRoutes() {
 		v1.POST("/discovery/oci/connections/:id/recommendations",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleRecommendationsForOCIScan(c) }))
+
+		// env->TF slice 3c — oci import-block preview (deterministic).
+		v1.POST("/discovery/oci/connections/:id/terraform-import",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleOCIGenerateTerraformImport(c) }))
 
 		// v0.89.61 (#688 Stream 86, Unified Discovery dashboard slice 1
 		// chunk 1) — cross-provider summary endpoint. Aggregates the
