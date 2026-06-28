@@ -152,6 +152,11 @@ type fakeOCI struct {
 	// Compartments returned by the identity list call.
 	Compartments []ociCompartment
 
+	// Coverage-parity slice 4 — Object Storage + Load Balancer mocks.
+	Namespace                  string
+	BucketsByCompartment       map[string][]ociBucket
+	LoadBalancersByCompartment map[string][]ociLoadBalancer
+
 	// InstancesByCompartment maps compartmentId -> instances served
 	// when /instances is called with that compartmentId. A missing
 	// compartmentId returns an empty list (not a 404) so tests can
@@ -427,6 +432,49 @@ func (f *fakeOCI) handler() http.Handler {
 				clusters = []okeCluster{}
 			}
 			_ = json.NewEncoder(w).Encode(clusters)
+			return
+		case strings.HasSuffix(r.URL.Path, "/loadBalancers"):
+			compartmentID := r.URL.Query().Get("compartmentId")
+			w.Header().Set("Content-Type", "application/json")
+			lbs := f.LoadBalancersByCompartment[compartmentID]
+			if lbs == nil {
+				lbs = []ociLoadBalancer{}
+			}
+			_ = json.NewEncoder(w).Encode(lbs)
+			return
+
+		case strings.Contains(r.URL.Path, "/n/") && strings.Contains(r.URL.Path, "/b/"):
+			// Object Storage GetBucket: /n/{ns}/b/{name}
+			parts := strings.Split(r.URL.Path, "/")
+			name := parts[len(parts)-1]
+			w.Header().Set("Content-Type", "application/json")
+			for _, list := range f.BucketsByCompartment {
+				for _, b := range list {
+					if b.Name == name {
+						_ = json.NewEncoder(w).Encode(b)
+						return
+					}
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(ociErrorBody{Code: "BucketNotFound", Message: name})
+			return
+
+		case strings.Contains(r.URL.Path, "/n/") && strings.HasSuffix(r.URL.Path, "/b"):
+			// Object Storage ListBuckets: /n/{ns}/b?compartmentId=...
+			compartmentID := r.URL.Query().Get("compartmentId")
+			w.Header().Set("Content-Type", "application/json")
+			summaries := []ociBucketSummary{}
+			for _, b := range f.BucketsByCompartment[compartmentID] {
+				summaries = append(summaries, ociBucketSummary{Name: b.Name, Namespace: f.Namespace})
+			}
+			_ = json.NewEncoder(w).Encode(summaries)
+			return
+
+		case strings.HasSuffix(r.URL.Path, "/n"):
+			// Object Storage GetNamespace.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(f.Namespace)
 			return
 		}
 

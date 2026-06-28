@@ -261,6 +261,13 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// doc §5.3.
 	s.scanOKEClusters(ctx, signingKey, allCompartments, &result)
 
+	// Coverage-parity arc slice 4 — object-store (Object Storage
+	// buckets) + load-balancer tiers across the same compartment set.
+	// Same SigningKey + httpClient; partial-failure isolated under
+	// ociobjectstorage / ocilb.
+	s.scanObjectStorage(ctx, signingKey, allCompartments, &result)
+	s.scanLoadBalancers(ctx, signingKey, allCompartments, &result)
+
 	// Slice 1 instrumented rule (Compute): HasOTel == true.
 	for _, c := range result.Compute {
 		if c.HasOTel {
