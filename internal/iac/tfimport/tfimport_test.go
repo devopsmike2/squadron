@@ -136,3 +136,49 @@ func TestRender_EmptyWhenNoBlocks(t *testing.T) {
 		t.Errorf("expected empty render for no blocks, got:\n%s", out)
 	}
 }
+
+func TestGenerate_MultiCloud_Compute(t *testing.T) {
+	in := []Resource{
+		{Provider: "azure", Category: "compute", ResourceID: "vm-linux", OSFamily: "linux",
+			ImportID: "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-linux", Region: "eastus"},
+		{Provider: "azure", Category: "compute", ResourceID: "vm-win", OSFamily: "windows",
+			ImportID: "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-win", Region: "eastus"},
+		{Provider: "gcp", Category: "compute", ResourceID: "gce-1",
+			ImportID: "proj/us-central1-a/gce-1", Region: "us-central1"},
+		{Provider: "oci", Category: "compute", ResourceID: "oci-1",
+			ImportID: "ocid1.instance.oc1..abc", Region: "us-ashburn-1"},
+	}
+	blocks, skipped := Generate(in)
+	if len(skipped) != 0 {
+		t.Fatalf("expected no skips, got %v", skipped)
+	}
+	want := map[string]string{
+		"azurerm_linux_virtual_machine":   "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-linux",
+		"azurerm_windows_virtual_machine": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-win",
+		"google_compute_instance":         "proj/us-central1-a/gce-1",
+		"oci_core_instance":               "ocid1.instance.oc1..abc",
+	}
+	for tfType, wantID := range want {
+		b, ok := blockByType(blocks, tfType)
+		if !ok {
+			t.Errorf("missing block for %s", tfType)
+			continue
+		}
+		if b.ImportID != wantID {
+			t.Errorf("%s import id = %q, want %q", tfType, b.ImportID, wantID)
+		}
+	}
+}
+
+func TestGenerate_MultiCloud_SkipsWhenNoImportID(t *testing.T) {
+	// Without a captured canonical ImportID, non-AWS compute is skipped
+	// (never guessed from the friendly ResourceID).
+	_, skipped := Generate([]Resource{
+		{Provider: "azure", Category: "compute", ResourceID: "vm-x", OSFamily: "linux"},
+		{Provider: "gcp", Category: "compute", ResourceID: "gce-x"},
+		{Provider: "oci", Category: "compute", ResourceID: "oci-x"},
+	})
+	if len(skipped) != 3 {
+		t.Fatalf("expected 3 skips for missing ImportID, got %v", skipped)
+	}
+}

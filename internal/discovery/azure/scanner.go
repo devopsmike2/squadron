@@ -457,6 +457,7 @@ func (s *Scanner) client() *http.Client {
 func projectVM(vm armVirtualMachine) scanner.ComputeInstanceSnapshot {
 	return scanner.ComputeInstanceSnapshot{
 		ResourceID:   vm.Name,
+		ImportID:     vm.ID, // full ARM resource ID = azurerm_*_virtual_machine import id
 		InstanceType: vm.Properties.HardwareProfile.VMSize,
 		Tags:         copyTags(vm.Tags),
 		HasOTel:      hasOTelTag(vm.Tags),

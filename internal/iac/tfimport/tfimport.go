@@ -36,11 +36,19 @@ func quote(s string) string { return fmt.Sprintf("%q", s) }
 // Resource is the minimal, provider-agnostic shape the generator needs.
 // Callers (the discovery handlers) map scan rows onto this.
 type Resource struct {
-	Provider   string // "aws" (slice 1); "gcp"/"azure"/"oci" in slice 3
+	Provider   string // "aws","azure","gcp","oci"
 	Category   string // "compute","object_store","function","database","load_balancer"
 	ResourceID string // cloud identifier as the scan reported it
 	Name       string // friendly name when distinct from ResourceID (e.g. Lambda)
 	Region     string
+	// ImportID — the provider-canonical terraform import ID when the
+	// scan captured it (Azure ARM id, GCP project/zone/name, OCI OCID).
+	// Empty for AWS (ResourceID already equals the import ID) and when
+	// the scanner couldn't capture it. The non-AWS mappers REQUIRE it.
+	ImportID string
+	// OSFamily — "linux"/"windows"/"unknown"; the Azure mapper uses it
+	// to pick azurerm_linux_virtual_machine vs the windows variant.
+	OSFamily string
 }
 
 // ImportBlock is one rendered Terraform import target.
@@ -116,6 +124,58 @@ var awsMappers = map[string]mapper{
 	},
 }
 
+// azureMappers / gcpMappers / ociMappers — slice 3b. These consume the
+// scanner-captured canonical ImportID directly (the scanner did the
+// per-cloud ID composition), so the mapper just picks the tf type and
+// passes ImportID through. A missing ImportID means the scanner didn't
+// capture a safe id → skip.
+var azureMappers = map[string]mapper{
+	"compute": func(r Resource) (string, string, bool) {
+		if r.ImportID == "" {
+			return "", "", false
+		}
+		tfType := "azurerm_linux_virtual_machine"
+		if strings.EqualFold(r.OSFamily, "windows") {
+			tfType = "azurerm_windows_virtual_machine"
+		}
+		return tfType, r.ImportID, true
+	},
+}
+
+var gcpMappers = map[string]mapper{
+	"compute": func(r Resource) (string, string, bool) {
+		if r.ImportID == "" {
+			return "", "", false
+		}
+		return "google_compute_instance", r.ImportID, true
+	},
+}
+
+var ociMappers = map[string]mapper{
+	"compute": func(r Resource) (string, string, bool) {
+		if r.ImportID == "" {
+			return "", "", false
+		}
+		return "oci_core_instance", r.ImportID, true
+	},
+}
+
+// mappersFor returns the category->mapper registry for a provider.
+func mappersFor(provider string) (map[string]mapper, bool) {
+	switch provider {
+	case "aws":
+		return awsMappers, true
+	case "azure":
+		return azureMappers, true
+	case "gcp":
+		return gcpMappers, true
+	case "oci":
+		return ociMappers, true
+	default:
+		return nil, false
+	}
+}
+
 func lastARNSegment(arn string) string {
 	if arn == "" {
 		return ""
@@ -140,13 +200,14 @@ func Generate(resources []Resource) ([]ImportBlock, []Skipped) {
 		if provider == "" {
 			provider = "aws"
 		}
-		if provider != "aws" {
-			skipped = append(skipped, Skipped{provider, r.Category, r.ResourceID, "provider not yet supported (slice 1 = AWS)"})
+		registry, ok := mappersFor(provider)
+		if !ok {
+			skipped = append(skipped, Skipped{provider, r.Category, r.ResourceID, "provider not supported"})
 			continue
 		}
-		m, ok := awsMappers[strings.ToLower(strings.TrimSpace(r.Category))]
+		m, ok := registry[strings.ToLower(strings.TrimSpace(r.Category))]
 		if !ok {
-			skipped = append(skipped, Skipped{provider, r.Category, r.ResourceID, "category has no import mapper yet"})
+			skipped = append(skipped, Skipped{provider, r.Category, r.ResourceID, "category has no import mapper yet for this provider"})
 			continue
 		}
 		tfType, importID, ok := m(r)
