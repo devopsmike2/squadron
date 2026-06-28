@@ -24,12 +24,13 @@
 //     Azure counterparts via the shared ./base helpers.
 
 import { apiDelete, apiGet, apiPost } from "./base";
+import { pollRecommendationJob } from "./discovery";
 import type {
   EventSourceRow,
   GenerateRecommendationsResponse,
   RecommendationJobAccepted,
 } from "./discovery";
-import { pollRecommendationJob } from "./discovery";
+import type { AWSTerraformImportResponse } from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -447,4 +448,27 @@ export function encodePrivateKeyForWire(pem: string): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+// generateOCITerraformImport renders Terraform import{} blocks for the
+// OCI compute resources in a scan so the operator can adopt un-managed
+// resources via `terraform plan -generate-config-out` (env->TF slice
+// 3d — parity with the AWS inventory adopt button). Synchronous: the
+// endpoint returns the rendered .tf directly. Remaps `computes` ->
+// `compute` to match the Go scan_result shape (as the recommendations
+// wrapper does).
+export async function generateOCITerraformImport(
+  connectionID: string,
+  scan: ScanOCIResponse,
+): Promise<AWSTerraformImportResponse> {
+  return apiPost<AWSTerraformImportResponse>(
+    `/discovery/oci/connections/${encodeURIComponent(connectionID)}/terraform-import`,
+    {
+      scan_result: {
+        tenancy_ocid: scan.tenancy_ocid,
+        region: scan.region,
+        compute: scan.computes,
+      },
+    },
+  );
 }

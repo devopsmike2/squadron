@@ -48,6 +48,7 @@ import {
   createGCPConnection,
   encodeServiceAccountForWire,
   generateGCPRecommendations,
+  generateGCPTerraformImport,
   enableGCPDemoConnection,
   listGCPConnections,
   scanGCPConnection,
@@ -63,6 +64,7 @@ import {
   type EventSourceRow,
   type ValidateGCPResponse,
 } from "@/api/discoveryGCP";
+import { TerraformAdoptCard } from "@/components/discovery/TerraformAdoptCard";
 import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1080,6 +1082,9 @@ function InventoryTab({
   return (
     <div className="space-y-3">
       <InventorySummary scan={scan} />
+      <TerraformAdoptCard
+        onGenerate={() => generateGCPTerraformImport(scan.connection_id, scan)}
+      />
       <Tabs defaultValue={INVENTORY_SUBTAB_COMPUTE}>
         <TabsList>
           <TabsTrigger value={INVENTORY_SUBTAB_COMPUTE}>Compute</TabsTrigger>

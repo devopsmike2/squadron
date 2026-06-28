@@ -21,12 +21,13 @@
 //     counterparts via the shared ./base helpers.
 
 import { apiDelete, apiGet, apiPost } from "./base";
+import { pollRecommendationJob } from "./discovery";
 import type {
   EventSourceRow,
   GenerateRecommendationsResponse,
   RecommendationJobAccepted,
 } from "./discovery";
-import { pollRecommendationJob } from "./discovery";
+import type { AWSTerraformImportResponse } from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -378,4 +379,19 @@ export function encodeClientSecretForWire(secret: string): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+// generateAzureTerraformImport renders Terraform import{} blocks for the
+// Azure compute resources in a scan so the operator can adopt
+// un-managed resources via `terraform plan -generate-config-out`
+// (env->TF slice 3d). Synchronous: the endpoint returns the rendered
+// .tf directly.
+export async function generateAzureTerraformImport(
+  connectionID: string,
+  scan: ScanAzureResponse,
+): Promise<AWSTerraformImportResponse> {
+  return apiPost<AWSTerraformImportResponse>(
+    `/discovery/azure/connections/${encodeURIComponent(connectionID)}/terraform-import`,
+    { scan_result: scan },
+  );
 }

@@ -51,6 +51,7 @@ import {
   createAzureConnection,
   encodeClientSecretForWire,
   generateAzureRecommendations,
+  generateAzureTerraformImport,
   enableAzureDemoConnection,
   listAzureConnections,
   scanAzureConnection,
@@ -66,6 +67,7 @@ import {
   type EventSourceRow,
   type ValidateAzureResponse,
 } from "@/api/discoveryAzure";
+import { TerraformAdoptCard } from "@/components/discovery/TerraformAdoptCard";
 import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1142,6 +1144,11 @@ function InventoryTab({
   return (
     <div className="space-y-3">
       <InventorySummary scan={scan} />
+      <TerraformAdoptCard
+        onGenerate={() =>
+          generateAzureTerraformImport(scan.connection_id, scan)
+        }
+      />
       <Tabs defaultValue={INVENTORY_SUBTAB_COMPUTE}>
         <TabsList>
           <TabsTrigger value={INVENTORY_SUBTAB_COMPUTE}>Compute</TabsTrigger>
