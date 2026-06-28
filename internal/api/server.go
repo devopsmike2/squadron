@@ -2458,6 +2458,13 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAITrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGenerateRecommendations(c) }))
 
+		// env -> Terraform (import blocks) arc, slice 1 — deterministic
+		// preview of import{} blocks for a scan result. No AI or cloud
+		// calls; returns the rendered .tf directly.
+		v1.POST("/discovery/aws/connections/:id/terraform-import",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGenerateTerraformImport(c) }))
+
 		// v0.89.209 — async recommendations poll. The kick-off (the POST
 		// above) returns 202 + a job_id; the UI polls this until the job
 		// is succeeded (carries the recommendations) or failed. Provider-
