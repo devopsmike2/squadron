@@ -22,6 +22,7 @@
 
 import { apiDelete, apiGet, apiPost } from "./base";
 import { pollRecommendationJob } from "./discovery";
+import type { LoadBalancerSnapshot, ObjectStoreSnapshot } from "./discovery";
 import type {
   EventSourceRow,
   GenerateRecommendationsResponse,
@@ -316,6 +317,8 @@ export interface ScanAzureResponse {
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
+  object_stores?: ObjectStoreSnapshot[];
+  load_balancers?: LoadBalancerSnapshot[];
   // serverless — serverless tier slice 1 chunk 5 (v0.89.92, #725
   // Stream 123). Azure Functions inventory from the chunk 3 Azure
   // scanner extension. Optional on the wire; the Inventory tab's

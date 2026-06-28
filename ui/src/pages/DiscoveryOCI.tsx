@@ -74,6 +74,10 @@ import {
   type ValidateOCIResponse,
 } from "@/api/discoveryOCI";
 import { openIaCGitHubTerraformImportPR } from "@/api/iacGithub";
+import {
+  LoadBalancersTable,
+  ObjectStoresTable,
+} from "@/components/discovery/InventoryTierTables";
 import { TerraformAdoptCard } from "@/components/discovery/TerraformAdoptCard";
 import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
@@ -153,6 +157,8 @@ const INVENTORY_SUBTAB_ORCHESTRATION = "orchestration";
 // empty for OCI), Event sources renders for OCI because OCI Streaming
 // ships as a real surface in slice 1 (design doc §3.4 + §7).
 const INVENTORY_SUBTAB_EVENT_SOURCES = "event_sources";
+const INVENTORY_SUBTAB_OBJECT_STORES = "object_stores";
+const INVENTORY_SUBTAB_LOAD_BALANCERS = "load_balancers";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1321,6 +1327,12 @@ function InventoryTab({
           <TabsTrigger value={INVENTORY_SUBTAB_SERVERLESS}>
             Serverless
           </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_OBJECT_STORES}>
+            Object stores
+          </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_LOAD_BALANCERS}>
+            Load balancers
+          </TabsTrigger>
           {showOrchestration && (
             <TabsTrigger value={INVENTORY_SUBTAB_ORCHESTRATION}>
               Orchestration
@@ -1343,6 +1355,12 @@ function InventoryTab({
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_SERVERLESS} className="mt-3">
           <ServerlessInventoryTable rows={scan.serverless ?? []} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_OBJECT_STORES} className="mt-3">
+          <ObjectStoresTable rows={scan.object_stores} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_LOAD_BALANCERS} className="mt-3">
+          <LoadBalancersTable rows={scan.load_balancers} />
         </TabsContent>
         {showOrchestration && (
           <TabsContent value={INVENTORY_SUBTAB_ORCHESTRATION} className="mt-3">
