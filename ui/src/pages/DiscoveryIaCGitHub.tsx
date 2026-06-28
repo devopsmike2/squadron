@@ -28,8 +28,11 @@
 
 import {
   AlertTriangle,
+  Check,
   ExternalLink,
   Github,
+  Loader2,
+  Plug,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -40,7 +43,9 @@ import useSWR from "swr";
 import {
   deleteIaCGitHubConnection,
   type IaCGitHubConnection,
+  type IaCGitHubOTelInjectPRResponse,
   listIaCGitHubConnections,
+  openIaCGitHubOTelInjectPR,
 } from "@/api/iacGithub";
 import {
   IaCGitHubWizard,
@@ -63,6 +68,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { IAC_GITHUB_PLACEMENT_KINDS } from "@/data/iacGithubWizard";
 
@@ -392,6 +398,108 @@ export default function DiscoveryIaCGitHubPage() {
   );
 }
 
+function OTelInjectAffordance({ conn }: { conn: IaCGitHubConnection }) {
+  const [configPath, setConfigPath] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<IaCGitHubOTelInjectPRResponse | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const valid = configPath.trim() !== "" && endpoint.trim() !== "";
+
+  const onInject = useCallback(async () => {
+    if (!valid || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await openIaCGitHubOTelInjectPR(conn.connection_id, {
+        config_path: configPath.trim(),
+        endpoint: endpoint.trim(),
+        insecure: true,
+      });
+      setResult(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [valid, submitting, conn.connection_id, configPath, endpoint]);
+
+  return (
+    <div className="space-y-2 rounded-md border p-2">
+      <p className="text-xs font-medium">Connect an OTel collector</p>
+      <p className="text-[11px] text-muted-foreground">
+        Inject a Squadron OTLP exporter into a collector config in this repo and
+        open a PR so the agent ships telemetry to Squadron.
+      </p>
+      <Input
+        value={configPath}
+        onChange={(e) => setConfigPath(e.target.value)}
+        placeholder="collector config path (e.g. modules/standalone-collector/collector.yaml)"
+        className="h-8 text-xs"
+        aria-label="collector config path"
+      />
+      <Input
+        value={endpoint}
+        onChange={(e) => setEndpoint(e.target.value)}
+        placeholder="Squadron OTLP endpoint (host:port)"
+        className="h-8 text-xs"
+        aria-label="squadron otlp endpoint"
+      />
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="gap-1 text-xs"
+        disabled={!valid || submitting}
+        onClick={onInject}
+      >
+        {submitting ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+        ) : (
+          <Plug className="h-3.5 w-3.5" aria-hidden />
+        )}
+        {submitting ? "Opening PR…" : "Inject OTLP & open PR"}
+      </Button>
+      {error && (
+        <p
+          className="text-[11px] text-destructive"
+          data-testid="otel-inject-error"
+        >
+          Injection failed: {error}
+        </p>
+      )}
+      {result && !result.changed && (
+        <p
+          className="text-[11px] text-muted-foreground"
+          data-testid="otel-inject-result"
+        >
+          {result.message ??
+            "Collector already exports to that endpoint; no PR opened."}
+        </p>
+      )}
+      {result && result.changed && result.pr_url && (
+        <p className="text-[11px]" data-testid="otel-inject-result">
+          <Check className="mr-1 inline h-3 w-3 text-emerald-500" aria-hidden />
+          Opened PR:{" "}
+          <a
+            href={result.pr_url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-primary underline"
+          >
+            {result.pr_url.replace(/^https:\/\/github\.com\//, "")}
+            <ExternalLink className="h-3 w-3" aria-hidden />
+          </a>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ConnectionCard({
   conn,
   onDelete,
@@ -450,6 +558,7 @@ function ConnectionCard({
         <p className="text-xs text-muted-foreground">
           Connected {formatTime(conn.created_at)}
         </p>
+        <OTelInjectAffordance conn={conn} />
         <div className="pt-1">
           <Button
             type="button"
