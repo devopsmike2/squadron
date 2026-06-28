@@ -427,6 +427,10 @@ type ObjectStoreCandidate struct {
 	ResourceID                 string `json:"resource_id"`
 	Region                     string `json:"region"`
 	ServerAccessLoggingEnabled bool   `json:"server_access_logging_enabled"`
+	// Provider routes the proposer to the correct per-cloud lever
+	// (aws=S3 server access logging, gcp=GCS bucket logging, azure=Blob
+	// diagnostic settings, oci=detection-deferred/inventory-only).
+	Provider string `json:"provider,omitempty"`
 }
 
 // LoadBalancerCandidate is one ALB-shaped row from the scan. Mirrors
@@ -449,6 +453,10 @@ type LoadBalancerCandidate struct {
 	AccessLogsEnabled  bool   `json:"access_logs_enabled"`
 	AccessLogsS3Bucket string `json:"access_logs_s3_bucket,omitempty"`
 	Region             string `json:"region"`
+	// Provider routes the proposer to the correct per-cloud lever
+	// (aws=access logs->S3, gcp=backend-service log_config, azure=LB
+	// diagnostic settings, oci=detection-deferred/inventory-only).
+	Provider string `json:"provider,omitempty"`
 }
 
 // ClusterCandidate is one EKS-shaped row from the scan. Mirrors

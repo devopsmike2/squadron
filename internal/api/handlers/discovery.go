@@ -2882,6 +2882,7 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			ResourceID:                 o.ResourceID,
 			Region:                     o.Region,
 			ServerAccessLoggingEnabled: o.ServerAccessLoggingEnabled,
+			Provider:                   "aws",
 		})
 	}
 	for _, l := range req.ScanResult.LoadBalancers {
@@ -2893,6 +2894,7 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			AccessLogsEnabled:  l.AccessLogsEnabled,
 			AccessLogsS3Bucket: l.AccessLogsS3Bucket,
 			Region:             l.Region,
+			Provider:           "aws",
 		})
 	}
 	// Clusters — slice 3b (v0.89.0). The proposer's composite
