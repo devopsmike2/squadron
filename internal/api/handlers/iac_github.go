@@ -21,6 +21,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/iac"
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/iac/hclpatch"
+	"github.com/devopsmike2/squadron/internal/iac/hclsummary"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -1438,6 +1439,26 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 			h.emitPROpenFailed(c.Request.Context(), conn, &req, he, "", 0)
 			c.JSON(statusForGitHubError(ferr), gin.H{"error": he})
 			return
+		}
+		// v0.90 (arc slice 4) dedup: refuse if the snippet re-declares a
+		// resource already present in the placement file — the operator
+		// already instrumented this, and creating the sibling file would
+		// produce a duplicate-resource Terraform error. Best-effort: a
+		// missing/unreadable placement file just skips the check.
+		if pf, pferr := client.GetFileContent(ctx, owner, repo, placement.FilePath, defaultBranch); pferr == nil && pf != nil {
+			if dups := hclsummary.OverlappingResources([]byte(req.Snippet), pf.DecodedContent); len(dups) > 0 {
+				he := &scanner.HumanizedError{
+					Code: "SquadronResourceAlreadyInstrumented",
+					Message: fmt.Sprintf(
+						"%s already declares %s — this resource looks already instrumented. Skipped to avoid a duplicate-resource Terraform error.",
+						placement.FilePath, strings.Join(dups, ", "),
+					),
+					SuggestedStep: "open-pr",
+				}
+				h.emitPROpenFailed(c.Request.Context(), conn, &req, he, "", 0)
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": he})
+				return
+			}
 		}
 		// Leave existingContent / existingFileSHA empty — PUT is a
 		// create.

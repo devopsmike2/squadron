@@ -103,3 +103,24 @@ func TestRenderForPrompt_RespectsByteBudget(t *testing.T) {
 		t.Errorf("expected truncation note under tight budget, got:\n%s", out)
 	}
 }
+
+func TestOverlappingResources(t *testing.T) {
+	existing := []byte(`resource "aws_instance" "this" {}
+resource "aws_ssm_association" "adot_i_123" { name = "x" }
+`)
+	// Snippet re-declares the SAME ssm association → overlap.
+	dupSnippet := []byte(`resource "aws_ssm_association" "adot_i_123" { name = "y" }`)
+	got := OverlappingResources(dupSnippet, existing)
+	if strings.Join(got, ",") != "aws_ssm_association.adot_i_123" {
+		t.Errorf("expected overlap on the ssm association, got %v", got)
+	}
+	// A fresh resource → no overlap.
+	newSnippet := []byte(`resource "aws_ssm_association" "adot_i_999" { name = "z" }`)
+	if got := OverlappingResources(newSnippet, existing); len(got) != 0 {
+		t.Errorf("expected no overlap for a new resource, got %v", got)
+	}
+	// Malformed snippet → no false-positive overlap.
+	if got := OverlappingResources([]byte("not { hcl ==="), existing); len(got) != 0 {
+		t.Errorf("malformed snippet should yield no overlap, got %v", got)
+	}
+}

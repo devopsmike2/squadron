@@ -142,3 +142,34 @@ func renderOne(s FileSummary) string {
 	}
 	return b.String()
 }
+
+// OverlappingResources returns the resource addresses ("type.name")
+// that appear in BOTH the snippet and the existing file. A non-empty
+// result means committing the snippet would declare a resource that
+// already exists — a duplicate that Terraform rejects at plan time.
+// Callers use this to dedup: refuse (or skip) re-adding instrumentation
+// the operator already has.
+//
+// Both inputs are parsed independently; a parse failure on either side
+// yields no overlap (empty result) rather than a false positive — the
+// safe default is "let it through" so a malformed snippet never blocks
+// a legitimate PR on a spurious dedup hit.
+func OverlappingResources(snippet, existing []byte) []string {
+	s := SummarizeFile("snippet.tf", snippet)
+	e := SummarizeFile("existing.tf", existing)
+	if !s.Parsed || !e.Parsed {
+		return nil
+	}
+	have := make(map[string]struct{}, len(e.Resources))
+	for _, r := range e.Resources {
+		have[r] = struct{}{}
+	}
+	var out []string
+	for _, r := range s.Resources {
+		if _, dup := have[r]; dup {
+			out = append(out, r)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

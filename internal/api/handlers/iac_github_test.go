@@ -1368,3 +1368,42 @@ func TestHandleIaCGitHubSetupValidation_AlreadyConfigured(t *testing.T) {
 		t.Errorf("no PUT expected when already configured, got %d", len(mc.putFileCalls))
 	}
 }
+
+// TestHandleIaCGitHubOpenPR_NewFile_DedupRefusesWhenResourceExists covers
+// slice 4 dedup: when the placement file already declares the resource
+// the snippet would create, the handler refuses (422
+// SquadronResourceAlreadyInstrumented) instead of opening a PR that
+// would produce a duplicate-resource Terraform error.
+func TestHandleIaCGitHubOpenPR_NewFile_DedupRefusesWhenResourceExists(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tip",
+		fileResp: map[string]*iacgithub.FileContent{
+			// The placement file already has the resource the snippet adds.
+			"modules/s3/main.tf": {
+				Path:           "modules/s3/main.tf",
+				DecodedContent: []byte("resource \"aws_s3_bucket_logging\" \"example\" {\n  bucket = \"x\"\n}\n"),
+			},
+		},
+		openPRResp: &iacgithub.PullRequest{Number: 1, HTMLURL: "https://github.com/octo/widgets/pull/1"},
+	}
+	h, _ := newTestIaCHandlers(t, mc, &discoveryRecordingAudit{})
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"s3-access-logging","file_path":"modules/s3/main.tf"}`)
+	body := `{
+		"scan_id": "s1", "step_idx": 0, "resource_kind": "s3-access-logging",
+		"snippet": "resource \"aws_s3_bucket_logging\" \"example\" {\n  bucket = aws_s3_bucket.example.id\n}",
+		"proposer_reasoning": "r", "affected_resources": ["b"], "account_id": "111111111111"
+	}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/open-pr", openPRRegisterFor(h), body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "SquadronResourceAlreadyInstrumented") {
+		t.Errorf("expected dedup refusal code; got %s", w.Body.String())
+	}
+	if len(mc.putFileCalls) != 0 {
+		t.Errorf("no PUT expected on dedup refusal, got %d", len(mc.putFileCalls))
+	}
+}
