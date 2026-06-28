@@ -233,6 +233,12 @@ export interface IaCGitHubOpenPRRequest {
   proposer_reasoning: string;
   affected_resources: string[];
   account_id?: string;
+  /** v0.90 — when true, Squadron strips ALL comments from the
+   * committed Terraform (its own header banner + the proposer's
+   * inline explanations) so the change is comment-free. Default
+   * false keeps the explanatory comments. The PR body (rationale)
+   * is never stripped. */
+  exclude_comments?: boolean;
   /** v0.89.12 #628 Stream 29 (slice 2) — structured HCL patch for
    * patch_existing kinds. When present, the backend's HCL-aware
    * merger applies the per-attribute edits in place and the PR

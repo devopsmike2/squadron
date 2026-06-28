@@ -2927,6 +2927,9 @@ export function DiscoveryRecommendationCard({
   const [iacOpen, setIacOpen] = useState(true);
   const [copied, setCopied] = useState(false);
   const [opening, setOpening] = useState(false);
+  // v0.90 — operator opt-in to strip all comments from the committed
+  // Terraform (Squadron's header banner + the proposer's inline notes).
+  const [excludeComments, setExcludeComments] = useState(false);
   const [openPRResult, setOpenPRResult] =
     useState<IaCGitHubOpenPRResponse | null>(null);
   const [openPRError, setOpenPRError] = useState<IaCGitHubOpenPRError | null>(
@@ -3000,6 +3003,8 @@ export function DiscoveryRecommendationCard({
         // append-only path stays in effect — no UI-side branching
         // needed.
         hcl_patch: rec.hcl_patch,
+        // v0.90 — forward the operator's comment-exclusion choice.
+        exclude_comments: excludeComments,
       });
       setOpenPRResult(res);
     } catch (e) {
@@ -3044,6 +3049,7 @@ export function DiscoveryRecommendationCard({
     proposerReasoning,
     accountID,
     opening,
+    excludeComments,
   ]);
 
   // v0.89.7b (#619 Stream 23) — account badge rendered only in
@@ -3251,6 +3257,23 @@ export function DiscoveryRecommendationCard({
                       )}
                       {opening ? "Opening PR…" : "Open PR"}
                     </Button>
+                  )}
+                  {openPREligible && (
+                    <label
+                      className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground"
+                      title="Strip Squadron's header banner and the proposer's inline comments from the committed Terraform. The rationale stays in the PR description."
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5"
+                        checked={excludeComments}
+                        onChange={(e) => setExcludeComments(e.target.checked)}
+                        disabled={opening}
+                        aria-label="Exclude comments from the committed Terraform"
+                        data-testid="iac-exclude-comments"
+                      />
+                      Exclude comments
+                    </label>
                   )}
                   {/* v0.89.11 (#626 Stream 27) — slice-1.5 hybrid PR
                       disposition. For patch_existing kinds (Lambda OTel
