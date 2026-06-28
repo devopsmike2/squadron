@@ -72,3 +72,78 @@ func awsScanToImportResources(sr awsScanResponse) []tfimport.Resource {
 	}
 	return resources
 }
+
+// computeSnapshotsToImportResources maps the canonical ComputeInstanceSnapshot
+// list (shared by the Azure/GCP/OCI scan responses) onto tfimport.Resource,
+// carrying the scanner-captured ImportID + OSFamily so the multi-cloud
+// mappers can emit correct import blocks.
+func computeSnapshotsToImportResources(provider string, comp []scanner.ComputeInstanceSnapshot) []tfimport.Resource {
+	out := make([]tfimport.Resource, 0, len(comp))
+	for _, c := range comp {
+		out = append(out, tfimport.Resource{
+			Provider:   provider,
+			Category:   "compute",
+			ResourceID: c.ResourceID,
+			// Name drives the generated TF address label; use the
+			// operator-readable name so addresses read imported_<name>
+			// rather than the long canonical ImportID.
+			Name:     c.ResourceID,
+			ImportID: c.ImportID,
+			OSFamily: c.OSFamily,
+			Region:   c.Region,
+		})
+	}
+	return out
+}
+
+// renderImportResponse runs the generator + writes the standard response.
+func renderImportResponse(c *gin.Context, resources []tfimport.Resource) {
+	blocks, skipped := tfimport.Generate(resources)
+	c.JSON(http.StatusOK, awsTerraformImportResponse{
+		Terraform:  tfimport.Render(blocks, skipped),
+		BlockCount: len(blocks),
+		Skipped:    skipped,
+	})
+}
+
+// HandleAzureGenerateTerraformImport — env->TF slice 3c preview for Azure.
+func (h *DiscoveryHandlers) HandleAzureGenerateTerraformImport(c *gin.Context) {
+	var req azureGenerateRecommendationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Message: "Request body could not be parsed as JSON."}})
+		return
+	}
+	if req.ScanResult.SubscriptionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Code: "MissingSubscriptionID", Message: "scan_result.subscription_id is required."}})
+		return
+	}
+	renderImportResponse(c, computeSnapshotsToImportResources("azure", req.ScanResult.Compute))
+}
+
+// HandleGCPGenerateTerraformImport — env->TF slice 3c preview for GCP.
+func (h *DiscoveryHandlers) HandleGCPGenerateTerraformImport(c *gin.Context) {
+	var req gcpGenerateRecommendationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Message: "Request body could not be parsed as JSON."}})
+		return
+	}
+	if req.ScanResult.ProjectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Code: "MissingProjectID", Message: "scan_result.project_id is required."}})
+		return
+	}
+	renderImportResponse(c, computeSnapshotsToImportResources("gcp", req.ScanResult.Compute))
+}
+
+// HandleOCIGenerateTerraformImport — env->TF slice 3c preview for OCI.
+func (h *DiscoveryHandlers) HandleOCIGenerateTerraformImport(c *gin.Context) {
+	var req ociGenerateRecommendationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Message: "Request body could not be parsed as JSON."}})
+		return
+	}
+	if req.ScanResult.TenancyOCID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Code: "MissingTenancyOCID", Message: "scan_result.tenancy_ocid is required."}})
+		return
+	}
+	renderImportResponse(c, computeSnapshotsToImportResources("oci", req.ScanResult.Compute))
+}
