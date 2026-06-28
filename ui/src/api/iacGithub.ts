@@ -471,3 +471,37 @@ export function openIaCGitHubTerraformImportPR(
     { provider, scan_result: scanResult },
   );
 }
+
+// OTel collector config-injection PR delivery (OTEL-agent arc slice 3).
+// Injects an otlp/squadron exporter into the collector config at
+// config_path in the connected repo and opens a PR. Idempotent: when the
+// config already exports to the endpoint, changed=false / already_wired
+// and no PR is opened.
+export interface IaCGitHubOTelInjectPRRequest {
+  config_path: string;
+  endpoint: string;
+  protocol?: "grpc" | "http";
+  insecure?: boolean;
+  signals?: string[];
+}
+
+export interface IaCGitHubOTelInjectPRResponse {
+  changed: boolean;
+  pr_number?: number;
+  pr_url?: string;
+  branch?: string;
+  file_path?: string;
+  summary?: string;
+  already_wired?: boolean;
+  message?: string;
+}
+
+export function openIaCGitHubOTelInjectPR(
+  connectionID: string,
+  req: IaCGitHubOTelInjectPRRequest,
+): Promise<IaCGitHubOTelInjectPRResponse> {
+  return apiPost<IaCGitHubOTelInjectPRResponse>(
+    `/iac/github/connections/${encodeURIComponent(connectionID)}/otel-inject-pr`,
+    req,
+  );
+}

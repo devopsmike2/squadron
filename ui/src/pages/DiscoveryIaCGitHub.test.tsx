@@ -21,6 +21,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { SWRConfig } from "swr";
@@ -31,6 +32,7 @@ import DiscoveryIaCGitHubPage from "./DiscoveryIaCGitHub";
 import {
   deleteIaCGitHubConnection,
   listIaCGitHubConnections,
+  openIaCGitHubOTelInjectPR,
   type IaCGitHubConnection,
 } from "@/api/iacGithub";
 
@@ -55,11 +57,13 @@ vi.mock("@/api/iacGithub", async () => {
     deleteIaCGitHubConnection: vi.fn(),
     validateIaCGitHub: vi.fn(),
     saveIaCGitHubConnection: vi.fn(),
+    openIaCGitHubOTelInjectPR: vi.fn(),
   };
 });
 
 const mockedList = vi.mocked(listIaCGitHubConnections);
 const mockedDelete = vi.mocked(deleteIaCGitHubConnection);
+const mockedOTelInject = vi.mocked(openIaCGitHubOTelInjectPR);
 
 function renderPage(initialEntries: string[] = ["/discovery/iac/github"]) {
   function Wrapper({ children }: { children: ReactNode }) {
@@ -188,6 +192,47 @@ describe("DiscoveryIaCGitHubPage", () => {
     await waitFor(() => {
       expect(mockedDelete).toHaveBeenCalledWith("conn-1");
     });
+  });
+
+  it("inject OTLP affordance opens a PR and shows the link", async () => {
+    const user = userEvent.setup();
+    mockedList.mockResolvedValue({ connections: sampleConnections });
+    mockedOTelInject.mockResolvedValue({
+      changed: true,
+      pr_number: 7,
+      pr_url: "https://github.com/octo/infra/pull/7",
+      file_path: "modules/standalone-collector/collector.yaml",
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("octo/infra")).toBeInTheDocument();
+    });
+
+    // First connection card's affordance inputs.
+    const pathInputs = screen.getAllByLabelText(/collector config path/i);
+    const endpointInputs = screen.getAllByLabelText(/squadron otlp endpoint/i);
+    await user.type(
+      pathInputs[0],
+      "modules/standalone-collector/collector.yaml",
+    );
+    await user.type(endpointInputs[0], "squadron:4317");
+
+    const buttons = screen.getAllByRole("button", {
+      name: /Inject OTLP & open PR/i,
+    });
+    await user.click(buttons[0]);
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId("otel-inject-result").length,
+      ).toBeGreaterThan(0);
+    });
+    expect(mockedOTelInject).toHaveBeenCalledWith("conn-1", {
+      config_path: "modules/standalone-collector/collector.yaml",
+      endpoint: "squadron:4317",
+      insecure: true,
+    });
+    expect(screen.getByText(/octo\/infra\/pull\/7/)).toBeInTheDocument();
   });
 
   // --- v0.89.4 #610 deep-link coverage --------------------------------
