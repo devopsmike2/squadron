@@ -31,6 +31,7 @@ import type {
   RecommendationJobAccepted,
 } from "./discovery";
 import type { AWSTerraformImportResponse } from "./discovery";
+import type { LoadBalancerSnapshot, ObjectStoreSnapshot } from "./discovery";
 
 // --- Storage type --------------------------------------------------
 
@@ -327,6 +328,8 @@ export interface ScanOCIResponse {
   computes: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
+  object_stores?: ObjectStoreSnapshot[];
+  load_balancers?: LoadBalancerSnapshot[];
   // serverless — serverless tier slice 1 chunk 5 (v0.89.92, #725
   // Stream 123). OCI Functions inventory from the chunk 4 OCI
   // scanner extension. Optional on the wire.
@@ -358,6 +361,8 @@ interface scanOCIConnectionWireResponse {
   compute: ComputeInstanceSnapshot[];
   databases?: DatabaseInstanceSnapshot[];
   clusters?: ClusterSnapshot[];
+  object_stores?: ObjectStoreSnapshot[];
+  load_balancers?: LoadBalancerSnapshot[];
   serverless?: ServerlessRow[];
   orchestrations?: OrchestrationRow[];
   event_sources?: EventSourceRow[];
@@ -387,6 +392,8 @@ export async function scanOCIConnection(id: string): Promise<ScanOCIResponse> {
     computes,
     databases: wire.databases,
     clusters: wire.clusters,
+    object_stores: wire.object_stores,
+    load_balancers: wire.load_balancers,
     serverless: wire.serverless,
     orchestrations: wire.orchestrations,
     event_sources: wire.event_sources,

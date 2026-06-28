@@ -65,6 +65,10 @@ import {
   type ValidateGCPResponse,
 } from "@/api/discoveryGCP";
 import { openIaCGitHubTerraformImportPR } from "@/api/iacGithub";
+import {
+  LoadBalancersTable,
+  ObjectStoresTable,
+} from "@/components/discovery/InventoryTierTables";
 import { TerraformAdoptCard } from "@/components/discovery/TerraformAdoptCard";
 import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
@@ -144,6 +148,8 @@ const INVENTORY_SUBTAB_ORCHESTRATION = "orchestration";
 // Event source tier slice 1 chunk 5 (v0.89.102, #738 Stream 136) — all
 // 4 providers (including OCI) render this sub-tab unconditionally.
 const INVENTORY_SUBTAB_EVENT_SOURCES = "event_sources";
+const INVENTORY_SUBTAB_OBJECT_STORES = "object_stores";
+const INVENTORY_SUBTAB_LOAD_BALANCERS = "load_balancers";
 
 // SWR_KEY_CONNECTIONS is the shared cache key the page reads and the
 // wizard's onSave mutate() targets.
@@ -1105,6 +1111,12 @@ function InventoryTab({
           <TabsTrigger value={INVENTORY_SUBTAB_SERVERLESS}>
             Serverless
           </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_OBJECT_STORES}>
+            Object stores
+          </TabsTrigger>
+          <TabsTrigger value={INVENTORY_SUBTAB_LOAD_BALANCERS}>
+            Load balancers
+          </TabsTrigger>
           <TabsTrigger value={INVENTORY_SUBTAB_ORCHESTRATION}>
             Orchestration
           </TabsTrigger>
@@ -1123,6 +1135,12 @@ function InventoryTab({
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_SERVERLESS} className="mt-3">
           <ServerlessInventoryTable rows={scan.serverless ?? []} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_OBJECT_STORES} className="mt-3">
+          <ObjectStoresTable rows={scan.object_stores} />
+        </TabsContent>
+        <TabsContent value={INVENTORY_SUBTAB_LOAD_BALANCERS} className="mt-3">
+          <LoadBalancersTable rows={scan.load_balancers} />
         </TabsContent>
         <TabsContent value={INVENTORY_SUBTAB_ORCHESTRATION} className="mt-3">
           <OrchestrationInventoryTable rows={scan.orchestrations ?? []} />
