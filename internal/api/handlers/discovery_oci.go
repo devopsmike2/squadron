@@ -877,6 +877,8 @@ type ociScanResponse struct {
 	Compute             []scanner.ComputeInstanceSnapshot  `json:"compute"`
 	Databases           []scanner.DatabaseInstanceSnapshot `json:"databases,omitempty"`
 	Clusters            []scanner.ClusterSnapshot          `json:"clusters,omitempty"`
+	ObjectStores        []scanner.ObjectStoreSnapshot      `json:"object_stores,omitempty"`
+	LoadBalancers       []scanner.LoadBalancerSnapshot     `json:"load_balancers,omitempty"`
 	InstrumentedCount   int                                `json:"instrumented_count"`
 	UninstrumentedCount int                                `json:"uninstrumented_count"`
 	Partial             bool                               `json:"partial"`
@@ -966,6 +968,8 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 			Compute:             r.Compute,
 			Databases:           r.Databases,
 			Clusters:            r.Clusters,
+			ObjectStores:        r.ObjectStores,
+			LoadBalancers:       r.LoadBalancers,
 			InstrumentedCount:   instr,
 			UninstrumentedCount: uninstr,
 			Partial:             false,
@@ -1140,6 +1144,8 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		Compute:             result.Compute,
 		Databases:           result.Databases,
 		Clusters:            result.Clusters,
+		ObjectStores:        result.ObjectStores,
+		LoadBalancers:       result.LoadBalancers,
 		InstrumentedCount:   instrumentedCount,
 		UninstrumentedCount: uninstrumentedCount,
 		Partial:             result.Partial,
