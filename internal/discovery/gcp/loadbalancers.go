@@ -1,0 +1,101 @@
+// Copyright (c) 2024 Squadron Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package gcp
+
+// Load-balancer tier — Cloud Load Balancing walk. Coverage-parity arc
+// slice 2. A Cloud Load Balancing config's access-logging unit is the
+// backend service (LogConfig.Enable); we list backend services across
+// all scopes (global + regional) via the aggregated list and project
+// each into scanner.LoadBalancerSnapshot. Instrumented axis mirrors the
+// AWS ALB AccessLogsEnabled axis.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+
+	compute "google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
+
+	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+)
+
+// ServiceIDGCLB is the load-balancer-tier service identifier reported
+// against Result.FailedServices on a non-fatal Cloud Load Balancing
+// error. compute.readonly (already in the scope union) covers the
+// aggregated backend-service list, so no new OAuth scope is needed.
+const ServiceIDGCLB = "gclb"
+
+// walkLoadBalancers lists backend services (the access-logging unit of a
+// Cloud Load Balancing config), projects each into a
+// scanner.LoadBalancerSnapshot, and appends to result.LoadBalancers.
+func (s *Scanner) walkLoadBalancers(ctx context.Context, client *compute.Service, result *scanner.Result) error {
+	return client.BackendServices.AggregatedList(s.ProjectID).Pages(ctx, func(page *compute.BackendServiceAggregatedList) error {
+		for scope, scoped := range page.Items {
+			region := regionFromAggregatedScope(scope)
+			for _, bs := range scoped.BackendServices {
+				if bs == nil {
+					continue
+				}
+				snap := scanner.LoadBalancerSnapshot{
+					ResourceID: bs.SelfLink,
+					Name:       bs.Name,
+					Type:       bs.LoadBalancingScheme,
+					Scheme:     gclbScheme(bs.LoadBalancingScheme),
+					Region:     region,
+				}
+				if snap.ResourceID == "" {
+					snap.ResourceID = bs.Name
+				}
+				if bs.LogConfig != nil && bs.LogConfig.Enable {
+					snap.AccessLogsEnabled = true
+				}
+				result.LoadBalancers = append(result.LoadBalancers, snap)
+			}
+		}
+		return nil
+	})
+}
+
+// gclbScheme maps a GCP loadBalancingScheme onto the AWS-style
+// internet-facing/internal vocabulary the proposer reasons about.
+func gclbScheme(scheme string) string {
+	switch {
+	case strings.HasPrefix(scheme, "INTERNAL"):
+		return "internal"
+	case strings.HasPrefix(scheme, "EXTERNAL"):
+		return "internet-facing"
+	}
+	return strings.ToLower(scheme)
+}
+
+// regionFromAggregatedScope turns an aggregated-list scope key
+// ("global" or "regions/us-central1") into a bare region string.
+func regionFromAggregatedScope(scope string) string {
+	if scope == "" || scope == "global" {
+		return "global"
+	}
+	if i := strings.LastIndex(scope, "/"); i >= 0 {
+		return scope[i+1:]
+	}
+	return scope
+}
+
+func classifyGCLBListError(err error) string {
+	var ge *googleapi.Error
+	if errors.As(err, &ge) {
+		switch ge.Code {
+		case http.StatusForbidden, http.StatusUnauthorized:
+			return fmt.Sprintf("%s: permission denied (grant the service account roles/compute.viewer)", ServiceIDGCLB)
+		case http.StatusNotFound:
+			return fmt.Sprintf("%s: project not found (verify project_id is correct)", ServiceIDGCLB)
+		case http.StatusTooManyRequests:
+			return fmt.Sprintf("%s: rate limit exceeded mid-scan", ServiceIDGCLB)
+		}
+		return fmt.Sprintf("%s: backend-service list failed (HTTP %d): %s", ServiceIDGCLB, ge.Code, truncate(ge.Message, 200))
+	}
+	return fmt.Sprintf("%s: network error: %s", ServiceIDGCLB, truncate(err.Error(), 200))
+}
