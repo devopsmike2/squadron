@@ -45,6 +45,10 @@ services:
       # 32 bytes — `head -c 32 /dev/urandom | base64`) to supply your
       # own key or share one across replicas.
       - SQUADRON_SECRETS_KEY=${SQUADRON_SECRETS_KEY:-}
+      # GitHub webhook HMAC secret for the IaC PR-merged/closed listener.
+      # Required (non-empty) for the /api/v1/webhooks/github route to accept
+      # deliveries — even when per-connection secrets are configured.
+      - SQUADRON_GITHUB_WEBHOOK_SECRET=${SQUADRON_GITHUB_WEBHOOK_SECRET:-}
       # AWS credentials (optional): the base identity discovery uses to
       # assume the SquadronDiscovery role in a connected account. Leave
       # unset until you connect an AWS account.
