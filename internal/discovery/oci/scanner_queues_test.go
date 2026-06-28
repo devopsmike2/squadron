@@ -86,6 +86,11 @@ func (f *fakeOCIQueues) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(queues)
 			return
 
+		case strings.HasSuffix(r.URL.Path, "/logGroups"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(fakeLogGroupList())
+			return
+
 		case strings.HasSuffix(r.URL.Path, "/logs"):
 			if f.LogsStatus != 0 {
 				w.Header().Set("Content-Type", "application/json")
@@ -93,13 +98,8 @@ func (f *fakeOCIQueues) handler() http.Handler {
 				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: "MockError", Message: "mock"})
 				return
 			}
-			searchTerm := r.URL.Query().Get("searchTerm")
-			logs := f.LogsByQueue[searchTerm]
-			if logs == nil {
-				logs = []ociLogResource{}
-			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(logs)
+			_ = json.NewEncoder(w).Encode(flattenFakeLogs(f.LogsByQueue))
 			return
 		}
 
@@ -312,6 +312,11 @@ func (f *fakeOCITriEventSources) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(f.QueuesByCompartment[compartmentID])
 			return
 
+		case strings.HasSuffix(r.URL.Path, "/logGroups"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(fakeLogGroupList())
+			return
+
 		case strings.HasSuffix(r.URL.Path, "/logs"):
 			if f.LogsStatus != 0 {
 				w.Header().Set("Content-Type", "application/json")
@@ -319,9 +324,8 @@ func (f *fakeOCITriEventSources) handler() http.Handler {
 				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: "MockError", Message: "mock"})
 				return
 			}
-			searchTerm := r.URL.Query().Get("searchTerm")
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(f.LogsByResource[searchTerm])
+			_ = json.NewEncoder(w).Encode(flattenFakeLogs(f.LogsByResource))
 			return
 		}
 

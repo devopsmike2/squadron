@@ -128,24 +128,37 @@ func (f *fakeOCIResourceManager) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(stacks)
 			return
 
-		case strings.HasSuffix(r.URL.Path, "/logs"):
+		case strings.HasSuffix(r.URL.Path, "/logGroups"):
 			f.LogsCalls++
 			compartmentID := r.URL.Query().Get("compartmentId")
-
 			if f.LogsFailureForCompartment != "" && compartmentID == f.LogsFailureForCompartment {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)
 				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: "Throttled", Message: "throttle"})
 				return
 			}
-
 			if f.LogsStatus != 0 {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(f.LogsStatus)
 				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: "MockError", Message: "mock"})
 				return
 			}
+			// Encode the compartment in the synthetic group id so the
+			// per-group /logs call can return that compartment's logs.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]ociLogGroupRef{{ID: "lg::" + compartmentID}})
+			return
 
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			parts := strings.Split(r.URL.Path, "/")
+			groupID := ""
+			for i, seg := range parts {
+				if seg == "logGroups" && i+1 < len(parts) {
+					groupID = parts[i+1]
+					break
+				}
+			}
+			compartmentID := strings.TrimPrefix(groupID, "lg::")
 			logs := f.LogsByCompartment[compartmentID]
 			if logs == nil {
 				logs = []resourceManagerLogResource{}
