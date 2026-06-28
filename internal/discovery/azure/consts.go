@@ -142,3 +142,15 @@ const aksProvisioningSucceeded = "Succeeded"
 // ClusterSnapshot.Status so the Inventory tab and the proposer's
 // non-active-skip branch see provider-consistent values.
 const aksStatusRunning = "RUNNING"
+
+// Coverage-parity arc slice 3 — object-store + load-balancer tiers.
+const (
+	// ServiceIDAzureStorage is the object-store-tier service id.
+	ServiceIDAzureStorage = "azurestorage"
+	// ServiceIDAzureLB is the load-balancer-tier service id.
+	ServiceIDAzureLB = "azurelb"
+	// armStorageAPIVersion pins Microsoft.Storage/storageAccounts.
+	armStorageAPIVersion = "2023-01-01"
+	// armNetworkAPIVersion pins Microsoft.Network/loadBalancers.
+	armNetworkAPIVersion = "2023-09-01"
+)
