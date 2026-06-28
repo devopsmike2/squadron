@@ -39,6 +39,9 @@ services:
       - ./squadron.yaml:/app/squadron.yaml
       # Persist data directory
       - squadron-data:/app/data
+      # Host AWS shared creds (read-only) so discovery's base identity
+      # can assume the connected account's role via AWS_PROFILE below.
+      - ${HOME}/.aws:/root/.aws:ro
       # Persist go build cache for faster rebuilds
       - go-build-cache:/root/.cache/go-build
       - go-mod-cache:/go/pkg/mod
@@ -63,10 +66,12 @@ services:
       # only when you want to supply your own key or share one across
       # replicas:
       - SQUADRON_SECRETS_KEY=${SQUADRON_SECRETS_KEY:-}
+      - SQUADRON_GITHUB_WEBHOOK_SECRET=${SQUADRON_GITHUB_WEBHOOK_SECRET:-}
       # AWS credentials for discovery's assume-role into a connected
       # account (the base identity that assumes the SquadronDiscovery
       # role). Passed through from your shell / .env when set; leave
       # unset if you're not connecting an AWS account yet.
+      - AWS_PROFILE=${AWS_PROFILE:-}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
