@@ -41,7 +41,7 @@ import {
   Loader2,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import useSWR from "swr";
 
 import { RecommendationsTab as AWSRecommendationsTab } from "./DiscoveryAWS";
@@ -362,6 +362,10 @@ function AzureWizard({ onComplete }: AzureWizardProps) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createdConnection, setCreatedConnection] =
     useState<AzureConnection | null>(null);
+  // Signature of the create payload used to seal the current
+  // createdConnection. Lets handleValidate re-create when the operator
+  // edits any credential field, even if validateResult was cleared.
+  const createdConnectionSig = useRef<string | null>(null);
   const [validateResult, setValidateResult] =
     useState<ValidateAzureResponse | null>(null);
   const [scanResult, setScanResult] = useState<ScanAzureResponse | null>(null);
@@ -460,17 +464,33 @@ function AzureWizard({ onComplete }: AzureWizardProps) {
       // credentials_invalid remediation loop is a dead end). Failed rows
       // are left in place, matching the existing don't-delete-on-failure
       // posture.
+      const createReq = {
+        display_name: displayName.trim(),
+        tenant_id: tenantID.trim(),
+        subscription_id: subscriptionID.trim(),
+        client_id: clientID.trim(),
+        sealed_secret: encodeClientSecretForWire(clientSecret),
+        location: location.trim(),
+      };
+      // Re-create the connection when there is none yet, the prior
+      // validate failed, OR the credential fields changed since the
+      // connection was created. The signature comparison is the robust
+      // guard: validateResult?.ok === false alone is fragile because it
+      // can be cleared (e.g. by step navigation) while createdConnection
+      // persists, silently re-testing a stale connection and trapping
+      // the operator in a credentials_invalid dead end even after they
+      // paste a corrected key. (Failed rows are left in place, matching
+      // the don't-delete-on-failure posture.)
+      const createSig = JSON.stringify(createReq);
       let conn = createdConnection;
-      if (!conn || validateResult?.ok === false) {
-        conn = await createAzureConnection({
-          display_name: displayName.trim(),
-          tenant_id: tenantID.trim(),
-          subscription_id: subscriptionID.trim(),
-          client_id: clientID.trim(),
-          sealed_secret: encodeClientSecretForWire(clientSecret),
-          location: location.trim(),
-        });
+      if (
+        !conn ||
+        validateResult?.ok === false ||
+        createdConnectionSig.current !== createSig
+      ) {
+        conn = await createAzureConnection(createReq);
         setCreatedConnection(conn);
+        createdConnectionSig.current = createSig;
       }
       const v = await validateAzureConnection(conn.id);
       setValidateResult(v);
