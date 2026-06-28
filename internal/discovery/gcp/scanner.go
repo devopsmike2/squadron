@@ -326,6 +326,13 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		recordPartialFailure(&result, ServiceIDGCS, classifyGCSListError(werr))
 	}
 
+	// Load balancers (coverage-parity arc slice 2). Reuses the compute
+	// client; backend services are the access-logging unit of Cloud Load
+	// Balancing. A list failure is partial, non-fatal.
+	if lbErr := s.walkLoadBalancers(ctx, client, &result); lbErr != nil {
+		recordPartialFailure(&result, ServiceIDGCLB, classifyGCLBListError(lbErr))
+	}
+
 	// Cold-start latency slice 2 chunk 1 (v0.89.118, #756 Stream 154)
 	// — per-row cold-start detection for the Cloud Run +
 	// Cloud Functions snapshots ScanServerless populated. Mirrors the
@@ -411,6 +418,15 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// logging is configured (ServerAccessLoggingEnabled), mirroring S3.
 	for _, o := range result.ObjectStores {
 		if o.ServerAccessLoggingEnabled {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Load balancers: instrumented when access logging is enabled,
+	// mirroring the ALB AccessLogsEnabled axis.
+	for _, lb := range result.LoadBalancers {
+		if lb.AccessLogsEnabled {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++

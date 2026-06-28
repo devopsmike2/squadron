@@ -54,6 +54,14 @@ type fakeGCP struct {
 	// BucketsListStatus, when non-zero, makes buckets.list return it.
 	BucketsListStatus int
 
+	// BackendServicesByScope maps aggregated-list scope key
+	// ("global" / "regions/us-central1") -> backend services, served by
+	// the aggregated backendServices endpoint (load-balancer tier).
+	BackendServicesByScope map[string][]*compute.BackendService
+	// BackendServicesListStatus, when non-zero, makes the aggregated
+	// backendServices list return it.
+	BackendServicesListStatus int
+
 	// InstancesByZone maps zone name → instances list response. The
 	// mock returns an empty list when a zone isn't seeded.
 	InstancesByZone map[string][]*compute.Instance
@@ -316,6 +324,20 @@ func (f *fakeGCP) handler() http.Handler {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
+			return
+		case strings.HasSuffix(path, "/aggregated/backendServices"):
+			// Cloud Load Balancing: aggregated backend-service list.
+			// handler() already holds f.mu.
+			if f.BackendServicesListStatus != 0 {
+				writeAPIError(w, f.BackendServicesListStatus, statusReason(f.BackendServicesListStatus), statusName(f.BackendServicesListStatus))
+				return
+			}
+			items := map[string]compute.BackendServicesScopedList{}
+			for scope, list := range f.BackendServicesByScope {
+				items[scope] = compute.BackendServicesScopedList{BackendServices: list}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(compute.BackendServiceAggregatedList{Items: items})
 			return
 		case strings.HasSuffix(path, "/b"):
 			// GCS Buckets.List path shape: {base}/b?project=...
@@ -1661,4 +1683,69 @@ func TestScan_GCSListError_PartialNotFatal(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "gcs should be in FailedServices: %v", result.FailedServices)
+}
+
+// TestScan_GCPLoadBalancers covers the load-balancer tier (coverage-
+// parity arc slice 2): backend services project into
+// LoadBalancerSnapshot, and one with access logging (LogConfig.Enable)
+// counts as instrumented; scheme maps onto internet-facing/internal.
+func TestScan_GCPLoadBalancers(t *testing.T) {
+	fake := newFakeGCP()
+	fake.BackendServicesByScope = map[string][]*compute.BackendService{
+		"global": {
+			{
+				Name:                "ext-logged-lb",
+				SelfLink:            "https://www.googleapis.com/compute/v1/projects/p/global/backendServices/ext-logged-lb",
+				LoadBalancingScheme: "EXTERNAL_MANAGED",
+				LogConfig:           &compute.BackendServiceLogConfig{Enable: true},
+			},
+		},
+		"regions/us-central1": {
+			{
+				Name:                "int-nolog-lb",
+				SelfLink:            "https://www.googleapis.com/compute/v1/projects/p/regions/us-central1/backendServices/int-nolog-lb",
+				LoadBalancingScheme: "INTERNAL_MANAGED",
+			},
+		},
+	}
+	s := newScannerWithFake(t, fake, "proj", "")
+	result, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result.LoadBalancers, 2)
+
+	var sawExt, sawInt bool
+	for _, lb := range result.LoadBalancers {
+		switch lb.Name {
+		case "ext-logged-lb":
+			sawExt = true
+			assert.True(t, lb.AccessLogsEnabled)
+			assert.Equal(t, "internet-facing", lb.Scheme)
+			assert.Equal(t, "global", lb.Region)
+		case "int-nolog-lb":
+			sawInt = true
+			assert.False(t, lb.AccessLogsEnabled)
+			assert.Equal(t, "internal", lb.Scheme)
+			assert.Equal(t, "us-central1", lb.Region)
+		}
+	}
+	assert.True(t, sawExt && sawInt, "both backend services should be present")
+	assert.GreaterOrEqual(t, result.InstrumentedCount, 1)
+}
+
+// TestScan_GCLBListError_PartialNotFatal confirms an aggregated
+// backend-service list failure is partial, non-fatal (gclb).
+func TestScan_GCLBListError_PartialNotFatal(t *testing.T) {
+	fake := newFakeGCP()
+	fake.BackendServicesListStatus = http.StatusForbidden
+	s := newScannerWithFake(t, fake, "proj", "")
+	result, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Partial)
+	found := false
+	for _, fs := range result.FailedServices {
+		if fs == ServiceIDGCLB {
+			found = true
+		}
+	}
+	assert.True(t, found, "gclb should be in FailedServices: %v", result.FailedServices)
 }
