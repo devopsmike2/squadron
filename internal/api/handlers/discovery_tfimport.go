@@ -42,6 +42,18 @@ func (h *DiscoveryHandlers) HandleAWSGenerateTerraformImport(c *gin.Context) {
 		return
 	}
 
+	blocks, skipped := tfimport.Generate(awsScanToImportResources(sr))
+	c.JSON(http.StatusOK, awsTerraformImportResponse{
+		Terraform:  tfimport.Render(blocks, skipped),
+		BlockCount: len(blocks),
+		Skipped:    skipped,
+	})
+}
+
+// awsScanToImportResources maps an AWS scan response onto the
+// provider-agnostic tfimport.Resource shape (shared by the preview
+// endpoint and the import-PR endpoint).
+func awsScanToImportResources(sr awsScanResponse) []tfimport.Resource {
 	var resources []tfimport.Resource
 	for _, r := range sr.Compute {
 		resources = append(resources, tfimport.Resource{Provider: "aws", Category: "compute", ResourceID: r.ResourceID, Region: r.Region})
@@ -58,11 +70,5 @@ func (h *DiscoveryHandlers) HandleAWSGenerateTerraformImport(c *gin.Context) {
 	for _, r := range sr.LoadBalancers {
 		resources = append(resources, tfimport.Resource{Provider: "aws", Category: "load_balancer", ResourceID: r.ResourceID, Name: r.Name, Region: r.Region})
 	}
-
-	blocks, skipped := tfimport.Generate(resources)
-	c.JSON(http.StatusOK, awsTerraformImportResponse{
-		Terraform:  tfimport.Render(blocks, skipped),
-		BlockCount: len(blocks),
-		Skipped:    skipped,
-	})
+	return resources
 }

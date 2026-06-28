@@ -24,7 +24,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/zclconf/go-cty/cty"
 )
+
+var ctyString = cty.String
+
+// quote renders a Go string as a double-quoted HCL string literal.
+func quote(s string) string { return fmt.Sprintf("%q", s) }
 
 // Resource is the minimal, provider-agnostic shape the generator needs.
 // Callers (the discovery handlers) map scan rows onto this.
@@ -205,14 +212,6 @@ func Render(blocks []ImportBlock, skipped []Skipped) string {
 		fmt.Fprintf(&b, "# Note: %d scanned resource(s) were skipped (no safe import mapping yet).\n", len(skipped))
 	}
 	b.WriteString("\n")
-	for _, blk := range blocks {
-		if blk.Region != "" {
-			fmt.Fprintf(&b, "# region: %s\n", blk.Region)
-		}
-		b.WriteString("import {\n")
-		fmt.Fprintf(&b, "  to = %s\n", blk.TFAddress)
-		fmt.Fprintf(&b, "  id = %q\n", blk.ImportID)
-		b.WriteString("}\n\n")
-	}
+	b.WriteString(RenderBlocksOnly(blocks))
 	return b.String()
 }

@@ -2886,6 +2886,13 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubSetupValidation(c) }))
 
+		// env -> Terraform (import blocks) arc, slice 2 — open a PR
+		// adding squadron_imports.tf (import{} blocks, deduped by cloud
+		// import ID against any existing file).
+		v1.POST("/iac/github/connections/:id/terraform-import-pr",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubTerraformImportPR(c) }))
+
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
 		// of the cost-insights surface.

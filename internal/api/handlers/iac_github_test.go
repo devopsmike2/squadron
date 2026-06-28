@@ -1407,3 +1407,80 @@ func TestHandleIaCGitHubOpenPR_NewFile_DedupRefusesWhenResourceExists(t *testing
 		t.Errorf("no PUT expected on dedup refusal, got %d", len(mc.putFileCalls))
 	}
 }
+
+func tfImportPRRegisterFor(h *IaCGitHubHandlers) func(r *gin.Engine) {
+	return func(r *gin.Engine) {
+		r.POST("/api/v1/iac/github/connections", h.HandleIaCGitHubSaveConnection)
+		r.POST("/api/v1/iac/github/connections/:id/terraform-import-pr", h.HandleIaCGitHubTerraformImportPR)
+	}
+}
+
+// TestHandleIaCGitHubTerraformImportPR_OpensPR covers env->TF slice 2:
+// a scan with importable resources → a PR adding squadron_imports.tf.
+func TestHandleIaCGitHubTerraformImportPR_OpensPR(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tip",
+		// squadron_imports.tf does not exist yet → default ErrFileNotFound.
+		openPRResp: &iacgithub.PullRequest{Number: 55, HTMLURL: "https://github.com/octo/widgets/pull/55"},
+	}
+	h, _ := newTestIaCHandlers(t, mc, &discoveryRecordingAudit{})
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"ec2-otel-layer","file_path":"modules/compute/main.tf"}`)
+	body := `{"scan_result":{"account_id":"111111111111","provider":"aws","scan_id":"scanZZ",
+		"compute":[{"resource_id":"i-0abc","region":"us-east-1"}],
+		"object_stores":[{"resource_id":"my-bucket","region":"us-east-1"}]}}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/terraform-import-pr",
+		tfImportPRRegisterFor(h), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "/pull/55") {
+		t.Errorf("missing PR url: %s", w.Body.String())
+	}
+	if len(mc.putFileCalls) != 1 {
+		t.Fatalf("putFile calls = %d, want 1", len(mc.putFileCalls))
+	}
+	put := mc.putFileCalls[0]
+	if put.Path != "squadron_imports.tf" {
+		t.Errorf("path = %q, want squadron_imports.tf", put.Path)
+	}
+	for _, want := range []string{`id = "i-0abc"`, `id = "my-bucket"`, "generate-config-out"} {
+		if !strings.Contains(string(put.Content), want) {
+			t.Errorf("content missing %q", want)
+		}
+	}
+}
+
+// TestHandleIaCGitHubTerraformImportPR_AllAlreadyImported skips opening a
+// PR when every candidate is already in squadron_imports.tf.
+func TestHandleIaCGitHubTerraformImportPR_AllAlreadyImported(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tip",
+		fileResp: map[string]*iacgithub.FileContent{
+			"squadron_imports.tf": {
+				Path:           "squadron_imports.tf",
+				DecodedContent: []byte("import {\n  to = aws_instance.imported_i_0abc\n  id = \"i-0abc\"\n}\n"),
+			},
+		},
+	}
+	h, _ := newTestIaCHandlers(t, mc, &discoveryRecordingAudit{})
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"ec2-otel-layer","file_path":"modules/compute/main.tf"}`)
+	body := `{"scan_result":{"account_id":"111111111111","provider":"aws","scan_id":"scanZZ",
+		"compute":[{"resource_id":"i-0abc","region":"us-east-1"}]}}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/terraform-import-pr",
+		tfImportPRRegisterFor(h), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "already_imported") {
+		t.Errorf("expected already_imported, got %s", w.Body.String())
+	}
+	if len(mc.putFileCalls) != 0 {
+		t.Errorf("no PUT expected when all already imported, got %d", len(mc.putFileCalls))
+	}
+}
