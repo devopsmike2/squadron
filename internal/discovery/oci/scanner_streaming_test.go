@@ -155,30 +155,29 @@ func (f *fakeOCIStreaming) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(streams)
 			return
 
+		case strings.HasSuffix(r.URL.Path, "/logGroups"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(fakeLogGroupList())
+			return
+
 		case strings.HasSuffix(r.URL.Path, "/logs"):
 			f.LogsCalls++
-			searchTerm := r.URL.Query().Get("searchTerm")
-
-			if f.LogsFailureForStream != "" && searchTerm == f.LogsFailureForStream {
+			// The per-group /logs call carries no resource id, so a
+			// Logging failure is now per-compartment (not per-stream):
+			// either LogsStatus or LogsFailureForStream being set fails
+			// the whole logs lookup.
+			if f.LogsStatus != 0 || f.LogsFailureForStream != "" {
+				status := f.LogsStatus
+				if status == 0 {
+					status = http.StatusServiceUnavailable
+				}
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: "Throttled", Message: "throttle"})
-				return
-			}
-
-			if f.LogsStatus != 0 {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(f.LogsStatus)
+				w.WriteHeader(status)
 				_ = json.NewEncoder(w).Encode(ociErrorBody{Code: "MockError", Message: "mock"})
 				return
 			}
-
-			logs := f.LogsByStream[searchTerm]
-			if logs == nil {
-				logs = []ociLogResource{}
-			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(logs)
+			_ = json.NewEncoder(w).Encode(flattenFakeLogs(f.LogsByStream))
 			return
 		}
 
@@ -452,25 +451,25 @@ func TestStreamingScanner_LoggingAPICallFailureNonFatal(t *testing.T) {
 		makeOCIStream("stream-b"),
 		makeOCIStream("stream-c"),
 	}
-	// stream-b's per-stream Logging call fails; stream-a + stream-c
-	// succeed. Only stream-c has a matching Logging entry.
-	fake.LogsFailureForStream = "ocid1.stream.oc1...stream-b"
+	// The OCI Logging list calls (logGroups + logs-per-group) carry no
+	// resource id, so a Logging failure is per-compartment, not
+	// per-stream: when the logs lookup fails, every stream in the
+	// compartment dims to axis=false, and the failure must remain
+	// non-fatal (every stream still surfaces).
+	fake.LogsFailureForStream = "trigger" // any non-empty value fails the logs call
 	fake.LogsByStream["ocid1.stream.oc1...stream-c"] = []ociLogResource{
 		makeOCILogResource("ocid1.stream.oc1...stream-c"),
 	}
 
 	s := newStreamingScannerWithFake(t, fake, "us-phoenix-1")
 	snaps, err := s.ScanStreams(context.Background(), scopeRoot())
-	require.NoError(t, err, "per-stream Logging failure must not abort the walk")
-	require.Len(t, snaps, 3, "every stream still surfaces even when Logging fails on one")
+	require.NoError(t, err, "Logging failure must not abort the walk")
+	require.Len(t, snaps, 3, "every stream still surfaces even when Logging fails")
 
-	byName := map[string]bool{}
 	for _, snap := range snaps {
-		byName[snap.ResourceName] = snap.HasLogAxis
+		assert.False(t, snap.HasLogAxis,
+			"Logging call failed -> axis defaults to false for all streams (non-fatal)")
 	}
-	assert.False(t, byName["stream-a"], "stream-a has no Logging entry")
-	assert.False(t, byName["stream-b"], "stream-b's Logging call failed -> axis defaults to false")
-	assert.True(t, byName["stream-c"], "stream-c has a matching Logging entry -> axis flips true")
 }
 
 // --- Test: SourceType is "stream" -----------------------------------

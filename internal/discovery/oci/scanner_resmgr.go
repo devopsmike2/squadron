@@ -287,21 +287,19 @@ func (s *Scanner) listResourceManagerStacksPage(ctx context.Context, sk *Signing
 // caller falls back to has_log_axis = false for all Stacks in the
 // compartment (partial-scan posture).
 func (s *Scanner) listResourceManagerLogSources(ctx context.Context, sk *SigningKey, compartmentID string) ([]resourceManagerLogSource, error) {
-	endpoint := s.loggingEndpoint()
-	u := fmt.Sprintf(
-		"%s/%s/logs?compartmentId=%s",
-		strings.TrimRight(endpoint, "/"),
-		loggingListAPIVersion,
-		url.QueryEscape(compartmentID),
-	)
+	// OCI Logging has no flat compartment-level /logs list (the prior
+	// "/logs?compartmentId=" call 404'd — found live during slice-6
+	// validation). Enumerate log groups in the compartment, then logs
+	// within each group, filtering to source.service == resourcemanager.
+	groups, gErr := s.listLoggingLogGroups(ctx, sk, compartmentID)
+	if gErr != nil {
+		return nil, gErr
+	}
+	base := strings.TrimRight(s.loggingEndpoint(), "/")
 	var all []resourceManagerLogSource
-	nextPage := ""
-	for {
-		pageURL := u
-		if nextPage != "" {
-			pageURL = pageURL + "&page=" + url.QueryEscape(nextPage)
-		}
-		body, nextToken, callErr := s.doSignedGETWithPage(ctx, sk, pageURL)
+	for _, g := range groups {
+		u := fmt.Sprintf("%s/%s/logGroups/%s/logs", base, loggingListAPIVersion, url.PathEscape(g.ID))
+		body, _, callErr := s.doSignedGETWithPage(ctx, sk, u)
 		if callErr != nil {
 			return nil, callErr
 		}
@@ -312,8 +310,12 @@ func (s *Scanner) listResourceManagerLogSources(ctx context.Context, sk *Signing
 		for _, lg := range out {
 			src := lg.Configuration.Source
 			if strings.EqualFold(src.Service, OCIResourceManagerLogSourceService) {
+				lgID := lg.LogGroupID
+				if lgID == "" {
+					lgID = g.ID
+				}
 				all = append(all, resourceManagerLogSource{
-					LogGroupID:    lg.LogGroupID,
+					LogGroupID:    lgID,
 					LogID:         lg.ID,
 					CompartmentID: compartmentID,
 					Service:       src.Service,
@@ -321,10 +323,6 @@ func (s *Scanner) listResourceManagerLogSources(ctx context.Context, sk *Signing
 				})
 			}
 		}
-		if nextToken == "" {
-			break
-		}
-		nextPage = nextToken
 	}
 	return all, nil
 }

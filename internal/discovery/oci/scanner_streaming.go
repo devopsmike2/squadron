@@ -488,28 +488,76 @@ func (s *Scanner) listLogsForStream(ctx context.Context, sk *SigningKey, compart
 // returns (false, error) so the caller can decide whether to dim
 // the axis or accept the per-resource miss.
 func (s *Scanner) listLogsForOCIResource(ctx context.Context, sk *SigningKey, compartmentID, resourceOCID string) (bool, error) {
-	endpoint := s.loggingEndpoint()
-	u := fmt.Sprintf(
-		"%s/%s/logs?compartmentId=%s&searchTerm=%s",
-		strings.TrimRight(endpoint, "/"),
-		loggingListAPIVersion,
-		url.QueryEscape(compartmentID),
-		url.QueryEscape(resourceOCID),
-	)
-	body, _, callErr := s.doSignedGETWithPage(ctx, sk, u)
-	if callErr != nil {
-		return false, callErr
+	// OCI Logging has no flat compartment-level /logs list. The correct
+	// shape (confirmed live during the slice-6 OCI validation — the
+	// previous flat "/logs?compartmentId=" call 404'd, silently dimming
+	// every tier's log axis to false) is two steps: list log groups in
+	// the compartment, then list logs within each group. A log resource
+	// is a match when its Configuration.Source.Resource equals the
+	// target OCID/name.
+	groups, gErr := s.listLoggingLogGroups(ctx, sk, compartmentID)
+	if gErr != nil {
+		return false, gErr
 	}
-	var out ociLogResourceList
-	if jerr := json.Unmarshal(body, &out); jerr != nil {
-		return false, &ociCallError{Wrapped: fmt.Errorf("logs response parse: %w", jerr)}
-	}
-	for _, lg := range out {
-		if lg.Configuration.Source.Resource == resourceOCID {
-			return true, nil
+	for _, g := range groups {
+		logs, lErr := s.listLogsInLogGroup(ctx, sk, g.ID)
+		if lErr != nil {
+			return false, lErr
+		}
+		for _, lg := range logs {
+			if lg.Configuration.Source.Resource == resourceOCID {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
+}
+
+// ociLogGroupRef is the minimal shape read from the ListLogGroups
+// response (the group OCID is all we need to then list its logs).
+type ociLogGroupRef struct {
+	ID string `json:"id"`
+}
+
+// listLoggingLogGroups lists the log groups in a compartment via
+// GET /<ver>/logGroups?compartmentId=. OCI returns the list as a JSON
+// array.
+func (s *Scanner) listLoggingLogGroups(ctx context.Context, sk *SigningKey, compartmentID string) ([]ociLogGroupRef, error) {
+	u := fmt.Sprintf(
+		"%s/%s/logGroups?compartmentId=%s",
+		strings.TrimRight(s.loggingEndpoint(), "/"),
+		loggingListAPIVersion,
+		url.QueryEscape(compartmentID),
+	)
+	body, _, callErr := s.doSignedGETWithPage(ctx, sk, u)
+	if callErr != nil {
+		return nil, callErr
+	}
+	var out []ociLogGroupRef
+	if jerr := json.Unmarshal(body, &out); jerr != nil {
+		return nil, &ociCallError{Wrapped: fmt.Errorf("log groups response parse: %w", jerr)}
+	}
+	return out, nil
+}
+
+// listLogsInLogGroup lists the log objects in a log group via
+// GET /<ver>/logGroups/{logGroupId}/logs.
+func (s *Scanner) listLogsInLogGroup(ctx context.Context, sk *SigningKey, logGroupID string) (ociLogResourceList, error) {
+	u := fmt.Sprintf(
+		"%s/%s/logGroups/%s/logs",
+		strings.TrimRight(s.loggingEndpoint(), "/"),
+		loggingListAPIVersion,
+		url.PathEscape(logGroupID),
+	)
+	body, _, callErr := s.doSignedGETWithPage(ctx, sk, u)
+	if callErr != nil {
+		return nil, callErr
+	}
+	var out ociLogResourceList
+	if jerr := json.Unmarshal(body, &out); jerr != nil {
+		return nil, &ociCallError{Wrapped: fmt.Errorf("logs response parse: %w", jerr)}
+	}
+	return out, nil
 }
 
 // streamingEndpoint returns the OCI Streaming control-plane API base

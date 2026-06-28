@@ -439,14 +439,14 @@ func (f *fakeOCI) handler() http.Handler {
 			}
 			_ = json.NewEncoder(w).Encode(clusters)
 			return
-		case strings.HasSuffix(r.URL.Path, "/logs"):
-			searchTerm := r.URL.Query().Get("searchTerm")
-			logs := f.LogsByResource[searchTerm]
-			if logs == nil {
-				logs = []ociLogResource{}
-			}
+		case strings.HasSuffix(r.URL.Path, "/logGroups"):
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(logs)
+			_ = json.NewEncoder(w).Encode(fakeLogGroupList())
+			return
+
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(flattenFakeLogs(f.LogsByResource))
 			return
 
 		case strings.HasSuffix(r.URL.Path, "/loadBalancers"):
@@ -1642,4 +1642,25 @@ func TestScan_PrivateKeyMemoized_OnlyParsedOnce(t *testing.T) {
 	_, err = s.Scan(context.Background())
 	require.NoError(t, err)
 	assert.Same(t, first, s.parsedKey, "parsed RSA key should be memoized across Scan calls")
+}
+
+// fakeLogGroupList returns the single synthetic log group every OCI
+// logging fake serves for ListLogGroups. The real OCI Logging API has
+// no flat /logs list — callers enumerate log groups then logs per group
+// (fixed live during slice-6 validation). The fakes collapse that to
+// one group whose /logs returns the flattened configured logs; the
+// production matcher keys off Configuration.Source.Resource, so the
+// single-group collapse is behaviorally faithful.
+func fakeLogGroupList() []ociLogGroupRef {
+	return []ociLogGroupRef{{ID: "ocid1.loggroup.oc1..fake"}}
+}
+
+// flattenFakeLogs collapses a resource-keyed log map into the flat list
+// the per-group /logs handler returns.
+func flattenFakeLogs(m map[string][]ociLogResource) []ociLogResource {
+	out := []ociLogResource{}
+	for _, v := range m {
+		out = append(out, v...)
+	}
+	return out
 }
