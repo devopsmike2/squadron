@@ -20,8 +20,16 @@ func TestScan_OCIObjectStorage(t *testing.T) {
 		Namespace: "myns",
 		BucketsByCompartment: map[string][]ociBucket{
 			root: {
-				{Name: "logged-bucket", ObjectEventsEnabled: true, FreeformTags: map[string]string{"env": "prod"}},
-				{Name: "plain-bucket", ObjectEventsEnabled: false},
+				{Name: "logged-bucket", FreeformTags: map[string]string{"env": "prod"}},
+				{Name: "plain-bucket"},
+			},
+		},
+		// Slice 6: coverage is resolved from the OCI Logging service.
+		// An enabled object-storage service log references logged-bucket;
+		// plain-bucket has none.
+		LogsByResource: map[string][]ociLogResource{
+			"logged-bucket": {
+				{Configuration: ociLogConfiguration{Source: ociLogSource{Resource: "logged-bucket", Category: "write"}}},
 			},
 		},
 	}
@@ -33,12 +41,12 @@ func TestScan_OCIObjectStorage(t *testing.T) {
 		switch o.ResourceID {
 		case "logged-bucket":
 			sawLogged = true
-			assert.True(t, o.ServerAccessLoggingEnabled, "objectEventsEnabled => instrumented")
+			assert.True(t, o.ServerAccessLoggingEnabled, "object-storage service log => covered")
 			assert.Equal(t, "us-phoenix-1", o.Region)
 			assert.Equal(t, "prod", o.Tags["env"])
 		case "plain-bucket":
 			sawPlain = true
-			assert.False(t, o.ServerAccessLoggingEnabled)
+			assert.False(t, o.ServerAccessLoggingEnabled, "no service log => uncovered")
 		}
 	}
 	assert.True(t, sawLogged && sawPlain, "both buckets present")
@@ -57,6 +65,12 @@ func TestScan_OCILoadBalancers(t *testing.T) {
 				{ID: "ocid1.loadbalancer..lb2", DisplayName: "private-lb", IsPrivate: true},
 			},
 		},
+		// Slice 6: an OCI service log references lb1; lb2 has none.
+		LogsByResource: map[string][]ociLogResource{
+			"ocid1.loadbalancer..lb1": {
+				{Configuration: ociLogConfiguration{Source: ociLogSource{Resource: "ocid1.loadbalancer..lb1", Category: "access"}}},
+			},
+		},
 	}
 	res, err := newScannerWithFake(t, fake, "us-phoenix-1").Scan(context.Background())
 	require.NoError(t, err)
@@ -67,11 +81,12 @@ func TestScan_OCILoadBalancers(t *testing.T) {
 		case "public-lb":
 			sawPublic = true
 			assert.Equal(t, "internet-facing", lb.Scheme)
+			assert.True(t, lb.AccessLogsEnabled, "service log referencing the LB OCID => covered")
 		case "private-lb":
 			sawPrivate = true
 			assert.Equal(t, "internal", lb.Scheme)
+			assert.False(t, lb.AccessLogsEnabled, "no service log => uncovered")
 		}
-		assert.False(t, lb.AccessLogsEnabled, "OCI LB logging detection deferred")
 		assert.Equal(t, "us-phoenix-1", lb.Region)
 	}
 	assert.True(t, sawPublic && sawPrivate, "both LBs present")

@@ -41,6 +41,7 @@ func (s *Scanner) lbEndpoint() string {
 }
 
 func (s *Scanner) scanLoadBalancers(ctx context.Context, sk *SigningKey, comps []ociCompartment, result *scanner.Result) {
+	loggingFailed := false
 	for _, comp := range comps {
 		lbs, listErr := s.listLoadBalancers(ctx, sk, comp.ID)
 		if listErr != nil {
@@ -56,12 +57,26 @@ func (s *Scanner) scanLoadBalancers(ctx context.Context, sk *SigningKey, comps [
 			if lb.IsPrivate {
 				scheme = "internal"
 			}
+			// Slice 6: OCI LB access logs live in the Logging service
+			// (no inline flag). Covered when an OCI service log
+			// references the LB OCID. A Logging failure dims the axis
+			// to false, recorded once as a partial failure.
+			covered := false
+			hasLog, logErr := s.listLogsForOCIResource(ctx, sk, comp.ID, lb.ID)
+			if logErr != nil {
+				if !loggingFailed {
+					loggingFailed = true
+					recordPartialFailure(result, ServiceIDLoadBalancer, classifyOCITierError(ServiceIDLoadBalancer, "logging", logErr))
+				}
+			} else {
+				covered = hasLog
+			}
 			result.LoadBalancers = append(result.LoadBalancers, scanner.LoadBalancerSnapshot{
 				ResourceID:        lb.ID,
 				Name:              lb.DisplayName,
 				Type:              "load-balancer",
 				Scheme:            scheme,
-				AccessLogsEnabled: false, // detected via the Logging service — deferred
+				AccessLogsEnabled: covered,
 				Region:            s.Region,
 				Tags:              flattenTags(lb.FreeformTags, lb.DefinedTags),
 			})

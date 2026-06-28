@@ -460,17 +460,18 @@ func TestBuildDiscoveryUserMessage_MultiCloudTiers_ProviderRouting(t *testing.T)
 		"provider=gcp", "provider=azure", "provider=oci",
 		"gcs-logs", "blobacct", "ocibucket",
 		"gclb1", "ocilb1",
-		// OCI rows must be flagged deferred (inventory only) so the
-		// model declines to recommend for them.
-		"detection deferred (inventory only",
 	} {
 		assert.Contains(t, msg, want, "prompt should include %q", want)
 	}
-	// The deferred phrase must appear for BOTH OCI tiers (object store +
-	// load balancer), so it occurs at least twice.
-	if got := strings.Count(msg, "detection deferred (inventory only"); got < 2 {
-		t.Fatalf("expected >=2 OCI deferred markers (object store + LB), got %d", got)
-	}
+	// Slice 6: OCI object-store/LB coverage is now resolved from the OCI
+	// Logging service, so OCI rows render covered/uncovered like every
+	// other cloud — the deferred placeholder must be gone.
+	assert.NotContains(t, msg, "detection deferred",
+		"OCI tiers are no longer detection-deferred after slice 6")
+	// ocibucket has server access logging on (covered); ocilb1 does not
+	// (uncovered) — both shorthand states must render.
+	assert.Contains(t, msg, "covered")
+	assert.Contains(t, msg, "uncovered")
 }
 
 // TestProposeFromDiscoveryScan_Disabled documents the gate: a service
