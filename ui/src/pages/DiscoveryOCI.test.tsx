@@ -26,6 +26,7 @@ import DiscoveryOCIPage from "./DiscoveryOCI";
 import {
   createOCIConnection,
   enableOCIDemoConnection,
+  generateOCITerraformImport,
   listOCIConnections,
   scanOCIConnection,
   validateOCIConnection,
@@ -62,6 +63,7 @@ vi.mock("@/api/discoveryOCI", async () => {
     createOCIConnection: vi.fn(),
     validateOCIConnection: vi.fn(),
     scanOCIConnection: vi.fn(),
+    generateOCITerraformImport: vi.fn(),
   };
 });
 
@@ -70,6 +72,7 @@ const mockedEnableOCIDemo = vi.mocked(enableOCIDemoConnection);
 const mockedCreateOCIConnection = vi.mocked(createOCIConnection);
 const mockedValidateOCIConnection = vi.mocked(validateOCIConnection);
 const mockedScanOCIConnection = vi.mocked(scanOCIConnection);
+const mockedGenerateOCITerraformImport = vi.mocked(generateOCITerraformImport);
 
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Mirrors the Azure page's renderPage helper.
@@ -656,6 +659,57 @@ describe("DiscoveryOCI", () => {
     for (const row of sampleScan.computes) {
       expect(screen.getByText(row.resource_id)).toBeInTheDocument();
     }
+  });
+
+  it("TestDiscoveryOCI_InventoryTab_GenerateTerraformToAdopt", async () => {
+    // env->TF slice 3d — the OCI inventory exposes the same
+    // "Generate Terraform to adopt" affordance as AWS: clicking it
+    // calls the per-cloud terraform-import preview wrapper with the
+    // connection id + scan and renders the returned import blocks.
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+    mockedGenerateOCITerraformImport.mockResolvedValue({
+      terraform:
+        'import {\n  to = oci_core_instance.web_1\n  id = "ocid1.instance.oc1..aaaa"\n}',
+      block_count: 1,
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /Generate Terraform to adopt/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tf-import-output")).toBeInTheDocument();
+    });
+    expect(mockedGenerateOCITerraformImport).toHaveBeenCalledWith(
+      sampleScan.connection_id,
+      sampleScan,
+    );
+    expect(screen.getByText(/1 import block:/)).toBeInTheDocument();
   });
 
   it("TestDiscoveryOCI_RecommendationsTab_EmptyStateWithoutScan", async () => {
