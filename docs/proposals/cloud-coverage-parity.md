@@ -37,15 +37,16 @@ model routes to the correct per-cloud observability lever:
 | AWS   | S3 server access logging | (existing) | ALB/NLB access logs → S3 | (existing) |
 | GCP   | GCS bucket logging (`logging.log_bucket`) | `gcs-logging-enable` | Backend-service `log_config.enable` | `gclb-logging-enable` |
 | Azure | Blob diagnostic setting (StorageRead/Write/Delete) | `azblob-diag-enable` | LB diagnostic setting | `azlb-diag-enable` |
-| OCI   | **detection deferred — inventory only** | — | **detection deferred — inventory only** | — |
+| OCI   | OCI Logging-service object-storage log | `ocibucket-logging-enable` | OCI Logging-service LB access log | `ocilb-logging-enable` |
 
-**OCI honesty note.** OCI object-store and load-balancer access logs are
-delivered through the OCI **Logging service**, which Squadron's
-read-only discovery scan does not yet inspect. The inline flags the
-scanner *can* read (`objectEventsEnabled` for buckets; nothing for LBs)
-are not telemetry levers, so emitting "enable logging" recommendations
-off them would produce false positives. Both OCI tiers therefore render
-as `detection deferred (inventory only — do not recommend)` and the
-proposer prompt instructs the model not to recommend for them. Closing
-this gap requires reading the OCI Logging service during the scan — a
-future slice.
+**OCI — closed in slice 6 (v0.89.284).** OCI object-store and
+load-balancer access logs are delivered through the OCI **Logging
+service** (no inline per-resource flag). Slice 6 resolves coverage by
+enumerating service logs and matching `configuration.source.resource`
+against each bucket name / load-balancer OCID — reusing the
+`listLogsForOCIResource` detection already shared by the streaming,
+topic, and queue tiers. A Logging-call failure dims the axis to
+uncovered and records an `ocilogging` partial failure rather than
+aborting the scan. This requires `read log-groups` in the OCI discovery
+policy (see the OCI first-time-setup guide). With slice 6, all four
+clouds now have real object-store + load-balancer recommendations.

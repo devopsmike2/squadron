@@ -578,3 +578,57 @@ extensions cheaper.
   scope_id is tenancy_ocid for OCI.
 - [Audit log](./audit-log.md) — full catalog including
   `discovery.oci.*` family.
+
+## Object-store + load-balancer tiers — SHIPPED (coverage-parity arc)
+
+Squadron's OCI scanner walks **Object Storage buckets** and **Load
+Balancers** across the same compartments it walks for Compute,
+Databases, and OKE (slice 4), and resolves their access-logging
+coverage from the **OCI Logging service** (slice 6).
+
+**Why the Logging service?** Unlike AWS S3 / ELB, OCI exposes no
+inline per-bucket or per-load-balancer "access logging enabled" flag.
+Access logs are delivered as *service logs* in the OCI Logging service.
+Squadron therefore enumerates service logs and marks a bucket / load
+balancer covered when an enabled service log references it (the same
+`listLogsForOCIResource` detection used for streams, topics, and
+queues). If the Logging calls fail (e.g. missing policy), the axis dims
+to *uncovered* and a partial failure is recorded under
+`failed_services=["ocilogging"]` rather than aborting the scan.
+
+**Recommendation kinds:** `ocibucket-logging-enable` (object stores)
+and `ocilb-logging-enable` (load balancers). Both emit Terraform that
+creates an `oci_logging_log` (`log_type = "SERVICE"`) with
+`configuration.source.service = "objectstorage"` / `"loadbalancer"`,
+`resource = <bucket-name>` / `<load-balancer-OCID>`, and an
+`oci_logging_log_group` (operator-chosen). The log destination is the
+Logging service itself, so — unlike AWS — there is no target-bucket
+policy prerequisite.
+
+**IAM policy additions.** The Compute/Database/OKE statements do NOT
+cover these tiers. Add:
+
+```sh
+oci iam policy update \
+  --policy-id <squadron-discovery-policy-ocid> \
+  --statements '[
+    "Allow group SquadronDiscovery to read instance-family in tenancy",
+    "Allow group SquadronDiscovery to read compartments in tenancy",
+    "Allow group SquadronDiscovery to read database-family in tenancy",
+    "Allow group SquadronDiscovery to read cluster-family in tenancy",
+    "Allow group SquadronDiscovery to read objectstorage-namespaces in tenancy",
+    "Allow group SquadronDiscovery to read buckets in tenancy",
+    "Allow group SquadronDiscovery to read load-balancers in tenancy",
+    "Allow group SquadronDiscovery to read log-groups in tenancy"
+  ]' \
+  --version-date "2025-01-01"
+```
+
+`read objectstorage-namespaces` + `read buckets` back the object-store
+walk; `read load-balancers` backs the LB walk; `read log-groups` backs
+the access-logging detection for both tiers (without it, both tiers
+still list but render uncovered and record `ocilogging` partial
+failures). Re-run the scan after adding the statements.
+
+**Service identifiers in audit:** `ociobjectstorage`, `ocilb`,
+`ocilogging`.

@@ -47,8 +47,13 @@ func (s *Scanner) objectStorageEndpoint() string {
 }
 
 // scanObjectStorage resolves the tenancy namespace, lists buckets per
-// compartment, and (per bucket) fetches objectEventsEnabled. Appends an
-// ObjectStoreSnapshot per bucket.
+// compartment, and appends an ObjectStoreSnapshot per bucket. The
+// coverage axis (ServerAccessLoggingEnabled) is resolved from the OCI
+// Logging service (slice 6): OCI has no inline per-bucket logging flag,
+// so a bucket is covered when an OCI service log references it (the same
+// listLogsForOCIResource detection the streaming/topic/queue tiers use).
+// A Logging-call failure dims the axis to false and is recorded once as
+// a partial failure rather than aborting the bucket walk.
 func (s *Scanner) scanObjectStorage(ctx context.Context, sk *SigningKey, comps []ociCompartment, result *scanner.Result) {
 	ns, nsErr := s.getNamespace(ctx, sk)
 	if nsErr != nil {
@@ -58,6 +63,7 @@ func (s *Scanner) scanObjectStorage(ctx context.Context, sk *SigningKey, comps [
 	if ns == "" {
 		return
 	}
+	loggingFailed := false
 	for _, comp := range comps {
 		buckets, listErr := s.listBuckets(ctx, sk, ns, comp.ID)
 		if listErr != nil {
@@ -69,16 +75,26 @@ func (s *Scanner) scanObjectStorage(ctx context.Context, sk *SigningKey, comps [
 			continue
 		}
 		for _, b := range buckets {
+			covered := false
+			hasLog, logErr := s.listLogsForOCIResource(ctx, sk, comp.ID, b.Name)
+			if logErr != nil {
+				if !loggingFailed {
+					loggingFailed = true
+					recordPartialFailure(result, ServiceIDObjectStorage, classifyOCITierError(ServiceIDObjectStorage, "logging", logErr))
+				}
+			} else {
+				covered = hasLog
+			}
 			detail, detErr := s.getBucket(ctx, sk, ns, b.Name)
 			if detErr != nil {
 				recordPartialFailure(result, ServiceIDObjectStorage, classifyOCITierError(ServiceIDObjectStorage, "bucket", detErr))
-				result.ObjectStores = append(result.ObjectStores, scanner.ObjectStoreSnapshot{ResourceID: b.Name, Region: s.Region})
+				result.ObjectStores = append(result.ObjectStores, scanner.ObjectStoreSnapshot{ResourceID: b.Name, Region: s.Region, ServerAccessLoggingEnabled: covered})
 				continue
 			}
 			result.ObjectStores = append(result.ObjectStores, scanner.ObjectStoreSnapshot{
 				ResourceID:                 detail.Name,
 				Region:                     s.Region,
-				ServerAccessLoggingEnabled: detail.ObjectEventsEnabled,
+				ServerAccessLoggingEnabled: covered,
 				Tags:                       flattenTags(detail.FreeformTags, detail.DefinedTags),
 			})
 		}

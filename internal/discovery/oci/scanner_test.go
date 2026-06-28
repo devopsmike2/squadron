@@ -157,6 +157,12 @@ type fakeOCI struct {
 	BucketsByCompartment       map[string][]ociBucket
 	LoadBalancersByCompartment map[string][]ociLoadBalancer
 
+	// Coverage-parity slice 6 — OCI Logging /logs mock. Keyed by the
+	// searchTerm (bucket name or LB OCID); the value is the logs whose
+	// Source.Resource matches, so listLogsForOCIResource flips the
+	// object-store / LB access-logging axis.
+	LogsByResource map[string][]ociLogResource
+
 	// InstancesByCompartment maps compartmentId -> instances served
 	// when /instances is called with that compartmentId. A missing
 	// compartmentId returns an empty list (not a 404) so tests can
@@ -433,6 +439,16 @@ func (f *fakeOCI) handler() http.Handler {
 			}
 			_ = json.NewEncoder(w).Encode(clusters)
 			return
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			searchTerm := r.URL.Query().Get("searchTerm")
+			logs := f.LogsByResource[searchTerm]
+			if logs == nil {
+				logs = []ociLogResource{}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(logs)
+			return
+
 		case strings.HasSuffix(r.URL.Path, "/loadBalancers"):
 			compartmentID := r.URL.Query().Get("compartmentId")
 			w.Header().Set("Content-Type", "application/json")

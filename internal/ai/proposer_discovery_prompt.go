@@ -151,14 +151,22 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`microsoft.insights/diagnosticSettings/read). Each plan step's ` +
 	`inline_config_snippet is Terraform the operator runs through their own ` +
 	`IaC pipeline.` + "\n" +
-	`  - OCI Object Storage buckets (object-store tier): DETECTION IS ` +
-	`DEFERRED. OCI bucket access logs are delivered through the OCI Logging ` +
-	`service, which Squadron's read-only scan does not yet inspect; the ` +
-	`inline objectEventsEnabled flag Squadron surfaces is an Events-service ` +
-	`automation flag, NOT a telemetry lever. Rows render as "detection ` +
-	`deferred (inventory only)". DO NOT emit recommendations for OCI object ` +
-	`stores — surface them as inventory context only, to avoid false ` +
-	`positives.` + "\n" +
+	`  - OCI Object Storage buckets (object-store tier): the single ` +
+	`observability lever is an OCI LOGGING-SERVICE object-storage access ` +
+	`log. OCI has no inline per-bucket logging flag, so a bucket is covered ` +
+	`when an enabled service log references it; when none exists, recommend ` +
+	`enabling. Recommendation kind: ocibucket-logging-enable. The Terraform ` +
+	`creates an oci_logging_log (log_type = "SERVICE") whose ` +
+	`configuration.source has service = "objectstorage", resource = ` +
+	`<bucket-name>, category = "write" (or "read"), plus an ` +
+	`oci_logging_log_group (operator-chosen; reuse an existing group when ` +
+	`present). The LOG GROUP is an operator choice — never invent an OCID; ` +
+	`surface it as a plan step parameter. Unlike AWS S3, the log ` +
+	`destination is the Logging service itself, so there is NO ` +
+	`target-bucket-policy prerequisite. SQUADRON DOES NOT EXECUTE any ` +
+	`Logging write API — the discovery scope is read-only (read log-groups ` +
+	`+ read logs). Each plan step's inline_config_snippet is Terraform the ` +
+	`operator runs through their own IaC pipeline.` + "\n" +
 	`  - GCP load balancers (load-balancer tier): the single observability ` +
 	`lever is BACKEND-SERVICE LOGGING. A google_compute_backend_service is ` +
 	`covered when access_logs_enabled is true (Squadron reads ` +
@@ -180,13 +188,19 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`discovery RBAC scope is read-only. Each plan step's ` +
 	`inline_config_snippet is Terraform the operator runs through their own ` +
 	`IaC pipeline.` + "\n" +
-	`  - OCI load balancers (load-balancer tier): DETECTION IS DEFERRED. ` +
-	`OCI load-balancer access logs are delivered through the OCI Logging ` +
-	`service, which Squadron's read-only scan does not yet inspect, so ` +
-	`access_logs_enabled is always reported false. Rows render as ` +
-	`"detection deferred (inventory only)". DO NOT emit recommendations for ` +
-	`OCI load balancers — surface them as inventory context only, to avoid ` +
-	`false positives.` + "\n" +
+	`  - OCI load balancers (load-balancer tier): the single observability ` +
+	`lever is an OCI LOGGING-SERVICE load-balancer access log. A load ` +
+	`balancer is covered when an enabled service log references its OCID; ` +
+	`when none exists, recommend enabling. Recommendation kind: ` +
+	`ocilb-logging-enable. The Terraform creates an oci_logging_log ` +
+	`(log_type = "SERVICE") whose configuration.source has service = ` +
+	`"loadbalancer", resource = <load-balancer-OCID>, category = "access", ` +
+	`plus an oci_logging_log_group (operator-chosen). The log destination ` +
+	`is the Logging service, so there is NO target-bucket-policy ` +
+	`prerequisite. SQUADRON DOES NOT EXECUTE any Logging write API — the ` +
+	`discovery scope is read-only (read log-groups + read logs). Each plan ` +
+	`step's inline_config_snippet is Terraform the operator runs through ` +
+	`their own IaC pipeline.` + "\n" +
 	`  - EKS clusters: observability has a COMPOSITE rule on two ` +
 	`axes that MUST BOTH be on. Axis 1: control plane logging must include BOTH "api" AND ` +
 	`"audit" types at minimum. Axis 2: at least one EKS managed add-on must have name ` +
@@ -834,9 +848,6 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 		if o.ServerAccessLoggingEnabled {
 			coverage = "covered"
 		}
-		if o.Provider == "oci" {
-			coverage = "detection deferred (inventory only — do not recommend)"
-		}
 		oprov := o.Provider
 		if oprov == "" {
 			oprov = "aws"
@@ -865,9 +876,6 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 		coverage := "uncovered"
 		if l.AccessLogsEnabled {
 			coverage = "covered"
-		}
-		if l.Provider == "oci" {
-			coverage = "detection deferred (inventory only — do not recommend)"
 		}
 		target := ""
 		if l.AccessLogsS3Bucket != "" {
