@@ -417,6 +417,28 @@ export async function openIaCGitHubPullRequest(
 // returns 204 just like a successful delete. The UI mutates the SWR
 // cache regardless of success/failure to give the operator immediate
 // feedback; a network-level failure surfaces via the apiDelete throw.
+// v0.90 (context-aware-merge-ready-prs arc, slice 3) — open a one-time
+// PR adding the Squadron terraform-validate GitHub Action (the
+// merge-ready gate). already_configured=true when the workflow is
+// already present on the default branch (no PR opened).
+export interface IaCGitHubSetupValidationResponse {
+  pr_number?: number;
+  pr_url?: string;
+  branch?: string;
+  file_path?: string;
+  already_configured?: boolean;
+  message?: string;
+}
+
+export function setupIaCGitHubValidation(
+  connectionID: string,
+): Promise<IaCGitHubSetupValidationResponse> {
+  return apiPost<IaCGitHubSetupValidationResponse>(
+    `/iac/github/connections/${encodeURIComponent(connectionID)}/setup-validation`,
+    {},
+  );
+}
+
 export function deleteIaCGitHubConnection(connectionID: string): Promise<void> {
   return apiDelete<void>(
     `/iac/github/connections/${encodeURIComponent(connectionID)}`,
