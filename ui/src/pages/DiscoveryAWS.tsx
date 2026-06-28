@@ -25,6 +25,7 @@ import {
   ChevronRight,
   Cloud,
   Copy,
+  FileCode,
   ExternalLink,
   GitPullRequest,
   Layers,
@@ -48,6 +49,7 @@ import useSWR from "swr";
 import {
   enableDemoConnection,
   generateAWSRecommendations,
+  generateAWSTerraformImport,
   listAWSConnections,
   listExcludedRecommendations,
   runAWSScan,
@@ -56,6 +58,7 @@ import {
   setRecommendationExclusion,
   validateAWSConnection,
   type AWSScanAllResponse,
+  type AWSTerraformImportResponse,
   type CloudConnection,
   type GenerateRecommendationsResponse,
   type RowSpanQuality,
@@ -1039,6 +1042,12 @@ function InventoryTab({
   // parent via onRecommendations.
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  // env->Terraform import-block generation (env->TF arc slice 3a).
+  const [importResult, setImportResult] =
+    useState<AWSTerraformImportResponse | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importCopied, setImportCopied] = useState(false);
 
   const onRun = useCallback(async () => {
     if (!selected || scanning) return;
@@ -1076,6 +1085,32 @@ function InventoryTab({
       setGenerating(false);
     }
   }, [result, generating, onRecommendations]);
+
+  const onGenerateImport = useCallback(async () => {
+    if (!result || importing) return;
+    setImporting(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const r = await generateAWSTerraformImport(result.account_id, result);
+      setImportResult(r);
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  }, [result, importing]);
+
+  const onCopyImport = useCallback(async () => {
+    if (!importResult?.terraform) return;
+    try {
+      await navigator.clipboard.writeText(importResult.terraform);
+      setImportCopied(true);
+      setTimeout(() => setImportCopied(false), 1800);
+    } catch {
+      // clipboard may be blocked; the <pre> is selectable.
+    }
+  }, [importResult]);
 
   return (
     <div className="space-y-4">
@@ -1149,6 +1184,12 @@ function InventoryTab({
           generating={generating}
           genError={genError}
           onGenerate={onGenerate}
+          importing={importing}
+          importError={importError}
+          importResult={importResult}
+          importCopied={importCopied}
+          onGenerateImport={onGenerateImport}
+          onCopyImport={onCopyImport}
         />
       )}
     </div>
@@ -1183,11 +1224,23 @@ function ScanResultPanel({
   generating,
   genError,
   onGenerate,
+  importing,
+  importError,
+  importResult,
+  importCopied,
+  onGenerateImport,
+  onCopyImport,
 }: {
   result: ScanResult;
   generating: boolean;
   genError: string | null;
   onGenerate: () => void;
+  importing: boolean;
+  importError: string | null;
+  importResult: AWSTerraformImportResponse | null;
+  importCopied: boolean;
+  onGenerateImport: () => void;
+  onCopyImport: () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -1247,6 +1300,66 @@ function ScanResultPanel({
             <p className="text-xs text-destructive">
               Recommendation generation failed: {genError}
             </p>
+          )}
+          <div className="flex flex-col gap-2 border-t pt-3 md:flex-row md:items-center md:justify-between">
+            <p className="text-xs text-muted-foreground">
+              Adopt un-managed resources into Terraform: generate{" "}
+              <code>import</code> blocks, then run{" "}
+              <code>terraform plan -generate-config-out</code>.
+            </p>
+            <Button
+              onClick={onGenerateImport}
+              disabled={importing}
+              variant="outline"
+              className="gap-1"
+            >
+              {importing ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <FileCode className="h-4 w-4" aria-hidden />
+              )}
+              {importing ? "Generating…" : "Generate Terraform to adopt"}
+            </Button>
+          </div>
+          {importError && (
+            <p className="text-xs text-destructive">
+              Import generation failed: {importError}
+            </p>
+          )}
+          {importResult && importResult.block_count === 0 && (
+            <p className="text-xs text-muted-foreground">
+              No resources in this scan have a supported import mapping yet.
+            </p>
+          )}
+          {importResult && importResult.block_count > 0 && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">
+                  {importResult.block_count} import block
+                  {importResult.block_count === 1 ? "" : "s"}:
+                </p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-xs"
+                  onClick={onCopyImport}
+                  aria-label="Copy import blocks"
+                >
+                  {importCopied ? (
+                    <Check className="mr-1 h-3 w-3" aria-hidden />
+                  ) : (
+                    <Copy className="mr-1 h-3 w-3" aria-hidden />
+                  )}
+                  {importCopied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              <pre
+                data-testid="tf-import-output"
+                className="max-h-72 overflow-auto rounded bg-muted p-2 text-xs"
+              >
+                {importResult.terraform}
+              </pre>
+            </div>
           )}
         </CardContent>
       </Card>

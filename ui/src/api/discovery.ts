@@ -707,6 +707,35 @@ export interface RecommendationJobStatusResponse {
 export const RECS_POLL_INTERVAL_MS = 2000;
 export const RECS_POLL_CEILING_MS = 180_000;
 
+// AWSTerraformImportResponse is the env->Terraform import-block preview
+// (env->TF arc slice 1). Synchronous: the endpoint returns the rendered
+// .tf directly (no job polling).
+export interface AWSTerraformImportSkipped {
+  provider: string;
+  category: string;
+  resource_id: string;
+  reason: string;
+}
+
+export interface AWSTerraformImportResponse {
+  terraform: string;
+  block_count: number;
+  skipped?: AWSTerraformImportSkipped[];
+}
+
+// generateAWSTerraformImport renders Terraform import{} blocks for the
+// resources in a scan result so the operator can adopt un-managed
+// resources via `terraform plan -generate-config-out`.
+export async function generateAWSTerraformImport(
+  accountID: string,
+  scanResult: ScanResult,
+): Promise<AWSTerraformImportResponse> {
+  return apiPost<AWSTerraformImportResponse>(
+    `/discovery/aws/connections/${encodeURIComponent(accountID)}/terraform-import`,
+    { scan_result: scanResult },
+  );
+}
+
 export async function generateAWSRecommendations(
   accountID: string,
   scanResult: ScanResult,
