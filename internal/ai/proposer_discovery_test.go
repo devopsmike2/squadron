@@ -3780,3 +3780,35 @@ func TestDiscoveryPrompt_ServerlessAddOnEnablement(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildDiscoveryUserMessage_RepoContext covers the v0.90 slice-2
+// repo-context block: empty RepoContext keeps the prompt unchanged
+// (cold-start parity), and a non-empty RepoContext is rendered verbatim
+// so the model sees the operator's real Terraform addresses.
+func TestBuildDiscoveryUserMessage_RepoContext(t *testing.T) {
+	// Parity: empty RepoContext must NOT introduce the block.
+	base := discoveryContextForTest()
+	baseMsg := buildDiscoveryUserMessage(*base)
+	if strings.Contains(baseMsg, "EXISTING TERRAFORM CONTEXT") {
+		t.Fatalf("empty RepoContext should not render the block; got:\n%s", baseMsg)
+	}
+
+	// With context: the block is rendered verbatim.
+	withCtx := discoveryContextForTest()
+	withCtx.RepoContext = "EXISTING TERRAFORM CONTEXT (the operator's repo):\nFile modules/compute/main.tf:\n  resources: aws_instance.this\n"
+	msg := buildDiscoveryUserMessage(*withCtx)
+	for _, want := range []string{
+		"EXISTING TERRAFORM CONTEXT",
+		"modules/compute/main.tf",
+		"aws_instance.this",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("RepoContext block missing %q; got:\n%s", want, msg)
+		}
+	}
+	// The block must appear before the closing JSON instruction so the
+	// model reads it as scan context, not as an afterthought.
+	if idxCtx, idxInstr := strings.Index(msg, "EXISTING TERRAFORM CONTEXT"), strings.Index(msg, "Return your plan as the JSON object"); idxCtx == -1 || idxInstr == -1 || idxCtx > idxInstr {
+		t.Errorf("RepoContext should precede the JSON instruction (ctx=%d instr=%d)", idxCtx, idxInstr)
+	}
+}
