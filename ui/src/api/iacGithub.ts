@@ -444,3 +444,30 @@ export function deleteIaCGitHubConnection(connectionID: string): Promise<void> {
     `/iac/github/connections/${encodeURIComponent(connectionID)}`,
   );
 }
+
+// env->Terraform import PR delivery (env->TF slice 3e). Opens a PR on
+// the IaC GitHub connection's repo adding/appending squadron_imports.tf
+// with import{} blocks for the scan's resources. provider selects the
+// mapper (aws|azure|gcp|oci); scanResult is the per-cloud scan payload
+// (the cloud's generate*TerraformImport wrapper shapes it the same way).
+export interface IaCGitHubTerraformImportPRResponse {
+  pr_number?: number;
+  pr_url?: string;
+  branch?: string;
+  file_path?: string;
+  block_count: number;
+  deduped?: number;
+  already_imported?: boolean;
+  message?: string;
+}
+
+export function openIaCGitHubTerraformImportPR(
+  connectionID: string,
+  provider: string,
+  scanResult: unknown,
+): Promise<IaCGitHubTerraformImportPRResponse> {
+  return apiPost<IaCGitHubTerraformImportPRResponse>(
+    `/iac/github/connections/${encodeURIComponent(connectionID)}/terraform-import-pr`,
+    { provider, scan_result: scanResult },
+  );
+}
