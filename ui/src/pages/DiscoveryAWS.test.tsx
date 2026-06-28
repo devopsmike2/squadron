@@ -32,6 +32,7 @@ import DiscoveryAWSPage from "./DiscoveryAWS";
 
 import {
   generateAWSRecommendations,
+  generateAWSTerraformImport,
   listAWSConnections,
   enableDemoConnection,
   listExcludedRecommendations,
@@ -85,6 +86,7 @@ vi.mock("@/api/discovery", async () => {
     saveAWSConnection: vi.fn(),
     validateAWSConnection: vi.fn(),
     generateAWSRecommendations: vi.fn(),
+    generateAWSTerraformImport: vi.fn(),
     // v0.89.7b (#619 Stream 23) — scanAllAWS is mocked via vi.spyOn
     // inside the scan-all tests; declaring it as vi.fn() here lets
     // vi.mocked(...) typing work without breaking the tests that
@@ -125,6 +127,7 @@ const mockedListAWSConnections = vi.mocked(listAWSConnections);
 const mockedEnableDemoConnection = vi.mocked(enableDemoConnection);
 const mockedRunAWSScan = vi.mocked(runAWSScan);
 const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
+const mockedGenerateAWSTerraformImport = vi.mocked(generateAWSTerraformImport);
 const mockedListIaCConnections = vi.mocked(listIaCGitHubConnections);
 const mockedOpenPullRequest = vi.mocked(openIaCGitHubPullRequest);
 const mockedSetRecommendationExclusion = vi.mocked(setRecommendationExclusion);
@@ -3706,5 +3709,50 @@ describe("DiscoveryAWSPage", () => {
     const cell = screen.getByTestId("propagation-cell");
     expect(cell).toHaveAttribute("data-value", "unknown");
     expect(cell).toHaveTextContent("—");
+  });
+
+  it("Inventory: Generate Terraform to adopt renders import blocks", async () => {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue(sampleScan);
+    mockedGenerateAWSTerraformImport.mockResolvedValue({
+      terraform:
+        '# Squadron import blocks\nimport {\n  to = aws_instance.imported_i_0abc\n  id = "i-0abc"\n}\n',
+      block_count: 1,
+    });
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", { name: /Connected account/i });
+    await user.click(select);
+    const option = await screen.findByRole("option", {
+      name: /Prod AWS \(123456789012\)/,
+    });
+    await user.click(option);
+    const runBtn = await screen.findByRole("button", { name: /Run scan/i });
+    await user.click(runBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+    });
+
+    const importBtn = await screen.findByRole("button", {
+      name: /Generate Terraform to adopt/i,
+    });
+    await user.click(importBtn);
+
+    await waitFor(() => {
+      expect(mockedGenerateAWSTerraformImport).toHaveBeenCalledWith(
+        "123456789012",
+        sampleScan,
+      );
+    });
+    const out = await screen.findByTestId("tf-import-output");
+    expect(out.textContent).toContain("aws_instance.imported_i_0abc");
+    expect(out.textContent).toContain('id = "i-0abc"');
   });
 });
