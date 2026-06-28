@@ -276,6 +276,19 @@ type DiscoveryScanContext struct {
 	// drops the block entirely so the cold-start prompt remains
 	// byte-for-byte identical to the slice 1 (v0.89.28) output.
 	VerdictBlock string
+
+	// RepoContext — v0.90 (context-aware-merge-ready-prs arc, slice 2)
+	// — an optional, pre-rendered prompt block summarising the
+	// operator's EXISTING Terraform (real resource addresses, data
+	// sources, variables, providers, modules) for the placement
+	// file(s) the recommendation would touch. Built deterministically
+	// by internal/iac/hclsummary from files fetched via the IaC
+	// connection PAT — no AI tokens spent parsing. Lets the model
+	// generate snippets that reference the operator's REAL addresses
+	// instead of inventing names. Empty for callers without a wired
+	// IaC connection; when empty the block is dropped so the
+	// cold-start prompt stays byte-for-byte identical.
+	RepoContext string
 }
 
 // ScopeID — v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5)

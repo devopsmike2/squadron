@@ -999,6 +999,19 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 		b.WriteString("\n")
 	}
 
+	// v0.90 (context-aware-merge-ready-prs arc, slice 2) — existing
+	// Terraform context. Rendered only when the wiring layer fetched
+	// + summarised the operator's placement file(s); empty keeps the
+	// prompt byte-for-byte identical to the pre-v0.90 output (the
+	// cold-start / no-IaC-connection path).
+	if in.RepoContext != "" {
+		b.WriteString(in.RepoContext)
+		if !strings.HasSuffix(in.RepoContext, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
 	// v0.89.28 (#643 slice 1) → v0.89.36 (#655 Stream 53, #531 slice
 	// 2 chunk 3) — verdict prompt block. Two insertion paths:
 	//
