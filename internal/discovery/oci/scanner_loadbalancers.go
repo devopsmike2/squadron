@@ -47,7 +47,13 @@ func (s *Scanner) scanLoadBalancers(ctx context.Context, sk *SigningKey, comps [
 		if listErr != nil {
 			reason := classifyOCITierError(ServiceIDLoadBalancer, "load balancer", listErr)
 			if reason == "" {
-				continue
+				// A 404 on the per-compartment LIST call is not a
+				// vanished-mid-walk skip (we are iterating compartments
+				// we already discovered): the service denied or could
+				// not find the listing — commonly a missing read/inspect
+				// policy on this tier. Surface it instead of silently
+				// reporting zero load balancers.
+				reason = fmt.Sprintf("%s: list returned HTTP 404 (NotAuthorizedOrNotFound) for compartment %s — verify the discovery policy grants read load-balancers", ServiceIDLoadBalancer, comp.ID)
 			}
 			recordPartialFailure(result, ServiceIDLoadBalancer, reason)
 			continue

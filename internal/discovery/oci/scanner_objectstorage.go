@@ -69,7 +69,10 @@ func (s *Scanner) scanObjectStorage(ctx context.Context, sk *SigningKey, comps [
 		if listErr != nil {
 			reason := classifyOCITierError(ServiceIDObjectStorage, "bucket", listErr)
 			if reason == "" {
-				continue
+				// A 404 on the per-compartment bucket LIST is meaningful
+				// (we already discovered this compartment) — surface it
+				// rather than silently reporting zero buckets.
+				reason = fmt.Sprintf("%s: bucket list returned HTTP 404 (NotAuthorizedOrNotFound) for compartment %s — verify the discovery policy grants read buckets", ServiceIDObjectStorage, comp.ID)
 			}
 			recordPartialFailure(result, ServiceIDObjectStorage, reason)
 			continue
