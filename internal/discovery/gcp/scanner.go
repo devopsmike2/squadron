@@ -317,6 +317,15 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		walkedRegions[s.Region] = struct{}{}
 	}
 
+	// Cloud Storage (object-store tier — coverage-parity arc slice 1).
+	// Independent of the other walks; a build-client or list failure is
+	// recorded against ServiceIDGCS and does not halt the scan.
+	if storageClient, gcsErr := s.buildStorageClient(ctx, oauthClient); gcsErr != nil {
+		recordPartialFailure(&result, ServiceIDGCS, fmt.Sprintf("%s: build client: %s", ServiceIDGCS, truncate(gcsErr.Error(), 200)))
+	} else if werr := s.walkGCS(ctx, storageClient, &result); werr != nil {
+		recordPartialFailure(&result, ServiceIDGCS, classifyGCSListError(werr))
+	}
+
 	// Cold-start latency slice 2 chunk 1 (v0.89.118, #756 Stream 154)
 	// — per-row cold-start detection for the Cloud Run +
 	// Cloud Functions snapshots ScanServerless populated. Mirrors the
@@ -393,6 +402,15 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// Inventory tab honest about the same denominator.
 	for _, sv := range result.Serverless {
 		if sv.IsInstrumented() {
+			result.InstrumentedCount++
+		} else {
+			result.UninstrumentedCount++
+		}
+	}
+	// Object stores: a GCS bucket is instrumented when usage/access
+	// logging is configured (ServerAccessLoggingEnabled), mirroring S3.
+	for _, o := range result.ObjectStores {
+		if o.ServerAccessLoggingEnabled {
 			result.InstrumentedCount++
 		} else {
 			result.UninstrumentedCount++
@@ -649,6 +667,8 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 		// as the project-level IAM grants.
 		RunReadonlyScope,
 		CloudFunctionsPlatformScope,
+		// Object-store tier (coverage-parity arc) — GCS bucket read.
+		StorageReadOnlyScope,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gcp: parse credential JSON: %w", err)

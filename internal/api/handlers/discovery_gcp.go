@@ -824,6 +824,7 @@ type gcpScanResponse struct {
 	Compute             []scanner.ComputeInstanceSnapshot  `json:"compute"`
 	Databases           []scanner.DatabaseInstanceSnapshot `json:"databases,omitempty"`
 	Clusters            []scanner.ClusterSnapshot          `json:"clusters,omitempty"`
+	ObjectStores        []scanner.ObjectStoreSnapshot      `json:"object_stores,omitempty"`
 	InstrumentedCount   int                                `json:"instrumented_count"`
 	UninstrumentedCount int                                `json:"uninstrumented_count"`
 	Partial             bool                               `json:"partial"`
@@ -912,6 +913,7 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 			Compute:             r.Compute,
 			Databases:           r.Databases,
 			Clusters:            r.Clusters,
+			ObjectStores:        r.ObjectStores,
 			InstrumentedCount:   instr,
 			UninstrumentedCount: uninstr,
 			Partial:             false,
@@ -1086,6 +1088,7 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 		Compute:             result.Compute,
 		Databases:           result.Databases,
 		Clusters:            result.Clusters,
+		ObjectStores:        result.ObjectStores,
 		InstrumentedCount:   instrumentedCount,
 		UninstrumentedCount: uninstrumentedCount,
 		Partial:             result.Partial,
