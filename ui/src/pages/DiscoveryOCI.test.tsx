@@ -215,7 +215,9 @@ describe("DiscoveryOCI", () => {
     await user.click(screen.getByRole("tab", { name: /Inventory/i }));
     await user.click(screen.getByRole("tab", { name: /Wizard/i }));
     // The in-progress value must still be there (would be "" pre-fix).
-    expect(screen.getByLabelText(/Display name/i)).toHaveValue("Persisted Tenancy");
+    expect(screen.getByLabelText(/Display name/i)).toHaveValue(
+      "Persisted Tenancy",
+    );
   });
 
   it("TestDiscoveryOCI_WizardStep1_TenancyOCIDValidation", async () => {
@@ -411,6 +413,67 @@ describe("DiscoveryOCI", () => {
     expect(mockedCreateOCIConnection).toHaveBeenCalledTimes(1);
     expect(mockedValidateOCIConnection).toHaveBeenCalledWith(
       sampleConnection.id,
+    );
+  });
+
+  it("TestDiscoveryOCI_WizardStep5_EditCredentialAfterSuccess_Recreates", async () => {
+    // Regression guard for the credentials_invalid dead end found
+    // during the OCI live-validate: editing any credential field must
+    // re-create (re-seal) the connection on the next validate, even
+    // when the prior validate SUCCEEDED. The old guard only re-created
+    // when validateResult?.ok === false, so an edit after success (or
+    // after the result was cleared by step navigation) silently
+    // re-tested the stale connection — trapping the operator forever.
+    const user = userEvent.setup();
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    expect(mockedCreateOCIConnection).toHaveBeenCalledTimes(1);
+
+    // Go back to the credentials step and change the fingerprint.
+    fireEvent.click(screen.getByRole("button", { name: /^Back$/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Fingerprint/i)).toBeInTheDocument();
+    });
+    const editedFingerprint = "11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00";
+    fireEvent.change(screen.getByLabelText(/Fingerprint/i), {
+      target: { value: editedFingerprint },
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Next$/i })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Validate connection/i }),
+      ).toBeInTheDocument();
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+
+    await waitFor(() => {
+      expect(mockedCreateOCIConnection).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedCreateOCIConnection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fingerprint: editedFingerprint }),
     );
   });
 
