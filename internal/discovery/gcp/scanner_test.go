@@ -23,6 +23,7 @@ import (
 	container "google.golang.org/api/container/v1beta1"
 	run "google.golang.org/api/run/v1"
 	sqladmin "google.golang.org/api/sqladmin/v1beta4"
+	storage "google.golang.org/api/storage/v1"
 
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 )
@@ -46,6 +47,12 @@ type fakeGCP struct {
 
 	// Zones is the static zones list served by zones.list.
 	Zones []*compute.Zone
+
+	// Buckets is the static GCS bucket list served by buckets.list
+	// (object-store tier — coverage-parity arc).
+	Buckets []*storage.Bucket
+	// BucketsListStatus, when non-zero, makes buckets.list return it.
+	BucketsListStatus int
 
 	// InstancesByZone maps zone name → instances list response. The
 	// mock returns an empty list when a zone isn't seeded.
@@ -309,6 +316,17 @@ func (f *fakeGCP) handler() http.Handler {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
+			return
+		case strings.HasSuffix(path, "/b"):
+			// GCS Buckets.List path shape: {base}/b?project=...
+			// handler() already holds f.mu (locked at the top), so read
+			// the seed fields directly — re-locking would deadlock.
+			if f.BucketsListStatus != 0 {
+				writeAPIError(w, f.BucketsListStatus, statusReason(f.BucketsListStatus), statusName(f.BucketsListStatus))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(storage.Buckets{Items: f.Buckets})
 			return
 		}
 
@@ -1586,4 +1604,61 @@ func TestScanServerless_LocationEnumerationWhenRegionEmpty(t *testing.T) {
 
 	cloudRun := serverlessBySurface(res.Serverless, cloudRunServerlessSurface)
 	require.Len(t, cloudRun, 2)
+}
+
+// TestScan_GCSObjectStores covers the object-store tier (coverage-parity
+// arc slice 1): GCS buckets project into ObjectStoreSnapshot, and a
+// bucket with usage/access logging configured counts as instrumented.
+func TestScan_GCSObjectStores(t *testing.T) {
+	fake := newFakeGCP()
+	fake.Buckets = []*storage.Bucket{
+		{
+			Name:     "logs-enabled-bucket",
+			Location: "US",
+			Logging:  &storage.BucketLogging{LogBucket: "target-bucket"},
+			Labels:   map[string]string{"env": "prod"},
+		},
+		{
+			Name:     "no-logs-bucket",
+			Location: "US-EAST1",
+		},
+	}
+	s := newScannerWithFake(t, fake, "proj", "")
+	result, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result.ObjectStores, 2)
+
+	var sawEnabled, sawDisabled bool
+	for _, o := range result.ObjectStores {
+		switch o.ResourceID {
+		case "logs-enabled-bucket":
+			sawEnabled = true
+			assert.True(t, o.ServerAccessLoggingEnabled, "logging bucket should be instrumented")
+			assert.Equal(t, "us", o.Region)
+			assert.Equal(t, "prod", o.Tags["env"])
+		case "no-logs-bucket":
+			sawDisabled = true
+			assert.False(t, o.ServerAccessLoggingEnabled)
+		}
+	}
+	assert.True(t, sawEnabled && sawDisabled, "both buckets should be present")
+	assert.GreaterOrEqual(t, result.InstrumentedCount, 1, "the logging bucket adds to instrumented count")
+}
+
+// TestScan_GCSListError_PartialNotFatal confirms a buckets.list failure
+// is recorded as a partial failure (gcs) without failing the scan.
+func TestScan_GCSListError_PartialNotFatal(t *testing.T) {
+	fake := newFakeGCP()
+	fake.BucketsListStatus = http.StatusForbidden
+	s := newScannerWithFake(t, fake, "proj", "")
+	result, err := s.Scan(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Partial)
+	found := false
+	for _, fs := range result.FailedServices {
+		if fs == ServiceIDGCS {
+			found = true
+		}
+	}
+	assert.True(t, found, "gcs should be in FailedServices: %v", result.FailedServices)
 }
