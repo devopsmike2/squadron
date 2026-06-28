@@ -500,6 +500,7 @@ func (s *Scanner) walkZoneInstances(ctx context.Context, client *compute.Service
 func projectInstance(inst *compute.Instance, region string) scanner.ComputeInstanceSnapshot {
 	snap := scanner.ComputeInstanceSnapshot{
 		ResourceID:   inst.Name,
+		ImportID:     importIDFromSelfLink(inst.SelfLink), // project/zone/name = google_compute_instance import id
 		InstanceType: trimMachineType(inst.MachineType),
 		Tags:         copyLabels(inst.Labels),
 		HasOTel:      hasOTelLabel(inst.Labels),
@@ -771,4 +772,31 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// importIDFromSelfLink derives the google_compute_instance terraform
+// import ID ("project/zone/name") from a GCE instance SelfLink such as
+// https://www.googleapis.com/compute/v1/projects/P/zones/Z/instances/N.
+// Returns "" when the SelfLink doesn't carry all three segments, so the
+// import-block generator skips rather than emit a malformed ID.
+func importIDFromSelfLink(selfLink string) string {
+	if selfLink == "" {
+		return ""
+	}
+	var project, zone, name string
+	parts := strings.Split(selfLink, "/")
+	for i := 0; i+1 < len(parts); i++ {
+		switch parts[i] {
+		case "projects":
+			project = parts[i+1]
+		case "zones":
+			zone = parts[i+1]
+		case "instances":
+			name = parts[i+1]
+		}
+	}
+	if project == "" || zone == "" || name == "" {
+		return ""
+	}
+	return project + "/" + zone + "/" + name
 }

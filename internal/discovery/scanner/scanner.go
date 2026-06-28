@@ -317,6 +317,14 @@ type ComputeInstanceSnapshot struct {
 	// instance name / Azure VM id / VMware vmref.
 	ResourceID string `json:"resource_id"`
 
+	// ImportID — env->Terraform arc — the provider-canonical
+	// `terraform import` ID when it differs from ResourceID. AWS:
+	// empty (ResourceID already equals the import ID). Azure: the
+	// full ARM resource ID. GCP: "project/zone/name". OCI: the OCID.
+	// Empty means "no safe import ID captured" — the import-block
+	// generator skips rather than guess.
+	ImportID string `json:"import_id,omitempty"`
+
 	// InstanceType is the provider-specific shape: m5.large /
 	// n2-standard-4 / Standard_D4s_v3 / etc. Left as a raw string —
 	// the proposer normalizes when reasoning about cost.

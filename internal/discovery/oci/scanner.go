@@ -440,6 +440,7 @@ func projectInstance(inst ociInstance, fallbackRegion string) scanner.ComputeIns
 	tags := flattenTags(inst.FreeformTags, inst.DefinedTags)
 	return scanner.ComputeInstanceSnapshot{
 		ResourceID:   inst.DisplayName,
+		ImportID:     inst.ID, // OCID = oci_core_instance import id
 		InstanceType: inst.Shape,
 		Tags:         tags,
 		HasOTel:      hasOTelTag(tags),
