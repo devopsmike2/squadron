@@ -175,6 +175,14 @@ type DiscoveryHandlers struct {
 	// DiscoveryScanStore interface); tests substitute a fake.
 	scanStore DiscoveryScanStore
 
+	// repoContextProvider — v0.90 (context-aware-merge-ready-prs arc,
+	// slice 2b) — optional. When wired, HandleAWSGenerateRecommendations
+	// asks it for an EXISTING TERRAFORM CONTEXT block summarising the
+	// operator's real placement-map files, so the proposer generates
+	// snippets against real resource addresses. Nil-safe: nil means no
+	// repo context (cold-start prompt unchanged).
+	repoContextProvider DiscoveryRepoContextProvider
+
 	// v0.89.44 (#665 Stream 63, slice 1 chunk 4 of the GitHub Checks
 	// API back-signal arc). All four fields are optional: when any one
 	// is nil/empty the chunk-4 PATCH-to-neutral follow-up inside
@@ -419,6 +427,22 @@ func (h *DiscoveryHandlers) WithExclusionStore(s DiscoveryExclusionStore) *Disco
 // WithScanStore wires the persisted scan-history store (v0.89.250,
 // continuous-discovery slice 1). Nil keeps scans non-persisted and the
 // history endpoints 503ing — the pre-v0.89.250 posture.
+// DiscoveryRepoContextProvider builds an EXISTING TERRAFORM CONTEXT
+// prompt block for a cloud scope by summarising the operator's IaC
+// placement files. Implemented by *repocontext.Provider in the wiring
+// layer. Returns "" when there is nothing usable; never errors so
+// recommendation generation always proceeds.
+type DiscoveryRepoContextProvider interface {
+	RepoContextForScope(ctx context.Context, cloudProvider, accountID string) string
+}
+
+// WithRepoContextProvider wires the optional repo-context provider
+// (v0.90 arc slice 2b). Nil-safe.
+func (h *DiscoveryHandlers) WithRepoContextProvider(p DiscoveryRepoContextProvider) *DiscoveryHandlers {
+	h.repoContextProvider = p
+	return h
+}
+
 func (h *DiscoveryHandlers) WithScanStore(s DiscoveryScanStore) *DiscoveryHandlers {
 	h.scanStore = s
 	return h
@@ -2983,6 +3007,14 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			acceptedURLs = urls
 			acceptedURLsByState = byState
 		}
+	}
+
+	// v0.90 (arc slice 2b) — existing-Terraform context. Best-effort:
+	// the provider returns "" on any failure so recommendation
+	// generation always proceeds; empty keeps the prompt unchanged.
+	if h.repoContextProvider != nil {
+		aiCtx.RepoContext = h.repoContextProvider.RepoContextForScope(
+			c.Request.Context(), "aws", req.ScanResult.AccountID)
 	}
 
 	// v0.89.209 async: the proposer call (sonnet-4-6 @ 8192 tokens) can run

@@ -30,6 +30,8 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/events"
+	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
+	"github.com/devopsmike2/squadron/internal/iac/repocontext"
 	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
@@ -1038,6 +1040,13 @@ func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin
 		}
 		if s.appStore != nil {
 			h.WithScanStore(s.appStore)
+		}
+		// v0.90 (context-aware-merge-ready-prs arc, slice 2b) — wire the
+		// repo-context provider so recommendations are generated against
+		// the operator's real Terraform. New() returns nil (no-op) when
+		// the IaC store or credstore key isn't wired.
+		if rcp := repocontext.New(s.iacConnStore, func(token string) repocontext.FileClient { return iacgithub.NewPATClient(token) }, s.discoveryCredKey, s.logger); rcp != nil {
+			h.WithRepoContextProvider(rcp)
 		}
 		fn(h, c)
 	}
