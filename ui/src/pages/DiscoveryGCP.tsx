@@ -64,6 +64,7 @@ import {
   type EventSourceRow,
   type ValidateGCPResponse,
 } from "@/api/discoveryGCP";
+import { openIaCGitHubTerraformImportPR } from "@/api/iacGithub";
 import { TerraformAdoptCard } from "@/components/discovery/TerraformAdoptCard";
 import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
@@ -1084,6 +1085,13 @@ function InventoryTab({
       <InventorySummary scan={scan} />
       <TerraformAdoptCard
         onGenerate={() => generateGCPTerraformImport(scan.connection_id, scan)}
+        onOpenPR={(iacConnectionID) =>
+          openIaCGitHubTerraformImportPR(iacConnectionID, "gcp", {
+            scan_id: scan.scan_id,
+            project_id: scan.project_id,
+            compute: scan.compute,
+          })
+        }
       />
       <Tabs defaultValue={INVENTORY_SUBTAB_COMPUTE}>
         <TabsList>

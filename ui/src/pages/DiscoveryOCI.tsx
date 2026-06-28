@@ -73,6 +73,7 @@ import {
   type EventSourceRow,
   type ValidateOCIResponse,
 } from "@/api/discoveryOCI";
+import { openIaCGitHubTerraformImportPR } from "@/api/iacGithub";
 import { TerraformAdoptCard } from "@/components/discovery/TerraformAdoptCard";
 import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
@@ -1300,6 +1301,13 @@ function InventoryTab({
       <InventorySummary scan={scan} />
       <TerraformAdoptCard
         onGenerate={() => generateOCITerraformImport(scan.connection_id, scan)}
+        onOpenPR={(iacConnectionID) =>
+          openIaCGitHubTerraformImportPR(iacConnectionID, "oci", {
+            scan_id: scan.scan_id,
+            tenancy_ocid: scan.tenancy_ocid,
+            compute: scan.computes,
+          })
+        }
       />
       <Tabs defaultValue={INVENTORY_SUBTAB_COMPUTE}>
         <TabsList>

@@ -67,6 +67,7 @@ import {
   type EventSourceRow,
   type ValidateAzureResponse,
 } from "@/api/discoveryAzure";
+import { openIaCGitHubTerraformImportPR } from "@/api/iacGithub";
 import { TerraformAdoptCard } from "@/components/discovery/TerraformAdoptCard";
 import { WizardShell } from "@/components/discovery/WizardShell";
 import { Badge } from "@/components/ui/badge";
@@ -1147,6 +1148,13 @@ function InventoryTab({
       <TerraformAdoptCard
         onGenerate={() =>
           generateAzureTerraformImport(scan.connection_id, scan)
+        }
+        onOpenPR={(iacConnectionID) =>
+          openIaCGitHubTerraformImportPR(iacConnectionID, "azure", {
+            scan_id: scan.scan_id,
+            subscription_id: scan.subscription_id,
+            compute: scan.compute,
+          })
         }
       />
       <Tabs defaultValue={INVENTORY_SUBTAB_COMPUTE}>

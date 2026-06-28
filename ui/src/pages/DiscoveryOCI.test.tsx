@@ -33,6 +33,10 @@ import {
   type OCIConnection,
   type ScanOCIResponse,
 } from "@/api/discoveryOCI";
+import {
+  listIaCGitHubConnections,
+  openIaCGitHubTerraformImportPR,
+} from "@/api/iacGithub";
 
 // jsdom polyfills for Radix Select / Tabs pointer-capture lookups.
 // Same posture as the Azure test file — without these the components
@@ -67,12 +71,24 @@ vi.mock("@/api/discoveryOCI", async () => {
   };
 });
 
+vi.mock("@/api/iacGithub", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/api/iacGithub")>("@/api/iacGithub");
+  return {
+    ...actual,
+    listIaCGitHubConnections: vi.fn(),
+    openIaCGitHubTerraformImportPR: vi.fn(),
+  };
+});
+
 const mockedListOCIConnections = vi.mocked(listOCIConnections);
 const mockedEnableOCIDemo = vi.mocked(enableOCIDemoConnection);
 const mockedCreateOCIConnection = vi.mocked(createOCIConnection);
 const mockedValidateOCIConnection = vi.mocked(validateOCIConnection);
 const mockedScanOCIConnection = vi.mocked(scanOCIConnection);
 const mockedGenerateOCITerraformImport = vi.mocked(generateOCITerraformImport);
+const mockedListIaCConns = vi.mocked(listIaCGitHubConnections);
+const mockedOpenImportPR = vi.mocked(openIaCGitHubTerraformImportPR);
 
 // renderPage wraps the page in a fresh SWRConfig so each test starts
 // with an empty cache. Mirrors the Azure page's renderPage helper.
@@ -710,6 +726,69 @@ describe("DiscoveryOCI", () => {
       sampleScan,
     );
     expect(screen.getByText(/1 import block:/)).toBeInTheDocument();
+  });
+
+  it("TestDiscoveryOCI_InventoryTab_OpenImportPR", async () => {
+    // env->TF slice 3f — the inventory "Open import PR" button lazily
+    // lists IaC GitHub connections and delivers the import blocks as a
+    // PR to the (single) connected repo, rendering the PR link.
+    const user = userEvent.setup();
+    mockedListOCIConnections.mockResolvedValue([sampleConnection]);
+    mockedCreateOCIConnection.mockResolvedValue(sampleConnection);
+    mockedValidateOCIConnection.mockResolvedValue({
+      ok: true,
+      instance_count: 5,
+    });
+    mockedScanOCIConnection.mockResolvedValue(sampleScan);
+    mockedListIaCConns.mockResolvedValue({
+      connections: [
+        {
+          connection_id: "iac-1",
+          provider: "github",
+          auth_kind: "pat",
+          repo_full_name: "octo/widgets",
+          default_branch: "main",
+          repo_layout: "multi",
+          placement_map: [],
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+    mockedOpenImportPR.mockResolvedValue({
+      block_count: 2,
+      pr_number: 9,
+      pr_url: "https://github.com/octo/widgets/pull/9",
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Wizard/i })).toBeInTheDocument();
+    });
+    await advanceToValidateScanStep(user);
+    await user.click(
+      screen.getByRole("button", { name: /Validate connection/i }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Connected — 5 compute instances visible/i),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Instances: 5/)).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /Open import PR/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tf-pr-result")).toBeInTheDocument();
+    });
+    expect(mockedOpenImportPR).toHaveBeenCalledWith(
+      "iac-1",
+      "oci",
+      expect.objectContaining({ compute: sampleScan.computes }),
+    );
+    expect(screen.getByText(/octo\/widgets\/pull\/9/)).toBeInTheDocument();
   });
 
   it("TestDiscoveryOCI_RecommendationsTab_EmptyStateWithoutScan", async () => {
