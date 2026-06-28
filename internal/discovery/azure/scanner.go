@@ -297,6 +297,13 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// the two-axis (HasTraceAxis + HasOTelDistro) detection result.
 	s.scanAzureFunctions(ctx, token, &result)
 
+	// Coverage-parity arc slice 3 — object-store (Storage Accounts) +
+	// load-balancer tiers, same OAuth token, partial-failure isolated
+	// under azurestorage / azurelb. Emits rows like the SQL/AKS/
+	// serverless walks above.
+	s.scanAzureStorage(ctx, token, &result)
+	s.scanAzureLoadBalancers(ctx, token, &result)
+
 	return result, nil
 }
 
