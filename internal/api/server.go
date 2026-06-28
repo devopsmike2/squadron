@@ -2872,6 +2872,13 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubOpenPR(c) }))
 
+		// v0.90 (context-aware-merge-ready-prs arc, slice 3) — open a
+		// one-time PR adding the terraform-validate GitHub Action (the
+		// merge-ready gate).
+		v1.POST("/iac/github/connections/:id/setup-validation",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubSetupValidation(c) }))
+
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
 		// of the cost-insights surface.

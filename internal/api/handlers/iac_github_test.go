@@ -1290,3 +1290,81 @@ func TestHandleIaCGitHubOpenPR_ExcludeComments_StripsBannerAndSnippetComments(t 
 		t.Errorf("exclude_comments: attribute should survive, got:\n%s", content)
 	}
 }
+
+func setupValidationRegisterFor(h *IaCGitHubHandlers) func(r *gin.Engine) {
+	return func(r *gin.Engine) {
+		r.POST("/api/v1/iac/github/connections", h.HandleIaCGitHubSaveConnection)
+		r.POST("/api/v1/iac/github/connections/:id/setup-validation", h.HandleIaCGitHubSetupValidation)
+	}
+}
+
+// TestHandleIaCGitHubSetupValidation_OpensWorkflowPR covers slice 3:
+// the one-time PR that adds the terraform-validate GitHub Action. The
+// committed file lands at .github/workflows/squadron-validate.yml and
+// carries the validate workflow.
+func TestHandleIaCGitHubSetupValidation_OpensWorkflowPR(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tipsha",
+		// GetFileContent default returns ErrFileNotFound → no collision.
+		openPRResp: &iacgithub.PullRequest{
+			Number: 91, HTMLURL: "https://github.com/octo/widgets/pull/91", HeadSHA: "wf",
+		},
+	}
+	h, _ := newTestIaCHandlers(t, mc, &discoveryRecordingAudit{})
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"ec2-otel-layer","file_path":"modules/compute/main.tf"}`)
+
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/setup-validation",
+		setupValidationRegisterFor(h), `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "/pull/91") {
+		t.Errorf("response missing PR url: %s", w.Body.String())
+	}
+	if len(mc.putFileCalls) != 1 {
+		t.Fatalf("putFile calls = %d, want 1", len(mc.putFileCalls))
+	}
+	put := mc.putFileCalls[0]
+	if put.Path != ".github/workflows/squadron-validate.yml" {
+		t.Errorf("workflow path = %q", put.Path)
+	}
+	for _, want := range []string{"terraform", "validate", "Squadron Terraform Validate", "-backend=false"} {
+		if !strings.Contains(string(put.Content), want) {
+			t.Errorf("workflow content missing %q", want)
+		}
+	}
+	// Setup branch is the dedicated one, not a squadron/rec branch.
+	if put.Branch != "squadron/setup/terraform-validate" {
+		t.Errorf("branch = %q, want squadron/setup/terraform-validate", put.Branch)
+	}
+}
+
+// TestHandleIaCGitHubSetupValidation_AlreadyConfigured returns a clean
+// already_configured response (no PR) when the workflow is present.
+func TestHandleIaCGitHubSetupValidation_AlreadyConfigured(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tipsha",
+		fileResp: map[string]*iacgithub.FileContent{
+			".github/workflows/squadron-validate.yml": {Path: ".github/workflows/squadron-validate.yml", DecodedContent: []byte("name: Squadron Terraform Validate\n")},
+		},
+	}
+	h, _ := newTestIaCHandlers(t, mc, &discoveryRecordingAudit{})
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"ec2-otel-layer","file_path":"modules/compute/main.tf"}`)
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/setup-validation",
+		setupValidationRegisterFor(h), `{}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "already_configured") {
+		t.Errorf("expected already_configured response, got: %s", w.Body.String())
+	}
+	if len(mc.putFileCalls) != 0 {
+		t.Errorf("no PUT expected when already configured, got %d", len(mc.putFileCalls))
+	}
+}
