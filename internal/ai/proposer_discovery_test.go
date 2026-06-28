@@ -437,6 +437,42 @@ func TestBuildDiscoveryUserMessage_ObjectStores_LoadBalancers(t *testing.T) {
 	}
 }
 
+// TestBuildDiscoveryUserMessage_MultiCloudTiers_ProviderRouting verifies
+// coverage-parity slice 5b: object-store + load-balancer rows render
+// provider= so the proposer routes to the per-cloud lever, and OCI rows
+// render as detection-deferred (inventory only) so the model does not
+// emit false-positive recommendations for tiers OCI logging detection
+// does not yet cover.
+func TestBuildDiscoveryUserMessage_MultiCloudTiers_ProviderRouting(t *testing.T) {
+	ctx := discoveryContextForTest()
+	ctx.ObjectStores = []ObjectStoreCandidate{
+		{ResourceID: "gcs-logs", Region: "us-central1", ServerAccessLoggingEnabled: false, Provider: "gcp"},
+		{ResourceID: "blobacct", Region: "eastus", ServerAccessLoggingEnabled: true, Provider: "azure"},
+		{ResourceID: "ocibucket", Region: "us-phoenix-1", ServerAccessLoggingEnabled: true, Provider: "oci"},
+	}
+	ctx.LoadBalancers = []LoadBalancerCandidate{
+		{ResourceID: "gclb1", Name: "gclb1", Type: "load-balancer", Scheme: "internet-facing", AccessLogsEnabled: false, Region: "us-central1", Provider: "gcp"},
+		{ResourceID: "ocilb1", Name: "ocilb1", Type: "load-balancer", Scheme: "internal", AccessLogsEnabled: false, Region: "us-phoenix-1", Provider: "oci"},
+	}
+	msg := buildDiscoveryUserMessage(*ctx)
+
+	for _, want := range []string{
+		"provider=gcp", "provider=azure", "provider=oci",
+		"gcs-logs", "blobacct", "ocibucket",
+		"gclb1", "ocilb1",
+		// OCI rows must be flagged deferred (inventory only) so the
+		// model declines to recommend for them.
+		"detection deferred (inventory only",
+	} {
+		assert.Contains(t, msg, want, "prompt should include %q", want)
+	}
+	// The deferred phrase must appear for BOTH OCI tiers (object store +
+	// load balancer), so it occurs at least twice.
+	if got := strings.Count(msg, "detection deferred (inventory only"); got < 2 {
+		t.Fatalf("expected >=2 OCI deferred markers (object store + LB), got %d", got)
+	}
+}
+
 // TestProposeFromDiscoveryScan_Disabled documents the gate: a service
 // constructed without an API key short-circuits to ErrDisabled so
 // callers don't have to nil-check the service.

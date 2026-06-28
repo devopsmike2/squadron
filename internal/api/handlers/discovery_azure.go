@@ -1355,6 +1355,25 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 			DatabaseManagementEnabled:  db.DatabaseManagementEnabled,
 		})
 	}
+	for _, o := range req.ScanResult.ObjectStores {
+		aiCtx.ObjectStores = append(aiCtx.ObjectStores, ai.ObjectStoreCandidate{
+			ResourceID:                 o.ResourceID,
+			Region:                     o.Region,
+			ServerAccessLoggingEnabled: o.ServerAccessLoggingEnabled,
+			Provider:                   "azure",
+		})
+	}
+	for _, l := range req.ScanResult.LoadBalancers {
+		aiCtx.LoadBalancers = append(aiCtx.LoadBalancers, ai.LoadBalancerCandidate{
+			ResourceID:        l.ResourceID,
+			Name:              l.Name,
+			Type:              l.Type,
+			Scheme:            l.Scheme,
+			AccessLogsEnabled: l.AccessLogsEnabled,
+			Region:            l.Region,
+			Provider:          "azure",
+		})
+	}
 	for _, cl := range req.ScanResult.Clusters {
 		addonNames := make([]string, 0, len(cl.Addons))
 		for _, a := range cl.Addons {

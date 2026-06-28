@@ -124,6 +124,69 @@ const proposeFromDiscoveryScanSystem = `You are a senior site reliability engine
 	`elasticloadbalancing:DescribeLoadBalancerAttributes + ` +
 	`elasticloadbalancing:DescribeTags). Each ALB plan step's inline_config_snippet is ` +
 	`Terraform the operator runs through their own IaC pipeline.` + "\n" +
+	`  - GCP Cloud Storage buckets (object-store tier): the single ` +
+	`observability lever is BUCKET STORAGE LOGGING delivered to a log-sink ` +
+	`bucket. A google_storage_bucket is covered when ` +
+	`server_access_logging_enabled is true (Squadron reads the bucket's ` +
+	`logging.logBucket); when false, recommend enabling. Recommendation ` +
+	`kind: gcs-logging-enable. The Terraform adds a logging block to the ` +
+	`google_storage_bucket: logging { log_bucket = <operator-choice>, ` +
+	`log_object_prefix = <operator-choice> }. The LOG BUCKET is an operator ` +
+	`choice — never invent a bucket name; surface it as a plan step ` +
+	`parameter. SQUADRON DOES NOT EXECUTE any Cloud Storage write API — the ` +
+	`discovery IAM scope is read-only (roles/storage.objectViewer + ` +
+	`buckets.get). Each plan step's inline_config_snippet is Terraform the ` +
+	`operator runs through their own IaC pipeline.` + "\n" +
+	`  - Azure Blob storage accounts (object-store tier): the single ` +
+	`observability lever is the BLOB DIAGNOSTIC SETTING. An ` +
+	`azurerm_storage_account is covered when at least one Diagnostic ` +
+	`Setting on its blob service routes the StorageRead / StorageWrite / ` +
+	`StorageDelete log categories to a destination (Log Analytics, Storage, ` +
+	`or Event Hub); when none exists, recommend adding one. Recommendation ` +
+	`kind: azblob-diag-enable. The Terraform creates an ` +
+	`azurerm_monitor_diagnostic_setting targeting the account's ` +
+	`/blobServices/default with enabled_log blocks for those categories. ` +
+	`SQUADRON DOES NOT EXECUTE the Diagnostic Settings write API — the ` +
+	`discovery RBAC scope is read-only (Reader + ` +
+	`microsoft.insights/diagnosticSettings/read). Each plan step's ` +
+	`inline_config_snippet is Terraform the operator runs through their own ` +
+	`IaC pipeline.` + "\n" +
+	`  - OCI Object Storage buckets (object-store tier): DETECTION IS ` +
+	`DEFERRED. OCI bucket access logs are delivered through the OCI Logging ` +
+	`service, which Squadron's read-only scan does not yet inspect; the ` +
+	`inline objectEventsEnabled flag Squadron surfaces is an Events-service ` +
+	`automation flag, NOT a telemetry lever. Rows render as "detection ` +
+	`deferred (inventory only)". DO NOT emit recommendations for OCI object ` +
+	`stores — surface them as inventory context only, to avoid false ` +
+	`positives.` + "\n" +
+	`  - GCP load balancers (load-balancer tier): the single observability ` +
+	`lever is BACKEND-SERVICE LOGGING. A google_compute_backend_service is ` +
+	`covered when access_logs_enabled is true (Squadron reads ` +
+	`logConfig.enable); when false, recommend enabling. Recommendation ` +
+	`kind: gclb-logging-enable. The Terraform sets log_config { enable = ` +
+	`true, sample_rate = <operator-choice, e.g. 1.0> } on the ` +
+	`google_compute_backend_service. SQUADRON DOES NOT EXECUTE any Compute ` +
+	`write API — the discovery IAM scope is read-only ` +
+	`(roles/compute.viewer). Each plan step's inline_config_snippet is ` +
+	`Terraform the operator runs through their own IaC pipeline.` + "\n" +
+	`  - Azure load balancers (load-balancer tier): the single ` +
+	`observability lever is the LB DIAGNOSTIC SETTING. An azurerm_lb is ` +
+	`covered when at least one Diagnostic Setting routes its log/metric ` +
+	`categories (LoadBalancerProbeHealthStatus, LoadBalancerAlertEvent) to ` +
+	`a destination; when none exists, recommend adding one. Recommendation ` +
+	`kind: azlb-diag-enable. The Terraform creates an ` +
+	`azurerm_monitor_diagnostic_setting targeting the load balancer. ` +
+	`SQUADRON DOES NOT EXECUTE the Diagnostic Settings write API — the ` +
+	`discovery RBAC scope is read-only. Each plan step's ` +
+	`inline_config_snippet is Terraform the operator runs through their own ` +
+	`IaC pipeline.` + "\n" +
+	`  - OCI load balancers (load-balancer tier): DETECTION IS DEFERRED. ` +
+	`OCI load-balancer access logs are delivered through the OCI Logging ` +
+	`service, which Squadron's read-only scan does not yet inspect, so ` +
+	`access_logs_enabled is always reported false. Rows render as ` +
+	`"detection deferred (inventory only)". DO NOT emit recommendations for ` +
+	`OCI load balancers — surface them as inventory context only, to avoid ` +
+	`false positives.` + "\n" +
 	`  - EKS clusters: observability has a COMPOSITE rule on two ` +
 	`axes that MUST BOTH be on. Axis 1: control plane logging must include BOTH "api" AND ` +
 	`"audit" types at minimum. Axis 2: at least one EKS managed add-on must have name ` +
@@ -771,8 +834,15 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 		if o.ServerAccessLoggingEnabled {
 			coverage = "covered"
 		}
-		fmt.Fprintf(&b, "  - %s (region=%s, %s)\n",
-			o.ResourceID, o.Region, coverage)
+		if o.Provider == "oci" {
+			coverage = "detection deferred (inventory only — do not recommend)"
+		}
+		oprov := o.Provider
+		if oprov == "" {
+			oprov = "aws"
+		}
+		fmt.Fprintf(&b, "  - %s (provider=%s, region=%s, %s)\n",
+			o.ResourceID, oprov, o.Region, coverage)
 	}
 	if len(in.ObjectStores) > len(osample) {
 		fmt.Fprintf(&b, "  ... and %d more\n", len(in.ObjectStores)-len(osample))
@@ -796,12 +866,19 @@ func buildDiscoveryUserMessage(in DiscoveryScanContext) string {
 		if l.AccessLogsEnabled {
 			coverage = "covered"
 		}
+		if l.Provider == "oci" {
+			coverage = "detection deferred (inventory only — do not recommend)"
+		}
 		target := ""
 		if l.AccessLogsS3Bucket != "" {
 			target = " logs-to=" + l.AccessLogsS3Bucket
 		}
-		fmt.Fprintf(&b, "  - %s (name=%s, type=%s, scheme=%s, region=%s, %s%s)\n",
-			l.ResourceID, l.Name, l.Type, l.Scheme, l.Region, coverage, target)
+		lprov := l.Provider
+		if lprov == "" {
+			lprov = "aws"
+		}
+		fmt.Fprintf(&b, "  - %s (provider=%s, name=%s, type=%s, scheme=%s, region=%s, %s%s)\n",
+			l.ResourceID, lprov, l.Name, l.Type, l.Scheme, l.Region, coverage, target)
 	}
 	if len(in.LoadBalancers) > len(lsample) {
 		fmt.Fprintf(&b, "  ... and %d more\n", len(in.LoadBalancers)-len(lsample))
