@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,9 +23,24 @@ import (
 const tfImportFilePath = "squadron_imports.tf"
 
 // iacGitHubTerraformImportPRRequest carries the scan result to turn into
-// import blocks. Mirrors the recommendations request shape.
+// import blocks. Provider selects the import mapper: empty or "aws"
+// keeps the original AWS-shaped path (account_id-validated);
+// "azure"/"gcp"/"oci" parse the provider-agnostic compute-snapshot
+// shape so the multi-cloud inventory adopt flow can deliver import PRs
+// too (env->TF slice 3e). ScanResult stays raw JSON, decoded per
+// provider in the handler.
 type iacGitHubTerraformImportPRRequest struct {
-	ScanResult awsScanResponse `json:"scan_result"`
+	Provider   string          `json:"provider"`
+	ScanResult json.RawMessage `json:"scan_result"`
+}
+
+// multiCloudImportScanResult is the minimal provider-agnostic scan
+// shape the Azure/GCP/OCI import-PR path needs: the canonical-ID-bearing
+// compute snapshots (ImportID populated by the scanners) plus the scan
+// id used for the PR branch name.
+type multiCloudImportScanResult struct {
+	ScanID  string                            `json:"scan_id"`
+	Compute []scanner.ComputeInstanceSnapshot `json:"compute"`
 }
 
 // HandleIaCGitHubTerraformImportPR generates Terraform import{} blocks
@@ -46,12 +62,52 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubTerraformImportPR(c *gin.Context) {
 		}})
 		return
 	}
-	if req.ScanResult.AccountID == "" {
+	if len(req.ScanResult) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
-			Code: "MissingScanAccountID", Message: "scan_result.account_id is required.",
+			Code: "MissingScanResult", Message: "scan_result is required.",
 		}})
 		return
 	}
+
+	// Decode the scan_result per provider into the provider-agnostic
+	// tfimport.Resource list. AWS keeps its richer multi-surface mapper;
+	// the other clouds map compute snapshots by canonical ImportID.
+	var resources []tfimport.Resource
+	var scanID string
+	switch strings.ToLower(strings.TrimSpace(req.Provider)) {
+	case "", "aws":
+		var sr awsScanResponse
+		if err := json.Unmarshal(req.ScanResult, &sr); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+				Message: "scan_result could not be parsed as an AWS scan.",
+			}})
+			return
+		}
+		if sr.AccountID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+				Code: "MissingScanAccountID", Message: "scan_result.account_id is required.",
+			}})
+			return
+		}
+		resources = awsScanToImportResources(sr)
+		scanID = sr.ScanID
+	case "azure", "gcp", "oci":
+		var sr multiCloudImportScanResult
+		if err := json.Unmarshal(req.ScanResult, &sr); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+				Message: "scan_result could not be parsed.",
+			}})
+			return
+		}
+		resources = computeSnapshotsToImportResources(strings.ToLower(strings.TrimSpace(req.Provider)), sr.Compute)
+		scanID = sr.ScanID
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code: "UnsupportedProvider", Message: "provider must be one of aws, azure, gcp, oci.",
+		}})
+		return
+	}
+
 	if h.store == nil || h.credKey == nil || h.clientFor == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
 			Code: "IaCNotWired", Message: "Squadron's IaC substrate isn't fully configured.",
@@ -59,7 +115,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubTerraformImportPR(c *gin.Context) {
 		return
 	}
 
-	blocks, skipped := tfimport.Generate(awsScanToImportResources(req.ScanResult))
+	blocks, skipped := tfimport.Generate(resources)
 	if len(blocks) == 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"block_count": 0,
@@ -138,7 +194,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubTerraformImportPR(c *gin.Context) {
 		finalContent = []byte(tfimport.Render(blocks, skipped))
 	}
 
-	branch := fmt.Sprintf("%simports/%s", normalizedBranchPrefix(conn), shortScanID(req.ScanResult.ScanID))
+	branch := fmt.Sprintf("%simports/%s", normalizedBranchPrefix(conn), shortScanID(scanID))
 	branchSHA, err := h.getBranchSHA(ctx, client, owner, repo, defaultBranch)
 	if err != nil {
 		he := humanizeGitHubErrorForOpenPR(err, conn.RepoFullName)

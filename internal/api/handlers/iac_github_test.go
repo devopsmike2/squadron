@@ -1453,6 +1453,40 @@ func TestHandleIaCGitHubTerraformImportPR_OpensPR(t *testing.T) {
 	}
 }
 
+// TestHandleIaCGitHubTerraformImportPR_OCI_OpensPR exercises the
+// multi-cloud import-PR path (env->TF slice 3e): an OCI scan with
+// canonical OCIDs in compute[].import_id is mapped to oci_core_instance
+// import blocks and delivered as a PR, just like AWS.
+func TestHandleIaCGitHubTerraformImportPR_OCI_OpensPR(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tip",
+		openPRResp:    &iacgithub.PullRequest{Number: 77, HTMLURL: "https://github.com/octo/widgets/pull/77"},
+	}
+	h, _ := newTestIaCHandlers(t, mc, &discoveryRecordingAudit{})
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"oci","resource_kind":"oci-compute","file_path":"modules/compute/main.tf"}`)
+	body := `{"provider":"oci","scan_result":{"scan_id":"ociScan1","tenancy_ocid":"ocid1.tenancy.oc1..aaaa",` +
+		`"compute":[{"resource_id":"squadron-test-vm-bare","import_id":"ocid1.instance.oc1.iad.anuwabc","region":"iad"}]}}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/terraform-import-pr",
+		tfImportPRRegisterFor(h), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "/pull/77") {
+		t.Errorf("missing PR url: %s", w.Body.String())
+	}
+	if len(mc.putFileCalls) != 1 {
+		t.Fatalf("putFile calls = %d, want 1", len(mc.putFileCalls))
+	}
+	for _, want := range []string{`id = "ocid1.instance.oc1.iad.anuwabc"`, "oci_core_instance", "generate-config-out"} {
+		if !strings.Contains(string(mc.putFileCalls[0].Content), want) {
+			t.Errorf("content missing %q: %s", want, string(mc.putFileCalls[0].Content))
+		}
+	}
+}
+
 // TestHandleIaCGitHubTerraformImportPR_AllAlreadyImported skips opening a
 // PR when every candidate is already in squadron_imports.tf.
 func TestHandleIaCGitHubTerraformImportPR_AllAlreadyImported(t *testing.T) {
