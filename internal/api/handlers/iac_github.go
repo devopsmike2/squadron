@@ -1049,6 +1049,13 @@ type iacGitHubOpenPRRequest struct {
 	AccountID         string   `json:"account_id"`
 	Region            string   `json:"region"`
 
+	// ExcludeComments — when true, Squadron strips ALL comments from the
+	// committed Terraform (its own header banner AND the proposer's inline
+	// explanations) so the change is comment-free. The rationale still
+	// lives in the PR body, which is never stripped. Default false keeps
+	// the explanatory comments. UI: a checkbox in the open-PR wizard step.
+	ExcludeComments bool `json:"exclude_comments"`
+
 	// HCLPatch — v0.89.12 #628 Stream 29 (slice 2) — structured
 	// per-attribute edit description for patch_existing kinds. When
 	// present AND the file parses AND the target resource address
@@ -1479,12 +1486,25 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	// PR body banner, and the response envelope below.
 	var finalContent []byte
 	dispositionActual := disposition // refined for patch_existing below
+	// snippetBytes is the proposer snippet, comment-stripped when the
+	// operator chose exclude_comments. Used by new_file + append paths;
+	// the HCL-merge path edits the operator's own file and is left
+	// untouched (stripping there would delete THEIR comments).
+	snippetBytes := []byte(req.Snippet)
+	if req.ExcludeComments {
+		snippetBytes = hclpatch.StripComments(snippetBytes)
+	}
 	var hclPatchFailureReason string
 	var lifecycleIgnored bool
 	var ignoredAttrPath string
 	switch disposition {
 	case iac.DispositionNewFile:
-		finalContent = buildNewFileContent(req.ResourceKind, scanIDShort, []byte(req.Snippet))
+		if req.ExcludeComments {
+			// No "Authored by Squadron" header banner — clean, comment-free file.
+			finalContent = appendSnippetWithTrailingNewline(nil, snippetBytes)
+		} else {
+			finalContent = buildNewFileContent(req.ResourceKind, scanIDShort, snippetBytes)
+		}
 	case iac.DispositionPatchExisting:
 		// Slice 2: try HCL-aware merge first when the proposer
 		// emitted a structured patch. Any failure → fall back to
@@ -1512,7 +1532,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 						zap.Error(mergeErr),
 					)
 				}
-				finalContent = appendSnippetWithTrailingNewline(existingContent, []byte(req.Snippet))
+				finalContent = appendSnippetWithTrailingNewline(existingContent, snippetBytes)
 			}
 		} else {
 			// No structured patch — slice-1.5 era recommendation
@@ -1521,7 +1541,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 			// audit reason so an auditor can tell them apart.
 			dispositionActual = dispositionPatchExistingFellBackToAppend
 			hclPatchFailureReason = "no_patch_emitted"
-			finalContent = appendSnippetWithTrailingNewline(existingContent, []byte(req.Snippet))
+			finalContent = appendSnippetWithTrailingNewline(existingContent, snippetBytes)
 		}
 	}
 

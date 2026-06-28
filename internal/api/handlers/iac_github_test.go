@@ -1235,3 +1235,58 @@ func TestHandleIaCGitHubOpenPR_PatchExisting_PRTitlePrefixedAndAuditFlagged(t *t
 		t.Errorf("audit file_path = %v, want modules/lambda/main.tf", got)
 	}
 }
+
+// TestHandleIaCGitHubOpenPR_ExcludeComments_StripsBannerAndSnippetComments
+// covers the v0.90 comment-exclusion option: when exclude_comments is
+// true on a new_file kind, the committed Terraform carries NEITHER the
+// "Authored by Squadron" header banner NOR the proposer's inline
+// comments, but the code itself survives intact.
+func TestHandleIaCGitHubOpenPR_ExcludeComments_StripsBannerAndSnippetComments(t *testing.T) {
+	mc := &mockGitHubClient{
+		repoResp:      &iacgithub.Repo{FullName: "octo/widgets", DefaultBranch: "main"},
+		branchSHAResp: "tipofmaindefaultsha",
+		openPRResp: &iacgithub.PullRequest{
+			Number: 78, HTMLURL: "https://github.com/octo/widgets/pull/78", HeadSHA: "newcommit",
+		},
+	}
+	audit := &discoveryRecordingAudit{}
+	h, _ := newTestIaCHandlers(t, mc, audit)
+	connID := saveConnectionForOpenPR(t, h,
+		`{"provider":"aws","resource_kind":"s3-access-logging","file_path":"modules/s3/main.tf"}`)
+	// Snippet carries a leading line comment AND an inline comment.
+	body := `{
+		"scan_id": "scan9999999",
+		"step_idx": 0,
+		"resource_kind": "s3-access-logging",
+		"snippet": "# Step 0: enable access logging\nresource \"aws_s3_bucket_logging\" \"example\" {\n  bucket = aws_s3_bucket.example.id # the source bucket\n}",
+		"proposer_reasoning": "One bucket has no access logging.",
+		"affected_resources": ["my-bucket"],
+		"account_id": "111111111111",
+		"exclude_comments": true
+	}`
+	w := doIaCRequest(t, http.MethodPost,
+		"/api/v1/iac/github/connections/"+connID+"/open-pr", openPRRegisterFor(h), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(mc.putFileCalls) != 1 {
+		t.Fatalf("putFile calls = %d, want 1", len(mc.putFileCalls))
+	}
+	content := string(mc.putFileCalls[0].Content)
+	if strings.Contains(content, "# Authored by Squadron") {
+		t.Errorf("exclude_comments: header banner should be stripped, got:\n%s", content)
+	}
+	if strings.Contains(content, "Step 0: enable access logging") {
+		t.Errorf("exclude_comments: snippet line comment should be stripped, got:\n%s", content)
+	}
+	if strings.Contains(content, "the source bucket") {
+		t.Errorf("exclude_comments: snippet inline comment should be stripped, got:\n%s", content)
+	}
+	// Code must survive.
+	if !strings.Contains(content, `resource "aws_s3_bucket_logging" "example"`) {
+		t.Errorf("exclude_comments: code body should survive, got:\n%s", content)
+	}
+	if !strings.Contains(content, "bucket = aws_s3_bucket.example.id") {
+		t.Errorf("exclude_comments: attribute should survive, got:\n%s", content)
+	}
+}
