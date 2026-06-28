@@ -2908,6 +2908,12 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubTerraformImportPR(c) }))
 
+		// OTEL-agent arc, slice 3 — inject a Squadron OTLP exporter into
+		// a connected repo's OTel Collector config and open a PR.
+		v1.POST("/iac/github/connections/:id/otel-inject-pr",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubOTelInjectPR(c) }))
+
 		// v0.27 Pricing projection. Turns the v0.24 byte numbers
 		// into $/month figures. Read-only; same scope as the rest
 		// of the cost-insights surface.
