@@ -2125,7 +2125,15 @@ func (s *Server) registerRoutes() {
 		audit.Use(middleware.RequireScope(services.ScopeAuditRead))
 		{
 			audit.GET("/events", auditHandlers.HandleListAuditEvents)
-			audit.POST("/:id/explain", auditHandlers.HandleExplainAuditEvent)
+			// Late-bind the AI service: registerRoutes() runs before
+			// SetAIService(), so the eagerly-built auditHandlers captured a
+			// nil aiService and this endpoint always reported "AI assist is
+			// not configured" even with a key set. Rebuild with the live
+			// service at request time (see WIRING-ORDER GOTCHA above).
+			audit.POST("/:id/explain", func(c *gin.Context) {
+				h := handlers.NewAuditHandlers(s.auditService, s.aiService, s.appStore, s.logger)
+				h.HandleExplainAuditEvent(c)
+			})
 		}
 
 		// v0.40.0 Timeline — postmortem view that merges audit,
