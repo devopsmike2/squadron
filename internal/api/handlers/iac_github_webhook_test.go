@@ -3578,3 +3578,47 @@ func TestProviderFromRecommendationKind_OrchestrationSlice2Extension(t *testing.
 		}
 	}
 }
+
+// TestWebhook_EmptyGlobalSecret_PerConnectionSecretStillVerifies — #184.
+// With an empty env-var global but a credstore key wired (per-connection
+// resolution possible), a delivery for a connection that HAS a sealed
+// per-connection secret must verify and process — not 503 up front.
+func TestWebhook_EmptyGlobalSecret_PerConnectionSecretStillVerifies(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newTestWebhookHandlerWithCredKey(t, audit, nil) // nil global
+	connectionID := seedConnection(t, store, "acme/infra")
+	sealAndStorePerConnSecret(t, store, key, connectionID, "per-conn-only")
+
+	body := makePREventBody(t, "closed", true, "acme/infra", 9,
+		"squadron/rec/alb-access-logs/xyz", "2026-06-22T00:00:00Z", "alice")
+	sig := signGitHubWebhook(t, body, []byte("per-conn-only"))
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty global must not block per-connection verify); body=%s",
+			w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+}
+
+// TestWebhook_EmptyGlobalSecret_NoPerConnectionSecret_Returns503 — #184.
+// Empty global AND no per-connection secret resolved for the delivery's
+// connection still 503s (deferred to after the secret pick).
+func TestWebhook_EmptyGlobalSecret_NoPerConnectionSecret_Returns503(t *testing.T) {
+	audit := &discoveryRecordingAudit{}
+	h, store, _ := newTestWebhookHandlerWithCredKey(t, audit, nil) // nil global, no sealed secret
+	seedConnection(t, store, "acme/infra")
+
+	body := makePREventBody(t, "closed", true, "acme/infra", 9,
+		"squadron/rec/alb-access-logs/xyz", "2026-06-22T00:00:00Z", "alice")
+	sig := signGitHubWebhook(t, body, []byte("whatever"))
+	w := doWebhookRequest(t, h, body, sig, "pull_request")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (no global + no per-connection secret); body=%s",
+			w.Code, w.Body.String())
+	}
+	if len(audit.entries) != 0 {
+		t.Errorf("audit entries = %d, want 0", len(audit.entries))
+	}
+}

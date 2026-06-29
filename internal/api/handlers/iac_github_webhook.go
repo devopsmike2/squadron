@@ -434,14 +434,17 @@ type webhookRepoSniff struct {
 //     picked secret. Same posture as v0.89.30.
 //   - 503 — global secret unconfigured. Body names the env var.
 func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
-	if len(h.secret) == 0 {
-		// Slice 2 reality check: per-connection secrets are the
-		// per-team rotation path, but the env-var global is still
-		// the fall-through for connections that haven't migrated.
-		// 503 here keeps the failure mode sane for those.
+	// #184 fix: 503 up front ONLY when there is no possible secret at
+	// all — the env-var global is empty AND per-connection resolution
+	// is unavailable (no connection store or no credstore key). When
+	// per-connection resolution IS possible, defer the no-secret
+	// decision until after the secret pick below, so a deployment that
+	// runs with an empty global but configures per-connection webhook
+	// secrets is no longer rejected before the per-connection lookup.
+	if len(h.secret) == 0 && (h.store == nil || h.credKey == nil) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":  "webhook secret not configured",
-			"detail": "set " + gitHubWebhookSecretEnvVar + " to enable the GitHub PR-merged listener",
+			"detail": "set " + gitHubWebhookSecretEnvVar + " (or configure a per-connection webhook secret) to enable the GitHub PR-merged listener",
 		})
 		return
 	}
@@ -496,6 +499,16 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	}
 
 	pickedSecret := h.pickWebhookSecret(c.Request.Context(), connectionID)
+	if len(pickedSecret) == 0 {
+		// #184: empty global AND no per-connection secret resolved for
+		// this delivery's connection. Honest 503 rather than verifying
+		// a signature against an empty key.
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":  "webhook secret not configured",
+			"detail": "no global secret (" + gitHubWebhookSecretEnvVar + ") and no per-connection webhook secret for this connection",
+		})
+		return
+	}
 
 	sig := c.GetHeader("X-Hub-Signature-256")
 	if !strings.HasPrefix(sig, "sha256=") {
