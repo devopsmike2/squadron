@@ -19,12 +19,39 @@ the fleet/rollout control plane fully free**. That's the differentiated hook tha
 gets engineers to try it and tell their team. Monetize what teams need to run it
 *at org scale, under governance, with a vendor on the hook*.
 
+```mermaid
+flowchart LR
+    T["TRY - free<br/>docker run -> demo mode<br/>discovery -> AI rec -> PR"] --> A["ADOPT - free<br/>connect real clouds<br/>fleet + staged rollouts"]
+    A --> X["EXPAND<br/>more teams + fleet<br/>governance needs appear"]
+    X --> U["UPGRADE - paid<br/>SSO/RBAC - HA - approvals<br/>compliance - support"]
+```
+
 ---
 
 ## Part 1 — OSS GA / "marketing-ready" checklist (finite)
 
 The bar is "a skeptical SRE can self-serve a great first hour, and we're not
 overclaiming." Most of this is already done.
+
+```mermaid
+flowchart LR
+    subgraph DONE["Done - the product"]
+        D1["Verified marquee paths"]
+        D2["Headline pages render"]
+        D3["Frictionless first-run"]
+        D4["Honest coverage docs + auth"]
+        D5["Perf / stability fixes"]
+    end
+    subgraph TODO["Remaining - mostly launch collateral"]
+        R1["Public demo asset *"]
+        R2["OSS-vs-paid page *"]
+        R3["README known-limitations"]
+        R4["Security one-pager"]
+        R5["Community plumbing"]
+        R6["CI headline smoke gate"]
+    end
+    DONE -.->|"* = highest leverage"| TODO
+```
 
 **Done**
 - [x] Marquee paths verified live: multi-cloud discovery -> AI recs -> real
@@ -66,6 +93,33 @@ overclaiming." Most of this is already done.
 
 Principle: **breadth + the core loop = OSS; depth + scale + governance +
 support = Enterprise.**
+
+```mermaid
+flowchart TB
+    subgraph OSS["OSS - Free - adoption engine (breadth + core loop)"]
+        direction TB
+        O1["Multi-cloud discovery - AWS - GCP - Azure - OCI"]
+        O2["AI recommendations (bring your own API key)"]
+        O3["IaC GitHub PRs - merge-ready Terraform + verdict learning"]
+        O4["Fleet control plane - OpAMP - groups - staged rollouts + auto-abort"]
+        O5["Config editor - Monaco - AI Assist - Lint - pipeline view"]
+        O6["Cost Insights + Savings (single backend)"]
+        O7["Alerts - Audit log - Incidents - Demo mode"]
+        O8["Bearer tokens + scopes - single team - embedded store"]
+    end
+    subgraph ENT["Enterprise - Paid - org-readiness (depth + scale + governance)"]
+        direction TB
+        E1["Identity - SSO/SAML/OIDC - SCIM - RBAC - multi-tenant"]
+        E2["Governance - approval chains - change windows - policy-as-code"]
+        E3["Compliance - long-term/tamper-evident audit - SOC2 exports"]
+        E4["Scale & HA - clustered - Postgres - 10k+ agents - multi-region"]
+        E5["Advanced detection - Lambda/App Insights - anomaly/ML"]
+        E6["Cost at scale - showback - budgets - forecasting"]
+        E7["Deployment - air-gapped - BYO/on-prem LLM"]
+        E8["Support - SLAs - managed SaaS"]
+    end
+    OSS ==>|"adopt, then hit scale / governance needs"| ENT
+```
 
 ### Stays OSS (adoption engine — keep free)
 - Multi-cloud discovery across **all four** clouds (AWS/GCP/Azure/OCI) —
