@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -128,7 +129,20 @@ func InjectOTLPExporter(src []byte, endpoint string, opts Options) (Result, erro
 			if opts.NoCreatePipelines {
 				continue
 			}
+			// A new pipeline MUST have a receiver — otelcol rejects a
+			// receiver-less pipeline at config-validation time, which
+			// would stop the collector from starting. Scaffold it with
+			// the config's otlp receiver (otlp supports traces/metrics/
+			// logs). If there is no otlp receiver to reuse, skip this
+			// signal rather than emit an invalid pipeline.
+			recv := otlpReceiverName(root)
+			if recv == "" {
+				continue
+			}
 			pipe = newMapping()
+			rseq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+			ensureInSequence(rseq, recv)
+			mapAppend(pipe, "receivers", rseq)
 			mapAppend(pipelines, sig, pipe)
 			changed = true
 		}
@@ -154,6 +168,25 @@ func InjectOTLPExporter(src []byte, endpoint string, opts Options) (Result, erro
 		summary = fmt.Sprintf("injected exporter %q -> %s and wired into pipelines %v", name, endpoint, opts.signals())
 	}
 	return Result{Bytes: out, Changed: changed, Summary: summary}, nil
+}
+
+// otlpReceiverName returns the name of an otlp receiver defined in the
+// config's top-level receivers map ("otlp" or an "otlp/..." instance),
+// or "" when none is defined. The otlp receiver supports all three
+// signals, so it is the safe receiver to seed a newly-scaffolded
+// pipeline with.
+func otlpReceiverName(root *yaml.Node) string {
+	receivers := mapChildMapping(root, "receivers", false)
+	if receivers == nil {
+		return ""
+	}
+	for i := 0; i+1 < len(receivers.Content); i += 2 {
+		key := receivers.Content[i].Value
+		if key == "otlp" || strings.HasPrefix(key, "otlp/") {
+			return key
+		}
+	}
+	return ""
 }
 
 // --- yaml.Node helpers ---------------------------------------------
