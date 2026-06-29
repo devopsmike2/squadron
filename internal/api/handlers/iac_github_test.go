@@ -1518,3 +1518,30 @@ func TestHandleIaCGitHubTerraformImportPR_AllAlreadyImported(t *testing.T) {
 		t.Errorf("no PUT expected when all already imported, got %d", len(mc.putFileCalls))
 	}
 }
+
+// TestBuildPRTitle_CountClause — #188. The "for N resources" clause is
+// dropped when the count is 0 (affected_resources is optional on the
+// plan step and not every caller plumbs it) so the title never reads the
+// misleading "for 0 resources". Positive counts still render accurately.
+func TestBuildPRTitle_CountClause(t *testing.T) {
+	cases := []struct {
+		name  string
+		count int
+		want  string
+	}{
+		{"zero omits count clause", 0, "Squadron: instrument s3-access-logging (scan abc1234)"},
+		{"one is singular", 1, "Squadron: instrument s3-access-logging for 1 resource (scan abc1234)"},
+		{"two is plural", 2, "Squadron: instrument s3-access-logging for 2 resources (scan abc1234)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPRTitle("s3-access-logging", tc.count, "abc1234")
+			if got != tc.want {
+				t.Errorf("buildPRTitle count=%d = %q, want %q", tc.count, got, tc.want)
+			}
+			if tc.count == 0 && strings.Contains(got, "for 0 resources") {
+				t.Errorf("count=0 title must not contain 'for 0 resources': %q", got)
+			}
+		})
+	}
+}
