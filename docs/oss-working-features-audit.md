@@ -143,3 +143,24 @@ them are green; the rendering itself was not re-walked in this pass.
 
 Follow-up (not demo-blocking): `pipeline_health_samples` has no retention GC,
 so it grows on disk; add a sweep loop like the webhook dedupe GC.
+
+### Browser pass — three headline pages (2026-06-29)
+
+Visually verified rendering against the running dev UI:
+
+- **Savings** (`/savings`) — estimated monthly spend, potential savings, "saved
+  this month," a forecasted-spend progress bar (Day N of 30), and Quick Wins
+  ranked by $ saved with Apply buttons + CRITICAL/WARN badges. Loads fast with
+  no hanging pipeline-health panel (it hosts that panel — the v0.89.290 fix is
+  confirmed indirectly).
+- **Fleet Map** (`/fleet-map`) — "Collector Pipelines" grid; the real
+  otelcol-contrib agents show online with TRACES/LOGS/METRICS signal badges,
+  Pipeline/Data-Flow/Fleet view toggles, Resources sidebar (Agent Groups +
+  Agents with online/offline state).
+- **Config editor** (`/configs/:id/edit`) — Monaco YAML editor with syntax
+  highlighting, Templates + AI Assist controls, Squadron Lint panel ("Clean —
+  no issues found"), and a live pipeline DAG (otlp receiver -> batch processor
+  -> otlp exporter) with a "Valid" badge.
+
+All three render correctly with live data. With the browser pass + the API
+smoke test + the pipeline-health fix, the headline demo surfaces are airtight.
