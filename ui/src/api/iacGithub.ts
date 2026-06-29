@@ -317,10 +317,15 @@ export class IaCGitHubOpenPRError extends Error {
   readonly suggested_step: string;
   readonly doc_link?: string;
   readonly status: number;
+  // suggested_paths is the #183 placement-suggestion list the server
+  // attaches to a NoPlacementMapping 422 (sibling to `error`). Empty
+  // for every other error shape.
+  readonly suggested_paths: string[];
   constructor(
     status: number,
     envelope: IaCHumanizedError | undefined,
     fallbackMessage: string,
+    suggestedPaths?: string[],
   ) {
     super(envelope?.message ?? fallbackMessage);
     this.name = "IaCGitHubOpenPRError";
@@ -328,6 +333,7 @@ export class IaCGitHubOpenPRError extends Error {
     this.suggested_step = envelope?.suggested_step ?? "";
     this.doc_link = envelope?.doc_link;
     this.status = status;
+    this.suggested_paths = suggestedPaths ?? [];
   }
 }
 
@@ -393,10 +399,16 @@ export async function openIaCGitHubPullRequest(
 
   if (!response.ok) {
     let envelope: IaCHumanizedError | undefined;
+    let suggestedPaths: string[] | undefined;
     try {
       const body = await response.json();
       if (body?.error && typeof body.error === "object") {
         envelope = body.error as IaCHumanizedError;
+      }
+      if (Array.isArray(body?.suggested_paths)) {
+        suggestedPaths = (body.suggested_paths as unknown[]).filter(
+          (x): x is string => typeof x === "string",
+        );
       }
     } catch {
       // ignore — fall back to generic message
@@ -405,6 +417,7 @@ export async function openIaCGitHubPullRequest(
       response.status,
       envelope,
       `Open-PR request failed: ${response.status} ${response.statusText}`,
+      suggestedPaths,
     );
   }
 

@@ -179,6 +179,12 @@ export interface IaCGitHubWizardEditPlacementMode {
   // wizard scrolls this row into view + outlines it on first render.
   // null when the URL param was missing or unknown.
   focusedResourceKind: string | null;
+  // prefillFilePath is the #183 slice-2 suggested path from the URL
+  // ?path=<...> param. When set together with focusedResourceKind, the
+  // placement editor pre-fills that row's file path (only when empty)
+  // so a one-click "use this suggestion" lands the operator on a
+  // ready-to-save row. null when no suggestion was carried.
+  prefillFilePath?: string | null;
 }
 
 export interface IaCGitHubWizardProps {
@@ -2210,9 +2216,21 @@ function PlacementOnlyEditor({
   // link is fired specifically because Open-PR failed on a missing
   // row), so unifying around "all rows visible + editable" beats
   // re-running the wizard's skip-all affordance.
-  const [rows, setRows] = useState<PlacementRowState[]>(() =>
-    initialPlacementRows(editMode.initialRows),
-  );
+  const [rows, setRows] = useState<PlacementRowState[]>(() => {
+    const seeded = initialPlacementRows(editMode.initialRows);
+    // #183 slice 2: pre-fill the focused kind's path with the server's
+    // suggestion, but never clobber a path the operator already saved.
+    if (editMode.prefillFilePath && editMode.focusedResourceKind) {
+      const prefill = editMode.prefillFilePath;
+      return seeded.map((r) =>
+        r.resource_kind === editMode.focusedResourceKind &&
+        r.file_path.trim() === ""
+          ? { ...r, file_path: prefill }
+          : r,
+      );
+    }
+    return seeded;
+  });
   const [bulkPattern, setBulkPattern] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);

@@ -85,6 +85,7 @@ const QP_CONNECTION_ID = "connection_id";
 const QP_STEP = "step";
 const QP_KIND = "kind";
 const QP_STEP_PLACEMENT = "placement";
+const QP_PATH = "path";
 
 // SWR cache key for the connections list. Exported because the wizard
 // dialog mutate()s on save so the new row lands without a refresh.
@@ -164,6 +165,10 @@ export default function DiscoveryIaCGitHubPage() {
           : "multi",
       initialRows: conn.placement_map,
       focusedResourceKind,
+      // #183 slice 2: a suggested path the operator clicked from the
+      // NoPlacementMapping recovery hint. Only meaningful alongside a
+      // focused kind; the wizard ignores it otherwise.
+      prefillFilePath: focusedResourceKind ? params.get(QP_PATH) : null,
     };
   }, [connections, isLoading, location.search]);
 
