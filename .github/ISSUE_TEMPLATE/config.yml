@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/devopsmike2/squadron/discussions
+    about: Ask "how do I…", share ideas, or discuss design. Not for bug reports.
+  - name: Report a security vulnerability
+    url: https://github.com/devopsmike2/squadron/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue.

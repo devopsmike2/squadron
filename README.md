@@ -318,6 +318,17 @@ make dev
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution
 guide.
 
+## Community & Support
+
+- **Questions / ideas:** [GitHub Discussions](https://github.com/devopsmike2/squadron/discussions).
+- **Bugs:** open a [bug report](https://github.com/devopsmike2/squadron/issues/new?template=bug_report.yml).
+- **Feature requests:** open a [feature request](https://github.com/devopsmike2/squadron/issues/new?template=feature_request.yml).
+- **Security:** report privately per [SECURITY.md](SECURITY.md) — please don't file a public issue.
+- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md) (commits need a DCO `Signed-off-by`, added by `git commit -s`).
+- All participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+More help routing in [SUPPORT.md](SUPPORT.md).
+
 ## License
 
 Apache 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

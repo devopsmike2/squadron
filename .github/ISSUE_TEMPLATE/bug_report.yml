@@ -1,0 +1,60 @@
+name: Bug report
+description: Report something that is broken or behaving unexpectedly
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please do not include secrets
+        (tokens, cloud credentials) in logs or screenshots.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+      placeholder: When I ... I expected ... but instead ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that reproduces the problem.
+      placeholder: |
+        1. docker run ...
+        2. Open /discovery/aws
+        3. Click Scan
+        4. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How are you running Squadron?
+      options:
+        - Docker (ghcr.io/devopsmike2/squadron:latest)
+        - docker compose
+        - Helm chart / Kubernetes
+        - Built from source (binary)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / image tag / commit
+      placeholder: "v0.89.304  (or :latest, or commit sha)"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / errors
+      description: Paste sanitized logs. This is rendered as a code block.
+      render: shell
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Docker version, cloud(s) involved, anything relevant.
