@@ -3324,6 +3324,14 @@ func (s *Server) registerRoutes() {
 
 	// SPA catch-all route - must be last
 	s.router.NoRoute(func(c *gin.Context) {
+		// Unknown API routes must 404 as JSON — not fall through to the SPA.
+		// Otherwise a client hitting a wrong or typo'd /api path gets a 200
+		// text/html index page, which masks the error and breaks content-type
+		// expectations for API consumers.
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found", "path": c.Request.URL.Path})
+			return
+		}
 		// Check if file exists
 		filePath := filepath.Join("./ui/dist", c.Request.URL.Path)
 		if _, err := os.Stat(filePath); err == nil {
