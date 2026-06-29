@@ -59,3 +59,37 @@ func TestFleetSummary_TimeBoundsTheScan(t *testing.T) {
 		t.Errorf("cutoff age = %s, want ~1h (default fleetWindow)", age)
 	}
 }
+
+// TestAgentSnapshot_TimeBoundsTheScan pins the consistency hardening:
+// AgentSnapshot must bound its window-function input with
+// `WHERE ... timestamp >= ?` and pass a cutoff at roughly now-snapshotWindow
+// (default 24h), so a single busy agent's full retention history can't
+// degrade the per-agent detail query. Mirrors the FleetSummary bound.
+func TestAgentSnapshot_TimeBoundsTheScan(t *testing.T) {
+	rr := &recordingReader{}
+	s := NewService(rr, noAgents{}, zap.NewNop())
+
+	if _, err := s.AgentSnapshot(context.Background(), "agent-123"); err != nil {
+		t.Fatalf("AgentSnapshot: %v", err)
+	}
+
+	if !strings.Contains(rr.lastQuery, "timestamp >= ?") {
+		t.Fatalf("agent-snapshot query must time-bound the window scan; got:\n%s", rr.lastQuery)
+	}
+	// agentID + cutoff
+	if len(rr.lastArgs) != 2 {
+		t.Fatalf("agent-snapshot query must pass agentID + one cutoff arg; got %d", len(rr.lastArgs))
+	}
+	if rr.lastArgs[0] != "agent-123" {
+		t.Errorf("first arg = %v, want agentID 'agent-123'", rr.lastArgs[0])
+	}
+	cutoff, ok := rr.lastArgs[1].(time.Time)
+	if !ok {
+		t.Fatalf("cutoff arg must be a time.Time; got %T", rr.lastArgs[1])
+	}
+	// Default snapshotWindow is 24h; the cutoff should sit ~24h back.
+	age := time.Since(cutoff)
+	if age < 23*time.Hour || age > 25*time.Hour {
+		t.Errorf("cutoff age = %s, want ~24h (default snapshotWindow)", age)
+	}
+}

@@ -124,8 +124,17 @@ type Service struct {
 	// recent freshness horizon so its cost is constant w.r.t. instance
 	// uptime (see FleetSummary). Default 1h.
 	fleetWindow time.Duration
-	mu          sync.Mutex
-	cache       map[string]cacheEntry
+	// snapshotWindow bounds the AgentSnapshot window-function scan the
+	// same way fleetWindow bounds FleetSummary: the ROW_NUMBER() input
+	// is restricted to a recent horizon so a single busy agent's
+	// 30-day sample history (retention GC horizon) can't degrade the
+	// per-agent detail query. Longer than fleetWindow because a live
+	// agent may report some metrics less often than hourly; 24h still
+	// drops a day-or-older "latest" sample, which would be stale health
+	// anyway (the fleet marks an agent stale after fleetWindow). Default 24h.
+	snapshotWindow time.Duration
+	mu             sync.Mutex
+	cache          map[string]cacheEntry
 }
 
 type cacheEntry struct {
@@ -138,12 +147,13 @@ type cacheEntry struct {
 // alert evaluator polls every 30s.
 func NewService(reader Reader, agents AgentLister, logger *zap.Logger) *Service {
 	return &Service{
-		reader:      reader,
-		agents:      agents,
-		logger:      logger,
-		cacheTTL:    10 * time.Second,
-		fleetWindow: time.Hour,
-		cache:       map[string]cacheEntry{},
+		reader:         reader,
+		agents:         agents,
+		logger:         logger,
+		cacheTTL:       10 * time.Second,
+		fleetWindow:    time.Hour,
+		snapshotWindow: 24 * time.Hour,
+		cache:          map[string]cacheEntry{},
 	}
 }
 
@@ -159,6 +169,12 @@ func (s *Service) AgentSnapshot(ctx context.Context, agentID string) (*AgentSnap
 		return cached.(*AgentSnapshot), nil
 	}
 
+	// Bound the window-function input to a recent horizon (see
+	// snapshotWindow) so the ROW_NUMBER() scan is constant w.r.t. how
+	// long the agent has been reporting, not O(retention) — the same
+	// fix FleetSummary got. "Latest per metric" within the window is
+	// the live-health answer; an older sample would be stale anyway.
+	cutoff := time.Now().Add(-s.snapshotWindow).UTC()
 	const query = `
 		WITH ranked AS (
 			SELECT
@@ -173,13 +189,13 @@ func (s *Service) AgentSnapshot(ctx context.Context, agentID string) (*AgentSnap
 					ORDER BY timestamp DESC
 				) AS rn
 			FROM pipeline_health_samples
-			WHERE agent_id = ?
+			WHERE agent_id = ? AND timestamp >= ?
 		)
 		SELECT metric_name, labels_json, value, unit, timestamp
 		FROM ranked WHERE rn = 1
 	`
 
-	rows, err := s.reader.QueryRaw(ctx, query, agentID)
+	rows, err := s.reader.QueryRaw(ctx, query, agentID, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline-health agent snapshot: %w", err)
 	}
