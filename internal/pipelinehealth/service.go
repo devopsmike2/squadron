@@ -120,8 +120,12 @@ type Service struct {
 	logger *zap.Logger
 
 	cacheTTL time.Duration
-	mu       sync.Mutex
-	cache    map[string]cacheEntry
+	// fleetWindow bounds the FleetSummary window-function scan to a
+	// recent freshness horizon so its cost is constant w.r.t. instance
+	// uptime (see FleetSummary). Default 1h.
+	fleetWindow time.Duration
+	mu          sync.Mutex
+	cache       map[string]cacheEntry
 }
 
 type cacheEntry struct {
@@ -134,11 +138,12 @@ type cacheEntry struct {
 // alert evaluator polls every 30s.
 func NewService(reader Reader, agents AgentLister, logger *zap.Logger) *Service {
 	return &Service{
-		reader:   reader,
-		agents:   agents,
-		logger:   logger,
-		cacheTTL: 10 * time.Second,
-		cache:    map[string]cacheEntry{},
+		reader:      reader,
+		agents:      agents,
+		logger:      logger,
+		cacheTTL:    10 * time.Second,
+		fleetWindow: time.Hour,
+		cache:       map[string]cacheEntry{},
 	}
 }
 
@@ -223,11 +228,17 @@ func (s *Service) FleetSummary(ctx context.Context) (*FleetSummary, error) {
 		return cached.(*FleetSummary), nil
 	}
 
-	// One query: per-agent latest sample of each (metric, label_hash).
-	// We use the same row-number window as AgentSnapshot but without
-	// the agent_id filter — the read cost is bounded by
-	// (agents × captured_metric_names × label_combinations), which is
-	// small even at fleet scales of low-thousands.
+	// One query: per-agent latest sample of each (metric, label_hash),
+	// bounded to a recent freshness window. Without the time bound the
+	// ROW_NUMBER() scans every sample ever written, so the endpoint
+	// degrades to multi-second hangs as the (unbounded, GC-less)
+	// pipeline_health_samples table grows with uptime. The bound makes
+	// the scan cost constant w.r.t. uptime (DuckDB prunes old row-groups
+	// via timestamp zone-maps) and is semantically correct: a sample
+	// older than the window is stale, so its agent falls through to the
+	// AllAgentIDs backfill as Unknown instead of reporting a verdict
+	// computed from hours-old data.
+	cutoff := time.Now().Add(-s.fleetWindow).UTC()
 	const query = `
 		WITH ranked AS (
 			SELECT
@@ -243,12 +254,13 @@ func (s *Service) FleetSummary(ctx context.Context) (*FleetSummary, error) {
 					ORDER BY timestamp DESC
 				) AS rn
 			FROM pipeline_health_samples
+			WHERE timestamp >= ?
 		)
 		SELECT agent_id, metric_name, labels_json, value, unit, timestamp
 		FROM ranked WHERE rn = 1
 	`
 
-	rows, err := s.reader.QueryRaw(ctx, query)
+	rows, err := s.reader.QueryRaw(ctx, query, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline-health fleet summary: %w", err)
 	}
