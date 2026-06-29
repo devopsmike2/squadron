@@ -2893,6 +2893,12 @@ func (s *Server) registerRoutes() {
 		v1.POST("/iac/github/connections/:id/open-pr",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubOpenPR(c) }))
+		// #183 slice 3 — batch placement suggestions. Scans the repo
+		// once and returns the best suggested path per PR-capable kind so
+		// the wizard can auto-fill the placement map. Read-only/advisory.
+		v1.GET("/iac/github/connections/:id/placement-suggestions",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubPlacementSuggestions(c) }))
 
 		// v0.90 (context-aware-merge-ready-prs arc, slice 3) — open a
 		// one-time PR adding the terraform-validate GitHub Action (the

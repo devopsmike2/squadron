@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -2219,29 +2220,51 @@ type placementRepoLister interface {
 // nil so the NoPlacementMapping 422 still goes out unchanged. Bounded by
 // maxPlacementScanFiles + a short internal timeout.
 func (h *IaCGitHubHandlers) suggestPlacementPaths(ctx context.Context, conn *iacconnstore.IaCConnection, kind string) []string {
-	if h == nil || h.clientFor == nil || h.credKey == nil || conn == nil {
+	summaries, scanned := h.fetchRepoSummaries(ctx, conn)
+	if !scanned {
+		// Preserve the plain-422 behavior: no repo access -> no suggestions.
 		return nil
+	}
+	sugs := placement.Suggest(kind, summaries)
+	paths := make([]string, 0, len(sugs))
+	for _, sg := range sugs {
+		paths = append(paths, sg.Path)
+	}
+	return paths
+}
+
+// fetchRepoSummaries lists the connection's repo and returns deterministic
+// summaries of its .tf files (parsed where fetched, filename-only beyond
+// maxPlacementScanFiles). scanned is false when the repo couldn't be read
+// at all (missing creds, wrong client shape, decrypt/list failure) so
+// callers can distinguish "scanned, nothing matched" from "couldn't scan".
+// Bounded by maxPlacementScanFiles + a short internal timeout. Reused by
+// the per-kind 422 hint and the batch placement-suggestions endpoint, so
+// the repo is walked once per request, not once per kind.
+func (h *IaCGitHubHandlers) fetchRepoSummaries(ctx context.Context, conn *iacconnstore.IaCConnection) ([]hclsummary.FileSummary, bool) {
+	if h == nil || h.clientFor == nil || h.credKey == nil || conn == nil {
+		return nil, false
 	}
 	creds, err := iacconnstore.UnmarshalGitHubPATCreds(conn.CredCiphertext, h.credKey)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	owner, repo, ok := splitRepoFullName(conn.RepoFullName)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	lister, ok := h.clientFor(creds.Token).(placementRepoLister)
 	if !ok {
-		return nil
+		return nil, false
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	ref := conn.DefaultBranch
 	entries, err := lister.ListTree(ctx, owner, repo, ref)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	var summaries []hclsummary.FileSummary
@@ -2251,7 +2274,6 @@ func (h *IaCGitHubHandlers) suggestPlacementPaths(ctx context.Context, conn *iac
 			continue
 		}
 		if fetched >= maxPlacementScanFiles {
-			// Filename-only: still usable for the hint/conventional tiers.
 			summaries = append(summaries, hclsummary.FileSummary{Path: e.Path})
 			continue
 		}
@@ -2263,11 +2285,82 @@ func (h *IaCGitHubHandlers) suggestPlacementPaths(ctx context.Context, conn *iac
 		summaries = append(summaries, hclsummary.SummarizeFile(e.Path, fc.DecodedContent))
 		fetched++
 	}
+	return summaries, true
+}
 
-	sugs := placement.Suggest(kind, summaries)
-	paths := make([]string, 0, len(sugs))
-	for _, sg := range sugs {
-		paths = append(paths, sg.Path)
+// placementSuggestionRow is one kind's best suggested placement path.
+type placementSuggestionRow struct {
+	ResourceKind  string `json:"resource_kind"`
+	SuggestedPath string `json:"suggested_path"`
+	Reason        string `json:"reason"`
+	NewFile       bool   `json:"new_file"`
+}
+
+// HandleIaCGitHubPlacementSuggestions (#183 slice 3) scans the connection's
+// repo ONCE and returns the best suggested placement path for every
+// PR-capable kind. The connect/edit wizard uses it to auto-fill the
+// placement map so operators rarely configure rows by hand or hit
+// NoPlacementMapping. Read-only and advisory: it never writes the repo or
+// the placement map. scanned=false means the repo couldn't be read (e.g.
+// a bad PAT) and the rows are conventional defaults the operator should
+// review before saving.
+func (h *IaCGitHubHandlers) HandleIaCGitHubPlacementSuggestions(c *gin.Context) {
+	connectionID := strings.TrimSpace(c.Param("id"))
+	if connectionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
+		}})
+		return
 	}
-	return paths
+	if h.store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "IaCStoreUnavailable",
+			Message: "The IaC connection store is not configured.",
+		}})
+		return
+	}
+	conn, err := h.store.Get(c.Request.Context(), connectionID)
+	if err != nil {
+		if errors.Is(err, iacconnstore.ErrConnectionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": &scanner.HumanizedError{
+				Code:    "ConnectionNotFound",
+				Message: "No IaC connection exists with that ID.",
+			}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "IaCStoreReadFailed",
+			Message: "Squadron could not read the IaC connection. The error has been logged.",
+		}})
+		return
+	}
+
+	summaries, scanned := h.fetchRepoSummaries(c.Request.Context(), conn)
+
+	kinds := make([]string, 0, len(iac.KindDispositions))
+	for k := range iac.KindDispositions {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+
+	rows := make([]placementSuggestionRow, 0, len(kinds))
+	for _, kind := range kinds {
+		sugs := placement.Suggest(kind, summaries)
+		if len(sugs) == 0 {
+			continue
+		}
+		rows = append(rows, placementSuggestionRow{
+			ResourceKind:  kind,
+			SuggestedPath: sugs[0].Path,
+			Reason:        sugs[0].Reason,
+			NewFile:       sugs[0].NewFile,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"connection_id": connectionID,
+		"scanned":       scanned,
+		"suggestions":   rows,
+	})
 }
