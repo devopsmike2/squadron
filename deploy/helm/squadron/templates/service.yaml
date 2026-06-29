@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "squadron.fullname" . }}
+  labels:
+    {{- include "squadron.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "squadron.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.ports.http }}
+      targetPort: http
+      protocol: TCP
+    - name: opamp
+      port: {{ .Values.service.ports.opamp }}
+      targetPort: opamp
+      protocol: TCP
+    - name: otlp-grpc
+      port: {{ .Values.service.ports.otlpGrpc }}
+      targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: {{ .Values.service.ports.otlpHttp }}
+      targetPort: otlp-http
+      protocol: TCP

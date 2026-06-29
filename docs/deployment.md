@@ -263,6 +263,33 @@ and persist `/data` to a named volume.
 
 ## Kubernetes
 
+### Helm (recommended)
+
+A chart lives in [`deploy/helm/squadron`](../deploy/helm/squadron). It deploys
+a single instance with a PersistentVolumeClaim for the data dir (SQLite stores
++ the auto-generated secrets key), a Service exposing the UI/API (8080), OpAMP
+(4320), and OTLP (4317/4318), optional Ingress for the UI, and an optional
+Secret for sensitive env.
+
+```bash
+# From a checkout:
+helm install squadron ./deploy/helm/squadron --namespace squadron --create-namespace
+
+# Enable AI + an Ingress, pin a version:
+helm install squadron ./deploy/helm/squadron -n squadron --create-namespace \
+  --set image.tag=v0.89.292 \
+  --set secrets.anthropicApiKey=sk-ant-... \
+  --set ingress.enabled=true --set ingress.hosts[0].host=squadron.example.com
+```
+
+Use `secrets.existingSecret` to reference a Secret you manage (same keys:
+`ANTHROPIC_API_KEY`, `SQUADRON_SECRETS_KEY`, `SQUADRON_GITHUB_WEBHOOK_SECRET`,
+`AWS_*`) rather than passing values on the command line. Squadron OSS is
+single-instance: keep `replicas` at 1. Out-of-cluster agents need the OpAMP /
+OTLP ports exposed (LoadBalancer Service or gRPC-capable Ingress).
+
+### Raw manifests
+
 The production path for teams already on Kubernetes. Squadron runs as a
 Deployment behind a Service and Ingress; SQLite gets swapped for an
 external Postgres; the OpAMP port needs its own listener since it's a

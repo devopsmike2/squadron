@@ -1,0 +1,99 @@
+# Squadron Helm values. Squadron OSS is single-instance (embedded SQLite +
+# data dir), so replicaCount is fixed at 1; HA is an enterprise concern.
+
+image:
+  repository: ghcr.io/devopsmike2/squadron
+  # Leave empty to use the chart's appVersion. Set to pin (e.g. "v0.89.292"
+  # or "latest").
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Non-sensitive runtime config -> env vars.
+config:
+  ginMode: release
+  logLevel: info
+  logFormat: console
+  timezone: UTC
+  awsRegion: us-east-1
+
+# Sensitive values. Either set them inline here (a Secret is created), or
+# point existingSecret at a Secret you manage with the same keys.
+secrets:
+  existingSecret: ""        # name of a pre-existing Secret (takes precedence)
+  anthropicApiKey: ""       # ANTHROPIC_API_KEY — enables AI features
+  squadronSecretsKey: ""    # SQUADRON_SECRETS_KEY — auto-generated if empty
+  githubWebhookSecret: ""   # SQUADRON_GITHUB_WEBHOOK_SECRET
+  awsAccessKeyId: ""        # AWS_ACCESS_KEY_ID
+  awsSecretAccessKey: ""    # AWS_SECRET_ACCESS_KEY
+  awsSessionToken: ""       # AWS_SESSION_TOKEN
+
+# Persistent data dir (/app/data): SQLite stores + auto-generated secrets.key.
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: ""          # "" = cluster default
+  accessMode: ReadWriteOnce
+  existingClaim: ""
+
+service:
+  type: ClusterIP
+  ports:
+    http: 8080              # UI + API
+    opamp: 4320             # agents connect here
+    otlpGrpc: 4317
+    otlpHttp: 4318
+  annotations: {}
+
+# Ingress for the UI/API (port 8080) only. Expose OpAMP/OTLP separately if
+# agents live outside the cluster (e.g. a LoadBalancer service).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: squadron.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+extraEnv: []

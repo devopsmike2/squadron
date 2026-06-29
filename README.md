@@ -99,6 +99,24 @@ You're probably **not** the target operator if:
 
 ## Quick start
 
+Fastest — no clone, one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/devopsmike2/squadron/main/install.sh | sh
+```
+
+This fetches a standalone compose into `./squadron`, starts it, waits for
+health, and prints the dashboard URL. To inspect before running, grab just
+the compose file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/devopsmike2/squadron/main/deploy/docker-compose.yml -o docker-compose.yml
+docker compose up -d
+```
+
+Already running and want a quick check? `./scripts/doctor.sh` verifies
+Docker, ports, and health, and prints the dashboard URL.
+
 Prefer to clone? `docker compose up -d` runs the same published image
 plus a demo collector, so the dashboard lands with a live agent already
 connected:
