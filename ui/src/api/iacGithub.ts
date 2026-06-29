@@ -226,7 +226,7 @@ export interface IaCPlacementSuggestion {
 }
 
 export interface IaCPlacementSuggestionsResponse {
-  connection_id: string;
+  connection_id?: string;
   // scanned is false when the repo could not be read (e.g. a bad PAT);
   // the suggestions are then conventional defaults to review, not real
   // repo matches.
@@ -242,6 +242,20 @@ export function getIaCGitHubPlacementSuggestions(
 ): Promise<IaCPlacementSuggestionsResponse> {
   return apiGet<IaCPlacementSuggestionsResponse>(
     `/iac/github/connections/${encodeURIComponent(connectionID)}/placement-suggestions`,
+  );
+}
+
+// getIaCGitHubPlacementSuggestionsPreview is the pre-save (#183 slice 5)
+// variant used by the connect wizard: no connection exists yet, so it
+// passes the in-memory token + repo. The token is used only for this call.
+export function getIaCGitHubPlacementSuggestionsPreview(req: {
+  token: string;
+  repo_full_name: string;
+  default_branch?: string;
+}): Promise<IaCPlacementSuggestionsResponse> {
+  return apiPost<IaCPlacementSuggestionsResponse>(
+    "/iac/github/placement-suggestions/preview",
+    req,
   );
 }
 

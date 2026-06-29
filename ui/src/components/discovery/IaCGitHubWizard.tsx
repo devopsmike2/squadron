@@ -61,6 +61,7 @@ import {
   updateIaCGitHubConnection,
   updateIaCGitHubPlacementMap,
   getIaCGitHubPlacementSuggestions,
+  getIaCGitHubPlacementSuggestionsPreview,
   validateIaCGitHub,
 } from "@/api/iacGithub";
 import { Badge } from "@/components/ui/badge";
@@ -297,6 +298,11 @@ function IaCGitHubWizardCreate({
   const [branchPrefix, setBranchPrefix] = useState("");
   const [reviewerTeamHandle, setReviewerTeamHandle] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // #183 slice 5: auto-fill placement from a pre-save repo scan.
+  const [createAutoFilling, setCreateAutoFilling] = useState(false);
+  const [createAutoFillNote, setCreateAutoFillNote] = useState<string | null>(
+    null,
+  );
 
   // Placement map — per-row file_path + skipped flag.
   const [placementRows, setPlacementRows] =
@@ -508,6 +514,45 @@ function IaCGitHubWizardCreate({
     );
   }, [bulkPattern]);
 
+  // autoFillCreateFromRepo scans the repo with the in-memory PAT (pre-save)
+  // and fills empty, non-skipped rows. Never clobbers an entered path.
+  const autoFillCreateFromRepo = useCallback(async () => {
+    setCreateAutoFilling(true);
+    setCreateAutoFillNote(null);
+    try {
+      const res = await getIaCGitHubPlacementSuggestionsPreview({
+        token,
+        repo_full_name: repoFullName,
+        default_branch:
+          defaultBranch.trim() === "" ? undefined : defaultBranch.trim(),
+      });
+      const byKind = new Map(
+        res.suggestions.map((sg) => [sg.resource_kind, sg.suggested_path]),
+      );
+      let filled = 0;
+      const next = placementRows.map((r) => {
+        if (r.skipped || r.file_path.trim() !== "") return r;
+        const sug = byKind.get(r.resource_kind);
+        if (sug && sug.trim() !== "") {
+          filled++;
+          return { ...r, file_path: sug };
+        }
+        return r;
+      });
+      setPlacementRows(next);
+      const noun = `${filled} row${filled === 1 ? "" : "s"}`;
+      setCreateAutoFillNote(
+        res.scanned
+          ? `Filled ${noun} from a scan of ${repoFullName}. Review before continuing.`
+          : `Couldn't read the repo (check the token) — filled ${noun} with conventional defaults.`,
+      );
+    } catch (e) {
+      setCreateAutoFillNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreateAutoFilling(false);
+    }
+  }, [token, repoFullName, defaultBranch, placementRows]);
+
   // Validate + Save ------------------------------------------------
 
   const handleValidate = useCallback(async () => {
@@ -711,6 +756,9 @@ function IaCGitHubWizardCreate({
               onToggleRowSkipped={toggleRowSkipped}
               onSkipAll={skipAll}
               onUnskipAll={unskipAll}
+              onAutoFill={autoFillCreateFromRepo}
+              autoFilling={createAutoFilling}
+              autoFillNote={createAutoFillNote}
             />
           )}
 
@@ -1390,6 +1438,9 @@ function PlacementMapStep({
   onSkipAll,
   onUnskipAll,
   focusedResourceKind,
+  onAutoFill,
+  autoFilling,
+  autoFillNote,
 }: {
   rows: PlacementRowState[];
   repoLayout: "mono" | "multi";
@@ -1405,6 +1456,12 @@ function PlacementMapStep({
   // deep-link see exactly which row needs attention without scanning
   // a list of seven.
   focusedResourceKind?: string | null;
+  // #183 slice 4/5 — when provided, render an Auto-fill button that
+  // populates empty rows from a repo scan. onAutoFill differs per flow
+  // (saved connection vs pre-save preview); the component is agnostic.
+  onAutoFill?: () => void;
+  autoFilling?: boolean;
+  autoFillNote?: string | null;
 }) {
   const allSkipped = rows.every((r) => r.skipped);
   const activeCount = rows.filter((r) => !r.skipped).length;
@@ -1434,6 +1491,26 @@ function PlacementMapStep({
         to. Skip the kinds you don&apos;t manage in this repo — you can
         configure them later from the connection&apos;s settings.
       </p>
+
+      {onAutoFill && (
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onAutoFill}
+            disabled={autoFilling}
+          >
+            {autoFilling && (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
+            )}
+            Auto-fill from repo scan
+          </Button>
+          {autoFillNote && (
+            <p className="mt-2 text-xs text-muted-foreground">{autoFillNote}</p>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2 rounded-md border bg-muted/30 p-3">
         <Label
@@ -2355,26 +2432,9 @@ function PlacementOnlyEditor({
       </div>
 
       <div className="rounded-lg border bg-card p-6">
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="text-base font-semibold">
-            {STEP_TITLES[STEP_PLACEMENT_MAP]}
-          </h3>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={autoFillFromRepo}
-            disabled={autoFilling}
-          >
-            {autoFilling && (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
-            )}
-            Auto-fill from repo scan
-          </Button>
-        </div>
-        {autoFillNote && (
-          <p className="mt-2 text-xs text-muted-foreground">{autoFillNote}</p>
-        )}
+        <h3 className="text-base font-semibold">
+          {STEP_TITLES[STEP_PLACEMENT_MAP]}
+        </h3>
         <div className="mt-4">
           <PlacementMapStep
             rows={rows}
@@ -2387,6 +2447,9 @@ function PlacementOnlyEditor({
             onSkipAll={skipAll}
             onUnskipAll={unskipAll}
             focusedResourceKind={editMode.focusedResourceKind}
+            onAutoFill={autoFillFromRepo}
+            autoFilling={autoFilling}
+            autoFillNote={autoFillNote}
           />
         </div>
       </div>

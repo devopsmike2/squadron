@@ -2866,6 +2866,11 @@ func (s *Server) registerRoutes() {
 		v1.POST("/iac/github/validate",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubValidate(c) }))
+		// #183 slice 5 — pre-save placement suggestions for the connect
+		// wizard (no saved connection yet; token+repo passed in-memory).
+		v1.POST("/iac/github/placement-suggestions/preview",
+			middleware.RequireScope(services.ScopeAgentsRead),
+			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubPlacementPreview(c) }))
 		v1.POST("/iac/github/connections",
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.iacGitHubTrampoline(func(h *handlers.IaCGitHubHandlers, c *gin.Context) { h.HandleIaCGitHubSaveConnection(c) }))
