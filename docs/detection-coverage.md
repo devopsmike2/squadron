@@ -21,12 +21,17 @@ by metric availability.
 - ⛔ **Deferred (honest framing)** — no native metric exists; Squadron emits an
   absent sentinel (`-1`) and a monitor-add recommendation rather than asserting
   a value it can't measure.
+- 🏢 **Commercial-tier detection** — the regression detection depends on a paid
+  telemetry add-on (Lambda Insights / Application Insights) and is part of the
+  future commercial tier. **OSS does not compute it**; instead OSS surfaces the
+  gap by recommending you enable the add-on (`lambda-insights-enable`,
+  `azfunc-appinsights-enable`). See [what's OSS vs Enterprise](./oss-vs-enterprise.md).
 
 ## Cold-start latency
 
 | Cloud | Surface | Native metric? | Status |
 |-------|---------|----------------|--------|
-| AWS | Lambda | **No** — `InitDuration` is a CloudWatch **Logs** REPORT field, not an `AWS/Lambda` metric. | ⚠️ Requires **Lambda Insights** (`LambdaInsights`/`init_duration`) or a Logs metric-filter. |
+| AWS | Lambda | **No** — `InitDuration` is a CloudWatch **Logs** REPORT field, not an `AWS/Lambda` metric. | 🏢 **Commercial-tier** — needs **Lambda Insights** (`LambdaInsights`/`init_duration`). OSS does not run the regression detector; it recommends enabling the add-on (`lambda-insights-enable`). |
 
 > **v0.89.258:** when a serverless function lacks its detection-prerequisite
 > add-on (Lambda Insights / Application Insights), the discovery proposer now
@@ -36,7 +41,7 @@ by metric availability.
 > ingestion). For AWS a cheaper CloudWatch Logs metric-filter alternative is
 > offered. Kinds: `lambda-insights-enable`, `azfunc-appinsights-enable`.
 | GCP | Cloud Run / Functions | Yes — `request_latencies` / `execution_times`. | ✅ (includes warm-path invocations; a permanently-warm service can show false positives). |
-| Azure | Functions | **No** — Azure Monitor exposes only `FunctionExecutionCount` / `FunctionExecutionUnits`; there is no per-function duration metric and no `IsAfterColdStart` dimension. | ⚠️ Requires **Application Insights** (`requests`/duration). |
+| Azure | Functions | **No** — Azure Monitor exposes only `FunctionExecutionCount` / `FunctionExecutionUnits`; there is no per-function duration metric and no `IsAfterColdStart` dimension. | 🏢 **Commercial-tier** — needs **Application Insights** (`requests`/duration). OSS does not run the regression detector; it recommends enabling the add-on (`azfunc-appinsights-enable`). |
 | OCI | Functions | Duration only — `oci_faas` has `FunctionExecutionDuration` but no cold-start counter. | ✅ Duration-regression heuristic (P95 current vs 7-day baseline); **not cold-start-isolated** — a spike may be a cold start or a slow dependency (v0.89.232). |
 
 ## Error rate
@@ -45,7 +50,7 @@ by metric availability.
 |-------|---------|----------------|--------|
 | AWS | Lambda | Yes — `AWS/Lambda` `Errors` + `Invocations` (Sum). | ✅ |
 | GCP | Cloud Run / Functions | Yes — `request_count` (5xx) / `execution_count` (status != ok). | ✅ |
-| Azure | Functions | **No** — no native per-function error metric (`FunctionErrors` does not exist). | ⚠️ Requires **Application Insights** (`requests/failed`). |
+| Azure | Functions | **No** — no native per-function error metric (`FunctionErrors` does not exist). | 🏢 **Commercial-tier** — needs **Application Insights** (`requests/failed`). OSS recommends enabling the add-on (`azfunc-appinsights-enable`). |
 | OCI | Functions | Yes — `oci_faas` `FunctionResponseCount` (error responses) over `FunctionInvocationCount` (fixed v0.89.229). | ✅ |
 
 ## Poison-message rate

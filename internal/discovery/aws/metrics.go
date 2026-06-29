@@ -47,8 +47,8 @@ const AWSCloudWatchRateLimitRPS = 10
 // GetMetricStatistics call against AWS/Lambda returns empty datapoints, so the
 // Lambda cold-start detection never accumulates samples and never fires. Making
 // it functional requires Lambda Insights (LambdaInsights/init_duration) or a
-// Logs metric-filter — a data-source decision deferred per
-// docs/audit/detection-metric-availability.md.
+// Logs metric-filter. Per the #152 enterprise-gate decision this detection is
+// commercial-tier (not run by OSS); see docs/audit/detection-metric-availability.md.
 const LambdaInitDurationMetricName = "InitDuration"
 
 // LambdaMetricNamespace is the CloudWatch namespace for AWS Lambda

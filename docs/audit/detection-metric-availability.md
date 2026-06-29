@@ -14,6 +14,17 @@ no-ops.
 
 ## Findings
 
+> **Resolution (#152 / #153, enterprise-gate decision):** AWS Lambda cold-start
+> and Azure Functions cold-start + error-rate detection depend on paid add-ons
+> (Lambda Insights / Application Insights) and are **commercial-tier**, not
+> performed by OSS. OSS surfaces the gap via the proposer's enable-the-add-on
+> recommendations (`lambda-insights-enable`, `azfunc-appinsights-enable`). The
+> detector code is retained as the commercial-tier seed but is **not wired in
+> OSS** (the cold-start observation store is never set in production); a future
+> enabler must also re-point the AWS query from `AWS/Lambda`/`InitDuration` to
+> the `LambdaInsights`/`init_duration` source. GCP and OCI cold-start/error
+> detection remain native-metric OSS features and are unaffected.
+
 | Cloud | Metric (code) | Real metric? | Effect |
 |-------|---------------|--------------|--------|
 | AWS | `AWS/Lambda` → `InitDuration` (p95) | **No** — init duration is a CloudWatch **Logs** REPORT field, not a CloudWatch metric. Available only via Lambda Insights (`LambdaInsights` namespace) or a log-metric-filter. | Lambda cold-start detection never accumulates samples → never fires. |
