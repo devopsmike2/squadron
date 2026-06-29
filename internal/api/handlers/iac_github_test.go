@@ -1700,3 +1700,69 @@ func TestPlacementSuggestions_batchScansRepoOnce(t *testing.T) {
 		t.Errorf("s3 kind -> %q, want buckets.tf (declares aws_s3_bucket)", got["s3-access-logging"])
 	}
 }
+
+// TestPlacementPreview_scansFromToken verifies the #183 slice-5 pre-save
+// endpoint scans the repo using the in-memory token (no saved connection)
+// and ranks every kind.
+func TestPlacementPreview_scansFromToken(t *testing.T) {
+	mc := &mockGitHubClient{
+		treeResp: []iacgithub.TreeEntry{
+			{Path: "sqs.tf", Type: "blob"},
+		},
+		fileResp: map[string]*iacgithub.FileContent{
+			"sqs.tf": {Path: "sqs.tf", DecodedContent: []byte(`resource "aws_sqs_queue" "q" {}`)},
+		},
+	}
+	h := NewIaCGitHubHandlers(nil, zap.NewNop()).
+		WithClientFactory(func(token string) iacgithub.Client { return mc })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := `{"token":"ghp_x","repo_full_name":"octo/widgets","default_branch":"main"}`
+	c.Request = httptest.NewRequest(http.MethodPost,
+		"/api/v1/iac/github/placement-suggestions/preview", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	h.HandleIaCGitHubPlacementPreview(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Scanned     bool `json:"scanned"`
+		Suggestions []struct {
+			ResourceKind  string `json:"resource_kind"`
+			SuggestedPath string `json:"suggested_path"`
+		} `json:"suggestions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Scanned {
+		t.Error("scanned should be true")
+	}
+	if len(resp.Suggestions) != len(iac.KindDispositions) {
+		t.Errorf("got %d suggestions, want one per kind (%d)", len(resp.Suggestions), len(iac.KindDispositions))
+	}
+	got := map[string]string{}
+	for _, s := range resp.Suggestions {
+		got[s.ResourceKind] = s.SuggestedPath
+	}
+	if got["sqs-redrive-policy-enable"] != "sqs.tf" {
+		t.Errorf("sqs kind -> %q, want sqs.tf", got["sqs-redrive-policy-enable"])
+	}
+}
+
+func TestPlacementPreview_missingToken(t *testing.T) {
+	h := NewIaCGitHubHandlers(nil, zap.NewNop())
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost,
+		"/api/v1/iac/github/placement-suggestions/preview",
+		strings.NewReader(`{"repo_full_name":"octo/widgets"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.HandleIaCGitHubPlacementPreview(c)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for missing token", w.Code)
+	}
+}

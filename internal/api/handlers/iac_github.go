@@ -2257,11 +2257,18 @@ func (h *IaCGitHubHandlers) fetchRepoSummaries(ctx context.Context, conn *iaccon
 	if !ok {
 		return nil, false
 	}
+	return h.scanRepoSummaries(ctx, lister, owner, repo, conn.DefaultBranch)
+}
 
+// scanRepoSummaries lists owner/repo at ref and returns deterministic
+// summaries of its .tf files (parsed where fetched, filename-only beyond
+// maxPlacementScanFiles). scanned is false when the tree could not be
+// listed. Shared by the saved-connection path (fetchRepoSummaries) and the
+// pre-save preview path. Bounded by maxPlacementScanFiles + a short timeout.
+func (h *IaCGitHubHandlers) scanRepoSummaries(ctx context.Context, lister placementRepoLister, owner, repo, ref string) ([]hclsummary.FileSummary, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	ref := conn.DefaultBranch
 	entries, err := lister.ListTree(ctx, owner, repo, ref)
 	if err != nil {
 		return nil, false
@@ -2286,6 +2293,86 @@ func (h *IaCGitHubHandlers) fetchRepoSummaries(ctx context.Context, conn *iaccon
 		fetched++
 	}
 	return summaries, true
+}
+
+// placementSuggestionRows ranks every PR-capable kind against the repo
+// summaries and returns the best path per kind. Shared by the saved and
+// preview suggestion endpoints.
+func placementSuggestionRows(summaries []hclsummary.FileSummary) []placementSuggestionRow {
+	kinds := make([]string, 0, len(iac.KindDispositions))
+	for k := range iac.KindDispositions {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	rows := make([]placementSuggestionRow, 0, len(kinds))
+	for _, kind := range kinds {
+		sugs := placement.Suggest(kind, summaries)
+		if len(sugs) == 0 {
+			continue
+		}
+		rows = append(rows, placementSuggestionRow{
+			ResourceKind:  kind,
+			SuggestedPath: sugs[0].Path,
+			Reason:        sugs[0].Reason,
+			NewFile:       sugs[0].NewFile,
+		})
+	}
+	return rows
+}
+
+// iacGitHubPlacementPreviewRequest is the pre-save (#183 slice 5) input:
+// the connect wizard has not created a connection yet, so it passes the
+// in-memory token + repo directly.
+type iacGitHubPlacementPreviewRequest struct {
+	Token         string `json:"token"`
+	RepoFullName  string `json:"repo_full_name"`
+	DefaultBranch string `json:"default_branch"`
+}
+
+// HandleIaCGitHubPlacementPreview is the pre-save variant of
+// HandleIaCGitHubPlacementSuggestions for the connect wizard. Same
+// advisory, read-only contract: scans the repo with the supplied token and
+// returns the best path per kind. The token is used only for this request.
+func (h *IaCGitHubHandlers) HandleIaCGitHubPlacementPreview(c *gin.Context) {
+	var req iacGitHubPlacementPreviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Message:       "Request body could not be parsed as JSON.",
+			SuggestedStep: "placement",
+		}})
+		return
+	}
+	if strings.TrimSpace(req.Token) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:          "MissingToken",
+			Message:       "A GitHub personal access token is required to scan the repo.",
+			SuggestedStep: "pat",
+		}})
+		return
+	}
+	owner, repo, ok := splitRepoFullName(req.RepoFullName)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:          "MalformedRepoFullName",
+			Message:       "Repository full name must be in \"owner/repo\" form.",
+			SuggestedStep: "pick-repo",
+		}})
+		return
+	}
+	if h.clientFor == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ClientUnavailable",
+			Message: "The IaC GitHub client factory is not configured.",
+		}})
+		return
+	}
+	lister, ok := h.clientFor(req.Token).(placementRepoLister)
+	if !ok {
+		c.JSON(http.StatusOK, gin.H{"scanned": false, "suggestions": placementSuggestionRows(nil)})
+		return
+	}
+	summaries, scanned := h.scanRepoSummaries(c.Request.Context(), lister, owner, repo, req.DefaultBranch)
+	c.JSON(http.StatusOK, gin.H{"scanned": scanned, "suggestions": placementSuggestionRows(summaries)})
 }
 
 // placementSuggestionRow is one kind's best suggested placement path.
@@ -2337,30 +2424,9 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubPlacementSuggestions(c *gin.Context) 
 	}
 
 	summaries, scanned := h.fetchRepoSummaries(c.Request.Context(), conn)
-
-	kinds := make([]string, 0, len(iac.KindDispositions))
-	for k := range iac.KindDispositions {
-		kinds = append(kinds, k)
-	}
-	sort.Strings(kinds)
-
-	rows := make([]placementSuggestionRow, 0, len(kinds))
-	for _, kind := range kinds {
-		sugs := placement.Suggest(kind, summaries)
-		if len(sugs) == 0 {
-			continue
-		}
-		rows = append(rows, placementSuggestionRow{
-			ResourceKind:  kind,
-			SuggestedPath: sugs[0].Path,
-			Reason:        sugs[0].Reason,
-			NewFile:       sugs[0].NewFile,
-		})
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"connection_id": connectionID,
 		"scanned":       scanned,
-		"suggestions":   rows,
+		"suggestions":   placementSuggestionRows(summaries),
 	})
 }
