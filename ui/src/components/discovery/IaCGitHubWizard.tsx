@@ -60,6 +60,7 @@ import {
   saveIaCGitHubConnection,
   updateIaCGitHubConnection,
   updateIaCGitHubPlacementMap,
+  getIaCGitHubPlacementSuggestions,
   validateIaCGitHub,
 } from "@/api/iacGithub";
 import { Badge } from "@/components/ui/badge";
@@ -2235,6 +2236,9 @@ function PlacementOnlyEditor({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // #183 slice 4: auto-fill placement paths from a server-side repo scan.
+  const [autoFilling, setAutoFilling] = useState(false);
+  const [autoFillNote, setAutoFillNote] = useState<string | null>(null);
 
   const entries = useMemo(() => placementRowsToEntries(rows), [rows]);
 
@@ -2263,6 +2267,41 @@ function PlacementOnlyEditor({
       }),
     );
   }, [bulkPattern]);
+
+  // autoFillFromRepo asks the server to scan the connected repo and fills
+  // each empty, non-skipped row with its best suggested path. It never
+  // clobbers a path the operator already entered or saved.
+  const autoFillFromRepo = useCallback(async () => {
+    setAutoFilling(true);
+    setAutoFillNote(null);
+    try {
+      const res = await getIaCGitHubPlacementSuggestions(editMode.connectionID);
+      const byKind = new Map(
+        res.suggestions.map((sg) => [sg.resource_kind, sg.suggested_path]),
+      );
+      let filled = 0;
+      const next = rows.map((r) => {
+        if (r.skipped || r.file_path.trim() !== "") return r;
+        const sug = byKind.get(r.resource_kind);
+        if (sug && sug.trim() !== "") {
+          filled++;
+          return { ...r, file_path: sug };
+        }
+        return r;
+      });
+      setRows(next);
+      const noun = `${filled} row${filled === 1 ? "" : "s"}`;
+      setAutoFillNote(
+        res.scanned
+          ? `Filled ${noun} from a scan of ${editMode.repoFullName}. Review before saving.`
+          : `Couldn't read the repo (check the connection's token) — filled ${noun} with conventional defaults. Review before saving.`,
+      );
+    } catch (e) {
+      setAutoFillNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAutoFilling(false);
+    }
+  }, [editMode.connectionID, editMode.repoFullName, rows]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -2316,9 +2355,26 @@ function PlacementOnlyEditor({
       </div>
 
       <div className="rounded-lg border bg-card p-6">
-        <h3 className="text-base font-semibold">
-          {STEP_TITLES[STEP_PLACEMENT_MAP]}
-        </h3>
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="text-base font-semibold">
+            {STEP_TITLES[STEP_PLACEMENT_MAP]}
+          </h3>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={autoFillFromRepo}
+            disabled={autoFilling}
+          >
+            {autoFilling && (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
+            )}
+            Auto-fill from repo scan
+          </Button>
+        </div>
+        {autoFillNote && (
+          <p className="mt-2 text-xs text-muted-foreground">{autoFillNote}</p>
+        )}
         <div className="mt-4">
           <PlacementMapStep
             rows={rows}
