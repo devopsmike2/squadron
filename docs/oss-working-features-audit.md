@@ -117,3 +117,29 @@ Worth a quick smoke test before a high-stakes demo.
 - Don't claim uniform detection depth across every tier/cloud; cite the coverage matrix.
 - Frame Squadron as orchestrator, not executor: it opens PRs and stages rollouts; it never
   runs `terraform apply` or pushes to a branch unattended. True, and a feature.
+
+---
+
+## Addendum — "Works" tier live smoke-test (2026-06-29, v0.89.290)
+
+API-level smoke test of every "Works"-tier surface against the running stack
+(~1000 agents, 21h uptime). All endpoints returned 200 with sane payloads:
+agents, configs, groups, topology (+ per-agent), alerts/rules, rollouts +
+rollout-recipes (templates/abort-criteria), audit/events, insights/volume
+(+ per-agent), recommendations (+ per-agent + dismissals), pricing/config,
+savings/realized, alerts/cost-spikes, incidents/drafts, quickstart
+(backends/opamp-snippet), pipeline-health (fleet + per-agent).
+
+**One real bug found and fixed (v0.89.290): `pipeline-health/fleet` hung
+~18s and returned nothing** on a long-running fleet — its window-function
+scanned the entire (GC-less, ever-growing) `pipeline_health_samples` table.
+Now time-bounded to a 1h freshness window (constant cost w.r.t. uptime);
+verified 18s -> 0.14s, 200. With that fix, the fleet/agents/pipeline-health
+surfaces move from **Works** to **Verified live**.
+
+Remaining check for pixel-level demo confidence: a browser pass of the headline
+visual pages (Savings, Fleet/Pipeline Health, Config editor) — the APIs behind
+them are green; the rendering itself was not re-walked in this pass.
+
+Follow-up (not demo-blocking): `pipeline_health_samples` has no retention GC,
+so it grows on disk; add a sweep loop like the webhook dedupe GC.
