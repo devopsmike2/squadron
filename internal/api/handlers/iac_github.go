@@ -22,6 +22,7 @@ import (
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/iac/hclpatch"
 	"github.com/devopsmike2/squadron/internal/iac/hclsummary"
+	"github.com/devopsmike2/squadron/internal/iac/placement"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -1253,11 +1254,22 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 		}
 	}
 	if placement == nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": &scanner.HumanizedError{
-			Code:          "NoPlacementMapping",
-			Message:       fmt.Sprintf("No placement-map row exists for resource_kind %q. Add a row in the IaC connection's placement map and retry.", req.ResourceKind),
-			SuggestedStep: "placement-map",
-		}})
+		// Best-effort: scan the connected repo and suggest where this
+		// kind's fix likely belongs, so the operator gets actionable
+		// paths instead of a bare dead-end. Never blocks the 422.
+		suggested := h.suggestPlacementPaths(c.Request.Context(), conn, req.ResourceKind)
+		msg := fmt.Sprintf("No placement-map row exists for resource_kind %q. Add a row in the IaC connection's placement map and retry.", req.ResourceKind)
+		if len(suggested) > 0 {
+			msg = fmt.Sprintf("No placement-map row exists for resource_kind %q. Squadron scanned the repo and suggests: %s. Add a placement-map row pointing at one of these and retry.", req.ResourceKind, strings.Join(suggested, ", "))
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error": &scanner.HumanizedError{
+				Code:          "NoPlacementMapping",
+				Message:       msg,
+				SuggestedStep: "placement-map",
+			},
+			"suggested_paths": suggested,
+		})
 		return
 	}
 
@@ -2185,4 +2197,77 @@ func buildNewFileContent(resourceKind, scanIDShort string, snippet []byte) []byt
 	out = append(out, trimmed...)
 	out = append(out, '\n')
 	return out
+}
+
+// maxPlacementScanFiles caps how many .tf files the placement suggester
+// fetches + parses on a NoPlacementMapping 422. Beyond this, files still
+// contribute their filename (for the filename/conventional tiers) but
+// aren't fetched — bounding latency + GitHub calls on the error path.
+const maxPlacementScanFiles = 30
+
+// placementRepoLister is the subset of the GitHub client the placement
+// suggester needs. *iacgithub.PATClient satisfies it; the iacgithub.Client
+// interface does not declare ListTree, so the call site asserts for it.
+type placementRepoLister interface {
+	ListTree(ctx context.Context, owner, repo, ref string) ([]iacgithub.TreeEntry, error)
+	GetFileContent(ctx context.Context, owner, repo, path, ref string) (*iacgithub.FileContent, error)
+}
+
+// suggestPlacementPaths returns ranked candidate file paths for where a
+// fix of the given kind should land in the connection's repo. It is
+// best-effort: any failure (decrypt, client shape, tree fetch) returns
+// nil so the NoPlacementMapping 422 still goes out unchanged. Bounded by
+// maxPlacementScanFiles + a short internal timeout.
+func (h *IaCGitHubHandlers) suggestPlacementPaths(ctx context.Context, conn *iacconnstore.IaCConnection, kind string) []string {
+	if h == nil || h.clientFor == nil || h.credKey == nil || conn == nil {
+		return nil
+	}
+	creds, err := iacconnstore.UnmarshalGitHubPATCreds(conn.CredCiphertext, h.credKey)
+	if err != nil {
+		return nil
+	}
+	owner, repo, ok := splitRepoFullName(conn.RepoFullName)
+	if !ok {
+		return nil
+	}
+	lister, ok := h.clientFor(creds.Token).(placementRepoLister)
+	if !ok {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	ref := conn.DefaultBranch
+	entries, err := lister.ListTree(ctx, owner, repo, ref)
+	if err != nil {
+		return nil
+	}
+
+	var summaries []hclsummary.FileSummary
+	fetched := 0
+	for _, e := range entries {
+		if e.Type != "blob" || !strings.HasSuffix(e.Path, ".tf") {
+			continue
+		}
+		if fetched >= maxPlacementScanFiles {
+			// Filename-only: still usable for the hint/conventional tiers.
+			summaries = append(summaries, hclsummary.FileSummary{Path: e.Path})
+			continue
+		}
+		fc, ferr := lister.GetFileContent(ctx, owner, repo, e.Path, ref)
+		if ferr != nil || fc == nil {
+			summaries = append(summaries, hclsummary.FileSummary{Path: e.Path})
+			continue
+		}
+		summaries = append(summaries, hclsummary.SummarizeFile(e.Path, fc.DecodedContent))
+		fetched++
+	}
+
+	sugs := placement.Suggest(kind, summaries)
+	paths := make([]string, 0, len(sugs))
+	for _, sg := range sugs {
+		paths = append(paths, sg.Path)
+	}
+	return paths
 }
