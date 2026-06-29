@@ -1,0 +1,28 @@
+Squadron is deploying (single instance).
+
+1. Wait for the pod to become ready:
+     kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "squadron.fullname" . }}
+
+2. Open the dashboard:
+{{- if .Values.ingress.enabled }}
+     http{{ if .Values.ingress.tls }}s{{ end }}://{{ (index .Values.ingress.hosts 0).host }}/quickstart
+{{- else }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "squadron.fullname" . }} {{ .Values.service.ports.http }}:{{ .Values.service.ports.http }}
+     # then open http://localhost:{{ .Values.service.ports.http }}/quickstart
+{{- end }}
+
+3. Agents (OpAMP {{ .Values.service.ports.opamp }} / OTLP {{ .Values.service.ports.otlpGrpc }},{{ .Values.service.ports.otlpHttp }}):
+   reach the service in-cluster at
+     {{ include "squadron.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.ports.opamp }}
+   For out-of-cluster agents, expose these ports via a LoadBalancer Service or Ingress (gRPC/TCP).
+
+{{- if not (or .Values.secrets.existingSecret (include "squadron.hasInlineSecrets" .)) }}
+
+NOTE: No ANTHROPIC_API_KEY set — AI features are off. Set secrets.anthropicApiKey
+      (or secrets.existingSecret) to enable AI recommendations / Explain / Merge.
+{{- end }}
+
+Reminder: API auth is OFF by default. Before exposing Squadron beyond a trusted
+network, enable Bearer-token auth — see docs/security-self-hosting.md.
+
+Squadron OSS is single-instance: keep replicas at 1 (SQLite + data dir).
