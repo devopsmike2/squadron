@@ -197,6 +197,12 @@ Full docs under [`/docs`](./docs/README.md):
   OTel traces
 - [squadronctl CLI](./docs/squadronctl.md) — command-line client
 - [API reference](./docs/api-reference.md) — REST endpoints
+- [What's OSS vs Enterprise](./docs/oss-vs-enterprise.md) — what's
+  free forever vs the planned commercial tier
+- [Detection coverage](./docs/detection-coverage.md) — exactly
+  which signals are real vs proxy vs deferred, per cloud
+- [Self-hosting security](./docs/security-self-hosting.md) — turn
+  auth on, what data leaves the box, credentials
 
 ## How Squadron compares
 
@@ -225,13 +231,39 @@ Cribl/DD-Pipelines if your needs are "complex routing across many
 non-OTel sources". Use Squadron if you're standardized on OTel
 and want the OTel-specific cost story.
 
+## Known limitations
+
+We're upfront about where Squadron is deep and where it isn't —
+lead with this when you evaluate it:
+
+- **Detection coverage is not uniform across tiers/clouds.** Some
+  observability axes are real metric-backed detection; others are
+  proxy-based or honestly deferred. The authoritative matrix is
+  [detection coverage](./docs/detection-coverage.md). Notably, AWS
+  Lambda and Azure Functions cold-start detection need paid
+  telemetry layers (Lambda Insights / Application Insights), and OCI
+  queue poison-rate has no native metric — these are flagged, not
+  silently wrong.
+- **Cost projections are directional.** Dollar figures come from
+  observed ingest × the per-GB backend rates you configure; validate
+  against your real invoice before acting.
+- **AI is opt-in, bring-your-own-key.** Recommendations, Explain,
+  Merge, and incident drafting require `ANTHROPIC_API_KEY`; with no
+  key they're simply off. The deterministic Terraform snippets are
+  correctness-audited, but free-form LLM reasoning should be reviewed
+  before you merge — which is the design: every fix is a PR gated by
+  your review + CI.
+- **Single-instance, single-team in OSS.** Multi-tenancy, SSO/RBAC,
+  HA, and long-term audit retention are
+  [commercial-tier](./docs/oss-vs-enterprise.md) concerns.
+
 ## Project status
 
 Squadron is in active development. The OSS core under Apache 2.0
 is free for any size fleet and self-hostable forever. A future
 commercial tier will target enterprise concerns (multi-tenancy,
 HA, SSO/RBAC depth, audit retention SLAs, priority support) — the
-SMB experience stays free.
+SMB experience stays free. See [what's OSS vs Enterprise](./docs/oss-vs-enterprise.md).
 
 Release tags so far:
 
