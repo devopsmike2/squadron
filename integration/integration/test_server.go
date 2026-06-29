@@ -19,6 +19,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/opamp"
 	"github.com/devopsmike2/squadron/internal/otlp/receiver"
+	"github.com/devopsmike2/squadron/internal/pipelinehealth"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
@@ -242,6 +243,11 @@ func (ts *TestServer) initServers() {
 	// behavior so the no-trace path is the right shape here.
 	ts.apiServer = api.NewServer(ts.agentService, ts.telemetryService, ts.savedQueryService, ts.alertService, ts.auditService, ts.rolloutService, ts.authService, api.AuthConfig{Enabled: false}, configSender, ts.broker, nil, ts.registry, ts.logger)
 
+	// Wire pipeline-health so the headline /pipeline-health/fleet surface is
+	// reachable in the integration smoke gate. Uses the harness DuckDB reader +
+	// agent service, mirroring the production wiring in cmd/all-in-one.
+	ts.apiServer.SetPipelineHealth(pipelinehealth.NewService(ts.telemetryReader, smokeAgentLister{svc: ts.agentService}, ts.logger))
+
 	// Create worker pool for async telemetry processing.
 	// Using default values: queue_size=10000, workers=3, timeout=5s.
 	// Worker metrics are nil — the pool falls back to a no-op WorkerMetrics
@@ -371,4 +377,22 @@ func findFreePort() int {
 	}
 	defer listener.Close()
 	return listener.Addr().(*net.TCPAddr).Port
+}
+
+// smokeAgentLister adapts the agent service to pipelinehealth.AgentLister for
+// the integration harness, mirroring pipelineHealthAgentLister in cmd/all-in-one.
+type smokeAgentLister struct{ svc services.AgentService }
+
+func (l smokeAgentLister) AllAgentIDs(ctx context.Context) ([]string, error) {
+	agents, err := l.svc.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(agents))
+	for _, a := range agents {
+		if a != nil {
+			ids = append(ids, a.ID.String())
+		}
+	}
+	return ids, nil
 }
