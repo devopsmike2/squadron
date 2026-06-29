@@ -91,6 +91,31 @@ var KindDispositions = map[string]string{
 	"eks-observability-addon":       DispositionNewFile,
 	"dynamodb-contributor-insights": DispositionNewFile,
 	"ecs-container-insights":        DispositionPatchExisting,
+
+	// GCP (#182). Label/instance/block edits patch the existing
+	// resource; none create a standalone new resource.
+	"gce-otel-label":      DispositionPatchExisting,
+	"cloudsql-pi-enable":  DispositionPatchExisting,
+	"gke-mp-enable":       DispositionPatchExisting,
+	"gcs-logging-enable":  DispositionPatchExisting,
+	"gclb-logging-enable": DispositionPatchExisting,
+
+	// Azure (#182). Diagnostic-setting kinds create a NEW
+	// azurerm_monitor_diagnostic_setting resource; the VM/AKS edits
+	// patch the existing resource.
+	"vm-otel-tag":        DispositionPatchExisting,
+	"aks-monitor-enable": DispositionPatchExisting,
+	"azsql-diag-enable":  DispositionNewFile,
+	"azblob-diag-enable": DispositionNewFile,
+	"azlb-diag-enable":   DispositionNewFile,
+
+	// OCI (#182). Logging-log kinds create a NEW oci_logging_log
+	// (+ log group) resource; tag/instance edits patch existing.
+	"compute-otel-tag":         DispositionPatchExisting,
+	"ocidb-perfhub-enable":     DispositionPatchExisting,
+	"oke-ops-insights-enable":  DispositionPatchExisting,
+	"ocibucket-logging-enable": DispositionNewFile,
+	"ocilb-logging-enable":     DispositionNewFile,
 }
 
 // DispositionFor returns the disposition for a given resource_kind.

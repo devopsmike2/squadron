@@ -106,6 +106,115 @@ export const IAC_GITHUB_PLACEMENT_KINDS: PlacementKindRow[] = [
     description:
       "Enables CloudWatch Container Insights on ECS clusters to surface task and service metrics.",
   },
+
+  // --- GCP (#182) ---
+  {
+    provider: "gcp",
+    resource_kind: "gce-otel-label",
+    display_name: "GCE OTel label",
+    description:
+      "Adds the OTel-collector label to Compute Engine instances missing it.",
+  },
+  {
+    provider: "gcp",
+    resource_kind: "cloudsql-pi-enable",
+    display_name: "Cloud SQL Query Insights",
+    description: "Enables Query Insights on Cloud SQL instances missing it.",
+  },
+  {
+    provider: "gcp",
+    resource_kind: "gke-mp-enable",
+    display_name: "GKE Managed Prometheus",
+    description:
+      "Enables Google Cloud Managed Service for Prometheus on GKE clusters.",
+  },
+  {
+    provider: "gcp",
+    resource_kind: "gcs-logging-enable",
+    display_name: "GCS bucket logging",
+    description:
+      "Enables storage logging to a log-sink bucket for Cloud Storage buckets without it.",
+  },
+  {
+    provider: "gcp",
+    resource_kind: "gclb-logging-enable",
+    display_name: "Cloud Load Balancing logging",
+    description:
+      "Enables backend-service logging (log_config) on Google Cloud load balancers.",
+  },
+
+  // --- Azure (#182) ---
+  {
+    provider: "azure",
+    resource_kind: "vm-otel-tag",
+    display_name: "Azure VM OTel tag",
+    description:
+      "Tags Azure VMs (linux/windows resource picked by OS) for OTel-collector instrumentation.",
+  },
+  {
+    provider: "azure",
+    resource_kind: "azsql-diag-enable",
+    display_name: "Azure SQL diagnostic settings",
+    description:
+      "Adds a diagnostic setting routing the SQLInsights log category for Azure SQL databases.",
+  },
+  {
+    provider: "azure",
+    resource_kind: "aks-monitor-enable",
+    display_name: "AKS monitoring",
+    description:
+      "Enables Azure Monitor / managed observability on AKS clusters.",
+  },
+  {
+    provider: "azure",
+    resource_kind: "azblob-diag-enable",
+    display_name: "Azure Blob diagnostic settings",
+    description:
+      "Adds a diagnostic setting routing blob StorageRead/Write/Delete logs for storage accounts.",
+  },
+  {
+    provider: "azure",
+    resource_kind: "azlb-diag-enable",
+    display_name: "Azure Load Balancer diagnostic settings",
+    description:
+      "Adds a diagnostic setting routing load-balancer log/metric categories.",
+  },
+
+  // --- OCI (#182) ---
+  {
+    provider: "oci",
+    resource_kind: "compute-otel-tag",
+    display_name: "OCI Compute OTel tag",
+    description:
+      "Adds the OTel freeform tag to OCI Compute instances missing it.",
+  },
+  {
+    provider: "oci",
+    resource_kind: "ocidb-perfhub-enable",
+    display_name: "OCI Database Operations Insights",
+    description:
+      "Enrolls OCI DB Systems / Autonomous Databases in Operations Insights / Database Management.",
+  },
+  {
+    provider: "oci",
+    resource_kind: "oke-ops-insights-enable",
+    display_name: "OKE Operations Insights",
+    description: "Enrolls OKE clusters in Operations Insights.",
+  },
+  {
+    provider: "oci",
+    resource_kind: "ocibucket-logging-enable",
+    display_name: "OCI Object Storage logging",
+    description:
+      "Creates an OCI Logging service log for Object Storage buckets without access logging.",
+  },
+  {
+    provider: "oci",
+    resource_kind: "ocilb-logging-enable",
+    display_name: "OCI Load Balancer logging",
+    description:
+      "Creates an OCI Logging service access log for load balancers without one.",
+  },
 ];
 
 // GitHub deep-link to the create-PAT page, pre-filled with the `repo`
