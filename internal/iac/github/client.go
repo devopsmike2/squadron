@@ -121,6 +121,14 @@ type FileContent struct {
 	DecodedContent []byte `json:"-"`
 }
 
+// TreeEntry is one node from a recursive git-tree listing. Type is
+// "blob" (file) or "tree" (directory). Only Path + Type are projected —
+// the placement suggester only needs to enumerate file paths.
+type TreeEntry struct {
+	Path string `json:"path"`
+	Type string `json:"type"`
+}
+
 // PullRequest is the projected create-PR / get-PR response. Number
 // + HTMLURL are what the audit payload and the UI need; HeadSHA is
 // surfaced so a future "show me the commit my PR points at" flow can
@@ -416,6 +424,41 @@ func (c *PATClient) GetFileContent(ctx context.Context, owner, repo, path, ref s
 		return nil, ErrFileNotFound
 	default:
 		return nil, statusError("GetFileContent", resp.StatusCode)
+	}
+}
+
+// ListTree returns every entry under the repo at ref using the
+// recursive git-tree API (one round-trip). ref may be a branch name,
+// tag, or commit SHA. Used by the placement suggester to enumerate .tf
+// files; callers filter by Type=="blob" and the ".tf" suffix. A 404
+// maps to ErrRepoNotFound (the ref or repo is unreachable). GitHub
+// truncates very large trees (>100k entries); the truncated flag is not
+// surfaced because suggestion is best-effort and a partial list is fine.
+func (c *PATClient) ListTree(ctx context.Context, owner, repo, ref string) ([]TreeEntry, error) {
+	if ref == "" {
+		ref = "HEAD"
+	}
+	apiPath := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
+		"/git/trees/" + url.PathEscape(ref) + "?recursive=1"
+	resp, body, err := c.do(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var raw struct {
+			Tree []TreeEntry `json:"tree"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, fmt.Errorf("github: decode tree: %w", err)
+		}
+		return raw.Tree, nil
+	case http.StatusUnauthorized:
+		return nil, ErrAuthFailed
+	case http.StatusNotFound:
+		return nil, ErrRepoNotFound
+	default:
+		return nil, statusError("ListTree", resp.StatusCode)
 	}
 }
 

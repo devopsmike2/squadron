@@ -37,6 +37,8 @@ type mockGitHubClient struct {
 	repoErr         error
 	fileResp        map[string]*iacgithub.FileContent
 	fileErr         map[string]error
+	treeResp        []iacgithub.TreeEntry
+	treeErr         error
 	branchSHAResp   string
 	branchSHAErr    error
 	createBranchErr error
@@ -87,6 +89,13 @@ func (m *mockGitHubClient) GetFileContent(_ context.Context, _, _, path, _ strin
 		return r, nil
 	}
 	return nil, iacgithub.ErrFileNotFound
+}
+
+func (m *mockGitHubClient) ListTree(_ context.Context, _, _, _ string) ([]iacgithub.TreeEntry, error) {
+	if m.treeErr != nil {
+		return nil, m.treeErr
+	}
+	return m.treeResp, nil
 }
 
 func (m *mockGitHubClient) CreateBranch(_ context.Context, owner, repo, branchName, fromSHA string) error {
@@ -1543,5 +1552,71 @@ func TestBuildPRTitle_CountClause(t *testing.T) {
 				t.Errorf("count=0 title must not contain 'for 0 resources': %q", got)
 			}
 		})
+	}
+}
+
+// TestSuggestPlacementPaths_scansRepo verifies the NoPlacementMapping
+// helper enumerates the repo, parses .tf files, and ranks the file that
+// declares the target resource type first.
+func TestSuggestPlacementPaths_scansRepo(t *testing.T) {
+	key := newTestCredKey(t)
+	ciphertext, err := iacconnstore.MarshalGitHubPATCreds(
+		iacconnstore.GitHubPATCredentials{Token: "ghp_test"}, key,
+	)
+	if err != nil {
+		t.Fatalf("seal creds: %v", err)
+	}
+	conn := &iacconnstore.IaCConnection{
+		Provider:       iacconnstore.ProviderGitHub,
+		AuthKind:       iacconnstore.AuthKindPAT,
+		RepoFullName:   "octo/widgets",
+		DefaultBranch:  "main",
+		CredCiphertext: ciphertext,
+	}
+
+	mc := &mockGitHubClient{
+		treeResp: []iacgithub.TreeEntry{
+			{Path: "network.tf", Type: "blob"},
+			{Path: "storage/buckets.tf", Type: "blob"},
+			{Path: "README.md", Type: "blob"},
+			{Path: "modules", Type: "tree"},
+		},
+		fileResp: map[string]*iacgithub.FileContent{
+			"network.tf":         {Path: "network.tf", DecodedContent: []byte(`resource "google_compute_network" "vpc" {}`)},
+			"storage/buckets.tf": {Path: "storage/buckets.tf", DecodedContent: []byte(`resource "google_storage_bucket" "assets" {}`)},
+		},
+	}
+
+	h := NewIaCGitHubHandlers(nil, zap.NewNop()).
+		WithCredstoreKey(key).
+		WithClientFactory(func(token string) iacgithub.Client { return mc })
+
+	paths := h.suggestPlacementPaths(context.Background(), conn, "gcs-logging-enable")
+	if len(paths) == 0 {
+		t.Fatal("expected at least one suggested path")
+	}
+	if paths[0] != "storage/buckets.tf" {
+		t.Errorf("top suggestion = %q, want storage/buckets.tf (declares google_storage_bucket)", paths[0])
+	}
+}
+
+// TestSuggestPlacementPaths_bestEffortOnError returns nil (not a panic)
+// when the repo can't be listed, so the 422 still goes out unchanged.
+func TestSuggestPlacementPaths_bestEffortOnError(t *testing.T) {
+	key := newTestCredKey(t)
+	ciphertext, _ := iacconnstore.MarshalGitHubPATCreds(
+		iacconnstore.GitHubPATCredentials{Token: "ghp_test"}, key,
+	)
+	conn := &iacconnstore.IaCConnection{
+		Provider: iacconnstore.ProviderGitHub, AuthKind: iacconnstore.AuthKindPAT,
+		RepoFullName: "octo/widgets", DefaultBranch: "main", CredCiphertext: ciphertext,
+	}
+	mc := &mockGitHubClient{treeErr: iacgithub.ErrRepoNotFound}
+	h := NewIaCGitHubHandlers(nil, zap.NewNop()).
+		WithCredstoreKey(key).
+		WithClientFactory(func(token string) iacgithub.Client { return mc })
+
+	if paths := h.suggestPlacementPaths(context.Background(), conn, "gcs-logging-enable"); paths != nil {
+		t.Errorf("expected nil on tree error, got %v", paths)
 	}
 }

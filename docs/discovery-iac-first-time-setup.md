@@ -582,6 +582,16 @@ map (or the row was skipped at save time).
   step in the wizard, focused on the missing row. Configure it and
   click Open PR again.
 
+- Suggested paths: when this error fires, Squadron scans your
+  connected repo (its `.tf` files) and suggests where this fix most
+  likely belongs — ranked by which file already declares the matching
+  resource type, then by filename, then by convention. The
+  suggestions appear in the error message and in a `suggested_paths`
+  field on the response; pick one when you add the placement-map row.
+  If the repo has no obvious home, Squadron proposes a conventional
+  new file name (for example `storage.tf`). This is advisory only —
+  it never opens a PR on its own.
+
 **`DefaultBranchWriteRefused`** — This is the security invariant
 firing. It means Squadron's branch-name resolution somehow produced
 the default branch name, which should not happen.
