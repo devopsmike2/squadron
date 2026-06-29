@@ -24,13 +24,16 @@ func TestKindDispositions_AllSlice1KindsClassified(t *testing.T) {
 		"dynamodb-contributor-insights": DispositionNewFile,
 		"ecs-container-insights":        DispositionPatchExisting,
 	}
-	if len(KindDispositions) != len(want) {
-		t.Fatalf("KindDispositions has %d entries, want %d", len(KindDispositions), len(want))
+	// The slice-1 kinds must stay correctly classified even as the map
+	// grows (event-source + cross-cloud kinds were added in #182), so
+	// assert the slice-1 subset rather than an exact total count.
+	if len(KindDispositions) < len(want) {
+		t.Fatalf("KindDispositions has %d entries, want at least the %d slice-1 kinds", len(KindDispositions), len(want))
 	}
 	for k, v := range want {
 		got, ok := KindDispositions[k]
 		if !ok {
-			t.Errorf("KindDispositions missing %q", k)
+			t.Errorf("KindDispositions missing slice-1 kind %q", k)
 			continue
 		}
 		if got != v {
@@ -38,23 +41,12 @@ func TestKindDispositions_AllSlice1KindsClassified(t *testing.T) {
 		}
 	}
 
-	// Cross-check the headline shape: 5 new_file + 4 patch_existing.
-	var n, p int
-	for _, v := range KindDispositions {
-		switch v {
-		case DispositionNewFile:
-			n++
-		case DispositionPatchExisting:
-			p++
-		default:
-			t.Errorf("unknown disposition value %q in KindDispositions", v)
+	// Every entry — slice-1 or any kind added later — must carry a valid
+	// disposition value (the property the exact counts used to guard).
+	for k, v := range KindDispositions {
+		if v != DispositionNewFile && v != DispositionPatchExisting {
+			t.Errorf("KindDispositions[%q] = %q, not a valid disposition", k, v)
 		}
-	}
-	if n != 4 {
-		t.Errorf("new_file count = %d, want 4", n)
-	}
-	if p != 5 {
-		t.Errorf("patch_existing count = %d, want 5", p)
 	}
 }
 
