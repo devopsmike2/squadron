@@ -37,7 +37,7 @@ func (s *Scanner) lbEndpoint() string {
 	if s.ociEndpoint != "" {
 		return s.ociEndpoint
 	}
-	return fmt.Sprintf("https://loadbalancer.%s.oci.oraclecloud.com", s.Region)
+	return fmt.Sprintf("https://iaas.%s.oraclecloud.com", s.Region)
 }
 
 func (s *Scanner) scanLoadBalancers(ctx context.Context, sk *SigningKey, comps []ociCompartment, result *scanner.Result) {
