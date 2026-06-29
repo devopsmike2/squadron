@@ -3469,7 +3469,36 @@ function openPRErrorRecoveryHint(
 ): ReactElement {
   const bareHref = "/discovery/iac/github";
   switch (err.code) {
-    case "NoPlacementMapping":
+    case "NoPlacementMapping": {
+      // #183 slice 2: when the server scanned the repo and suggested
+      // likely paths, render them as one-click links that pre-fill the
+      // placement row, so the operator confirms-and-saves instead of
+      // hunting for the right file.
+      const suggested = err.suggested_paths ?? [];
+      if (connection && resourceKind && suggested.length > 0) {
+        return (
+          <>
+            No placement row for this kind yet. Squadron scanned the repo and
+            suggests:{" "}
+            {suggested.map((pth, i) => (
+              <span key={pth}>
+                {i > 0 ? ", " : ""}
+                <Link
+                  to={buildIaCPlacementDeepLink(
+                    connection.connection_id,
+                    resourceKind,
+                    pth,
+                  )}
+                  className="font-mono text-violet-500 hover:underline"
+                >
+                  {pth}
+                </Link>
+              </span>
+            ))}
+            . Pick one to pre-fill the placement row, then retry.
+          </>
+        );
+      }
       // Deep-link when we have both pieces — we virtually always do
       // here because NoPlacementMapping is only raised after the
       // server confirmed the connection exists and resolved a
@@ -3493,6 +3522,7 @@ function openPRErrorRecoveryHint(
           in your IaC connection and retry.
         </>
       );
+    }
     case "RepoNotFound":
     case "AuthFailed":
     case "CredentialDecryptFailed":
@@ -3546,11 +3576,18 @@ function openPRErrorRecoveryHint(
 function buildIaCPlacementDeepLink(
   connectionID: string,
   resourceKind: string,
+  filePath?: string,
 ): string {
   const params = new URLSearchParams();
   params.set("connection_id", connectionID);
   params.set("step", "placement");
   params.set("kind", resourceKind);
+  // #183 slice 2: when a suggested path is supplied, pre-fill the
+  // placement row's file path so the operator confirms-and-saves in
+  // one step instead of typing the path themselves.
+  if (filePath && filePath.trim() !== "") {
+    params.set("path", filePath);
+  }
   return `/discovery/iac/github?${params.toString()}`;
 }
 
