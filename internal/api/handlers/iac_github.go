@@ -2007,6 +2007,16 @@ func teamSlugFromHandle(h string) string {
 // `Squadron: instrument <resource_kind> for <count> resources (scan
 // <scan_id_short>)`.
 func buildPRTitle(resourceKind string, count int, scanIDShort string) string {
+	// #188: affected_resources is optional on the plan step (the model
+	// may omit it, and not every open-PR caller plumbs it). Rendering
+	// "for 0 resources" reads as a bug, so when the count is unknown /
+	// zero we drop the count clause entirely rather than print a
+	// misleading zero. A positive count still renders the accurate
+	// "for N resource(s)".
+	if count <= 0 {
+		return fmt.Sprintf("Squadron: instrument %s (scan %s)",
+			resourceKind, scanIDShort)
+	}
 	plural := "resources"
 	if count == 1 {
 		plural = "resource"
