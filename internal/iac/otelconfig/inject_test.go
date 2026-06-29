@@ -6,6 +6,8 @@ package otelconfig
 import (
 	"strings"
 	"testing"
+
+	yaml "gopkg.in/yaml.v3"
 )
 
 const baseConfig = `receivers:
@@ -156,5 +158,52 @@ service:
 	}
 	if !strings.Contains(out, "REPLACE_WITH_SQUADRON_OTLP") {
 		t.Errorf("operator's own otlp exporter was clobbered:\n%s", out)
+	}
+}
+
+// TestInject_ScaffoldedPipelineHasReceiver pins the fix for the live-e2e
+// bug: a newly-scaffolded pipeline (e.g. logs, absent in baseConfig) must
+// carry a receiver, otherwise otelcol rejects the config at startup and
+// the collector never runs. The otlp receiver (supports all signals) is
+// seeded from the config's receivers section.
+func TestInject_ScaffoldedPipelineHasReceiver(t *testing.T) {
+	r, err := InjectOTLPExporter([]byte(baseConfig), "sq:4317", Options{})
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	out := string(r.Bytes)
+	// Re-parse and assert the logs pipeline has >=1 receiver.
+	var doc map[string]any
+	if err := yaml.Unmarshal(r.Bytes, &doc); err != nil {
+		t.Fatalf("re-parse: %v\n%s", err, out)
+	}
+	svc, _ := doc["service"].(map[string]any)
+	pipes, _ := svc["pipelines"].(map[string]any)
+	logs, ok := pipes["logs"].(map[string]any)
+	if !ok {
+		t.Fatalf("logs pipeline not scaffolded:\n%s", out)
+	}
+	recv, ok := logs["receivers"].([]any)
+	if !ok || len(recv) == 0 {
+		t.Fatalf("scaffolded logs pipeline has no receiver (invalid otelcol config):\n%s", out)
+	}
+	if recv[0] != "otlp" {
+		t.Errorf("logs receiver = %v, want otlp", recv[0])
+	}
+}
+
+// TestInject_SkipsScaffoldWhenNoOTLPReceiver: if there's no otlp receiver
+// to seed a new pipeline with, the injector must not emit an invalid
+// receiver-less pipeline — it skips that signal instead.
+func TestInject_SkipsScaffoldWhenNoOTLPReceiver(t *testing.T) {
+	cfg := "receivers:\n  hostmetrics:\n    scrapers:\n      cpu:\n" +
+		"exporters:\n  debug:\n" +
+		"service:\n  pipelines:\n    metrics:\n      receivers: [hostmetrics]\n      exporters: [debug]\n"
+	r, err := InjectOTLPExporter([]byte(cfg), "sq:4317", Options{Signals: []string{"logs"}})
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if strings.Contains(string(r.Bytes), "logs:") {
+		t.Errorf("logs pipeline should be skipped (no otlp receiver to seed it):\n%s", r.Bytes)
 	}
 }
