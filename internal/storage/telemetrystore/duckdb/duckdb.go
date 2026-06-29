@@ -734,7 +734,10 @@ func (s *Storage) QueryRaw(ctx context.Context, query string, args ...interface{
 func (s *Storage) CleanupOldData(ctx context.Context, retention time.Duration) error {
 	cutoffTime := time.Now().Add(-retention)
 
-	tables := []string{"metrics_sum", "metrics_gauge", "metrics_histogram", "logs", "traces"}
+	// pipeline_health_samples is high-churn collector self-metrics; without
+	// it here the table grew unbounded (the FleetSummary query is time-bounded
+	// independently, so this is the disk-retention half of that fix).
+	tables := []string{"metrics_sum", "metrics_gauge", "metrics_histogram", "logs", "traces", "pipeline_health_samples"}
 
 	for _, table := range tables {
 		query := fmt.Sprintf("DELETE FROM %s WHERE timestamp < ?", table)
