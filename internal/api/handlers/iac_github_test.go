@@ -1620,3 +1620,83 @@ func TestSuggestPlacementPaths_bestEffortOnError(t *testing.T) {
 		t.Errorf("expected nil on tree error, got %v", paths)
 	}
 }
+
+// TestPlacementSuggestions_batchScansRepoOnce verifies the #183 slice-3
+// endpoint returns a best path per PR-capable kind from a single repo
+// scan, with the resource-type-declaring file ranked top for matching
+// kinds.
+func TestPlacementSuggestions_batchScansRepoOnce(t *testing.T) {
+	key := newTestCredKey(t)
+	ciphertext, err := iacconnstore.MarshalGitHubPATCreds(
+		iacconnstore.GitHubPATCredentials{Token: "ghp_test"}, key,
+	)
+	if err != nil {
+		t.Fatalf("seal creds: %v", err)
+	}
+	store := iacconnstore.NewMemoryStore()
+	conn := &iacconnstore.IaCConnection{
+		Provider:       iacconnstore.ProviderGitHub,
+		AuthKind:       iacconnstore.AuthKindPAT,
+		RepoFullName:   "octo/widgets",
+		DefaultBranch:  "main",
+		RepoLayout:     iacconnstore.RepoLayoutMono,
+		CredCiphertext: ciphertext,
+	}
+	if err := store.Create(context.Background(), conn); err != nil {
+		t.Fatalf("create conn: %v", err)
+	}
+
+	mc := &mockGitHubClient{
+		treeResp: []iacgithub.TreeEntry{
+			{Path: "sqs.tf", Type: "blob"},
+			{Path: "buckets.tf", Type: "blob"},
+		},
+		fileResp: map[string]*iacgithub.FileContent{
+			"sqs.tf":     {Path: "sqs.tf", DecodedContent: []byte(`resource "aws_sqs_queue" "q" {}`)},
+			"buckets.tf": {Path: "buckets.tf", DecodedContent: []byte(`resource "aws_s3_bucket" "b" {}`)},
+		},
+	}
+
+	h := NewIaCGitHubHandlers(store, zap.NewNop()).
+		WithCredstoreKey(key).
+		WithClientFactory(func(token string) iacgithub.Client { return mc })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: conn.ConnectionID}}
+	c.Request = httptest.NewRequest(http.MethodGet,
+		"/api/v1/iac/github/connections/"+conn.ConnectionID+"/placement-suggestions", nil)
+
+	h.HandleIaCGitHubPlacementSuggestions(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Scanned     bool `json:"scanned"`
+		Suggestions []struct {
+			ResourceKind  string `json:"resource_kind"`
+			SuggestedPath string `json:"suggested_path"`
+		} `json:"suggestions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Scanned {
+		t.Error("scanned should be true (repo was listed)")
+	}
+	// Every PR-capable kind should get a row (real match or fallback).
+	if len(resp.Suggestions) != len(iac.KindDispositions) {
+		t.Errorf("got %d suggestions, want one per kind (%d)", len(resp.Suggestions), len(iac.KindDispositions))
+	}
+	got := map[string]string{}
+	for _, s := range resp.Suggestions {
+		got[s.ResourceKind] = s.SuggestedPath
+	}
+	if got["sqs-redrive-policy-enable"] != "sqs.tf" {
+		t.Errorf("sqs kind -> %q, want sqs.tf (declares aws_sqs_queue)", got["sqs-redrive-policy-enable"])
+	}
+	if got["s3-access-logging"] != "buckets.tf" {
+		t.Errorf("s3 kind -> %q, want buckets.tf (declares aws_s3_bucket)", got["s3-access-logging"])
+	}
+}
