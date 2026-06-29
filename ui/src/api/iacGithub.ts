@@ -214,6 +214,37 @@ export function listIaCGitHubConnections(): Promise<IaCGitHubListConnectionsResp
   return apiGet<IaCGitHubListConnectionsResponse>("/iac/github/connections");
 }
 
+// Placement suggestions (#183 slice 3/4) -----------------------------
+
+// IaCPlacementSuggestion is one kind's best suggested placement path,
+// produced by the server scanning the connected repo.
+export interface IaCPlacementSuggestion {
+  resource_kind: string;
+  suggested_path: string;
+  reason: string;
+  new_file: boolean;
+}
+
+export interface IaCPlacementSuggestionsResponse {
+  connection_id: string;
+  // scanned is false when the repo could not be read (e.g. a bad PAT);
+  // the suggestions are then conventional defaults to review, not real
+  // repo matches.
+  scanned: boolean;
+  suggestions: IaCPlacementSuggestion[];
+}
+
+// getIaCGitHubPlacementSuggestions scans the connection's repo and
+// returns the best suggested placement path per PR-capable kind. Used by
+// the placement editor's "auto-fill from repo scan" affordance.
+export function getIaCGitHubPlacementSuggestions(
+  connectionID: string,
+): Promise<IaCPlacementSuggestionsResponse> {
+  return apiGet<IaCPlacementSuggestionsResponse>(
+    `/iac/github/connections/${encodeURIComponent(connectionID)}/placement-suggestions`,
+  );
+}
+
 // Open-PR endpoint --------------------------------------------------
 
 // IaCGitHubOpenPRRequest is the wire shape POSTed to
