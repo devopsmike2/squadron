@@ -116,6 +116,19 @@ var KindDispositions = map[string]string{
 	"oke-ops-insights-enable":  DispositionPatchExisting,
 	"ocibucket-logging-enable": DispositionNewFile,
 	"ocilb-logging-enable":     DispositionNewFile,
+
+	// Event-source tier (#182 follow-up).
+	"eventbridge-schemas-discover":            DispositionNewFile,
+	"eventbridge-logging-enable":              DispositionNewFile,
+	"eventbridge-rule-preserves-trace":        DispositionPatchExisting,
+	"sqs-redrive-policy-enable":               DispositionPatchExisting,
+	"pubsub-trace-enable":                     DispositionPatchExisting,
+	"pubsub-schema-attach":                    DispositionNewFile,
+	"pubsub-subscription-preserves-attrs":     DispositionPatchExisting,
+	"servicebus-diagnostics-enable":           DispositionNewFile,
+	"servicebus-policy-preserves-traceparent": DispositionPatchExisting,
+	"streaming-logging-enable":                DispositionNewFile,
+	"streaming-config-preserves-headers":      DispositionPatchExisting,
 }
 
 // DispositionFor returns the disposition for a given resource_kind.

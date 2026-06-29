@@ -215,6 +215,84 @@ export const IAC_GITHUB_PLACEMENT_KINDS: PlacementKindRow[] = [
     description:
       "Creates an OCI Logging service access log for load balancers without one.",
   },
+
+  // --- Event sources (#182 follow-up) ---
+  {
+    provider: "aws",
+    resource_kind: "eventbridge-logging-enable",
+    display_name: "EventBridge log target",
+    description:
+      "Adds a CloudWatch Logs target rule to an EventBridge bus for trace-readiness auditing.",
+  },
+  {
+    provider: "aws",
+    resource_kind: "eventbridge-schemas-discover",
+    display_name: "EventBridge Schemas Discoverer",
+    description:
+      "Attaches a Schemas Discoverer to an EventBridge bus (trace-readiness proxy).",
+  },
+  {
+    provider: "aws",
+    resource_kind: "eventbridge-rule-preserves-trace",
+    display_name: "EventBridge rule trace propagation",
+    description:
+      "Adjusts a rule input transformer so the X-Ray / traceparent header survives to the target.",
+  },
+  {
+    provider: "aws",
+    resource_kind: "sqs-redrive-policy-enable",
+    display_name: "SQS redrive policy + DLQ",
+    description:
+      "Adds a dead-letter queue and redrive policy to an SQS queue so failed messages are not lost.",
+  },
+  {
+    provider: "gcp",
+    resource_kind: "pubsub-trace-enable",
+    display_name: "Pub/Sub topic tracing",
+    description: "Enables OpenTelemetry tracing on Pub/Sub topics missing it.",
+  },
+  {
+    provider: "gcp",
+    resource_kind: "pubsub-schema-attach",
+    display_name: "Pub/Sub schema",
+    description:
+      "Attaches a schema (incl. traceparent field) to Pub/Sub topics without one.",
+  },
+  {
+    provider: "gcp",
+    resource_kind: "pubsub-subscription-preserves-attrs",
+    display_name: "Pub/Sub subscription trace attrs",
+    description:
+      "Adjusts a subscription attribute filter so the traceparent attribute survives.",
+  },
+  {
+    provider: "azure",
+    resource_kind: "servicebus-diagnostics-enable",
+    display_name: "Service Bus diagnostics",
+    description:
+      "Adds a diagnostic setting routing Service Bus logs to Log Analytics / App Insights.",
+  },
+  {
+    provider: "azure",
+    resource_kind: "servicebus-policy-preserves-traceparent",
+    display_name: "Service Bus trace propagation policy",
+    description:
+      "Adjusts namespace authorization so publishers can attach the traceparent property.",
+  },
+  {
+    provider: "oci",
+    resource_kind: "streaming-logging-enable",
+    display_name: "OCI Streaming logging",
+    description:
+      "Creates an OCI Logging service log for streams without one (trace-readiness proxy).",
+  },
+  {
+    provider: "oci",
+    resource_kind: "streaming-config-preserves-headers",
+    display_name: "OCI Streaming retention for trace headers",
+    description:
+      "Raises stream retention to >=24h so Kafka headers carrying traceparent are not truncated.",
+  },
 ];
 
 // GitHub deep-link to the create-PAT page, pre-filled with the `repo`
