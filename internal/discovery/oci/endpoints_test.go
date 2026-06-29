@@ -19,7 +19,7 @@ func TestProductionEndpointHosts(t *testing.T) {
 		want string
 	}{
 		{"objectstorage", s.objectStorageEndpoint(), "https://objectstorage.us-ashburn-1.oraclecloud.com"},
-		{"loadbalancer", s.lbEndpoint(), "https://loadbalancer.us-ashburn-1.oci.oraclecloud.com"},
+		{"loadbalancer", s.lbEndpoint(), "https://iaas.us-ashburn-1.oraclecloud.com"},
 		{"logging", s.loggingEndpoint(), "https://logging.us-ashburn-1.oci.oraclecloud.com"},
 	}
 	for _, c := range cases {
