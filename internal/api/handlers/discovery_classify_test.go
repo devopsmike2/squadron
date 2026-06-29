@@ -132,6 +132,104 @@ func TestClassifyResourceKind(t *testing.T) {
 			snippet: "",
 			want:    "",
 		},
+
+		// --- #182: GCP / Azure / OCI ---
+		{
+			name:    "gcp gcs bucket logging",
+			stepNam: "enable storage logging",
+			snippet: `resource "google_storage_bucket" "b" { logging { log_bucket = "x" } }`,
+			want:    "gcs-logging-enable",
+		},
+		{
+			name:    "gcp backend-service logging",
+			stepNam: "enable LB logging",
+			snippet: `resource "google_compute_backend_service" "b" { log_config { enable = true } }`,
+			want:    "gclb-logging-enable",
+		},
+		{
+			name:    "gcp cloud sql",
+			stepNam: "enable query insights",
+			snippet: `resource "google_sql_database_instance" "db" {}`,
+			want:    "cloudsql-pi-enable",
+		},
+		{
+			name:    "gcp gke",
+			stepNam: "enable managed prometheus",
+			snippet: `resource "google_container_cluster" "c" {}`,
+			want:    "gke-mp-enable",
+		},
+		{
+			name:    "gcp compute instance label",
+			stepNam: "tag GCE",
+			snippet: `resource "google_compute_instance" "vm" { labels = {} }`,
+			want:    "gce-otel-label",
+		},
+		{
+			name:    "azure blob diag (disambiguated by storage account)",
+			stepNam: "enable blob logging",
+			snippet: `resource "azurerm_storage_account" "s" {} resource "azurerm_monitor_diagnostic_setting" "d" {}`,
+			want:    "azblob-diag-enable",
+		},
+		{
+			name:    "azure lb diag (disambiguated by azurerm_lb)",
+			stepNam: "enable lb logging",
+			snippet: `resource "azurerm_lb" "lb" {} resource "azurerm_monitor_diagnostic_setting" "d" {}`,
+			want:    "azlb-diag-enable",
+		},
+		{
+			name:    "azure sql diag",
+			stepNam: "enable sqlinsights",
+			snippet: `resource "azurerm_mssql_database" "db" {} resource "azurerm_monitor_diagnostic_setting" "d" {}`,
+			want:    "azsql-diag-enable",
+		},
+		{
+			name:    "azure aks",
+			stepNam: "enable aks monitoring",
+			snippet: `resource "azurerm_kubernetes_cluster" "k" {}`,
+			want:    "aks-monitor-enable",
+		},
+		{
+			name:    "azure vm",
+			stepNam: "tag azure vm",
+			snippet: `resource "azurerm_linux_virtual_machine" "vm" { tags = {} }`,
+			want:    "vm-otel-tag",
+		},
+		{
+			name:    "oci bucket logging (oci_logging_log + objectstorage source)",
+			stepNam: "enable bucket logging",
+			snippet: `resource "oci_logging_log" "l" { configuration { source { service = "objectstorage" } } }`,
+			want:    "ocibucket-logging-enable",
+		},
+		{
+			name:    "oci lb logging (oci_logging_log + loadbalancer source)",
+			stepNam: "enable lb logging",
+			snippet: `resource "oci_logging_log" "l" { configuration { source { service = "loadbalancer" } } }`,
+			want:    "ocilb-logging-enable",
+		},
+		{
+			name:    "oci database",
+			stepNam: "enable operations insights",
+			snippet: `resource "oci_database_db_system" "db" {}`,
+			want:    "ocidb-perfhub-enable",
+		},
+		{
+			name:    "oci oke",
+			stepNam: "enroll oke",
+			snippet: `resource "oci_containerengine_cluster" "c" {}`,
+			want:    "oke-ops-insights-enable",
+		},
+		{
+			name:    "oci compute tag",
+			stepNam: "tag oci instance",
+			snippet: `resource "oci_core_instance" "vm" { freeform_tags = {} }`,
+			want:    "compute-otel-tag",
+		},
+		{
+			name:    "non-aws provider marker blocks aws name fallback",
+			stepNam: "enable load balancer logging",             // would hit alb-access-logs by name
+			snippet: `resource "google_compute_network" "n" {}`, // google_ marker, no matched rule
+			want:    "",
+		},
 	}
 
 	for _, tc := range cases {

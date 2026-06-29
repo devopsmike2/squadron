@@ -3223,6 +3223,67 @@ func classifyResourceKind(stepName, snippet string) string {
 		return "alb-access-logs"
 	}
 
+	// Non-AWS provider snippets (#182). The placement matcher keys on
+	// ResourceKind, but the AWS-only switch above returned "" for every
+	// GCP/Azure/OCI snippet — so those recommendations could never match
+	// a placement-map row (open-PR 422'd with NoPlacementMapping).
+	// Detect the per-tier Terraform resource each cloud's proposer
+	// emits. Azure diagnostic-setting and OCI logging-log snippets are
+	// shared across tiers, so they disambiguate by the TARGET resource
+	// (Azure) or the source service (OCI) present in the snippet.
+	switch {
+	// --- GCP ---
+	case strings.Contains(lower, "google_storage_bucket"):
+		return "gcs-logging-enable"
+	case strings.Contains(lower, "google_compute_backend_service"):
+		return "gclb-logging-enable"
+	case strings.Contains(lower, "google_sql_database_instance"):
+		return "cloudsql-pi-enable"
+	case strings.Contains(lower, "google_container_cluster"),
+		strings.Contains(lower, "google_container_node_pool"):
+		return "gke-mp-enable"
+	case strings.Contains(lower, "google_compute_instance"):
+		return "gce-otel-label"
+	// --- Azure (diag-setting tiers disambiguate by target resource) ---
+	case strings.Contains(lower, "azurerm_storage_account"):
+		return "azblob-diag-enable"
+	case strings.Contains(lower, "azurerm_lb"):
+		return "azlb-diag-enable"
+	case strings.Contains(lower, "azurerm_mssql_database"),
+		strings.Contains(lower, "azurerm_sql_database"):
+		return "azsql-diag-enable"
+	case strings.Contains(lower, "azurerm_kubernetes_cluster"):
+		return "aks-monitor-enable"
+	case strings.Contains(lower, "azurerm_linux_virtual_machine"),
+		strings.Contains(lower, "azurerm_windows_virtual_machine"),
+		strings.Contains(lower, "azurerm_virtual_machine"):
+		return "vm-otel-tag"
+	// --- OCI (logging-log tiers disambiguate by source service) ---
+	case strings.Contains(lower, "oci_objectstorage_bucket"),
+		strings.Contains(lower, "oci_logging_log") && strings.Contains(lower, "objectstorage"):
+		return "ocibucket-logging-enable"
+	case strings.Contains(lower, "oci_load_balancer"),
+		strings.Contains(lower, "oci_logging_log") && strings.Contains(lower, "loadbalancer"):
+		return "ocilb-logging-enable"
+	case strings.Contains(lower, "oci_database"),
+		strings.Contains(lower, "autonomous_database"):
+		return "ocidb-perfhub-enable"
+	case strings.Contains(lower, "oci_containerengine_cluster"):
+		return "oke-ops-insights-enable"
+	case strings.Contains(lower, "oci_core_instance"):
+		return "compute-otel-tag"
+	}
+
+	// If the snippet carries a non-AWS provider marker but matched no
+	// rule above, do NOT fall through to the AWS step-name heuristics:
+	// a GCP/Azure/OCI step named "...load balancer..." must not be
+	// misclassified as alb-access-logs. Unknown is the safe answer.
+	if strings.Contains(lower, "google_") ||
+		strings.Contains(lower, "azurerm_") ||
+		strings.Contains(lower, "oci_") {
+		return ""
+	}
+
 	// Step-name fallback for prompts that emit Terraform we don't
 	// recognize. Less reliable than the snippet match but keeps the
 	// UI's Open PR available when the proposer is verbose about the
