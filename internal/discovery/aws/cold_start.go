@@ -243,6 +243,13 @@ func (s *Scanner) DetectColdStartRegression(
 // Also skips when connectionID is empty — same rationale as the
 // chunk-1 store contract: rows attributed to no owner would leak
 // across operators in a multi-tenant deployment.
+// COMMERCIAL-TIER (#152, enterprise-gate decision): Lambda cold-start
+// regression detection is part of the future commercial tier, NOT performed
+// by OSS. It is dormant here because the cold-start observation store is never
+// wired in OSS (WithColdStartStore is test-only), so this early-returns. A
+// commercial enabler must ALSO re-point the InitDuration query from
+// AWS/Lambda (which returns nothing) to LambdaInsights/init_duration. OSS
+// surfaces the gap via the proposer's lambda-insights-enable recommendation.
 func (s *Scanner) runColdStartDetectionForServerless(ctx context.Context, result *scanner.Result) {
 	if s.cwClient == nil || s.coldStartStore == nil || s.connectionID == "" {
 		return
@@ -343,6 +350,9 @@ func (s *Scanner) WithCloudWatchClient(client CloudWatchClient) *Scanner {
 // adapter into the Scanner. v0.89.114. Same setter-only extension
 // pattern as the trace-coverage handler family — production wires
 // the real *sqlite.Storage; tests substitute an in-memory fake.
+// Do NOT call this in OSS wiring: it activates the commercial-tier cold-start
+// detector, which queries a metric source that returns nothing in OSS (see
+// runColdStartDetectionForServerless). Test-only in OSS.
 func (s *Scanner) WithColdStartStore(store ColdStartStore) *Scanner {
 	s.coldStartStore = store
 	return s

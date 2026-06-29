@@ -212,6 +212,11 @@ func (r ColdStartDetectionResult) ShouldFireRecommendation() bool {
 //
 // See docs/proposals/cold-start-latency-slice2.md §3.3 + §11
 // acceptance tests 5-7.
+// COMMERCIAL-TIER (#153, enterprise-gate decision): Azure Functions
+// cold-start + error-rate detection needs Application Insights and is part of
+// the future commercial tier, not OSS. This detector is not invoked by the
+// Azure scan path; OSS surfaces the gap via the proposer's
+// azfunc-appinsights-enable recommendation.
 func (s *Scanner) DetectColdStartRegression(
 	ctx context.Context,
 	resourceARN string,
