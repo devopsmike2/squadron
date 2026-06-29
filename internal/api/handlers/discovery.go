@@ -3221,6 +3221,23 @@ func classifyResourceKind(stepName, snippet string) string {
 	case strings.Contains(lower, "aws_lb") && strings.Contains(lower, "access_logs"),
 		strings.Contains(lower, "aws_alb"):
 		return "alb-access-logs"
+	// AWS event-source tier (#182 follow-up). EventBridge has three
+	// TF-emitting kinds: a Schemas Discoverer (xray/schemas share this
+	// TF), a log-target rule (logging-enable), and an input-transformer
+	// rule that preserves the trace header (rule-preserves-trace). SQS
+	// emits a redrive policy + DLQ. Audit-only kinds (sns-*, sqs-
+	// deadletter-queue-attach) carry no Terraform and never open a PR,
+	// so they need no classification.
+	case strings.Contains(lower, "aws_schemas_discoverer"):
+		return "eventbridge-schemas-discover"
+	case strings.Contains(lower, "aws_cloudwatch_event_target") && strings.Contains(lower, "input_transformer"):
+		return "eventbridge-rule-preserves-trace"
+	case strings.Contains(lower, "aws_cloudwatch_event_target"),
+		strings.Contains(lower, "aws_cloudwatch_event_rule"),
+		strings.Contains(lower, "aws_cloudwatch_event_bus"):
+		return "eventbridge-logging-enable"
+	case strings.Contains(lower, "aws_sqs_queue"):
+		return "sqs-redrive-policy-enable"
 	}
 
 	// Non-AWS provider snippets (#182). The placement matcher keys on
@@ -3242,6 +3259,12 @@ func classifyResourceKind(stepName, snippet string) string {
 	case strings.Contains(lower, "google_container_cluster"),
 		strings.Contains(lower, "google_container_node_pool"):
 		return "gke-mp-enable"
+	case strings.Contains(lower, "google_pubsub_subscription"):
+		return "pubsub-subscription-preserves-attrs"
+	case strings.Contains(lower, "google_pubsub_schema"):
+		return "pubsub-schema-attach"
+	case strings.Contains(lower, "google_pubsub_topic"):
+		return "pubsub-trace-enable"
 	case strings.Contains(lower, "google_compute_instance"):
 		return "gce-otel-label"
 	// --- Azure (diag-setting tiers disambiguate by target resource) ---
@@ -3258,7 +3281,15 @@ func classifyResourceKind(stepName, snippet string) string {
 		strings.Contains(lower, "azurerm_windows_virtual_machine"),
 		strings.Contains(lower, "azurerm_virtual_machine"):
 		return "vm-otel-tag"
+	case strings.Contains(lower, "azurerm_servicebus_namespace_authorization_rule"):
+		return "servicebus-policy-preserves-traceparent"
+	case strings.Contains(lower, "azurerm_servicebus"):
+		return "servicebus-diagnostics-enable"
 	// --- OCI (logging-log tiers disambiguate by source service) ---
+	case strings.Contains(lower, "oci_streaming_stream"):
+		return "streaming-config-preserves-headers"
+	case strings.Contains(lower, "oci_logging_log") && strings.Contains(lower, "streaming"):
+		return "streaming-logging-enable"
 	case strings.Contains(lower, "oci_objectstorage_bucket"),
 		strings.Contains(lower, "oci_logging_log") && strings.Contains(lower, "objectstorage"):
 		return "ocibucket-logging-enable"

@@ -224,6 +224,73 @@ func TestClassifyResourceKind(t *testing.T) {
 			snippet: `resource "oci_core_instance" "vm" { freeform_tags = {} }`,
 			want:    "compute-otel-tag",
 		},
+		// --- #182 follow-up: event-source / SQS ---
+		{
+			name:    "eventbridge schemas discoverer",
+			stepNam: "attach schemas discoverer",
+			snippet: `resource "aws_schemas_discoverer" "d" {}`,
+			want:    "eventbridge-schemas-discover",
+		},
+		{
+			name:    "eventbridge log target",
+			stepNam: "add log target",
+			snippet: `resource "aws_cloudwatch_event_target" "t" { arn = aws_cloudwatch_log_group.bus.arn }`,
+			want:    "eventbridge-logging-enable",
+		},
+		{
+			name:    "eventbridge rule preserves trace (input_transformer)",
+			stepNam: "preserve trace header",
+			snippet: `resource "aws_cloudwatch_event_target" "t" { input_transformer { input_template = "x-amzn-trace-id" } }`,
+			want:    "eventbridge-rule-preserves-trace",
+		},
+		{
+			name:    "sqs redrive policy",
+			stepNam: "add DLQ",
+			snippet: `resource "aws_sqs_queue" "dlq" {} ` + "redrive_policy",
+			want:    "sqs-redrive-policy-enable",
+		},
+		{
+			name:    "pubsub topic tracing",
+			stepNam: "enable pubsub tracing",
+			snippet: `resource "google_pubsub_topic" "t" { tracing_config {} }`,
+			want:    "pubsub-trace-enable",
+		},
+		{
+			name:    "pubsub schema",
+			stepNam: "attach schema",
+			snippet: `resource "google_pubsub_schema" "s" {}`,
+			want:    "pubsub-schema-attach",
+		},
+		{
+			name:    "pubsub subscription",
+			stepNam: "preserve attrs",
+			snippet: `resource "google_pubsub_subscription" "s" {}`,
+			want:    "pubsub-subscription-preserves-attrs",
+		},
+		{
+			name:    "servicebus diagnostics",
+			stepNam: "enable servicebus diag",
+			snippet: `resource "azurerm_servicebus_namespace" "n" {} resource "azurerm_monitor_diagnostic_setting" "d" {}`,
+			want:    "servicebus-diagnostics-enable",
+		},
+		{
+			name:    "servicebus policy preserves traceparent",
+			stepNam: "fix auth rule",
+			snippet: `resource "azurerm_servicebus_namespace_authorization_rule" "r" {}`,
+			want:    "servicebus-policy-preserves-traceparent",
+		},
+		{
+			name:    "oci streaming logging",
+			stepNam: "enable streaming logging",
+			snippet: `resource "oci_logging_log" "l" { configuration { source { service = "streaming" } } }`,
+			want:    "streaming-logging-enable",
+		},
+		{
+			name:    "oci streaming retention",
+			stepNam: "raise retention",
+			snippet: `resource "oci_streaming_stream" "s" { retention_in_hours = 24 }`,
+			want:    "streaming-config-preserves-headers",
+		},
 		{
 			name:    "non-aws provider marker blocks aws name fallback",
 			stepNam: "enable load balancer logging",             // would hit alb-access-logs by name
