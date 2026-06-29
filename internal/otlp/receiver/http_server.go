@@ -1,10 +1,12 @@
 package receiver
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/metrics"
@@ -147,12 +149,32 @@ func (s *HTTPServer) Stop(ctx context.Context) error {
 	return nil
 }
 
+// readRequestBody reads the OTLP request body, transparently
+// decompressing it when the client sets Content-Encoding: gzip. The
+// OTLP/HTTP spec permits gzip-compressed payloads and the upstream
+// otelcol otlphttp exporter enables gzip by default; without this the
+// compressed bytes reach proto.Unmarshal and fail with "invalid
+// wire-format data" (HTTP 400), silently dropping telemetry from any
+// standard OTLP client.
+func (s *HTTPServer) readRequestBody(c *gin.Context) ([]byte, error) {
+	var reader io.Reader = c.Request.Body
+	if strings.EqualFold(c.GetHeader("Content-Encoding"), "gzip") {
+		gz, err := gzip.NewReader(c.Request.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gz.Close()
+		reader = gz
+	}
+	return io.ReadAll(reader)
+}
+
 // handleOTLPTraces handles OTLP traces ingestion
 func (s *HTTPServer) handleOTLPTraces(c *gin.Context) {
 	start := time.Now()
 
 	// Read raw body
-	body, err := io.ReadAll(c.Request.Body)
+	body, err := s.readRequestBody(c)
 	if err != nil {
 		s.logger.Error("Failed to read traces request body", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
@@ -220,7 +242,7 @@ func (s *HTTPServer) handleOTLPMetrics(c *gin.Context) {
 	start := time.Now()
 
 	// Read raw body
-	body, err := io.ReadAll(c.Request.Body)
+	body, err := s.readRequestBody(c)
 	if err != nil {
 		s.logger.Error("Failed to read metrics request body", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
@@ -262,7 +284,7 @@ func (s *HTTPServer) handleOTLPLogs(c *gin.Context) {
 	start := time.Now()
 
 	// Read raw body
-	body, err := io.ReadAll(c.Request.Body)
+	body, err := s.readRequestBody(c)
 	if err != nil {
 		s.logger.Error("Failed to read logs request body", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})

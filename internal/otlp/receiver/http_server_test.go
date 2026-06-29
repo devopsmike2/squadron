@@ -5,6 +5,7 @@ package receiver
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -291,4 +292,44 @@ func TestExtractResourceAttributes_SkipsNilAndEmptyKeys(t *testing.T) {
 	})
 	assert.Equal(t, "shop", got["svc"])
 	assert.Len(t, got, 1)
+}
+
+// TestHandleOTLP_GzipEncodedBody pins the fix for the OTLP/HTTP gzip
+// gap: the upstream otelcol otlphttp exporter gzips payloads by
+// default, so the receiver MUST honor Content-Encoding: gzip. Before
+// the fix the compressed bytes hit proto.Unmarshal and returned 400,
+// silently dropping all telemetry from standard OTLP clients.
+func TestHandleOTLP_GzipEncodedBody(t *testing.T) {
+	idx := newRecordingIndex()
+	_, router := newTestHTTPServer(t, idx)
+
+	raw := buildTraceRequest(t, rsSpec{attrs: []*commonpb.KeyValue{kvString("service.name", "gz")}, spans: 1, roots: 1})
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, err := gz.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, gz.Close())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(buf.Bytes()))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusAccepted, w.Code, "gzip-encoded OTLP body must be accepted")
+	require.Len(t, idx.calls(), 1, "decompressed batch must reach the trace index")
+}
+
+// TestHandleOTLP_UncompressedStillWorks guards the no-encoding path so
+// the gzip branch doesn't regress plain protobuf clients.
+func TestHandleOTLP_UncompressedStillWorks(t *testing.T) {
+	idx := newRecordingIndex()
+	_, router := newTestHTTPServer(t, idx)
+	raw := buildTraceRequest(t, rsSpec{attrs: []*commonpb.KeyValue{kvString("service.name", "plain")}, spans: 1, roots: 1})
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusAccepted, w.Code)
+	require.Len(t, idx.calls(), 1)
 }
