@@ -2,60 +2,72 @@
 
 **Pillar:** Dynamic discovery
 **Tag at publish:** v0.89.304
-**Visual evidence:** A screenshot of the Fleet / Agents page on the
+**Visual evidence:** A screenshot of the Fleet / Agents view on the
 live deployment at the v0.89.304 tag, showing the freshly
 pipeline-deployed collector online — an `ip-172-31-…ec2.internal`
-row with an Online status and a recent last-seen, registered with
-no manual step. A small inset frame shows the `git log --oneline`
-for the four tags this produced: v0.89.301, v0.89.302, v0.89.303,
-v0.89.304. The terminal text + the Online row are the evidence;
-no mockup.
+row, Online status, recent last-seen, registered with no manual
+step. Optional inset: the `git log --oneline` for v0.89.301–304.
 **Hashtags:** #OpenTelemetry #SRE
-**Target word count:** 200-400
+**Target word count:** 300-450
 
 ## Draft
 
-The promise on the box is "deploy a collector and it shows up in
-your fleet." The only way to know if that is true is to deploy one
-yourself and watch.
+All week I've shown the proposer reasoning about collectors. The
+volume spike it caught at minute zero. The decline note it carried
+across clouds on Saturday. Every one of those posts quietly assumes
+something I had never actually shown: that the collector reaches
+Squadron in the first place.
 
-So we did. A Terraform pipeline stands up a host, Squadron opens a
-PR that injects the `otlphttp` exporter into the collector config,
-the host boots, the agent ships telemetry, and it should appear in
-Fleet. We walked the whole path on a real EC2 instance. It did not
-appear. Walking the path produced four releases.
+This week I stopped assuming and deployed one myself.
 
-**v0.89.301 — the injector wrote a pipeline with no receiver.** The
-config-injection scaffolded an exporter into a signal pipeline that
-had no receiver. otelcol fails that config at startup, so the agent
-never ran. Caught the moment a real collector tried to boot it.
+The setup is the one a real team would use. A Terraform pipeline
+stands up a host. Squadron opens a PR that injects its exporter into
+the collector's config. The host boots, the agent starts shipping
+telemetry, and it should appear in the fleet view. No manual step.
 
-**v0.89.302 — the receiver did not decompress gzip.** The OTel
-`otlphttp` exporter gzips request bodies by default. Squadron's
-OTLP/HTTP receiver read the body and unmarshalled it as protobuf
-without checking `Content-Encoding`, so every compressed request —
-i.e. every standard client out of the box — got an HTTP 400 and
-its telemetry was dropped. Silently. This one would have hit
-everybody.
+I ran the whole thing against a real EC2 box and watched the fleet.
+Nothing showed up.
 
-**v0.89.303 / .304 — discovery only registered agents with a UUID.**
-Passive OTLP discovery keyed agent identity off a UUID
-`service.instance.id`. Most infra and hostmetrics collectors do not
-set one. Squadron accepted their telemetry (202) and then skipped
-registering them, with no log. v0.89.303 added the log; v0.89.304
-synthesizes a stable identity from `host.name`, so a plain
-collector now registers. We re-deployed and watched the agent come
-online — `discovered telemetry-only agent` in the log, the row in
-Fleet.
+Walking the path to find out why produced four releases in an
+afternoon. The load-bearing one:
 
-None of these was catastrophic alone. Together they were the
-difference between "deploy a collector and it appears" and "deploy
-a collector and nothing happens, with no error to explain why."
-Unit tests passed the whole time. The bugs only existed on the
-path a real operator takes.
+The collector's exporter gzips its payload by default. Squadron's
+ingest endpoint read the body and parsed it as protobuf without
+checking for compression. So every standard collector got an HTTP
+400 and its telemetry was dropped. Silently. The collector logged a
+clean export. Squadron logged a wire-format parse error nobody was
+watching. The agent just never appeared.
 
-The front door only counts if you walk through it.
+Two smaller ones rode along. The injector scaffolded a pipeline with
+no receiver, so the collector refused to start. And discovery only
+registered agents that emit a UUID service.instance.id — which most
+infrastructure collectors don't — so it accepted their telemetry and
+then quietly declined to file them in the fleet.
 
-Repo at the v0.89.304 tag. The fleet surface is at `/fleet`.
+Fixed all three. Re-deployed. Watched the log say
+`discovered telemetry-only agent` and the row come online.
+
+Three more thoughts.
+
+One. The unit tests were green the entire time. None of these bugs
+existed in a test. They existed on the path a real operator walks —
+deploy, inject, boot, ship. That gap is exactly the thing I keep
+saying a green check does not cover.
+
+Two. The failure mode that scares me is the silent one. A 202 on the
+wire, telemetry on the floor, nothing in the log an operator would
+read. The honest-framing posts from this week were about the
+proposer admitting what it cannot see. Same discipline has to apply
+to the platform's own front door, or the rest is theater.
+
+Three. The fix is not just our bug. It widens who the product is
+for. Any standard OTLP collector now registers without ceremony — no
+special config, no UUID it was never going to set. Deploy it, it
+shows up.
+
+Squadron is open source. Repo in the comments.
+
+What's a bug you only found because you ran the whole path yourself,
+end to end, instead of trusting the green check?
 
 #OpenTelemetry #SRE
