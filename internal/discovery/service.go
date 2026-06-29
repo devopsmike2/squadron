@@ -100,12 +100,23 @@ func NewService(store Store, dedup time.Duration, logger *zap.Logger) *Service {
 // hard prerequisite of telemetry ingestion.
 func (s *Service) RegisterIfUnknown(ctx context.Context, obs Observation) {
 	if obs.AgentID == "" {
+		// No (or empty) service.instance.id on the telemetry. Passive
+		// OTLP discovery keys agent identity off a UUID
+		// service.instance.id, so without one we cannot register the
+		// agent even though its telemetry was ingested fine. Log at
+		// debug so this is diagnosable (it is otherwise invisible —
+		// the sender sees 202s but never appears in Fleet).
+		s.logger.Debug("discovery: skipping telemetry with no service.instance.id; passive OTLP discovery needs a UUID service.instance.id to register an agent",
+			zap.String("hostname", obs.Hostname), zap.String("service.name", obs.ServiceName))
 		return
 	}
 	parsed, err := uuid.Parse(obs.AgentID)
 	if err != nil {
 		// Some collectors set service.instance.id to a non-UUID
-		// string. Skip silently — the agents table requires UUIDs.
+		// string. Skip — the agents table requires UUIDs. Same
+		// invisibility problem as the empty case above, so log it.
+		s.logger.Debug("discovery: skipping telemetry with non-UUID service.instance.id; passive OTLP discovery requires a UUID service.instance.id",
+			zap.String("service.instance.id", obs.AgentID), zap.String("hostname", obs.Hostname))
 		return
 	}
 	now := time.Now().UTC()
