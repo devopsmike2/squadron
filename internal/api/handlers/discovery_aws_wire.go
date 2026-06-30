@@ -26,7 +26,32 @@ func defaultAWSValidatorFactory(creds credstore.AWSCredentials, accountID string
 // Lives in this file (rather than discovery.go) so the AWS SDK import
 // stays isolated to the production-only wire layer.
 func defaultAWSScannerFactory(key *credstore.Key) AWSScannerFactory {
+	return commercialAWSScannerFactory(key, false, nil)
+}
+
+// CommercialObservationStore is the write-capable observation store the
+// commercial-tier detectors persist to. The production *sqlite.Storage
+// (appStore) satisfies it; it is the union of the AWS scanner's
+// cold-start + error-rate store contracts.
+type CommercialObservationStore interface {
+	awsscanner.ColdStartStore
+	awsscanner.ErrorRateStore
+}
+
+// commercialAWSScannerFactory builds the production AWS scanner factory and,
+// when the commercial tier is enabled (config.CommercialDetectors.Enabled)
+// with a wired observation store, activates the add-on-dependent cold-start +
+// error-rate detectors on each constructed scanner. Default (enabled=false /
+// store=nil) is the OSS path: the detectors stay dormant exactly as before.
+func commercialAWSScannerFactory(key *credstore.Key, commercialEnabled bool, obs CommercialObservationStore) AWSScannerFactory {
 	return func(conn *credstore.CloudConnection) (DiscoveryScanner, error) {
-		return awsscanner.NewScannerFromConnection(conn, key)
+		sc, err := awsscanner.NewScannerFromConnection(conn, key)
+		if err != nil {
+			return nil, err
+		}
+		if commercialEnabled && obs != nil {
+			sc.EnableCommercialDetectors(obs, obs)
+		}
+		return sc, nil
 	}
 }

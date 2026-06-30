@@ -232,6 +232,18 @@ type DiscoveryHandlers struct {
 	// posture as coldStartStore.
 	errorRateStore ErrorRateObservationStore
 
+	// Commercial-tier detector activation (#152 productization).
+	// credstoreKey is retained so the AWS scanner factory can be rebuilt
+	// when commercial activation is wired (it needs both the key and the
+	// observation store). commercialDetectorsEnabled +
+	// commercialObsStore are threaded from config.CommercialDetectors and
+	// the application store; when both are set the factory activates the
+	// add-on-dependent cold-start + error-rate detectors on each scanner.
+	// Default (disabled / nil store) is the OSS dormant path.
+	credstoreKey               *credstore.Key
+	commercialDetectorsEnabled bool
+	commercialObsStore         CommercialObservationStore
+
 	logger *zap.Logger
 }
 
@@ -368,11 +380,38 @@ func (h *DiscoveryHandlers) WithAuditService(a services.AuditService) *Discovery
 // half-wired posture where Save persists rows the scan handler can't
 // read.
 func (h *DiscoveryHandlers) WithCredstoreKey(key *credstore.Key) *DiscoveryHandlers {
+	h.credstoreKey = key
 	h.awsCredMarshaller = func(creds credstore.AWSCredentials) ([]byte, []byte, error) {
 		return credstore.MarshalAWSCredentials(creds, key)
 	}
-	h.awsScannerFor = defaultAWSScannerFactory(key)
+	h.rebuildAWSScannerFactory()
 	return h
+}
+
+// WithCommercialDetectors threads the commercial-tier activation
+// (config.CommercialDetectors.Enabled + the write-capable observation store)
+// into the AWS scanner factory. When enabled with a non-nil store, scanners
+// built for a scan activate the add-on-dependent cold-start + error-rate
+// detectors. Default (enabled=false) preserves the OSS dormant path.
+// Order-independent with WithCredstoreKey — both rebuild the factory from the
+// retained key + commercial settings.
+func (h *DiscoveryHandlers) WithCommercialDetectors(enabled bool, store CommercialObservationStore) *DiscoveryHandlers {
+	h.commercialDetectorsEnabled = enabled
+	h.commercialObsStore = store
+	h.rebuildAWSScannerFactory()
+	return h
+}
+
+// rebuildAWSScannerFactory (re)installs the AWS scanner factory from the
+// retained credstore key + current commercial-detector settings. No-op until
+// the key is set (WithCredstoreKey). Shared by WithCredstoreKey and
+// WithCommercialDetectors so the two can be called in any order.
+func (h *DiscoveryHandlers) rebuildAWSScannerFactory() {
+	if h.credstoreKey == nil {
+		return
+	}
+	h.awsScannerFor = commercialAWSScannerFactory(
+		h.credstoreKey, h.commercialDetectorsEnabled, h.commercialObsStore)
 }
 
 // WithCredMarshaller overrides the AWSCredMarshaller. Tests use this

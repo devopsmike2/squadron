@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
@@ -516,6 +517,20 @@ func (f *sdkClientFactory) RDS(_ context.Context, region string) (RDSClient, err
 
 func (f *sdkClientFactory) S3(_ context.Context, region string) (S3Client, error) {
 	return s3.NewFromConfig(awssdk.Config{
+		Region:      region,
+		Credentials: f.creds,
+	}), nil
+}
+
+// CloudWatch returns a CloudWatch client bound to the assumed-role
+// session for the supplied region. It satisfies cloudWatchBuilder
+// (metrics.go), the capability the commercial-tier detectors type-assert
+// off the factory to build a per-region metrics client — the analog of
+// CostExplorer() for the cost path. CloudWatch metrics are region-scoped,
+// so callers build one client per function region (Lambda Insights is
+// regional).
+func (f *sdkClientFactory) CloudWatch(_ context.Context, region string) (CloudWatchClient, error) {
+	return cloudwatch.NewFromConfig(awssdk.Config{
 		Region:      region,
 		Credentials: f.creds,
 	}), nil

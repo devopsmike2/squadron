@@ -251,7 +251,13 @@ func (s *Scanner) DetectColdStartRegression(
 // AWS/Lambda (which returns nothing) to LambdaInsights/init_duration. OSS
 // surfaces the gap via the proposer's lambda-insights-enable recommendation.
 func (s *Scanner) runColdStartDetectionForServerless(ctx context.Context, result *scanner.Result) {
-	if s.cwClient == nil || s.coldStartStore == nil || s.connectionID == "" {
+	if s.coldStartStore == nil || s.connectionID == "" {
+		return
+	}
+	// OSS dormant path: no commercial gate AND no directly-injected client
+	// ⇒ nothing to do (this is the v0.89.114 behaviour). The commercial path
+	// (#152 productization) builds a per-region CloudWatch client on demand.
+	if !s.commercialDetectors && s.cwClient == nil {
 		return
 	}
 	for _, snap := range result.Serverless {
@@ -260,6 +266,18 @@ func (s *Scanner) runColdStartDetectionForServerless(ctx context.Context, result
 		}
 		if snap.ResourceARN == "" {
 			continue
+		}
+		// Commercial path: Lambda Insights metrics are region-scoped, so
+		// bind s.cwClient to the function's own region before each query.
+		if s.commercialDetectors {
+			cw, err := s.cloudWatchForRegion(ctx, regionFromARN(snap.ResourceARN))
+			if err != nil {
+				recordPartialFailure(result, "lambda_cold_start",
+					fmt.Sprintf("cold-start CloudWatch client build failed for %s: %s",
+						snap.ResourceARN, err.Error()))
+				continue
+			}
+			s.cwClient = cw
 		}
 		detection, err := s.DetectColdStartRegression(ctx, snap.ResourceARN)
 		if err != nil {
