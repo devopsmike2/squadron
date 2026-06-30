@@ -162,3 +162,24 @@ AWS/Azure/OCI). Fixes shipped this pass: gzip receiver (v0.89.302), audit-explai
 nil-aiService, API-404 hygiene, proposer 90→180s timeout. The blocker to a
 confident "100%" is BUG #259 (proposer large-scan robustness: max_tokens +
 JSON-repair + chunk-by-tier).
+
+## #259 FIXED — chunk-by-tier discovery proposer (c1ea3d6)
+The proposer now fans out one LLM call per non-empty tier when a scan spans ≥3
+tiers or >12 resources (small scans keep the single call). Per-tier plans merge
+into one ProposalResult; per-tier failures tolerated.
+**Live-verified:** re-ran the *exact* multi-tier AWS scan that failed twice
+(timeout + invalid/truncated JSON) — now `succeeded` with 8 valid plan steps
+across EC2 / Lambda / RDS / S3 / ALB / EventBridge. Unit tests cover
+split/merge/size/threshold.
+
+### FINAL VERDICT (updated)
+The blocker is resolved. The marquee discovery → AI-recommendations loop now
+works end-to-end on a realistic multi-tier account (the hard, previously-broken
+part). Everything verified this pass holds: Phases 1–2 (boot, no-cloud, AI
+explain/merge), staged rollouts, real-cloud scan detection (AWS/Azure/OCI), and
+now large-scan recommendations. The final deterministic step (open-PR from a
+recommendation) is proven live recently (#187) and takes the now-valid recs as
+input. **5 real bugs found + fixed this verification pass:** gzip receiver
+(v0.89.302), audit-explain nil-aiService, API-404 hygiene, proposer 90→180s
+timeout, and the #259 chunk-by-tier proposer — every one passed all unit tests
+before this pass.
