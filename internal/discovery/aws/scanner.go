@@ -123,6 +123,21 @@ type Scanner struct {
 	// Same posture as coldStartStore.
 	errorRateStore ErrorRateStore
 
+	// commercialDetectors gates the add-on-dependent regression
+	// detectors (#152 / #153 enterprise-gate decision). Default false
+	// (OSS): the Lambda cold-start InitDuration query targets the
+	// AWS/Lambda namespace where the metric does not exist (empty
+	// datapoints ⇒ never fires), preserving OSS behaviour. When true
+	// (commercial tier, wired by the scan orchestrator from
+	// config.CommercialDetectors.Enabled), the InitDuration query is
+	// re-pointed at the Lambda Insights namespace
+	// (LambdaInsights/init_duration) where the cold-start signal
+	// actually lives — the operator must have the paid Lambda Insights
+	// add-on enabled for datapoints to appear. The flag never enables
+	// any extra cloud calls on its own; it only changes which
+	// namespace an already-issued query reads.
+	commercialDetectors bool
+
 	// costExplorerClient is the AWS Cost Explorer adapter the
 	// cost-correlation substrate slice 6 chunk 2 (v0.89.184) uses for
 	// the read-only QueryCost body. Nil-tolerant: when nil, QueryCost
