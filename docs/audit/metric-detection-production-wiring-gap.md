@@ -1,10 +1,51 @@
 # Audit finding: metric-based serverless detection is not wired in the production scanner factories
 
-**Status:** finding for maintainer review + decision. No behavior change made.
+**Status:** ✅ RESOLVED via **option 2** (opt-in flag). AWS v0.89.330, OCI
+v0.89.331, GCP v0.89.332. See "Resolution" below.
 **Confidence:** high (static evidence below; grep + read across the scanner
 packages and the production factory).
-**Severity:** high — a whole detection feature class is dormant in production
-for GCP/OCI, and for AWS unless the commercial flag is on.
+**Severity:** high — a whole detection feature class was dormant in production
+for GCP/OCI, and for AWS unless the commercial flag was on.
+
+## Resolution (option 2 — opt-in flag, default off)
+
+The maintainer chose **option 2**: a single config switch,
+**`serverless_metric_detection.enabled`** (default false), that constructs the
+per-cloud metric client and activates the **native-metric** serverless
+detectors. The OSS default stays at zero billed metric reads; the operator opts
+in (and grants the metric IAM/scope) to turn them on. The add-on-dependent
+detectors (AWS Lambda **cold-start** via Lambda Insights; **all** Azure Functions
+detection via Application Insights) remain under `commercial_detectors.enabled`
+— they need a paid telemetry add-on, not just a native metric, so they are out
+of scope for this flag.
+
+Shipped in three slices:
+
+- **AWS (v0.89.330).** Decoupled Lambda **error-rate** from the commercial gate:
+  it runs on the native `AWS/Lambda` `Errors`+`Invocations` metrics under the new
+  flag (building a per-region CloudWatch client on demand), no Lambda Insights
+  required. Cold-start stays commercial (InitDuration only lives in the Lambda
+  Insights namespace).
+- **OCI (v0.89.331).** Folded the OCI Functions walk + cold-start/error-rate
+  detection passes into `Scan()` (the slice-1 chunk-4 deferral) and wired the
+  already-implemented `signedMonitoringClient` + observation stores + connection
+  id in `OCIFactory`. Gated on the flag, so a default scan is unchanged.
+- **GCP (v0.89.332).** Wrote the production Cloud Monitoring V3 adapter
+  (`gcp/metrics_sdk.go`, the deferred chunk-2 SDK adapter) + wired the stores +
+  connection id in `GCPFactory`; the `monitoring.read` OAuth scope is requested
+  only when the flag is on (least privilege).
+  **Live-verification pending:** the adapter is unit-tested against canned
+  `timeSeries.list` JSON but not yet against a real Cloud Monitoring backend; its
+  SampleCount proxy (1 per populated 5m period — see the metrics_sdk.go header)
+  feeds the cold-start baseline-minimum-samples gate and wants a live confirm.
+
+Follow-up: OCI Functions **inventory** discovery is currently gated on the same
+flag (the Scan walk only runs when the monitoring client is wired), so with the
+flag off OCI Functions remain un-inventoried — the pre-existing state. Making OCI
+Functions discovery unconditional (like the compute/db/OKE tiers), decoupled from
+metric detection, is tracked as a separate enhancement.
+
+The original finding (unchanged) follows.
 
 ## Summary
 
