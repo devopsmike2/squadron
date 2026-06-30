@@ -43,7 +43,11 @@ on top.
 - **Scale & HA**: clustered control plane, Postgres / managed store backends,
   10k+ agent fleets, multi-region.
 - **Advanced detection**: signals that require paid telemetry layers (AWS Lambda
-  Insights, Azure Application Insights) plus anomaly / ML detection.
+  Insights, Azure Application Insights) plus anomaly / ML detection. The
+  add-on-backed cold-start + error-rate regression detectors are implemented and
+  activate end-to-end behind `commercial_detectors.enabled` (default off); see
+  [Enabling commercial-tier detection](./detection-coverage.md#enabling-commercial-tier-detection)
+  for the operator flow + the per-cloud add-on / RBAC prerequisites.
 - **Cost at org scale**: showback / chargeback, budgets + forecasting,
   multi-backend rate management.
 - **Deployment options**: air-gapped, bring-your-own / on-prem LLM.
