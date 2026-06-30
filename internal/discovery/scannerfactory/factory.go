@@ -86,19 +86,29 @@ func (a azureScanner) Validate(ctx context.Context, _ *credstore.CloudConnection
 }
 
 // AzureFactory is the production handlers.AzureScannerFactory.
-type AzureFactory struct{}
+type AzureFactory struct {
+	// CommercialDetectors activates the App Insights-backed cold-start +
+	// error-rate detectors on each built scanner (#153 productization).
+	// Wired from config.CommercialDetectors.Enabled in main.go; default
+	// false keeps the detectors dormant (OSS posture).
+	CommercialDetectors bool
+}
 
 // Build maps a persisted AzureConnection + unsealed client_secret into
 // a live scanner. The Scanner performs the OAuth2 client-credentials
 // exchange internally at Scan() time.
-func (AzureFactory) Build(conn azureconnstore.AzureConnection, clientSecret []byte) (scanner.Scanner, error) {
-	return azureScanner{&azure.Scanner{
+func (f AzureFactory) Build(conn azureconnstore.AzureConnection, clientSecret []byte) (scanner.Scanner, error) {
+	sc := &azure.Scanner{
 		TenantID:       conn.TenantID,
 		SubscriptionID: conn.SubscriptionID,
 		ClientID:       conn.ClientID,
 		ClientSecret:   clientSecret,
 		Location:       conn.Location,
-	}}, nil
+	}
+	if f.CommercialDetectors {
+		sc = sc.WithCommercialDetectors(true)
+	}
+	return azureScanner{sc}, nil
 }
 
 // --- GCP ------------------------------------------------------------

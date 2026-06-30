@@ -885,7 +885,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			logger.Warn("azure discovery substrate: NewSQLiteStore failed; Azure discovery disabled", zap.Error(aerr))
 		} else {
 			apiServer.SetAzureDiscoveryStore(azStore)
-			apiServer.SetAzureDiscoveryScannerFactory(scannerfactory.AzureFactory{})
+			apiServer.SetAzureDiscoveryScannerFactory(scannerfactory.AzureFactory{
+				CommercialDetectors: config.CommercialDetectors.Enabled,
+			})
 			logger.Info("azure discovery substrate wired", zap.String("path", filepath.Join(discoveryBaseDir, "azureconnstore.db")))
 		}
 		if ociStore, oerr := ociconnstore.NewSQLiteStore(ociconnstore.Config{DBPath: filepath.Join(discoveryBaseDir, "ociconnstore.db"), Logger: logger}); oerr != nil {
