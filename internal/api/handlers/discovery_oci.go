@@ -134,6 +134,19 @@ type DiscoveryOCIHandlers struct {
 	// server.go from the same *traceindex.Quality the span-quality handler
 	// uses.
 	samplingSpanCounter proposer.SamplingRateSpanCounter
+
+	// samplingSink, when non-nil, captures each scan's live sampling
+	// result into the per-resource /sampling endpoint cache (#295 slice
+	// 5). Wired in server.go from the shared SamplingObservationCache.
+	samplingSink *SamplingObservationCache
+}
+
+// WithOCISamplingSink wires the per-resource endpoint cache so the OCI
+// scan annotation also records its live results for the endpoint to
+// serve (#295 slice 5). Nil-safe (leaves the endpoint unfed).
+func (h *DiscoveryOCIHandlers) WithOCISamplingSink(cache *SamplingObservationCache) *DiscoveryOCIHandlers {
+	h.samplingSink = cache
+	return h
 }
 
 // WithOCISamplingSpanCounter wires the traceindex span counter the
@@ -1161,7 +1174,7 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 	// short-circuits.
 	if h.samplingSpanCounter != nil {
 		if querier, ok := scn.(proposer.SamplingRateMetricQuerier); ok {
-			det := newSamplingDetector(querier, h.samplingSpanCounter)
+			det := newSamplingDetector(querier, h.samplingSpanCounter).withSink(h.samplingSink)
 			AnnotateServerlessWithSampling(c.Request.Context(), det, samplingARNKeyResolver{}, result.Serverless, h.logger)
 		}
 	}

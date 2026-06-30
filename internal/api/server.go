@@ -247,6 +247,14 @@ type Server struct {
 	samplingHandlerOnce                sync.Once
 	samplingResourceLookup             handlers.SamplingResourceLookup
 	samplingDetector                   handlers.SamplingDetector
+	// samplingObservationCache (#295 slice 5) backs the per-resource
+	// /sampling endpoint: the per-cloud scan handlers record each scan's
+	// live sampling result into it (the annotation sink), and the
+	// endpoint reads it as both lookup + detector. Created once by
+	// ensureSamplingCache. Sampling is a live join, so this is an
+	// in-memory last-result cache, not a persisted observation store.
+	samplingCacheOnce        sync.Once
+	samplingObservationCache *handlers.SamplingObservationCache
 
 	// discoveryServerlessErrorRateHandler — v0.89.128 (#768 Stream
 	// 166, Error rate correlation slice 1 chunk 2). The per-resource
@@ -973,6 +981,9 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		// counter the span-quality handler uses; setter is nil-safe and
 		// type-asserts to SpanCountLast24h.
 		h.WithSamplingSpanCounter(s.qualitySnapshotIndexForDiscovery)
+		// Feed the per-resource /sampling endpoint cache (#295 slice 5):
+		// the annotation records each scan's live result for the endpoint.
+		h.WithSamplingSink(s.ensureSamplingCache())
 		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — wire the
 		// operator-set exclusion store. The application store satisfies
 		// the slim DiscoveryExclusionStore interface directly so the
@@ -1142,6 +1153,8 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 		// *traceindex.Quality the span-quality handler uses; the setter
 		// recovers SpanCountLast24h via a type assertion (nil-safe).
 		h.WithGCPSamplingSpanCounter(s.qualitySnapshotIndexForDiscovery)
+		// Feed the per-resource /sampling endpoint cache (#295 slice 5).
+		h.WithGCPSamplingSink(s.ensureSamplingCache())
 		fn(h, c)
 	}
 }
@@ -1262,6 +1275,8 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 		// Sampling-rate annotation (#295): same *traceindex.Quality span
 		// counter as the span-quality handler; setter is nil-safe.
 		h.WithOCISamplingSpanCounter(s.qualitySnapshotIndexForDiscovery)
+		// Feed the per-resource /sampling endpoint cache (#295 slice 5).
+		h.WithOCISamplingSink(s.ensureSamplingCache())
 		fn(h, c)
 	}
 }
@@ -1562,6 +1577,12 @@ func (s *Server) applyDiscoveryCommercialDetectors(h *handlers.DiscoveryHandlers
 // specific resource that hasn't been observed yet.
 func (s *Server) discoveryServerlessSamplingTrampoline(fn func(*handlers.DiscoveryServerlessSamplingHandlers, *gin.Context)) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Ensure the shared cache exists and is wired as the endpoint's
+		// lookup + detector BEFORE the handler is built (samplingHandlerOnce
+		// captures the fields). Without this, a /sampling request that
+		// arrives before any scan would build a 404-forever handler even
+		// after later scans populate the cache. (#295 slice 5)
+		s.ensureSamplingCache()
 		s.samplingHandlerOnce.Do(func() {
 			s.discoveryServerlessSamplingHandler = handlers.NewDiscoveryServerlessSamplingHandlers(
 				s.samplingResourceLookup,
@@ -1571,6 +1592,28 @@ func (s *Server) discoveryServerlessSamplingTrampoline(fn func(*handlers.Discove
 		})
 		fn(s.discoveryServerlessSamplingHandler, c)
 	}
+}
+
+// ensureSamplingCache lazily creates the shared sampling-observation
+// cache (#295 slice 5) and wires it as the per-resource endpoint's
+// lookup + detector. Idempotent (sync.Once). An explicitly-injected
+// lookup/detector (SetSamplingResourceLookup / SetSamplingDetector,
+// used by tests) is preserved — the cache only fills a nil seam. The
+// per-cloud scan trampolines call this to obtain the same cache to use
+// as their annotation sink, so producer (scan) and consumer (endpoint)
+// share one instance.
+func (s *Server) ensureSamplingCache() *handlers.SamplingObservationCache {
+	s.samplingCacheOnce.Do(func() {
+		cache := handlers.NewSamplingObservationCache()
+		s.samplingObservationCache = cache
+		if s.samplingResourceLookup == nil {
+			s.samplingResourceLookup = cache
+		}
+		if s.samplingDetector == nil {
+			s.samplingDetector = cache
+		}
+	})
+	return s.samplingObservationCache
 }
 
 // SetSamplingResourceLookup — v0.89.123 (#763 Stream 161). Wires
