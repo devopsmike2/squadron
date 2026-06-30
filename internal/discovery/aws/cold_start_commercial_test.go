@@ -6,6 +6,7 @@ package aws
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 )
@@ -72,6 +73,35 @@ func TestColdStartNamespaceGate(t *testing.T) {
 			// Either way the function name resolves identically from the ARN.
 			if got := awsStr(in.Dimensions[0].Value); got != "checkout" {
 				t.Errorf("Dimension value = %q, want %q", got, "checkout")
+			}
+		})
+	}
+}
+
+// TestCloudWatchPeriodForWindow locks the #152 live-discovered fix: the
+// period must keep every window's datapoint count within CloudWatch's 1440
+// cap, while leaving the 24h current window at the tuned 300s.
+func TestCloudWatchPeriodForWindow(t *testing.T) {
+	cases := []struct {
+		name       string
+		window     time.Duration
+		wantPeriod int32
+	}{
+		{"1h SQS window stays 300", time.Hour, 300},
+		{"24h current window stays 300", 24 * time.Hour, 300},
+		{"168h baseline bumps above 300", 168 * time.Hour, 480},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cloudWatchPeriodForWindow(tc.window)
+			if got != tc.wantPeriod {
+				t.Errorf("period = %d, want %d", got, tc.wantPeriod)
+			}
+			// Invariant: datapoints must stay within the CloudWatch cap.
+			datapoints := int(tc.window/time.Second) / int(got)
+			if datapoints > cloudWatchMaxDatapoints {
+				t.Errorf("datapoints = %d exceeds CloudWatch cap %d (window=%s period=%d)",
+					datapoints, cloudWatchMaxDatapoints, tc.window, got)
 			}
 		})
 	}
