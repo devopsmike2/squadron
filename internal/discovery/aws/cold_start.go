@@ -358,6 +358,21 @@ func (s *Scanner) WithColdStartStore(store ColdStartStore) *Scanner {
 	return s
 }
 
+// WithCommercialDetectors flips the add-on-dependent regression
+// detectors on (#152 enterprise-gate). Default false (OSS). When true
+// the Lambda cold-start InitDuration query is re-pointed from the
+// AWS/Lambda namespace (where the metric does not exist) to the Lambda
+// Insights namespace (LambdaInsights/init_duration) where the operator's
+// paid add-on publishes it. The flag changes only which namespace an
+// already-issued query reads — it never enables an extra cloud call.
+// The scan orchestrator wires this from config.CommercialDetectors.Enabled,
+// alongside a real ColdStartStore (the store gate is what actually runs
+// the detection branch).
+func (s *Scanner) WithCommercialDetectors(on bool) *Scanner {
+	s.commercialDetectors = on
+	return s
+}
+
 // WithConnectionID overrides the connection identifier used to scope
 // persisted cold-start observations. v0.89.114. Production carries
 // the value through NewScannerFromConnection; the

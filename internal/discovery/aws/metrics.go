@@ -58,6 +58,27 @@ const LambdaInitDurationMetricName = "InitDuration"
 // metrics_test.go::TestLambdaMetricNamespace_Constant.
 const LambdaMetricNamespace = "AWS/Lambda"
 
+// LambdaInsightsNamespace is the CloudWatch namespace the AWS Lambda
+// Insights add-on publishes its enhanced per-function metrics into.
+// Unlike AWS/Lambda, this namespace carries init_duration — the actual
+// cold-start latency signal — but only when the operator has enabled
+// the paid Lambda Insights extension on the function. #152
+// enterprise-gate: the commercial-tier cold-start detector re-points
+// the InitDuration query here (see Scanner.commercialDetectors).
+const LambdaInsightsNamespace = "LambdaInsights"
+
+// LambdaInsightsInitDurationMetric is the Lambda Insights metric name
+// for cold-start initialization duration (milliseconds). It is the
+// LambdaInsights-namespace analog of the AWS/Lambda REPORT-field
+// InitDuration; the dimension key is "function_name" (snake_case),
+// distinct from AWS/Lambda's "FunctionName".
+const LambdaInsightsInitDurationMetric = "init_duration"
+
+// LambdaInsightsFunctionDimension is the dimension key Lambda Insights
+// uses to scope a metric to a single function. Lower-snake-case,
+// unlike the AWS/Lambda "FunctionName" PascalCase dimension.
+const LambdaInsightsFunctionDimension = "function_name"
+
 // LambdaInvocationsMetricName is the CloudWatch metric name for AWS
 // Lambda invocation count. Sampling rate analysis slice 1 chunk 1
 // (v0.89.122) uses this as the denominator for the
@@ -306,11 +327,29 @@ func (s *Scanner) QueryAggregate(
 	extStat := mapMetricStatisticToCloudWatch(stat)
 	periodSeconds := int32(cloudWatchMetricPeriodSeconds)
 
+	// #152 enterprise-gate: the InitDuration cold-start signal does
+	// not exist in the AWS/Lambda namespace — it lives in the Lambda
+	// Insights namespace (LambdaInsights/init_duration, dimension
+	// function_name). In OSS (commercialDetectors=false) we keep the
+	// AWS/Lambda query, which returns empty datapoints and never fires
+	// — that is the intended OSS posture (the proposer instead
+	// recommends enabling the add-on). When the commercial tier is
+	// enabled the query is re-pointed at the Lambda Insights namespace
+	// where the operator's add-on actually publishes the signal.
+	namespace := LambdaMetricNamespace
+	queryMetricName := metricName
+	dimName := "FunctionName"
+	if s.commercialDetectors {
+		namespace = LambdaInsightsNamespace
+		queryMetricName = LambdaInsightsInitDurationMetric
+		dimName = LambdaInsightsFunctionDimension
+	}
+
 	input := &cloudwatch.GetMetricStatisticsInput{
-		Namespace:  awssdk.String(LambdaMetricNamespace),
-		MetricName: awssdk.String(metricName),
+		Namespace:  awssdk.String(namespace),
+		MetricName: awssdk.String(queryMetricName),
 		Dimensions: []cwtypes.Dimension{{
-			Name:  awssdk.String("FunctionName"),
+			Name:  awssdk.String(dimName),
 			Value: awssdk.String(functionName),
 		}},
 		StartTime:          awssdk.Time(startTime),

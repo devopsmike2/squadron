@@ -25,6 +25,35 @@ type Config struct {
 	Deploy          DeployConfig          `yaml:"deploy,omitempty"`
 	Billing         BillingConfig         `yaml:"billing,omitempty"`
 	CostCorrelation CostCorrelationConfig `yaml:"cost_correlation,omitempty"`
+
+	CommercialDetectors CommercialDetectorsConfig `yaml:"commercial_detectors,omitempty"`
+}
+
+// CommercialDetectorsConfig is the operator-facing switch for the
+// add-on-dependent regression detectors that are part of the future
+// commercial tier (#152 AWS Lambda cold-start via Lambda Insights;
+// #153 Azure Functions cold-start + error via Application Insights).
+// OFF by default: in OSS these detectors stay dormant and Squadron
+// instead surfaces the gap by recommending the operator enable the
+// paid add-on (lambda-insights-enable / azfunc-appinsights-enable).
+//
+// Setting Enabled=true is the explicit decision to run the regression
+// detectors against the add-on telemetry. It does NOT enable the
+// add-ons (those are paid features the operator turns on in their
+// cloud account) and it does NOT change OSS metric availability — it
+// only re-points the existing detector queries at the namespaces
+// (Lambda Insights / Application Insights) where the cold-start +
+// error signals actually live, and wires the observation stores the
+// detection branch persists to. When the add-ons are absent the
+// detectors read empty datapoints and stay silent, exactly as in OSS.
+//
+// This is the single switch that flips these detectors from
+// plumbed-but-dormant to live, mirroring CostCorrelationConfig.
+type CommercialDetectorsConfig struct {
+	// Enabled turns the commercial-tier regression detectors on.
+	// Default false (OSS) — the detectors stay dormant and OSS
+	// recommends enabling the add-on instead.
+	Enabled bool `yaml:"enabled"`
 }
 
 // BillingConfig wires the v0.42 billing connectors (Splunk for now;
