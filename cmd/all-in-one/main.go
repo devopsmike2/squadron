@@ -698,6 +698,41 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Info("Cost-spike alerting disabled (requires pricing.enabled + insights service)")
 	}
 
+	// Retention GC for the two unbounded operator-activity tables.
+	// cost_spike_events gains a row per detected anomaly and
+	// recommendation_outcomes a row per Apply click; neither had a prune
+	// path, so a long-lived deployment accumulates them without bound (and
+	// GET /savings/realized full-scans the outcomes table). 24h ticker,
+	// 90-day horizon. Closed cost-spikes only — open ones are never pruned.
+	// Safe-degrade: only the sqlite store implements the predicates.
+	type operatorTableRetentionGC interface {
+		DeleteClosedCostSpikeEventsBefore(ctx context.Context, before time.Time) (int64, error)
+		DeleteRecommendationOutcomesBefore(ctx context.Context, before time.Time) (int64, error)
+	}
+	if gcStore, ok := appStore.(operatorTableRetentionGC); ok {
+		const operatorTableRetention = 90 * 24 * time.Hour
+		go func() {
+			t := time.NewTicker(24 * time.Hour)
+			defer t.Stop()
+			for range t.C {
+				cutoff := time.Now().UTC().Add(-operatorTableRetention)
+				if n, err := gcStore.DeleteClosedCostSpikeEventsBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("cost_spike_events retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("cost_spike_events retention GC ran", zap.Int64("deleted", n))
+				}
+				if n, err := gcStore.DeleteRecommendationOutcomesBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("recommendation_outcomes retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("recommendation_outcomes retention GC ran", zap.Int64("deleted", n))
+				}
+			}
+		}()
+		logger.Info("operator-table retention GC started",
+			zap.Duration("retention", operatorTableRetention),
+			zap.Duration("interval", 24*time.Hour))
+	}
+
 	// v0.31 Pipeline Health — collector self-metrics surface. Reads
 	// from the dedicated pipeline_health_samples table populated by
 	// the worker pool's extractor. Needs an AgentLister so the fleet
