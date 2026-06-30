@@ -128,18 +128,52 @@ func (g gcpScanner) Validate(ctx context.Context, _ *credstore.CloudConnection) 
 	return probeValidate(g.Scan(ctx, nil, nil))
 }
 
+// GCPObservationStore is the write-capable cold-start + error-rate
+// observation store the native-metric serverless detectors persist to.
+// The production *sqlite.Storage (appStore) satisfies it.
+type GCPObservationStore interface {
+	gcp.ColdStartStore
+	gcp.ErrorRateStore
+}
+
 // GCPFactory is the production handlers.GCPScannerFactory.
-type GCPFactory struct{}
+type GCPFactory struct {
+	// MetricDetection activates the Cloud Monitoring-backed serverless
+	// cold-start + error-rate detectors on each built scanner
+	// (config.ServerlessMetricDetection.Enabled; option 2, #300). Wired
+	// from main.go. Default false: the scanner builds no Cloud Monitoring
+	// client and the detection passes no-op, so a stock scan issues zero
+	// metric reads — the OSS posture.
+	MetricDetection bool
+
+	// ObsStore is the write-capable observation store the detectors
+	// persist to. Required (alongside MetricDetection) to activate.
+	ObsStore GCPObservationStore
+}
 
 // Build maps a persisted GCPConnection + unsealed Service Account JSON
 // into a live scanner. The Scanner builds an oauth2-backed client from
 // the SA JSON at Scan() time.
-func (GCPFactory) Build(conn *gcpconnstore.GCPConnection, saJSON []byte) (scanner.Scanner, error) {
-	return gcpScanner{&gcp.Scanner{
+//
+// When MetricDetection is enabled with a store, the scanner is flagged
+// to build the Cloud Monitoring adapter at Scan() time (it needs the
+// scan-time oauth client) and is wired with the cold-start / error-rate
+// observation stores + the connection id that scopes persisted
+// observations, so a scan runs the native-metric detectors over the
+// Cloud Run / Cloud Functions surfaces it already walks.
+func (f GCPFactory) Build(conn *gcpconnstore.GCPConnection, saJSON []byte) (scanner.Scanner, error) {
+	sc := &gcp.Scanner{
 		ProjectID: conn.ProjectID,
 		SAJSON:    saJSON,
 		Region:    conn.Region,
-	}}, nil
+	}
+	if f.MetricDetection && f.ObsStore != nil {
+		sc = sc.WithServerlessMetricDetection(true).
+			WithColdStartStore(f.ObsStore).
+			WithErrorRateStore(f.ObsStore).
+			WithConnectionID(conn.ID)
+	}
+	return gcpScanner{sc}, nil
 }
 
 // --- OCI ------------------------------------------------------------

@@ -98,6 +98,15 @@ type Scanner struct {
 	// interface surface and the godoc for the SDK-wiring rationale.
 	metricsClient metricsClient
 
+	// metricDetection gates the native-metric serverless detectors
+	// (config.ServerlessMetricDetection.Enabled; option 2, #300). When
+	// true, Scan builds a real Cloud Monitoring adapter from the
+	// scan-time oauth client and wires it via WithMetricsClient before
+	// the cold-start + error-rate passes run. Default false keeps
+	// metricsClient nil so those passes no-op — the OSS posture. Set by
+	// GCPFactory via WithServerlessMetricDetection.
+	metricDetection bool
+
 	// metricsLimiter is the per-Scanner-instance rate limiter that
 	// the slice 2 chunk 1 (v0.89.118) MetricQuerier consults before
 	// every Cloud Monitoring call. Pre-armed at 60 RPM (the
@@ -344,6 +353,21 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// resource detection failure is logged into FailedServices with
 	// the matching surface identifier (cloudrun_cold_start /
 	// cloudfunc_cold_start) but does NOT halt the per-row loop.
+	//
+	// Native-metric serverless detection (option 2, #300): when the
+	// flag is on, build the real Cloud Monitoring adapter from the
+	// scan-time oauth client and wire it so the two passes below have a
+	// live metricsClient. Default off → metricsClient stays nil and the
+	// passes no-op (zero metric reads, the OSS posture). A build failure
+	// is non-fatal and recorded as a partial failure.
+	if s.metricDetection && s.metricsClient == nil {
+		if mc, mcErr := s.buildMonitoringClient(ctx, oauthClient); mcErr != nil {
+			recordPartialFailure(&result, "serverless_metric_detection",
+				truncate(mcErr.Error(), 200))
+		} else {
+			s.WithMetricsClient(mc)
+		}
+	}
 	s.runColdStartDetectionForServerless(ctx, &result)
 
 	// Error rate correlation slice 1 chunk 3 (v0.89.129, #769
@@ -663,9 +687,7 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 	// default on new projects (constraints/iam.disableServiceAccountKey
 	// Creation), so a key-only connector locks those tenants out. The
 	// returned TokenSource mints short-lived tokens for any shape.
-	creds, err := google.CredentialsFromJSON(
-		ctx,
-		s.SAJSON,
+	scopes := []string{
 		compute.ComputeReadonlyScope,
 		sqladmin.SqlserviceAdminScope,
 		// Slice-2 (kubernetes-tier-slice2.md §5.1) GKE Container API
@@ -685,7 +707,16 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 		CloudFunctionsPlatformScope,
 		// Object-store tier (coverage-parity arc) — GCS bucket read.
 		StorageReadOnlyScope,
-	)
+	}
+	// Cloud Monitoring read scope — requested only when the native-metric
+	// serverless detectors are enabled (option 2, #300), so a default
+	// scan's OAuth grant stays exactly as before (least privilege). The
+	// runbook documents roles/monitoring.viewer as the project-level IAM
+	// grant required when serverless_metric_detection.enabled is on.
+	if s.metricDetection {
+		scopes = append(scopes, MonitoringReadScope)
+	}
+	creds, err := google.CredentialsFromJSON(ctx, s.SAJSON, scopes...)
 	if err != nil {
 		return nil, fmt.Errorf("gcp: parse credential JSON: %w", err)
 	}

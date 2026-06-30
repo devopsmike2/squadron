@@ -76,3 +76,15 @@ const RunReadonlyScope = "https://www.googleapis.com/auth/run.readonly"
 // role layer is the actual least-privilege ask either way, mirroring
 // the GKE container-scope rationale on ContainerReadonlyScope above).
 const CloudFunctionsPlatformScope = "https://www.googleapis.com/auth/cloud-platform.read-only"
+
+// MonitoringReadScope is the OAuth scope the Cloud Monitoring V3
+// timeSeries.list call (the native-metric serverless cold-start +
+// error-rate detectors, option 2 / #300) is authorized against. The
+// monitoring/v3 client library exposes
+// "https://www.googleapis.com/auth/monitoring.read" as the canonical
+// constant; the scanner pins it explicitly so the scope union in
+// buildOAuthHTTPClient stays greppable. Requested ONLY when
+// config.ServerlessMetricDetection.Enabled is on (least privilege); the
+// runbook documents roles/monitoring.viewer as the project-level IAM
+// grant required in that case.
+const MonitoringReadScope = "https://www.googleapis.com/auth/monitoring.read"

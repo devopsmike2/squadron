@@ -970,7 +970,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			logger.Warn("gcp discovery substrate: NewSQLiteStore failed; GCP discovery disabled", zap.Error(gerr))
 		} else {
 			apiServer.SetGCPDiscoveryStore(gcpStore)
-			apiServer.SetGCPDiscoveryScannerFactory(scannerfactory.GCPFactory{})
+			gcpFactory := scannerfactory.GCPFactory{}
+			// Native-metric serverless detection (option 2, #300): when the
+			// flag is on and the app store supports observation persistence,
+			// wire the Cloud Monitoring detectors. Default off keeps GCP
+			// serverless detection dormant (zero metric reads). NOTE: the
+			// Cloud Monitoring adapter ships behind this flag with
+			// live-verification pending (see metrics_sdk.go header).
+			if config.ServerlessMetricDetection.Enabled {
+				if obs, ok := appStore.(scannerfactory.GCPObservationStore); ok {
+					gcpFactory.MetricDetection = true
+					gcpFactory.ObsStore = obs
+				} else {
+					logger.Warn("serverless_metric_detection.enabled is true but the application store does not support GCP observation persistence; GCP serverless detection stays dormant")
+				}
+			}
+			apiServer.SetGCPDiscoveryScannerFactory(gcpFactory)
 			logger.Info("gcp discovery substrate wired", zap.String("path", filepath.Join(discoveryBaseDir, "gcpconnstore.db")))
 		}
 		if azStore, aerr := azureconnstore.NewSQLiteStore(azureconnstore.Config{DBPath: filepath.Join(discoveryBaseDir, "azureconnstore.db"), Logger: logger}); aerr != nil {
