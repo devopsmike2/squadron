@@ -954,6 +954,14 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 				handlers.NewStaticColdStartDetectionConstants(24, 168, 1.5, 500.0),
 			)
 		}
+		// Mirror the cold-start wiring for error-rate so the
+		// AnnotateServerlessWithErrorRate pass (discovery.go) populates
+		// current_error_rate + error_rate_exceeds_threshold on AWS Lambda rows.
+		// Previously absent — the AWS error-rate annotation stayed a no-op even
+		// with the reader set. Nil reader short-circuits (rows render "—").
+		if s.errorRateObservationReader != nil {
+			h.WithErrorRateObservationStore(s.errorRateObservationReader)
+		}
 		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — wire the
 		// operator-set exclusion store. The application store satisfies
 		// the slim DiscoveryExclusionStore interface directly so the

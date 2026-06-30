@@ -519,6 +519,24 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		apiServer.SetErrorRateObservationReader(r)
 	}
 
+	// Discovery trace-coverage panel + per-row last_seen_at annotations. The
+	// same *traceindex.Index that feeds the OTLP receivers (above) satisfies
+	// both discovery interfaces (Coverage + LastSeenAt); the SetX...ForDiscovery
+	// setters were never called, so the Discovery dashboard's trace-coverage
+	// panel served zeros and every resource rendered last-seen "never".
+	if traceIndex != nil {
+		apiServer.SetTraceIndexForDiscovery(traceIndex)
+		apiServer.SetTraceIndexLookupForDiscovery(traceIndex)
+	}
+	// Discovery span-quality aggregate panel. The same *traceindex.Quality that
+	// feeds the OTLP receivers satisfies QualitySnapshotIndex; without it the
+	// span-quality endpoint served all-zero counts and the panel hid itself.
+	// (The per-resource span-quality DETAIL endpoint additionally needs a
+	// ResourceKeyProjector — a scan-backed adapter — tracked separately.)
+	if qualityIndex != nil {
+		apiServer.SetQualitySnapshotIndexForDiscovery(qualityIndex)
+	}
+
 	// v0.27.1 Quickstart needs to know the OpAMP port so the
 	// generated agent configs dial back to the right place.
 	apiServer.SetOpAMPPort(config.Server.OpAMPPort)
