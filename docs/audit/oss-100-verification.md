@@ -137,3 +137,28 @@ found and fixed** (API 404 hygiene; audit-explain nil-aiService).
 Not re-verified head-to-toe *today* (proven live in the last few days): full
 deploy→scan-vs-oracle for all 4 clouds, GCP scan completion, and the live IaC
 GitHub PR loop (needs a PAT to re-run).
+
+## ADDENDUM — fresh deploy→PR run (Phase 3 full), with creds
+Deployed slice-3a-test (full multi-tier env: 4 EC2 [2 otel/2 bare] + Lambdas +
+RDS + ALB + S3) to the real AWS account; existing GitHub IaC connection
+(PAT) present for repo squadron-test-aws-terraform.
+- DEPLOY: PASS. SCAN: **PASS, spot-on** — detected 4 EC2, correctly flagged the
+  2 bare ones (has_otel=false), partial=false.
+- RECS (real LLM): **FAILED — found BUG #259.** Single giant proposer call for
+  the multi-tier inventory (1) timed out at 90s [mitigated to 180s, a778443],
+  then (2) returned invalid JSON (max_tokens truncation / bad string escape).
+  Marquee discovery→recs→PR loop does NOT survive a large multi-tier scan.
+- PR-open + verdict-learning: verified live recently on a single bare EC2 (#187);
+  not re-run here because recs didn't produce a usable plan on the big scan.
+- Teardown: terraform destroy complete; AWS confirmed empty (no instances/RDS).
+
+### REVISED VERDICT
+Not 100%. The marquee discovery→AI-recs→PR loop works for **normal/small scans**
+(single-tier, handful of resources — verified live), but **fails on large
+multi-tier scans** (BUG #259: proposer single-call doesn't scale — timeout +
+invalid/truncated JSON). Everything else verified this pass remains solid
+(Phases 1–2, AI explain/merge, staged rollout, real-cloud scan detection across
+AWS/Azure/OCI). Fixes shipped this pass: gzip receiver (v0.89.302), audit-explain
+nil-aiService, API-404 hygiene, proposer 90→180s timeout. The blocker to a
+confident "100%" is BUG #259 (proposer large-scan robustness: max_tokens +
+JSON-repair + chunk-by-tier).
