@@ -7,6 +7,17 @@ detection either requires extra operator setup (Lambda Insights / Application
 Insights) or is honestly deferred to a monitor recommendation. This page is the
 authoritative, honest statement of what works where.
 
+> ⚠️ **Production-wiring caveat (under review).** The ✅ rows below describe
+> what the detector *can* do given its metric — but the serverless **regression**
+> detectors (cold-start + error-rate) need a per-cloud metric client that the
+> stock all-in-one binary does not wire by default. AWS/Azure wire it only on the
+> commercial path (`commercial_detectors.enabled`); GCP/OCI have no production
+> metric-client wiring today, so those detectors are effectively dormant
+> out-of-the-box and the ✅ overstates the default state. See
+> [docs/audit/metric-detection-production-wiring-gap.md](./audit/metric-detection-production-wiring-gap.md)
+> for the evidence + the pending wiring decision; the matrix verdicts will be
+> reconciled once that lands.
+
 This page covers metric-based detections only. **Structural/config detections**
 — trace-coverage presence (is the OTel primitive enabled?), event-source
 diagnostic-settings presence, schema enforcement — read resource configuration
