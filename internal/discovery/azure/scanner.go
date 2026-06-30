@@ -129,6 +129,13 @@ type Scanner struct {
 	// the real cold-start + error signals — the operator must have the
 	// paid Application Insights add-on enabled for datapoints to appear.
 	commercialDetectors bool
+
+	// ikByFunctionARN maps a Function App's ARM resource id to its linked
+	// Application Insights InstrumentationKey, captured during the Functions
+	// walk (commercial path only). The post-scan commercial enrichment uses
+	// it to resolve the App Insights component the cold-start + error-rate
+	// metrics live on. Lazily initialized; empty/nil on the OSS path.
+	ikByFunctionARN map[string]string
 }
 
 // Provider satisfies the (future) scanner.Scanner interface. The
@@ -237,6 +244,7 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 		// Microsoft.Compute in unusual policy splits. Partial
 		// failures accumulate under the "azfunc" service id.
 		s.scanAzureFunctions(ctx, token, &result)
+		s.runAzureServerlessCommercialDetection(ctx, token, &result)
 		return result, nil
 	}
 
@@ -310,6 +318,11 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	// chunk only emits raw ServerlessInstanceSnapshot rows with
 	// the two-axis (HasTraceAxis + HasOTelDistro) detection result.
 	s.scanAzureFunctions(ctx, token, &result)
+	// Commercial-tier detector activation (#153 productization): gated
+	// post-projection enrichment that resolves each Function App's linked
+	// Application Insights component and runs the cold-start + error
+	// detectors against it, annotating the serverless rows. No-op in OSS.
+	s.runAzureServerlessCommercialDetection(ctx, token, &result)
 
 	// Coverage-parity arc slice 3 — object-store (Storage Accounts) +
 	// load-balancer tiers, same OAuth token, partial-failure isolated

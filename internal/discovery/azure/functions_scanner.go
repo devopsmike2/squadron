@@ -163,6 +163,13 @@ func (s *Scanner) scanAzureFunctions(ctx context.Context, accessToken string, re
 			result.Serverless = append(result.Serverless, projectFunctionAppNoSettings(site, result.AccountID))
 			continue
 		}
+		// Commercial path (#153 productization): capture the Function App's
+		// App Insights InstrumentationKey so the post-scan enrichment can
+		// resolve the linked component the cold-start + error metrics live
+		// on. No-op in OSS (flag off) and when no connection string is set.
+		if s.commercialDetectors {
+			s.captureFunctionInstrumentationKey(site.ID, settings[AppInsightsConnectionStringAppSetting])
+		}
 		result.Serverless = append(result.Serverless, projectFunctionApp(site, settings, result.AccountID))
 	}
 }
