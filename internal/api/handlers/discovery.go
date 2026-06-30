@@ -1476,11 +1476,12 @@ type awsServerlessRow struct {
 	ErrorRateExceedsThreshold *bool    `json:"error_rate_exceeds_threshold,omitempty"`
 
 	// SamplingRatio / SamplingExceedsFloor — Sampling rate analysis.
-	// Forwarded for wire-shape parity with the other clouds; currently
-	// always nil-elided because the SamplingAnnotator is not yet wired
-	// into any scan path (sampling detection is dormant fleet-wide —
-	// tracked as a separate activation arc). When that lands, AWS
-	// surfaces sampling here with no further marshal change.
+	// Populated by the AnnotateServerlessWithSampling pass (wired into the
+	// AWS scan path in #295, v0.89.338) when serverless_metric_detection is
+	// on: the pass joins the scanner's invocation-count query with the
+	// traceindex span count and stamps these. With the flag off (or a row
+	// that misses the trace join) they stay nil and render "—". Same
+	// nil-elision posture as the cold-start + error-rate pairs.
 	SamplingRatio        *float64 `json:"sampling_ratio,omitempty"`
 	SamplingExceedsFloor *bool    `json:"sampling_exceeds_floor,omitempty"`
 

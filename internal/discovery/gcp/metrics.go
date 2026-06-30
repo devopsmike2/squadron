@@ -8,16 +8,19 @@ package gcp
 // timeSeries.list. Ships the Cloud Run request_latencies + Cloud
 // Functions execution_times surfaces per design doc §3.1 + §3.2.
 //
-// SDK wiring posture: this chunk ships the
+// SDK wiring posture: this file ships the
 // scanner.MetricQuerier-satisfying QueryAggregate method against a
 // narrow metricsClient interface that abstracts the underlying
-// timeSeries.list call. The production-path SDK adapter
-// (cloud.google.com/go/monitoring/apiv3/v2) is deferred to a
-// follow-up chunk — same chunk-1 → chunk-2 split AWS did with
-// slice 1. Tests use an in-memory fake satisfying metricsClient.
-// The follow-up swaps the nil metricsClient on the production-path
-// Scanner for a real SDK-backed adapter; QueryAggregate stays
-// byte-identical.
+// timeSeries.list call. The production-path adapter that satisfies
+// that interface SHIPPED in metrics_sdk.go (#300/#304, v0.89.335) — a
+// REST adapter over google.golang.org/api/monitoring/v3, live-verified
+// against real Cloud Monitoring. The production Scanner builds it in
+// Scan() (scanner.go::buildMonitoringClient) and wires it via
+// WithMetricsClient when config.ServerlessMetricDetection.Enabled is on;
+// QueryAggregate stays byte-identical whether it runs against the live
+// adapter or an in-memory test fake. With the flag off the metricsClient
+// stays nil and QueryAggregate returns ErrMetricNotImplemented (the
+// no-op OSS posture).
 //
 // See docs/proposals/cold-start-latency-slice2.md §5 + §11.
 
@@ -267,12 +270,13 @@ func (s *Scanner) QueryAggregate(
 	stat scanner.MetricStatistic,
 ) (scanner.AggregateMetricResult, error) {
 	if s.metricsClient == nil {
-		// Surfaces the chunk-1 skeleton sentinel so callers that
-		// haven't wired the Cloud Monitoring client (validation-
-		// only Scanners, partially-constructed test fixtures)
-		// observe the same shape as the v0.89.113 substrate. The
-		// follow-up SDK chunk replaces nil with a real adapter and
-		// this branch becomes inert in production.
+		// Surfaces the absent-substrate sentinel so callers that
+		// haven't wired the Cloud Monitoring client observe a stable
+		// shape. This is the live path on a stock OSS scan
+		// (serverless_metric_detection off → metricsClient stays nil);
+		// it goes inert only when the flag is on, where Scan() builds
+		// the real metrics_sdk.go adapter and wires it via
+		// WithMetricsClient before any detector runs.
 		return scanner.AggregateMetricResult{
 			ResourceARN: resourceARN,
 			MetricName:  metricName,

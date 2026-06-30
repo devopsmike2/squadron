@@ -20,14 +20,17 @@ import (
 // Source of truth: the latest persisted scan per (provider, scope). The scan
 // response JSON carries the serverless rows with the three diagnostic
 // annotations the panel rolls up — cold-start latency, sampling-too-aggressive,
-// and error-rate spike. All four clouds now carry the cold-start + error-rate
-// flags on the wire (GCP/Azure/OCI serialize the snapshot directly; AWS forwards
-// them on awsServerlessRow as of the v0.89.324 marshal-parity fix). The sampling
-// axis reads zero everywhere today because the SamplingAnnotator is not yet
-// wired into any scan path (sampling detection is dormant fleet-wide — a
-// separate activation arc); the field is present so the rollup lights up with no
-// reader change once that lands. A missing flag is read as "not firing" — never
-// fabricated.
+// and error-rate spike. All four clouds carry the cold-start + error-rate flags
+// on the wire (GCP/Azure/OCI serialize the snapshot directly; AWS forwards them
+// on awsServerlessRow as of the v0.89.324 marshal-parity fix), and the
+// serverless-annotation-parity arc wired the cold-start + error-rate annotation
+// passes into the GCP/OCI/Azure scan handlers so those flags populate, not just
+// AWS. The sampling axis is live for AWS/GCP/OCI (the SamplingAnnotator was
+// wired into those scan paths in #295, v0.89.336–340) when
+// serverless_metric_detection is on; Azure sampling stays deferred (see
+// sampling-rate-activation.md), so the Azure sampling slice reads zero until
+// that lands — no reader change needed when it does. A missing flag is read as
+// "not firing" — never fabricated.
 
 // workloadHealthScanShape is the minimal projection of a scan response JSON the
 // reader needs: the serverless rows and their three exceedance flags. The field
