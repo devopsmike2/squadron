@@ -89,6 +89,15 @@ type ociQueue struct {
 	RetentionInSeconds           int    `json:"retentionInSeconds,omitempty"`
 	DeadLetterQueueDeliveryCount int    `json:"deadLetterQueueDeliveryCount,omitempty"`
 	CustomEncryptionKeyID        string `json:"customEncryptionKeyId,omitempty"`
+	// MessagesEndpoint is the per-queue data-plane base URL
+	// (QueueSummary.messagesEndpoint). It is the host the GetStats /
+	// GetMessages / PutMessages calls target — distinct from the
+	// control-plane queues endpoint. Poison-DEPTH detection (#159,
+	// v0.89.305) signs a GET against
+	// {messagesEndpoint}/20210201/queues/{id}/stats to read the DLQ's
+	// visibleMessages. Empty when OCI omits it (older API) → the depth
+	// signal safe-degrades to the absent sentinel.
+	MessagesEndpoint string `json:"messagesEndpoint,omitempty"`
 	// Consumer lag detection slice 2 chunk 4 (v0.89.171, #813
 	// Stream 210) — runtimeMetadata carries the lag axis source
 	// fields (visibleMessages + timeStateLastChanged). Optional in
@@ -349,6 +358,18 @@ func (s *Scanner) projectOCIQueue(ctx context.Context, sk *SigningKey, queue oci
 	// the poison-rate axis keys see byte-identical output to
 	// v0.89.175.
 	applyOCIQueuePoisonRateDetail(&snap, queue)
+
+	// Poison-DEPTH signal (#159, v0.89.305) — the honest,
+	// always-available "poison present" signal that closes what the
+	// rate axis above could not: the oci_queue Monitoring namespace
+	// has no dead-letter metric, but the Queue Service DATA-PLANE
+	// GetStats call exposes the DLQ's visibleMessages directly. This
+	// reads it best-effort (nil-tolerant: no DLQ configured, unknown
+	// messagesEndpoint, or a failed call all yield the -1 absent
+	// sentinel) and writes poison_dlq_depth + poison_dlq_nonempty,
+	// mirroring AWS SQS DLQ-depth (#156). ADDITIVE only — no prior
+	// Detail key is modified.
+	applyOCIQueuePoisonDepthDetail(&snap, s.queueDLQDepth(ctx, sk, queue))
 
 	return snap
 }
