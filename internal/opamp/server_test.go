@@ -55,6 +55,11 @@ func (m *MockAgentService) UpdateAgentEffectiveConfig(ctx context.Context, id uu
 	return args.Error(0)
 }
 
+func (m *MockAgentService) UpdateAgentRegistration(ctx context.Context, agent *services.Agent) error {
+	args := m.Called(ctx, agent)
+	return args.Error(0)
+}
+
 func (m *MockAgentService) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 	args := m.Called(ctx, id)
 	return args.Error(0)
@@ -438,4 +443,78 @@ func TestExtractGroupInfo(t *testing.T) {
 			assert.Equal(t, tt.expectedName, groupName)
 		})
 	}
+}
+
+// strAttr builds a single string-valued KeyValue for an AgentDescription.
+func strAttr(k, v string) *protobufs.KeyValue {
+	return &protobufs.KeyValue{
+		Key:   k,
+		Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: v}},
+	}
+}
+
+// TestPersistAgent_ExistingAgent_WithDescription_UpdatesRegistration:
+// when a registered agent re-reports a changed AgentDescription, the
+// else branch now persists the new name/labels/version via
+// UpdateAgentRegistration (previously dropped). This is the core of the
+// slice-3 fix that keeps the stored GroupID rollout scoping reads in sync.
+func TestPersistAgent_ExistingAgent_WithDescription_UpdatesRegistration(t *testing.T) {
+	logger := zap.NewNop()
+	mockService := new(MockAgentService)
+
+	agentID := uuid.New()
+	existing := &services.Agent{ID: agentID, Name: "original", Version: "1.0.0"}
+
+	mockService.On("GetAgent", mock.Anything, agentID).Return(existing, nil)
+	mockService.On("UpdateAgentStatus", mock.Anything, agentID, mock.Anything).Return(nil)
+	mockService.On("UpdateAgentLastSeen", mock.Anything, agentID, mock.Anything).Return(nil)
+	mockService.On("UpdateAgentRegistration", mock.Anything, mock.MatchedBy(func(a *services.Agent) bool {
+		return a.ID == agentID && a.Name == "renamed" && a.Version == "2.0.0"
+	})).Return(nil)
+
+	server := &Server{logger: logger, agentService: mockService}
+
+	agent := &Agent{InstanceId: agentID, InstanceIdStr: agentID.String()}
+	msg := &protobufs.AgentToServer{
+		AgentDescription: &protobufs.AgentDescription{
+			IdentifyingAttributes: []*protobufs.KeyValue{
+				strAttr("service.name", "renamed"),
+				strAttr("service.version", "2.0.0"),
+			},
+			NonIdentifyingAttributes: []*protobufs.KeyValue{
+				strAttr("tier", "gold"),
+			},
+		},
+	}
+
+	server.persistAgent(context.Background(), agent, msg)
+
+	mockService.AssertCalled(t, "UpdateAgentRegistration", mock.Anything, mock.Anything)
+	mockService.AssertExpectations(t)
+}
+
+// TestPersistAgent_ExistingAgent_NoDescription_SkipsRegistration: a
+// description-less heartbeat must NOT call UpdateAgentRegistration —
+// otherwise it would clobber the stored identity (name="unknown",
+// labels={}, version="") and the GroupID with empty values.
+func TestPersistAgent_ExistingAgent_NoDescription_SkipsRegistration(t *testing.T) {
+	logger := zap.NewNop()
+	mockService := new(MockAgentService)
+
+	agentID := uuid.New()
+	existing := &services.Agent{ID: agentID, Name: "original", Version: "1.0.0"}
+
+	mockService.On("GetAgent", mock.Anything, agentID).Return(existing, nil)
+	mockService.On("UpdateAgentStatus", mock.Anything, agentID, mock.Anything).Return(nil)
+	mockService.On("UpdateAgentLastSeen", mock.Anything, agentID, mock.Anything).Return(nil)
+
+	server := &Server{logger: logger, agentService: mockService}
+
+	agent := &Agent{InstanceId: agentID, InstanceIdStr: agentID.String()}
+	msg := &protobufs.AgentToServer{} // no AgentDescription
+
+	server.persistAgent(context.Background(), agent, msg)
+
+	mockService.AssertNotCalled(t, "UpdateAgentRegistration", mock.Anything, mock.Anything)
+	mockService.AssertExpectations(t)
 }

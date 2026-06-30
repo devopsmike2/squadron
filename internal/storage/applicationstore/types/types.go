@@ -16,6 +16,16 @@ type ApplicationStore interface {
 	UpdateAgentStatus(ctx context.Context, id uuid.UUID, status AgentStatus) error
 	UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSeen time.Time) error
 	UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, effectiveConfig string) error
+	// UpdateAgentRegistration writes the mutable registration/grouping
+	// fields of an EXISTING agent (Name, Labels, Version, GroupID,
+	// GroupName) by ID. Used when an already-registered agent re-reports
+	// a changed AgentDescription (new group, relabel, collector upgrade)
+	// and by the operator PATCH /agents/:id/group endpoint. Without it,
+	// those changes lived only in OpAMP server memory and the DB — which
+	// the UI list and the rollout engine's group/canary scoping read —
+	// kept the stale values forever. Returns an error if the agent row
+	// does not exist.
+	UpdateAgentRegistration(ctx context.Context, agent *Agent) error
 	DeleteAgent(ctx context.Context, id uuid.UUID) error
 
 	// Group management

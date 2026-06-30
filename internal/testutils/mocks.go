@@ -28,6 +28,7 @@ type MockAgentService struct {
 	UpdateAgentStatusErr          error
 	UpdateAgentLastSeenErr        error
 	UpdateAgentEffectiveConfigErr error
+	UpdateAgentRegistrationErr    error
 	DeleteAgentErr                error
 	CreateGroupErr                error
 	GetGroupErr                   error
@@ -154,6 +155,29 @@ func (m *MockAgentService) UpdateAgentEffectiveConfig(ctx context.Context, id uu
 	}
 
 	agent.EffectiveConfig = effectiveConfig
+	agent.UpdatedAt = time.Now()
+	return nil
+}
+
+// UpdateAgentRegistration implements services.AgentService
+func (m *MockAgentService) UpdateAgentRegistration(ctx context.Context, in *services.Agent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.UpdateAgentRegistrationErr != nil {
+		return m.UpdateAgentRegistrationErr
+	}
+
+	agent, exists := m.agents[in.ID]
+	if !exists {
+		return nil
+	}
+
+	agent.Name = in.Name
+	agent.Labels = in.Labels
+	agent.Version = in.Version
+	agent.GroupID = in.GroupID
+	agent.GroupName = in.GroupName
 	agent.UpdatedAt = time.Now()
 	return nil
 }

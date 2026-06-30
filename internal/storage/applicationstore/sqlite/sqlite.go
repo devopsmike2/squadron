@@ -1171,6 +1171,31 @@ func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, 
 	return nil
 }
 
+// UpdateAgentRegistration writes the mutable registration/grouping fields
+// of an existing agent. Callers pass a full *types.Agent (loaded via
+// GetAgent or built from a fresh OpAMP AgentDescription); only Name,
+// Labels, Version, GroupID, GroupName + updated_at are written — status,
+// last_seen, effective_config, capabilities, and the immutable id/created_at
+// are left untouched by their own update paths.
+func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agent) error {
+	labelsJSON, _ := json.Marshal(agent.Labels)
+	query := `UPDATE agents
+		SET name = ?, labels = ?, version = ?, group_id = ?, group_name = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND deleted_at IS NULL`
+	result, err := s.db.ExecContext(ctx, query,
+		agent.Name, string(labelsJSON), agent.Version,
+		agent.GroupID, agent.GroupName, agent.ID.String())
+	if err != nil {
+		return fmt.Errorf("failed to update agent registration: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("agent not found: %s", agent.ID.String())
+	}
+	s.logger.Debug("Updated agent registration", zap.String("agent_id", agent.ID.String()))
+	return nil
+}
+
 func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 	// v0.51 — soft delete. UPDATE the tombstone column instead of
 	// DELETE so the row remains for audit history (CIP-007-6 R4.3).

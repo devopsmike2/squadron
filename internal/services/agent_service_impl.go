@@ -226,6 +226,26 @@ func (s *AgentServiceImpl) UpdateAgentEffectiveConfig(ctx context.Context, id uu
 	return nil
 }
 
+// UpdateAgentRegistration persists the mutable registration/grouping
+// fields (Name, Labels, Version, GroupID, GroupName) of an existing
+// agent. Status, LastSeen, EffectiveConfig, Capabilities and the
+// immutable CreatedAt are intentionally NOT written by this path —
+// status/last-seen have their own dedicated heartbeat updates and the
+// registration UPDATE must not clobber them. Used by the OpAMP server
+// when a registered agent re-reports a changed AgentDescription, and by
+// the operator group-assignment endpoint.
+func (s *AgentServiceImpl) UpdateAgentRegistration(ctx context.Context, agent *Agent) error {
+	storageAgent := &applicationstore.Agent{
+		ID:        agent.ID,
+		Name:      agent.Name,
+		Labels:    agent.Labels,
+		Version:   agent.Version,
+		GroupID:   agent.GroupID,
+		GroupName: agent.GroupName,
+	}
+	return s.appStore.UpdateAgentRegistration(ctx, storageAgent)
+}
+
 // snapshotDriftStatus returns the drift status that a fresh GetAgent would
 // compute. Returns ConfigDriftStatusUnknown if the agent can't be fetched —
 // callers should treat that as "no change worth alerting on" and skip

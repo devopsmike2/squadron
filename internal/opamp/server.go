@@ -462,41 +462,9 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 	status := s.determineAgentStatus(msg)
 
 	if existingAgent == nil {
-		// Auto-create group if it doesn't exist
-		if agent.GroupName != nil && *agent.GroupName != "" {
-			existingGroup, err := s.agentService.GetGroupByName(ctx, *agent.GroupName)
-			if err != nil {
-				s.logger.Debug("Error checking existing group",
-					zap.String("groupName", *agent.GroupName),
-					zap.Error(err))
-			}
-
-			if existingGroup == nil {
-				// Group doesn't exist, create it
-				newGroup := &services.Group{
-					ID:        uuid.New().String(),
-					Name:      *agent.GroupName,
-					Labels:    make(map[string]string),
-					CreatedAt: now,
-					UpdatedAt: now,
-				}
-
-				if err := s.agentService.CreateGroup(ctx, newGroup); err != nil {
-					s.logger.Error("Failed to auto-create group",
-						zap.String("groupName", *agent.GroupName),
-						zap.Error(err))
-				} else {
-					s.logger.Info("Auto-created group for agent",
-						zap.String("groupName", *agent.GroupName),
-						zap.String("groupId", newGroup.ID))
-					// Update agent's GroupID
-					agent.GroupID = &newGroup.ID
-				}
-			} else {
-				// Group exists, set GroupID
-				agent.GroupID = &existingGroup.ID
-			}
-		}
+		// Resolve (and auto-create) the agent's group, setting
+		// agent.GroupID in memory.
+		s.ensureAgentGroup(ctx, agent, now)
 
 		// Create new agent
 		serviceAgent := &services.Agent{
@@ -536,6 +504,33 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 				zap.Error(err))
 		}
 
+		// Persist registration/grouping changes — but ONLY when this
+		// message carried an AgentDescription. A description-less
+		// heartbeat extracts to name="unknown", labels={}, version=""
+		// (see extractAgent* helpers), which would clobber the stored
+		// identity and, critically, the GroupID that rollout canary
+		// scoping reads back. The same nil-guard gates processAgentGrouping.
+		if msg.AgentDescription != nil {
+			// Resolve (and auto-create) the group so a description that
+			// names a new group lands the agent in it on the existing
+			// path too, not just first connect.
+			s.ensureAgentGroup(ctx, agent, now)
+
+			registration := &services.Agent{
+				ID:        agent.InstanceId,
+				Name:      name,
+				Labels:    labels,
+				Version:   version,
+				GroupID:   agent.GroupID,
+				GroupName: agent.GroupName,
+			}
+			if err := s.agentService.UpdateAgentRegistration(ctx, registration); err != nil {
+				s.logger.Error("Failed to update agent registration",
+					zap.String("agentId", agent.InstanceIdStr),
+					zap.Error(err))
+			}
+		}
+
 		// Update effective config if present
 		if agent.EffectiveConfig != "" {
 			if err := s.agentService.UpdateAgentEffectiveConfig(ctx, agent.InstanceId, agent.EffectiveConfig); err != nil {
@@ -544,6 +539,50 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 					zap.Error(err))
 			}
 		}
+	}
+}
+
+// ensureAgentGroup resolves the agent's group from its in-memory
+// GroupName (set by processAgentGrouping from the AgentDescription),
+// auto-creating the group if it doesn't yet exist, and writes the
+// resolved GroupID back onto the in-memory agent. No-op when the agent
+// carries no group name. Safe to call from both the create and update
+// paths in persistAgent.
+func (s *Server) ensureAgentGroup(ctx context.Context, agent *Agent, now time.Time) {
+	if agent.GroupName == nil || *agent.GroupName == "" {
+		return
+	}
+
+	existingGroup, err := s.agentService.GetGroupByName(ctx, *agent.GroupName)
+	if err != nil {
+		s.logger.Debug("Error checking existing group",
+			zap.String("groupName", *agent.GroupName),
+			zap.Error(err))
+	}
+
+	if existingGroup == nil {
+		// Group doesn't exist, create it
+		newGroup := &services.Group{
+			ID:        uuid.New().String(),
+			Name:      *agent.GroupName,
+			Labels:    make(map[string]string),
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+
+		if err := s.agentService.CreateGroup(ctx, newGroup); err != nil {
+			s.logger.Error("Failed to auto-create group",
+				zap.String("groupName", *agent.GroupName),
+				zap.Error(err))
+		} else {
+			s.logger.Info("Auto-created group for agent",
+				zap.String("groupName", *agent.GroupName),
+				zap.String("groupId", newGroup.ID))
+			agent.GroupID = &newGroup.ID
+		}
+	} else {
+		// Group exists, set GroupID
+		agent.GroupID = &existingGroup.ID
 	}
 }
 

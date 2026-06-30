@@ -434,3 +434,45 @@ func TestSQLiteConcurrentAccess(t *testing.T) {
 		assert.Len(t, agents, 10)
 	})
 }
+
+// TestSQLiteUpdateAgentRegistration: the registration UPDATE writes
+// Name/Labels/Version/GroupID/GroupName by ID and leaves Status alone.
+// group_id has a FK to groups(id) (foreign_keys=ON), so the target
+// group is created first.
+func TestSQLiteUpdateAgentRegistration(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		ctx := context.Background()
+		require.NoError(t, store.CreateGroup(ctx, makeTestGroup("grp-prod")))
+
+		gid, gname := "grp-prod", "prod"
+		err := store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID:        agentID,
+			Name:      "renamed",
+			Labels:    map[string]string{"tier": "gold"},
+			Version:   "2.3.4",
+			GroupID:   &gid,
+			GroupName: &gname,
+		})
+		require.NoError(t, err)
+
+		got, err := store.GetAgent(ctx, agentID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "renamed", got.Name)
+		assert.Equal(t, "2.3.4", got.Version)
+		require.NotNil(t, got.GroupID)
+		assert.Equal(t, "grp-prod", *got.GroupID)
+		require.NotNil(t, got.GroupName)
+		assert.Equal(t, "prod", *got.GroupName)
+		assert.Equal(t, "gold", got.Labels["tier"])
+		assert.Equal(t, types.AgentStatusOnline, got.Status)
+	})
+}
+
+func TestSQLiteUpdateAgentRegistrationNotFound(t *testing.T) {
+	withSQLiteStore(t, func(store types.ApplicationStore) {
+		err := store.UpdateAgentRegistration(context.Background(), &types.Agent{ID: uuid.New(), Name: "x"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+}
