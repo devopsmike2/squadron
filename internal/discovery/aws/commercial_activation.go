@@ -41,6 +41,21 @@ func (s *Scanner) EnableCommercialDetectors(coldStartStore ColdStartStore, error
 	return s
 }
 
+// EnableServerlessMetricDetection turns on the NATIVE-metric serverless
+// detectors without the commercial add-on gate. It wires the error-rate
+// observation store and flips serverlessMetricDetection, so
+// runErrorRateDetectionForServerless builds a per-region CloudWatch client on
+// demand and runs against the native AWS/Lambda Errors + Invocations metrics.
+// Lambda cold-start is intentionally NOT enabled here (it needs the paid
+// Lambda Insights add-on, which stays under EnableCommercialDetectors). Called
+// by the scan orchestrator only when config.ServerlessMetricDetection.Enabled
+// is true. Composable with EnableCommercialDetectors (both may be on).
+func (s *Scanner) EnableServerlessMetricDetection(errorRateStore ErrorRateStore) *Scanner {
+	s.serverlessMetricDetection = true
+	s.errorRateStore = errorRateStore
+	return s
+}
+
 // cloudWatchForRegion returns a CloudWatch client bound to the supplied
 // region, building it from the assume-role factory and caching it per region
 // so a multi-region scan reuses one client per region. Used only on the

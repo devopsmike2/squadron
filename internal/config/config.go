@@ -27,6 +27,37 @@ type Config struct {
 	CostCorrelation CostCorrelationConfig `yaml:"cost_correlation,omitempty"`
 
 	CommercialDetectors CommercialDetectorsConfig `yaml:"commercial_detectors,omitempty"`
+
+	ServerlessMetricDetection ServerlessMetricDetectionConfig `yaml:"serverless_metric_detection,omitempty"`
+}
+
+// ServerlessMetricDetectionConfig is the operator-facing switch for the
+// natively-available serverless metric detectors — cold-start latency
+// regression (24h vs 168h P95) and error-rate spike (24h vs 168h ratio) —
+// on the surfaces where the signal lives in a NATIVE cloud metric and needs
+// no paid add-on: AWS Lambda error-rate (AWS/Lambda Errors + Invocations),
+// GCP Cloud Run / Functions cold-start + error-rate (Cloud Monitoring), and
+// OCI Functions cold-start + error-rate (OCI Monitoring).
+//
+// OFF by default. Activating it constructs a per-cloud metric client and, on
+// every scan, issues per-serverless-resource metric API reads — on AWS those
+// are CloudWatch GetMetricStatistics calls, which are billed per request.
+// Cloud Monitoring / OCI Monitoring have free tiers then bill. This is the
+// single switch that flips these detectors from plumbed-but-dormant (the
+// metric client is never constructed in the stock factories) to live, and it
+// keeps that per-scan cost in the operator's hands — mirroring
+// CommercialDetectorsConfig and CostCorrelationConfig.
+//
+// SCOPE — what this does NOT cover: the add-on-dependent detectors stay under
+// commercial_detectors, because they need a paid telemetry add-on rather than
+// a native metric: AWS Lambda COLD-START (Lambda Insights init_duration) and
+// ALL Azure Functions detection (Application Insights). Those remain gated on
+// CommercialDetectors.Enabled. This flag is strictly the native-metric subset.
+type ServerlessMetricDetectionConfig struct {
+	// Enabled constructs the per-cloud serverless metric client and runs the
+	// native-metric cold-start + error-rate detectors. Default false (OSS):
+	// the detectors stay dormant and the metric client is never built.
+	Enabled bool `yaml:"enabled"`
 }
 
 // CommercialDetectorsConfig is the operator-facing switch for the

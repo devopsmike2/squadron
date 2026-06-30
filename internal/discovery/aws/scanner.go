@@ -138,6 +138,20 @@ type Scanner struct {
 	// namespace an already-issued query reads.
 	commercialDetectors bool
 
+	// serverlessMetricDetection gates the NATIVE-metric serverless detectors
+	// independently of the commercial add-on gate. Default false (OSS). When
+	// true (wired by the scan orchestrator from
+	// config.ServerlessMetricDetection.Enabled), the error-rate detector runs
+	// against the native AWS/Lambda Errors + Invocations metrics — no Lambda
+	// Insights add-on required — building a per-region CloudWatch client on
+	// demand exactly as the commercial path does. It does NOT enable Lambda
+	// cold-start: that detector reads InitDuration, which is only present in
+	// the paid Lambda Insights namespace, so cold-start stays gated on
+	// commercialDetectors. Decoupling lets an operator run native error-rate
+	// regression detection without buying the commercial add-on, matching how
+	// GCP / OCI error-rate run on their native metrics.
+	serverlessMetricDetection bool
+
 	// cwClientByRegion caches per-region CloudWatch clients built from the
 	// assume-role factory during commercial-tier detection (Lambda Insights
 	// metrics are region-scoped, so a multi-region scan needs one client per

@@ -149,13 +149,16 @@ func (s *Scanner) runErrorRateDetectionForServerless(ctx context.Context, result
 	if s.errorRateStore == nil || s.connectionID == "" {
 		return
 	}
-	// OSS dormant path: no commercial gate AND no directly-injected client
-	// ⇒ nothing to do. The commercial path (#152 productization) builds a
-	// per-region CloudWatch client on demand. (Lambda Errors/Invocations are
-	// native AWS/Lambda metrics, so this detector is OSS-capable, but its
-	// activation is bundled under the same opt-in flag because it issues a
-	// per-Lambda CloudWatch GetMetricStatistics call.)
-	if !s.commercialDetectors && s.cwClient == nil {
+	// Dormant path: no activation gate AND no directly-injected client ⇒
+	// nothing to do. Two gates activate this native-metric detector: the
+	// commercial gate (#152 productization, bundled with cold-start) and the
+	// standalone serverless-metric-detection gate
+	// (config.ServerlessMetricDetection.Enabled) — the latter exists because
+	// Lambda Errors/Invocations are native AWS/Lambda metrics needing no paid
+	// add-on, so error-rate can run without the commercial tier. Either gate
+	// builds a per-region CloudWatch client on demand below; it still issues a
+	// per-Lambda GetMetricStatistics call, which is why it is opt-in.
+	if !s.commercialDetectors && !s.serverlessMetricDetection && s.cwClient == nil {
 		return
 	}
 	for _, snap := range result.Serverless {
@@ -165,7 +168,7 @@ func (s *Scanner) runErrorRateDetectionForServerless(ctx context.Context, result
 		if snap.ResourceARN == "" {
 			continue
 		}
-		if s.commercialDetectors {
+		if s.commercialDetectors || s.serverlessMetricDetection {
 			cw, err := s.cloudWatchForRegion(ctx, regionFromARN(snap.ResourceARN))
 			if err != nil {
 				recordPartialFailure(result, "lambda_error_rate",

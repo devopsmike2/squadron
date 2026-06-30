@@ -229,6 +229,13 @@ type Server struct {
 	commercialDetectorsEnabled bool
 	commercialObsStore         handlers.CommercialObservationStore
 
+	// serverlessMetricDetectionEnabled mirrors commercialDetectorsEnabled for
+	// the native-metric serverless detectors (config.ServerlessMetricDetection.
+	// Enabled). When true with commercialObsStore wired, the discovery
+	// trampolines activate the native Lambda error-rate detector independent of
+	// the commercial add-on gate. Shares commercialObsStore (same appStore).
+	serverlessMetricDetectionEnabled bool
+
 	// discoveryServerlessSamplingHandler — v0.89.123 (#763 Stream 161,
 	// Sampling rate analysis slice 1 chunk 2). Per-resource sampling
 	// endpoint handler. Built lazily by
@@ -1506,12 +1513,31 @@ func (s *Server) SetCommercialDetectors(enabled bool, store handlers.CommercialO
 	s.commercialObsStore = store
 }
 
-// applyDiscoveryCommercialDetectors threads the server's commercial-detector
-// settings onto a freshly-built DiscoveryHandlers (no-op when no store is
-// wired). Called by the discovery trampolines right after WithCredstoreKey.
+// SetServerlessMetricDetection wires the native-metric serverless detector
+// activation (option 2; #300 resolution): when enabled with a non-nil
+// write-capable observation store, the discovery trampolines activate the
+// native Lambda error-rate detector (AWS/Lambda Errors + Invocations) on each
+// scan, independent of the commercial add-on gate. Wired from main.go:
+// config.ServerlessMetricDetection.Enabled + the application store. Default
+// (disabled) keeps the per-cloud metric clients unconstructed — the OSS
+// zero-cost default.
+func (s *Server) SetServerlessMetricDetection(enabled bool, store handlers.CommercialObservationStore) {
+	s.serverlessMetricDetectionEnabled = enabled
+	if store != nil && s.commercialObsStore == nil {
+		s.commercialObsStore = store
+	}
+}
+
+// applyDiscoveryCommercialDetectors threads the server's commercial + native
+// serverless-metric detector settings onto a freshly-built DiscoveryHandlers
+// (no-op when no store is wired). Called by the discovery trampolines right
+// after WithCredstoreKey.
 func (s *Server) applyDiscoveryCommercialDetectors(h *handlers.DiscoveryHandlers) {
 	if s.commercialObsStore != nil {
 		h.WithCommercialDetectors(s.commercialDetectorsEnabled, s.commercialObsStore)
+		if s.serverlessMetricDetectionEnabled {
+			h.WithServerlessMetricDetection(true, s.commercialObsStore)
+		}
 	}
 }
 

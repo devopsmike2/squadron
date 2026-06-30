@@ -494,6 +494,20 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Warn("commercial_detectors.enabled is true but the application store does not support observation persistence; detectors stay dormant")
 	}
 
+	// Native-metric serverless detector activation (option 2; #300 resolution).
+	// When config.ServerlessMetricDetection.Enabled is true, wire the same
+	// write-capable application store so a real scan activates the
+	// native-metric serverless detectors — AWS Lambda error-rate here (slice
+	// 1), and GCP/OCI cold-start + error-rate as their factories are threaded.
+	// Default (disabled) keeps the per-cloud metric clients unconstructed, so
+	// the OSS default issues zero billed metric reads. Independent of
+	// CommercialDetectors; shares the same appStore.
+	if serverlessObs, ok := appStore.(handlers.CommercialObservationStore); ok {
+		apiServer.SetServerlessMetricDetection(config.ServerlessMetricDetection.Enabled, serverlessObs)
+	} else if config.ServerlessMetricDetection.Enabled {
+		logger.Warn("serverless_metric_detection.enabled is true but the application store does not support observation persistence; detectors stay dormant")
+	}
+
 	// Workload Health dashboard panel (v0.89.132). The handler + route + UI
 	// shipped but no reader was ever wired, so the endpoint returned all-zero
 	// counts and the panel hid itself. Wire the persisted-scan-backed reader so
