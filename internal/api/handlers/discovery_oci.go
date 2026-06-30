@@ -21,6 +21,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -126,6 +127,25 @@ type DiscoveryOCIHandlers struct {
 	coldStartStore ColdStartObservationReader
 	errorRateStore ErrorRateObservationStore
 	exclusionStore DiscoveryExclusionStore
+
+	// samplingSpanCounter is the traceindex span counter the sampling-rate
+	// annotation (#295) joins against the scan-time invocation-count query.
+	// Nil leaves serverless rows un-annotated for sampling. Wired in
+	// server.go from the same *traceindex.Quality the span-quality handler
+	// uses.
+	samplingSpanCounter proposer.SamplingRateSpanCounter
+}
+
+// WithOCISamplingSpanCounter wires the traceindex span counter the
+// sampling-rate annotation (#295) needs. Accepts the QualitySnapshotIndex the
+// server holds and recovers SpanCountLast24h via a type assertion (the
+// production *traceindex.Quality satisfies both); an index that doesn't leaves
+// sampling annotation a no-op.
+func (h *DiscoveryOCIHandlers) WithOCISamplingSpanCounter(idx QualitySnapshotIndex) *DiscoveryOCIHandlers {
+	if sc, ok := idx.(proposer.SamplingRateSpanCounter); ok {
+		h.samplingSpanCounter = sc
+	}
+	return h
 }
 
 // WithOCIRegressionStores wires the regression-recommendation stores (any may
@@ -1130,6 +1150,20 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		AnnotateComputeWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Compute, h.logger)
 		AnnotateDatabaseWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Databases, h.logger)
 		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Clusters, h.logger)
+	}
+
+	// Sampling-rate annotation (#295) — join the scan-time invocation
+	// count (the just-run scanner's QueryAggregate, backed by the OCI
+	// Monitoring client serverless_metric_detection wired) with the
+	// traceindex 24h span count, in-place on the serverless rows. Gated
+	// implicitly on the flag (no metric client → ErrMetricNotImplemented →
+	// rows stay "—"). nil span counter or a scanner without QueryAggregate
+	// short-circuits.
+	if h.samplingSpanCounter != nil {
+		if querier, ok := scn.(proposer.SamplingRateMetricQuerier); ok {
+			det := newSamplingDetector(querier, h.samplingSpanCounter)
+			AnnotateServerlessWithSampling(c.Request.Context(), det, samplingARNKeyResolver{}, result.Serverless, h.logger)
+		}
 	}
 
 	// Event-source tier (v0.89.195) — gated dispatch mirroring the AWS

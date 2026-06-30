@@ -21,6 +21,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/gcpconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -115,6 +116,25 @@ type DiscoveryGCPHandlers struct {
 	coldStartStore ColdStartObservationReader
 	errorRateStore ErrorRateObservationStore
 	exclusionStore DiscoveryExclusionStore
+
+	// samplingSpanCounter is the traceindex span counter the sampling-rate
+	// annotation joins against the scan-time invocation-count query
+	// (#295). Nil leaves serverless rows un-annotated for sampling (the
+	// "—" posture). Wired in server.go from the same *traceindex.Quality
+	// the span-quality handler uses.
+	samplingSpanCounter proposer.SamplingRateSpanCounter
+}
+
+// WithGCPSamplingSpanCounter wires the traceindex span counter the
+// sampling-rate annotation (#295) needs. It accepts the QualitySnapshotIndex
+// the server already holds and recovers the SpanCountLast24h surface via a
+// type assertion (the production *traceindex.Quality satisfies both); an
+// index that doesn't (e.g. a test fake) leaves sampling annotation a no-op.
+func (h *DiscoveryGCPHandlers) WithGCPSamplingSpanCounter(idx QualitySnapshotIndex) *DiscoveryGCPHandlers {
+	if sc, ok := idx.(proposer.SamplingRateSpanCounter); ok {
+		h.samplingSpanCounter = sc
+	}
+	return h
 }
 
 // WithGCPRegressionStores wires the cold-start + error-rate observation readers
@@ -1080,6 +1100,21 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 		AnnotateComputeWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Compute, h.logger)
 		AnnotateDatabaseWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Databases, h.logger)
 		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Clusters, h.logger)
+	}
+
+	// Sampling-rate annotation (#295) — join the scan-time invocation
+	// count (the just-run scanner's QueryAggregate, backed by the metric
+	// client serverless_metric_detection wired) with the traceindex 24h
+	// span count, in-place on the serverless rows. Gated implicitly on the
+	// flag: with it off the scanner has no metric client and QueryAggregate
+	// returns ErrMetricNotImplemented, so the annotator leaves the rows "—".
+	// No region wrinkle on GCP. nil span counter or a scanner without
+	// QueryAggregate short-circuits.
+	if h.samplingSpanCounter != nil {
+		if querier, ok := scn.(proposer.SamplingRateMetricQuerier); ok {
+			det := newSamplingDetector(querier, h.samplingSpanCounter)
+			AnnotateServerlessWithSampling(c.Request.Context(), det, samplingARNKeyResolver{}, result.Serverless, h.logger)
+		}
 	}
 
 	// Event-source tier (v0.89.195) — gated dispatch mirroring the AWS

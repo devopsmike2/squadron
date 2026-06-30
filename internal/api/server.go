@@ -1134,6 +1134,10 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 		// fire for any operator once a prior scan annotated the rows. The setter
 		// tolerates nil args; exclusions come from the app store.
 		h.WithGCPRegressionStores(s.coldStartObservationReader, s.errorRateObservationReader, s.appStore)
+		// Sampling-rate annotation (#295): the span counter is the same
+		// *traceindex.Quality the span-quality handler uses; the setter
+		// recovers SpanCountLast24h via a type assertion (nil-safe).
+		h.WithGCPSamplingSpanCounter(s.qualitySnapshotIndexForDiscovery)
 		fn(h, c)
 	}
 }
@@ -1251,6 +1255,9 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 		// Regression-recommendation stores (detection→proposal). OCI Functions
 		// cold-start (duration heuristic) + error-rate are OSS-native.
 		h.WithOCIRegressionStores(s.coldStartObservationReader, s.errorRateObservationReader, s.appStore)
+		// Sampling-rate annotation (#295): same *traceindex.Quality span
+		// counter as the span-quality handler; setter is nil-safe.
+		h.WithOCISamplingSpanCounter(s.qualitySnapshotIndexForDiscovery)
 		fn(h, c)
 	}
 }
