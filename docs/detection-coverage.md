@@ -25,13 +25,15 @@ by metric availability.
   telemetry add-on (Lambda Insights / Application Insights) and is part of the
   commercial tier. **OSS does not compute it**; instead OSS surfaces the gap by
   recommending you enable the add-on (`lambda-insights-enable`,
-  `azfunc-appinsights-enable`). The detectors are **implemented and gated**
-  behind `commercial_detectors.enabled` (default off; v0.89.306 AWS #152 /
-  v0.89.307 Azure #153): when enabled they re-point at the add-on namespaces
-  (Lambda Insights `init_duration`; Application Insights `requests/duration`,
-  `requests/failed`) and run the regression detector. With the gate off — the
-  OSS default — they query the base namespaces, which return no datapoints, so
-  behaviour is unchanged. See [what's OSS vs Enterprise](./oss-vs-enterprise.md).
+  `azfunc-appinsights-enable`). The detectors are **implemented and activated
+  end-to-end** behind `commercial_detectors.enabled` (default off; AWS
+  v0.89.312 / Azure v0.89.313): when enabled, a real discovery scan runs the
+  regression detectors against the add-on telemetry (Lambda Insights
+  `init_duration`; Application Insights `requests/duration` / `requests/failed`)
+  and surfaces the result on the serverless inventory rows. With the gate off —
+  the OSS default — the detectors stay dormant and behaviour is unchanged. See
+  [Enabling commercial-tier detection](#enabling-commercial-tier-detection)
+  below and [what's OSS vs Enterprise](./oss-vs-enterprise.md).
 
 ## Cold-start latency
 
@@ -95,3 +97,35 @@ start working on the next scan with no Squadron change.
 
 See [docs/audit/detection-metric-availability.md](./audit/detection-metric-availability.md)
 for the verification details and the open data-source decisions.
+
+## Enabling commercial-tier detection
+
+The Lambda Insights / Application Insights regression detectors ship **off**.
+To turn them on (commercial tier), set in your Squadron config:
+
+```yaml
+commercial_detectors:
+  enabled: true
+```
+
+With the flag on, every discovery scan runs the cold-start + error-rate
+detectors against the add-on telemetry and annotates the serverless inventory
+rows (Cold-start P95, Error rate). The flag is the *only* switch — there is no
+per-resource toggle. Default off preserves the OSS posture exactly (the
+detectors never run, no extra cloud calls).
+
+**Prerequisites the operator must provide** — Squadron reads telemetry, it does
+not provision it:
+
+| Cloud | Add-on (paid) | Squadron RBAC needed |
+|-------|---------------|----------------------|
+| AWS Lambda | **Lambda Insights** extension enabled per function (`CloudWatchLambdaInsightsExecutionRolePolicy` on the function role). | `cloudwatch:GetMetricStatistics` — already in the connect-account scan role; it is namespace-agnostic, so it covers the `LambdaInsights` namespace with no change. |
+| Azure Functions | **Application Insights** linked to the Function App (`APPLICATIONINSIGHTS_CONNECTION_STRING`). | `Microsoft.Insights/metrics/read` (already used) **plus the new** `Microsoft.Insights/components/read` (subscription-scope component LIST, to resolve the component the metrics live on). Both are covered by the built-in **Reader** / **Monitoring Reader** roles; operators on a narrow custom role must add `Microsoft.Insights/components/read`. |
+
+**Cost / latency note:** with the flag on, each scan issues extra metric reads
+per serverless resource (AWS: 2 cold-start + 4 error-rate CloudWatch
+`GetMetricStatistics` calls per Lambda; Azure: the same shape against
+Application Insights, plus one `Microsoft.Insights/components` LIST per scan).
+CloudWatch `GetMetricStatistics` is billed per request; Azure Monitor metric
+reads are free. Functions with no add-on enabled safe-degrade (no datapoints,
+no annotation) — never a scan failure.
