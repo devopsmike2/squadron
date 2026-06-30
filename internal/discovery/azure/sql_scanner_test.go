@@ -199,6 +199,13 @@ func (f *fakeAzureSQL) handler() http.Handler {
 			return
 		}
 
+		// Object-store + load-balancer tiers run after the SQL walk;
+		// route them empty so SQL tests don't get spurious
+		// azurestorage / azurelb partial failures.
+		if routeEmptyInfraTier(w, path) {
+			return
+		}
+
 		// Unhandled.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
