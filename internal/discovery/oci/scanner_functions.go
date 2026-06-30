@@ -203,24 +203,27 @@ func (s *Scanner) ScanServerless(ctx context.Context, scope scanner.ScanScope) (
 // native-metric cold-start / error-rate detection passes into Scan —
 // the slice-1 chunk-4 deferral ("Chunk 5 of the serverless arc will
 // fold the call into Scan alongside scanDatabases / scanOKEClusters",
-// see ScanServerless above), wired here as part of option 2 (#300).
+// see ScanServerless above), wired as part of option 2 (#300).
 //
-// Gated on the monitoring client being wired — i.e.
-// config.ServerlessMetricDetection.Enabled, which OCIFactory honors —
-// so a default scan's behavior and API-call surface stay exactly as
-// before; only an opted-in deployment walks Functions and runs the
-// detectors. The detection passes are themselves nil-tolerant on
-// coldStartStore / errorRateStore / connectionID, so even with a
-// monitoring client wired they no-op until the stores are present.
+// DISCOVERY is unconditional (#306): OCI Functions are an inventory
+// tier like compute / database / OKE, so the walk runs on every scan
+// and populates result.Serverless. This also un-inerts the structural
+// serverless recommendations (apm-enable / otel-distro), which key off
+// the discovered rows, not metrics.
+//
+// DETECTION (cold-start + error-rate) is gated on the monitoring client
+// being wired — i.e. config.ServerlessMetricDetection.Enabled, which
+// OCIFactory honors — because it issues per-resource OCI Monitoring
+// reads. With the flag off, the metric client is nil and the passes are
+// skipped, so a default scan does inventory only and issues zero metric
+// reads. The detection passes are also nil-tolerant on coldStartStore /
+// errorRateStore / connectionID.
 //
 // Reuses the compartment set the earlier compute / database / OKE tier
 // walks already enumerated (tenancy root + first-level children) to
 // avoid a redundant compartment-list call. A discovery failure is
 // accumulated under ServiceIDServerless and does not halt the scan.
 func (s *Scanner) scanServerlessTier(ctx context.Context, allCompartments []ociCompartment, result *scanner.Result) {
-	if s.monitoringClient == nil {
-		return
-	}
 	compartmentIDs := make([]string, 0, len(allCompartments))
 	for _, comp := range allCompartments {
 		compartmentIDs = append(compartmentIDs, comp.ID)
@@ -234,6 +237,12 @@ func (s *Scanner) scanServerlessTier(ctx context.Context, allCompartments []ociC
 		return
 	}
 	result.Serverless = snaps
+
+	// Native-metric detection runs only when the serverless-metric flag
+	// wired a monitoring client (it issues per-resource metric reads).
+	if s.monitoringClient == nil {
+		return
+	}
 	s.runColdStartDetectionForServerless(ctx, result)
 	s.runErrorRateDetectionForServerless(ctx, result)
 }

@@ -92,11 +92,13 @@ func TestScanServerlessTier_DiscoversAndDetects(t *testing.T) {
 	}
 }
 
-// TestScanServerlessTier_SkippedWithoutMonitoringClient confirms the
-// OSS default: with no monitoring client wired (flag off), the
-// serverless tier is a no-op — no Functions walk, no detection, no
-// metric reads — so a stock scan is unchanged.
-func TestScanServerlessTier_SkippedWithoutMonitoringClient(t *testing.T) {
+// TestScanServerlessTier_DiscoversWithoutMonitoringClient pins #306:
+// Functions inventory discovery is UNCONDITIONAL (an inventory tier like
+// compute / database / OKE), so result.Serverless is populated even with
+// the flag off (no monitoring client). Only the metric DETECTION passes
+// are gated on the monitoring client — with it nil, the walk still runs
+// but no per-resource metric reads happen.
+func TestScanServerlessTier_DiscoversWithoutMonitoringClient(t *testing.T) {
 	const rootCompartment = "ocid1.tenancy.oc1..aaa"
 
 	fake := newFakeOCIFunctions()
@@ -108,15 +110,16 @@ func TestScanServerlessTier_SkippedWithoutMonitoringClient(t *testing.T) {
 	}
 
 	s := newFunctionsScannerWithFake(t, fake, "us-phoenix-1")
-	// No WithMonitoringClient — monitoringClient stays nil.
+	// No WithMonitoringClient — monitoringClient stays nil (flag off).
 
 	result := &scanner.Result{}
 	s.scanServerlessTier(context.Background(),
 		[]ociCompartment{{ID: rootCompartment, Name: "root", LifecycleState: "ACTIVE"}},
 		result)
 
-	assert.Empty(t, result.Serverless,
-		"serverless tier must be skipped when no monitoring client is wired (flag off)")
-	assert.Equal(t, 0, fake.ApplicationsCalls,
-		"no Applications walk should happen when the tier is gated off")
+	require.Len(t, result.Serverless, 1,
+		"Functions inventory discovery must run even with the metric flag off (#306)")
+	assert.Equal(t, "checkout", result.Serverless[0].ResourceName)
+	assert.Greater(t, fake.ApplicationsCalls, 0,
+		"the Applications walk should run as part of unconditional discovery")
 }
