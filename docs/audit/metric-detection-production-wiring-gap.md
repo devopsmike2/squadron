@@ -34,29 +34,35 @@ Shipped in three slices:
   (`gcp/metrics_sdk.go`, the deferred chunk-2 SDK adapter) + wired the stores +
   connection id in `GCPFactory`; the `monitoring.read` OAuth scope is requested
   only when the flag is on (least privilege).
-  **Live-verification pending:** the adapter is unit-tested against canned
-  `timeSeries.list` JSON but not yet against a real Cloud Monitoring backend; its
-  SampleCount proxy (1 per populated 5m period — see the metrics_sdk.go header)
-  feeds the cold-start baseline-minimum-samples gate and wants a live confirm.
-  A gated live-verification harness ships in
-  `internal/discovery/gcp/metrics_live_test.go` (skipped unless
-  `SQUADRON_GCP_LIVE=1`). Run it from any machine with GCP access — it exercises
-  the production adapter + `QueryAggregate` against a real Cloud Run service and
-  prints the parsed points + SampleCount sum for inspection:
+  **Live-verified ✅ (v0.89.335, 2026-06-30).** The production adapter was run
+  against a real Cloud Monitoring backend via ADC (the gated harness in
+  `internal/discovery/gcp/metrics_live_test.go`). A timeSeries round-trip
+  confirmed: ADC auth through `buildOAuthHTTPClient` (with the `monitoring.read`
+  scope) + `buildMonitoringClient`, a real `timeSeries.list` request returning
+  200, correct `TypedValue` DoubleValue parsing (returned the exact written
+  value), the cross-period rollup, and the SampleCount proxy + interval parsing.
+  The SampleCount proxy is 1 per populated 5m period (see the metrics_sdk.go
+  header), so the cold-start gate (`ColdStartBaselineMinimumSamples` = 50) needs
+  >= 50 populated buckets across the 168h baseline window.
+
+  Two sub-paths remain canned-only (low risk, same adapter code): the Int64Value
+  (ALIGN_DELTA count) decode and the end-to-end against a deployed Cloud Run
+  service's `request_latencies` distribution. The harness runs them when a real
+  Cloud Run service with traffic is available:
 
   ```sh
   SQUADRON_GCP_LIVE=1 \
-  SQUADRON_GCP_SA_JSON=/path/to/sa.json \
+  SQUADRON_GCP_SA_JSON="$HOME/.config/gcloud/application_default_credentials.json" \
   SQUADRON_GCP_PROJECT=my-project \
   SQUADRON_GCP_LOCATION=us-central1 \
   SQUADRON_GCP_SERVICE=my-cloud-run-service \
   go test ./internal/discovery/gcp/ -run TestGCPLiveMonitoring -v
   ```
 
-  The SA/ADC principal needs `roles/monitoring.viewer`; the named service must
-  have had 2xx traffic in the last 24h. Confirm a busy service over a 168h
-  window clears `ColdStartBaselineMinimumSamples` (50). The sandbox this shipped
-  from had no GCP credentials, so this run is the remaining step.
+  (Or pass `SQUADRON_GCP_FILTER`/`SQUADRON_GCP_ALIGNER` to point the harness at
+  any metric with data — how the v0.89.335 verification was run, against a custom
+  metric round-tripped through Cloud Monitoring on an otherwise-empty project.)
+  The SA/ADC principal needs `roles/monitoring.viewer`.
 
 Follow-up (✅ resolved, v0.89.334): OCI Functions **inventory** discovery is now
 **unconditional** — `scanServerlessTier` always walks Functions (an inventory

@@ -53,8 +53,6 @@ func TestGCPLiveMonitoring_Verify(t *testing.T) {
 
 	saPath := mustEnv(t, "SQUADRON_GCP_SA_JSON")
 	project := mustEnv(t, "SQUADRON_GCP_PROJECT")
-	location := mustEnv(t, "SQUADRON_GCP_LOCATION")
-	service := mustEnv(t, "SQUADRON_GCP_SERVICE")
 
 	saJSON, err := os.ReadFile(saPath)
 	if err != nil {
@@ -78,6 +76,47 @@ func TestGCPLiveMonitoring_Verify(t *testing.T) {
 
 	end := time.Now().UTC()
 	start := end.Add(-24 * time.Hour)
+
+	// GENERIC MODE: when SQUADRON_GCP_FILTER is set, query that metric
+	// directly. This validates the adapter's auth + request + response
+	// parsing + pagination + SampleCount proxy against ANY metric with
+	// data (e.g. serviceruntime.googleapis.com/api/request_count), so the
+	// adapter can be confirmed on real Cloud Monitoring responses without
+	// a deployed serverless resource. The serverless-specific filters are
+	// just strings over the same response envelope, so a passing generic
+	// run de-risks them too.
+	if filter := os.Getenv("SQUADRON_GCP_FILTER"); filter != "" {
+		aligner := os.Getenv("SQUADRON_GCP_ALIGNER")
+		if aligner == "" {
+			aligner = "ALIGN_RATE"
+		}
+		points, qerr := mc.QueryTimeSeries(ctx, fmt.Sprintf("projects/%s", project), filter, start, end, aligner)
+		if qerr != nil {
+			t.Fatalf("generic QueryTimeSeries (%s / %s): %v", filter, aligner, qerr)
+		}
+		var sampleSum int64
+		var maxVal float64
+		for i, p := range points {
+			sampleSum += p.SampleCount
+			if p.Value > maxVal {
+				maxVal = p.Value
+			}
+			if i < 5 {
+				t.Logf("  point[%d]: Value=%g SampleCount=%d [%s .. %s]",
+					i, p.Value, p.SampleCount, p.StartTime.Format(time.RFC3339), p.EndTime.Format(time.RFC3339))
+			}
+		}
+		t.Logf("GENERIC %s / %s → %d points; SampleCount sum = %d; max Value = %g",
+			filter, aligner, len(points), sampleSum, maxVal)
+		if len(points) == 0 {
+			t.Fatal("generic filter returned zero points — pick a metric with recent data so the parser is actually exercised")
+		}
+		return
+	}
+
+	// SERVERLESS MODE: requires LOCATION + SERVICE.
+	location := mustEnv(t, "SQUADRON_GCP_LOCATION")
+	service := mustEnv(t, "SQUADRON_GCP_SERVICE")
 
 	// 1) Raw adapter call: Cloud Run request_latencies, percentile-aligned.
 	filter := fmt.Sprintf(
