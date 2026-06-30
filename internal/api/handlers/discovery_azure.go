@@ -105,6 +105,24 @@ type DiscoveryAzureHandlers struct {
 	// scanStore — continuous-discovery slice 2 (v0.89.251). Persists
 	// completed scans + backs the history endpoints. Nil = non-persisted.
 	scanStore DiscoveryScanStore
+	// Regression-recommendation stores (detection→proposal). Optional;
+	// nil short-circuits the corresponding pass. Azure Functions
+	// cold-start + error-rate are commercial-tier (App Insights); the
+	// recs only fire once those detectors annotated a prior scan.
+	coldStartStore ColdStartObservationReader
+	errorRateStore ErrorRateObservationStore
+	exclusionStore DiscoveryExclusionStore
+}
+
+// WithAzureRegressionStores wires the regression-recommendation stores (any may
+// be nil). Returns the receiver for chaining.
+func (h *DiscoveryAzureHandlers) WithAzureRegressionStores(
+	coldStart ColdStartObservationReader, errorRate ErrorRateObservationStore, exclusions DiscoveryExclusionStore,
+) *DiscoveryAzureHandlers {
+	h.coldStartStore = coldStart
+	h.errorRateStore = errorRate
+	h.exclusionStore = exclusions
+	return h
 }
 
 // NewDiscoveryAzureHandlers builds the handler struct. Optional
@@ -1440,6 +1458,13 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 				Message: "Squadron could not encode the plan step. The error has been logged.",
 			}, http.StatusInternalServerError
 		}
+
+		// Detection → proposal: append cold-start + error-rate regression recs
+		// for any Azure Functions row whose detector fired on this scan
+		// (commercial-tier — App Insights). Additive + best-effort.
+		appendRegressionRecs(ctx, &recs, req.ScanResult.Serverless,
+			h.coldStartStore, h.errorRateStore, h.exclusionStore,
+			conn.ID, conn.SubscriptionID, conn.Location, req.ScanResult.ScanID, now, h.logger)
 
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{

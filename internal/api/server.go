@@ -1114,6 +1114,11 @@ func (s *Server) discoveryGCPTrampoline(fn func(*handlers.DiscoveryGCPHandlers, 
 		if s.appStore != nil {
 			h.WithGCPScanStore(s.appStore)
 		}
+		// Regression-recommendation stores (detection→proposal). Cloud Run /
+		// Cloud Functions cold-start + error-rate are OSS-native, so these recs
+		// fire for any operator once a prior scan annotated the rows. The setter
+		// tolerates nil args; exclusions come from the app store.
+		h.WithGCPRegressionStores(s.coldStartObservationReader, s.errorRateObservationReader, s.appStore)
 		fn(h, c)
 	}
 }
@@ -1169,6 +1174,10 @@ func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandle
 		if s.appStore != nil {
 			h.WithAzureScanStore(s.appStore)
 		}
+		// Regression-recommendation stores (detection→proposal). Azure
+		// Functions cold-start + error-rate are commercial-tier (App Insights);
+		// the recs fire once those detectors annotated a prior scan.
+		h.WithAzureRegressionStores(s.coldStartObservationReader, s.errorRateObservationReader, s.appStore)
 		fn(h, c)
 	}
 }
@@ -1224,6 +1233,9 @@ func (s *Server) discoveryOCITrampoline(fn func(*handlers.DiscoveryOCIHandlers, 
 		if s.appStore != nil {
 			h.WithOCIScanStore(s.appStore)
 		}
+		// Regression-recommendation stores (detection→proposal). OCI Functions
+		// cold-start (duration heuristic) + error-rate are OSS-native.
+		h.WithOCIRegressionStores(s.coldStartObservationReader, s.errorRateObservationReader, s.appStore)
 		fn(h, c)
 	}
 }
