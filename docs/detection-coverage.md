@@ -22,14 +22,13 @@ authoritative, honest statement of what works where.
 > **all** Azure Functions detection via Application Insights) — those need a paid
 > telemetry add-on, not just a native metric, and are not covered by this flag.
 >
-> > **GCP live-verification pending.** The GCP Cloud Monitoring adapter
-> > (v0.89.332) is unit-tested against canned `timeSeries.list` JSON but has not
-> > yet been validated against a real Cloud Monitoring backend; in particular its
-> > SampleCount proxy (which feeds the cold-start baseline-minimum-samples gate)
-> > wants a live confirm. Treat GCP serverless metric detection as opt-in +
-> > live-verification-pending until that pass lands. See
+> > **GCP live-verified ✅ (v0.89.335).** The Cloud Monitoring adapter was run
+> > against a real Cloud Monitoring backend via ADC — auth, request, response
+> > parse, rollup, and the SampleCount proxy all confirmed on real data. Two
+> > sub-paths (the ALIGN_DELTA int64 decode and the end-to-end on a deployed
+> > Cloud Run service) remain canned-only but exercise the same adapter code. See
 > > [docs/audit/metric-detection-production-wiring-gap.md](./audit/metric-detection-production-wiring-gap.md)
-> > for the full resolution.
+> > for the full resolution + the harness run command.
 
 This page covers metric-based detections only. **Structural/config detections**
 — trace-coverage presence (is the OTel primitive enabled?), event-source
@@ -72,7 +71,7 @@ by metric availability.
 > add-on is paid (Lambda Insights per function-month; App Insights on
 > ingestion). For AWS a cheaper CloudWatch Logs metric-filter alternative is
 > offered. Kinds: `lambda-insights-enable`, `azfunc-appinsights-enable`.
-| GCP | Cloud Run / Functions | Yes — `request_latencies` / `execution_times`. | ✅ **opt-in** (`serverless_metric_detection.enabled`, default off — see activation note above; **live-verification pending**, v0.89.332). Includes warm-path invocations; a permanently-warm service can show false positives. |
+| GCP | Cloud Run / Functions | Yes — `request_latencies` / `execution_times`. | ✅ **opt-in** (`serverless_metric_detection.enabled`, default off — see activation note above; adapter **live-verified** against real Cloud Monitoring, v0.89.335). Includes warm-path invocations; a permanently-warm service can show false positives. |
 | Azure | Functions | **No** — Azure Monitor exposes only `FunctionExecutionCount` / `FunctionExecutionUnits`; there is no per-function duration metric and no `IsAfterColdStart` dimension. | 🏢 **Commercial-tier (implemented, gated — v0.89.307, #153)** — the regression detector re-points to **Application Insights** `requests/duration` (queried on the App Insights component resource via Azure Monitor) when `commercial_detectors.enabled=true`. OSS default off: queries `FunctionExecutionDuration` (empty → never fires) and recommends enabling the add-on (`azfunc-appinsights-enable`). |
 | OCI | Functions | Duration only — `oci_faas` has `FunctionExecutionDuration` but no cold-start counter. | ✅ **opt-in** (`serverless_metric_detection.enabled`, default off — see activation note above; v0.89.331). Duration-regression heuristic (P95 current vs 7-day baseline); **not cold-start-isolated** — a spike may be a cold start or a slow dependency (v0.89.232). |
 
@@ -81,7 +80,7 @@ by metric availability.
 | Cloud | Surface | Native metric? | Status |
 |-------|---------|----------------|--------|
 | AWS | Lambda | Yes — `AWS/Lambda` `Errors` + `Invocations` (Sum). | ✅ **opt-in** (`serverless_metric_detection.enabled`, default off — native metric, no Lambda Insights add-on; decoupled from the commercial gate, v0.89.330). |
-| GCP | Cloud Run / Functions | Yes — `request_count` (5xx) / `execution_count` (status != ok). | ✅ **opt-in** (`serverless_metric_detection.enabled`, default off — see activation note above; **live-verification pending**, v0.89.332). |
+| GCP | Cloud Run / Functions | Yes — `request_count` (5xx) / `execution_count` (status != ok). | ✅ **opt-in** (`serverless_metric_detection.enabled`, default off — see activation note above; adapter **live-verified** against real Cloud Monitoring, v0.89.335). |
 | Azure | Functions | **No** — no native per-function error metric (`FunctionErrors` does not exist). | 🏢 **Commercial-tier (implemented, gated — v0.89.307, #153)** — the error-rate detector re-points to **Application Insights** `requests/failed` over `requests/count` when `commercial_detectors.enabled=true`. OSS default off: queries `FunctionErrors` (empty → never fires) and recommends enabling the add-on (`azfunc-appinsights-enable`). |
 | OCI | Functions | Yes — `oci_faas` `FunctionResponseCount` (error responses) over `FunctionInvocationCount` (fixed v0.89.229). | ✅ **opt-in** (`serverless_metric_detection.enabled`, default off — see activation note above; v0.89.331). |
 

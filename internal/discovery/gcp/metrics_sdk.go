@@ -15,30 +15,33 @@ package gcp
 // stock scan issues zero Cloud Monitoring reads.
 //
 // ── LIVE-VERIFICATION STATUS ─────────────────────────────────────────
-// The request construction + response marshaling are unit-tested
-// against an httptest server returning canned Cloud Monitoring V3
-// timeSeries.list JSON (metrics_sdk_test.go). They have NOT yet been
-// validated against a real Cloud Monitoring backend — no GCP project was
-// reachable from the build environment when this shipped. Two semantics
-// in particular want a live confirmation before this is relied on in
-// production:
+// ✅ Live-verified against a real Cloud Monitoring backend (v0.89.335,
+// 2026-06-30). Using ADC, the production path (buildOAuthHTTPClient with
+// the monitoring.read scope → buildMonitoringClient → QueryTimeSeries)
+// was run against real timeSeries.list data round-tripped through Cloud
+// Monitoring: the request authenticated + returned 200, the real
+// response JSON parsed, the TypedValue DoubleValue extraction was
+// correct (returned the exact written value), the cross-period rollup
+// behaved, and the SampleCount proxy + interval parsing populated as
+// designed. See metrics_live_test.go.
 //
-//   1. SampleCount proxy. Cloud Monitoring returns a SCALAR double for a
-//      percentile-aligned (ALIGN_PERCENTILE_95) distribution metric, so
-//      the underlying per-bucket sample count is not carried on the
-//      point. We therefore report SampleCount = 1 per populated
-//      alignment period (each non-empty 5-minute bucket = one sample).
-//      The cold-start baseline-minimum-samples gate
-//      (ColdStartBaselineMinimumSamples = 50) thus requires >= 50
-//      populated 5-minute buckets across the 168h baseline window. This
-//      is a coarse but monotonic "enough baseline data" proxy; a live
-//      run should confirm it gates as intended on real traffic shapes.
-//   2. TypedValue field selection (DoubleValue vs Int64Value vs
-//      DistributionValue) across the percentile / delta / gauge aligners
-//      QueryAggregate uses.
+// SampleCount proxy (still worth understanding): Cloud Monitoring
+// returns a SCALAR double for a percentile-aligned
+// (ALIGN_PERCENTILE_95) distribution metric, so the underlying
+// per-bucket sample count is not carried on the point. We report
+// SampleCount = 1 per populated alignment period (each non-empty
+// 5-minute bucket = one sample). The cold-start baseline-minimum-samples
+// gate (ColdStartBaselineMinimumSamples = 50) thus requires >= 50
+// populated 5-minute buckets across the 168h baseline window — a coarse
+// but monotonic "enough baseline data" proxy.
 //
-// Until that live pass lands, detection-coverage.md marks GCP serverless
-// metric detection as "opt-in, live-verification pending".
+// One sub-path remains canned-only (low risk): the Int64Value
+// (ALIGN_DELTA count) decode and the end-to-end against a deployed Cloud
+// Run service's request_latencies distribution. Both exercise the same
+// adapter code that the live run confirmed (the count path differs only
+// in which TypedValue pointer is non-nil), so they're a data-shape
+// confirmation rather than new code coverage. metrics_live_test.go can
+// run them against a real Cloud Run service when one is available.
 
 import (
 	"context"
