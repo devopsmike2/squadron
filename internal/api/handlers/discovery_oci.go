@@ -886,6 +886,12 @@ type ociScanResponse struct {
 	FailedServices      []string                           `json:"failed_services,omitempty"`
 	ScanID              string                             `json:"scan_id"`
 	EventSources        []eventSourceRow                   `json:"event_sources,omitempty"`
+	// Serverless carries the per-function rows (OCI Functions) with
+	// their cold-start + error-rate detection annotations (the
+	// snapshot type is marshaled directly), so both regression axes
+	// round-trip into the recs request DTO — feeding the
+	// detection→recommendation flow (parity with AWS).
+	Serverless []scanner.ServerlessInstanceSnapshot `json:"serverless,omitempty"`
 }
 
 // HandleScanOCIConnection — POST
@@ -974,6 +980,7 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 			UninstrumentedCount: uninstr,
 			Partial:             false,
 			ScanID:              r.ScanID,
+			Serverless:          r.Serverless,
 		})
 		return
 	}
@@ -1153,6 +1160,7 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		FailedServices:      result.FailedServices,
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
+		Serverless:          result.Serverless,
 	}
 	// slice 2 (v0.89.251) — persist the completed scan (best-effort). Scope
 	// is the route :id (connection ID). Demo path returned earlier.

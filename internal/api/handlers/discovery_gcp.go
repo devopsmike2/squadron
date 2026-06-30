@@ -833,6 +833,13 @@ type gcpScanResponse struct {
 	FailedServices      []string                           `json:"failed_services,omitempty"`
 	ScanID              string                             `json:"scan_id"`
 	EventSources        []eventSourceRow                   `json:"event_sources,omitempty"`
+	// Serverless carries the per-function rows (Cloud Run / Cloud
+	// Functions) with their cold-start + error-rate detection
+	// annotations. The snapshot type is marshaled directly (these
+	// clouds don't use a snake_case wire row), so both regression
+	// axes round-trip into the recs request DTO — feeding the
+	// detection→recommendation flow (parity with AWS).
+	Serverless []scanner.ServerlessInstanceSnapshot `json:"serverless,omitempty"`
 }
 
 // HandleScanGCPConnection — POST
@@ -920,6 +927,7 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 			UninstrumentedCount: uninstr,
 			Partial:             false,
 			ScanID:              r.ScanID,
+			Serverless:          r.Serverless,
 		})
 		return
 	}
@@ -1099,6 +1107,7 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 		FailedServices:      result.FailedServices,
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
+		Serverless:          result.Serverless,
 	}
 	// slice 2 (v0.89.251) — persist the completed scan (best-effort). Scope
 	// is the route :id (connection ID). Demo path returned earlier, so demo

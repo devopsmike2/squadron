@@ -870,6 +870,12 @@ type azureScanResponse struct {
 	ScanID              string                             `json:"scan_id"`
 	EventSources        []eventSourceRow                   `json:"event_sources,omitempty"`
 	Orchestrations      []awsOrchestrationRow              `json:"orchestrations,omitempty"`
+	// Serverless carries the per-function rows (Azure Functions) with
+	// their cold-start + error-rate detection annotations (the
+	// snapshot type is marshaled directly), so both regression axes
+	// round-trip into the recs request DTO — feeding the
+	// detection→recommendation flow (parity with AWS).
+	Serverless []scanner.ServerlessInstanceSnapshot `json:"serverless,omitempty"`
 }
 
 // HandleScanAzureConnection — POST
@@ -958,6 +964,7 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 			UninstrumentedCount: uninstr,
 			Partial:             false,
 			ScanID:              r.ScanID,
+			Serverless:          r.Serverless,
 		})
 		return
 	}
@@ -1163,6 +1170,7 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
 		Orchestrations:      marshalOrchestrationRows(result.Orchestrations),
+		Serverless:          result.Serverless,
 	}
 	// slice 2 (v0.89.251) — persist the completed scan (best-effort). Scope
 	// is the route :id (connection ID). Demo path returned earlier.
