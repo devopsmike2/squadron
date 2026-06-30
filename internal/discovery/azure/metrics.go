@@ -113,6 +113,57 @@ const AzureFunctionsInvocationsMetric = "FunctionInvocations"
 // empty. Deferred per docs/audit/detection-metric-availability.md.
 const AzureFunctionsErrorsMetric = "FunctionErrors"
 
+// Application Insights standard metric names (#153 enterprise-gate).
+// Unlike the Azure Monitor Functions metrics above — which do not
+// carry per-function duration or error signals — these live on the
+// Application Insights component resource (microsoft.insights/components)
+// and are queryable through the same Azure Monitor /metrics path with
+// the same SP token, provided the resource ARN passed to QueryAggregate
+// is the Application Insights component (not the Function App). They
+// carry the real cold-start latency + error signals when the operator
+// has the paid Application Insights add-on enabled.
+const (
+	// AppInsightsRequestDurationMetric is the App Insights server
+	// request duration (ms); the cold-start regression detector reads
+	// its P95 when the commercial gate is on.
+	AppInsightsRequestDurationMetric = "requests/duration"
+	// AppInsightsRequestsCountMetric is the App Insights total server
+	// request count — the error-rate denominator (all requests).
+	AppInsightsRequestsCountMetric = "requests/count"
+	// AppInsightsRequestsFailedMetric is the App Insights failed server
+	// request count — the error-rate numerator.
+	AppInsightsRequestsFailedMetric = "requests/failed"
+)
+
+// coldStartDurationMetric returns the duration metric name the
+// cold-start detector should query: the inert Functions metric in OSS
+// (never fires) or the Application Insights request-duration metric
+// when the commercial gate is on (#153).
+func (s *Scanner) coldStartDurationMetric() string {
+	if s.commercialDetectors {
+		return AppInsightsRequestDurationMetric
+	}
+	return AzureFunctionsExecutionDurationMetric
+}
+
+// errorTotalMetric / errorFailedMetric return the (denominator,
+// numerator) metric names the error-rate detector should query —
+// inert Functions metrics in OSS, Application Insights request
+// count/failed when the commercial gate is on (#153).
+func (s *Scanner) errorTotalMetric() string {
+	if s.commercialDetectors {
+		return AppInsightsRequestsCountMetric
+	}
+	return AzureFunctionsInvocationsMetric
+}
+
+func (s *Scanner) errorFailedMetric() string {
+	if s.commercialDetectors {
+		return AppInsightsRequestsFailedMetric
+	}
+	return AzureFunctionsErrorsMetric
+}
+
 // ServiceBusDeadletteredMessagesMetric is the Azure Monitor metric
 // name for Service Bus dead-lettered message count. Poison-rate
 // substrate slice 4 chunk 3a (v0.89.179) reads this on the
@@ -261,8 +312,11 @@ func (s *Scanner) QueryAggregate(
 	// and skips the IsAfterColdStart dimension filter (the
 	// invocation count denominator wants ALL invocations, not just
 	// cold-start ones).
-	if metricName == AzureFunctionsInvocationsMetric {
-		return s.queryAzureFunctionCounterTotal(ctx, resourceARN, AzureFunctionsInvocationsMetric, window, stat)
+	if metricName == AzureFunctionsInvocationsMetric || metricName == AppInsightsRequestsCountMetric {
+		// #153: the App Insights requests/count denominator shares the
+		// SUM-rollup, no-dimension-filter shape with FunctionInvocations,
+		// so it reuses the same counter-total helper.
+		return s.queryAzureFunctionCounterTotal(ctx, resourceARN, metricName, window, stat)
 	}
 
 	// Error rate correlation slice 1 chunk 1 (v0.89.127):
@@ -271,8 +325,10 @@ func (s *Scanner) QueryAggregate(
 	// "Total", no IsAfterColdStart filter — the error count wants
 	// ALL failed invocations, not just cold-start ones), so the
 	// underlying queryAzureFunctionCounterTotal helper is reused.
-	if metricName == AzureFunctionsErrorsMetric {
-		return s.queryAzureFunctionCounterTotal(ctx, resourceARN, AzureFunctionsErrorsMetric, window, stat)
+	if metricName == AzureFunctionsErrorsMetric || metricName == AppInsightsRequestsFailedMetric {
+		// #153: the App Insights requests/failed numerator shares the
+		// SUM-rollup shape with FunctionErrors.
+		return s.queryAzureFunctionCounterTotal(ctx, resourceARN, metricName, window, stat)
 	}
 
 	// Poison-rate substrate slice 4 chunk 3a (v0.89.179): Service Bus
@@ -284,9 +340,11 @@ func (s *Scanner) QueryAggregate(
 		return s.queryServiceBusDeadletterDelta(ctx, resourceARN, window, stat)
 	}
 
-	if metricName != AzureFunctionsExecutionDurationMetric {
+	if metricName != AzureFunctionsExecutionDurationMetric && metricName != AppInsightsRequestDurationMetric {
 		// Slice 2 substrate scope: FunctionExecutionDuration +
-		// FunctionInvocations + FunctionErrors. Other names short-
+		// FunctionInvocations + FunctionErrors, plus the #153
+		// App Insights requests/duration (which shares the
+		// Maximum-aggregation duration query shape). Other names short-
 		// circuit to an empty result with no error so the
 		// interface contract distinguishes "metric not supported
 		// in slice 1" (empty result) from "API call failed"
@@ -932,6 +990,19 @@ func (s *Scanner) WithAccessToken(token string) *Scanner {
 // it entirely (a nil limiter short-circuits the Wait call). Production
 // never calls this — the chunk-4 wiring pre-arms the limiter at the
 // substrate-default rate.
+// WithCommercialDetectors flips the add-on-dependent regression
+// detectors on (#153 enterprise-gate). Default false (OSS). When true
+// the Functions cold-start + error detectors request the Application
+// Insights metric names (requests/duration, requests/count,
+// requests/failed) instead of the inert Azure Monitor Functions metric
+// names. The caller must also pass the Application Insights component
+// resource ARN to the detectors and wire an observation store for the
+// detection branch to run.
+func (s *Scanner) WithCommercialDetectors(on bool) *Scanner {
+	s.commercialDetectors = on
+	return s
+}
+
 func (s *Scanner) WithMetricsLimiter(limiter *rate.Limiter) *Scanner {
 	s.metricsLimiter = limiter
 	return s

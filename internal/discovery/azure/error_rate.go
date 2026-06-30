@@ -77,19 +77,24 @@ func (s *Scanner) DetectErrorRate(
 	currentWindow := time.Duration(ErrorRateCurrentWindowHours) * time.Hour
 	baselineWindow := time.Duration(ErrorRateBaselineWindowHours) * time.Hour
 
-	currInv, err := s.QueryAggregate(ctx, resourceARN, AzureFunctionsInvocationsMetric, currentWindow, scanner.StatisticSum)
+	// #153 enterprise-gate: OSS reads FunctionInvocations/FunctionErrors
+	// (no native Functions error metric ⇒ empty ⇒ never fires); the
+	// commercial gate reads App Insights requests/count + requests/failed.
+	totalMetric := s.errorTotalMetric()
+	failedMetric := s.errorFailedMetric()
+	currInv, err := s.QueryAggregate(ctx, resourceARN, totalMetric, currentWindow, scanner.StatisticSum)
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: current invocation count query: %w", err)
 	}
-	currErr, err := s.QueryAggregate(ctx, resourceARN, AzureFunctionsErrorsMetric, currentWindow, scanner.StatisticSum)
+	currErr, err := s.QueryAggregate(ctx, resourceARN, failedMetric, currentWindow, scanner.StatisticSum)
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: current error count query: %w", err)
 	}
-	baseInv, err := s.QueryAggregate(ctx, resourceARN, AzureFunctionsInvocationsMetric, baselineWindow, scanner.StatisticSum)
+	baseInv, err := s.QueryAggregate(ctx, resourceARN, totalMetric, baselineWindow, scanner.StatisticSum)
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: baseline invocation count query: %w", err)
 	}
-	baseErr, err := s.QueryAggregate(ctx, resourceARN, AzureFunctionsErrorsMetric, baselineWindow, scanner.StatisticSum)
+	baseErr, err := s.QueryAggregate(ctx, resourceARN, failedMetric, baselineWindow, scanner.StatisticSum)
 	if err != nil {
 		return ErrorRateDetectionResult{}, fmt.Errorf("error rate: baseline error count query: %w", err)
 	}

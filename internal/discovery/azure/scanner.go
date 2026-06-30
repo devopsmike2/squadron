@@ -115,6 +115,20 @@ type Scanner struct {
 	// limiter is nil, which is the chunk-1 skeleton path (no real
 	// Azure Monitor calls being made).
 	metricsLimiter *rate.Limiter
+
+	// commercialDetectors gates the add-on-dependent regression
+	// detectors (#153 enterprise-gate decision). Default false (OSS):
+	// the Functions cold-start + error detectors query the
+	// FunctionExecutionDuration / FunctionErrors Azure Monitor metric
+	// names, which do not exist for Functions (empty datapoints ⇒
+	// never fire) — the intended OSS posture, where the proposer
+	// instead recommends enabling Application Insights. When true
+	// (commercial tier, wired from config.CommercialDetectors.Enabled),
+	// the detectors request the Application Insights metric names
+	// (requests/duration, requests/failed, requests/count) which carry
+	// the real cold-start + error signals — the operator must have the
+	// paid Application Insights add-on enabled for datapoints to appear.
+	commercialDetectors bool
 }
 
 // Provider satisfies the (future) scanner.Scanner interface. The
