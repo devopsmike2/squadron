@@ -239,6 +239,11 @@ type DiscoveryHandlers struct {
 	// the same *traceindex.Quality the span-quality handler uses.
 	samplingSpanCounter proposer.SamplingRateSpanCounter
 
+	// samplingSink, when non-nil, captures each scan's live sampling
+	// result into the per-resource /sampling endpoint cache (#295 slice
+	// 5). Wired in server.go from the shared SamplingObservationCache.
+	samplingSink *SamplingObservationCache
+
 	// Commercial-tier detector activation (#152 productization).
 	// credstoreKey is retained so the AWS scanner factory can be rebuilt
 	// when commercial activation is wired (it needs both the key and the
@@ -612,6 +617,14 @@ func (h *DiscoveryHandlers) WithSamplingSpanCounter(idx QualitySnapshotIndex) *D
 	if sc, ok := idx.(proposer.SamplingRateSpanCounter); ok {
 		h.samplingSpanCounter = sc
 	}
+	return h
+}
+
+// WithSamplingSink wires the per-resource endpoint cache so the AWS
+// scan annotation also records its live results for the endpoint to
+// serve (#295 slice 5). Nil-safe (leaves the endpoint unfed).
+func (h *DiscoveryHandlers) WithSamplingSink(cache *SamplingObservationCache) *DiscoveryHandlers {
+	h.samplingSink = cache
 	return h
 }
 
@@ -2264,7 +2277,7 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 	// ErrMetricNotImplemented, so the rows stay "—".
 	if h.samplingSpanCounter != nil && result != nil {
 		if querier, ok := awsScanner.(proposer.SamplingRateMetricQuerier); ok {
-			det := newSamplingDetector(querier, h.samplingSpanCounter)
+			det := newSamplingDetector(querier, h.samplingSpanCounter).withSink(h.samplingSink)
 			AnnotateServerlessWithSampling(ctx, det, samplingARNKeyResolver{}, result.Serverless, h.logger)
 		}
 	}

@@ -157,9 +157,62 @@ Tracing the per-cloud scan handlers surfaced two facts that reshape slices 2–5
 - **5:** per-resource `/sampling` endpoint wiring + detection-coverage.md
   sampling-rows reconciliation + full gate.
 
+## Landing (post-slice-5)
+
+What actually shipped, and the two deliberate deviations from the original plan:
+
+**Shipped (AWS / GCP / OCI):**
+
+- Slice 1 — `samplingDetector` adapter + `samplingARNKeyResolver` + tests.
+- Slice 2 — GCP + OCI serverless annotation blocks (new passes; these handlers
+  previously annotated only compute/db/cluster) + span-counter threading + tests.
+- Slice 3 — AWS serverless annotation + a region-aware `aws.QueryAggregate`
+  (rebinds CloudWatch to the queried Lambda's own region) + tests.
+- Slice 5 — the per-resource `GET /…/serverless/{id}/sampling` endpoint is now
+  live. Backed by an **in-memory last-result cache** (`SamplingObservationCache`):
+  the scan annotation records each resource's live result (via a sink on the
+  detector); the endpoint reads that cache as both lookup + detector. The server
+  holds one cache, wires it as the endpoint's lookup/detector, and threads it
+  into each per-cloud scan handler as the sink. This is the "persist a small
+  sampling observation the endpoint reads" option from the *Per-resource
+  endpoint* note above — chosen over a sqlite observation store (cold-start's
+  pattern) because sampling is a **live join**, recomputed each scan, with no
+  historical-observation concept: the endpoint reflects the last scan and 404s
+  for resources no scan has observed (or whenever `serverless_metric_detection`
+  is off). All four roles (record / lookup / detect) are one small type, tested.
+
+**Deferred — Azure sampling (slice 4), a surfaced product decision:**
+
+Azure is intentionally NOT wired. Native Azure sampling would be the *first*
+native-metric Azure serverless detector in OSS (Azure's cold-start/error-rate
+detection is App Insights / commercial-only — see
+`docs/audit/detection-metric-availability.md`), and lighting it up requires
+three coupled decisions that shouldn't be made unilaterally inside this arc:
+
+1. **A deferred metric rename.** Sampling's denominator is the invocation count,
+   but the constant `azure.AzureFunctionsInvocationsMetric` is the *known-
+   nonexistent* placeholder `"FunctionInvocations"` (the real native metric is
+   `FunctionExecutionCount`; the rename was deferred pending Azure's broader
+   error/duration data-source decision). Wiring Azure sampling without the rename
+   would be **inert** — the invocation query returns empty, every row renders
+   "—". (The numerator — the OTLP span count — is fine; it's not an Azure metric.)
+2. **A gating decision.** AWS/GCP/OCI sampling rides `serverless_metric_detection`
+   implicitly (flag off → no metric client → `ErrMetricNotImplemented`). Azure's
+   `QueryAggregate` instead runs whenever the scan access token is present (every
+   scan), so Azure sampling has no natural opt-in seam and would issue an Azure
+   Monitor query per function per scan unless a gate is added.
+3. **Granularity.** `FunctionExecutionCount` is Function-App-level, not per-
+   function — an acceptable but coarser join than the other clouds.
+
+Recommended follow-up: pair the `FunctionExecutionCount` rename with the Azure
+error/duration data-source decision and an explicit opt-in gate, then mirror the
+GCP/OCI annotation wiring. Tracked as the open Azure item.
+
 ## Non-goals
 
 - No new config flag — rides `serverless_metric_detection.enabled`.
-- No persisted sampling-observation store in slices 1–4 (the annotation is live).
+- No persisted sampling-observation store (the annotation + endpoint are live;
+  slice 5 uses an in-memory last-result cache, not a sqlite store).
 - No change to the detection math, the recommendation kind, or the Terraform
   patterns — all already shipped.
+- Azure sampling — deferred (see Landing). No inert wiring.

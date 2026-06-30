@@ -368,6 +368,32 @@ can distinguish "below floor but above minimum (fires)" from
 "below floor AND below minimum (statistical noise — does NOT
 fire)."
 
+### Activation status (#295)
+
+Sampling-rate detection is **active for AWS, GCP, and OCI**, gated on
+`serverless_metric_detection.enabled` (default off — it reads a billed
+per-cloud invocation-count metric). With the flag on, each serverless
+scan annotates the inventory rows (UI `sampling_ratio` +
+`would_fire_recommendation`) and fires the
+`span-quality-sampling-too-aggressive` recommendation, and records the
+result so the per-resource endpoint above can serve it. With the flag
+off, the scanner has no metric client, the query returns
+`ErrMetricNotImplemented`, rows render "—", and the endpoint 404s — no
+metric reads, no behavior change.
+
+The per-resource endpoint is backed by an **in-memory last-result
+cache**, not a persisted store: it reflects the most recent scan's live
+result for the resource and returns 404 for any resource no scan has
+observed (sampling is recomputed each scan — there is no historical
+sampling observation to read back).
+
+**Azure is not yet wired** (deferred). Azure's native invocation metric
+name needs a correctness fix first (`FunctionExecutionCount`, currently
+the nonexistent placeholder `FunctionInvocations`) plus an opt-in gate;
+see `docs/proposals/sampling-rate-activation.md` (Landing) and
+`docs/audit/detection-metric-availability.md`. Until then, Azure
+serverless sampling rows render "—" and the Azure endpoint 404s.
+
 ## Per-cloud rate limits + cost surface
 
 The substrate's existing rate limiters from cold-start slice 1+2
@@ -375,12 +401,13 @@ absorb the new query:
 
 - AWS: 10 RPS; sampling adds 1 query/resource (cold-start has 2)
 - GCP: 60 RPM
-- Azure: 12000 RPH (200 RPM)
+- Azure: 12000 RPH (200 RPM) — reserved; Azure sampling is deferred (see
+  Activation status), so no Azure sampling queries are issued today
 - OCI: 10 TPS
 
-For a 4-cloud serverless fleet of 1000 functions per cloud,
-sampling adds 4000 queries/day across all clouds — negligible
-relative to per-cloud quotas.
+For a 3-cloud serverless fleet (AWS/GCP/OCI — Azure deferred) of 1000
+functions per cloud, sampling adds 3000 queries/day across those clouds
+— negligible relative to per-cloud quotas.
 
 Cost: covered by the same free tiers as cold-start. No
 incremental cost per the no-money brief.

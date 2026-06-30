@@ -38,6 +38,11 @@ import (
 type samplingDetector struct {
 	querier proposer.SamplingRateMetricQuerier
 	quality proposer.SamplingRateSpanCounter
+	// sink, when non-nil, captures each annotation's live result into
+	// the per-resource endpoint's cache (#295 slice 5). Only the
+	// AnnotateSampling (scan) path writes; the endpoint reads the cache
+	// directly. Nil in tests and when no cache is wired.
+	sink *SamplingObservationCache
 }
 
 var (
@@ -56,6 +61,19 @@ func newSamplingDetector(querier proposer.SamplingRateMetricQuerier, quality pro
 	return &samplingDetector{querier: querier, quality: quality}
 }
 
+// withSink attaches the per-resource endpoint cache so every
+// AnnotateSampling call also records its result. Nil-receiver-safe so
+// it chains cleanly off newSamplingDetector (which returns nil when the
+// querier is absent): a nil detector stays nil. A nil cache leaves the
+// sink unset (annotation still runs; nothing recorded).
+func (d *samplingDetector) withSink(sink *SamplingObservationCache) *samplingDetector {
+	if d == nil {
+		return nil
+	}
+	d.sink = sink
+	return d
+}
+
 // DetectSampling implements SamplingDetector (per-resource endpoint).
 func (d samplingDetector) DetectSampling(
 	ctx context.Context,
@@ -67,13 +85,21 @@ func (d samplingDetector) DetectSampling(
 }
 
 // AnnotateSampling implements SamplingAnnotator (scan-response rows).
+// On a successful detection it also records the result into the
+// per-resource endpoint cache (#295 slice 5) when a sink is wired, so
+// the /sampling endpoint can serve the most recent scan's result. A
+// query error records nothing (the row degrades to "—").
 func (d samplingDetector) AnnotateSampling(
 	ctx context.Context,
 	resourceARN string,
 	surface string,
 	traceindexKey string,
 ) (proposer.SamplingRateDetectionResult, error) {
-	return proposer.DetectSamplingRate(ctx, d.querier, d.quality, resourceARN, surface, traceindexKey)
+	result, err := proposer.DetectSamplingRate(ctx, d.querier, d.quality, resourceARN, surface, traceindexKey)
+	if err == nil && d.sink != nil {
+		d.sink.record(resourceARN, surface, traceindexKey, result)
+	}
+	return result, err
 }
 
 // samplingARNKeyResolver maps a serverless (surface, ARN) to the
