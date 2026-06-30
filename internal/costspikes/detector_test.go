@@ -5,6 +5,7 @@ package costspikes
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,75 @@ import (
 	"github.com/devopsmike2/squadron/internal/pricing"
 	storetypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
+
+// lockedSpikeStore is a concurrency-safe SpikeStore that atomically
+// models the latest-open state, so a concurrency test exercises the
+// DETECTOR's serialization (tickMu) rather than a race in the fake.
+type lockedSpikeStore struct {
+	mu      sync.Mutex
+	open    *storetypes.CostSpikeEvent
+	created int
+}
+
+func (s *lockedSpikeStore) CreateCostSpikeEvent(_ context.Context, e *storetypes.CostSpikeEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.created++
+	cp := *e
+	s.open = &cp
+	return nil
+}
+func (s *lockedSpikeStore) UpdateCostSpikeEvent(_ context.Context, e *storetypes.CostSpikeEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *e
+	if cp.EndedAt != nil {
+		s.open = nil
+	} else {
+		s.open = &cp
+	}
+	return nil
+}
+func (s *lockedSpikeStore) LatestOpenCostSpike(_ context.Context) (*storetypes.CostSpikeEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.open == nil {
+		return nil, nil
+	}
+	cp := *s.open
+	return &cp, nil
+}
+
+// TestDetector_ConcurrentTicks_SingleOpenSpike pins the duplicate-open
+// race fix: the 60s background loop and an operator POST /tick can call
+// Tick concurrently; without serialization both observe "no open spike"
+// and both INSERT. With tickMu, exactly one open row is created. Run with
+// -race to also catch the underlying check-then-insert data race.
+func TestDetector_ConcurrentTicks_SingleOpenSpike(t *testing.T) {
+	store := &lockedSpikeStore{}
+	// A large spike value keeps pct far above threshold even as ticks
+	// append samples, so the spike never closes-and-reopens mid-test.
+	pricer := &fakePricer{enabled: true, monthly: 10000}
+	det := New(DefaultConfig(), store, pricer, &fakeInsights{})
+	warmUp(det, 100, 30)
+
+	const n = 25
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_ = det.Tick(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.created != 1 {
+		t.Fatalf("concurrent ticks created %d open spikes, want exactly 1 (duplicate-open race)", store.created)
+	}
+}
 
 // fakeStore is an in-memory SpikeStore that records every write.
 // Sufficient for testing the detector's state-machine.
