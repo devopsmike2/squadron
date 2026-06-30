@@ -397,10 +397,13 @@ func (q *Quality) recordPlaceholder(key, attr, placeholder string, now time.Time
 // log the counts so an operator can see the eviction cadence.
 //
 // Memory bound: with no eviction, the Quality structure would grow
-// indefinitely on a fleet that adds new resources over time. Calling
-// EvictExpired periodically (the chunk-2 flusher hook does this on
-// each tick) keeps total memory proportional to ACTIVE resources, not
-// historical.
+// indefinitely — perKey/placeholders/providers with each new resource,
+// and parentSeen with cumulative unique span count on the receive hot
+// path. The production driver is the background flusher, which calls
+// EvictExpired on every tick when wired via
+// BackgroundFlusher.WithQualityEvictor (cmd/all-in-one passes the
+// span-quality index). That keeps total memory proportional to ACTIVE
+// resources/traces, not historical.
 func (q *Quality) EvictExpired() (countersEvicted, tracesEvicted int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

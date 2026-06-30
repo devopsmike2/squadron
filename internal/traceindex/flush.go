@@ -43,7 +43,22 @@ type BackgroundFlusher struct {
 	audit    AuditEmitter
 	logger   *zap.Logger
 	clock    func() time.Time
+	// quality, when non-nil, has EvictExpired called on every flush tick
+	// so the span-quality index's memory stays bounded to ACTIVE
+	// resources/traces. The Quality structure is fed on the OTLP receive
+	// hot path (one Observe per span) and its parentSeen map otherwise
+	// grows unbounded — there is no other production eviction driver.
+	quality qualityEvictor
 }
+
+// qualityEvictor is the minimal surface the flusher needs to bound the
+// span-quality index's memory. *Quality satisfies it; tests substitute a
+// fake. Returns (countersEvicted, tracesEvicted).
+type qualityEvictor interface {
+	EvictExpired() (countersEvicted, tracesEvicted int)
+}
+
+var _ qualityEvictor = (*Quality)(nil)
 
 // defaultFlushInterval is the slice-1 design-doc §4 cadence — 30
 // seconds. The chunk-2 wiring passes this explicitly so an operator-
@@ -79,6 +94,26 @@ func NewBackgroundFlusher(index *Index, interval time.Duration, audit AuditEmitt
 		logger:   logger,
 		clock:    time.Now,
 	}
+}
+
+// WithQualityEvictor wires the span-quality index so its EvictExpired runs
+// on every flush tick — the single production driver that keeps the
+// Quality structure's memory bounded to ACTIVE resources/traces (its
+// parentSeen map otherwise grows unbounded with cumulative unique span
+// count on the receive hot path). Nil-safe and optional: span-quality may
+// be disabled, in which case the flusher just flushes the Index. Returns
+// the receiver for chaining off NewBackgroundFlusher.
+func (b *BackgroundFlusher) WithQualityEvictor(q qualityEvictor) *BackgroundFlusher {
+	// Guard against a typed-nil *Quality being wrapped in a non-nil
+	// interface (the common main.go "qualityIndex may be nil" case).
+	if q == nil {
+		return b
+	}
+	if qi, ok := q.(*Quality); ok && qi == nil {
+		return b
+	}
+	b.quality = q
+	return b
 }
 
 // Start runs the flush loop until ctx is canceled. Errors during
@@ -130,6 +165,20 @@ func (b *BackgroundFlusher) Start(ctx context.Context) {
 // Start so flush_test can drive a single iteration without standing
 // up the ticker.
 func (b *BackgroundFlusher) flushOnce(ctx context.Context, intervalSeconds int) {
+	// Span-quality eviction runs every tick, independent of the Index
+	// flush (and of whether that flush errors) — it is the only production
+	// bound on the Quality structure's memory. Without it parentSeen leaks
+	// unboundedly on the OTLP receive hot path. Counts are debug-logged;
+	// the audit payload contract (counts/duration/interval only) is
+	// unchanged.
+	if b.quality != nil {
+		if ce, te := b.quality.EvictExpired(); ce > 0 || te > 0 {
+			b.logger.Debug("traceindex quality eviction",
+				zap.Int("counters_evicted", ce),
+				zap.Int("traces_evicted", te))
+		}
+	}
+
 	start := b.clock()
 	written, evicted, err := b.index.Flush(ctx)
 	duration := b.clock().Sub(start)

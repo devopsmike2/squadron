@@ -283,6 +283,57 @@ func TestBackgroundFlusher_StopOnContextCancel(t *testing.T) {
 // TestBackgroundFlusher_NilIndexExitsCleanly — defensive guard. A
 // nil Index would crash on the first Flush; the flusher logs +
 // returns instead.
+// fakeQualityEvictor counts EvictExpired calls so the flusher's
+// span-quality eviction wiring can be asserted without a real Quality.
+type fakeQualityEvictor struct {
+	calls    int32
+	counters int
+	traces   int
+}
+
+func (f *fakeQualityEvictor) EvictExpired() (int, int) {
+	atomic.AddInt32(&f.calls, 1)
+	return f.counters, f.traces
+}
+
+// TestBackgroundFlusher_EvictsQualityEachFlush pins that a wired
+// span-quality evictor runs once per flush tick — the only production
+// bound on the Quality structure's memory (its parentSeen map otherwise
+// leaks unboundedly on the OTLP receive hot path).
+func TestBackgroundFlusher_EvictsQualityEachFlush(t *testing.T) {
+	store := newFakeStore(0)
+	idx := NewIndex(store, 0, nil)
+	ev := &fakeQualityEvictor{counters: 2, traces: 3}
+	flusher := NewBackgroundFlusher(idx, 20*time.Millisecond, nil, zap.NewNop()).
+		WithQualityEvictor(ev)
+
+	flusher.flushOnce(context.Background(), 1)
+	flusher.flushOnce(context.Background(), 1)
+
+	assert.Equal(t, int32(2), atomic.LoadInt32(&ev.calls),
+		"EvictExpired must run once per flush tick")
+}
+
+// TestBackgroundFlusher_QualityEvictorNilSafe pins that a nil interface
+// AND a typed-nil *Quality both leave the evictor unwired (the common
+// main.go "span-quality disabled" path), and flushOnce never panics.
+func TestBackgroundFlusher_QualityEvictorNilSafe(t *testing.T) {
+	store := newFakeStore(0)
+	idx := NewIndex(store, 0, nil)
+
+	f1 := NewBackgroundFlusher(idx, 20*time.Millisecond, nil, zap.NewNop()).WithQualityEvictor(nil)
+	if f1.quality != nil {
+		t.Error("nil evictor must leave quality unwired")
+	}
+
+	var q *Quality
+	f2 := NewBackgroundFlusher(idx, 20*time.Millisecond, nil, zap.NewNop()).WithQualityEvictor(q)
+	if f2.quality != nil {
+		t.Error("typed-nil *Quality must leave quality unwired")
+	}
+	f2.flushOnce(context.Background(), 1) // must not panic
+}
+
 func TestBackgroundFlusher_NilIndexExitsCleanly(t *testing.T) {
 	flusher := NewBackgroundFlusher(nil, 50*time.Millisecond, nil, zap.NewNop())
 	ctx, cancel := context.WithCancel(context.Background())
