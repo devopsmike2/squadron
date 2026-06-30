@@ -20,11 +20,14 @@ import (
 // Source of truth: the latest persisted scan per (provider, scope). The scan
 // response JSON carries the serverless rows with the three diagnostic
 // annotations the panel rolls up — cold-start latency, sampling-too-aggressive,
-// and error-rate spike. GCP / Azure / OCI marshal all three (the snapshot type
-// is serialized directly); AWS currently carries only the cold-start flag on
-// its snake_case wire row, so AWS rolls up cold-start today and the error-rate
-// + sampling axes are a tracked follow-up (awsServerlessRow marshal gap). A
-// missing flag is read as "not firing" — never fabricated.
+// and error-rate spike. All four clouds now carry the cold-start + error-rate
+// flags on the wire (GCP/Azure/OCI serialize the snapshot directly; AWS forwards
+// them on awsServerlessRow as of the v0.89.324 marshal-parity fix). The sampling
+// axis reads zero everywhere today because the SamplingAnnotator is not yet
+// wired into any scan path (sampling detection is dormant fleet-wide — a
+// separate activation arc); the field is present so the rollup lights up with no
+// reader change once that lands. A missing flag is read as "not firing" — never
+// fabricated.
 
 // workloadHealthScanShape is the minimal projection of a scan response JSON the
 // reader needs: the serverless rows and their three exceedance flags. The field

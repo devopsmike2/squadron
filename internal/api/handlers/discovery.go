@@ -1405,6 +1405,28 @@ type awsServerlessRow struct {
 	ColdStartP95Ms            *float64 `json:"cold_start_p95_ms,omitempty"`
 	ColdStartExceedsThreshold *bool    `json:"cold_start_exceeds_threshold,omitempty"`
 
+	// CurrentErrorRate / ErrorRateExceedsThreshold — Error rate
+	// correlation. The AnnotateServerlessWithErrorRate pass populates
+	// these on the AWS snapshot (live: the commercial-tier error-rate
+	// detector writes the error_rate_observation rows the pass reads);
+	// they were previously dropped at this marshal, hiding the error-
+	// rate cell from the AWS serverless inventory UI and zeroing the
+	// AWS error-rate axis in the Workload Health rollup. Now forwarded,
+	// matching the GCP/Azure/OCI wire shape (which serialize the
+	// snapshot directly). Same nil-elision posture as the cold-start
+	// pair — a row with no observation renders "—".
+	CurrentErrorRate          *float64 `json:"current_error_rate,omitempty"`
+	ErrorRateExceedsThreshold *bool    `json:"error_rate_exceeds_threshold,omitempty"`
+
+	// SamplingRatio / SamplingExceedsFloor — Sampling rate analysis.
+	// Forwarded for wire-shape parity with the other clouds; currently
+	// always nil-elided because the SamplingAnnotator is not yet wired
+	// into any scan path (sampling detection is dormant fleet-wide —
+	// tracked as a separate activation arc). When that lands, AWS
+	// surfaces sampling here with no further marshal change.
+	SamplingRatio        *float64 `json:"sampling_ratio,omitempty"`
+	SamplingExceedsFloor *bool    `json:"sampling_exceeds_floor,omitempty"`
+
 	Detail map[string]any `json:"detail,omitempty"`
 }
 
@@ -1671,6 +1693,10 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 			LastSeenAt:                sv.LastSeenAt,
 			ColdStartP95Ms:            sv.ColdStartP95Ms,
 			ColdStartExceedsThreshold: sv.ColdStartExceedsThreshold,
+			CurrentErrorRate:          sv.CurrentErrorRate,
+			ErrorRateExceedsThreshold: sv.ErrorRateExceedsThreshold,
+			SamplingRatio:             sv.SamplingRatio,
+			SamplingExceedsFloor:      sv.SamplingExceedsFloor,
 			Detail:                    sv.Detail,
 		})
 	}

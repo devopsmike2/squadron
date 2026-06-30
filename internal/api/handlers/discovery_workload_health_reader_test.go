@@ -82,10 +82,10 @@ func TestPersistedScanWorkloadHealthReader_CountsAndDedup(t *testing.T) {
 	}
 }
 
-// TestPersistedScanWorkloadHealthReader_AWSPartial confirms the honest partial
-// posture: AWS scan JSON carries only the cold-start flag (error-rate + sampling
-// dropped from awsServerlessRow today), so those axes read as not-firing rather
-// than fabricated.
+// TestPersistedScanWorkloadHealthReader_MissingFlagsNotFiring confirms the
+// honest posture: a serverless row whose error-rate / sampling flags are absent
+// from the scan JSON (e.g. a pre-marshal-parity AWS scan, or the fleet-wide
+// dormant sampling axis) reads as not-firing rather than fabricated.
 func TestPersistedScanWorkloadHealthReader_AWSPartial(t *testing.T) {
 	store := newFakeScanStore()
 	seedWHScan(t, store, "aws-1", "aws", "123456789012", time.Now().UTC(),
