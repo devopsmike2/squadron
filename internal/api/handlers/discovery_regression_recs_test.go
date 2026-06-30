@@ -124,3 +124,75 @@ func TestAppendAWSColdStartRegressionRecs_Excluded(t *testing.T) {
 		t.Fatalf("excluded rec: want 0 recs, got %d", len(recs))
 	}
 }
+
+// TestAppendAWSErrorRateRegressionRecs_Fires reconstructs the detection result
+// from the error-rate observation store (24h current + 168h baseline), re-gates
+// it via the shared FinalizeErrorRateGates, and confirms a Lambda clearing all
+// three gates yields one error-rate-spike recommendation.
+func TestAppendAWSErrorRateRegressionRecs_Fires(t *testing.T) {
+	const arn = "arn:aws:lambda:us-east-1:acc:function:orders"
+	now := time.Now().UTC()
+
+	store := &stubErrorRateReader{}
+	// current: 2000 errors / 5000 inv = 0.40; baseline: 100 / 10000 = 0.01.
+	// ratio 40x > 2.0, inv 5000 >= 1000, errors 2000 >= 50 → fires.
+	store.set(arn, regressionCurrentWindowHours, 2000, 5000, 0.40, now)
+	store.set(arn, regressionBaselineWindowHours, 100, 10000, 0.01, now)
+
+	h := &DiscoveryHandlers{errorRateStore: store, exclusionStore: &fakeExclusionStore{}}
+	scan := awsScanResponse{
+		ScanID:    "scan-1",
+		AccountID: "acc",
+		Regions:   []string{"us-east-1"},
+		Serverless: []awsServerlessRow{{
+			Surface:      "lambda",
+			ResourceName: "orders",
+			ResourceARN:  arn,
+			Region:       "us-east-1",
+		}},
+	}
+
+	var recs []recommendations.Recommendation
+	h.appendAWSErrorRateRegressionRecs(context.Background(), &recs, scan, now)
+
+	if len(recs) != 1 {
+		t.Fatalf("want 1 error-rate rec, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.ResourceKind != proposer.ErrorRateRecommendationKind {
+		t.Errorf("ResourceKind = %q, want %q", got.ResourceKind, proposer.ErrorRateRecommendationKind)
+	}
+	if got.IaC == nil || got.IaC.Source == "" {
+		t.Error("expected a Terraform IaC snippet on the error-rate rec")
+	}
+	if got.ID != arn+".error_rate_spike" {
+		t.Errorf("ID = %q, want %q", got.ID, arn+".error_rate_spike")
+	}
+}
+
+// TestAppendAWSErrorRateRegressionRecs_LowVolume_NoRec confirms the noise floor:
+// a high rate on too few invocations does not clear ExceedsMinimumInvocations.
+func TestAppendAWSErrorRateRegressionRecs_LowVolume_NoRec(t *testing.T) {
+	const arn = "arn:aws:lambda:us-east-1:acc:function:rare"
+	now := time.Now().UTC()
+
+	store := &stubErrorRateReader{}
+	// 30 errors / 100 inv = 0.30 — high rate, but only 100 invocations (< 1000).
+	store.set(arn, regressionCurrentWindowHours, 30, 100, 0.30, now)
+	store.set(arn, regressionBaselineWindowHours, 1, 1000, 0.001, now)
+
+	h := &DiscoveryHandlers{errorRateStore: store, exclusionStore: &fakeExclusionStore{}}
+	scan := awsScanResponse{
+		ScanID:     "scan-1",
+		AccountID:  "acc",
+		Regions:    []string{"us-east-1"},
+		Serverless: []awsServerlessRow{{Surface: "lambda", ResourceName: "rare", ResourceARN: arn, Region: "us-east-1"}},
+	}
+
+	var recs []recommendations.Recommendation
+	h.appendAWSErrorRateRegressionRecs(context.Background(), &recs, scan, now)
+
+	if len(recs) != 0 {
+		t.Fatalf("low volume: want 0 recs, got %d", len(recs))
+	}
+}

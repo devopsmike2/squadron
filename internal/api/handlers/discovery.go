@@ -3111,6 +3111,7 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		// Naturally gated by data availability (only fires when the
 		// commercial-tier detectors annotated the rows on a prior scan).
 		h.appendAWSColdStartRegressionRecs(ctx, &recs, req.ScanResult, now)
+		h.appendAWSErrorRateRegressionRecs(ctx, &recs, req.ScanResult, now)
 
 		// Audit event. Payload deliberately omits the Terraform content —
 		// audit rows shouldn't grow with snippet size. step_count +
