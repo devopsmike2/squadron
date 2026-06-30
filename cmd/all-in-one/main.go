@@ -536,6 +536,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	if qualityIndex != nil {
 		apiServer.SetQualitySnapshotIndexForDiscovery(qualityIndex)
 	}
+	// Per-resource span-quality DETAIL endpoint: resolve a (provider, kind, id)
+	// path tuple to the traceindex key via the persisted scan inventory. Without
+	// it the detail endpoint 404s every lookup even though the aggregate panel
+	// works. Scan-backed; no new data source.
+	if appStore != nil {
+		apiServer.SetResourceKeyProjectorForDiscovery(handlers.NewDiscoveryScanResourceKeyProjector(appStore, logger))
+	}
 
 	// v0.27.1 Quickstart needs to know the OpAMP port so the
 	// generated agent configs dial back to the right place.
