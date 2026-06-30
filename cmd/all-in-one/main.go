@@ -493,6 +493,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Warn("commercial_detectors.enabled is true but the application store does not support observation persistence; detectors stay dormant")
 	}
 
+	// Workload Health dashboard panel (v0.89.132). The handler + route + UI
+	// shipped but no reader was ever wired, so the endpoint returned all-zero
+	// counts and the panel hid itself. Wire the persisted-scan-backed reader so
+	// the panel rolls up the per-provider serverless cold-start / sampling /
+	// error-rate annotations from the latest scans.
+	if appStore != nil {
+		apiServer.SetWorkloadHealthInventoryReader(handlers.NewPersistedScanWorkloadHealthReader(appStore, logger))
+	}
+
 	// v0.27.1 Quickstart needs to know the OpAMP port so the
 	// generated agent configs dial back to the right place.
 	apiServer.SetOpAMPPort(config.Server.OpAMPPort)
