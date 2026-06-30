@@ -141,6 +141,29 @@ func KindToResourceTypes(kind string) []string {
 		return []string{"oci_streaming_stream"}
 	case "streaming-logging-enable":
 		return []string{"oci_streaming_stream", "oci_logging_log"}
+	// --- Serverless regression recs (detection→proposal). Resource types
+	// mirror the iacpicker cold-start / error-rate snippets so open-PR can
+	// suggest the placement file that holds the function / service. ---
+	case "lambda-cold-start-baseline":
+		// New aws_lambda_provisioned_concurrency_config referencing the function.
+		return []string{"aws_lambda_provisioned_concurrency_config", "aws_lambda_function"}
+	case "cloudrun-cold-start-baseline":
+		return []string{"google_cloud_run_service"}
+	case "cloudfunc-cold-start-baseline":
+		return []string{"google_cloudfunctions2_function"}
+	case "azfunc-cold-start-baseline":
+		return []string{"azurerm_service_plan", "azurerm_linux_function_app"}
+	case "ocifunc-cold-start-baseline":
+		return []string{"oci_functions_function"}
+	case "span-quality-error-rate-spike":
+		// Cross-cloud kind: one of five surfaces fires per rec, so the
+		// union lets the placement matcher land on whichever exists in
+		// the repo. Primary (Lambda) drives the new-file fallback name.
+		return []string{
+			"aws_lambda_function", "google_cloud_run_service",
+			"google_cloudfunctions2_function", "azurerm_service_plan",
+			"oci_functions_function",
+		}
 	}
 	return nil
 }

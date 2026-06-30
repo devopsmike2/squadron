@@ -29,6 +29,13 @@ func TestKindToResourceTypes_Spot(t *testing.T) {
 		"ocibucket-logging-enable":  "oci_objectstorage_bucket",
 		"s3-access-logging":         "aws_s3_bucket",
 		"sqs-redrive-policy-enable": "aws_sqs_queue",
+		// Serverless regression recs (detection→proposal).
+		"lambda-cold-start-baseline":    "aws_lambda_provisioned_concurrency_config",
+		"cloudrun-cold-start-baseline":  "google_cloud_run_service",
+		"cloudfunc-cold-start-baseline": "google_cloudfunctions2_function",
+		"azfunc-cold-start-baseline":    "azurerm_service_plan",
+		"ocifunc-cold-start-baseline":   "oci_functions_function",
+		"span-quality-error-rate-spike": "aws_lambda_function",
 	}
 	for kind, wantPrimary := range cases {
 		got := placement.KindToResourceTypes(kind)
