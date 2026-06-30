@@ -177,6 +177,13 @@ func (f *fakeAzure) handler() http.Handler {
 			return
 		}
 
+		// Object-store + load-balancer tiers run after the VM walk;
+		// route them empty so VM tests don't get spurious
+		// azurestorage / azurelb partial failures.
+		if routeEmptyInfraTier(w, r.URL.Path) {
+			return
+		}
+
 		// Unmatched path — surface as 404 so test failures are
 		// obvious rather than the scanner silently consuming an
 		// empty body.

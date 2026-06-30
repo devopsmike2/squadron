@@ -122,6 +122,13 @@ func (f *fakeAzureAKS) handler() http.Handler {
 			return
 		}
 
+		// Object-store + load-balancer tiers run after the AKS walk;
+		// route them empty so AKS tests don't get spurious
+		// azurestorage / azurelb partial failures.
+		if routeEmptyInfraTier(w, path) {
+			return
+		}
+
 		// Unhandled.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
