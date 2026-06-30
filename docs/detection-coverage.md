@@ -129,3 +129,30 @@ Application Insights, plus one `Microsoft.Insights/components` LIST per scan).
 CloudWatch `GetMetricStatistics` is billed per request; Azure Monitor metric
 reads are free. Functions with no add-on enabled safe-degrade (no datapoints,
 no annotation) — never a scan failure.
+
+## From detection to recommendation
+
+A fired regression detector no longer dead-ends as an inventory cell. For **AWS
+Lambda**, the discovery recommendations flow now turns a detected cold-start
+latency regression or error-rate spike into an actionable, merge-ready
+recommendation — the same envelope the LLM-proposed instrumentation steps use,
+carrying a deterministic Terraform snippet (provisioned-concurrency for
+cold-start; a memory/concurrency bump for error-rate) that opens as a PR through
+the normal IaC flow. These deterministic recommendations are:
+
+- **Additive + best-effort** — they are appended alongside the LLM recs and
+  never block them; a store miss or build error is logged and skipped.
+- **Naturally gated by data availability** — a cold-start rec only appears once
+  a prior scan persisted the cold-start observation (i.e. the commercial-tier
+  detector ran against Lambda Insights). The error-rate rec is reconstructed
+  from the persisted `error_rate_observation` rows and re-gated through the same
+  thresholds as live detection (rate ratio > 2.0x AND ≥ 1000 invocations AND
+  ≥ 50 errors in the 24h window), so the threshold logic lives in exactly one
+  place — no drift between live detection and the recommendation path.
+- **Exclusion-aware** — an operator-excluded regression rec stays excluded, by
+  the same verdict-learning machinery the rest of the discovery recs honor.
+
+GCP, Azure, and OCI surface the regression **annotations** on their inventory
+rows today; turning those into recommendations is a tracked follow-up (it
+depends on those clouds' scan-response wire shape carrying the serverless rows,
+which AWS already does).
