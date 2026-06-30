@@ -537,6 +537,26 @@ The substrate has now paid for itself three times over.
 Every subsequent metric-correlation diagnostic Squadron
 ships gets the same compounding return.
 
+## Interpreting Azure (Application Insights) counts
+
+When the commercial tier sources the error rate from Application Insights
+(`requests/count` + `requests/failed`), the **absolute** invocation and error
+counts reflect App Insights' own ingestion sampling / `itemCount` weighting —
+they can be substantially larger than the raw request volume. This is expected
+App Insights behaviour, not a Squadron miscount: Squadron sums one per-bucket
+timeseries (5-minute `Total` aggregation) over the window, with no dimension
+split, so there is no double-counting on our side.
+
+The detection keys off the **error rate** (`failed / count`), which is
+sampling-invariant — numerator and denominator are weighted identically, so the
+ratio is unaffected. The absolute count only feeds the conservative volume floor
+(≥1000 invocations) that suppresses noisy low-traffic functions; sampling
+inflation there only makes the floor easier to clear, and the ratio floor
+(≥2.0×) still guards against false positives. Read the amber Error-rate cell as
+"the rate moved," not "exactly N requests." (Observed during the v0.89.311 live
+verification: 95 injected requests surfaced as ~16k counted invocations with the
+26% failure ratio preserved exactly.)
+
 ## Cross-references
 
 - [Error rate correlation slice 1 design doc](./proposals/error-rate-correlation-slice1.md) —
