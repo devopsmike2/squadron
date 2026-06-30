@@ -298,6 +298,30 @@ func (s *Scanner) QueryAggregate(
 		}, scanner.ErrMetricNotImplemented
 	}
 
+	// Region-aware client selection (#295). CloudWatch metrics are
+	// region-scoped, but s.cwClient is a single client left bound to
+	// whichever region the per-region scan walk last touched. A STANDALONE
+	// QueryAggregate — e.g. the sampling-rate annotation, which queries
+	// each Lambda independently of the cold-start/error-rate walk — would
+	// otherwise hit the wrong region for a function outside that last
+	// region. When the per-region builder is available (the
+	// commercial / serverless-metric path), bind cwClient to the ARN's own
+	// region first. Best-effort: a build failure (or the OSS/test path with
+	// a directly-injected client and no factory) leaves the current client
+	// in place. Gated on s.factory being already built (the post-scan /
+	// mid-scan state) so cloudWatchForRegion reuses it and never invokes
+	// the default builder; the OSS/test path injects a client directly and
+	// leaves s.factory nil, so it is left untouched. The per-region walk
+	// already rebinds per row, so this is redundant-but-harmless there and
+	// corrective for standalone callers.
+	if s.factory != nil {
+		if r := regionFromARN(resourceARN); r != "" {
+			if cw, rerr := s.cloudWatchForRegion(ctx, r); rerr == nil && cw != nil {
+				s.cwClient = cw
+			}
+		}
+	}
+
 	// Sampling rate slice 1 chunk 1 (v0.89.122): Invocations is the
 	// second supported AWS/Lambda metric. Routes into a sibling
 	// helper that uses Statistics=["Sum"] rather than the
