@@ -941,6 +941,88 @@ func TestRecommendationsForGCPScan_ProposerNotWired(t *testing.T) {
 	}
 }
 
+// TestRecommendationsForGCPScan_AppendsRegressionRecs drives the recs endpoint
+// end-to-end (request → async job → response) and verifies the detection→
+// proposal wiring shipped in v0.89.319: a Cloud Run row whose cold-start
+// detector fired (annotation on the scan response) AND whose error-rate
+// observations clear the gates yields BOTH deterministic regression recs
+// alongside the LLM step. The error-rate path is store-gated, so a rec
+// appearing proves WithGCPRegressionStores actually reaches the helper through
+// the handler (the seam the unit tests don't cover).
+func TestRecommendationsForGCPScan_AppendsRegressionRecs(t *testing.T) {
+	mock := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Reasoning: "GCP instrumentation plan",
+			Model:     "claude-test",
+			Plan: ai.PlanCandidate{
+				Steps: []ai.PlanStepCandidate{
+					{Name: "Install OTel on checkout", InlineConfigSnippet: "resource \"x\" \"y\" {}"},
+				},
+			},
+		},
+	}
+	h, store, key := newGCPTestHandlers(t, &discoveryRecordingAudit{}, &fakeGCPScannerFactory{scanner: &fakeScanner{}})
+	h.WithGCPAIProposer(mock)
+
+	const crARN = "//run.googleapis.com/projects/sandbox-12345/services/checkout"
+	now := time.Now().UTC()
+	errStore := &stubErrorRateReader{}
+	// current 2000/5000 = 0.40, baseline 100/10000 = 0.01 → ratio 40x, fires.
+	errStore.set(crARN, regressionCurrentWindowHours, 2000, 5000, 0.40, now)
+	errStore.set(crARN, regressionBaselineWindowHours, 100, 10000, 0.01, now)
+	// coldStartStore nil (cold-start gates on the snapshot flag); exclusions nil.
+	h.WithGCPRegressionStores(nil, errStore, nil)
+
+	r := newGCPRouter(h)
+	conn := seedGCPConnection(t, store, key, "Prod", "sandbox-12345", "us-central1")
+
+	exceeds := true
+	p95 := 720.0
+	body, err := json.Marshal(gcpGenerateRecommendationsRequest{
+		ScanResult: gcpScanResponse{
+			ScanID:    "scan-gcp-regression",
+			ProjectID: "sandbox-12345",
+			Region:    "us-central1",
+			Serverless: []scanner.ServerlessInstanceSnapshot{{
+				Provider:                  "gcp",
+				Surface:                   "cloudrun",
+				ResourceName:              "checkout",
+				ResourceARN:               crARN,
+				Region:                    "us-central1",
+				ColdStartP95Ms:            &p95,
+				ColdStartExceedsThreshold: &exceeds,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	w := gcpDoRequest(r, http.MethodPost, "/api/v1/discovery/gcp/connections/"+conn.ID+"/recommendations", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	kinds := map[string]bool{}
+	for _, rec := range resp.Recommendations {
+		kinds[rec.ResourceKind] = true
+	}
+	if !kinds["cloudrun-cold-start-baseline"] {
+		t.Errorf("missing cold-start regression rec; kinds=%v body=%s", kinds, w.Body.String())
+	}
+	if !kinds["span-quality-error-rate-spike"] {
+		t.Errorf("missing error-rate regression rec (store wiring); kinds=%v body=%s", kinds, w.Body.String())
+	}
+	// The LLM step must still be present (regression recs are additive).
+	if len(resp.Recommendations) != 3 {
+		t.Errorf("recommendations len = %d, want 3 (1 LLM + 2 regression); body=%s", len(resp.Recommendations), w.Body.String())
+	}
+}
+
 // TestGCPDemo_EnableScanDisable exercises the credential-free GCP demo:
 // enable provisions the demo project, scan short-circuits to the canned
 // sample inventory (no SA decrypt, no scanner Build), enable is idempotent,
