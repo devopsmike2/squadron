@@ -30,12 +30,13 @@ import (
 // the add-on-backed clouds, or the signal is OSS-native) — so the surface is
 // naturally gated by data availability, no extra flag.
 
-// coldStartBaselineWindowHours / coldStartCurrentWindowHours are the
-// observation windows the detector persists under; the recs path reads them
-// back to enrich the reasoning text with the baseline + ratio numbers.
+// regressionCurrentWindowHours / regressionBaselineWindowHours are the
+// observation windows both regression detectors (cold-start + error-rate)
+// persist under; the recs path reads them back to reconstruct the detection
+// result / enrich the reasoning text.
 const (
-	coldStartCurrentWindowHours  = 24
-	coldStartBaselineWindowHours = 168
+	regressionCurrentWindowHours  = 24
+	regressionBaselineWindowHours = 168
 )
 
 // appendAWSColdStartRegressionRecs appends one cold-start regression
@@ -72,14 +73,14 @@ func (h *DiscoveryHandlers) appendAWSColdStartRegressionRecs(
 		// for the reasoning text. Optional — absence just yields a terser
 		// reasoning string, never a dropped recommendation.
 		if h.coldStartStore != nil {
-			if base, ok, err := h.coldStartStore.LatestColdStartObservation(ctx, sv.ResourceARN, coldStartBaselineWindowHours); err == nil && ok {
+			if base, ok, err := h.coldStartStore.LatestColdStartObservation(ctx, sv.ResourceARN, regressionBaselineWindowHours); err == nil && ok {
 				finding.BaselineP95Ms = base.P95Ms
 				finding.BaselineSampleCount = base.SampleCount
 				if base.P95Ms > 0 {
 					finding.Ratio = finding.CurrentP95Ms / base.P95Ms
 				}
 			}
-			if cur, ok, err := h.coldStartStore.LatestColdStartObservation(ctx, sv.ResourceARN, coldStartCurrentWindowHours); err == nil && ok {
+			if cur, ok, err := h.coldStartStore.LatestColdStartObservation(ctx, sv.ResourceARN, regressionCurrentWindowHours); err == nil && ok {
 				finding.CurrentSampleCount = cur.SampleCount
 			}
 		}
@@ -130,6 +131,94 @@ func coldStartDraftToRecommendation(
 			Source: d.Terraform,
 		},
 		ResourceKind:      d.Kind, // "lambda-cold-start-baseline"
+		AffectedResources: []string{d.ResourceID},
+	}
+	if rec.ResourceKind != "" {
+		rec.Disposition = iac.DispositionFor(rec.ResourceKind)
+	}
+	return rec
+}
+
+// appendAWSErrorRateRegressionRecs appends one error-rate-spike recommendation
+// per AWS Lambda whose persisted error-rate observations clear the canonical
+// gates (rate ratio > 2.0x AND >= 1000 invocations AND >= 50 errors in the 24h
+// window). Unlike cold-start, the error-rate annotation is not carried on the
+// wire scan row, so the detection result is reconstructed from the
+// error_rate_observation store (24h current + 168h baseline) and re-gated via
+// the shared proposer.FinalizeErrorRateGates so the thresholds never drift.
+// Best-effort + additive; exclusions honored inside the builder.
+func (h *DiscoveryHandlers) appendAWSErrorRateRegressionRecs(
+	ctx context.Context, recs *[]recommendations.Recommendation, scan awsScanResponse, now time.Time,
+) {
+	if h.errorRateStore == nil {
+		return // read store not wired → nothing to reconstruct from.
+	}
+	scope := proposer.ErrorRateScope{
+		ConnectionID: scan.AccountID,
+		ScopeID:      scan.AccountID,
+		Region:       firstRegion(scan.Regions),
+	}
+	for _, sv := range scan.Serverless {
+		if sv.Surface != "lambda" || sv.ResourceARN == "" {
+			continue
+		}
+		cur, okCur, errCur := h.errorRateStore.LatestErrorRateObservation(ctx, sv.ResourceARN, regressionCurrentWindowHours)
+		base, okBase, errBase := h.errorRateStore.LatestErrorRateObservation(ctx, sv.ResourceARN, regressionBaselineWindowHours)
+		if errCur != nil || errBase != nil || !okCur || !okBase {
+			continue
+		}
+		result := proposer.ErrorRateDetectionResult{
+			ResourceARN:             sv.ResourceARN,
+			Surface:                 "lambda",
+			CurrentInvocationCount:  uint64(cur.InvocationCount),
+			CurrentErrorCount:       uint64(cur.ErrorCount),
+			BaselineInvocationCount: uint64(base.InvocationCount),
+			BaselineErrorCount:      uint64(base.ErrorCount),
+		}
+		proposer.FinalizeErrorRateGates(&result) // derives rates + the three gate booleans
+		row := proposer.ErrorRateInventoryRow{
+			RecommendationID: sv.ResourceARN, // stable across scans → exclusions persist
+			Provider:         "aws",
+			Surface:          "lambda",
+			ResourceTFName:   sv.ResourceName,
+			ResourceID:       sv.ResourceARN,
+			Region:           sv.Region,
+		}
+		draft, err := proposer.CheckLambdaErrorRate(ctx, row, &result, scope, h.exclusionStore)
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Warn("aws error-rate regression rec build error", zap.Error(err))
+			}
+			continue
+		}
+		if draft == nil {
+			continue // gates not met or excluded.
+		}
+		*recs = append(*recs, errorRateDraftToRecommendation(*draft, scan.ScanID, now))
+	}
+}
+
+// errorRateDraftToRecommendation maps a proposer.ErrorRateRecommendationDraft
+// onto the wire recommendation envelope (mirrors coldStartDraftToRecommendation).
+func errorRateDraftToRecommendation(
+	d proposer.ErrorRateRecommendationDraft, scanID string, now time.Time,
+) recommendations.Recommendation {
+	rec := recommendations.Recommendation{
+		ID:          d.RecommendationID,
+		Category:    recommendations.CategoryEmptySignal,
+		Severity:    recommendations.SeverityWarn,
+		Title:       "Elevated error rate",
+		Detail:      d.Reasoning,
+		GeneratedAt: now,
+		Source: &recommendations.RecommendationSource{
+			Kind:  recommendations.SourceDiscoveryScan,
+			RefID: scanID,
+		},
+		IaC: &recommendations.IaCSnippet{
+			Format: recommendations.IaCTerraform,
+			Source: d.Terraform,
+		},
+		ResourceKind:      d.Kind, // "span-quality-error-rate-spike"
 		AffectedResources: []string{d.ResourceID},
 	}
 	if rec.ResourceKind != "" {

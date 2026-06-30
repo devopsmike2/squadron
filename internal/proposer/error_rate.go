@@ -190,6 +190,16 @@ func DetectErrorRate(
 		BaselineErrorCount:      posUint64(baseErr.Value),
 		ObservedAt:              time.Now().UTC(),
 	}
+	FinalizeErrorRateGates(&result)
+	return result, nil
+}
+
+// FinalizeErrorRateGates computes the derived error-rate fields — the current
+// + baseline rates, the §12-adjusted rate ratio, and the three gate booleans —
+// from the four raw counts already set on the result. Shared by DetectErrorRate
+// and the recommendations-wiring layer (which reconstructs the result from
+// persisted observation rows) so the gate thresholds live in exactly one place.
+func FinalizeErrorRateGates(result *ErrorRateDetectionResult) {
 	if result.CurrentInvocationCount > 0 {
 		result.CurrentErrorRate = float64(result.CurrentErrorCount) / float64(result.CurrentInvocationCount)
 	}
@@ -209,7 +219,6 @@ func DetectErrorRate(
 	result.ExceedsRateRatioFloor = result.RateRatio > ErrorRateRatioFloor
 	result.ExceedsMinimumInvocations = result.CurrentInvocationCount >= ErrorRateMinInvocationCount
 	result.ExceedsMinimumErrors = result.CurrentErrorCount >= ErrorRateMinErrorCount
-	return result, nil
 }
 
 // posUint64 clamps a possibly-negative float metric value to a
