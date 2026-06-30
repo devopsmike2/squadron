@@ -480,6 +480,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}
 	apiServer.SetActionStoreAndSigner(appStore, actionSigner)
 
+	// Commercial-tier detector activation (#152 productization). When
+	// config.CommercialDetectors.Enabled is true, wire the application store
+	// as the write-capable observation store so a real discovery scan
+	// activates the add-on-dependent AWS cold-start + error-rate detectors.
+	// Default (disabled) leaves them dormant — the OSS posture. The store
+	// must satisfy the cold-start + error-rate write contracts (the
+	// *sqlite.Storage appStore does).
+	if commercialObs, ok := appStore.(handlers.CommercialObservationStore); ok {
+		apiServer.SetCommercialDetectors(config.CommercialDetectors.Enabled, commercialObs)
+	} else if config.CommercialDetectors.Enabled {
+		logger.Warn("commercial_detectors.enabled is true but the application store does not support observation persistence; detectors stay dormant")
+	}
+
 	// v0.27.1 Quickstart needs to know the OpAMP port so the
 	// generated agent configs dial back to the right place.
 	apiServer.SetOpAMPPort(config.Server.OpAMPPort)

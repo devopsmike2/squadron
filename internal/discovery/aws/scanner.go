@@ -138,6 +138,13 @@ type Scanner struct {
 	// namespace an already-issued query reads.
 	commercialDetectors bool
 
+	// cwClientByRegion caches per-region CloudWatch clients built from the
+	// assume-role factory during commercial-tier detection (Lambda Insights
+	// metrics are region-scoped, so a multi-region scan needs one client per
+	// region). Lazily initialized; only used on the commercial path. The
+	// OSS/test path injects a single client via WithCloudWatchClient instead.
+	cwClientByRegion map[string]CloudWatchClient
+
 	// costExplorerClient is the AWS Cost Explorer adapter the
 	// cost-correlation substrate slice 6 chunk 2 (v0.89.184) uses for
 	// the read-only QueryCost body. Nil-tolerant: when nil, QueryCost

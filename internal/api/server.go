@@ -221,6 +221,14 @@ type Server struct {
 	coldStartHandlerOnce                sync.Once
 	coldStartObservationReader          handlers.ColdStartObservationReader
 
+	// Commercial-tier detector activation (#152 productization). When
+	// commercialDetectorsEnabled is true and commercialObsStore is wired
+	// (from config.CommercialDetectors.Enabled + the application store), the
+	// discovery trampolines activate the add-on-dependent AWS cold-start +
+	// error-rate detectors on each scan. Default off = OSS dormant path.
+	commercialDetectorsEnabled bool
+	commercialObsStore         handlers.CommercialObservationStore
+
 	// discoveryServerlessSamplingHandler — v0.89.123 (#763 Stream 161,
 	// Sampling rate analysis slice 1 chunk 2). Per-resource sampling
 	// endpoint handler. Built lazily by
@@ -921,6 +929,7 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		if s.discoveryCredKey != nil {
 			h.WithCredstoreKey(s.discoveryCredKey)
 		}
+		s.applyDiscoveryCommercialDetectors(h)
 		if s.discoveryAIService != nil {
 			h.WithAIProposer(s.discoveryAIService)
 		}
@@ -1016,6 +1025,7 @@ func (s *Server) discoveryAITrampoline(fn func(*handlers.DiscoveryHandlers, *gin
 		if s.discoveryCredKey != nil {
 			h.WithCredstoreKey(s.discoveryCredKey)
 		}
+		s.applyDiscoveryCommercialDetectors(h)
 		h.WithAIProposer(s.discoveryAIService)
 		// v0.89.28 (#643 slice 1) — wire the accepted-recommendations
 		// assembler. The adapter iterates IaC connections to pick the
@@ -1463,6 +1473,26 @@ func (s *Server) discoveryServerlessColdStartTrampoline(fn func(*handlers.Discov
 // point).
 func (s *Server) SetColdStartObservationReader(reader handlers.ColdStartObservationReader) {
 	s.coldStartObservationReader = reader
+}
+
+// SetCommercialDetectors wires the commercial-tier detector activation
+// (#152 productization): when enabled with a non-nil write-capable
+// observation store, the discovery trampolines activate the
+// add-on-dependent AWS cold-start + error-rate detectors on each scan.
+// Wired from main.go: config.CommercialDetectors.Enabled + the application
+// store. Default (disabled) preserves the OSS dormant path.
+func (s *Server) SetCommercialDetectors(enabled bool, store handlers.CommercialObservationStore) {
+	s.commercialDetectorsEnabled = enabled
+	s.commercialObsStore = store
+}
+
+// applyDiscoveryCommercialDetectors threads the server's commercial-detector
+// settings onto a freshly-built DiscoveryHandlers (no-op when no store is
+// wired). Called by the discovery trampolines right after WithCredstoreKey.
+func (s *Server) applyDiscoveryCommercialDetectors(h *handlers.DiscoveryHandlers) {
+	if s.commercialObsStore != nil {
+		h.WithCommercialDetectors(s.commercialDetectorsEnabled, s.commercialObsStore)
+	}
 }
 
 // discoveryServerlessSamplingTrampoline — v0.89.123 (#763 Stream 161,

@@ -146,7 +146,16 @@ func posErrorRateUint64(v float64) uint64 {
 // Skips the entire branch when either s.cwClient or
 // s.errorRateStore is nil, or when connectionID is empty.
 func (s *Scanner) runErrorRateDetectionForServerless(ctx context.Context, result *scanner.Result) {
-	if s.cwClient == nil || s.errorRateStore == nil || s.connectionID == "" {
+	if s.errorRateStore == nil || s.connectionID == "" {
+		return
+	}
+	// OSS dormant path: no commercial gate AND no directly-injected client
+	// ⇒ nothing to do. The commercial path (#152 productization) builds a
+	// per-region CloudWatch client on demand. (Lambda Errors/Invocations are
+	// native AWS/Lambda metrics, so this detector is OSS-capable, but its
+	// activation is bundled under the same opt-in flag because it issues a
+	// per-Lambda CloudWatch GetMetricStatistics call.)
+	if !s.commercialDetectors && s.cwClient == nil {
 		return
 	}
 	for _, snap := range result.Serverless {
@@ -155,6 +164,16 @@ func (s *Scanner) runErrorRateDetectionForServerless(ctx context.Context, result
 		}
 		if snap.ResourceARN == "" {
 			continue
+		}
+		if s.commercialDetectors {
+			cw, err := s.cloudWatchForRegion(ctx, regionFromARN(snap.ResourceARN))
+			if err != nil {
+				recordPartialFailure(result, "lambda_error_rate",
+					fmt.Sprintf("error-rate CloudWatch client build failed for %s: %s",
+						snap.ResourceARN, err.Error()))
+				continue
+			}
+			s.cwClient = cw
 		}
 		detection, err := s.DetectErrorRate(ctx, snap.ResourceARN)
 		if err != nil {
