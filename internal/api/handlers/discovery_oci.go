@@ -128,6 +128,11 @@ type DiscoveryOCIHandlers struct {
 	errorRateStore ErrorRateObservationStore
 	exclusionStore DiscoveryExclusionStore
 
+	// coldStartConstants pins the cold-start annotation thresholds so the
+	// OCI scan handler can run AnnotateServerlessWithColdStart on the
+	// serverless rows (parity with AWS). Nil leaves the rows "—".
+	coldStartConstants ColdStartAnnotationThresholds
+
 	// samplingSpanCounter is the traceindex span counter the sampling-rate
 	// annotation (#295) joins against the scan-time invocation-count query.
 	// Nil leaves serverless rows un-annotated for sampling. Wired in
@@ -169,6 +174,16 @@ func (h *DiscoveryOCIHandlers) WithOCIRegressionStores(
 	h.coldStartStore = coldStart
 	h.errorRateStore = errorRate
 	h.exclusionStore = exclusions
+	return h
+}
+
+// WithOCIColdStartConstants pins the cold-start annotation thresholds so
+// the OCI scan handler populates cold_start_p95_ms +
+// cold_start_exceeds_threshold on the serverless rows (parity with AWS).
+// Server threads the same NewStaticColdStartDetectionConstants AWS uses.
+// Nil leaves the cold-start annotation a no-op ("—").
+func (h *DiscoveryOCIHandlers) WithOCIColdStartConstants(thresholds ColdStartAnnotationThresholds) *DiscoveryOCIHandlers {
+	h.coldStartConstants = thresholds
 	return h
 }
 
@@ -1163,6 +1178,19 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		AnnotateComputeWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Compute, h.logger)
 		AnnotateDatabaseWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Databases, h.logger)
 		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "oci", conn.TenancyOCID, result.Clusters, h.logger)
+	}
+
+	// Serverless cold-start + error-rate annotation (parity with AWS;
+	// serverless-annotation-parity arc). Project the persisted
+	// cold_start_observation + error_rate_observation rows (written by the
+	// OCI scanner's detectors when serverless_metric_detection is on) onto
+	// the OCI Functions inventory rows so the UI shows cold-start latency +
+	// error rate, not "—". Both nil-store-safe.
+	if h.coldStartStore != nil && h.coldStartConstants != nil {
+		AnnotateServerlessWithColdStart(c.Request.Context(), h.coldStartStore, h.coldStartConstants, result.Serverless, h.logger)
+	}
+	if h.errorRateStore != nil {
+		AnnotateServerlessWithErrorRate(c.Request.Context(), h.errorRateStore, result.Serverless, h.logger)
 	}
 
 	// Sampling-rate annotation (#295) — join the scan-time invocation

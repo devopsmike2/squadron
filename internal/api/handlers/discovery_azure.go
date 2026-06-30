@@ -112,6 +112,13 @@ type DiscoveryAzureHandlers struct {
 	coldStartStore ColdStartObservationReader
 	errorRateStore ErrorRateObservationStore
 	exclusionStore DiscoveryExclusionStore
+
+	// coldStartConstants pins the cold-start annotation thresholds so the
+	// Azure scan handler can run AnnotateServerlessWithColdStart on the
+	// serverless rows (parity with AWS). Azure cold-start/error-rate data
+	// is App Insights (commercial)-sourced, so the rows populate only when
+	// that add-on is on; nil-store-safe → "—" otherwise.
+	coldStartConstants ColdStartAnnotationThresholds
 }
 
 // WithAzureRegressionStores wires the regression-recommendation stores (any may
@@ -122,6 +129,15 @@ func (h *DiscoveryAzureHandlers) WithAzureRegressionStores(
 	h.coldStartStore = coldStart
 	h.errorRateStore = errorRate
 	h.exclusionStore = exclusions
+	return h
+}
+
+// WithAzureColdStartConstants pins the cold-start annotation thresholds so
+// the Azure scan handler populates cold_start_p95_ms +
+// cold_start_exceeds_threshold on the serverless rows (parity with AWS).
+// Nil leaves the cold-start annotation a no-op ("—").
+func (h *DiscoveryAzureHandlers) WithAzureColdStartConstants(thresholds ColdStartAnnotationThresholds) *DiscoveryAzureHandlers {
+	h.coldStartConstants = thresholds
 	return h
 }
 
@@ -1116,6 +1132,19 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 		AnnotateComputeWithLastSeen(c.Request.Context(), h.traceIndex, "azure", conn.SubscriptionID, result.Compute, h.logger)
 		AnnotateDatabaseWithLastSeen(c.Request.Context(), h.traceIndex, "azure", conn.SubscriptionID, result.Databases, h.logger)
 		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "azure", conn.SubscriptionID, result.Clusters, h.logger)
+	}
+
+	// Serverless cold-start + error-rate annotation (parity with AWS;
+	// serverless-annotation-parity arc). Project the persisted
+	// cold_start_observation + error_rate_observation rows onto the Azure
+	// Functions inventory rows so the UI shows cold-start latency + error
+	// rate, not "—". Azure's source is App Insights (commercial), so these
+	// populate only when that add-on is on; both nil-store-safe.
+	if h.coldStartStore != nil && h.coldStartConstants != nil {
+		AnnotateServerlessWithColdStart(c.Request.Context(), h.coldStartStore, h.coldStartConstants, result.Serverless, h.logger)
+	}
+	if h.errorRateStore != nil {
+		AnnotateServerlessWithErrorRate(c.Request.Context(), h.errorRateStore, result.Serverless, h.logger)
 	}
 
 	// Event-source tier (v0.89.195) — gated dispatch mirroring the AWS

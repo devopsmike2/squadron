@@ -117,6 +117,12 @@ type DiscoveryGCPHandlers struct {
 	errorRateStore ErrorRateObservationStore
 	exclusionStore DiscoveryExclusionStore
 
+	// coldStartConstants pins the cold-start annotation thresholds (24h
+	// current / 168h baseline / 1.5x / 500ms) so the GCP scan handler can
+	// run AnnotateServerlessWithColdStart on the serverless rows, parity
+	// with AWS. Nil (with a nil coldStartStore) leaves the rows "—".
+	coldStartConstants ColdStartAnnotationThresholds
+
 	// samplingSpanCounter is the traceindex span counter the sampling-rate
 	// annotation joins against the scan-time invocation-count query
 	// (#295). Nil leaves serverless rows un-annotated for sampling (the
@@ -160,6 +166,17 @@ func (h *DiscoveryGCPHandlers) WithGCPRegressionStores(
 	h.coldStartStore = coldStart
 	h.errorRateStore = errorRate
 	h.exclusionStore = exclusions
+	return h
+}
+
+// WithGCPColdStartConstants pins the cold-start annotation thresholds so
+// the GCP scan handler can populate cold_start_p95_ms +
+// cold_start_exceeds_threshold on the serverless rows (parity with the
+// AWS handler). Server threads the same NewStaticColdStartDetectionConstants
+// AWS uses so the four substrate values stay single-sourced. Nil leaves
+// the cold-start annotation a no-op ("—").
+func (h *DiscoveryGCPHandlers) WithGCPColdStartConstants(thresholds ColdStartAnnotationThresholds) *DiscoveryGCPHandlers {
+	h.coldStartConstants = thresholds
 	return h
 }
 
@@ -1113,6 +1130,19 @@ func (h *DiscoveryGCPHandlers) HandleScanGCPConnection(c *gin.Context) {
 		AnnotateComputeWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Compute, h.logger)
 		AnnotateDatabaseWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Databases, h.logger)
 		AnnotateClusterWithLastSeen(c.Request.Context(), h.traceIndex, "gcp", conn.ProjectID, result.Clusters, h.logger)
+	}
+
+	// Serverless cold-start + error-rate annotation (parity with AWS;
+	// serverless-annotation-parity arc). Project the persisted
+	// cold_start_observation + error_rate_observation rows (written by the
+	// GCP scanner's detectors when serverless_metric_detection is on) onto
+	// the Cloud Run / Cloud Functions inventory rows so the UI shows
+	// cold-start latency + error rate, not "—". Both nil-store-safe.
+	if h.coldStartStore != nil && h.coldStartConstants != nil {
+		AnnotateServerlessWithColdStart(c.Request.Context(), h.coldStartStore, h.coldStartConstants, result.Serverless, h.logger)
+	}
+	if h.errorRateStore != nil {
+		AnnotateServerlessWithErrorRate(c.Request.Context(), h.errorRateStore, result.Serverless, h.logger)
 	}
 
 	// Sampling-rate annotation (#295) — join the scan-time invocation
