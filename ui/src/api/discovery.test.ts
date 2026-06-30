@@ -30,10 +30,9 @@ describe("async recommendations", () => {
       result: { declined: false, recommendations: [] },
     });
 
-    const res = await generateAWSRecommendations(
-      "123456789012",
-      { account_id: "123456789012" } as unknown as ScanResult,
-    );
+    const res = await generateAWSRecommendations("123456789012", {
+      account_id: "123456789012",
+    } as unknown as ScanResult);
 
     expect(res.declined).toBe(false);
     expect(mockedApiPost).toHaveBeenCalledWith(
