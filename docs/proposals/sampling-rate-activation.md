@@ -183,36 +183,41 @@ What actually shipped, and the two deliberate deviations from the original plan:
 
 **Deferred — Azure sampling (slice 4), a surfaced product decision:**
 
-Azure is intentionally NOT wired. Native Azure sampling would be the *first*
-native-metric Azure serverless detector in OSS (Azure's cold-start/error-rate
-detection is App Insights / commercial-only — see
-`docs/audit/detection-metric-availability.md`), and lighting it up requires
-three coupled decisions that shouldn't be made unilaterally inside this arc:
+### Azure sampling — activated (Option 2)
 
-1. **A deferred metric rename.** Sampling's denominator is the invocation count,
-   but the constant `azure.AzureFunctionsInvocationsMetric` is the *known-
-   nonexistent* placeholder `"FunctionInvocations"` (the real native metric is
-   `FunctionExecutionCount`; the rename was deferred pending Azure's broader
-   error/duration data-source decision). Wiring Azure sampling without the rename
-   would be **inert** — the invocation query returns empty, every row renders
-   "—". (The numerator — the OTLP span count — is fine; it's not an Azure metric.)
-2. **A gating decision.** AWS/GCP/OCI sampling rides `serverless_metric_detection`
-   implicitly (flag off → no metric client → `ErrMetricNotImplemented`). Azure's
-   `QueryAggregate` instead runs whenever the scan access token is present (every
-   scan), so Azure sampling has no natural opt-in seam and would issue an Azure
-   Monitor query per function per scan unless a gate is added.
-3. **Granularity.** `FunctionExecutionCount` is Function-App-level, not per-
-   function — an acceptable but coarser join than the other clouds.
+Azure sampling was initially deferred (it would have been the first native-metric
+Azure serverless detector, and lighting it up touched three coupled decisions).
+After surfacing the options, **Option 2 (native `FunctionExecutionCount`,
+opt-in)** was chosen and shipped. The three concerns resolved cleanly:
 
-Recommended follow-up: pair the `FunctionExecutionCount` rename with the Azure
-error/duration data-source decision and an explicit opt-in gate, then mirror the
-GCP/OCI annotation wiring. Tracked as the open Azure item.
+1. **Metric rename — done.** `azure.AzureFunctionsInvocationsMetric` is now the
+   real native metric `"FunctionExecutionCount"` (was the nonexistent placeholder
+   `"FunctionInvocations"`). The constant NAME keeps the historical "Invocations"
+   spelling so the proposer/error-rate call sites stay byte-identical; only the
+   wire value changed. The rename also un-breaks the native error-rate denominator
+   (it queried the nonexistent name before) — no regression (the error numerator
+   `FunctionErrors` is still App-Insights-only, so native error-rate stays inert).
+2. **Gating — explicit handler check.** Because Azure's `QueryAggregate` runs
+   whenever the scan token is present (no metric-client-absence signal), the Azure
+   handler gates the sampling annotation on an explicit
+   `serverlessMetricDetectionEnabled` flag threaded from
+   `config.ServerlessMetricDetection.Enabled` — same opt-in posture as the other
+   clouds, different mechanism.
+3. **Granularity — clean.** `FunctionExecutionCount` is Function-App-level, which
+   *matches* Squadron's Azure serverless unit (the scanner enumerates Function
+   Apps, not individual functions), so both sides of the join are app-level. And
+   `FunctionExecutionCount` counts ALL executions regardless of trigger (HTTP,
+   timer, queue, blob, event) — the correct, complete sampling denominator. (App
+   Insights `requests/count` would have under-counted non-HTTP triggers — see the
+   Option-2-vs-hybrid analysis.)
+
+Sampling is now active for **all four clouds** behind
+`serverless_metric_detection.enabled`.
 
 ## Non-goals
 
-- No new config flag — rides `serverless_metric_detection.enabled`.
+- No new config flag — rides `serverless_metric_detection.enabled` (Azure too).
 - No persisted sampling-observation store (the annotation + endpoint are live;
   slice 5 uses an in-memory last-result cache, not a sqlite store).
 - No change to the detection math, the recommendation kind, or the Terraform
   patterns — all already shipped.
-- Azure sampling — deferred (see Landing). No inert wiring.

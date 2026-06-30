@@ -148,7 +148,7 @@ func TestAzureErrorRateMetricGate(t *testing.T) {
 		wantTotal  string
 		wantFailed string
 	}{
-		{"OSS", false, "FunctionInvocations", "FunctionErrors"},
+		{"OSS", false, "FunctionExecutionCount", "FunctionErrors"},
 		{"commercial", true, "requests/count", "requests/failed"},
 	}
 	for _, tc := range cases {

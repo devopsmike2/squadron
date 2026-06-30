@@ -348,7 +348,10 @@ func TestAzureQueryAggregate_UnsupportedMetricName_ReturnsEmptyNoError(t *testin
 	res, err := s.QueryAggregate(
 		context.Background(),
 		testFunctionAppARN,
-		"FunctionExecutionCount", // not FunctionExecutionDuration
+		// A real Azure Functions metric Squadron's routing does NOT
+		// support (distinct from FunctionExecutionCount, which is now
+		// the routed invocation denominator after the Option-2 rename).
+		"FunctionExecutionUnits",
 		24*time.Hour,
 		scanner.StatisticP95,
 	)
@@ -517,12 +520,14 @@ func TestAggregateAzureTimeseries_PrefersResponseUnit(t *testing.T) {
 
 // -- v0.89.122 sampling rate slice 1 chunk 1 additions ---------------------
 
-// TestAzureFunctionsInvocationsMetric_Constant pins the Azure
-// Monitor metric name for FunctionInvocations — the
-// sampling-rate-slice-1 denominator (§4.4).
+// TestAzureFunctionsInvocationsMetric_Constant pins the Azure Monitor
+// metric name for the invocation denominator. Value is the real native
+// metric "FunctionExecutionCount" (renamed from the nonexistent
+// placeholder "FunctionInvocations" when Azure native sampling was
+// activated) — counts all Function App executions, aggregation Total.
 func TestAzureFunctionsInvocationsMetric_Constant(t *testing.T) {
-	if AzureFunctionsInvocationsMetric != "FunctionInvocations" {
-		t.Fatalf("AzureFunctionsInvocationsMetric = %q, want \"FunctionInvocations\"", AzureFunctionsInvocationsMetric)
+	if AzureFunctionsInvocationsMetric != "FunctionExecutionCount" {
+		t.Fatalf("AzureFunctionsInvocationsMetric = %q, want \"FunctionExecutionCount\"", AzureFunctionsInvocationsMetric)
 	}
 }
 

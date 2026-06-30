@@ -155,7 +155,7 @@ func TestSamplingInvocationMetricFor_AllFiveSurfaces(t *testing.T) {
 		"lambda":    "Invocations",
 		"cloudrun":  "run.googleapis.com/request_count",
 		"cloudfunc": "cloudfunctions.googleapis.com/function/execution_count",
-		"azfunc":    "FunctionInvocations",
+		"azfunc":    "FunctionExecutionCount",
 		"ocifunc":   "FunctionInvocationCount",
 	}
 	for surface, want := range cases {

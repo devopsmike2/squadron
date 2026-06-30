@@ -80,13 +80,21 @@ const AzureFunctionsIsAfterColdStartDimension = "IsAfterColdStart"
 // appropriate aggregation; IAM stays unchanged (the existing Azure
 // Reader role covers both metrics).
 //
-// Pinned to "FunctionInvocations" by
-// metrics_test.go::TestAzureFunctionsInvocationsMetric_Constant.
-// AVAILABILITY WARNING: the real Azure Monitor invocation metric is
-// FunctionExecutionCount; "FunctionInvocations" does not exist. See
-// docs/audit/detection-metric-availability.md (rename deferred with the Azure
-// error/duration data-source decision).
-const AzureFunctionsInvocationsMetric = "FunctionInvocations"
+// Value: "FunctionExecutionCount" — the real Azure Monitor invocation
+// counter for a Function App (Microsoft.Web/sites), aggregation Total. It
+// counts ALL function executions regardless of trigger (HTTP, timer,
+// queue, blob, event), which is exactly the sampling-rate denominator
+// (every execution should emit a span) and the native error-rate
+// denominator. App-level, matching Squadron's Function-App serverless
+// unit. Renamed from the nonexistent placeholder "FunctionInvocations"
+// when Azure native sampling was activated (Option 2) — see
+// docs/proposals/sampling-rate-activation.md and
+// docs/audit/detection-metric-availability.md. The constant name keeps the
+// historical "Invocations" spelling so the proposer/error-rate call sites
+// stay byte-identical; only the wire value changed.
+//
+// Pinned by metrics_test.go::TestAzureFunctionsInvocationsMetric_Constant.
+const AzureFunctionsInvocationsMetric = "FunctionExecutionCount"
 
 // AzureFunctionsErrorsMetric is the Azure Monitor metric name for
 // per-function error count. Error rate correlation slice 1 chunk 1

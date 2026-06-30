@@ -65,3 +65,30 @@ func TestWithOCISamplingSpanCounter_TypeAssertion(t *testing.T) {
 		t.Error("a nil index must leave sampling a no-op")
 	}
 }
+
+// TestWithAzureSamplingSpanCounter_TypeAssertion mirrors GCP/OCI — Azure
+// native sampling (Option 2) recovers SpanCountLast24h the same way.
+func TestWithAzureSamplingSpanCounter_TypeAssertion(t *testing.T) {
+	full := (&DiscoveryAzureHandlers{}).WithAzureSamplingSpanCounter(samplingFullQualityIndex{spans: 9})
+	if full.samplingSpanCounter == nil {
+		t.Error("a quality index exposing SpanCountLast24h should wire the sampling span counter")
+	}
+	only := (&DiscoveryAzureHandlers{}).WithAzureSamplingSpanCounter(samplingOnlyQualityIndex{})
+	if only.samplingSpanCounter != nil {
+		t.Error("an index without SpanCountLast24h must leave sampling a no-op")
+	}
+}
+
+// TestWithAzureServerlessMetricDetection_Gate pins the explicit opt-in gate
+// Azure needs (its QueryAggregate always has the token, so the annotation
+// is gated on the flag, not on metric-client absence like the other clouds).
+func TestWithAzureServerlessMetricDetection_Gate(t *testing.T) {
+	on := (&DiscoveryAzureHandlers{}).WithAzureServerlessMetricDetection(true)
+	if !on.serverlessMetricDetectionEnabled {
+		t.Error("WithAzureServerlessMetricDetection(true) must enable the gate")
+	}
+	off := (&DiscoveryAzureHandlers{}).WithAzureServerlessMetricDetection(false)
+	if off.serverlessMetricDetectionEnabled {
+		t.Error("default/off must leave Azure native sampling inactive")
+	}
+}

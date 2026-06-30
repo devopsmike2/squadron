@@ -21,6 +21,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -119,6 +120,47 @@ type DiscoveryAzureHandlers struct {
 	// is App Insights (commercial)-sourced, so the rows populate only when
 	// that add-on is on; nil-store-safe → "—" otherwise.
 	coldStartConstants ColdStartAnnotationThresholds
+
+	// Azure native sampling (Option 2). Unlike AWS/GCP/OCI — where the
+	// metric client's absence is the implicit opt-in gate — Azure's
+	// QueryAggregate runs whenever the scan access token is present, so
+	// sampling needs an EXPLICIT gate: serverlessMetricDetectionEnabled
+	// (threaded from config.ServerlessMetricDetection.Enabled). With it on,
+	// the annotation joins the native FunctionExecutionCount denominator
+	// with the traceindex span count. samplingSink feeds the per-resource
+	// /sampling endpoint cache; samplingSpanCounter is the *traceindex.Quality.
+	samplingSpanCounter              proposer.SamplingRateSpanCounter
+	samplingSink                     *SamplingObservationCache
+	serverlessMetricDetectionEnabled bool
+}
+
+// WithAzureSamplingSpanCounter wires the traceindex span counter the
+// sampling annotation joins against the scan-time FunctionExecutionCount
+// query. Accepts the QualitySnapshotIndex the server holds and recovers
+// SpanCountLast24h via a type assertion (the production *traceindex.Quality
+// satisfies both); an index that doesn't leaves sampling a no-op.
+func (h *DiscoveryAzureHandlers) WithAzureSamplingSpanCounter(idx QualitySnapshotIndex) *DiscoveryAzureHandlers {
+	if sc, ok := idx.(proposer.SamplingRateSpanCounter); ok {
+		h.samplingSpanCounter = sc
+	}
+	return h
+}
+
+// WithAzureSamplingSink wires the per-resource endpoint cache so the Azure
+// scan annotation records its live results for the endpoint to serve.
+// Nil-safe (leaves the endpoint unfed).
+func (h *DiscoveryAzureHandlers) WithAzureSamplingSink(cache *SamplingObservationCache) *DiscoveryAzureHandlers {
+	h.samplingSink = cache
+	return h
+}
+
+// WithAzureServerlessMetricDetection sets the opt-in gate for Azure native
+// sampling (config.ServerlessMetricDetection.Enabled). Off (default) leaves
+// the Azure sampling annotation inactive — no FunctionExecutionCount query,
+// rows render "—".
+func (h *DiscoveryAzureHandlers) WithAzureServerlessMetricDetection(on bool) *DiscoveryAzureHandlers {
+	h.serverlessMetricDetectionEnabled = on
+	return h
 }
 
 // WithAzureRegressionStores wires the regression-recommendation stores (any may
@@ -1145,6 +1187,20 @@ func (h *DiscoveryAzureHandlers) HandleScanAzureConnection(c *gin.Context) {
 	}
 	if h.errorRateStore != nil {
 		AnnotateServerlessWithErrorRate(c.Request.Context(), h.errorRateStore, result.Serverless, h.logger)
+	}
+
+	// Azure native sampling annotation (Option 2). Joins the scan-time
+	// FunctionExecutionCount denominator (the just-run scanner's
+	// QueryAggregate) with the traceindex 24h span count, in-place on the
+	// Function App rows. EXPLICITLY gated on serverlessMetricDetectionEnabled
+	// because Azure's QueryAggregate runs whenever the access token is
+	// present (no metric-client-absence gate like the other clouds). Off →
+	// no FunctionExecutionCount query, rows stay "—".
+	if h.serverlessMetricDetectionEnabled && h.samplingSpanCounter != nil {
+		if querier, ok := scn.(proposer.SamplingRateMetricQuerier); ok {
+			det := newSamplingDetector(querier, h.samplingSpanCounter).withSink(h.samplingSink)
+			AnnotateServerlessWithSampling(c.Request.Context(), det, samplingARNKeyResolver{}, result.Serverless, h.logger)
+		}
 	}
 
 	// Event-source tier (v0.89.195) — gated dispatch mirroring the AWS
