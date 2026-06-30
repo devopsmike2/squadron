@@ -132,13 +132,18 @@ no annotation) — never a scan failure.
 
 ## From detection to recommendation
 
-A fired regression detector no longer dead-ends as an inventory cell. For **AWS
-Lambda**, the discovery recommendations flow now turns a detected cold-start
-latency regression or error-rate spike into an actionable, merge-ready
-recommendation — the same envelope the LLM-proposed instrumentation steps use,
-carrying a deterministic Terraform snippet (provisioned-concurrency for
-cold-start; a memory/concurrency bump for error-rate) that opens as a PR through
-the normal IaC flow. These deterministic recommendations are:
+A fired regression detector no longer dead-ends as an inventory cell. Across
+**all five serverless surfaces** — AWS Lambda, GCP Cloud Run, GCP Cloud
+Functions, Azure Functions, and OCI Functions — the discovery recommendations
+flow now turns a detected cold-start latency regression or error-rate spike into
+an actionable, merge-ready recommendation — the same envelope the LLM-proposed
+instrumentation steps use, carrying a deterministic Terraform snippet
+(provisioned-concurrency / min-instances for cold-start; a memory/concurrency
+bump for error-rate) that opens as a PR through the normal IaC flow. GCP Cloud
+Run / Cloud Functions and OCI Functions are **OSS-native**, so these recs fire
+for any operator; AWS Lambda and Azure Functions are commercial-tier (they
+depend on the Lambda Insights / Application Insights add-ons). These
+deterministic recommendations are:
 
 - **Additive + best-effort** — they are appended alongside the LLM recs and
   never block them; a store miss or build error is logged and skipped.
@@ -152,7 +157,8 @@ the normal IaC flow. These deterministic recommendations are:
 - **Exclusion-aware** — an operator-excluded regression rec stays excluded, by
   the same verdict-learning machinery the rest of the discovery recs honor.
 
-GCP, Azure, and OCI surface the regression **annotations** on their inventory
-rows today; turning those into recommendations is a tracked follow-up (it
-depends on those clouds' scan-response wire shape carrying the serverless rows,
-which AWS already does).
+All four clouds carry the serverless rows (with their cold-start + error-rate
+annotations) on their scan-response wire shape, so the recommendation pass runs
+uniformly across them — the per-surface logic dispatches to the matching
+deterministic builder by surface, and a snapshot whose detector didn't fire is
+skipped before any store lookup.
