@@ -221,8 +221,13 @@ func (s *Scanner) DetectColdStartRegression(
 	ctx context.Context,
 	resourceARN string,
 ) (ColdStartDetectionResult, error) {
+	// #153 enterprise-gate: in OSS this reads FunctionExecutionDuration
+	// (which does not exist for Functions ⇒ empty ⇒ never fires); with
+	// the commercial gate on it reads the App Insights requests/duration
+	// metric where the real cold-start signal lives.
+	durationMetric := s.coldStartDurationMetric()
 	current, err := s.QueryAggregate(
-		ctx, resourceARN, AzureFunctionsExecutionDurationMetric,
+		ctx, resourceARN, durationMetric,
 		time.Duration(ColdStartCurrentWindowHours)*time.Hour,
 		scanner.StatisticP95,
 	)
@@ -231,7 +236,7 @@ func (s *Scanner) DetectColdStartRegression(
 	}
 
 	baseline, err := s.QueryAggregate(
-		ctx, resourceARN, AzureFunctionsExecutionDurationMetric,
+		ctx, resourceARN, durationMetric,
 		time.Duration(ColdStartBaselineWindowHours)*time.Hour,
 		scanner.StatisticP95,
 	)
