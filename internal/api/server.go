@@ -969,6 +969,10 @@ func (s *Server) discoveryTrampoline(fn func(*handlers.DiscoveryHandlers, *gin.C
 		if s.errorRateObservationReader != nil {
 			h.WithErrorRateObservationStore(s.errorRateObservationReader)
 		}
+		// Sampling-rate annotation (#295): the same *traceindex.Quality span
+		// counter the span-quality handler uses; setter is nil-safe and
+		// type-asserts to SpanCountLast24h.
+		h.WithSamplingSpanCounter(s.qualitySnapshotIndexForDiscovery)
 		// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — wire the
 		// operator-set exclusion store. The application store satisfies
 		// the slim DiscoveryExclusionStore interface directly so the

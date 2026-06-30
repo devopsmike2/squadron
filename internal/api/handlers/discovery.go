@@ -23,6 +23,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/iac"
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
+	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/proposer/checkrunprompt"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -231,6 +232,12 @@ type DiscoveryHandlers struct {
 	// fields nil (rendered as "—" in the UI). Same nil-tolerant
 	// posture as coldStartStore.
 	errorRateStore ErrorRateObservationStore
+
+	// samplingSpanCounter — sampling-rate annotation (#295). The
+	// traceindex span counter the sampling join uses; nil leaves the
+	// serverless rows un-annotated for sampling. Wired in server.go from
+	// the same *traceindex.Quality the span-quality handler uses.
+	samplingSpanCounter proposer.SamplingRateSpanCounter
 
 	// Commercial-tier detector activation (#152 productization).
 	// credstoreKey is retained so the AWS scanner factory can be rebuilt
@@ -593,6 +600,18 @@ func (h *DiscoveryHandlers) WithColdStartObservationStore(store ColdStartObserva
 // *sqlite.Storage; tests substitute a fake.
 func (h *DiscoveryHandlers) WithErrorRateObservationStore(store ErrorRateObservationStore) *DiscoveryHandlers {
 	h.errorRateStore = store
+	return h
+}
+
+// WithSamplingSpanCounter wires the traceindex span counter the
+// sampling-rate annotation (#295) joins against the scan-time invocation
+// query. Accepts the QualitySnapshotIndex the server holds and recovers
+// SpanCountLast24h via a type assertion (the production *traceindex.Quality
+// satisfies both); an index that doesn't leaves sampling annotation a no-op.
+func (h *DiscoveryHandlers) WithSamplingSpanCounter(idx QualitySnapshotIndex) *DiscoveryHandlers {
+	if sc, ok := idx.(proposer.SamplingRateSpanCounter); ok {
+		h.samplingSpanCounter = sc
+	}
 	return h
 }
 
@@ -2234,6 +2253,20 @@ func (h *DiscoveryHandlers) runAWSScan(ctx context.Context, accountID string, re
 	// serializes. Nil store short-circuits.
 	if h.errorRateStore != nil && result != nil {
 		AnnotateServerlessWithErrorRate(ctx, h.errorRateStore, result.Serverless, h.logger)
+	}
+
+	// Sampling-rate annotation (#295) — join the scan-time invocation
+	// count (the just-run scanner's QueryAggregate; #295 made it
+	// region-aware so each Lambda hits its own region's CloudWatch) with
+	// the traceindex 24h span count, in-place on the serverless rows.
+	// Gated implicitly on serverless_metric_detection: with it off the
+	// scanner has no CloudWatch client and QueryAggregate returns
+	// ErrMetricNotImplemented, so the rows stay "—".
+	if h.samplingSpanCounter != nil && result != nil {
+		if querier, ok := awsScanner.(proposer.SamplingRateMetricQuerier); ok {
+			det := newSamplingDetector(querier, h.samplingSpanCounter)
+			AnnotateServerlessWithSampling(ctx, det, samplingARNKeyResolver{}, result.Serverless, h.logger)
+		}
 	}
 
 	// v0.89.250 continuous-discovery slice 1 — persist the completed scan
