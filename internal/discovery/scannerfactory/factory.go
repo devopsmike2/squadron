@@ -159,19 +159,52 @@ func (o ociScanner) Validate(ctx context.Context, _ *credstore.CloudConnection) 
 	return probeValidate(o.Scan(ctx, nil, nil))
 }
 
+// OCIObservationStore is the write-capable cold-start + error-rate
+// observation store the native-metric serverless detectors persist to.
+// The production *sqlite.Storage (appStore) satisfies it.
+type OCIObservationStore interface {
+	oci.ColdStartStore
+	oci.ErrorRateStore
+}
+
 // OCIFactory is the production handlers.OCIScannerFactory.
-type OCIFactory struct{}
+type OCIFactory struct {
+	// MetricDetection activates the OCI Monitoring-backed serverless
+	// cold-start + error-rate detectors on each built scanner
+	// (config.ServerlessMetricDetection.Enabled; option 2, #300). Wired
+	// from main.go. Default false: the monitoring client stays nil and
+	// the serverless detection block in Scan no-ops, so a stock scan
+	// issues zero billed metric reads — the OSS posture.
+	MetricDetection bool
+
+	// ObsStore is the write-capable observation store the detectors
+	// persist to. Required (alongside MetricDetection) to activate.
+	ObsStore OCIObservationStore
+}
 
 // Build maps a persisted OCIConnection + unsealed RSA private key into
 // a live scanner. The Scanner signs OCI REST calls with the key at
 // Scan() time. OCI Region is required (regional endpoints) — the
 // wizard + handler enforce a non-empty value before persisting.
-func (OCIFactory) Build(conn ociconnstore.OCIConnection, privateKey []byte) (scanner.Scanner, error) {
-	return ociScanner{&oci.Scanner{
+//
+// When MetricDetection is enabled with a store, the scanner is wired
+// with the (already-implemented) signed OCI Monitoring client + the
+// cold-start / error-rate observation stores + the connection id that
+// scopes persisted observations, so a scan walks Functions and runs
+// the native-metric detectors.
+func (f OCIFactory) Build(conn ociconnstore.OCIConnection, privateKey []byte) (scanner.Scanner, error) {
+	sc := &oci.Scanner{
 		TenancyOCID: conn.TenancyOCID,
 		UserOCID:    conn.UserOCID,
 		Fingerprint: conn.Fingerprint,
 		PrivateKey:  privateKey,
 		Region:      conn.Region,
-	}}, nil
+	}
+	if f.MetricDetection && f.ObsStore != nil {
+		sc = sc.WithMonitoringClient(oci.NewSignedMonitoringClient(sc)).
+			WithColdStartStore(f.ObsStore).
+			WithErrorRateStore(f.ObsStore).
+			WithConnectionID(conn.ID)
+	}
+	return ociScanner{sc}, nil
 }
