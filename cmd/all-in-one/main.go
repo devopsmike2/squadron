@@ -41,6 +41,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scannerfactory"
 	"github.com/devopsmike2/squadron/internal/events"
+	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/incidents"
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/inventory"
@@ -542,6 +543,32 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// works. Scan-backed; no new data source.
 	if appStore != nil {
 		apiServer.SetResourceKeyProjectorForDiscovery(handlers.NewDiscoveryScanResourceKeyProjector(appStore, logger))
+	}
+
+	// GitHub Checks API back-signal (opt-in). When a remediation PR is opened
+	// Squadron can post a GitHub Check Run on it and resolve it on merge/close
+	// (and on "don't propose again"). The feature is complete + documented
+	// (docs/checks-api.md) but the all-in-one binary never wired it, so the
+	// documented opt-in was impossible without forking. Activate it when the
+	// operator provides a deployment PAT carrying the checks:write scope; unset
+	// (the default) leaves every Checks surface dormant — the OSS posture, and
+	// fail-open by design (the PR still opens, just without a check run).
+	//
+	// All chunks are gated on the one env var together: the check run is
+	// created in_progress, so the create path (chunk 2) is only useful with the
+	// resolve path (chunks 3/4) also wired — otherwise the check would hang
+	// pending forever. SQUADRON_PUBLIC_HOST drives the "View in Squadron" deep
+	// link in the check-run summary (optional).
+	if pat := strings.TrimSpace(os.Getenv("SQUADRON_IAC_GITHUB_PAT")); pat != "" {
+		checksClient := iacgithub.NewPATClient(pat)
+		apiServer.SetIaCChecksClient(checksClient)        // chunk 2: create on PR open (per-connection PAT at call time)
+		apiServer.SetIaCChecksPAT(pat)                    // chunk 4: exclusion → PATCH check run to neutral
+		apiServer.SetIaCWebhookChecksClient(checksClient) // chunk 3: webhook update on merge/close
+		apiServer.SetIaCWebhookChecksPAT(pat)             // chunk 3: deployment PAT for the webhook PATCH
+		if host := strings.TrimSpace(os.Getenv("SQUADRON_PUBLIC_HOST")); host != "" {
+			apiServer.SetSquadronHost(host)
+		}
+		logger.Info("GitHub Checks API back-signal enabled (SQUADRON_IAC_GITHUB_PAT set)")
 	}
 
 	// v0.27.1 Quickstart needs to know the OpAMP port so the

@@ -147,6 +147,31 @@ implementation. See design doc §2 for the rationale on each.
   fine-grained PATs: the explicit scope is `Checks: Read and
   write` on the target repos.
 
+## Enabling it (all-in-one binary)
+
+The feature is **opt-in and off by default** — without it, PRs still
+open exactly as before, just with no check run (fail-open). To enable
+it on the standard `all-in-one` Squadron binary, set one environment
+variable to a PAT carrying the `checks:write` scope (Step 1 below
+verifies the scope), then restart:
+
+```bash
+export SQUADRON_IAC_GITHUB_PAT="<a PAT with checks:write>"
+# Optional: the base URL the check-run summary's "View in Squadron"
+# link targets. Omit to suppress the link.
+export SQUADRON_PUBLIC_HOST="https://squadron.example.com"
+```
+
+Setting `SQUADRON_IAC_GITHUB_PAT` wires every Checks surface at once —
+create-on-open (chunk 2), update-on-merge/close (chunk 3), and
+update-on-exclude (chunk 4) — so a created check run always reaches a
+final conclusion rather than hanging `in_progress`. Leaving it unset
+keeps all Checks surfaces dormant (the default OSS posture). The PAT is
+held in memory and never logged. Operators embedding Squadron in a
+custom binary wire the same setters (`SetIaCChecksClient`,
+`SetIaCWebhookChecksClient` / `…PAT`, `SetIaCChecksPAT`,
+`SetSquadronHost`) in their own composition root.
+
 ## Step 1 — Verify or upgrade your PAT scope
 
 The cleanest one-shot check is GitHub's `/user` endpoint, which
