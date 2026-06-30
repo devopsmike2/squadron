@@ -244,6 +244,13 @@ type DiscoveryHandlers struct {
 	commercialDetectorsEnabled bool
 	commercialObsStore         CommercialObservationStore
 
+	// serverlessMetricDetectionEnabled threads
+	// config.ServerlessMetricDetection.Enabled into the AWS scanner factory.
+	// When true with a non-nil commercialObsStore, scanners activate the
+	// native-metric Lambda error-rate detector (no Lambda Insights add-on).
+	// Independent of commercialDetectorsEnabled; shares commercialObsStore.
+	serverlessMetricDetectionEnabled bool
+
 	logger *zap.Logger
 }
 
@@ -402,16 +409,34 @@ func (h *DiscoveryHandlers) WithCommercialDetectors(enabled bool, store Commerci
 	return h
 }
 
+// WithServerlessMetricDetection threads the native-metric serverless detector
+// activation (config.ServerlessMetricDetection.Enabled + the write-capable
+// observation store) into the AWS scanner factory. When enabled with a
+// non-nil store, scanners built for a scan activate the native-metric Lambda
+// error-rate detector (no Lambda Insights add-on). Default (enabled=false)
+// preserves the OSS dormant path. Order-independent with WithCredstoreKey and
+// WithCommercialDetectors — all three rebuild the factory from retained state.
+func (h *DiscoveryHandlers) WithServerlessMetricDetection(enabled bool, store CommercialObservationStore) *DiscoveryHandlers {
+	h.serverlessMetricDetectionEnabled = enabled
+	if store != nil {
+		h.commercialObsStore = store
+	}
+	h.rebuildAWSScannerFactory()
+	return h
+}
+
 // rebuildAWSScannerFactory (re)installs the AWS scanner factory from the
-// retained credstore key + current commercial-detector settings. No-op until
-// the key is set (WithCredstoreKey). Shared by WithCredstoreKey and
-// WithCommercialDetectors so the two can be called in any order.
+// retained credstore key + current commercial + serverless-metric detector
+// settings. No-op until the key is set (WithCredstoreKey). Shared by
+// WithCredstoreKey, WithCommercialDetectors, and WithServerlessMetricDetection
+// so the calls can come in any order.
 func (h *DiscoveryHandlers) rebuildAWSScannerFactory() {
 	if h.credstoreKey == nil {
 		return
 	}
 	h.awsScannerFor = commercialAWSScannerFactory(
-		h.credstoreKey, h.commercialDetectorsEnabled, h.commercialObsStore)
+		h.credstoreKey, h.commercialDetectorsEnabled,
+		h.serverlessMetricDetectionEnabled, h.commercialObsStore)
 }
 
 // WithCredMarshaller overrides the AWSCredMarshaller. Tests use this

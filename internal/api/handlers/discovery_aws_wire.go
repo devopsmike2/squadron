@@ -26,7 +26,7 @@ func defaultAWSValidatorFactory(creds credstore.AWSCredentials, accountID string
 // Lives in this file (rather than discovery.go) so the AWS SDK import
 // stays isolated to the production-only wire layer.
 func defaultAWSScannerFactory(key *credstore.Key) AWSScannerFactory {
-	return commercialAWSScannerFactory(key, false, nil)
+	return commercialAWSScannerFactory(key, false, false, nil)
 }
 
 // CommercialObservationStore is the write-capable observation store the
@@ -38,12 +38,22 @@ type CommercialObservationStore interface {
 	awsscanner.ErrorRateStore
 }
 
-// commercialAWSScannerFactory builds the production AWS scanner factory and,
-// when the commercial tier is enabled (config.CommercialDetectors.Enabled)
-// with a wired observation store, activates the add-on-dependent cold-start +
-// error-rate detectors on each constructed scanner. Default (enabled=false /
-// store=nil) is the OSS path: the detectors stay dormant exactly as before.
-func commercialAWSScannerFactory(key *credstore.Key, commercialEnabled bool, obs CommercialObservationStore) AWSScannerFactory {
+// commercialAWSScannerFactory builds the production AWS scanner factory and
+// activates serverless regression detectors on each constructed scanner per
+// two independent opt-in gates, both wired to the same write-capable
+// observation store:
+//
+//   - commercialEnabled (config.CommercialDetectors.Enabled): activates the
+//     add-on-dependent cold-start + error-rate detectors (Lambda Insights).
+//   - serverlessMetricEnabled (config.ServerlessMetricDetection.Enabled):
+//     activates the native-metric error-rate detector (AWS/Lambda Errors +
+//     Invocations) WITHOUT requiring the commercial add-on. Cold-start is not
+//     covered here — it needs Lambda Insights and rides the commercial gate.
+//
+// Default (both false / store=nil) is the OSS dormant path: no detectors run.
+// The two gates compose; if both are on, EnableCommercialDetectors already
+// covers error-rate so the second call is a harmless no-op on the same store.
+func commercialAWSScannerFactory(key *credstore.Key, commercialEnabled, serverlessMetricEnabled bool, obs CommercialObservationStore) AWSScannerFactory {
 	return func(conn *credstore.CloudConnection) (DiscoveryScanner, error) {
 		sc, err := awsscanner.NewScannerFromConnection(conn, key)
 		if err != nil {
@@ -51,6 +61,9 @@ func commercialAWSScannerFactory(key *credstore.Key, commercialEnabled bool, obs
 		}
 		if commercialEnabled && obs != nil {
 			sc.EnableCommercialDetectors(obs, obs)
+		}
+		if serverlessMetricEnabled && obs != nil {
+			sc.EnableServerlessMetricDetection(obs)
 		}
 		return sc, nil
 	}
