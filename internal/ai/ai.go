@@ -83,8 +83,11 @@ const (
 	// Bumping to 90s in v0.88.1 after a Track A live-deploy hit
 	// the 30s wall at 17 resources. JARVIS calls still finish
 	// well under 30s; the new ceiling only kicks in for the
-	// genuinely-large discovery payload case.
-	requestTimeout = 90 * time.Second
+	// genuinely-large discovery payload case. Bumped to 180s in the
+	// clean-room verification pass after a full multi-tier scan
+	// (EC2+Lambda+RDS+ALB+S3) exceeded 90s while awaiting headers on
+	// the non-streamed response. (Streaming is the proper long-term fix.)
+	requestTimeout = 180 * time.Second
 )
 
 // Config is what the operator sets in squadron.yaml (or via the
