@@ -38,12 +38,33 @@ Shipped in three slices:
   `timeSeries.list` JSON but not yet against a real Cloud Monitoring backend; its
   SampleCount proxy (1 per populated 5m period — see the metrics_sdk.go header)
   feeds the cold-start baseline-minimum-samples gate and wants a live confirm.
+  A gated live-verification harness ships in
+  `internal/discovery/gcp/metrics_live_test.go` (skipped unless
+  `SQUADRON_GCP_LIVE=1`). Run it from any machine with GCP access — it exercises
+  the production adapter + `QueryAggregate` against a real Cloud Run service and
+  prints the parsed points + SampleCount sum for inspection:
 
-Follow-up: OCI Functions **inventory** discovery is currently gated on the same
-flag (the Scan walk only runs when the monitoring client is wired), so with the
-flag off OCI Functions remain un-inventoried — the pre-existing state. Making OCI
-Functions discovery unconditional (like the compute/db/OKE tiers), decoupled from
-metric detection, is tracked as a separate enhancement.
+  ```sh
+  SQUADRON_GCP_LIVE=1 \
+  SQUADRON_GCP_SA_JSON=/path/to/sa.json \
+  SQUADRON_GCP_PROJECT=my-project \
+  SQUADRON_GCP_LOCATION=us-central1 \
+  SQUADRON_GCP_SERVICE=my-cloud-run-service \
+  go test ./internal/discovery/gcp/ -run TestGCPLiveMonitoring -v
+  ```
+
+  The SA/ADC principal needs `roles/monitoring.viewer`; the named service must
+  have had 2xx traffic in the last 24h. Confirm a busy service over a 168h
+  window clears `ColdStartBaselineMinimumSamples` (50). The sandbox this shipped
+  from had no GCP credentials, so this run is the remaining step.
+
+Follow-up (✅ resolved, v0.89.334): OCI Functions **inventory** discovery is now
+**unconditional** — `scanServerlessTier` always walks Functions (an inventory
+tier like compute/db/OKE) and populates `result.Serverless`; only the
+native-metric cold-start/error-rate **detection** passes stay gated on the
+monitoring client. This also un-inerts the structural OCI serverless
+recommendations (apm-enable / otel-distro), which key off the discovered rows
+rather than metrics.
 
 The original finding (unchanged) follows.
 
