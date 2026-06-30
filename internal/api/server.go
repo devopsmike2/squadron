@@ -1224,6 +1224,12 @@ func (s *Server) discoveryAzureTrampoline(fn func(*handlers.DiscoveryAzureHandle
 		// (serverless-annotation-parity arc). Azure's source is App Insights
 		// (commercial); rows populate only when that add-on is on.
 		h.WithAzureColdStartConstants(handlers.NewStaticColdStartDetectionConstants(24, 168, 1.5, 500.0))
+		// Azure native sampling (Option 2): the span counter + endpoint cache,
+		// plus the explicit opt-in gate (Azure QueryAggregate always has the
+		// token, so unlike the other clouds it needs an explicit flag).
+		h.WithAzureSamplingSpanCounter(s.qualitySnapshotIndexForDiscovery)
+		h.WithAzureSamplingSink(s.ensureSamplingCache())
+		h.WithAzureServerlessMetricDetection(s.serverlessMetricDetectionEnabled)
 		fn(h, c)
 	}
 }

@@ -370,16 +370,23 @@ fire)."
 
 ### Activation status (#295)
 
-Sampling-rate detection is **active for AWS, GCP, and OCI**, gated on
-`serverless_metric_detection.enabled` (default off — it reads a billed
-per-cloud invocation-count metric). With the flag on, each serverless
-scan annotates the inventory rows (UI `sampling_ratio` +
+Sampling-rate detection is **active for all four clouds — AWS, GCP, OCI,
+and Azure**, gated on `serverless_metric_detection.enabled` (default off —
+it reads a billed per-cloud invocation-count metric). With the flag on,
+each serverless scan annotates the inventory rows (UI `sampling_ratio` +
 `would_fire_recommendation`) and fires the
 `span-quality-sampling-too-aggressive` recommendation, and records the
 result so the per-resource endpoint above can serve it. With the flag
-off, the scanner has no metric client, the query returns
-`ErrMetricNotImplemented`, rows render "—", and the endpoint 404s — no
-metric reads, no behavior change.
+off, the annotation does not run, rows render "—", and the endpoint
+404s — no metric reads, no behavior change.
+
+Azure's invocation denominator is the native Azure Monitor
+`FunctionExecutionCount` (all Function App executions, app-level —
+matching Squadron's Function-App serverless unit); no App Insights
+add-on is required. Because Azure's metric query runs whenever the scan
+token is present (it has no metric-client-absence signal like the other
+clouds), Azure sampling is gated by an explicit handler check on the
+same flag rather than implicitly.
 
 The per-resource endpoint is backed by an **in-memory last-result
 cache**, not a persisted store: it reflects the most recent scan's live
@@ -401,13 +408,14 @@ absorb the new query:
 
 - AWS: 10 RPS; sampling adds 1 query/resource (cold-start has 2)
 - GCP: 60 RPM
-- Azure: 12000 RPH (200 RPM) — reserved; Azure sampling is deferred (see
-  Activation status), so no Azure sampling queries are issued today
+- Azure: 12000 RPH (200 RPM); sampling adds 1 FunctionExecutionCount
+  query/Function App. Azure Monitor standard-metric reads are free within
+  generous limits (unlike billed CloudWatch GetMetricData)
 - OCI: 10 TPS
 
-For a 3-cloud serverless fleet (AWS/GCP/OCI — Azure deferred) of 1000
-functions per cloud, sampling adds 3000 queries/day across those clouds
-— negligible relative to per-cloud quotas.
+For a 4-cloud serverless fleet of 1000 functions per cloud, sampling adds
+4000 queries/day across all clouds — negligible relative to per-cloud
+quotas.
 
 Cost: covered by the same free tiers as cold-start. No
 incremental cost per the no-money brief.

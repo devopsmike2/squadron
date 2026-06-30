@@ -28,7 +28,7 @@ no-ops.
 | Cloud | Metric (code) | Real metric? | Effect |
 |-------|---------------|--------------|--------|
 | AWS | `AWS/Lambda` → `InitDuration` (p95) | **No** — init duration is a CloudWatch **Logs** REPORT field, not a CloudWatch metric. Available only via Lambda Insights (`LambdaInsights` namespace) or a log-metric-filter. | Lambda cold-start detection never accumulates samples → never fires. |
-| Azure | `FunctionInvocations` | **No** — the real invocation metric is `FunctionExecutionCount`. | Error-rate denominator empty. |
+| Azure | `FunctionExecutionCount` (was the nonexistent `FunctionInvocations`) | **Yes** — renamed to the real native metric when Azure native sampling was activated (Option 2, v0.89.343). Counts all Function App executions (Total). | OK — now the real invocation denominator for sampling + native error-rate. (Native error-rate still inert: its numerator `FunctionErrors` remains App-Insights-only.) |
 | Azure | `FunctionErrors` | **No** — no native per-function error metric; requires Application Insights (`requests/failed`). | Error-rate numerator empty. |
 | Azure | `FunctionExecutionDuration` | **No** — no native per-function duration metric; requires Application Insights. | Cold-start detection never fires. |
 | OCI | namespace `oci_functions`, `function_invocation_count`, `function_duration`, `function_invocation_count` + `result="error"` | **Misnamed** — real namespace is `oci_faas`; metrics are `FunctionInvocationCount`, `FunctionExecutionDuration`, `FunctionResponseCount` (error responses). No `result` dimension. | All OCI Functions detection queried a non-existent namespace. **Fixed v0.89.229.** |

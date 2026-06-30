@@ -54,8 +54,9 @@ stay single-sourced), and a handler test.
 1. **GCP** — reference slice.
 2. **OCI** — mirror.
 3. **Azure** — mirror (data is commercial-gated; nil-safe → "—" when the add-on
-   is off). Note: Azure sampling stays deferred (#295) — this arc only adds
-   cold-start + error-rate, whose Azure source (App Insights) is already wired.
+   is off). This arc added Azure cold-start + error-rate (App-Insights-sourced);
+   Azure sampling was activated separately (Option 2, native
+   `FunctionExecutionCount` — see `sampling-rate-activation.md`).
    Docs reconciliation + full gate.
 
 ## Landing
@@ -77,12 +78,11 @@ the server-trampoline constants line were missing):
   `CurrentErrorRate` on the cloud's serverless surface.
 
 With this, the three serverless annotation passes (cold-start, error-rate,
-sampling) are AWS-parity across GCP + OCI; Azure has cold-start + error-rate
-(sampling stays deferred per `sampling-rate-activation.md`).
+sampling) are AWS-parity across all four clouds (Azure sampling was activated
+natively in a follow-up — Option 2, see `sampling-rate-activation.md`).
 
 ## Non-goals
 
 - No new config flag — rides the existing detection gates.
 - No change to the detection math, thresholds, or the persisted observation
   schema — purely projecting already-persisted observations onto the scan rows.
-- Azure sampling — remains deferred (see `sampling-rate-activation.md`).
