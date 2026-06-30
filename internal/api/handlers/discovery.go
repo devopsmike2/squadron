@@ -3105,6 +3105,13 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			}, http.StatusInternalServerError
 		}
 
+		// Detection → proposal: append deterministic cold-start regression
+		// recommendations for any Lambda whose cold-start detector fired on
+		// this scan. Additive + best-effort — never blocks the LLM recs.
+		// Naturally gated by data availability (only fires when the
+		// commercial-tier detectors annotated the rows on a prior scan).
+		h.appendAWSColdStartRegressionRecs(ctx, &recs, req.ScanResult, now)
+
 		// Audit event. Payload deliberately omits the Terraform content —
 		// audit rows shouldn't grow with snippet size. step_count +
 		// scan_id + token metering are what an auditor needs to
