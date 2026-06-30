@@ -125,9 +125,13 @@ type GetAgentStatsResponse struct {
 	GroupsCount   int `json:"groupsCount"`
 }
 
-// UpdateAgentGroupRequest represents the request to update agent group
+// UpdateAgentGroupRequest represents the request to update agent group.
+// A null/absent or empty group_id clears the agent's group assignment;
+// a non-empty value must reference an existing group (validated against
+// the store in the handler rather than by a binding tag, so a "" clear
+// isn't rejected as a malformed UUID).
 type UpdateAgentGroupRequest struct {
-	GroupID *string `json:"group_id" binding:"omitempty,uuid"`
+	GroupID *string `json:"group_id"`
 }
 
 // validDriftFilters is the set of drift_status query values the endpoint
@@ -372,10 +376,70 @@ func (h *AgentHandlers) HandleGetAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, agent)
 }
 
-// handleUpdateAgentGroup handles PATCH /api/v1/agents/:id/group
+// handleUpdateAgentGroup handles PATCH /api/v1/agents/:id/group.
+//
+// Re-points an existing agent at a different group (or clears its
+// assignment). Persists through AgentService.UpdateAgentRegistration so
+// the stored GroupID/GroupName — which rollout canary scoping reads
+// back — stays in sync with the operator's choice. Before v0.89.347
+// this was a hard 501 stub even though the Fleet UI's group dropdown
+// called it.
 func (h *AgentHandlers) HandleUpdateAgentGroup(c *gin.Context) {
-	// Not implemented in current interface
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Agent group update not implemented"})
+	agentID := c.Param("id")
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID format"})
+		return
+	}
+
+	var req UpdateAgentGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	agent, err := h.agentService.GetAgent(c.Request.Context(), agentUUID)
+	if err != nil {
+		h.logger.Error("Failed to get agent for group update",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agent"})
+		return
+	}
+	if agent == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+		return
+	}
+
+	// Normalize: treat null and "" identically as "clear assignment".
+	if req.GroupID == nil || *req.GroupID == "" {
+		agent.GroupID = nil
+		agent.GroupName = nil
+	} else {
+		group, err := h.agentService.GetGroup(c.Request.Context(), *req.GroupID)
+		if err != nil {
+			h.logger.Error("Failed to look up group for agent update",
+				zap.String("group_id", *req.GroupID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to look up group"})
+			return
+		}
+		if group == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Group not found"})
+			return
+		}
+		gid := group.ID
+		gname := group.Name
+		agent.GroupID = &gid
+		agent.GroupName = &gname
+	}
+
+	if err := h.agentService.UpdateAgentRegistration(c.Request.Context(), agent); err != nil {
+		h.logger.Error("Failed to update agent group",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent group"})
+		return
+	}
+
+	c.JSON(http.StatusOK, agent)
 }
 
 // handleGetAgentStats handles GET /api/v1/agents/stats

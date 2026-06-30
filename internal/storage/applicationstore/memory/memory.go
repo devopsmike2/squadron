@@ -335,6 +335,34 @@ func (s *Store) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, ef
 	return nil
 }
 
+// UpdateAgentRegistration writes the mutable registration/grouping fields
+// (Name, Labels, Version, GroupID, GroupName) of an existing agent.
+// Mirrors the sqlite impl; deep-copies Labels so the caller's map can't
+// alias the stored one.
+func (s *Store) UpdateAgentRegistration(ctx context.Context, agent *types.Agent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, exists := s.agents[agent.ID]
+	if !exists || existing.DeletedAt != nil {
+		return fmt.Errorf("agent not found: %s", agent.ID)
+	}
+	existing.Name = agent.Name
+	if agent.Labels != nil {
+		existing.Labels = make(map[string]string, len(agent.Labels))
+		for k, v := range agent.Labels {
+			existing.Labels[k] = v
+		}
+	} else {
+		existing.Labels = nil
+	}
+	existing.Version = agent.Version
+	existing.GroupID = agent.GroupID
+	existing.GroupName = agent.GroupName
+	existing.UpdatedAt = time.Now()
+	return nil
+}
+
 func (s *Store) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

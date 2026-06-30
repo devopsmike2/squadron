@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -570,17 +571,88 @@ func TestHandleGetAgentStats_GroupsError(t *testing.T) {
 	assert.Equal(t, 0, response.GroupsCount)
 }
 
-func TestHandleUpdateAgentGroup(t *testing.T) {
-	handlers, _ := setupAgentHandlersTest()
-
-	// Create test request
+// patchGroup is a small helper that drives HandleUpdateAgentGroup with a
+// JSON body and the :id path param set, returning the recorder.
+func patchGroup(t *testing.T, h *AgentHandlers, agentID, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("PATCH", "/api/v1/agents/"+uuid.New().String()+"/group", nil)
+	c.Params = gin.Params{{Key: "id", Value: agentID}}
+	c.Request = httptest.NewRequest("PATCH", "/api/v1/agents/"+agentID+"/group",
+		bytes.NewReader([]byte(body)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.HandleUpdateAgentGroup(c)
+	return w
+}
 
-	// Execute handler
-	handlers.HandleUpdateAgentGroup(c)
+// TestHandleUpdateAgentGroup_Reassign: PATCH with a valid existing
+// group re-points the agent and the new GroupID/GroupName persist.
+func TestHandleUpdateAgentGroup_Reassign(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
 
-	// Assert response - not implemented
-	assert.Equal(t, http.StatusNotImplemented, w.Code)
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1"}))
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: "grp-1", Name: "prod"}))
+
+	w := patchGroup(t, handlers, agentID.String(), `{"group_id":"grp-1"}`)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	got, err := mock.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, got.GroupID)
+	assert.Equal(t, "grp-1", *got.GroupID)
+	require.NotNil(t, got.GroupName)
+	assert.Equal(t, "prod", *got.GroupName)
+}
+
+// TestHandleUpdateAgentGroup_Clear: a null group_id clears the
+// assignment (un-assign).
+func TestHandleUpdateAgentGroup_Clear(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	gid, gname := "grp-1", "prod"
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{
+		ID: agentID, Name: "a1", GroupID: &gid, GroupName: &gname}))
+
+	w := patchGroup(t, handlers, agentID.String(), `{"group_id":null}`)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	got, err := mock.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, got.GroupID)
+	assert.Nil(t, got.GroupName)
+}
+
+// TestHandleUpdateAgentGroup_UnknownAgent: 404 when the agent doesn't exist.
+func TestHandleUpdateAgentGroup_UnknownAgent(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := patchGroup(t, handlers, uuid.New().String(), `{"group_id":"grp-1"}`)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandleUpdateAgentGroup_UnknownGroup: 400 when the target group
+// doesn't exist (agent unchanged).
+func TestHandleUpdateAgentGroup_UnknownGroup(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1"}))
+
+	w := patchGroup(t, handlers, agentID.String(), `{"group_id":"does-not-exist"}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	got, err := mock.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, got.GroupID)
+}
+
+// TestHandleUpdateAgentGroup_BadID: 400 on a non-UUID agent id.
+func TestHandleUpdateAgentGroup_BadID(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := patchGroup(t, handlers, "not-a-uuid", `{"group_id":"grp-1"}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

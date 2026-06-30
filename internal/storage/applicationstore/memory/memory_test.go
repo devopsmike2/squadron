@@ -453,3 +453,51 @@ func TestStorePurge(t *testing.T) {
 		assert.Empty(t, configs)
 	})
 }
+
+// TestStoreUpdateAgentRegistration: the registration UPDATE writes
+// Name/Labels/Version/GroupID/GroupName by ID, deep-copies Labels, and
+// leaves Status untouched.
+func TestStoreUpdateAgentRegistration(t *testing.T) {
+	withPopulatedMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		gid, gname := "grp-7", "prod"
+		newLabels := map[string]string{"tier": "gold"}
+
+		err := store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID:        testAgentID,
+			Name:      "renamed",
+			Labels:    newLabels,
+			Version:   "2.3.4",
+			GroupID:   &gid,
+			GroupName: &gname,
+		})
+		require.NoError(t, err)
+
+		got, err := store.GetAgent(ctx, testAgentID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "renamed", got.Name)
+		assert.Equal(t, "2.3.4", got.Version)
+		require.NotNil(t, got.GroupID)
+		assert.Equal(t, "grp-7", *got.GroupID)
+		require.NotNil(t, got.GroupName)
+		assert.Equal(t, "prod", *got.GroupName)
+		assert.Equal(t, map[string]string{"tier": "gold"}, got.Labels)
+		// Status is NOT part of the registration update.
+		assert.Equal(t, types.AgentStatusOnline, got.Status)
+
+		// Mutating the caller's label map must not bleed into the store.
+		newLabels["tier"] = "mutated"
+		got2, err := store.GetAgent(ctx, testAgentID)
+		require.NoError(t, err)
+		assert.Equal(t, "gold", got2.Labels["tier"])
+	})
+}
+
+func TestStoreUpdateAgentRegistrationNotFound(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		err := store.UpdateAgentRegistration(context.Background(), &types.Agent{ID: uuid.New(), Name: "x"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+}

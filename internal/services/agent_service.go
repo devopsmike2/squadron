@@ -17,6 +17,13 @@ type AgentService interface {
 	UpdateAgentStatus(ctx context.Context, id uuid.UUID, status AgentStatus) error
 	UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSeen time.Time) error
 	UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, effectiveConfig string) error
+	// UpdateAgentRegistration persists the mutable registration/grouping
+	// fields (Name, Labels, Version, GroupID, GroupName) of an existing
+	// agent. Used by the OpAMP server when a registered agent re-reports a
+	// changed AgentDescription, and by the operator group-assignment
+	// endpoint. Callers pass a full *Agent (typically loaded via GetAgent
+	// then mutated) so unrelated fields round-trip unchanged.
+	UpdateAgentRegistration(ctx context.Context, agent *Agent) error
 	DeleteAgent(ctx context.Context, id uuid.UUID) error
 
 	// Group operations
