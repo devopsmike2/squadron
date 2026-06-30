@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -19,14 +20,16 @@ import (
 // returns an empty timeseries. It lets the #153 gate test assert which
 // metric the detector asked for without caring about the result.
 type metricNameCapture struct {
-	mu   sync.Mutex
-	seen []string
+	mu      sync.Mutex
+	seen    []string
+	filters []string
 }
 
 func (c *metricNameCapture) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
 		c.seen = append(c.seen, r.URL.Query().Get("metricnames"))
+		c.filters = append(c.filters, r.URL.Query().Get("$filter"))
 		c.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -53,6 +56,55 @@ func newGateTestScanner(t *testing.T, c *metricNameCapture, commercial bool) *Sc
 }
 
 const gateTestARN = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg/providers/microsoft.insights/components/ai-comp"
+
+// TestAzureColdStartFilterGate locks the #153 live-caught fix: the App
+// Insights requests/duration metric has no IsAfterColdStart dimension, so the
+// commercial cold-start query must NOT send the $filter — while the OSS path
+// (FunctionExecutionDuration) still does.
+func TestAzureColdStartFilterGate(t *testing.T) {
+	t.Run("commercial requests/duration sends no IsAfterColdStart filter", func(t *testing.T) {
+		cap := &metricNameCapture{}
+		s := newGateTestScanner(t, cap, true)
+		if _, err := s.DetectColdStartRegression(context.Background(), gateTestARN); err != nil {
+			t.Fatalf("DetectColdStartRegression: %v", err)
+		}
+		for i, f := range cap.filters {
+			if strings.Contains(strings.ToLower(f), "isaftercoldstart") {
+				t.Errorf("query[%d] sent an IsAfterColdStart filter for requests/duration: %q", i, f)
+			}
+		}
+	})
+	t.Run("OSS FunctionExecutionDuration sends the IsAfterColdStart filter", func(t *testing.T) {
+		cap := &metricNameCapture{}
+		s := newGateTestScanner(t, cap, false)
+		if _, err := s.DetectColdStartRegression(context.Background(), gateTestARN); err != nil {
+			t.Fatalf("DetectColdStartRegression: %v", err)
+		}
+		found := false
+		for _, f := range cap.filters {
+			if strings.Contains(strings.ToLower(f), "isaftercoldstart") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("OSS cold-start path should send the IsAfterColdStart filter; filters=%v", cap.filters)
+		}
+	})
+}
+
+// TestIsAzureDimensionNotFoundError_CaseInsensitive locks the #153 fix to the
+// fallback matcher: Azure echoes the dimension lowercased, so the match must
+// be case-insensitive.
+func TestIsAzureDimensionNotFoundError_CaseInsensitive(t *testing.T) {
+	err := &armCallError{
+		StatusCode: 400,
+		Code:       "BadRequest",
+		Message:    "Metric: requests/duration does not support requested dimension combination: isaftercoldstart, supported ones are: request/resultCode",
+	}
+	if !isAzureDimensionNotFoundError(err, AzureFunctionsIsAfterColdStartDimension) {
+		t.Errorf("expected lowercased 'isaftercoldstart' in message to match dimension %q", AzureFunctionsIsAfterColdStartDimension)
+	}
+}
 
 // TestAzureColdStartMetricGate covers the #153 enterprise-gate: the
 // cold-start detector queries the inert FunctionExecutionDuration metric
