@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -194,5 +195,84 @@ func TestAppendAWSErrorRateRegressionRecs_LowVolume_NoRec(t *testing.T) {
 
 	if len(recs) != 0 {
 		t.Fatalf("low volume: want 0 recs, got %d", len(recs))
+	}
+}
+
+// TestAppendColdStartRegressionRecs_PerCloudSurfaces confirms the surface
+// dispatch fires the right per-cloud builder + kind for the GCP/Azure/OCI
+// serverless surfaces, gating purely on the snapshot's exceeds flag (no store).
+func TestAppendColdStartRegressionRecs_PerCloudSurfaces(t *testing.T) {
+	exceeds := true
+	p95 := 700.0
+	now := time.Now().UTC()
+	scope := proposer.ColdStartScope{ConnectionID: "conn", ScopeID: "scope", Region: "r1"}
+
+	cases := []struct {
+		surface  string
+		wantKind string
+	}{
+		{"cloudrun", proposer.ColdStartRecommendationKindCloudRun},
+		{"cloudfunc", proposer.ColdStartRecommendationKindCloudFunc},
+		{"azfunc", proposer.ColdStartRecommendationKindAzureFunc},
+		{"ocifunc", proposer.ColdStartRecommendationKindOCIFunc},
+	}
+	for _, tc := range cases {
+		t.Run(tc.surface, func(t *testing.T) {
+			snaps := []scanner.ServerlessInstanceSnapshot{{
+				Provider: "x", Surface: tc.surface, ResourceName: "fn",
+				ResourceARN: "res-" + tc.surface, Region: "r1",
+				ColdStartP95Ms: &p95, ColdStartExceedsThreshold: &exceeds,
+			}}
+			var recs []recommendations.Recommendation
+			appendColdStartRegressionRecs(context.Background(), &recs, snaps, nil, nil, scope, "scan", now, nil)
+			if len(recs) != 1 {
+				t.Fatalf("%s: want 1 rec, got %d", tc.surface, len(recs))
+			}
+			if recs[0].ResourceKind != tc.wantKind {
+				t.Errorf("%s: kind = %q, want %q", tc.surface, recs[0].ResourceKind, tc.wantKind)
+			}
+			if recs[0].IaC == nil || recs[0].IaC.Source == "" {
+				t.Errorf("%s: expected Terraform snippet", tc.surface)
+			}
+		})
+	}
+
+	// An unknown surface is skipped (no mis-shaped rec).
+	t.Run("unknown-surface-skipped", func(t *testing.T) {
+		snaps := []scanner.ServerlessInstanceSnapshot{{
+			Surface: "appservice", ResourceARN: "res-x",
+			ColdStartP95Ms: &p95, ColdStartExceedsThreshold: &exceeds,
+		}}
+		var recs []recommendations.Recommendation
+		appendColdStartRegressionRecs(context.Background(), &recs, snaps, nil, nil, scope, "scan", now, nil)
+		if len(recs) != 0 {
+			t.Fatalf("unknown surface: want 0 recs, got %d", len(recs))
+		}
+	})
+}
+
+// TestAppendErrorRateRegressionRecs_PerCloudSurface confirms the error-rate
+// path reconstructs the result from the store and fires the per-cloud builder
+// for a non-AWS surface (Cloud Run).
+func TestAppendErrorRateRegressionRecs_PerCloudSurface(t *testing.T) {
+	const arn = "res-cloudrun-err"
+	now := time.Now().UTC()
+	store := &stubErrorRateReader{}
+	store.set(arn, regressionCurrentWindowHours, 2000, 5000, 0.40, now)
+	store.set(arn, regressionBaselineWindowHours, 100, 10000, 0.01, now)
+
+	snaps := []scanner.ServerlessInstanceSnapshot{{
+		Provider: "gcp", Surface: "cloudrun", ResourceName: "svc", ResourceARN: arn, Region: "r1",
+	}}
+	scope := proposer.ErrorRateScope{ConnectionID: "conn", ScopeID: "scope", Region: "r1"}
+
+	var recs []recommendations.Recommendation
+	appendErrorRateRegressionRecs(context.Background(), &recs, snaps, store, nil, scope, "scan", now, nil)
+
+	if len(recs) != 1 {
+		t.Fatalf("want 1 error-rate rec, got %d", len(recs))
+	}
+	if recs[0].ResourceKind != proposer.ErrorRateRecommendationKind {
+		t.Errorf("kind = %q, want %q", recs[0].ResourceKind, proposer.ErrorRateRecommendationKind)
 	}
 }

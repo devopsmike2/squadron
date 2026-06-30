@@ -120,6 +120,23 @@ type DiscoveryOCIHandlers struct {
 	// scanStore — continuous-discovery slice 2 (v0.89.251). Persists
 	// completed scans + backs the history endpoints. Nil = non-persisted.
 	scanStore DiscoveryScanStore
+	// Regression-recommendation stores (detection→proposal). Optional;
+	// nil short-circuits the corresponding pass. OCI Functions
+	// cold-start (duration heuristic) + error-rate are OSS-native.
+	coldStartStore ColdStartObservationReader
+	errorRateStore ErrorRateObservationStore
+	exclusionStore DiscoveryExclusionStore
+}
+
+// WithOCIRegressionStores wires the regression-recommendation stores (any may
+// be nil). Returns the receiver for chaining.
+func (h *DiscoveryOCIHandlers) WithOCIRegressionStores(
+	coldStart ColdStartObservationReader, errorRate ErrorRateObservationStore, exclusions DiscoveryExclusionStore,
+) *DiscoveryOCIHandlers {
+	h.coldStartStore = coldStart
+	h.errorRateStore = errorRate
+	h.exclusionStore = exclusions
+	return h
 }
 
 // NewDiscoveryOCIHandlers builds the handler struct. Optional
@@ -1430,6 +1447,13 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 				Message: "Squadron could not encode the plan step. The error has been logged.",
 			}, http.StatusInternalServerError
 		}
+
+		// Detection → proposal: append cold-start + error-rate regression recs
+		// for any OCI Functions row whose detector fired on this scan
+		// (OSS-native). Additive + best-effort.
+		appendRegressionRecs(ctx, &recs, req.ScanResult.Serverless,
+			h.coldStartStore, h.errorRateStore, h.exclusionStore,
+			conn.ID, conn.TenancyOCID, conn.Region, req.ScanResult.ScanID, now, h.logger)
 
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{

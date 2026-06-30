@@ -107,6 +107,27 @@ type DiscoveryGCPHandlers struct {
 	// scanStore — continuous-discovery slice 2 (v0.89.251). Persists
 	// completed scans + backs the history endpoints. Nil = non-persisted.
 	scanStore DiscoveryScanStore
+	// Regression-recommendation stores (detection→proposal). Optional;
+	// nil short-circuits the corresponding regression-rec pass. The
+	// cold-start/error-rate detectors annotate the scan response; these
+	// stores let the recs path reconstruct the detection result + honor
+	// operator exclusions. Wired in server.go alongside the AWS handler.
+	coldStartStore ColdStartObservationReader
+	errorRateStore ErrorRateObservationStore
+	exclusionStore DiscoveryExclusionStore
+}
+
+// WithGCPRegressionStores wires the cold-start + error-rate observation readers
+// and the exclusion store the regression-recommendation pass consumes. Any may
+// be nil (the corresponding pass short-circuits). Returns the receiver for
+// chaining.
+func (h *DiscoveryGCPHandlers) WithGCPRegressionStores(
+	coldStart ColdStartObservationReader, errorRate ErrorRateObservationStore, exclusions DiscoveryExclusionStore,
+) *DiscoveryGCPHandlers {
+	h.coldStartStore = coldStart
+	h.errorRateStore = errorRate
+	h.exclusionStore = exclusions
+	return h
 }
 
 // NewDiscoveryGCPHandlers builds the handler struct. Optional
@@ -1379,6 +1400,13 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 				Message: "Squadron could not encode the plan step. The error has been logged.",
 			}, http.StatusInternalServerError
 		}
+
+		// Detection → proposal: append cold-start + error-rate regression recs
+		// for any Cloud Run / Cloud Functions row whose detector fired on this
+		// scan (OSS-native — no commercial gate). Additive + best-effort.
+		appendRegressionRecs(ctx, &recs, req.ScanResult.Serverless,
+			h.coldStartStore, h.errorRateStore, h.exclusionStore,
+			conn.ID, conn.ProjectID, conn.Region, req.ScanResult.ScanID, now, h.logger)
 
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{
