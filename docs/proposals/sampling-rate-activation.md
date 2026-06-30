@@ -114,6 +114,49 @@ first.
 5. **Per-resource `/sampling` endpoint** wiring + docs reconciliation
    (detection-coverage.md sampling rows) + full gate.
 
+## Implementation findings (post-slice-1)
+
+Tracing the per-cloud scan handlers surfaced two facts that reshape slices 2–5:
+
+1. **Only the AWS handler runs a serverless annotation pass.** `discovery.go`
+   (~2224) calls `AnnotateServerlessWithColdStart` + `…WithErrorRate` after the
+   scan. The GCP / OCI / Azure handlers annotate **compute/database/cluster**
+   last-seen only (e.g. `discovery_gcp.go:1079`) and pass `result.Serverless`
+   straight through **unannotated**. So the serverless cold-start / error-rate /
+   sampling UI fields are *already* AWS-only for those clouds — a pre-existing
+   gap this arc must fill, not just "wire sampling". Each of GCP/OCI/Azure needs
+   a new serverless annotation block in its scan handler.
+
+2. **The live querier is the in-scope post-scan scanner.** Each handler keeps
+   its scanner local (`awsScanner` at discovery.go:1989/2016; `scn` at
+   discovery_gcp.go:1005) in scope at the annotation point, and the concrete
+   `*Scanner` (promoted through the factory adapter) satisfies
+   `proposer.SamplingRateMetricQuerier` via a type assertion. The span counter
+   is the server's `*traceindex.Quality` (already created in main.go for the
+   span-quality handler) type-asserted to `proposer.SamplingRateSpanCounter`
+   (`SpanCountLast24h`); it must be threaded into each scan handler (a new
+   field + setter) since today only the span-quality handler holds it.
+
+3. **AWS per-region binding (confirmed real).** `aws.Scanner.QueryAggregate`
+   uses the single `s.cwClient`, left bound to the *last* scanned region. A
+   single-region scan (the common case) annotates correctly; a multi-region
+   scan would query the wrong region for functions outside the last one. The AWS
+   slice must make the invocation query region-aware (bind per-ARN region like
+   the error-rate walk does) before annotating, or scope to per-region.
+
+### Refined slice plan
+
+- **2 (AWS):** AWS already has the annotation site → lowest-friction to prove
+  the end-to-end. Add the span-counter field+setter to `DiscoveryHandlers`,
+  thread the `*traceindex.Quality` from main.go, make the AWS invocation query
+  region-aware, add the sampling annotation block, handler test.
+- **3 (GCP + OCI):** add the serverless annotation block (new) to each handler
+  + thread the span counter; no region wrinkle.
+- **4 (Azure):** add the annotation block; Azure's invocation metric rides the
+  App Insights commercial path — confirm `QueryAggregate` reaches it.
+- **5:** per-resource `/sampling` endpoint wiring + detection-coverage.md
+  sampling-rows reconciliation + full gate.
+
 ## Non-goals
 
 - No new config flag — rides `serverless_metric_detection.enabled`.
