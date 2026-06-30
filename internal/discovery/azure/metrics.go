@@ -370,6 +370,15 @@ func (s *Scanner) QueryAggregate(
 	// Filter on IsAfterColdStart=true first; on a 400 naming the
 	// dimension, fall back to unfiltered and signal via fellBack.
 	coldStartFilter := fmt.Sprintf("%s eq 'true'", AzureFunctionsIsAfterColdStartDimension)
+	// #153 (live-caught): the App Insights requests/duration metric has no
+	// IsAfterColdStart dimension — its dimensions are request/resultCode,
+	// request/success, cloud/roleName, etc. Sending the filter 400s
+	// ("requests/duration does not support requested dimension combination:
+	// isaftercoldstart"). For that metric query unfiltered: it measures all
+	// request durations, which is the cold-start P95 signal we want.
+	if metricName == AppInsightsRequestDurationMetric {
+		coldStartFilter = ""
+	}
 
 	result, fellBack, err := s.queryAzureMetricWithFallback(
 		ctx, resourceARN, metricName, startTime, endTime, aggregation, coldStartFilter,
@@ -904,7 +913,13 @@ func isAzureDimensionNotFoundError(err error, dimensionName string) bool {
 		// Pair with a dimension-name match in the message to
 		// avoid false positives on other BadRequest conditions
 		// (malformed timespan, unsupported aggregation, etc.).
-		if dimensionName != "" && strings.Contains(ace.Message, dimensionName) {
+		// Case-insensitive: Azure echoes the dimension lowercased
+		// (e.g. "does not support requested dimension combination:
+		// isaftercoldstart") even though the request used PascalCase —
+		// a case-sensitive match silently missed the fallback (#153
+		// live-caught).
+		if dimensionName != "" && strings.Contains(
+			strings.ToLower(ace.Message), strings.ToLower(dimensionName)) {
 			return true
 		}
 		// If the message is missing or doesn't name the dimension
