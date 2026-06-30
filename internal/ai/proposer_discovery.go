@@ -5,7 +5,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -658,89 +657,7 @@ func (s *Service) ProposeFromDiscoveryScan(ctx context.Context, in *DiscoverySca
 		return nil, fmt.Errorf("discovery scan context: %w", err)
 	}
 
-	resp, err := s.callMessages(ctx, callOpts{
-		Model:  s.cfg.MergeModel,
-		System: proposeFromDiscoveryScanSystem,
-		// Reuse the v0.82 proposer cap. Discovery plans emit Terraform
-		// per step (typically denser than collector YAML) so the
-		// 4096-token headroom is at least as important here as for the
-		// cost-spike plan kind. Same constant per v0.82's #550 fix.
-		MaxTokens: ProposerMaxTokens,
-		UserText:  buildDiscoveryUserMessage(*in),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("propose from discovery scan: %w", err)
-	}
-
-	// Parse the JSON block. Mirrors ProposeFromCostSpike's parsed
-	// shape — same fields, same extractJSONBlock helper. We expect
-	// kind=plan; the handler validates and rejects rollout-kind
-	// explicitly below.
-	type parsed struct {
-		Declined  bool                   `json:"declined"`
-		Reason    string                 `json:"reason"`
-		Kind      ProposalKind           `json:"kind"`
-		Proposal  RolloutInputCandidate  `json:"proposal"`
-		Plan      PlanCandidate          `json:"plan"`
-		Reasoning string                 `json:"reasoning"`
-		Evidence  []EvidenceRefCandidate `json:"evidence"`
-	}
-	raw := extractJSONBlock(resp.Text)
-	var p parsed
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return nil, fmt.Errorf("propose from discovery scan: model response was not valid JSON: %w (raw=%s)",
-			err, truncateString(resp.Text, 400))
-	}
-
-	result := &ProposalResult{
-		Declined:  p.Declined,
-		Reason:    strings.TrimSpace(p.Reason),
-		Kind:      p.Kind,
-		Reasoning: strings.TrimSpace(p.Reasoning),
-		Evidence:  p.Evidence,
-		Model:     resp.Model,
-		TokensIn:  resp.TokensIn,
-		TokensOut: resp.TokensOut,
-	}
-
-	if p.Declined {
-		// Declined is a normal outcome — the model said no productive
-		// instrumentation plan exists for this scan. The handler
-		// passes the reason through to the UI without an error.
-		return result, nil
-	}
-
-	// Plan-kind ONLY for discovery. Empty Kind defaults to rollout
-	// in the cost-spike path for backwards compat; here we treat it
-	// as a violation. The discovery prompt explicitly tells the
-	// model to set kind="plan"; if it didn't, the response is bad.
-	kind := p.Kind
-	if kind == "" {
-		// Allow the empty default only when the plan body is
-		// present — some models emit kind=plan implicitly by
-		// returning a plan field. Without a plan body, treat as
-		// the rollout default and reject below.
-		if len(p.Plan.Steps) > 0 {
-			kind = ProposalKindPlan
-		} else {
-			kind = ProposalKindRollout
-		}
-	}
-	if kind != ProposalKindPlan {
-		return nil, fmt.Errorf("propose from discovery scan: model returned kind %q; discovery is plan-only", kind)
-	}
-	result.Kind = ProposalKindPlan
-	result.Plan = p.Plan
-
-	// v0.89.48 (#671 Stream 69, GCP discovery slice 1 chunk 5) —
-	// provider-aware plan-step group_id check. Slice 1's discovery
-	// pipeline uses the provider-agnostic scope_id (account_id for AWS,
-	// project_id for GCP) as the group identifier so the per-step
-	// validation has one rule, not two.
-	if err := validateDiscoveryPlan(p.Plan, in.ScopeID()); err != nil {
-		return nil, fmt.Errorf("propose from discovery scan: model returned an invalid plan: %w", err)
-	}
-	return result, nil
+	return s.runDiscoveryChunks(ctx, in)
 }
 
 // validateDatabaseCandidates is the pre-call validator for the
