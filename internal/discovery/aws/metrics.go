@@ -157,6 +157,41 @@ const SQSNumberOfMessagesSentMetricName = "NumberOfMessagesSent"
 // baseline) lines up at the same granularity.
 const cloudWatchMetricPeriodSeconds = 300
 
+// cloudWatchMaxDatapoints is CloudWatch GetMetricStatistics' hard cap on the
+// number of datapoints (period buckets) a single call may return. Requesting
+// more is a 400 InvalidParameterCombination. We compute periods against a
+// slightly lower target to keep headroom against window/period rounding.
+const (
+	cloudWatchMaxDatapoints  = 1440
+	cloudWatchSafeDatapoints = 1400
+)
+
+// cloudWatchPeriodForWindow returns a CloudWatch aggregation period (seconds,
+// rounded up to a multiple of 60) for the given window that keeps the datapoint
+// count within CloudWatch's 1440-datapoint cap. It never drops below
+// cloudWatchMetricPeriodSeconds (the 5-minute default the cross-window math is
+// tuned for) — so the 24h current window stays at 300s — but a wide window
+// such as the 7-day cold-start/error baseline (168h ÷ 300s = 2016 datapoints)
+// bumps to a coarser period so the call stays under the cap.
+//
+// This was discovered by the live Lambda Insights verification (#152): the
+// 168h baseline query 400'd against real CloudWatch ("up to 2016 datapoints,
+// which exceeds the limit of 1440"). Unit fakes don't enforce the cap and the
+// detector never ran live in OSS, so the bug was dormant until the commercial
+// tier exercised the query for real.
+func cloudWatchPeriodForWindow(window time.Duration) int32 {
+	period := cloudWatchMetricPeriodSeconds
+	windowSecs := int(window / time.Second)
+	if windowSecs > 0 {
+		needed := (windowSecs + cloudWatchSafeDatapoints - 1) / cloudWatchSafeDatapoints // ceil
+		needed = ((needed + 59) / 60) * 60                                               // round up to multiple of 60
+		if needed > period {
+			period = needed
+		}
+	}
+	return int32(period)
+}
+
 // CloudWatchClient is the minimal surface the AWS MetricQuerier needs
 // from the CloudWatch SDK. Slice 1 chunk 2 (v0.89.114) consumes only
 // GetMetricStatistics — the rest of the SDK is intentionally outside
@@ -325,7 +360,7 @@ func (s *Scanner) QueryAggregate(
 	endTime := time.Now().UTC()
 	startTime := endTime.Add(-window)
 	extStat := mapMetricStatisticToCloudWatch(stat)
-	periodSeconds := int32(cloudWatchMetricPeriodSeconds)
+	periodSeconds := cloudWatchPeriodForWindow(window)
 
 	// #152 enterprise-gate: the InitDuration cold-start signal does
 	// not exist in the AWS/Lambda namespace — it lives in the Lambda
@@ -477,7 +512,7 @@ func (s *Scanner) queryLambdaCounterSum(
 
 	endTime := time.Now().UTC()
 	startTime := endTime.Add(-window)
-	periodSeconds := int32(cloudWatchMetricPeriodSeconds)
+	periodSeconds := cloudWatchPeriodForWindow(window)
 
 	input := &cloudwatch.GetMetricStatisticsInput{
 		Namespace:  awssdk.String(LambdaMetricNamespace),
@@ -578,7 +613,7 @@ func (s *Scanner) querySQSCounterSum(
 
 	endTime := time.Now().UTC()
 	startTime := endTime.Add(-window)
-	periodSeconds := int32(cloudWatchMetricPeriodSeconds)
+	periodSeconds := cloudWatchPeriodForWindow(window)
 
 	input := &cloudwatch.GetMetricStatisticsInput{
 		Namespace:  awssdk.String(SQSMetricNamespace),
