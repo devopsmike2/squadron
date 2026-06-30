@@ -438,7 +438,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	defer traceFlushCancel()
 	if traceIndex != nil {
 		flushAudit := &traceIndexAuditAdapter{audit: auditService}
-		flusher := traceindex.NewBackgroundFlusher(traceIndex, 30*time.Second, flushAudit, logger)
+		// WithQualityEvictor: the same flush loop bounds the span-quality
+		// index's memory (its parentSeen map otherwise grows unbounded on
+		// the OTLP receive hot path). Nil-safe when span-quality is disabled.
+		flusher := traceindex.NewBackgroundFlusher(traceIndex, 30*time.Second, flushAudit, logger).
+			WithQualityEvictor(qualityIndex)
 		go flusher.Start(traceFlushCtx)
 	}
 
