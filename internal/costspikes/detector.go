@@ -109,6 +109,17 @@ type Detector struct {
 
 	mu      sync.Mutex
 	samples []float64 // ring of recent total monthly_usd projections
+
+	// tickMu serializes whole Tick cycles. The detection state machine
+	// reads the latest open spike and then conditionally creates one
+	// (openOrEscalate) — a check-then-insert that is NOT atomic under
+	// the fine-grained sample mutex alone. Without this, the 60s
+	// background loop and an operator-triggered POST /tick can interleave,
+	// both observe "no open spike", and both INSERT — leaving two
+	// simultaneous open rows for one event, only one of which ever closes.
+	// One tick is cheap by construction (one ProjectFleet + one read +
+	// <=one write), so full serialization costs nothing.
+	tickMu sync.Mutex
 }
 
 // New builds a detector. Caller is responsible for calling Tick
@@ -141,12 +152,15 @@ func New(cfg Config, store SpikeStore, pricer PricerProjector, ins InsightsQueri
 
 // Tick is one detection cycle: pull the current projection, push
 // it into the rolling window, compare to baseline, and write any
-// state transitions to the store. Safe to call concurrently —
-// internal mutex guards the sample buffer.
+// state transitions to the store. Safe to call concurrently — tickMu
+// serializes whole cycles so the open-spike check-then-insert stays
+// atomic (the background loop and an operator POST /tick can race).
 func (d *Detector) Tick(ctx context.Context) error {
 	if d == nil || d.pricer == nil || !d.pricer.Enabled() {
 		return nil
 	}
+	d.tickMu.Lock()
+	defer d.tickMu.Unlock()
 	current, currentBySignal, err := d.currentProjection(ctx)
 	if err != nil {
 		return fmt.Errorf("project: %w", err)
