@@ -502,6 +502,23 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		apiServer.SetWorkloadHealthInventoryReader(handlers.NewPersistedScanWorkloadHealthReader(appStore, logger))
 	}
 
+	// Discovery observation readers (cold-start + error-rate). The
+	// Set*ObservationReader setters were never called, so these server fields
+	// stayed nil in production — leaving the per-resource cold-start/error-rate
+	// detail endpoints dormant (404), the AWS cold-start scan-annotation pass a
+	// no-op, and the per-cloud regression-recommendation ERROR-RATE path inert
+	// (it reconstructs the detection result from the error_rate_observation
+	// store, which was nil). The application store is the same *sqlite.Storage
+	// the per-cloud scanners persist observations into, and it satisfies both
+	// reader interfaces. Strictly additive: an unsatisfied assertion is a no-op
+	// (same posture as the CommercialObservationStore wiring above).
+	if r, ok := appStore.(handlers.ColdStartObservationReader); ok {
+		apiServer.SetColdStartObservationReader(r)
+	}
+	if r, ok := appStore.(handlers.ErrorRateObservationReader); ok {
+		apiServer.SetErrorRateObservationReader(r)
+	}
+
 	// v0.27.1 Quickstart needs to know the OpAMP port so the
 	// generated agent configs dial back to the right place.
 	apiServer.SetOpAMPPort(config.Server.OpAMPPort)
