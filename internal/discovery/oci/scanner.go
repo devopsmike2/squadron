@@ -268,6 +268,13 @@ func (s *Scanner) Scan(ctx context.Context) (result scanner.Result, err error) {
 	s.scanObjectStorage(ctx, signingKey, allCompartments, &result)
 	s.scanLoadBalancers(ctx, signingKey, allCompartments, &result)
 
+	// Serverless tier (OCI Functions) + native-metric cold-start /
+	// error-rate detection, folded into Scan here (the slice-1 chunk-4
+	// deferral; see ScanServerless). No-op unless
+	// config.ServerlessMetricDetection.Enabled wired a monitoring client
+	// onto this scanner, so a default scan is byte-for-byte unchanged.
+	s.scanServerlessTier(ctx, allCompartments, &result)
+
 	// Slice 1 instrumented rule (Compute): HasOTel == true.
 	for _, c := range result.Compute {
 		if c.HasOTel {

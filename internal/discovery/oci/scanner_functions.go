@@ -199,6 +199,45 @@ func (s *Scanner) ScanServerless(ctx context.Context, scope scanner.ScanScope) (
 	return s.ScanFunctions(ctx, scope)
 }
 
+// scanServerlessTier folds the OCI Functions serverless walk + the
+// native-metric cold-start / error-rate detection passes into Scan —
+// the slice-1 chunk-4 deferral ("Chunk 5 of the serverless arc will
+// fold the call into Scan alongside scanDatabases / scanOKEClusters",
+// see ScanServerless above), wired here as part of option 2 (#300).
+//
+// Gated on the monitoring client being wired — i.e.
+// config.ServerlessMetricDetection.Enabled, which OCIFactory honors —
+// so a default scan's behavior and API-call surface stay exactly as
+// before; only an opted-in deployment walks Functions and runs the
+// detectors. The detection passes are themselves nil-tolerant on
+// coldStartStore / errorRateStore / connectionID, so even with a
+// monitoring client wired they no-op until the stores are present.
+//
+// Reuses the compartment set the earlier compute / database / OKE tier
+// walks already enumerated (tenancy root + first-level children) to
+// avoid a redundant compartment-list call. A discovery failure is
+// accumulated under ServiceIDServerless and does not halt the scan.
+func (s *Scanner) scanServerlessTier(ctx context.Context, allCompartments []ociCompartment, result *scanner.Result) {
+	if s.monitoringClient == nil {
+		return
+	}
+	compartmentIDs := make([]string, 0, len(allCompartments))
+	for _, comp := range allCompartments {
+		compartmentIDs = append(compartmentIDs, comp.ID)
+	}
+	snaps, err := s.ScanServerless(ctx, scanner.ScanScope{
+		AccountID:      s.TenancyOCID,
+		CompartmentIDs: compartmentIDs,
+	})
+	if err != nil {
+		recordPartialFailure(result, ServiceIDServerless, err.Error())
+		return
+	}
+	result.Serverless = snaps
+	s.runColdStartDetectionForServerless(ctx, result)
+	s.runErrorRateDetectionForServerless(ctx, result)
+}
+
 // ScanFunctions walks the OCI Functions surface for the configured
 // scope. Two-level walk: per compartment list Applications, then
 // per Application list Functions. Both levels follow OCI's

@@ -986,7 +986,20 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			logger.Warn("oci discovery substrate: NewSQLiteStore failed; OCI discovery disabled", zap.Error(oerr))
 		} else {
 			apiServer.SetOCIDiscoveryStore(ociStore)
-			apiServer.SetOCIDiscoveryScannerFactory(scannerfactory.OCIFactory{})
+			ociFactory := scannerfactory.OCIFactory{}
+			// Native-metric serverless detection (option 2, #300): when
+			// the flag is on and the app store supports observation
+			// persistence, wire the OCI Monitoring detectors. Default off
+			// keeps OCI serverless detection dormant (zero metric reads).
+			if config.ServerlessMetricDetection.Enabled {
+				if obs, ok := appStore.(scannerfactory.OCIObservationStore); ok {
+					ociFactory.MetricDetection = true
+					ociFactory.ObsStore = obs
+				} else {
+					logger.Warn("serverless_metric_detection.enabled is true but the application store does not support OCI observation persistence; OCI serverless detection stays dormant")
+				}
+			}
+			apiServer.SetOCIDiscoveryScannerFactory(ociFactory)
 			logger.Info("oci discovery substrate wired", zap.String("path", filepath.Join(discoveryBaseDir, "ociconnstore.db")))
 		}
 	}
