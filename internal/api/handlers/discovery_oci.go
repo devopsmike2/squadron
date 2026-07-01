@@ -951,6 +951,15 @@ type ociScanResponse struct {
 	FailedServices      []string                           `json:"failed_services,omitempty"`
 	ScanID              string                             `json:"scan_id"`
 	EventSources        []eventSourceRow                   `json:"event_sources,omitempty"`
+	// Orchestrations carries OCI Resource Manager Stack rows (the
+	// orchestration tier). The OCI scanner satisfies
+	// OrchestrationDiscoveryScanner via ScanResourceManagerStacks, but
+	// HandleScanOCIConnection never invoked it — so RM Stacks were dropped
+	// from every OCI scan, leaving the picker (PickResourceManagerLoggingPattern)
+	// with nothing to fire on. Now folded (mirrors the Azure Logic Apps fix in
+	// v0.89.222) so the Inventory tab's Orchestration sub-tab populates. Shared
+	// awsOrchestrationRow wire shape across all clouds.
+	Orchestrations []awsOrchestrationRow `json:"orchestrations"`
 	// Serverless carries the per-function rows (OCI Functions) with
 	// their cold-start + error-rate detection annotations (the
 	// snapshot type is marshaled directly), so both regression axes
@@ -1236,6 +1245,32 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		}
 	}
 
+	// Orchestration tier (OCI Resource Manager Stacks): the OCI scanner
+	// satisfies OrchestrationDiscoveryScanner via ScanResourceManagerStacks,
+	// but — unlike the AWS and Azure handlers — this one never invoked it, so
+	// RM Stacks were silently dropped from every OCI scan (orchestrations
+	// always empty, the RM-logging picker dormant). Mirror the event-source
+	// fold above (and the Azure Logic Apps wiring) so the Inventory tab's
+	// Orchestration sub-tab populates. Best-effort: a walk failure degrades the
+	// response to an empty orchestration slice rather than 500-ing the scan.
+	if tierListContains(parseTiersOrDefault(scanReq.Tiers), TierOrchestration) {
+		if orchScanner, ok := scn.(OrchestrationDiscoveryScanner); ok {
+			orchOut, orchErr := orchScanner.ScanOrchestrations(scanCtx, scanner.ScanScope{
+				AccountID: conn.TenancyOCID,
+				Regions:   regions,
+			})
+			if orchErr != nil {
+				if h.logger != nil {
+					h.logger.Warn("oci scan: orchestration scan failed",
+						zap.Error(orchErr), zap.String("tenancy_ocid", conn.TenancyOCID))
+				}
+			}
+			if len(orchOut) > 0 {
+				result.Orchestrations = append(result.Orchestrations, orchOut...)
+			}
+		}
+	}
+
 	resp := ociScanResponse{
 		ConnectionID:        conn.ID,
 		TenancyOCID:         conn.TenancyOCID,
@@ -1252,6 +1287,7 @@ func (h *DiscoveryOCIHandlers) HandleScanOCIConnection(c *gin.Context) {
 		FailedServices:      result.FailedServices,
 		ScanID:              result.ScanID,
 		EventSources:        marshalEventSourceRows(result.EventSources),
+		Orchestrations:      marshalOrchestrationRows(result.Orchestrations),
 		Serverless:          result.Serverless,
 	}
 	// slice 2 (v0.89.251) — persist the completed scan (best-effort). Scope
