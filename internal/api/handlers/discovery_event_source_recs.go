@@ -216,6 +216,8 @@ func eventSourceRecTitle(kind string) string {
 		return "Event Hubs namespace has no hub with Capture enabled"
 	case proposer.ONSLoggingRecommendationKind:
 		return "OCI Notification topic logging not enabled"
+	case proposer.QueuesLoggingRecommendationKind:
+		return "OCI queue logging not enabled"
 	default:
 		return "Event source observability gap"
 	}

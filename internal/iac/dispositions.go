@@ -139,6 +139,7 @@ var KindDispositions = map[string]string{
 	"streaming-logging-enable":                DispositionNewFile,
 	"streaming-config-preserves-headers":      DispositionPatchExisting,
 	"ons-logging-enable":                      DispositionNewFile,
+	"queues-logging-enable":                   DispositionNewFile,
 
 	// Serverless regression recs (detection→proposal). lambda-cold-start
 	// creates a NEW aws_lambda_provisioned_concurrency_config (referencing

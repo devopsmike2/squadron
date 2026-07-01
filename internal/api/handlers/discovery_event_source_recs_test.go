@@ -332,3 +332,24 @@ func TestAppendOCIEventSourceRecs_Fires(t *testing.T) {
 		t.Errorf("Disposition = %q, want new_file", recs[0].Disposition)
 	}
 }
+
+// TestAppendOCIEventSourceRecs_QueuesFires: an OCI queue scanned without
+// Logging produces a queues-logging-enable rec (second OCI surface).
+func TestAppendOCIEventSourceRecs_QueuesFires(t *testing.T) {
+	h := &DiscoveryOCIHandlers{exclusionStore: &fakeExclusionStore{}, logger: zap.NewNop()}
+	rows := []eventSourceRow{{
+		Provider: "oci", Surface: "queues", ResourceName: "q1",
+		ResourceARN: "ocid1.queue.oc1..abc", Region: "us-ashburn-1", HasLogAxis: false,
+	}}
+	var recs []recommendations.Recommendation
+	h.appendOCIEventSourceRecs(context.Background(), &recs, rows, "conn-1", "ocid1.tenancy.oc1..t", "us-ashburn-1", "scan-oq", time.Now().UTC())
+	if len(recs) != 1 {
+		t.Fatalf("want 1 OCI queues rec, got %d", len(recs))
+	}
+	if recs[0].ResourceKind != "queues-logging-enable" {
+		t.Errorf("ResourceKind = %q, want queues-logging-enable", recs[0].ResourceKind)
+	}
+	if recs[0].Disposition != iac.DispositionNewFile {
+		t.Errorf("Disposition = %q, want new_file", recs[0].Disposition)
+	}
+}
