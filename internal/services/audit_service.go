@@ -97,13 +97,25 @@ const (
 	AuditEventAgentRegistered   = "agent.registered"
 	AuditEventAgentDriftSynced  = "agent.drift.synced"
 	AuditEventAgentDriftDrifted = "agent.drift.drifted"
-	AuditEventConfigStored      = "config.stored"
-	AuditEventConfigApplied     = "config.applied"
-	AuditEventAlertRuleCreated  = "alert_rule.created"
-	AuditEventAlertRuleUpdated  = "alert_rule.updated"
-	AuditEventAlertRuleDeleted  = "alert_rule.deleted"
-	AuditEventAlertFired        = "alert.fired"
-	AuditEventAlertResolved     = "alert.resolved"
+
+	// v0.89.363 — operator reassigns an agent to a different group (or clears
+	// its assignment) via PATCH /api/v1/agents/:id/group. This mutates the
+	// stored GroupID/GroupName that rollout canary scoping reads back, so it
+	// belongs on the audit timeline alongside agent.registered / drift / delete
+	// (every other agent mutation already audits; this one didn't). Emitted by
+	// the HTTP handler — NOT the shared AgentService.UpdateAgentRegistration,
+	// which the OpAMP heartbeat also calls — and only when the group actually
+	// changes (a no-op reassignment to the same group emits nothing). Payload:
+	// agent_id, from_group_id, from_group_name, to_group_id, to_group_name
+	// (the from_*/to_* pairs are empty strings when clearing/unassigned).
+	AuditEventAgentGroupReassigned = "agent.group_reassigned"
+	AuditEventConfigStored         = "config.stored"
+	AuditEventConfigApplied        = "config.applied"
+	AuditEventAlertRuleCreated     = "alert_rule.created"
+	AuditEventAlertRuleUpdated     = "alert_rule.updated"
+	AuditEventAlertRuleDeleted     = "alert_rule.deleted"
+	AuditEventAlertFired           = "alert.fired"
+	AuditEventAlertResolved        = "alert.resolved"
 
 	// Action runner lifecycle. action.dispatched fires when Squadron
 	// signs a request and writes it as pending. action.executed and

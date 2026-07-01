@@ -656,3 +656,51 @@ func TestHandleUpdateAgentGroup_BadID(t *testing.T) {
 	w := patchGroup(t, handlers, "not-a-uuid", `{"group_id":"grp-1"}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+// TestHandleUpdateAgentGroup_EmitsAuditOnChange: reassigning an agent to a
+// different group records one agent.group_reassigned event carrying the
+// from→to transition. Every other agent mutation already audits; this closes
+// the gap for group reassignment.
+func TestHandleUpdateAgentGroup_EmitsAuditOnChange(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	audit := &recordingAuditService{}
+	h := NewAgentHandlers(mock, &mockConfigSender{}, zap.NewNop()).WithAuditService(audit)
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1"}))
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: "grp-1", Name: "prod"}))
+
+	w := patchGroup(t, h, agentID.String(), `{"group_id":"grp-1"}`)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	require.Len(t, audit.recorded, 1, "a group change must emit one audit event")
+	got := audit.recorded[0]
+	assert.Equal(t, services.AuditEventAgentGroupReassigned, got.EventType)
+	assert.Equal(t, services.AuditTargetAgent, got.TargetType)
+	assert.Equal(t, agentID.String(), got.TargetID)
+	assert.Equal(t, "", got.Payload["from_group_id"], "agent started unassigned")
+	assert.Equal(t, "grp-1", got.Payload["to_group_id"])
+	assert.Equal(t, "prod", got.Payload["to_group_name"])
+}
+
+// TestHandleUpdateAgentGroup_NoOpReassignEmitsNoAudit: re-selecting an agent's
+// CURRENT group (the Fleet dropdown re-picking the same value) returns 200 but
+// records no audit row — transition-only emission, mirroring the exclusion /
+// rollback-flag posture.
+func TestHandleUpdateAgentGroup_NoOpReassignEmitsNoAudit(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	audit := &recordingAuditService{}
+	h := NewAgentHandlers(mock, &mockConfigSender{}, zap.NewNop()).WithAuditService(audit)
+	ctx := context.Background()
+
+	gid, gname := "grp-1", "prod"
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{
+		ID: agentID, Name: "a1", GroupID: &gid, GroupName: &gname}))
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: "grp-1", Name: "prod"}))
+
+	w := patchGroup(t, h, agentID.String(), `{"group_id":"grp-1"}`)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, audit.recorded, 0, "no-op reassignment to the same group must not audit")
+}

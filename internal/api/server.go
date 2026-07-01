@@ -2052,7 +2052,8 @@ func (s *Server) Stop(ctx context.Context) error {
 // telemetryService, alertService, broker, ...) are safe to build eagerly.
 func (s *Server) registerRoutes() {
 	// Initialize handlers
-	agentHandlers := handlers.NewAgentHandlersWithTracer(s.agentService, s.commander, s.configsTracer, s.logger)
+	agentHandlers := handlers.NewAgentHandlersWithTracer(s.agentService, s.commander, s.configsTracer, s.logger).
+		WithAuditService(s.auditService)
 	configHandlers := handlers.NewConfigHandlers(s.agentService, s.commander, s.logger)
 	// v0.51 — wire the audit service so HandleLintConfig can persist
 	// config.lint_evaluated events when findings show up. nil-safe.
