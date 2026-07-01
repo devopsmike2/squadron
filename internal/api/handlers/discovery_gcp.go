@@ -1459,24 +1459,27 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 				Message: "Squadron's AI proposer failed: " + err.Error(),
 			}, http.StatusInternalServerError
 		}
-		if result.Declined {
-			return marshalRecResult(awsGenerateRecommendationsResponse{
-				Declined:        true,
-				Reason:          result.Reason,
-				Recommendations: []recommendations.Recommendation{},
-			})
-		}
-
 		now := time.Now().UTC()
-		recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
-		if err != nil {
-			if h.logger != nil {
-				h.logger.Error("gcp generate recommendations: plan step marshal failed", zap.Error(err))
+
+		// The LLM proposer can DECLINE when the "traditional" resource tiers
+		// are empty. The deterministic picker-based recs below (regression,
+		// event-source) are INDEPENDENT of the LLM plan and derive from their
+		// own scanned tiers, so they must run even when the proposer declines —
+		// otherwise a project whose only finding is e.g. a Cloud Tasks queue
+		// missing retry config would decline and silently drop a real rec.
+		var recs []recommendations.Recommendation
+		if !result.Declined {
+			built, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+			if err != nil {
+				if h.logger != nil {
+					h.logger.Error("gcp generate recommendations: plan step marshal failed", zap.Error(err))
+				}
+				return nil, &scanner.HumanizedError{
+					Code:    "PlanStepMarshalFailed",
+					Message: "Squadron could not encode the plan step. The error has been logged.",
+				}, http.StatusInternalServerError
 			}
-			return nil, &scanner.HumanizedError{
-				Code:    "PlanStepMarshalFailed",
-				Message: "Squadron could not encode the plan step. The error has been logged.",
-			}, http.StatusInternalServerError
+			recs = built
 		}
 
 		// Detection → proposal: append cold-start + error-rate regression recs
@@ -1492,6 +1495,17 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 		// best-effort; activates the dormant iacpicker GCP patterns.
 		h.appendGCPEventSourceRecs(ctx, &recs, req.ScanResult.EventSources,
 			conn.ID, conn.ProjectID, conn.Region, req.ScanResult.ScanID, now)
+
+		// If the proposer declined AND no deterministic picker rec fired,
+		// surface the decline honestly. When a deterministic rec DID fire,
+		// return it despite the empty LLM plan.
+		if result.Declined && len(recs) == 0 {
+			return marshalRecResult(awsGenerateRecommendationsResponse{
+				Declined:        true,
+				Reason:          result.Reason,
+				Recommendations: []recommendations.Recommendation{},
+			})
+		}
 
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{
