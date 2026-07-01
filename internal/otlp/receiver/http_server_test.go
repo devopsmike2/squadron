@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -332,4 +333,104 @@ func TestHandleOTLP_UncompressedStillWorks(t *testing.T) {
 	router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusAccepted, w.Code)
 	require.Len(t, idx.calls(), 1)
+}
+
+// buildTraceRequestJSON serializes an ExportTraceServiceRequest with the
+// OTLP/JSON (protojson) encoding — the wire shape a Content-Type:
+// application/json client sends.
+func buildTraceRequestJSON(t *testing.T, specs ...rsSpec) []byte {
+	t.Helper()
+	req := &coltracepb.ExportTraceServiceRequest{}
+	for _, sp := range specs {
+		rs := &tracepb.ResourceSpans{
+			Resource:   &resourcepb.Resource{Attributes: sp.attrs},
+			ScopeSpans: []*tracepb.ScopeSpans{{Spans: make([]*tracepb.Span, 0, sp.spans)}},
+		}
+		for i := 0; i < sp.spans; i++ {
+			s := &tracepb.Span{}
+			if i >= sp.roots {
+				s.ParentSpanId = []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+			}
+			rs.ScopeSpans[0].Spans = append(rs.ScopeSpans[0].Spans, s)
+		}
+		req.ResourceSpans = append(req.ResourceSpans, rs)
+	}
+	body, err := protojson.Marshal(req)
+	require.NoError(t, err)
+	return body
+}
+
+// TestHandleOTLP_JSONEncodedBody pins the fix for the OTLP/JSON gap: the
+// OTLP/HTTP spec requires servers to accept BOTH application/x-protobuf and
+// application/json (protojson). Before the fix a JSON body — sent by the OTel
+// Web SDK, JSON-configured language SDKs, and script-based clients — hit
+// proto.Unmarshal and returned 400, silently dropping the telemetry.
+func TestHandleOTLP_JSONEncodedBody(t *testing.T) {
+	idx := newRecordingIndex()
+	_, router := newTestHTTPServer(t, idx)
+
+	body := buildTraceRequestJSON(t, rsSpec{
+		attrs: []*commonpb.KeyValue{kvString("service.name", "json-client")},
+		spans: 3, roots: 1,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusAccepted, w.Code, "OTLP/JSON body must be accepted")
+	calls := idx.calls()
+	require.Len(t, calls, 1, "decoded JSON batch must reach the trace index")
+	assert.Equal(t, 3, calls[0].SpanCount)
+	assert.Equal(t, "json-client", calls[0].Attributes["service.name"])
+}
+
+// TestHandleOTLP_JSONContentTypeWithCharset verifies the media-type parameter
+// is tolerated — some clients send "application/json; charset=utf-8".
+func TestHandleOTLP_JSONContentTypeWithCharset(t *testing.T) {
+	idx := newRecordingIndex()
+	_, router := newTestHTTPServer(t, idx)
+
+	body := buildTraceRequestJSON(t, rsSpec{attrs: []*commonpb.KeyValue{kvString("service.name", "charset")}, spans: 1, roots: 1})
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusAccepted, w.Code)
+	require.Len(t, idx.calls(), 1)
+}
+
+// TestHandleOTLP_MalformedJSONRejected confirms the JSON path still rejects
+// genuinely invalid bodies with 400 (the decode contract is preserved, not
+// bypassed).
+func TestHandleOTLP_MalformedJSONRejected(t *testing.T) {
+	_, router := newTestHTTPServer(t, newRecordingIndex())
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader([]byte(`{"resourceSpans": [ this is not valid json`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestIsJSONContentType unit-pins the media-type classifier: the JSON subtype
+// (with or without parameters, any case) selects protojson; everything else —
+// protobuf, empty, unrelated — falls back to binary.
+func TestIsJSONContentType(t *testing.T) {
+	for _, tc := range []struct {
+		ct   string
+		want bool
+	}{
+		{"application/json", true},
+		{"application/json; charset=utf-8", true},
+		{"Application/JSON", true},
+		{"  application/json  ", true},
+		{"application/x-protobuf", false},
+		{"", false},
+		{"text/plain", false},
+	} {
+		if got := isJSONContentType(tc.ct); got != tc.want {
+			t.Errorf("isJSONContentType(%q) = %v, want %v", tc.ct, got, tc.want)
+		}
+	}
 }

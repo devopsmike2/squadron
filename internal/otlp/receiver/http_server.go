@@ -14,6 +14,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/worker"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -169,6 +170,38 @@ func (s *HTTPServer) readRequestBody(c *gin.Context) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
+// unmarshalOTLPRequest decodes an OTLP/HTTP request body into msg, selecting
+// the wire encoding from the request's Content-Type. The OTLP/HTTP spec
+// (opentelemetry.io/docs/specs/otlp/#binary-protobuf-encoding /
+// #json-protobuf-encoding) defines TWO encodings a compliant server must
+// accept: binary protobuf (Content-Type: application/x-protobuf, the default)
+// and Protobuf-JSON (Content-Type: application/json). The receiver previously
+// ran proto.Unmarshal unconditionally, so any standard OTLP/JSON client —
+// browser-based OTel Web SDKs (JSON-only), language SDKs configured for JSON,
+// and curl/script-based smoke tests — hit the binary decoder with a JSON body
+// and got HTTP 400 "invalid wire-format data", silently dropping all their
+// telemetry. This mirrors the Content-Encoding: gzip fix in readRequestBody:
+// honor what standard clients actually send. An absent or unrecognized
+// Content-Type falls back to protobuf, matching the spec's default and
+// preserving the prior behavior for existing clients.
+func unmarshalOTLPRequest(contentType string, body []byte, msg proto.Message) error {
+	if isJSONContentType(contentType) {
+		return protojson.Unmarshal(body, msg)
+	}
+	return proto.Unmarshal(body, msg)
+}
+
+// isJSONContentType reports whether the Content-Type header names the OTLP/JSON
+// encoding. The media type may carry parameters (e.g. "application/json;
+// charset=utf-8"), so only the type/subtype before any ';' is compared, case-
+// insensitively per RFC 9110.
+func isJSONContentType(contentType string) bool {
+	if i := strings.IndexByte(contentType, ';'); i >= 0 {
+		contentType = contentType[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(contentType), "application/json")
+}
+
 // handleOTLPTraces handles OTLP traces ingestion
 func (s *HTTPServer) handleOTLPTraces(c *gin.Context) {
 	start := time.Now()
@@ -183,7 +216,7 @@ func (s *HTTPServer) handleOTLPTraces(c *gin.Context) {
 
 	// Unmarshal to validate it's valid OTLP
 	var req coltracepb.ExportTraceServiceRequest
-	if err := proto.Unmarshal(body, &req); err != nil {
+	if err := unmarshalOTLPRequest(c.GetHeader("Content-Type"), body, &req); err != nil {
 		s.logger.Error("Failed to unmarshal traces request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid OTLP traces data"})
 		return
@@ -251,7 +284,7 @@ func (s *HTTPServer) handleOTLPMetrics(c *gin.Context) {
 
 	// Unmarshal to validate it's valid OTLP
 	var req colmetricspb.ExportMetricsServiceRequest
-	if err := proto.Unmarshal(body, &req); err != nil {
+	if err := unmarshalOTLPRequest(c.GetHeader("Content-Type"), body, &req); err != nil {
 		s.logger.Error("Failed to unmarshal metrics request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid OTLP metrics data"})
 		return
@@ -293,7 +326,7 @@ func (s *HTTPServer) handleOTLPLogs(c *gin.Context) {
 
 	// Unmarshal to validate it's valid OTLP
 	var req collogspb.ExportLogsServiceRequest
-	if err := proto.Unmarshal(body, &req); err != nil {
+	if err := unmarshalOTLPRequest(c.GetHeader("Content-Type"), body, &req); err != nil {
 		s.logger.Error("Failed to unmarshal logs request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid OTLP logs data"})
 		return
