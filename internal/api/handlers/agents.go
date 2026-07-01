@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -37,6 +38,20 @@ type AgentHandlers struct {
 	commander     AgentCommander
 	configsTracer *configs.Tracer // optional; nil disables config-push spans
 	logger        *zap.Logger
+
+	// auditService, when non-nil, receives an agent.group_reassigned event
+	// when an operator changes an agent's group via HandleUpdateAgentGroup.
+	// Optional — a nil recorder means "no audit emission" so existing tests
+	// stay compiling. Mirrors the DiscoveryHandlers.WithAuditService idiom.
+	auditService services.AuditService
+}
+
+// WithAuditService wires the audit recorder used by HandleUpdateAgentGroup.
+// Optional — a nil recorder is treated as "no audit emission". Fluent so the
+// server can chain it onto the constructor.
+func (h *AgentHandlers) WithAuditService(a services.AuditService) *AgentHandlers {
+	h.auditService = a
+	return h
 }
 
 // NewAgentHandlers creates a new agent handlers instance. configsTracer
@@ -410,6 +425,11 @@ func (h *AgentHandlers) HandleUpdateAgentGroup(c *gin.Context) {
 		return
 	}
 
+	// Snapshot the pre-change group BEFORE the normalize block mutates the
+	// agent in place, so the audit row can report the from→to transition.
+	fromGroupID := derefOrEmpty(agent.GroupID)
+	fromGroupName := derefOrEmpty(agent.GroupName)
+
 	// Normalize: treat null and "" identically as "clear assignment".
 	if req.GroupID == nil || *req.GroupID == "" {
 		agent.GroupID = nil
@@ -439,7 +459,44 @@ func (h *AgentHandlers) HandleUpdateAgentGroup(c *gin.Context) {
 		return
 	}
 
+	// Operator-action audit: record the group reassignment on the timeline,
+	// but only when the group actually changed — a no-op re-assignment to the
+	// same group (the Fleet dropdown re-selecting the current value) emits
+	// nothing, mirroring the exclusion/rollback-flag transition-only posture.
+	// Best-effort: a nil recorder or a Record error never fails the request.
+	toGroupID := derefOrEmpty(agent.GroupID)
+	toGroupName := derefOrEmpty(agent.GroupName)
+	if h.auditService != nil && toGroupID != fromGroupID {
+		actor := middleware.ActorFromGin(c).String()
+		if actor == "" {
+			actor = services.AuditActorSystem
+		}
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      actor,
+			EventType:  services.AuditEventAgentGroupReassigned,
+			TargetType: services.AuditTargetAgent,
+			TargetID:   agentID,
+			Action:     "group_reassigned",
+			Payload: map[string]any{
+				"agent_id":        agentID,
+				"from_group_id":   fromGroupID,
+				"from_group_name": fromGroupName,
+				"to_group_id":     toGroupID,
+				"to_group_name":   toGroupName,
+			},
+		})
+	}
+
 	c.JSON(http.StatusOK, agent)
+}
+
+// derefOrEmpty returns the pointed-to string or "" for a nil pointer. Used to
+// render optional group id/name fields for comparison + audit payloads.
+func derefOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // handleGetAgentStats handles GET /api/v1/agents/stats
