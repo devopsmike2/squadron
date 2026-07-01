@@ -93,7 +93,7 @@ func (e *Engine) dispatchActionStep(ctx context.Context, r *services.Rollout) {
 		e.logger.Warn("plan engine: decode action spec failed; aborting step",
 			zap.String("rollout_id", r.ID),
 			zap.Error(err))
-		e.triggerActionStepAbort(ctx, r, "action_spec_decode_failed")
+		e.triggerActionStepAbort(ctx, r, "action_spec_decode_failed", true)
 		return
 	}
 	actor := r.RequestedBy
@@ -107,7 +107,7 @@ func (e *Engine) dispatchActionStep(ctx context.Context, r *services.Rollout) {
 			zap.String("plan_id", r.PlanID),
 			zap.Int("step_index", r.PlanStepIndex),
 			zap.Error(err))
-		e.triggerActionStepAbort(ctx, r, "action_dispatch_failed")
+		e.triggerActionStepAbort(ctx, r, "action_dispatch_failed", true)
 		return
 	}
 	now := time.Now().UTC()
@@ -156,9 +156,12 @@ func (e *Engine) pollActionStep(ctx context.Context, r *services.Rollout) {
 	case "success":
 		e.finishActionStep(ctx, r)
 	case "failure":
-		e.triggerActionStepAbort(ctx, r, deniedReason(deniedFor, "action_runtime_failure"))
+		// Runner-reported: HandlePostActionResult already wrote the
+		// action.failed audit row, so don't duplicate it here.
+		e.triggerActionStepAbort(ctx, r, deniedReason(deniedFor, "action_runtime_failure"), false)
 	case "denied":
-		e.triggerActionStepAbort(ctx, r, deniedReason(deniedFor, "action_denied"))
+		// Runner-reported: action.denied already audited by the handler.
+		e.triggerActionStepAbort(ctx, r, deniedReason(deniedFor, "action_denied"), false)
 	default:
 		// pending / unknown — apply the engine-side timeout. The
 		// dispatcher returns the action_request's ExpiresAt which
@@ -166,7 +169,9 @@ func (e *Engine) pollActionStep(ctx context.Context, r *services.Rollout) {
 		// time. Once we're past it, declare action_timeout and
 		// trigger the backwards walk.
 		if !expiresAt.IsZero() && time.Now().UTC().After(expiresAt) {
-			e.triggerActionStepAbort(ctx, r, "action_timeout")
+			// Engine-side timeout sweep — the runner never posted a
+			// result, so emit the action.failed audit row ourselves.
+			e.triggerActionStepAbort(ctx, r, "action_timeout", true)
 		}
 	}
 }
@@ -207,6 +212,28 @@ func (e *Engine) finishActionStep(ctx context.Context, r *services.Rollout) {
 	}
 }
 
+// actionStepAuditPayload builds the payload shared by the plan-
+// embedded action lifecycle audit rows. plan_id + plan_step_index
+// are the keys the timeline's planEmbeddedActionTitle renderer uses
+// to title the row "Action <type> …"; action_type is best-effort
+// (the spec is decoded from the step when it's still decodable) so
+// the title matches the runner-reported action.* rows that
+// HandlePostActionResult writes. extra keys (e.g. reason) merge last.
+func actionStepAuditPayload(r *services.Rollout, extra map[string]any) map[string]any {
+	p := map[string]any{
+		"plan_id":         r.PlanID,
+		"plan_step_index": r.PlanStepIndex,
+		"step_kind":       services.StepKindAction,
+	}
+	if spec, err := services.DecodeActionStepSpec(r); err == nil && spec != nil {
+		p["action_type"] = spec.ActionType
+	}
+	for k, v := range extra {
+		p[k] = v
+	}
+	return p
+}
+
 // triggerActionStepAbort flips an in-progress action step to
 // Aborted with the supplied reason, then runs the same plan-level
 // walk a kind=rollout failure does (cancel followers + roll back
@@ -214,7 +241,14 @@ func (e *Engine) finishActionStep(ctx context.Context, r *services.Rollout) {
 // implementation skips action steps in the succeeded prefix per
 // spec §5 — action reversal is an action-type property, not a
 // plan property — so the engine doesn't have to filter here.
-func (e *Engine) triggerActionStepAbort(ctx context.Context, r *services.Rollout, reason string) {
+//
+// engineInitiated marks the terminations the runner never posted a
+// result for (spec-decode failure, dispatch failure, the engine-
+// side timeout sweep). Runner-reported failure/denied paths pass
+// false: HandlePostActionResult already wrote their action.failed /
+// action.denied audit row (with plan context) before the engine
+// polled the terminal status, so re-emitting here would duplicate.
+func (e *Engine) triggerActionStepAbort(ctx context.Context, r *services.Rollout, reason string, engineInitiated bool) {
 	r.State = services.RolloutStateAborted
 	r.AbortReason = reason
 	if err := e.rolloutService.Persist(ctx, r); err != nil {
@@ -228,6 +262,16 @@ func (e *Engine) triggerActionStepAbort(ctx context.Context, r *services.Rollout
 		"plan_step_index": r.PlanStepIndex,
 		"step_kind":       services.StepKindAction,
 	})
+	// Engine-initiated terminations bypass HandlePostActionResult, so
+	// without this they'd carry only the generic rollout.aborted row
+	// and render as "Rollout aborted" instead of "Action <type>
+	// failed" on the plan timeline. Emit the action.failed row so an
+	// engine-detected action failure is audited + titled exactly like
+	// a runner-reported one.
+	if engineInitiated {
+		e.recordAudit(ctx, r, services.AuditEventActionFailed, "failed",
+			actionStepAuditPayload(r, map[string]any{"reason": reason}))
+	}
 	e.publishStateChange(r, "aborted")
 	e.logger.Warn("plan engine: action step aborted",
 		zap.String("rollout_id", r.ID),
