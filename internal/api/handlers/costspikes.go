@@ -14,6 +14,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/costspikes"
+	"github.com/devopsmike2/squadron/internal/services"
 	storetypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -38,10 +39,23 @@ type CostSpikeStore interface {
 type CostSpikesHandlers struct {
 	store    CostSpikeStore
 	detector *costspikes.Detector // optional — when nil, /tick is disabled
+
+	// auditService, when non-nil, receives a cost_spike.acknowledged event on
+	// the first ack of each spike. Optional — a nil recorder means "no audit
+	// emission". Mirrors the DiscoveryHandlers.WithAuditService idiom.
+	auditService services.AuditService
 }
 
 func NewCostSpikesHandlers(store CostSpikeStore, det *costspikes.Detector) *CostSpikesHandlers {
 	return &CostSpikesHandlers{store: store, detector: det}
+}
+
+// WithAuditService wires the audit recorder used by HandleAcknowledge.
+// Optional — a nil recorder is treated as "no audit emission". Fluent so the
+// server can chain it onto NewCostSpikesHandlers.
+func (h *CostSpikesHandlers) WithAuditService(a services.AuditService) *CostSpikesHandlers {
+	h.auditService = a
+	return h
 }
 
 // HandleList — GET /api/v1/alerts/cost-spikes
@@ -113,6 +127,23 @@ func (h *CostSpikesHandlers) HandleAcknowledge(c *gin.Context) {
 	if err := h.store.UpdateCostSpikeEvent(c.Request.Context(), ev); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	// Operator-action audit: acknowledging a spike is a state change (it hides
+	// the dashboard banner) and belongs on the timeline. Emitted only here —
+	// the idempotent re-ack path above returns before this, so a spike
+	// acknowledged twice produces exactly one audit row. Best-effort.
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      actor,
+			EventType:  services.AuditEventCostSpikeAcknowledged,
+			TargetType: services.AuditTargetCostSpike,
+			TargetID:   id,
+			Action:     "acknowledged",
+			Payload: map[string]any{
+				"cost_spike_id":   id,
+				"acknowledged_by": actor,
+			},
+		})
 	}
 	c.JSON(http.StatusOK, ev)
 }

@@ -607,4 +607,28 @@ const (
 	// at all" and SIEM consumers can re-fetch the endpoint for the
 	// per-diagnostic breakdown.
 	AuditEventDiscoveryWorkloadHealthRequested = "discovery.workload_health.requested"
+
+	// v0.89.362 — operator-action audit for the retrospective-savings and
+	// cost-spike surfaces. Both mutated state on an operator click (recording
+	// an Apply outcome / acknowledging a spike) but emitted no audit row, so
+	// the action left no trace on the "what changed when" timeline the rest of
+	// Squadron routes through. These close that gap.
+	//
+	//   - savings.recommendation_applied: emitted by
+	//     POST /api/v1/recommendations/:id/applied AFTER the
+	//     RecommendationOutcome row is created. Actor is the operator (or
+	//     "system"). TargetType AuditTargetRecommendation, TargetID the
+	//     recommendation id. Payload: recommendation_id, outcome_id, title,
+	//     category, est_savings_per_month_usd_at_apply.
+	//   - cost_spike.acknowledged: emitted by
+	//     POST /api/v1/alerts/cost-spikes/:id/acknowledge on the FIRST ack
+	//     only — an idempotent re-ack of an already-acknowledged spike returns
+	//     200 without emitting a duplicate row. TargetType AuditTargetCostSpike,
+	//     TargetID the spike id. Payload: cost_spike_id, acknowledged_by.
+	AuditEventSavingsRecommendationApplied = "savings.recommendation_applied"
+	AuditEventCostSpikeAcknowledged        = "cost_spike.acknowledged"
+
+	// Target types for the two operator-action surfaces above.
+	AuditTargetRecommendation = "recommendation"
+	AuditTargetCostSpike      = "cost_spike"
 )

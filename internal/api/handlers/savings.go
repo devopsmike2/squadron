@@ -18,6 +18,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/insights"
 	"github.com/devopsmike2/squadron/internal/pricing"
 	"github.com/devopsmike2/squadron/internal/recommendations"
+	"github.com/devopsmike2/squadron/internal/services"
 	storetypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -45,9 +46,23 @@ type SavingsHandlers struct {
 	pricer   *pricing.Projector
 	logger   *zap.Logger
 
+	// auditService, when non-nil, receives a savings.recommendation_applied
+	// event each time an operator clicks Apply. Optional — a nil recorder
+	// means "no audit emission" so existing tests that don't wire it stay
+	// compiling. Mirrors the DiscoveryHandlers.WithAuditService idiom.
+	auditService services.AuditService
+
 	// Window used for byte-rate measurements. 1h matches insights'
 	// default cache key, so reads here piggyback on the same cache.
 	measureWindow insights.Window
+}
+
+// WithAuditService wires the audit recorder used by HandleApplied. Optional —
+// a nil recorder is treated as "no audit emission". Fluent so the server can
+// chain it onto NewSavingsHandlers. Mirrors DiscoveryHandlers.WithAuditService.
+func (h *SavingsHandlers) WithAuditService(a services.AuditService) *SavingsHandlers {
+	h.auditService = a
+	return h
 }
 
 func NewSavingsHandlers(
@@ -151,6 +166,26 @@ func (h *SavingsHandlers) HandleApplied(c *gin.Context) {
 			zap.String("rec_id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	// Operator-action audit: an Apply click mutates persisted state (the
+	// outcome row the Savings page tracks), so it belongs on the "what
+	// changed when" timeline. Best-effort — a nil recorder or a Record error
+	// never fails the request the operator already succeeded at.
+	if h.auditService != nil {
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      actor,
+			EventType:  services.AuditEventSavingsRecommendationApplied,
+			TargetType: services.AuditTargetRecommendation,
+			TargetID:   id,
+			Action:     "applied",
+			Payload: map[string]any{
+				"recommendation_id":                  id,
+				"outcome_id":                         outcome.ID,
+				"title":                              outcome.Title,
+				"category":                           outcome.Category,
+				"est_savings_per_month_usd_at_apply": outcome.EstSavingsPerMonthUSDAtApply,
+			},
+		})
 	}
 	c.JSON(http.StatusOK, outcome)
 }
