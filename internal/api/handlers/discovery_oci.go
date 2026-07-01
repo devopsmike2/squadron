@@ -1573,6 +1573,13 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 		h.appendOCIEventSourceRecs(ctx, &recs, req.ScanResult.EventSources,
 			conn.ID, conn.TenancyOCID, conn.Region, req.ScanResult.ScanID, now)
 
+		// Detection → proposal: append OCI orchestration recommendations
+		// (Resource Manager Stack logging) for any scanned RM Stack with a
+		// logging gap. Additive + best-effort; activates the dormant
+		// iacpicker PickResourceManagerLoggingPattern (#328 Slice 2).
+		h.appendOCIOrchestrationRecs(ctx, &recs, req.ScanResult.Orchestrations,
+			conn.ID, conn.TenancyOCID, conn.Region, req.ScanResult.ScanID, now)
+
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{
 				Actor:      services.AuditActorSystem,

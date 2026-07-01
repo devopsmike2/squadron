@@ -157,6 +157,12 @@ func KindToResourceTypes(kind string) []string {
 		return []string{"oci_ons_notification_topic"}
 	case "queues-logging-enable":
 		return []string{"oci_queue_queue", "oci_logging_log"}
+	case "resmgr-logging-enable":
+		// Orchestration tier (#328). The picker adds an oci_logging_log_group
+		// + oci_logging_log (SERVICE source=resourcemanager) referencing the
+		// Stack by id, so placement lands on the file holding the Stack (or an
+		// existing oci_logging_log if the repo already groups logging config).
+		return []string{"oci_resourcemanager_stack", "oci_logging_log"}
 	// --- Serverless regression recs (detection→proposal). Resource types
 	// mirror the iacpicker cold-start / error-rate snippets so open-PR can
 	// suggest the placement file that holds the function / service. ---

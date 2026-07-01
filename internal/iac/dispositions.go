@@ -154,6 +154,12 @@ var KindDispositions = map[string]string{
 	"ocifunc-cold-start-baseline":          DispositionPatchExisting,
 	"span-quality-error-rate-spike":        DispositionPatchExisting,
 	"span-quality-sampling-too-aggressive": DispositionPatchExisting,
+
+	// Orchestration tier (#328). resmgr-logging-enable creates a NEW
+	// oci_logging_log_group + oci_logging_log (SERVICE log with
+	// source=resourcemanager) referencing the existing Stack by id, so it's a
+	// clean drop-in sibling file — new_file.
+	"resmgr-logging-enable": DispositionNewFile,
 }
 
 // DispositionFor returns the disposition for a given resource_kind.
