@@ -272,6 +272,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	buildEdition := wireExtensions(rolloutService)
 	logger.Info("squadron build edition", zap.String("edition", buildEdition))
 
+	// Resolve commercial-tier detector activation through the edition
+	// seam (extension/detectors + wire_detectors_*.go). The OSS build's
+	// provider forces this false regardless of the runtime switch — the
+	// entitlement is the compiled-in edition, not config.CommercialDetectors.
+	// Enabled. The enterprise edition's provider honours the switch as a
+	// per-scan cost/safety toggle. Every activation site below reads this
+	// resolved value, never the raw config flag.
+	commercialDetectorsEnabled := commercialDetectorProvider().CommercialDetectorsActive(config.CommercialDetectors.Enabled)
+	if config.CommercialDetectors.Enabled && !commercialDetectorsEnabled {
+		logger.Info("commercial_detectors.enabled is set but this build does not include the commercial-tier detectors; they stay dormant (entitlement is the enterprise edition, not this flag)",
+			zap.String("edition", buildEdition))
+	}
+
 	// Bootstrap an initial token if auth is enabled and the store has
 	// none yet. Operators see this token in stderr on first start; they
 	// copy it, use it to log in, create proper labeled tokens, and
@@ -493,9 +506,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// must satisfy the cold-start + error-rate write contracts (the
 	// *sqlite.Storage appStore does).
 	if commercialObs, ok := appStore.(handlers.CommercialObservationStore); ok {
-		apiServer.SetCommercialDetectors(config.CommercialDetectors.Enabled, commercialObs)
-	} else if config.CommercialDetectors.Enabled {
-		logger.Warn("commercial_detectors.enabled is true but the application store does not support observation persistence; detectors stay dormant")
+		apiServer.SetCommercialDetectors(commercialDetectorsEnabled, commercialObs)
+	} else if commercialDetectorsEnabled {
+		logger.Warn("commercial detectors are active but the application store does not support observation persistence; detectors stay dormant")
 	}
 
 	// Native-metric serverless detector activation (option 2; #300 resolution).
@@ -1099,7 +1112,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		} else {
 			apiServer.SetAzureDiscoveryStore(azStore)
 			apiServer.SetAzureDiscoveryScannerFactory(scannerfactory.AzureFactory{
-				CommercialDetectors: config.CommercialDetectors.Enabled,
+				CommercialDetectors: commercialDetectorsEnabled,
 			})
 			logger.Info("azure discovery substrate wired", zap.String("path", filepath.Join(discoveryBaseDir, "azureconnstore.db")))
 		}
