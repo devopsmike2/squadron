@@ -1530,6 +1530,13 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 			h.coldStartStore, h.errorRateStore, h.exclusionStore,
 			conn.ID, conn.TenancyOCID, conn.Region, req.ScanResult.ScanID, now, h.logger)
 
+		// Detection → proposal: append OCI event-source recommendations
+		// (Notification Service logging) for any scanned event source with
+		// a config-gap. Additive + best-effort; activates the dormant
+		// iacpicker OCI pattern.
+		h.appendOCIEventSourceRecs(ctx, &recs, req.ScanResult.EventSources,
+			conn.ID, conn.TenancyOCID, conn.Region, req.ScanResult.ScanID, now)
+
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{
 				Actor:      services.AuditActorSystem,

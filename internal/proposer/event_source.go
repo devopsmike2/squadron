@@ -44,6 +44,7 @@ const (
 	EventGridCloudEventRecommendationKind   = "eventgrid-cloudevent-schema-enforce"
 	EventHubsDiagnosticsRecommendationKind  = "eventhubs-diagnostics-enable"
 	EventHubsCaptureRecommendationKind      = "eventhubs-capture-enable"
+	ONSLoggingRecommendationKind            = "ons-logging-enable"
 )
 
 // Surface discriminators the scanners stamp on event-source snapshots.
@@ -51,12 +52,13 @@ const (
 // so the detection branch stays dependency-light; the per-Check tests
 // pin the literals against the scanner constants.
 const (
-	awsSNSSurface         = "sns"
-	awsSQSSurface         = "sqs"
-	gcpCloudTasksSurface  = "cloudtasks"
-	gcpPubSubLiteSurface  = "pubsublite"
-	azureEventGridSurface = "eventgrid"
-	azureEventHubsSurface = "eventhubs"
+	awsSNSSurface           = "sns"
+	awsSQSSurface           = "sqs"
+	gcpCloudTasksSurface    = "cloudtasks"
+	gcpPubSubLiteSurface    = "pubsublite"
+	azureEventGridSurface   = "eventgrid"
+	azureEventHubsSurface   = "eventhubs"
+	ociNotificationsSurface = "notifications"
 )
 
 // EventSourceInventoryRow is the minimal projection of a scanned
@@ -153,6 +155,7 @@ var EventSourceChecks = []EventSourceCheck{
 	CheckEventGridCloudEventSchema,
 	CheckEventHubsDiagnostics,
 	CheckEventHubsCapture,
+	CheckONSLogging,
 }
 
 // resolveRecID picks the stable recommendation identifier for a row
@@ -473,4 +476,27 @@ func CheckEventHubsCapture(
 		ResourceTFName: row.ResourceTFName,
 	})
 	return buildEventSourceDraft(EventHubsCaptureRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckONSLogging is the detection branch for the OCI Notification
+// Service logging kind. Fires on Surface==notifications && !HasLogAxis
+// (the topic has no OCI Logging configured, so there's no audit trail of
+// delivery events). Terraform from iacpicker.PickONSLoggingPattern.
+func CheckONSLogging(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != ociNotificationsSurface || row.HasLogAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, ONSLoggingRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickONSLoggingPattern(iacpicker.RecommendationContext{
+		Provider:       "oci",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(ONSLoggingRecommendationKind, recID, row, scope, terraform, reasoning), nil
 }

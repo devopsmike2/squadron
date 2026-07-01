@@ -309,3 +309,26 @@ func TestAppendAzureEventSourceRecs_Fires(t *testing.T) {
 		}
 	}
 }
+
+// TestAppendOCIEventSourceRecs_Fires: an ONS topic scanned without OCI
+// Logging becomes an ons-logging-enable recommendation. Exercises the
+// OCI adapter (the fourth and final cloud in the picker-activation arc).
+func TestAppendOCIEventSourceRecs_Fires(t *testing.T) {
+	h := &DiscoveryOCIHandlers{exclusionStore: &fakeExclusionStore{}, logger: zap.NewNop()}
+	rows := []eventSourceRow{{
+		Provider: "oci", Surface: "notifications", ResourceName: "t1",
+		ResourceARN: "ocid1.onstopic.oc1..abc", Region: "us-ashburn-1", HasLogAxis: false,
+	}}
+	var recs []recommendations.Recommendation
+	h.appendOCIEventSourceRecs(context.Background(), &recs, rows, "conn-1", "ocid1.tenancy.oc1..t", "us-ashburn-1", "scan-o", time.Now().UTC())
+
+	if len(recs) != 1 {
+		t.Fatalf("want 1 OCI event-source rec, got %d", len(recs))
+	}
+	if recs[0].ResourceKind != "ons-logging-enable" {
+		t.Errorf("ResourceKind = %q, want ons-logging-enable", recs[0].ResourceKind)
+	}
+	if recs[0].Disposition != iac.DispositionNewFile {
+		t.Errorf("Disposition = %q, want new_file", recs[0].Disposition)
+	}
+}
