@@ -48,14 +48,17 @@ func PickColdStartProvisionedConcurrencyPattern(ctx RecommendationContext) Picke
 	terraform := fmt.Sprintf(`resource "aws_lambda_provisioned_concurrency_config" "%s" {
   function_name                     = aws_lambda_function.%s.function_name
   provisioned_concurrent_executions = 1  # operator tunes
-  # qualifier must be a PUBLISHED version or alias — provisioned concurrency
-  # cannot target $LATEST. .version resolves to a real version only when the
-  # aws_lambda_function has publish = true.
-  qualifier                         = aws_lambda_function.%s.version
+  # REQUIRED: qualifier must be a PUBLISHED version or alias. Provisioned
+  # concurrency CANNOT target $LATEST — applying against it fails with
+  # "Provisioned Concurrency configuration is not supported for the $LATEST
+  # version". Replace the placeholder below with EITHER:
+  #   - aws_lambda_function.%s.version  (only if that resource has publish = true),
+  #   - or an alias, e.g. aws_lambda_alias.%s_live.name.
+  qualifier                         = "REPLACE_WITH_PUBLISHED_VERSION_OR_ALIAS"
 }
-`, name, name, name)
+`, name, name, name, name)
 
-	reasoning := "Provisioned concurrency keeps the Lambda execution environment warm, eliminating cold-start latency for the configured concurrency floor. Tune the value based on your traffic pattern; 1 is the minimum to start. If your cause is actually init-script regression or architecture change, decline this PR and address the actual cause."
+	reasoning := "Provisioned concurrency keeps the Lambda execution environment warm, eliminating cold-start latency for the configured concurrency floor. Tune the value based on your traffic pattern; 1 is the minimum to start. IMPORTANT before you apply: provisioned concurrency cannot target $LATEST — set the qualifier to a published version (the function must have publish = true) or an alias. The snippet ships a placeholder qualifier you must replace, otherwise terraform apply fails. If your cause is actually init-script regression or architecture change, decline this PR and address the actual cause."
 
 	return PickedPattern{
 		PrimaryTerraform: terraform,
