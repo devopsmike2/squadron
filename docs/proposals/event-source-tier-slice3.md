@@ -5,6 +5,22 @@ Widens the event source tier claim from 1 surface per cloud
 to 2 by adding AWS SNS as a second AWS event source surface
 alongside EventBridge (slice 1).
 
+**Update (picker-activation arc, v0.89.348):** the
+`sns-delivery-logging-enable` recommendation is now emitted
+end-to-end. Slice 3 built the scanner (aws/sns.go, HasLogAxis =
+any per-protocol delivery-feedback role set) and the iacpicker
+emitter (`PickSNSDeliveryLoggingPattern`) but never wired a
+detection branch to call the picker — the kind was dormant in
+production. The picker-activation arc adds
+`proposer.CheckSNSDeliveryLogging` (fires when a scanned SNS topic
+has `HasLogAxis == false`, honoring exclusions/verdict-learning)
+and the handler append
+`DiscoveryHandlers.appendAWSEventSourceRecs`, so a real discovery
+scan now surfaces the recommendation and opens a Terraform PR. This
+is the reference slice for wiring the remaining dormant
+event-source pickers (SQS redrive, Cloud Tasks, Event Grid, Event
+Hubs, ONS, Pub/Sub Lite, Resource Manager).
+
 **See also:**
 [Event source tier slice 1](./event-source-tier-slice1.md),
 [Event source tier slice 2](./event-source-tier-slice2.md),

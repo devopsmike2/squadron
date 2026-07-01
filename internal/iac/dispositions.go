@@ -121,6 +121,7 @@ var KindDispositions = map[string]string{
 	"eventbridge-schemas-discover":            DispositionNewFile,
 	"eventbridge-logging-enable":              DispositionNewFile,
 	"eventbridge-rule-preserves-trace":        DispositionPatchExisting,
+	"sns-delivery-logging-enable":             DispositionPatchExisting,
 	"sqs-redrive-policy-enable":               DispositionPatchExisting,
 	"pubsub-trace-enable":                     DispositionPatchExisting,
 	"pubsub-schema-attach":                    DispositionNewFile,

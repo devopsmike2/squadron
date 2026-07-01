@@ -3211,6 +3211,14 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		h.appendAWSColdStartRegressionRecs(ctx, &recs, req.ScanResult, now)
 		h.appendAWSErrorRateRegressionRecs(ctx, &recs, req.ScanResult, now)
 
+		// Detection → proposal: append deterministic event-source
+		// recommendations (slice 1: AWS SNS delivery-logging) for any
+		// scanned event source with a config-gap. Additive + best-effort;
+		// gated by data availability (only SNS rows lacking the log axis
+		// fire) + exclusions. Activates the iacpicker event-source
+		// patterns that were built + tested but had no production caller.
+		h.appendAWSEventSourceRecs(ctx, &recs, req.ScanResult, now)
+
 		// Audit event. Payload deliberately omits the Terraform content —
 		// audit rows shouldn't grow with snippet size. step_count +
 		// scan_id + token metering are what an auditor needs to
@@ -3370,9 +3378,11 @@ func classifyResourceKind(stepName, snippet string) string {
 	// TF-emitting kinds: a Schemas Discoverer (xray/schemas share this
 	// TF), a log-target rule (logging-enable), and an input-transformer
 	// rule that preserves the trace header (rule-preserves-trace). SQS
-	// emits a redrive policy + DLQ. Audit-only kinds (sns-*, sqs-
-	// deadletter-queue-attach) carry no Terraform and never open a PR,
-	// so they need no classification.
+	// emits a redrive policy + DLQ; SNS emits the delivery-logging IAM
+	// role + per-protocol feedback attachments (picker-activation slice
+	// 1). The audit-only kinds (sns-subscriptions-attach,
+	// sqs-deadletter-queue-attach) carry no Terraform and never open a
+	// PR, so they need no classification.
 	case strings.Contains(lower, "aws_schemas_discoverer"):
 		return "eventbridge-schemas-discover"
 	case strings.Contains(lower, "aws_cloudwatch_event_target") && strings.Contains(lower, "input_transformer"):
@@ -3381,6 +3391,8 @@ func classifyResourceKind(stepName, snippet string) string {
 		strings.Contains(lower, "aws_cloudwatch_event_rule"),
 		strings.Contains(lower, "aws_cloudwatch_event_bus"):
 		return "eventbridge-logging-enable"
+	case strings.Contains(lower, "aws_sns_topic") && strings.Contains(lower, "feedback_role_arn"):
+		return "sns-delivery-logging-enable"
 	case strings.Contains(lower, "aws_sqs_queue"):
 		return "sqs-redrive-policy-enable"
 	}
