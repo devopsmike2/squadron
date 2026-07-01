@@ -13,6 +13,32 @@ import (
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
+// retentionGCContract mirrors the two interfaces cmd/all-in-one asserts the
+// application store against to schedule retention GC (operatorTableRetentionGC
+// + discoveryTableRetentionGC). Those assertions are done at RUNTIME via a type
+// switch, so a signature drift on any one prune method would silently fail the
+// assertion and disable the whole sweep — a table would leak in production with
+// no compile error and no test failure. Pinning *Storage against the combined
+// contract here turns that latent failure into a build error the moment a
+// signature changes. Keep this list in lockstep with the two main.go interfaces.
+type retentionGCContract interface {
+	// operator-activity tables
+	DeleteClosedCostSpikeEventsBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteRecommendationOutcomesBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteDismissedIncidentDraftsBefore(ctx context.Context, before time.Time) (int64, error)
+	// discovery/serverless scan tables
+	DeleteServerlessBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteEventSourceInstancesBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteOrchestrationInstancesBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteColdStartObservationsBefore(ctx context.Context, before time.Time) error
+	DeleteErrorRateObservationsBefore(ctx context.Context, before time.Time) error
+}
+
+// Compile-time guard: the sqlite store must satisfy every retention predicate
+// main.go schedules. If this stops compiling, a Delete*Before signature drifted
+// and the corresponding GC sweep would silently no-op in production.
+var _ retentionGCContract = (*Storage)(nil)
+
 // TestRetention_DeleteClosedCostSpikeEventsBefore: closed spikes older
 // than the cutoff are pruned; recent closed spikes AND open spikes (any
 // age) survive — an unresolved anomaly must never be GC'd.

@@ -739,6 +739,67 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			zap.Duration("interval", 24*time.Hour))
 	}
 
+	// Retention GC for the discovery/serverless scan tables. Each grows
+	// without bound on a long-lived deployment:
+	//   - serverless_instance / event_source_instance / orchestration_instance
+	//     gain one row set per SCAN (keyed by created_at); the per-connection
+	//     dashboards read only the MOST-RECENT scan, so older scans' rows are
+	//     dead weight that accumulates every re-scan.
+	//   - cold_start_observation / error_rate_observation gain one row per
+	//     detector observation (keyed by observed_at); the regression readers
+	//     only look back 24h/168h, so anything older is unreadable.
+	// Each table shipped a Delete*Before prune predicate but had no scheduled
+	// caller — they were exercised only by unit tests, so the tables leaked in
+	// production. This wires them on the same 24h/90-day cadence as the
+	// operator-activity tables. A SEPARATE interface + assertion from
+	// operatorTableRetentionGC so a signature drift in one cluster can't
+	// silently disable the other. Safe-degrade: only the sqlite store
+	// implements the predicates (the memory store fails the assertion cleanly,
+	// as it does for the operator-table sweep).
+	type discoveryTableRetentionGC interface {
+		DeleteServerlessBefore(ctx context.Context, before time.Time) (int64, error)
+		DeleteEventSourceInstancesBefore(ctx context.Context, before time.Time) (int64, error)
+		DeleteOrchestrationInstancesBefore(ctx context.Context, before time.Time) (int64, error)
+		DeleteColdStartObservationsBefore(ctx context.Context, before time.Time) error
+		DeleteErrorRateObservationsBefore(ctx context.Context, before time.Time) error
+	}
+	if gcStore, ok := appStore.(discoveryTableRetentionGC); ok {
+		const discoveryTableRetention = 90 * 24 * time.Hour
+		go func() {
+			t := time.NewTicker(24 * time.Hour)
+			defer t.Stop()
+			for range t.C {
+				cutoff := time.Now().UTC().Add(-discoveryTableRetention)
+				if n, err := gcStore.DeleteServerlessBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("serverless_instance retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("serverless_instance retention GC ran", zap.Int64("deleted", n))
+				}
+				if n, err := gcStore.DeleteEventSourceInstancesBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("event_source_instance retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("event_source_instance retention GC ran", zap.Int64("deleted", n))
+				}
+				if n, err := gcStore.DeleteOrchestrationInstancesBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("orchestration_instance retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("orchestration_instance retention GC ran", zap.Int64("deleted", n))
+				}
+				// The two observation tables' predicates return only an error
+				// (their per-resource API consumers never needed a row count).
+				if err := gcStore.DeleteColdStartObservationsBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("cold_start_observation retention GC failed", zap.Error(err))
+				}
+				if err := gcStore.DeleteErrorRateObservationsBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("error_rate_observation retention GC failed", zap.Error(err))
+				}
+			}
+		}()
+		logger.Info("discovery-table retention GC started",
+			zap.Duration("retention", discoveryTableRetention),
+			zap.Duration("interval", 24*time.Hour))
+	}
+
 	// v0.31 Pipeline Health — collector self-metrics surface. Reads
 	// from the dedicated pipeline_health_samples table populated by
 	// the worker pool's extractor. Needs an AgentLister so the fleet
