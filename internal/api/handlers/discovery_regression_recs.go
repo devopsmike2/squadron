@@ -247,17 +247,117 @@ func appendErrorRateRegressionRecs(
 	}
 }
 
-// appendRegressionRecs runs both regression-rec passes (cold-start +
-// error-rate) over a serverless snapshot slice for one connection scope. The
-// per-cloud recs handlers call this directly with their connection identity, so
-// they need no proposer import. exclusions is a DiscoveryExclusionStore (the
-// app store) which structurally satisfies both proposer exclusion interfaces.
+// samplingBuilder is the shared shape of the per-surface sampling-rate proposer
+// builders (all five take the same SamplingRateDetectionResult + row + scope +
+// exclusions), so sampling can dispatch by surface uniformly — like error-rate,
+// and unlike cold-start (which needs per-surface finding types).
+type samplingBuilder func(context.Context, proposer.SamplingRateInventoryRow, *proposer.SamplingRateDetectionResult, proposer.SamplingRateScope, proposer.SamplingRateExclusionStore) (*proposer.SamplingRateRecommendationDraft, error)
+
+// samplingBuilderForSurface maps a serverless surface to its sampling-rate
+// builder (all five share the span-quality-sampling-too-aggressive kind).
+func samplingBuilderForSurface(surface string) samplingBuilder {
+	switch surface {
+	case "lambda":
+		return proposer.CheckLambdaSamplingRate
+	case "cloudrun":
+		return proposer.CheckCloudRunSamplingRate
+	case "cloudfunc":
+		return proposer.CheckCloudFunctionsSamplingRate
+	case "azfunc":
+		return proposer.CheckAzureFunctionsSamplingRate
+	case "ocifunc":
+		return proposer.CheckOCIFunctionsSamplingRate
+	default:
+		return nil
+	}
+}
+
+// appendSamplingRegressionRecs appends one sampling-too-aggressive
+// recommendation per serverless row whose most-recent live sampling result
+// (below the 5% floor AND >= 1000 invocations) is held in the sampling cache.
+// Unlike cold-start / error-rate — which reconstruct a detection result from a
+// time-series sqlite observation store — sampling is a LIVE join recomputed
+// every scan (cloud invocation count ⋈ traceindex span count), so the backing
+// is the in-memory SamplingObservationCache the scan-response annotation pass
+// filled (samplingReader, a SamplingDetector). A nil reader, a cache miss
+// (zero-value result → ShouldFire false), an unknown surface, or a builder
+// error never blocks the recs already in `recs`. Exclusions honored inside the
+// builder. A row whose SamplingExceedsFloor flag is explicitly false is skipped
+// before the lookup; a nil flag falls through (the cache + builder gate).
+func appendSamplingRegressionRecs(
+	ctx context.Context,
+	recs *[]recommendations.Recommendation,
+	serverless []scanner.ServerlessInstanceSnapshot,
+	samplingReader SamplingDetector,
+	exclusions proposer.SamplingRateExclusionStore,
+	scope proposer.SamplingRateScope,
+	scanID string,
+	now time.Time,
+	logger *zap.Logger,
+) {
+	if samplingReader == nil {
+		return // no live-sampling cache wired → nothing to reconstruct from.
+	}
+	for _, sv := range serverless {
+		if sv.ResourceARN == "" {
+			continue
+		}
+		// Skip rows the annotation pass already cleared (flag present + false).
+		// A nil flag falls through — the cache lookup + builder gate decide.
+		if sv.SamplingExceedsFloor != nil && !*sv.SamplingExceedsFloor {
+			continue
+		}
+		build := samplingBuilderForSurface(sv.Surface)
+		if build == nil {
+			continue
+		}
+		// The traceindex join key for serverless is the resource ARN (same as
+		// the annotation pass + the per-resource endpoint). The cache resolves
+		// purely by ARN; surface + key are informational.
+		result, err := samplingReader.DetectSampling(ctx, sv.ResourceARN, sv.Surface, sv.ResourceARN)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("sampling regression rec lookup error", zap.Error(err), zap.String("surface", sv.Surface))
+			}
+			continue
+		}
+		row := proposer.SamplingRateInventoryRow{
+			RecommendationID: sv.ResourceARN, // stable across scans → exclusions persist
+			Provider:         sv.Provider,
+			Surface:          sv.Surface,
+			ResourceTFName:   sv.ResourceName,
+			ResourceID:       sv.ResourceARN,
+			Region:           sv.Region,
+		}
+		draft, err := build(ctx, row, &result, scope, exclusions)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("sampling regression rec build error", zap.Error(err), zap.String("surface", sv.Surface))
+			}
+			continue
+		}
+		if draft == nil {
+			continue // gate not met or excluded.
+		}
+		*recs = append(*recs, samplingDraftToRecommendation(*draft, scanID, now))
+	}
+}
+
+// appendRegressionRecs runs all three regression-rec passes (cold-start +
+// error-rate + sampling) over a serverless snapshot slice for one connection
+// scope. The per-cloud recs handlers call this directly with their connection
+// identity, so they need no proposer import. exclusions is a
+// DiscoveryExclusionStore (the app store) which structurally satisfies all
+// three proposer exclusion interfaces. samplingReader is the per-server
+// SamplingObservationCache (nil-safe: a nil reader just skips the sampling
+// pass).
 func appendRegressionRecs(
 	ctx context.Context,
 	recs *[]recommendations.Recommendation,
 	serverless []scanner.ServerlessInstanceSnapshot,
 	coldStartStore ColdStartObservationReader,
 	errorRateStore ErrorRateObservationStore,
+	samplingReader SamplingDetector,
 	exclusions DiscoveryExclusionStore,
 	connectionID, scopeID, region, scanID string,
 	now time.Time,
@@ -268,6 +368,9 @@ func appendRegressionRecs(
 		scanID, now, logger)
 	appendErrorRateRegressionRecs(ctx, recs, serverless, errorRateStore, exclusions,
 		proposer.ErrorRateScope{ConnectionID: connectionID, ScopeID: scopeID, Region: region},
+		scanID, now, logger)
+	appendSamplingRegressionRecs(ctx, recs, serverless, samplingReader, exclusions,
+		proposer.SamplingRateScope{ConnectionID: connectionID, ScopeID: scopeID, Region: region},
 		scanID, now, logger)
 }
 
@@ -289,6 +392,10 @@ func awsServerlessRowsToSnapshots(rows []awsServerlessRow) []scanner.ServerlessI
 			ResourceARN:               sv.ResourceARN,
 			ColdStartP95Ms:            sv.ColdStartP95Ms,
 			ColdStartExceedsThreshold: sv.ColdStartExceedsThreshold,
+			// SamplingExceedsFloor rides the AWS wire row (the annotation
+			// pass stamps it); carry it so the sampling regression pre-filter
+			// can gate on it. Cold-start/error-rate axes stay as-is.
+			SamplingExceedsFloor: sv.SamplingExceedsFloor,
 		})
 	}
 	return out
@@ -316,6 +423,18 @@ func (h *DiscoveryHandlers) appendAWSErrorRateRegressionRecs(
 	}
 	appendErrorRateRegressionRecs(ctx, recs, awsServerlessRowsToSnapshots(scan.Serverless),
 		h.errorRateStore, h.exclusionStore, scope, scan.ScanID, now, h.logger)
+}
+
+func (h *DiscoveryHandlers) appendAWSSamplingRegressionRecs(
+	ctx context.Context, recs *[]recommendations.Recommendation, scan awsScanResponse, now time.Time,
+) {
+	scope := proposer.SamplingRateScope{
+		ConnectionID: scan.AccountID,
+		ScopeID:      scan.AccountID,
+		Region:       firstRegion(scan.Regions),
+	}
+	appendSamplingRegressionRecs(ctx, recs, awsServerlessRowsToSnapshots(scan.Serverless),
+		h.samplingSink, h.exclusionStore, scope, scan.ScanID, now, h.logger)
 }
 
 // --- draft → wire envelope conversions (shared across clouds) --------------
@@ -371,6 +490,35 @@ func errorRateDraftToRecommendation(
 			Source: d.Terraform,
 		},
 		ResourceKind:      d.Kind, // "span-quality-error-rate-spike"
+		AffectedResources: []string{d.ResourceID},
+	}
+	if rec.ResourceKind != "" {
+		rec.Disposition = iac.DispositionFor(rec.ResourceKind)
+	}
+	return rec
+}
+
+// samplingDraftToRecommendation maps a proposer.SamplingRateRecommendationDraft
+// onto the wire recommendation envelope (mirrors errorRateDraftToRecommendation).
+func samplingDraftToRecommendation(
+	d proposer.SamplingRateRecommendationDraft, scanID string, now time.Time,
+) recommendations.Recommendation {
+	rec := recommendations.Recommendation{
+		ID:          d.RecommendationID,
+		Category:    recommendations.CategoryEmptySignal,
+		Severity:    recommendations.SeverityWarn,
+		Title:       "Sampling too aggressive",
+		Detail:      d.Reasoning,
+		GeneratedAt: now,
+		Source: &recommendations.RecommendationSource{
+			Kind:  recommendations.SourceDiscoveryScan,
+			RefID: scanID,
+		},
+		IaC: &recommendations.IaCSnippet{
+			Format: recommendations.IaCTerraform,
+			Source: d.Terraform,
+		},
+		ResourceKind:      d.Kind, // "span-quality-sampling-too-aggressive"
 		AffectedResources: []string{d.ResourceID},
 	}
 	if rec.ResourceKind != "" {

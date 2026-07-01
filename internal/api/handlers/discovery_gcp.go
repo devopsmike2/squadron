@@ -1483,7 +1483,7 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 		// for any Cloud Run / Cloud Functions row whose detector fired on this
 		// scan (OSS-native — no commercial gate). Additive + best-effort.
 		appendRegressionRecs(ctx, &recs, req.ScanResult.Serverless,
-			h.coldStartStore, h.errorRateStore, h.exclusionStore,
+			h.coldStartStore, h.errorRateStore, h.samplingSink, h.exclusionStore,
 			conn.ID, conn.ProjectID, conn.Region, req.ScanResult.ScanID, now, h.logger)
 
 		// Detection → proposal: append GCP event-source recommendations

@@ -1527,7 +1527,7 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 		// for any OCI Functions row whose detector fired on this scan
 		// (OSS-native). Additive + best-effort.
 		appendRegressionRecs(ctx, &recs, req.ScanResult.Serverless,
-			h.coldStartStore, h.errorRateStore, h.exclusionStore,
+			h.coldStartStore, h.errorRateStore, h.samplingSink, h.exclusionStore,
 			conn.ID, conn.TenancyOCID, conn.Region, req.ScanResult.ScanID, now, h.logger)
 
 		// Detection → proposal: append OCI event-source recommendations

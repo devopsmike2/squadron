@@ -171,10 +171,12 @@ func KindToResourceTypes(kind string) []string {
 		return []string{"azurerm_service_plan", "azurerm_linux_function_app"}
 	case "ocifunc-cold-start-baseline":
 		return []string{"oci_functions_function"}
-	case "span-quality-error-rate-spike":
-		// Cross-cloud kind: one of five surfaces fires per rec, so the
-		// union lets the placement matcher land on whichever exists in
-		// the repo. Primary (Lambda) drives the new-file fallback name.
+	case "span-quality-error-rate-spike", "span-quality-sampling-too-aggressive":
+		// Cross-cloud kinds: one of five serverless surfaces fires per
+		// rec, so the union lets the placement matcher land on whichever
+		// exists in the repo. Both patch the existing function/service
+		// (error-rate: memory/concurrency; sampling: OTEL_TRACES_SAMPLER
+		// env vars). Primary (Lambda) drives the new-file fallback name.
 		return []string{
 			"aws_lambda_function", "google_cloud_run_service",
 			"google_cloudfunctions2_function", "azurerm_service_plan",
