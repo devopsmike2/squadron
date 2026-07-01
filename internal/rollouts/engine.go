@@ -464,15 +464,7 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 		e.logger.Warn("rollout engine: failed to persist start", zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
-	e.tracer.BeginStage(r, r.CurrentStage, len(ids))
-	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", stageAuditPayload(r, r.CurrentStage, ids))
-	// Surface zero-canary stages as a distinct audit event so post-mortems
-	// don't have to guess why nothing happened. Common case: label
-	// selector typo at create time, group emptied after creation.
-	if len(ids) == 0 {
-		e.recordAudit(ctx, r, "rollout.empty_canary", "empty_canary", stageAuditPayload(r, r.CurrentStage, ids))
-		e.tracer.RecordEvent(r.ID, "empty_canary", "")
-	}
+	e.recordStageApplied(ctx, r, ids)
 	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout started",
 		zap.String("rollout_id", r.ID),
@@ -526,13 +518,10 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		e.logger.Warn("rollout engine: failed to persist advance", zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
-	// BeginStage ends the previous stage's span and opens a new one,
-	// so the trace tree shows a clean stage-by-stage progression.
-	e.tracer.BeginStage(r, r.CurrentStage, len(ids))
-	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", stageAuditPayload(r, r.CurrentStage, ids))
-	if len(ids) == 0 {
-		e.tracer.RecordEvent(r.ID, "empty_canary", "")
-	}
+	// Emit the stage-applied (and, for a zero-agent stage, empty_canary)
+	// audit + trace events. Shared with start() via recordStageApplied so the
+	// two paths can't drift.
+	e.recordStageApplied(ctx, r, ids)
 	e.publishStateChange(r, "stage_applied")
 	e.logger.Info("rollout advanced",
 		zap.String("rollout_id", r.ID),
@@ -1065,6 +1054,29 @@ func stageAuditPayload(r *services.Rollout, stageIdx int, ids []uuid.UUID) map[s
 		out["label_selector"] = stage.LabelSelector
 	}
 	return out
+}
+
+// recordStageApplied emits the observability events for a freshly-applied
+// stage: the OTel BeginStage span transition, a rollout.stage_applied audit
+// row, and — when the stage resolved to ZERO agents — a rollout.empty_canary
+// audit row plus its trace event. Both the initial-stage path (start) and the
+// promote path (advanceOrCheck) route through here so the two can't drift. A
+// prior bug did exactly that: advanceOrCheck emitted the empty_canary TRACE
+// event but dropped the empty_canary AUDIT row, so a stage that went empty
+// mid-rollout (label selector churned to nothing, percentage rounded to zero
+// on a shrunk group) left the trace saying empty_canary while the audit
+// timeline — the operator's durable post-mortem record — showed only
+// stage_applied. Centralizing the emission makes that class of asymmetry
+// unrepresentable.
+func (e *Engine) recordStageApplied(ctx context.Context, r *services.Rollout, ids []uuid.UUID) {
+	// BeginStage ends the previous stage's span and opens a new one so the
+	// trace tree shows a clean stage-by-stage progression.
+	e.tracer.BeginStage(r, r.CurrentStage, len(ids))
+	e.recordAudit(ctx, r, "rollout.stage_applied", "stage_applied", stageAuditPayload(r, r.CurrentStage, ids))
+	if len(ids) == 0 {
+		e.recordAudit(ctx, r, "rollout.empty_canary", "empty_canary", stageAuditPayload(r, r.CurrentStage, ids))
+		e.tracer.RecordEvent(r.ID, "empty_canary", "")
+	}
 }
 
 func (e *Engine) recordAudit(ctx context.Context, r *services.Rollout, eventType, action string, payload map[string]any) {
