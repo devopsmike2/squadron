@@ -132,6 +132,12 @@ func KindToResourceTypes(kind string) []string {
 		return []string{"azurerm_servicebus_namespace"}
 	case "servicebus-policy-preserves-traceparent":
 		return []string{"azurerm_servicebus_namespace_authorization_rule"}
+	case "eventgrid-diagnostics-enable", "eventgrid-cloudevent-schema-enforce":
+		return []string{"azurerm_eventgrid_topic"}
+	case "eventhubs-diagnostics-enable":
+		return []string{"azurerm_eventhub_namespace"}
+	case "eventhubs-capture-enable":
+		return []string{"azurerm_eventhub"}
 	// --- OCI ---
 	case "ocibucket-logging-enable":
 		return []string{"oci_objectstorage_bucket"}

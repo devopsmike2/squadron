@@ -1551,6 +1551,14 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 			h.coldStartStore, h.errorRateStore, h.exclusionStore,
 			conn.ID, conn.SubscriptionID, conn.Location, req.ScanResult.ScanID, now, h.logger)
 
+		// Detection → proposal: append Azure event-source recommendations
+		// (Event Grid diagnostics/CloudEvents-schema, Event Hubs
+		// diagnostics/Capture) for any scanned event source with a
+		// config-gap. Additive + best-effort; activates the dormant
+		// iacpicker Azure patterns.
+		h.appendAzureEventSourceRecs(ctx, &recs, req.ScanResult.EventSources,
+			conn.ID, conn.SubscriptionID, conn.Location, req.ScanResult.ScanID, now)
+
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{
 				Actor:      services.AuditActorSystem,

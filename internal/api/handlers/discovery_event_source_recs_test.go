@@ -277,3 +277,35 @@ func TestAppendGCPEventSourceRecs_ReservationHasDetail(t *testing.T) {
 		t.Fatalf("want 0 recs when logging present + reservation attached, got %d", len(recs))
 	}
 }
+
+// TestAppendAzureEventSourceRecs_Fires: an Event Grid topic lacking
+// diagnostics + proprietary schema and an Event Hubs namespace lacking
+// diagnostics + Capture produce four recs (2 + 2). Exercises the Azure
+// adapter + the Detail-bag has_capture read.
+func TestAppendAzureEventSourceRecs_Fires(t *testing.T) {
+	h := &DiscoveryAzureHandlers{exclusionStore: &fakeExclusionStore{}, logger: zap.NewNop()}
+	rows := []eventSourceRow{
+		{Provider: "azure", Surface: "eventgrid", ResourceName: "eg1",
+			ResourceARN: "/subscriptions/s/rg/providers/Microsoft.EventGrid/topics/eg1", Region: "eastus"},
+		{Provider: "azure", Surface: "eventhubs", ResourceName: "eh1",
+			ResourceARN: "/subscriptions/s/rg/providers/Microsoft.EventHub/namespaces/eh1", Region: "eastus"},
+	}
+	var recs []recommendations.Recommendation
+	h.appendAzureEventSourceRecs(context.Background(), &recs, rows, "conn-1", "sub-1", "eastus", "scan-a", time.Now().UTC())
+
+	if len(recs) != 4 {
+		t.Fatalf("want 4 Azure event-source recs, got %d", len(recs))
+	}
+	kinds := map[string]bool{}
+	for _, r := range recs {
+		kinds[r.ResourceKind] = true
+	}
+	for _, want := range []string{
+		"eventgrid-diagnostics-enable", "eventgrid-cloudevent-schema-enforce",
+		"eventhubs-diagnostics-enable", "eventhubs-capture-enable",
+	} {
+		if !kinds[want] {
+			t.Errorf("missing kind %q (got %v)", want, kinds)
+		}
+	}
+}
