@@ -169,7 +169,7 @@ func (h *SavingsHandlers) HandleRealized(c *gin.Context) {
 
 	// Refresh observations for each outcome.
 	var totalRealizedUSD float64
-	var realizedCount, pendingCount, notObservedCount int
+	var realizedCount, pendingCount, notObservedCount, revertedCount int
 
 	for _, o := range outcomes {
 		// Only re-observe attribute-class outcomes today; outlier_agent
@@ -197,6 +197,13 @@ func (h *SavingsHandlers) HandleRealized(c *gin.Context) {
 			pendingCount++
 		case "not_observed":
 			notObservedCount++
+		case "reverted":
+			// Once-realized savings that regressed back to baseline.
+			// Counted separately and NOT added to totalRealizedUSD —
+			// the savings no longer exist. Previously this status was
+			// unhandled, so a reverted outcome fell through every case
+			// and the sub-counts silently failed to sum to total.
+			revertedCount++
 		}
 	}
 
@@ -207,6 +214,7 @@ func (h *SavingsHandlers) HandleRealized(c *gin.Context) {
 			"realized":     realizedCount,
 			"pending":      pendingCount,
 			"not_observed": notObservedCount,
+			"reverted":     revertedCount,
 			"total":        len(outcomes),
 		},
 		"outcomes": outcomes,
@@ -265,14 +273,14 @@ func (h *SavingsHandlers) refreshAttributeOutcome(ctx context.Context, o *storet
 		}
 		o.Status = "realized"
 	} else {
-		// Hasn't dropped yet. Pending for the first hour, then
-		// not_observed after — we assume by then the rollout has
-		// either completed or won't.
-		if time.Since(o.AppliedAt) > time.Hour {
-			o.Status = "not_observed"
-		} else {
-			o.Status = "pending"
-		}
+		// Observed rate is back at/above baseline: the status transition
+		// depends on the PRIOR status (was-realized → reverted vs
+		// never-realized → pending/not_observed). See statusAtBaseline.
+		o.Status = statusAtBaseline(o.Status, o.AppliedAt, time.Now())
+		// In every branch the currently-observed savings are zero: the
+		// attribute is back at baseline, so no bytes are being saved
+		// right now. A reverted outcome therefore drops out of the
+		// realized-USD tally, which is the correct behavior.
 		o.RealizedSavingsPerMonthUSD = 0
 	}
 
@@ -285,6 +293,28 @@ func (h *SavingsHandlers) refreshAttributeOutcome(ctx context.Context, o *storet
 // ----------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------
+
+// statusAtBaseline decides the next outcome status when a refreshed
+// observation shows the affected attribute's byte rate is back AT or ABOVE
+// baseline (i.e. no savings are currently observed). The decision hinges on the
+// PRIOR status so the two operator stories stay distinct — a distinction the
+// RecommendationOutcome type doc explicitly pins:
+//
+//   - prior "realized": savings Squadron already counted have evaporated (a
+//     rollback or config drift pushed the byte rate back up) → "reverted".
+//     Folding this into "not_observed" (as the code did before) hid genuine
+//     regressions of already-credited savings inside the "never worked" bucket.
+//   - never realized: the fix simply hasn't taken effect yet → "pending" for
+//     the first settling hour, then "not_observed".
+func statusAtBaseline(priorStatus string, appliedAt, now time.Time) string {
+	if priorStatus == "realized" {
+		return "reverted"
+	}
+	if now.Sub(appliedAt) > time.Hour {
+		return "not_observed"
+	}
+	return "pending"
+}
 
 // newOutcomeID returns a 16-hex-char random identifier. We don't
 // need a full UUID — the IDs are private to one Squadron instance
