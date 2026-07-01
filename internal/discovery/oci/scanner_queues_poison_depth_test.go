@@ -4,6 +4,7 @@
 package oci
 
 import (
+	"context"
 	"testing"
 
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
@@ -105,7 +106,7 @@ func TestApplyOCIQueuePoisonDepthDetail(t *testing.T) {
 func TestQueueDLQDepth_NoDLQConfigured(t *testing.T) {
 	s := &Scanner{}
 	q := ociQueue{ID: "ocid1.queue.x", MessagesEndpoint: "https://cell-1.queue.messages.us-ashburn-1.oci.oraclecloud.com"}
-	if got := s.queueDLQDepth(nil, nil, q); got != -1 {
+	if got := s.queueDLQDepth(context.TODO(), nil, q); got != -1 {
 		t.Errorf("no-DLQ queue depth = %d, want -1", got)
 	}
 }
@@ -116,7 +117,7 @@ func TestQueueDLQDepth_NoDLQConfigured(t *testing.T) {
 func TestQueueDLQDepth_NoMessagesEndpoint(t *testing.T) {
 	s := &Scanner{}
 	q := ociQueue{ID: "ocid1.queue.x", DeadLetterQueueDeliveryCount: 5}
-	if got := s.queueDLQDepth(nil, nil, q); got != -1 {
+	if got := s.queueDLQDepth(context.TODO(), nil, q); got != -1 {
 		t.Errorf("no-endpoint queue depth = %d, want -1", got)
 	}
 }
