@@ -3210,6 +3210,7 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		// commercial-tier detectors annotated the rows on a prior scan).
 		h.appendAWSColdStartRegressionRecs(ctx, &recs, req.ScanResult, now)
 		h.appendAWSErrorRateRegressionRecs(ctx, &recs, req.ScanResult, now)
+		h.appendAWSSamplingRegressionRecs(ctx, &recs, req.ScanResult, now)
 
 		// Detection → proposal: append deterministic event-source
 		// recommendations (slice 1: AWS SNS delivery-logging) for any

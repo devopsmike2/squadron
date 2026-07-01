@@ -1548,7 +1548,7 @@ func (h *DiscoveryAzureHandlers) HandleRecommendationsForAzureScan(c *gin.Contex
 		// for any Azure Functions row whose detector fired on this scan
 		// (commercial-tier — App Insights). Additive + best-effort.
 		appendRegressionRecs(ctx, &recs, req.ScanResult.Serverless,
-			h.coldStartStore, h.errorRateStore, h.exclusionStore,
+			h.coldStartStore, h.errorRateStore, h.samplingSink, h.exclusionStore,
 			conn.ID, conn.SubscriptionID, conn.Location, req.ScanResult.ScanID, now, h.logger)
 
 		// Detection → proposal: append Azure event-source recommendations

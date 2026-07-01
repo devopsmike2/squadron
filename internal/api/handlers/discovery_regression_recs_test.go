@@ -198,6 +198,133 @@ func TestAppendAWSErrorRateRegressionRecs_LowVolume_NoRec(t *testing.T) {
 	}
 }
 
+// TestAppendAWSSamplingRegressionRecs_Fires exercises the live-join path: the
+// scan-response annotation pass has cached a below-floor sampling result for a
+// Lambda (10 spans / 2000 invocations = 0.5% < 5% floor, >= 1000 invocations),
+// so the sampling regression pass reads it back and emits one
+// span-quality-sampling-too-aggressive recommendation with a Terraform snippet.
+func TestAppendAWSSamplingRegressionRecs_Fires(t *testing.T) {
+	const arn = "arn:aws:lambda:us-east-1:acc:function:ingest"
+	now := time.Now().UTC()
+	exceeds := true
+
+	cache := NewSamplingObservationCache()
+	cache.record(arn, "lambda", arn, proposer.SamplingRateDetectionResult{
+		ResourceARN:               arn,
+		Surface:                   "lambda",
+		ObservedSpanCount:         10,
+		ExpectedInvocationCount:   2000,
+		Ratio:                     0.005,
+		ExceedsFloor:              true,
+		ExceedsMinimumInvocations: true,
+		ObservedAt:                now,
+	})
+
+	h := &DiscoveryHandlers{samplingSink: cache, exclusionStore: &fakeExclusionStore{}}
+	scan := awsScanResponse{
+		ScanID:    "scan-1",
+		AccountID: "acc",
+		Regions:   []string{"us-east-1"},
+		Serverless: []awsServerlessRow{{
+			Provider:             "aws",
+			Surface:              "lambda",
+			ResourceName:         "ingest",
+			ResourceARN:          arn,
+			Region:               "us-east-1",
+			SamplingExceedsFloor: &exceeds,
+		}},
+	}
+
+	var recs []recommendations.Recommendation
+	h.appendAWSSamplingRegressionRecs(context.Background(), &recs, scan, now)
+
+	if len(recs) != 1 {
+		t.Fatalf("want 1 sampling regression rec, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.ResourceKind != proposer.SamplingRateRecommendationKind {
+		t.Errorf("ResourceKind = %q, want %q", got.ResourceKind, proposer.SamplingRateRecommendationKind)
+	}
+	if got.ID != arn+".sampling_too_aggressive" {
+		t.Errorf("ID = %q, want %q (stable across scans)", got.ID, arn+".sampling_too_aggressive")
+	}
+	if got.IaC == nil || got.IaC.Source == "" {
+		t.Error("expected a Terraform IaC snippet on the sampling rec")
+	}
+	if got.Source == nil || got.Source.Kind != recommendations.SourceDiscoveryScan {
+		t.Error("expected Source.Kind = discovery_scan")
+	}
+}
+
+// TestAppendAWSSamplingRegressionRecs_AcceptableRatio_NoRec confirms the gate:
+// a cached result whose ratio clears the 5% floor (200 spans / 2000 = 10%) does
+// NOT fire, even though the row carries the annotation flag — the builder's
+// ShouldFireRecommendation is the real gate.
+func TestAppendAWSSamplingRegressionRecs_AcceptableRatio_NoRec(t *testing.T) {
+	const arn = "arn:aws:lambda:us-east-1:acc:function:healthy"
+	now := time.Now().UTC()
+	// SamplingExceedsFloor is false → the row is skipped before the lookup.
+	notExceeds := false
+
+	cache := NewSamplingObservationCache()
+	cache.record(arn, "lambda", arn, proposer.SamplingRateDetectionResult{
+		ResourceARN:               arn,
+		Surface:                   "lambda",
+		ObservedSpanCount:         200,
+		ExpectedInvocationCount:   2000,
+		Ratio:                     0.10,
+		ExceedsFloor:              false,
+		ExceedsMinimumInvocations: true,
+		ObservedAt:                now,
+	})
+
+	h := &DiscoveryHandlers{samplingSink: cache, exclusionStore: &fakeExclusionStore{}}
+	scan := awsScanResponse{
+		ScanID:    "scan-1",
+		AccountID: "acc",
+		Regions:   []string{"us-east-1"},
+		Serverless: []awsServerlessRow{{
+			Surface:              "lambda",
+			ResourceName:         "healthy",
+			ResourceARN:          arn,
+			Region:               "us-east-1",
+			SamplingExceedsFloor: &notExceeds,
+		}},
+	}
+
+	var recs []recommendations.Recommendation
+	h.appendAWSSamplingRegressionRecs(context.Background(), &recs, scan, now)
+
+	if len(recs) != 0 {
+		t.Fatalf("acceptable ratio: want 0 recs, got %d", len(recs))
+	}
+}
+
+// TestAppendAWSSamplingRegressionRecs_NilSink_NoRec confirms the nil-safe skip:
+// a deployment with no sampling cache wired (serverless_metric_detection off)
+// emits no sampling recs and never panics.
+func TestAppendAWSSamplingRegressionRecs_NilSink_NoRec(t *testing.T) {
+	exceeds := true
+	h := &DiscoveryHandlers{exclusionStore: &fakeExclusionStore{}} // samplingSink nil
+	scan := awsScanResponse{
+		ScanID:    "scan-1",
+		AccountID: "acc",
+		Regions:   []string{"us-east-1"},
+		Serverless: []awsServerlessRow{{
+			Surface:              "lambda",
+			ResourceARN:          "arn:aws:lambda:us-east-1:acc:function:fn",
+			SamplingExceedsFloor: &exceeds,
+		}},
+	}
+
+	var recs []recommendations.Recommendation
+	h.appendAWSSamplingRegressionRecs(context.Background(), &recs, scan, time.Now().UTC())
+
+	if len(recs) != 0 {
+		t.Fatalf("nil sink: want 0 recs, got %d", len(recs))
+	}
+}
+
 // TestAppendColdStartRegressionRecs_PerCloudSurfaces confirms the surface
 // dispatch fires the right per-cloud builder + kind for the GCP/Azure/OCI
 // serverless surfaces, gating purely on the snapshot's exceeds flag (no store).

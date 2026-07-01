@@ -147,12 +147,13 @@ var KindDispositions = map[string]string{
 	// cross-cloud error-rate kind modify an existing resource's
 	// attributes (min-instances / SKU / memory / concurrency), so
 	// patch_existing.
-	"lambda-cold-start-baseline":    DispositionNewFile,
-	"cloudrun-cold-start-baseline":  DispositionPatchExisting,
-	"cloudfunc-cold-start-baseline": DispositionPatchExisting,
-	"azfunc-cold-start-baseline":    DispositionPatchExisting,
-	"ocifunc-cold-start-baseline":   DispositionPatchExisting,
-	"span-quality-error-rate-spike": DispositionPatchExisting,
+	"lambda-cold-start-baseline":           DispositionNewFile,
+	"cloudrun-cold-start-baseline":         DispositionPatchExisting,
+	"cloudfunc-cold-start-baseline":        DispositionPatchExisting,
+	"azfunc-cold-start-baseline":           DispositionPatchExisting,
+	"ocifunc-cold-start-baseline":          DispositionPatchExisting,
+	"span-quality-error-rate-spike":        DispositionPatchExisting,
+	"span-quality-sampling-too-aggressive": DispositionPatchExisting,
 }
 
 // DispositionFor returns the disposition for a given resource_kind.
