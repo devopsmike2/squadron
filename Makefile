@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed
+.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed
 
 # Variables
 BINARY_NAME=squadron
@@ -32,6 +32,26 @@ build-backend:
 	@echo "Building $(BINARY_NAME) (backend only)..."
 	@mkdir -p $(BUILD_DIR)
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/all-in-one
+
+# Build the ENTERPRISE edition (backend). The enterprise edition is the
+# umbrella that includes the Compliance Pack (enforced group policy,
+# change windows, SIEM export, per-call access audit) and the
+# commercial-tier serverless regression detectors. It is assembled by
+# dropping the private squadron-enterprise repo's wire files into the
+# build tree, then compiling with the edition build tags.
+#
+# From THIS (open-core) repo, `make build-enterprise` compiles the tags
+# against the open-core STUB wire files (cmd/all-in-one/wire_compliance.go,
+# wire_detectors_enterprise.go), which panic-with-guidance at startup —
+# proving the seam wiring is present but the private code is not. The real
+# enterprise build runs this target from a tree with the private wire files
+# installed. See docs/build.md for the full edition build model.
+build-enterprise:
+	@echo "Building $(BINARY_NAME) (enterprise edition, backend)..."
+	@mkdir -p $(BUILD_DIR)
+	go build -tags "enterprise compliance" -o $(BUILD_DIR)/$(BINARY_NAME)-enterprise ./cmd/all-in-one
+	@echo "NOTE: without the private squadron-enterprise wire files installed, this binary"
+	@echo "      panics-with-guidance at startup. See docs/build.md."
 
 # Demo seed. Drops a realistic engineer copilot scenario into the
 # application store: demo group, baseline config, synthetic agent,
