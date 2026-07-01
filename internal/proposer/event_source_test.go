@@ -431,3 +431,34 @@ func TestCheckONSLogging_FiresAndSkips(t *testing.T) {
 		t.Error("expected nil for non-notifications surface")
 	}
 }
+
+// TestCheckQueuesLogging_FiresAndSkips: OCI Queue Service logging — the
+// second OCI event-source surface. Fires on queues + !HasLogAxis.
+func TestCheckQueuesLogging_FiresAndSkips(t *testing.T) {
+	row := EventSourceInventoryRow{
+		RecommendationID: "ocid1.queue.oc1..abc",
+		Provider:         "oci",
+		Surface:          "queues",
+		ResourceTFName:   "q1",
+		ResourceID:       "ocid1.queue.oc1..abc",
+		Region:           "us-ashburn-1",
+	}
+	d, err := CheckQueuesLogging(context.Background(), row,
+		EventSourceScope{ConnectionID: "c", ScopeID: "ten"}, nil)
+	if err != nil || d == nil || d.Kind != QueuesLoggingRecommendationKind {
+		t.Fatalf("expected queues-logging fire, got %v err %v", d, err)
+	}
+	if !strings.Contains(d.Terraform, "oci_logging_log") {
+		t.Errorf("terraform missing oci_logging_log:\n%s", d.Terraform)
+	}
+	row.HasLogAxis = true
+	if d2, _ := CheckQueuesLogging(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when logging present")
+	}
+	// A notifications (ONS) row is CheckONSLogging's concern, not this one.
+	row.HasLogAxis = false
+	row.Surface = "notifications"
+	if d3, _ := CheckQueuesLogging(context.Background(), row, EventSourceScope{}, nil); d3 != nil {
+		t.Error("expected nil for non-queues surface")
+	}
+}

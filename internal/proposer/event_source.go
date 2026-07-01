@@ -45,6 +45,7 @@ const (
 	EventHubsDiagnosticsRecommendationKind  = "eventhubs-diagnostics-enable"
 	EventHubsCaptureRecommendationKind      = "eventhubs-capture-enable"
 	ONSLoggingRecommendationKind            = "ons-logging-enable"
+	QueuesLoggingRecommendationKind         = "queues-logging-enable"
 )
 
 // Surface discriminators the scanners stamp on event-source snapshots.
@@ -59,6 +60,7 @@ const (
 	azureEventGridSurface   = "eventgrid"
 	azureEventHubsSurface   = "eventhubs"
 	ociNotificationsSurface = "notifications"
+	ociQueuesSurface        = "queues"
 )
 
 // EventSourceInventoryRow is the minimal projection of a scanned
@@ -156,6 +158,7 @@ var EventSourceChecks = []EventSourceCheck{
 	CheckEventHubsDiagnostics,
 	CheckEventHubsCapture,
 	CheckONSLogging,
+	CheckQueuesLogging,
 }
 
 // resolveRecID picks the stable recommendation identifier for a row
@@ -499,4 +502,29 @@ func CheckONSLogging(
 		ResourceTFName: row.ResourceTFName,
 	})
 	return buildEventSourceDraft(ONSLoggingRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckQueuesLogging is the detection branch for the OCI Queue Service
+// logging kind. Fires on Surface==queues && !HasLogAxis (the queue has
+// no OCI Logging configured, so dequeue/DLQ delivery events leave no
+// audit trail). Terraform from iacpicker.PickQueuesLoggingPattern.
+// Second OCI event-source surface (Streaming + ONS + Queue Service),
+// completing the slice-9 OCI event-source parity claim.
+func CheckQueuesLogging(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != ociQueuesSurface || row.HasLogAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, QueuesLoggingRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickQueuesLoggingPattern(iacpicker.RecommendationContext{
+		Provider:       "oci",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(QueuesLoggingRecommendationKind, recID, row, scope, terraform, reasoning), nil
 }
