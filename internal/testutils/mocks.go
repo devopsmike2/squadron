@@ -290,6 +290,7 @@ func (m *MockAgentService) UpdateGroup(ctx context.Context, group *services.Grou
 	existing.Name = group.Name
 	existing.Labels = group.Labels
 	existing.RequireApproval = group.RequireApproval
+	existing.RequireApprovalForRollback = group.RequireApprovalForRollback
 	existing.LearnFromVerdicts = group.LearnFromVerdicts
 	existing.ChangeWindows = group.ChangeWindows
 	existing.UpdatedAt = group.UpdatedAt
