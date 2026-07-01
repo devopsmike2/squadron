@@ -44,14 +44,34 @@ on top.
   10k+ agent fleets, multi-region.
 - **Advanced detection**: signals that require paid telemetry layers (AWS Lambda
   Insights, Azure Application Insights) plus anomaly / ML detection. The
-  add-on-backed cold-start + error-rate regression detectors are implemented and
-  activate end-to-end behind `commercial_detectors.enabled` (default off); see
+  add-on-backed cold-start + error-rate regression detectors ship in the
+  **enterprise edition**; within it, `commercial_detectors.enabled` (default off)
+  is a per-scan cost/safety switch. On an **OSS build the switch is inert** — the
+  entitlement is the build edition, not the flag — and OSS instead surfaces the
+  gap by recommending the add-on (`lambda-insights-enable` /
+  `azfunc-appinsights-enable`). See
   [Enabling commercial-tier detection](./detection-coverage.md#enabling-commercial-tier-detection)
   for the operator flow + the per-cloud add-on / RBAC prerequisites.
 - **Cost at org scale**: showback / chargeback, budgets + forecasting,
   multi-backend rate management.
 - **Deployment options**: air-gapped, bring-your-own / on-prem LLM.
 - **Support**: SLAs, managed SaaS, onboarding services.
+
+## How the boundary is enforced
+
+The OSS / enterprise line is a **build-time** boundary, not a runtime license
+check. The open core defines extension-point interfaces and compiles **no-op
+providers**; the enterprise edition supplies the real providers, injected at
+build time behind an edition build tag. So the entitlement is *which code is
+compiled in* — an OSS binary cannot be turned into an enterprise binary by
+flipping a config flag. Runtime switches like `commercial_detectors.enabled`
+are **cost/safety** toggles that only take effect inside the enterprise edition.
+
+Confirm which edition a running instance is via the startup log
+(`squadron build edition`) or the `squadron_build_info{edition=...}` metric on
+`/metrics`. The full model — build tags, targets, and the contract every paid
+feature follows — is in [docs/build.md](build.md) and
+[docs/architecture/oss-enterprise-separation.md](architecture/oss-enterprise-separation.md).
 
 ## The promise
 

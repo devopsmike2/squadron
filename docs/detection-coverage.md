@@ -17,10 +17,12 @@ authoritative, honest statement of what works where.
 > have free tiers then bill). Set **`serverless_metric_detection.enabled: true`**
 > (option 2, #300; AWS v0.89.330, OCI v0.89.331, GCP v0.89.332) to construct the
 > client and run them; the OSS default stays at zero metric reads. This is a
-> separate switch from `commercial_detectors.enabled`, which gates the
-> **add-on**-dependent detectors (AWS Lambda **cold-start** via Lambda Insights;
-> **all** Azure Functions detection via Application Insights) — those need a paid
-> telemetry add-on, not just a native metric, and are not covered by this flag.
+> separate switch from `commercial_detectors.enabled`, which — **only in the
+> enterprise edition** (it is inert in an OSS build; see [docs/build.md](build.md)) —
+> gates the **add-on**-dependent detectors (AWS Lambda **cold-start** via Lambda
+> Insights; **all** Azure Functions detection via Application Insights). Those
+> need a paid telemetry add-on, not just a native metric, and are not covered by
+> this flag.
 >
 > > **GCP live-verified ✅ (v0.89.335).** The Cloud Monitoring adapter was run
 > > against a real Cloud Monitoring backend via ADC — auth, request, response
@@ -123,19 +125,30 @@ for the verification details and the open data-source decisions.
 
 ## Enabling commercial-tier detection
 
-The Lambda Insights / Application Insights regression detectors ship **off**.
-To turn them on (commercial tier), set in your Squadron config:
+The Lambda Insights / Application Insights regression detectors are part of the
+**enterprise edition**. The entitlement boundary is the *build edition*, not a
+runtime flag: an OSS binary does not include the activation path, so
+`commercial_detectors.enabled` is **inert in OSS** (it is logged as inert at
+startup and the detectors stay dormant). See [docs/build.md](build.md) for the
+edition build model and
+[the separation contract](architecture/oss-enterprise-separation.md).
+
+In the **enterprise edition**, `commercial_detectors.enabled` is a per-scan
+**cost/safety switch** — it opts into the paid Lambda Insights / Application
+Insights API reads. It ships **off**:
 
 ```yaml
 commercial_detectors:
-  enabled: true
+  enabled: true   # enterprise edition only; inert in an OSS build
 ```
 
-With the flag on, every discovery scan runs the cold-start + error-rate
-detectors against the add-on telemetry and annotates the serverless inventory
-rows (Cold-start P95, Error rate). The flag is the *only* switch — there is no
-per-resource toggle. Default off preserves the OSS posture exactly (the
-detectors never run, no extra cloud calls).
+With the switch on (enterprise build), every discovery scan runs the cold-start
++ error-rate detectors against the add-on telemetry and annotates the serverless
+inventory rows (Cold-start P95, Error rate). The switch is the *only* toggle —
+there is no per-resource control. Off preserves the dormant posture exactly (the
+detectors never run, no extra cloud calls). In OSS the switch has no effect at
+all; Squadron instead recommends enabling the add-on
+(`lambda-insights-enable` / `azfunc-appinsights-enable`).
 
 **Prerequisites the operator must provide** — Squadron reads telemetry, it does
 not provision it:
