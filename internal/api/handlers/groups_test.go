@@ -195,3 +195,86 @@ func TestHandleUpdateGroup_LearnFromVerdicts_Omit_LeavesUnchanged(t *testing.T) 
 	assert.True(t, stored.RequireApproval,
 		"require_approval should have flipped to true on this PUT")
 }
+
+// TestHandleCreateGroup_RequireApprovalForRollback: the v0.61 rollback-
+// approval security gate must be settable at create time. Before
+// v0.89.354 the field was dropped at the DTO layer, pinning it to the
+// column default (off) — a compliance control unreachable via API.
+func TestHandleCreateGroup_RequireApprovalForRollback(t *testing.T) {
+	handlers, mockService := setupGroupHandlersTest()
+
+	body, _ := json.Marshal(map[string]any{
+		"name":                          "prod-nerc",
+		"require_approval_for_rollback": true,
+	})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/v1/groups", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	handlers.HandleCreateGroup(c)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+	var resp services.Group
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.RequireApprovalForRollback, "create should honor require_approval_for_rollback=true")
+
+	stored, err := mockService.GetGroup(context.Background(), resp.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.True(t, stored.RequireApprovalForRollback,
+		"service-layer Group must carry RequireApprovalForRollback after create")
+}
+
+// TestHandleCreateGroup_RequireApprovalForRollback_DefaultsOff: omitting
+// the field leaves the gate off (matches the column default).
+func TestHandleCreateGroup_RequireApprovalForRollback_DefaultsOff(t *testing.T) {
+	handlers, mockService := setupGroupHandlersTest()
+	body, _ := json.Marshal(map[string]any{"name": "dev"})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/v1/groups", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	handlers.HandleCreateGroup(c)
+	require.Equal(t, http.StatusCreated, w.Code)
+	var resp services.Group
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.RequireApprovalForRollback, "omitted field should default off")
+	stored, _ := mockService.GetGroup(context.Background(), resp.ID)
+	require.NotNil(t, stored)
+	assert.False(t, stored.RequireApprovalForRollback)
+}
+
+// TestHandleUpdateGroup_RequireApprovalForRollback: the PUT path can
+// enable the gate (nil = untouched pointer convention), and leaves it
+// unchanged when the field is omitted.
+func TestHandleUpdateGroup_RequireApprovalForRollback(t *testing.T) {
+	handlers, mockService := setupGroupHandlersTest()
+	require.NoError(t, mockService.CreateGroup(context.Background(),
+		&services.Group{ID: "g1", Name: "prod"}))
+
+	// Enable via PUT.
+	body, _ := json.Marshal(map[string]any{"require_approval_for_rollback": true})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: "g1"}}
+	c.Request = httptest.NewRequest("PUT", "/api/v1/groups/g1", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	handlers.HandleUpdateGroup(c)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	stored, _ := mockService.GetGroup(context.Background(), "g1")
+	require.NotNil(t, stored)
+	assert.True(t, stored.RequireApprovalForRollback, "PUT should enable the rollback gate")
+
+	// Omitting the field on a later PUT must leave it enabled (nil = untouched).
+	body2, _ := json.Marshal(map[string]any{"name": "prod-renamed"})
+	w2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(w2)
+	c2.Params = gin.Params{{Key: "id", Value: "g1"}}
+	c2.Request = httptest.NewRequest("PUT", "/api/v1/groups/g1", bytes.NewReader(body2))
+	c2.Request.Header.Set("Content-Type", "application/json")
+	handlers.HandleUpdateGroup(c2)
+	require.Equal(t, http.StatusOK, w2.Code)
+	stored2, _ := mockService.GetGroup(context.Background(), "g1")
+	require.NotNil(t, stored2)
+	assert.True(t, stored2.RequireApprovalForRollback, "omitted field must leave the gate untouched (still on)")
+}

@@ -38,6 +38,16 @@ type CreateGroupRequest struct {
 	// follow-up PUT. The v0.48 work added the storage + service
 	// support but the create handler was never extended.
 	RequireApproval bool `json:"require_approval,omitempty"`
+	// v0.89.354 — accept require_approval_for_rollback at create time.
+	// The v0.61 work added the column + the RollBack() enforcement gate
+	// (rollout_service_impl.go: a rollback against this group is forced
+	// into pending_approval), but neither the create nor the update
+	// handler ever extended their request DTO — so this security control
+	// (separate-of-duties on the more-dangerous rollback operation) could
+	// only be toggled via direct SQL. Plain bool: the column default is 0
+	// (gate off), so the zero value matches the default; an operator sets
+	// it true to enable. Same shape as RequireApproval above.
+	RequireApprovalForRollback bool `json:"require_approval_for_rollback,omitempty"`
 	// v0.89.18 (#634) — accept learn_from_verdicts at create time.
 	// The v0.89.17 (#633) #531 slice 1 work added the column + the
 	// proposer side of the feedback loop but never extended the API
@@ -117,13 +127,14 @@ func (h *GroupHandlers) HandleCreateGroup(c *gin.Context) {
 
 	// Create group
 	group := &services.Group{
-		ID:                groupID,
-		Name:              req.Name,
-		Labels:            req.Labels,
-		RequireApproval:   req.RequireApproval,
-		LearnFromVerdicts: learnFromVerdicts,
-		CreatedAt:         time.Now(),
-		UpdatedAt:         time.Now(),
+		ID:                         groupID,
+		Name:                       req.Name,
+		Labels:                     req.Labels,
+		RequireApproval:            req.RequireApproval,
+		RequireApprovalForRollback: req.RequireApprovalForRollback,
+		LearnFromVerdicts:          learnFromVerdicts,
+		CreatedAt:                  time.Now(),
+		UpdatedAt:                  time.Now(),
 	}
 
 	// Save group to storage
@@ -175,6 +186,11 @@ type UpdateGroupRequest struct {
 	Name            *string            `json:"name"`
 	Labels          *map[string]string `json:"labels"`
 	RequireApproval *bool              `json:"require_approval"`
+	// v0.89.354 — flip the v0.61 rollback-approval gate. Same pointer
+	// convention as RequireApproval: nil means "leave untouched",
+	// non-nil false disables the gate, non-nil true enables it. Read by
+	// the rollout engine's RollBack() path on the next rollback.
+	RequireApprovalForRollback *bool `json:"require_approval_for_rollback"`
 	// v0.49 — change windows. Sent as a complete replacement
 	// (semantics of PUT) — pass the full list, not a delta.
 	// Nil means "don't touch"; empty slice means "clear all
@@ -220,6 +236,9 @@ func (h *GroupHandlers) HandleUpdateGroup(c *gin.Context) {
 	}
 	if req.RequireApproval != nil {
 		existing.RequireApproval = *req.RequireApproval
+	}
+	if req.RequireApprovalForRollback != nil {
+		existing.RequireApprovalForRollback = *req.RequireApprovalForRollback
 	}
 	if req.LearnFromVerdicts != nil {
 		existing.LearnFromVerdicts = *req.LearnFromVerdicts
