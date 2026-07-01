@@ -26,6 +26,8 @@ type retentionGCContract interface {
 	DeleteClosedCostSpikeEventsBefore(ctx context.Context, before time.Time) (int64, error)
 	DeleteRecommendationOutcomesBefore(ctx context.Context, before time.Time) (int64, error)
 	DeleteDismissedIncidentDraftsBefore(ctx context.Context, before time.Time) (int64, error)
+	// audit log — pruned only when the operator opts in (default off)
+	DeleteAuditEventsBefore(ctx context.Context, before time.Time) (int64, error)
 	// discovery/serverless scan tables
 	DeleteServerlessBefore(ctx context.Context, before time.Time) (int64, error)
 	DeleteEventSourceInstancesBefore(ctx context.Context, before time.Time) (int64, error)
@@ -74,6 +76,39 @@ func TestRetention_DeleteDiscoveryScansBefore(t *testing.T) {
 		kept, err := store.GetDiscoveryScan(ctx, "scan-recent")
 		require.NoError(t, err)
 		require.NotNil(t, kept, "scan-recent must survive")
+	})
+}
+
+// TestRetention_DeleteAuditEventsBefore: the predicate prunes audit rows
+// older than the cutoff by their logical timestamp and keeps recent ones.
+// This backs the OPT-IN audit retention sweep (default disabled) — the
+// predicate always deletes by cutoff; the enable/window gating lives at the
+// cmd/all-in-one call site, not here.
+func TestRetention_DeleteAuditEventsBefore(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		old := time.Now().UTC().Add(-400 * 24 * time.Hour)
+		recent := time.Now().UTC().Add(-10 * 24 * time.Hour)
+
+		require.NoError(t, store.CreateAuditEvent(ctx, &types.AuditEvent{
+			ID: "ae-old", Timestamp: old, Actor: "system",
+			EventType: "rollout.succeeded", TargetType: "rollout", Action: "succeeded"}))
+		require.NoError(t, store.CreateAuditEvent(ctx, &types.AuditEvent{
+			ID: "ae-recent", Timestamp: recent, Actor: "system",
+			EventType: "rollout.succeeded", TargetType: "rollout", Action: "succeeded"}))
+
+		cutoff := time.Now().UTC().Add(-365 * 24 * time.Hour)
+		n, err := store.DeleteAuditEventsBefore(ctx, cutoff)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), n, "only the 400-day-old audit row should be pruned")
+
+		gone, err := store.GetAuditEvent(ctx, "ae-old")
+		require.NoError(t, err)
+		require.Nil(t, gone, "ae-old must be pruned")
+		kept, err := store.GetAuditEvent(ctx, "ae-recent")
+		require.NoError(t, err)
+		require.NotNil(t, kept, "ae-recent must survive")
 	})
 }
 

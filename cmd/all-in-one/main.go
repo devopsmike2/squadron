@@ -830,6 +830,49 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			zap.Duration("interval", 24*time.Hour))
 	}
 
+	// Audit-log retention GC — OPT-IN, OFF by default. Unlike the sweeps
+	// above (fixed 90-day cutoff on operator/discovery activity),
+	// audit_events is the append-only compliance/evidence log, so pruning
+	// it is a product/compliance decision the operator must make explicitly.
+	// With the switch unset the log grows unbounded — the compliance-safe
+	// default. Enable via config (audit_retention.enabled + retention_days)
+	// or the SQUADRON_AUDIT_RETENTION_DAYS env override (a positive integer,
+	// which takes precedence). Retention windows vary by regime (PCI ~1yr,
+	// HIPAA ~6yr, SOX ~7yr, GDPR erasure), so there is no default window.
+	auditRetention := config.AuditRetention
+	if raw := strings.TrimSpace(os.Getenv("SQUADRON_AUDIT_RETENTION_DAYS")); raw != "" {
+		if days, err := strconv.Atoi(raw); err == nil && days > 0 {
+			auditRetention = config.AuditRetentionConfig{Enabled: true, RetentionDays: days}
+		} else {
+			logger.Warn("ignoring invalid SQUADRON_AUDIT_RETENTION_DAYS (want a positive integer of days)",
+				zap.String("value", raw))
+		}
+	}
+	if window, active := auditRetention.RetentionWindow(); active {
+		type auditRetentionGC interface {
+			DeleteAuditEventsBefore(ctx context.Context, before time.Time) (int64, error)
+		}
+		if gcStore, ok := appStore.(auditRetentionGC); ok {
+			go func() {
+				t := time.NewTicker(24 * time.Hour)
+				defer t.Stop()
+				for range t.C {
+					cutoff := time.Now().UTC().Add(-window)
+					if n, err := gcStore.DeleteAuditEventsBefore(context.Background(), cutoff); err != nil {
+						logger.Warn("audit_events retention GC failed", zap.Error(err))
+					} else if n > 0 {
+						logger.Info("audit_events retention GC ran", zap.Int64("deleted", n))
+					}
+				}
+			}()
+			logger.Info("audit-log retention GC started (opt-in)",
+				zap.Duration("retention", window),
+				zap.Duration("interval", 24*time.Hour))
+		} else {
+			logger.Warn("audit retention configured but the store has no DeleteAuditEventsBefore; audit log will grow unbounded")
+		}
+	}
+
 	// v0.31 Pipeline Health — collector self-metrics surface. Reads
 	// from the dedicated pipeline_health_samples table populated by
 	// the worker pool's extractor. Needs an AgentLister so the fleet
