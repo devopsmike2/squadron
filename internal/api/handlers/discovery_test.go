@@ -2116,6 +2116,75 @@ func TestHandleAWSGenerateRecommendations_Declined(t *testing.T) {
 	}
 }
 
+// TestHandleAWSGenerateRecommendations_DeclineStillAppendsRegression pins the
+// decline-guard fix (#328 follow-up): when the LLM proposer DECLINES (empty
+// plan), the deterministic detector-based regression recs must still fire.
+// Before the fix, the handler returned on result.Declined BEFORE the
+// appendAWS*RegressionRecs / appendAWSEventSourceRecs calls, silently dropping
+// a real finding. Here a Lambda whose cold-start detector fired (annotation on
+// the scan row) yields the lambda-cold-start-baseline rec even though the LLM
+// declined — the response must be declined:false with the regression rec.
+func TestHandleAWSGenerateRecommendations_DeclineStillAppendsRegression(t *testing.T) {
+	mp := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Declined: true,
+			Reason:   "Every scanned resource already has OTel coverage.",
+			Kind:     ai.ProposalKindPlan,
+		},
+	}
+	conn := &credstore.CloudConnection{AccountID: "123456789012", Provider: credstore.ProviderAWS}
+	audit := &discoveryRecordingAudit{}
+	h := newRecsHandlers(t, conn, mp, audit)
+
+	exceeds := true
+	p95 := 910.0
+	reqBody, err := json.Marshal(awsGenerateRecommendationsRequest{
+		ScanResult: awsScanResponse{
+			ScanID:    "scan-aws-decline-regression",
+			AccountID: "123456789012",
+			Regions:   []string{"us-east-1"},
+			Serverless: []awsServerlessRow{{
+				Provider:                  "aws",
+				Surface:                   "lambda",
+				AccountID:                 "123456789012",
+				Region:                    "us-east-1",
+				ResourceName:              "checkout",
+				ResourceARN:               "arn:aws:lambda:us-east-1:123456789012:function:checkout",
+				ColdStartP95Ms:            &p95,
+				ColdStartExceedsThreshold: &exceeds,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	w := doRecsRequest(h, "123456789012", string(reqBody))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Declined        bool `json:"declined"`
+		Recommendations []struct {
+			ResourceKind string `json:"resource_kind"`
+		} `json:"recommendations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if resp.Declined {
+		t.Error("declined = true; want false — the cold-start regression rec fired despite the LLM decline")
+	}
+	var sawColdStart bool
+	for _, r := range resp.Recommendations {
+		if r.ResourceKind == "lambda-cold-start-baseline" {
+			sawColdStart = true
+		}
+	}
+	if !sawColdStart {
+		t.Errorf("missing lambda-cold-start-baseline on decline path; body=%s", w.Body.String())
+	}
+}
+
 func TestHandleAWSGenerateRecommendations_HappyPath(t *testing.T) {
 	// Two-step plan with real-looking Terraform per step. The
 	// audit-payload-leak assertion below checks the snippet text does
