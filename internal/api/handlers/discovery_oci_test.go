@@ -76,6 +76,9 @@ type fakeOCIScanner struct {
 	err    error
 	// eventSources is returned by ScanEventSources (event-source tier).
 	eventSources []scanner.EventSourceInstanceSnapshot
+	// orchestrations is returned by ScanOrchestrations (orchestration tier —
+	// OCI Resource Manager Stacks).
+	orchestrations []scanner.OrchestrationInstanceSnapshot
 }
 
 func (f *fakeOCIScanner) Provider() credstore.Provider {
@@ -102,6 +105,13 @@ func (f *fakeOCIScanner) Validate(_ context.Context, _ *credstore.CloudConnectio
 // returned snapshots into the response.
 func (f *fakeOCIScanner) ScanEventSources(_ context.Context, _ scanner.ScanScope) ([]scanner.EventSourceInstanceSnapshot, error) {
 	return f.eventSources, nil
+}
+
+// ScanOrchestrations satisfies OrchestrationDiscoveryScanner so the OCI scan
+// handler's tier-gated orchestration dispatch (v0.89.365) folds the returned
+// Resource Manager Stack snapshots into the response.
+func (f *fakeOCIScanner) ScanOrchestrations(_ context.Context, _ scanner.ScanScope) ([]scanner.OrchestrationInstanceSnapshot, error) {
+	return f.orchestrations, nil
 }
 
 // fakeOCIScannerFactory satisfies OCIScannerFactory by returning a
@@ -979,6 +989,63 @@ func TestScanOCIConnection_SurfacesEventSources(t *testing.T) {
 	}
 	if len(es.PropagationNotes) != 1 {
 		t.Errorf("propagation_notes len = %d, want 1", len(es.PropagationNotes))
+	}
+}
+
+// TestScanOCIConnection_SurfacesOrchestrations pins the Slice-1 fix: an OCI
+// scan now invokes ScanOrchestrations and folds Resource Manager Stack rows
+// into the response's orchestrations slice (they were silently dropped before,
+// leaving the RM-logging picker dormant). The stack here has HasLogAxis=false —
+// the logging-gap condition the picker keys on — which Slice 2 will turn into a
+// recommendation; Slice 1 only proves the row reaches the wire.
+func TestScanOCIConnection_SurfacesOrchestrations(t *testing.T) {
+	fs := &fakeOCIScanner{
+		result: &scanner.Result{
+			ScanID:              "scan-orch-oci",
+			InstrumentedCount:   1,
+			UninstrumentedCount: 0,
+			Compute: []scanner.ComputeInstanceSnapshot{
+				{ResourceID: "ocid1.instance.1", HasOTel: true},
+			},
+		},
+		orchestrations: []scanner.OrchestrationInstanceSnapshot{
+			{
+				Provider:     "oci",
+				Surface:      "resmgr",
+				ResourceName: "prod-stack",
+				ResourceARN:  "ocid1.ormstack.oc1.iad.prod",
+				Region:       ociTestRegion,
+				WorkflowType: "Stack",
+				HasTraceAxis: false,
+				HasLogAxis:   false, // no RM-source logging in the compartment → the gap
+			},
+		},
+	}
+	factory := &fakeOCIScannerFactory{scanner: fs}
+	h, store, key := newOCITestHandlers(t, nil, factory)
+	r := newOCIRouter(h)
+
+	conn := seedOCIConnection(t, store, key, "Prod", ociTestTenancyOCID, ociTestUserOCID, ociTestFingerprint, ociTestRegion)
+	w := ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/connections/"+conn.ID+"/scan", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp ociScanResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if len(resp.Orchestrations) != 1 {
+		t.Fatalf("orchestrations len = %d, want 1; body=%s", len(resp.Orchestrations), w.Body.String())
+	}
+	oc := resp.Orchestrations[0]
+	if oc.ResourceName != "prod-stack" {
+		t.Errorf("resource_name = %q, want prod-stack", oc.ResourceName)
+	}
+	if oc.Surface != "resmgr" || oc.WorkflowType != "Stack" {
+		t.Errorf("surface/workflow = %q/%q, want resmgr/Stack", oc.Surface, oc.WorkflowType)
+	}
+	if oc.HasLogAxis {
+		t.Errorf("has_log_axis = true, want false (the logging gap the picker fires on)")
 	}
 }
 
