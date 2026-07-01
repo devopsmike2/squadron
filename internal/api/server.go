@@ -3135,7 +3135,8 @@ func (s *Server) registerRoutes() {
 					})
 					return
 				}
-				h := handlers.NewSavingsHandlers(store, s.recsEngine, s.insightsService, s.pricer, s.logger)
+				h := handlers.NewSavingsHandlers(store, s.recsEngine, s.insightsService, s.pricer, s.logger).
+					WithAuditService(s.auditService)
 				h.HandleApplied(c)
 			})
 		v1.GET("/savings/realized",
@@ -3184,7 +3185,8 @@ func (s *Server) registerRoutes() {
 					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "cost spikes disabled"})
 					return
 				}
-				h := handlers.NewCostSpikesHandlers(s.costSpikes, s.costSpikeDetector)
+				h := handlers.NewCostSpikesHandlers(s.costSpikes, s.costSpikeDetector).
+					WithAuditService(s.auditService)
 				h.HandleAcknowledge(c)
 			})
 		v1.POST("/alerts/cost-spikes/tick",
