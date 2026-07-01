@@ -153,6 +153,8 @@ func KindToResourceTypes(kind string) []string {
 		return []string{"oci_streaming_stream"}
 	case "streaming-logging-enable":
 		return []string{"oci_streaming_stream", "oci_logging_log"}
+	case "ons-logging-enable":
+		return []string{"oci_ons_notification_topic"}
 	// --- Serverless regression recs (detection→proposal). Resource types
 	// mirror the iacpicker cold-start / error-rate snippets so open-PR can
 	// suggest the placement file that holds the function / service. ---

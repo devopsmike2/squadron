@@ -145,6 +145,19 @@ func (h *DiscoveryAzureHandlers) appendAzureEventSourceRecs(
 		h.exclusionStore, scope, scanID, now, h.logger)
 }
 
+// appendOCIEventSourceRecs folds the OCI event-source recommendations
+// (Notification Service logging) into the OCI recommendations flow. The
+// exclusion scope mirrors the regression-recs scope
+// (ConnectionID=conn.ID, ScopeID=tenancyOCID).
+func (h *DiscoveryOCIHandlers) appendOCIEventSourceRecs(
+	ctx context.Context, recs *[]recommendations.Recommendation,
+	rows []eventSourceRow, connID, tenancyOCID, region, scanID string, now time.Time,
+) {
+	scope := proposer.EventSourceScope{ConnectionID: connID, ScopeID: tenancyOCID, Region: region}
+	appendEventSourceRecs(ctx, recs, eventSourceRowsToInventory(rows),
+		h.exclusionStore, scope, scanID, now, h.logger)
+}
+
 // eventSourceDraftToRecommendation maps an EventSourceRecommendationDraft
 // onto the wire recommendation envelope (mirrors
 // coldStartDraftToRecommendation) so the rec renders + opens a PR
@@ -201,6 +214,8 @@ func eventSourceRecTitle(kind string) string {
 		return "Event Hubs namespace has no diagnostic setting"
 	case proposer.EventHubsCaptureRecommendationKind:
 		return "Event Hubs namespace has no hub with Capture enabled"
+	case proposer.ONSLoggingRecommendationKind:
+		return "OCI Notification topic logging not enabled"
 	default:
 		return "Event source observability gap"
 	}

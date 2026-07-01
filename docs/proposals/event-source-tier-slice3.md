@@ -18,8 +18,22 @@ and the handler append
 `DiscoveryHandlers.appendAWSEventSourceRecs`, so a real discovery
 scan now surfaces the recommendation and opens a Terraform PR. This
 is the reference slice for wiring the remaining dormant
-event-source pickers (SQS redrive, Cloud Tasks, Event Grid, Event
-Hubs, ONS, Pub/Sub Lite, Resource Manager).
+event-source pickers.
+
+**Arc closed (v0.89.348–v0.89.352):** all event-source pickers are
+now wired to production detection branches + per-cloud handler
+appends. Coverage: AWS SNS delivery-logging + SQS redrive; GCP Cloud
+Tasks retry/logging + Pub/Sub Lite logging/reservation; Azure Event
+Grid diagnostics/CloudEvents-schema + Event Hubs
+diagnostics/Capture; OCI Notification Service logging. Every signal
+was confirmed (via a per-cloud parallel survey) to already reach the
+handler from the existing scanners — no scanner enrichment was
+required. The one remaining dormant picker,
+`PickResourceManagerLoggingPattern`, is orchestration-tier (not
+event-source) and is tracked separately. The detection branches live
+in `internal/proposer/event_source.go` (registry:
+`proposer.EventSourceChecks`); the per-cloud appends in
+`internal/api/handlers/discovery_event_source_recs.go`.
 
 **See also:**
 [Event source tier slice 1](./event-source-tier-slice1.md),

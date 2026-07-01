@@ -401,3 +401,33 @@ func TestEventSourceChecks_EventGridFiresBoth(t *testing.T) {
 		t.Errorf("event grid row fired %d checks, want 2 (diagnostics + schema)", n)
 	}
 }
+
+// --- OCI ONS logging check (batch 4) ---
+
+func TestCheckONSLogging_FiresAndSkips(t *testing.T) {
+	row := EventSourceInventoryRow{
+		RecommendationID: "ocid1.onstopic.oc1..abc",
+		Provider:         "oci",
+		Surface:          "notifications",
+		ResourceTFName:   "t1",
+		ResourceID:       "ocid1.onstopic.oc1..abc",
+		Region:           "us-ashburn-1",
+	}
+	d, err := CheckONSLogging(context.Background(), row,
+		EventSourceScope{ConnectionID: "c", ScopeID: "ten"}, nil)
+	if err != nil || d == nil || d.Kind != ONSLoggingRecommendationKind {
+		t.Fatalf("expected ons-logging fire, got %v err %v", d, err)
+	}
+	if !strings.Contains(d.Terraform, "oci_logging_log") {
+		t.Errorf("terraform missing oci_logging_log:\n%s", d.Terraform)
+	}
+	row.HasLogAxis = true
+	if d2, _ := CheckONSLogging(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when logging present")
+	}
+	row.HasLogAxis = false
+	row.Surface = "streaming"
+	if d3, _ := CheckONSLogging(context.Background(), row, EventSourceScope{}, nil); d3 != nil {
+		t.Error("expected nil for non-notifications surface")
+	}
+}
