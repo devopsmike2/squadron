@@ -73,6 +73,27 @@ func (s *Storage) SaveDiscoveryScan(ctx context.Context, rec *types.ScanRecord) 
 	return nil
 }
 
+// DeleteDiscoveryScansBefore prunes persisted scan history whose
+// created_at predates the cutoff. discovery_scans stores the full
+// inventory in result_json (multi-MB per row), making it the largest-
+// growing discovery table on a continuously-scanning deployment; it
+// belongs to the same 90-day retention sweep as the per-resource
+// discovery instance tables. Returns the number of rows deleted.
+func (s *Storage) DeleteDiscoveryScansBefore(
+	ctx context.Context,
+	before time.Time,
+) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM discovery_scans WHERE created_at < ?`,
+		before.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete discovery_scans: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // ListDiscoveryScans returns newest-first scan history for a scope. result_json
 // is omitted to keep list responses small. A blank scopeID lists every scan for
 // the provider.

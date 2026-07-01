@@ -32,12 +32,50 @@ type retentionGCContract interface {
 	DeleteOrchestrationInstancesBefore(ctx context.Context, before time.Time) (int64, error)
 	DeleteColdStartObservationsBefore(ctx context.Context, before time.Time) error
 	DeleteErrorRateObservationsBefore(ctx context.Context, before time.Time) error
+	DeleteDiscoveryScansBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
 // Compile-time guard: the sqlite store must satisfy every retention predicate
 // main.go schedules. If this stops compiling, a Delete*Before signature drifted
 // and the corresponding GC sweep would silently no-op in production.
 var _ retentionGCContract = (*Storage)(nil)
+
+// TestRetention_DeleteDiscoveryScansBefore: persisted scan history older
+// than the cutoff is pruned; recent scans survive. discovery_scans stores
+// the full inventory blob per row, so without this GC it is the largest
+// unbounded discovery table on a continuously-scanning deployment.
+func TestRetention_DeleteDiscoveryScansBefore(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		old := time.Now().UTC().Add(-100 * 24 * time.Hour)
+		recent := time.Now().UTC().Add(-1 * 24 * time.Hour)
+
+		require.NoError(t, store.SaveDiscoveryScan(ctx, &types.ScanRecord{
+			ScanID: "scan-old", Provider: "aws", ScopeID: "acc-1",
+			StartedAt: old, CompletedAt: old, CreatedAt: old,
+			Summary: map[string]int{"ec2": 3}, ResultJSON: `{"instances":[]}`,
+		}))
+		require.NoError(t, store.SaveDiscoveryScan(ctx, &types.ScanRecord{
+			ScanID: "scan-recent", Provider: "aws", ScopeID: "acc-1",
+			StartedAt: recent, CompletedAt: recent, CreatedAt: recent,
+			Summary: map[string]int{"ec2": 3}, ResultJSON: `{"instances":[]}`,
+		}))
+
+		cutoff := time.Now().UTC().Add(-90 * 24 * time.Hour)
+		n, err := store.DeleteDiscoveryScansBefore(ctx, cutoff)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), n, "only the 100-day-old scan should be pruned")
+
+		// Old scan gone; recent scan (and its inventory) intact.
+		gone, err := store.GetDiscoveryScan(ctx, "scan-old")
+		require.NoError(t, err)
+		require.Nil(t, gone, "scan-old must be pruned")
+		kept, err := store.GetDiscoveryScan(ctx, "scan-recent")
+		require.NoError(t, err)
+		require.NotNil(t, kept, "scan-recent must survive")
+	})
+}
 
 // TestRetention_DeleteClosedCostSpikeEventsBefore: closed spikes older
 // than the cutoff are pruned; recent closed spikes AND open spikes (any
