@@ -839,10 +839,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// or the SQUADRON_AUDIT_RETENTION_DAYS env override (a positive integer,
 	// which takes precedence). Retention windows vary by regime (PCI ~1yr,
 	// HIPAA ~6yr, SOX ~7yr, GDPR erasure), so there is no default window.
+	// NOTE: the local var `config` (from config.LoadConfig above) shadows the
+	// config *package* in this scope, so the package type name
+	// `config.AuditRetentionConfig` is NOT referenceable here. Mutate a copy
+	// of the loaded value's field instead of constructing a fresh typed literal.
 	auditRetention := config.AuditRetention
 	if raw := strings.TrimSpace(os.Getenv("SQUADRON_AUDIT_RETENTION_DAYS")); raw != "" {
 		if days, err := strconv.Atoi(raw); err == nil && days > 0 {
-			auditRetention = config.AuditRetentionConfig{Enabled: true, RetentionDays: days}
+			auditRetention.Enabled = true
+			auditRetention.RetentionDays = days
 		} else {
 			logger.Warn("ignoring invalid SQUADRON_AUDIT_RETENTION_DAYS (want a positive integer of days)",
 				zap.String("value", raw))
