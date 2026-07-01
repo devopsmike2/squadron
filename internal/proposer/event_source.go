@@ -34,8 +34,12 @@ import (
 // (providerFromRecommendationKind), and its placement/disposition map
 // entries.
 const (
-	SNSDeliveryLoggingRecommendationKind = "sns-delivery-logging-enable"
-	SQSRedrivePolicyRecommendationKind   = "sqs-redrive-policy-enable"
+	SNSDeliveryLoggingRecommendationKind    = "sns-delivery-logging-enable"
+	SQSRedrivePolicyRecommendationKind      = "sqs-redrive-policy-enable"
+	CloudTasksRetryPolicyRecommendationKind = "cloudtasks-retry-policy-enable"
+	CloudTasksLoggingRecommendationKind     = "cloudtasks-logging-enable"
+	PubSubLiteLoggingRecommendationKind     = "pubsublite-logging-enable"
+	PubSubLiteReservationRecommendationKind = "pubsublite-reservation-attach"
 )
 
 // Surface discriminators the scanners stamp on event-source snapshots.
@@ -43,8 +47,10 @@ const (
 // so the detection branch stays dependency-light; the per-Check tests
 // pin the literals against the scanner constants.
 const (
-	awsSNSSurface = "sns"
-	awsSQSSurface = "sqs"
+	awsSNSSurface        = "sns"
+	awsSQSSurface        = "sqs"
+	gcpCloudTasksSurface = "cloudtasks"
+	gcpPubSubLiteSurface = "pubsublite"
 )
 
 // EventSourceInventoryRow is the minimal projection of a scanned
@@ -133,6 +139,10 @@ type EventSourceCheck func(
 var EventSourceChecks = []EventSourceCheck{
 	CheckSNSDeliveryLogging,
 	CheckSQSRedrive,
+	CheckCloudTasksRetryPolicy,
+	CheckCloudTasksLogging,
+	CheckPubSubLiteLogging,
+	CheckPubSubLiteReservation,
 }
 
 // resolveRecID picks the stable recommendation identifier for a row
@@ -259,4 +269,100 @@ func CheckSQSRedrive(
 		ResourceTFName: row.ResourceTFName,
 	})
 	return buildEventSourceDraft(SQSRedrivePolicyRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckCloudTasksRetryPolicy is the detection branch for the GCP Cloud
+// Tasks retry-policy kind. Fires on Surface==cloudtasks && !HasTraceAxis
+// (no retry policy configured → transient failures aren't retried).
+// Terraform from iacpicker.PickCloudTasksRetryPolicyPattern.
+func CheckCloudTasksRetryPolicy(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != gcpCloudTasksSurface || row.HasTraceAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, CloudTasksRetryPolicyRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickCloudTasksRetryPolicyPattern(iacpicker.RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(CloudTasksRetryPolicyRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckCloudTasksLogging is the detection branch for the GCP Cloud
+// Tasks logging kind. Fires on Surface==cloudtasks && !HasLogAxis (no
+// Stackdriver logging sampling → delivery attempts aren't recorded).
+// Terraform from iacpicker.PickCloudTasksLoggingPattern.
+func CheckCloudTasksLogging(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != gcpCloudTasksSurface || row.HasLogAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, CloudTasksLoggingRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickCloudTasksLoggingPattern(iacpicker.RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(CloudTasksLoggingRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckPubSubLiteLogging is the detection branch for the GCP Pub/Sub
+// Lite logging kind. Fires on Surface==pubsublite && !HasLogAxis (no
+// Cloud Logging sink filtering on the topic). Terraform from
+// iacpicker.PickPubSubLiteLoggingPattern.
+func CheckPubSubLiteLogging(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != gcpPubSubLiteSurface || row.HasLogAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, PubSubLiteLoggingRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickPubSubLiteLoggingPattern(iacpicker.RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(PubSubLiteLoggingRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckPubSubLiteReservation is the detection branch for the GCP
+// Pub/Sub Lite reservation kind. Fires on Surface==pubsublite &&
+// !HasReservation (no throughput reservation → topic throttled to the
+// per-partition floor). The signal comes from the scanned Detail bag
+// (Detail["has_reservation"]), read into HasReservation by the per-cloud
+// row→inventory projection. Terraform from
+// iacpicker.PickPubSubLiteReservationPattern (billable — the reasoning
+// flags the operator-incurred cost).
+func CheckPubSubLiteReservation(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != gcpPubSubLiteSurface || row.HasReservation {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, PubSubLiteReservationRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickPubSubLiteReservationPattern(iacpicker.RecommendationContext{
+		Provider:       "gcp",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(PubSubLiteReservationRecommendationKind, recID, row, scope, terraform, reasoning), nil
 }

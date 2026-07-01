@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/devopsmike2/squadron/internal/iac"
 	"github.com/devopsmike2/squadron/internal/recommendations"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -220,5 +222,58 @@ func TestAppendAWSEventSourceRecs_MixedSurfaces(t *testing.T) {
 	}
 	if !kinds["sns-delivery-logging-enable"] || !kinds["sqs-redrive-policy-enable"] {
 		t.Errorf("expected both kinds, got %v", kinds)
+	}
+}
+
+// TestAppendGCPEventSourceRecs_Fires: a Cloud Tasks queue lacking retry
+// policy + logging and a Pub/Sub Lite topic lacking logging + reservation
+// produce four recs (2 + 2). Exercises the GCP adapter + the Detail-bag
+// reservation read (has_reservation absent → fires).
+func TestAppendGCPEventSourceRecs_Fires(t *testing.T) {
+	h := &DiscoveryGCPHandlers{exclusionStore: &fakeExclusionStore{}, logger: zap.NewNop()}
+	rows := []eventSourceRow{
+		{Provider: "gcp", Surface: "cloudtasks", ResourceName: "q1",
+			ResourceARN: "projects/p/locations/us-central1/queues/q1", Region: "us-central1"},
+		{Provider: "gcp", Surface: "pubsublite", ResourceName: "t1",
+			ResourceARN: "projects/p/locations/us-central1/topics/t1", Region: "us-central1"},
+	}
+	var recs []recommendations.Recommendation
+	h.appendGCPEventSourceRecs(context.Background(), &recs, rows, "conn-1", "p", "us-central1", "scan-g", time.Now().UTC())
+
+	if len(recs) != 4 {
+		t.Fatalf("want 4 GCP event-source recs, got %d", len(recs))
+	}
+	kinds := map[string]bool{}
+	for _, r := range recs {
+		kinds[r.ResourceKind] = true
+		if r.IaC == nil || r.IaC.Source == "" {
+			t.Errorf("rec %q missing Terraform", r.ResourceKind)
+		}
+	}
+	for _, want := range []string{
+		"cloudtasks-retry-policy-enable", "cloudtasks-logging-enable",
+		"pubsublite-logging-enable", "pubsublite-reservation-attach",
+	} {
+		if !kinds[want] {
+			t.Errorf("missing kind %q (got %v)", want, kinds)
+		}
+	}
+}
+
+// TestAppendGCPEventSourceRecs_ReservationHasDetail: when the scanned
+// Detail bag reports has_reservation=true, the reservation rec is
+// suppressed but logging still fires (one rec, not two).
+func TestAppendGCPEventSourceRecs_ReservationHasDetail(t *testing.T) {
+	h := &DiscoveryGCPHandlers{exclusionStore: &fakeExclusionStore{}, logger: zap.NewNop()}
+	rows := []eventSourceRow{{
+		Provider: "gcp", Surface: "pubsublite", ResourceName: "t1",
+		ResourceARN: "projects/p/locations/us-central1/topics/t1", Region: "us-central1",
+		HasLogAxis: true, // logging present → no logging rec
+		Detail:     map[string]any{"has_reservation": true},
+	}}
+	var recs []recommendations.Recommendation
+	h.appendGCPEventSourceRecs(context.Background(), &recs, rows, "conn-1", "p", "us-central1", "scan-g2", time.Now().UTC())
+	if len(recs) != 0 {
+		t.Fatalf("want 0 recs when logging present + reservation attached, got %d", len(recs))
 	}
 }

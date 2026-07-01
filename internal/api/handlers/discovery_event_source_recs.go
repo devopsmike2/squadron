@@ -69,11 +69,14 @@ func appendEventSourceRecs(
 	}
 }
 
-// awsEventSourceRowsToInventory projects the AWS snake_case event-source
-// wire rows into the shared EventSourceInventoryRow the branch consumes.
-// RecommendationID = ResourceARN so a decline persists across re-scans
-// (matches the regression-recs stable-ID convention).
-func awsEventSourceRowsToInventory(rows []eventSourceRow) []proposer.EventSourceInventoryRow {
+// eventSourceRowsToInventory projects the snake_case event-source wire
+// rows into the shared EventSourceInventoryRow the detection branches
+// consume. Provider-agnostic: the row already carries Provider/Surface,
+// and the two Detail-bag signals (has_reservation, has_capture) that
+// aren't top-level axes are read out here. RecommendationID = ResourceARN
+// so a decline persists across re-scans (matches the regression-recs
+// stable-ID convention).
+func eventSourceRowsToInventory(rows []eventSourceRow) []proposer.EventSourceInventoryRow {
 	out := make([]proposer.EventSourceInventoryRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, proposer.EventSourceInventoryRow{
@@ -85,9 +88,21 @@ func awsEventSourceRowsToInventory(rows []eventSourceRow) []proposer.EventSource
 			Region:           r.Region,
 			HasLogAxis:       r.HasLogAxis,
 			HasTraceAxis:     r.HasTraceAxis,
+			HasReservation:   detailBool(r.Detail, "has_reservation"),
+			HasCapture:       detailBool(r.Detail, "has_capture"),
 		})
 	}
 	return out
+}
+
+// detailBool reads a bool out of the scanned Detail bag, tolerating the
+// key being absent (→ false) or JSON-decoded to a non-bool.
+func detailBool(detail map[string]any, key string) bool {
+	if detail == nil {
+		return false
+	}
+	v, ok := detail[key].(bool)
+	return ok && v
 }
 
 func (h *DiscoveryHandlers) appendAWSEventSourceRecs(
@@ -98,8 +113,22 @@ func (h *DiscoveryHandlers) appendAWSEventSourceRecs(
 		ScopeID:      scan.AccountID,
 		Region:       firstRegion(scan.Regions),
 	}
-	appendEventSourceRecs(ctx, recs, awsEventSourceRowsToInventory(scan.EventSources),
+	appendEventSourceRecs(ctx, recs, eventSourceRowsToInventory(scan.EventSources),
 		h.exclusionStore, scope, scan.ScanID, now, h.logger)
+}
+
+// appendGCPEventSourceRecs folds the GCP event-source recommendations
+// (Cloud Tasks retry/logging, Pub/Sub Lite logging/reservation) into the
+// GCP recommendations flow. connID/projectID/region come from the
+// connection; the exclusion scope mirrors the regression-recs scope
+// (ConnectionID=conn.ID, ScopeID=projectID).
+func (h *DiscoveryGCPHandlers) appendGCPEventSourceRecs(
+	ctx context.Context, recs *[]recommendations.Recommendation,
+	rows []eventSourceRow, connID, projectID, region, scanID string, now time.Time,
+) {
+	scope := proposer.EventSourceScope{ConnectionID: connID, ScopeID: projectID, Region: region}
+	appendEventSourceRecs(ctx, recs, eventSourceRowsToInventory(rows),
+		h.exclusionStore, scope, scanID, now, h.logger)
 }
 
 // eventSourceDraftToRecommendation maps an EventSourceRecommendationDraft
@@ -142,6 +171,14 @@ func eventSourceRecTitle(kind string) string {
 		return "SNS delivery-status logging not enabled"
 	case proposer.SQSRedrivePolicyRecommendationKind:
 		return "SQS queue has no redrive policy (silent message loss)"
+	case proposer.CloudTasksRetryPolicyRecommendationKind:
+		return "Cloud Tasks queue has no retry policy"
+	case proposer.CloudTasksLoggingRecommendationKind:
+		return "Cloud Tasks queue logging not enabled"
+	case proposer.PubSubLiteLoggingRecommendationKind:
+		return "Pub/Sub Lite topic logging not enabled"
+	case proposer.PubSubLiteReservationRecommendationKind:
+		return "Pub/Sub Lite topic has no throughput reservation"
 	default:
 		return "Event source observability gap"
 	}

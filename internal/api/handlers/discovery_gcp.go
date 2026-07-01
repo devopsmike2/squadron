@@ -1486,6 +1486,13 @@ func (h *DiscoveryGCPHandlers) HandleRecommendationsForGCPScan(c *gin.Context) {
 			h.coldStartStore, h.errorRateStore, h.exclusionStore,
 			conn.ID, conn.ProjectID, conn.Region, req.ScanResult.ScanID, now, h.logger)
 
+		// Detection → proposal: append GCP event-source recommendations
+		// (Cloud Tasks retry/logging, Pub/Sub Lite logging/reservation)
+		// for any scanned event source with a config-gap. Additive +
+		// best-effort; activates the dormant iacpicker GCP patterns.
+		h.appendGCPEventSourceRecs(ctx, &recs, req.ScanResult.EventSources,
+			conn.ID, conn.ProjectID, conn.Region, req.ScanResult.ScanID, now)
+
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{
 				Actor:      services.AuditActorSystem,
