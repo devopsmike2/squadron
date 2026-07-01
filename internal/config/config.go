@@ -29,6 +29,38 @@ type Config struct {
 	CommercialDetectors CommercialDetectorsConfig `yaml:"commercial_detectors,omitempty"`
 
 	ServerlessMetricDetection ServerlessMetricDetectionConfig `yaml:"serverless_metric_detection,omitempty"`
+
+	AuditRetention AuditRetentionConfig `yaml:"audit_retention,omitempty"`
+}
+
+// AuditRetentionConfig is the operator-facing switch for pruning the
+// audit_events log. OFF by default — audit_events is the append-only
+// compliance/evidence log, so it grows unbounded unless an operator whose
+// regime permits (or requires) a bounded window explicitly opts in. Unlike
+// the other retention sweeps (which prune operator/discovery activity on a
+// fixed 90-day cutoff), there is no safe universal default here: retention
+// regimes vary widely (e.g. PCI-DSS ~1yr, HIPAA ~6yr, SOX ~7yr, plus GDPR
+// erasure obligations), so the operator sets the window. Leaving the block
+// out — or Enabled false — keeps the compliance-safe unbounded default.
+type AuditRetentionConfig struct {
+	// Enabled turns audit-log pruning ON. Default false: the audit log is
+	// never pruned and grows unbounded.
+	Enabled bool `yaml:"enabled"`
+	// RetentionDays is the window kept when Enabled: events whose timestamp
+	// is older than now-RetentionDays are pruned on a daily sweep. Must be
+	// > 0 to take effect — Enabled with a non-positive value is treated as
+	// INACTIVE so a misconfiguration can never silently wipe the whole log.
+	RetentionDays int `yaml:"retention_days"`
+}
+
+// RetentionWindow returns the audit-log retention window and whether pruning
+// is active. Active only when Enabled AND RetentionDays > 0, so an
+// enabled-but-zero-day config safely no-ops instead of deleting everything.
+func (c AuditRetentionConfig) RetentionWindow() (time.Duration, bool) {
+	if !c.Enabled || c.RetentionDays <= 0 {
+		return 0, false
+	}
+	return time.Duration(c.RetentionDays) * 24 * time.Hour, true
 }
 
 // ServerlessMetricDetectionConfig is the operator-facing switch for the

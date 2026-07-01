@@ -9,6 +9,7 @@ which agents got which stage, when an alert fired.
 - [What's recorded](#whats-recorded)
 - [Filtering](#filtering)
 - [The UI timeline](#the-ui-timeline)
+- [Retention](#retention)
 - [API reference](#api-reference)
 
 ## Event shape
@@ -110,6 +111,65 @@ entity you're looking at:
 
 Live-updating via SSE: an `audit_event_recorded` event over the broker
 revalidates whichever timelines are mounted, so you don't have to refresh.
+
+## Retention
+
+The audit log is **append-only and unbounded by default** — it is never
+pruned unless you explicitly turn on retention. This is deliberate: the
+audit log is your compliance/evidence record, and silently deleting it
+would be the wrong default for anyone who relies on it after the fact.
+
+Other Squadron tables (cost-spike events, discovery scan history, and so
+on) prune on a fixed 90-day sweep. The audit log does **not**, because a
+one-size retention window doesn't fit real regimes:
+
+| Regime (typical, non-legal-advice) | Commonly cited retention |
+|-----------------------------------|--------------------------|
+| PCI-DSS                            | ~1 year                  |
+| HIPAA                             | ~6 years                 |
+| SOX                              | ~7 years                 |
+| GDPR                             | keep only as long as needed; honor erasure obligations |
+
+These are rough industry rules of thumb, not legal advice — confirm your
+own obligations before choosing a window.
+
+### Enabling retention
+
+Retention only prunes when you turn it on **and** set a positive window.
+Two ways, env takes precedence:
+
+**Config file:**
+
+```yaml
+audit_retention:
+  enabled: true
+  retention_days: 365   # keep one year; older events are pruned daily
+```
+
+**Environment variable** (handy for env-only deployments):
+
+```bash
+SQUADRON_AUDIT_RETENTION_DAYS=365
+```
+
+When active, a daily sweep deletes audit events whose `timestamp` is older
+than `now - retention_days`. Startup logs `audit-log retention GC started
+(opt-in)` with the window so you can confirm it's on.
+
+### Safety behavior
+
+- **Default off.** Omit the block (or leave `enabled: false`) and the log
+  grows unbounded — nothing is ever deleted.
+- **Misconfiguration never wipes the log.** `enabled: true` with a
+  non-positive `retention_days` (0 or negative) is treated as *inactive*,
+  not "delete everything." You must set a real positive window for pruning
+  to run.
+- **Pruning is by event time** (`timestamp`), so "keep 365 days" means 365
+  days of history regardless of when a row was written.
+
+If your regime requires longer retention than a single Squadron instance
+should hold, export the audit log to your SIEM/warehouse and enable a
+shorter local window — the two are independent.
 
 ## API reference
 

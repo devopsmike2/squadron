@@ -71,3 +71,28 @@ func (s *Storage) DeleteDismissedIncidentDraftsBefore(ctx context.Context, befor
 	n, _ := res.RowsAffected()
 	return n, nil
 }
+
+// DeleteAuditEventsBefore removes audit_events rows whose timestamp (the
+// event's logical time, indexed) predates the cutoff. Returns the number of
+// rows removed.
+//
+// UNLIKE every other retention predicate, the sweep that calls this is
+// OFF by default (see cmd/all-in-one audit-retention wiring): audit_events
+// is the append-only compliance/evidence log, so silently pruning it is a
+// product/compliance decision, not an engineering default. The predicate
+// exists so operators whose regime permits (or requires) a bounded window
+// can opt in to a configurable retention; with the switch unset the log
+// grows unbounded and nothing here runs. This method itself performs the
+// delete unconditionally — the enable/window gating lives entirely at the
+// call site.
+func (s *Storage) DeleteAuditEventsBefore(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM audit_events WHERE timestamp < ?`,
+		before.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete audit_events: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
