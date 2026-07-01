@@ -37,10 +37,25 @@ func TestPickColdStartProvisionedConcurrency_PatternMatchesSpec(t *testing.T) {
 		"function_name                     = aws_lambda_function.order_processor.function_name",
 		"provisioned_concurrent_executions = 1",
 		"# operator tunes",
-		"qualifier                         = aws_lambda_function.order_processor.version",
+		// v0.89.355: the qualifier is now a loud placeholder, not a
+		// live .version reference (which resolves to $LATEST and hard-
+		// fails apply when the function isn't publishing versions).
+		`qualifier                         = "REPLACE_WITH_PUBLISHED_VERSION_OR_ALIAS"`,
 	} {
 		if !strings.Contains(tf, want) {
 			t.Errorf("Terraform missing %q; got:\n%s", want, tf)
+		}
+	}
+	// Guard against regressing to the apply-breaking form: the snippet
+	// must NOT emit a bare `.version` qualifier expression (provisioned
+	// concurrency cannot target $LATEST). The precondition must be a
+	// substitute-before-apply placeholder + a reasoning caveat instead.
+	if strings.Contains(tf, "qualifier                         = aws_lambda_function.order_processor.version") {
+		t.Errorf("snippet emits a bare .version qualifier — resolves to $LATEST and fails apply; got:\n%s", tf)
+	}
+	for _, want := range []string{"$LATEST", "published version", "publish = true"} {
+		if !strings.Contains(picked.Reasoning, want) {
+			t.Errorf("reasoning missing precondition %q; got: %s", want, picked.Reasoning)
 		}
 	}
 	if picked.FallbackUsed {
