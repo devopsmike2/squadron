@@ -708,6 +708,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	type operatorTableRetentionGC interface {
 		DeleteClosedCostSpikeEventsBefore(ctx context.Context, before time.Time) (int64, error)
 		DeleteRecommendationOutcomesBefore(ctx context.Context, before time.Time) (int64, error)
+		DeleteDismissedIncidentDraftsBefore(ctx context.Context, before time.Time) (int64, error)
 	}
 	if gcStore, ok := appStore.(operatorTableRetentionGC); ok {
 		const operatorTableRetention = 90 * 24 * time.Hour
@@ -725,6 +726,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 					logger.Warn("recommendation_outcomes retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("recommendation_outcomes retention GC ran", zap.Int64("deleted", n))
+				}
+				if n, err := gcStore.DeleteDismissedIncidentDraftsBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("incident_drafts retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("incident_drafts retention GC ran", zap.Int64("deleted", n))
 				}
 			}
 		}()
