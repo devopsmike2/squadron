@@ -94,6 +94,8 @@ func KindToResourceTypes(kind string) []string {
 		return []string{"aws_schemas_discoverer", "aws_cloudwatch_event_bus"}
 	case "sqs-redrive-policy-enable":
 		return []string{"aws_sqs_queue"}
+	case "sns-delivery-logging-enable":
+		return []string{"aws_sns_topic"}
 	// --- GCP ---
 	case "gcs-logging-enable":
 		return []string{"google_storage_bucket"}
