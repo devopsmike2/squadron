@@ -131,6 +131,20 @@ func (h *DiscoveryGCPHandlers) appendGCPEventSourceRecs(
 		h.exclusionStore, scope, scanID, now, h.logger)
 }
 
+// appendAzureEventSourceRecs folds the Azure event-source
+// recommendations (Event Grid diagnostics/CloudEvents-schema, Event Hubs
+// diagnostics/Capture) into the Azure recommendations flow. The
+// exclusion scope mirrors the regression-recs scope
+// (ConnectionID=conn.ID, ScopeID=subscriptionID).
+func (h *DiscoveryAzureHandlers) appendAzureEventSourceRecs(
+	ctx context.Context, recs *[]recommendations.Recommendation,
+	rows []eventSourceRow, connID, subscriptionID, region, scanID string, now time.Time,
+) {
+	scope := proposer.EventSourceScope{ConnectionID: connID, ScopeID: subscriptionID, Region: region}
+	appendEventSourceRecs(ctx, recs, eventSourceRowsToInventory(rows),
+		h.exclusionStore, scope, scanID, now, h.logger)
+}
+
 // eventSourceDraftToRecommendation maps an EventSourceRecommendationDraft
 // onto the wire recommendation envelope (mirrors
 // coldStartDraftToRecommendation) so the rec renders + opens a PR
@@ -179,6 +193,14 @@ func eventSourceRecTitle(kind string) string {
 		return "Pub/Sub Lite topic logging not enabled"
 	case proposer.PubSubLiteReservationRecommendationKind:
 		return "Pub/Sub Lite topic has no throughput reservation"
+	case proposer.EventGridDiagnosticsRecommendationKind:
+		return "Event Grid topic has no diagnostic setting"
+	case proposer.EventGridCloudEventRecommendationKind:
+		return "Event Grid topic not using the CloudEvents schema"
+	case proposer.EventHubsDiagnosticsRecommendationKind:
+		return "Event Hubs namespace has no diagnostic setting"
+	case proposer.EventHubsCaptureRecommendationKind:
+		return "Event Hubs namespace has no hub with Capture enabled"
 	default:
 		return "Event source observability gap"
 	}

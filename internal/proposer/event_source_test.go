@@ -317,3 +317,87 @@ func TestEventSourceChecks_CloudTasksFiresBoth(t *testing.T) {
 		t.Errorf("cloud tasks row fired %d checks, want 2 (retry + logging)", n)
 	}
 }
+
+// --- Azure event-source checks (batch 3) ---
+
+func azureRow(surface string) EventSourceInventoryRow {
+	return EventSourceInventoryRow{
+		RecommendationID: "/subscriptions/s/rg/providers/Microsoft.EventGrid/" + surface + "/x",
+		Provider:         "azure",
+		Surface:          surface,
+		ResourceTFName:   "x",
+		ResourceID:       "/subscriptions/s/rg/providers/Microsoft.EventGrid/" + surface + "/x",
+		Region:           "eastus",
+	}
+}
+
+func TestCheckEventGridDiagnostics_FiresAndSkips(t *testing.T) {
+	d, err := CheckEventGridDiagnostics(context.Background(), azureRow("eventgrid"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "s"}, nil)
+	if err != nil || d == nil || d.Kind != EventGridDiagnosticsRecommendationKind {
+		t.Fatalf("expected eventgrid-diagnostics fire, got %v err %v", d, err)
+	}
+	row := azureRow("eventgrid")
+	row.HasLogAxis = true
+	if d2, _ := CheckEventGridDiagnostics(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when diagnostics present")
+	}
+}
+
+func TestCheckEventGridCloudEventSchema_FiresAndSkips(t *testing.T) {
+	// Fires when proprietary schema (HasTraceAxis false).
+	d, err := CheckEventGridCloudEventSchema(context.Background(), azureRow("eventgrid"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "s"}, nil)
+	if err != nil || d == nil || d.Kind != EventGridCloudEventRecommendationKind {
+		t.Fatalf("expected eventgrid-cloudevent fire, got %v err %v", d, err)
+	}
+	row := azureRow("eventgrid")
+	row.HasTraceAxis = true // already CloudEventSchemaV1_0
+	if d2, _ := CheckEventGridCloudEventSchema(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when already CloudEvents schema")
+	}
+}
+
+func TestCheckEventHubsDiagnostics_FiresAndSkips(t *testing.T) {
+	d, err := CheckEventHubsDiagnostics(context.Background(), azureRow("eventhubs"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "s"}, nil)
+	if err != nil || d == nil || d.Kind != EventHubsDiagnosticsRecommendationKind {
+		t.Fatalf("expected eventhubs-diagnostics fire, got %v err %v", d, err)
+	}
+	row := azureRow("eventhubs")
+	row.HasLogAxis = true
+	if d2, _ := CheckEventHubsDiagnostics(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when diagnostics present")
+	}
+}
+
+// TestCheckEventHubsCapture_ReadsDetailSignal: capture fires on
+// !HasCapture (the Detail["has_capture"] signal), NOT on an axis.
+func TestCheckEventHubsCapture_ReadsDetailSignal(t *testing.T) {
+	d, err := CheckEventHubsCapture(context.Background(), azureRow("eventhubs"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "s"}, nil)
+	if err != nil || d == nil || d.Kind != EventHubsCaptureRecommendationKind {
+		t.Fatalf("expected eventhubs-capture fire, got %v err %v", d, err)
+	}
+	row := azureRow("eventhubs")
+	row.HasCapture = true
+	if d2, _ := CheckEventHubsCapture(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when a hub has Capture enabled")
+	}
+}
+
+// TestEventSourceChecks_EventGridFiresBoth: an Event Grid topic lacking
+// diagnostics AND using a proprietary schema fires exactly the two Event
+// Grid checks.
+func TestEventSourceChecks_EventGridFiresBoth(t *testing.T) {
+	row := azureRow("eventgrid") // both axes false
+	n := 0
+	for _, c := range EventSourceChecks {
+		if d, _ := c(context.Background(), row, EventSourceScope{}, nil); d != nil {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("event grid row fired %d checks, want 2 (diagnostics + schema)", n)
+	}
+}

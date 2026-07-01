@@ -40,6 +40,10 @@ const (
 	CloudTasksLoggingRecommendationKind     = "cloudtasks-logging-enable"
 	PubSubLiteLoggingRecommendationKind     = "pubsublite-logging-enable"
 	PubSubLiteReservationRecommendationKind = "pubsublite-reservation-attach"
+	EventGridDiagnosticsRecommendationKind  = "eventgrid-diagnostics-enable"
+	EventGridCloudEventRecommendationKind   = "eventgrid-cloudevent-schema-enforce"
+	EventHubsDiagnosticsRecommendationKind  = "eventhubs-diagnostics-enable"
+	EventHubsCaptureRecommendationKind      = "eventhubs-capture-enable"
 )
 
 // Surface discriminators the scanners stamp on event-source snapshots.
@@ -47,10 +51,12 @@ const (
 // so the detection branch stays dependency-light; the per-Check tests
 // pin the literals against the scanner constants.
 const (
-	awsSNSSurface        = "sns"
-	awsSQSSurface        = "sqs"
-	gcpCloudTasksSurface = "cloudtasks"
-	gcpPubSubLiteSurface = "pubsublite"
+	awsSNSSurface         = "sns"
+	awsSQSSurface         = "sqs"
+	gcpCloudTasksSurface  = "cloudtasks"
+	gcpPubSubLiteSurface  = "pubsublite"
+	azureEventGridSurface = "eventgrid"
+	azureEventHubsSurface = "eventhubs"
 )
 
 // EventSourceInventoryRow is the minimal projection of a scanned
@@ -143,6 +149,10 @@ var EventSourceChecks = []EventSourceCheck{
 	CheckCloudTasksLogging,
 	CheckPubSubLiteLogging,
 	CheckPubSubLiteReservation,
+	CheckEventGridDiagnostics,
+	CheckEventGridCloudEventSchema,
+	CheckEventHubsDiagnostics,
+	CheckEventHubsCapture,
 }
 
 // resolveRecID picks the stable recommendation identifier for a row
@@ -365,4 +375,102 @@ func CheckPubSubLiteReservation(
 		ResourceTFName: row.ResourceTFName,
 	})
 	return buildEventSourceDraft(PubSubLiteReservationRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckEventGridDiagnostics is the detection branch for the Azure Event
+// Grid diagnostics kind. Fires on Surface==eventgrid && !HasLogAxis (no
+// diagnostic setting routing to Log Analytics / App Insights). Terraform
+// from iacpicker.PickEventGridDiagnosticsPattern.
+func CheckEventGridDiagnostics(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != azureEventGridSurface || row.HasLogAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, EventGridDiagnosticsRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickEventGridDiagnosticsPattern(iacpicker.RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(EventGridDiagnosticsRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckEventGridCloudEventSchema is the detection branch for the Azure
+// Event Grid CloudEvents-schema kind. Fires on Surface==eventgrid &&
+// !HasTraceAxis — the topic uses a proprietary input_schema
+// (EventGridSchema / CustomEventSchema) rather than CloudEventSchemaV1_0,
+// so it skips the W3C traceparent extension. Terraform from
+// iacpicker.PickEventGridCloudEventSchemaPattern (a BREAKING change for
+// subscribers — the reasoning flags coordinate-before-merge).
+func CheckEventGridCloudEventSchema(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != azureEventGridSurface || row.HasTraceAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, EventGridCloudEventRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickEventGridCloudEventSchemaPattern(iacpicker.RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(EventGridCloudEventRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckEventHubsDiagnostics is the detection branch for the Azure Event
+// Hubs diagnostics kind. Fires on Surface==eventhubs && !HasLogAxis (the
+// namespace has no diagnostic setting). Terraform from
+// iacpicker.PickEventHubsDiagnosticsPattern.
+func CheckEventHubsDiagnostics(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != azureEventHubsSurface || row.HasLogAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, EventHubsDiagnosticsRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickEventHubsDiagnosticsPattern(iacpicker.RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(EventHubsDiagnosticsRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
+
+// CheckEventHubsCapture is the detection branch for the Azure Event Hubs
+// Capture kind. Fires on Surface==eventhubs && !HasCapture — no event
+// hub in the namespace has Capture enabled, so raw event bodies aren't
+// archived for replay/post-mortem. The signal comes from the scanned
+// Detail["has_capture"] bag (not a top-level axis), read into HasCapture
+// by the row→inventory projection. Terraform from
+// iacpicker.PickEventHubsCapturePattern.
+func CheckEventHubsCapture(
+	ctx context.Context, row EventSourceInventoryRow,
+	scope EventSourceScope, exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != azureEventHubsSurface || row.HasCapture {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, EventHubsCaptureRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickEventHubsCapturePattern(iacpicker.RecommendationContext{
+		Provider:       "azure",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(EventHubsCaptureRecommendationKind, recID, row, scope, terraform, reasoning), nil
 }
