@@ -53,7 +53,12 @@ jobs:
       
     - name: Lint check
       run: |
-        go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        # Pinned, not @latest: golangci-lint v2 (the current @latest) rejects
+        # this repo's v1-format .golangci.yml with a hard config-load error,
+        # which broke the Go job independently of any code change. Pin to the
+        # last v1 release so the config is honored and CI is reproducible.
+        # (To adopt v2 later: `golangci-lint migrate` the config + bump this pin.)
+        go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
         make lint
 
   test-frontend:
