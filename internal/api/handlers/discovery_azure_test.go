@@ -864,6 +864,71 @@ func TestRecommendationsForAzureScan_HappyPath(t *testing.T) {
 	}
 }
 
+// TestRecommendationsForAzureScan_DeclineStillAppendsRegression pins the
+// decline-guard fix (#328 follow-up): when the LLM proposer DECLINES (empty
+// plan), the deterministic detector-based regression recs must still fire.
+// Before the fix, the handler returned on result.Declined BEFORE the
+// appendRegressionRecs / appendAzureEventSourceRecs calls, silently dropping a
+// real finding. Here an Azure Function whose cold-start detector fired yields
+// the azfunc-cold-start-baseline rec even though the LLM declined — the
+// response must be declined:false with the regression rec.
+func TestRecommendationsForAzureScan_DeclineStillAppendsRegression(t *testing.T) {
+	mock := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Declined: true,
+			Reason:   "No compute or functions to instrument in this subscription.",
+			Model:    "claude-test",
+		},
+	}
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newAzureTestHandlers(t, audit, nil)
+	h.WithAzureAIProposer(mock)
+	r := newAzureRouter(h)
+	conn := seedAzureConnection(t, store, key, "Prod", azureTestTenantID, azureTestSubscriptionID, azureTestClientID, "eastus")
+
+	exceeds := true
+	p95 := 1200.0
+	body, err := json.Marshal(azureGenerateRecommendationsRequest{
+		ScanResult: azureScanResponse{
+			ScanID:         "scan-azure-decline-regression",
+			SubscriptionID: azureTestSubscriptionID,
+			Location:       "eastus",
+			Serverless: []scanner.ServerlessInstanceSnapshot{{
+				Provider:                  "azure",
+				Surface:                   "azfunc",
+				ResourceName:              "checkout",
+				ResourceARN:               "/subscriptions/" + azureTestSubscriptionID + "/resourceGroups/rg/providers/Microsoft.Web/sites/checkout",
+				Region:                    "eastus",
+				ColdStartP95Ms:            &p95,
+				ColdStartExceedsThreshold: &exceeds,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	w := azureDoRequest(r, http.MethodPost, "/api/v1/discovery/azure/connections/"+conn.ID+"/recommendations", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if resp.Declined {
+		t.Error("declined = true; want false — the cold-start regression rec fired despite the LLM decline")
+	}
+	var sawColdStart bool
+	for _, rec := range resp.Recommendations {
+		if rec.ResourceKind == "azfunc-cold-start-baseline" {
+			sawColdStart = true
+		}
+	}
+	if !sawColdStart {
+		t.Errorf("missing azfunc-cold-start-baseline on decline path; body=%s", w.Body.String())
+	}
+}
+
 func TestRecommendationsForAzureScan_ProposerNotWired(t *testing.T) {
 	h, store, key := newAzureTestHandlers(t, nil, nil)
 	r := newAzureRouter(h)
