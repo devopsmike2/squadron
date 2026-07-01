@@ -74,3 +74,47 @@ func TestRetention_DeleteRecommendationOutcomesBefore(t *testing.T) {
 		require.Equal(t, "o-recent", remaining[0].ID)
 	})
 }
+
+// TestRetention_DeleteDismissedIncidentDraftsBefore: dismissed drafts
+// older than the cutoff are pruned; recent dismissed drafts AND non-
+// dismissed drafts (draft / published, any age) survive — a
+// still-actionable or published-for-dedup draft must never be GC'd.
+func TestRetention_DeleteDismissedIncidentDraftsBefore(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		old := time.Now().UTC().Add(-100 * 24 * time.Hour)
+		recent := time.Now().UTC().Add(-1 * 24 * time.Hour)
+
+		// Dismissed + old → pruned.
+		require.NoError(t, store.CreateIncidentDraft(ctx, &types.IncidentDraft{
+			ID: "dismissed-old", Status: "dismissed", Title: "t", BodyMarkdown: "b",
+			CreatedAt: old.Add(-time.Hour), UpdatedAt: old}))
+		// Dismissed + recent → survives.
+		require.NoError(t, store.CreateIncidentDraft(ctx, &types.IncidentDraft{
+			ID: "dismissed-recent", Status: "dismissed", Title: "t", BodyMarkdown: "b",
+			CreatedAt: recent.Add(-time.Hour), UpdatedAt: recent}))
+		// Draft + old → survives (not dismissed).
+		require.NoError(t, store.CreateIncidentDraft(ctx, &types.IncidentDraft{
+			ID: "draft-old", Status: "draft", Title: "t", BodyMarkdown: "b",
+			CreatedAt: old.Add(-time.Hour), UpdatedAt: old}))
+		// Published + old → survives (load-bearing dedup/link record).
+		require.NoError(t, store.CreateIncidentDraft(ctx, &types.IncidentDraft{
+			ID: "published-old", Status: "published", Title: "t", BodyMarkdown: "b",
+			ActionRequestID: "ar-1", CreatedAt: old.Add(-time.Hour), UpdatedAt: old}))
+
+		cutoff := time.Now().UTC().Add(-90 * 24 * time.Hour)
+		n, err := store.DeleteDismissedIncidentDraftsBefore(ctx, cutoff)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), n, "only the dismissed+old draft should be deleted")
+
+		gone, err := store.GetIncidentDraft(ctx, "dismissed-old")
+		require.NoError(t, err)
+		require.Nil(t, gone, "dismissed-old should be pruned")
+		for _, id := range []string{"dismissed-recent", "draft-old", "published-old"} {
+			kept, err := store.GetIncidentDraft(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, kept, "%s should survive the sweep", id)
+		}
+	})
+}

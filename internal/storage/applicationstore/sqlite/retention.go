@@ -49,3 +49,25 @@ func (s *Storage) DeleteRecommendationOutcomesBefore(ctx context.Context, before
 	n, _ := res.RowsAffected()
 	return n, nil
 }
+
+// DeleteDismissedIncidentDraftsBefore removes DISMISSED incident-draft
+// rows (status = 'dismissed') whose updated_at (set at dismiss time)
+// predates the cutoff. incident_drafts gains a row per AI-drafted
+// incident and HandleDismissDraft only flips status to 'dismissed' — the
+// row otherwise stays forever, so a long-lived deployment accumulates
+// them without bound. Only dismissed drafts are pruned: 'draft' and
+// 'published' rows are load-bearing (published ones are keyed by
+// action_request_id for dedup / external-link lookup) and must survive
+// regardless of age, mirroring the "closed cost-spikes only" invariant.
+// Returns the number of rows removed.
+func (s *Storage) DeleteDismissedIncidentDraftsBefore(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM incident_drafts WHERE status = 'dismissed' AND updated_at < ?`,
+		before.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete dismissed incident_drafts: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
