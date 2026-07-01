@@ -132,3 +132,93 @@ func TestAppendAWSEventSourceRecs_NonSNSSurface_NoRec(t *testing.T) {
 		t.Fatalf("want 0 recs for non-sns surface, got %d", len(recs))
 	}
 }
+
+const sqsQueueARN = "arn:aws:sqs:us-east-1:111122223333:orders"
+
+// TestAppendAWSEventSourceRecs_SQS_Fires: an SQS queue scanned without a
+// redrive policy (HasTraceAxis=false) becomes an sqs-redrive-policy-enable
+// recommendation with the picker's Terraform, proving the multi-check
+// dispatch reaches the second AWS surface. HasTraceAxis is the fire gate
+// (redrive policy present), not HasLogAxis (DLQ reachable).
+func TestAppendAWSEventSourceRecs_SQS_Fires(t *testing.T) {
+	h := &DiscoveryHandlers{exclusionStore: &fakeExclusionStore{}}
+	scan := awsScanResponse{
+		ScanID:    "scan-sqs-1",
+		AccountID: "111122223333",
+		Regions:   []string{"us-east-1"},
+		EventSources: []eventSourceRow{{
+			Provider:     "aws",
+			Surface:      "sqs",
+			ResourceName: "orders",
+			ResourceARN:  sqsQueueARN,
+			Region:       "us-east-1",
+			HasTraceAxis: false, // no redrive policy → fires
+		}},
+	}
+	var recs []recommendations.Recommendation
+	h.appendAWSEventSourceRecs(context.Background(), &recs, scan, time.Now().UTC())
+
+	if len(recs) != 1 {
+		t.Fatalf("want 1 SQS event-source rec, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.ResourceKind != "sqs-redrive-policy-enable" {
+		t.Errorf("ResourceKind = %q, want sqs-redrive-policy-enable", got.ResourceKind)
+	}
+	if got.IaC == nil || !strings.Contains(got.IaC.Source, "redrive_policy") {
+		t.Error("expected the picker's redrive_policy Terraform")
+	}
+	if got.Disposition != iac.DispositionPatchExisting {
+		t.Errorf("Disposition = %q, want patch_existing", got.Disposition)
+	}
+}
+
+// TestAppendAWSEventSourceRecs_SQS_HasRedrive_NoRec: a queue that already
+// has a redrive policy (HasTraceAxis=true) yields no recommendation.
+func TestAppendAWSEventSourceRecs_SQS_HasRedrive_NoRec(t *testing.T) {
+	h := &DiscoveryHandlers{exclusionStore: &fakeExclusionStore{}}
+	scan := awsScanResponse{
+		ScanID:    "scan-sqs-2",
+		AccountID: "111122223333",
+		Regions:   []string{"us-east-1"},
+		EventSources: []eventSourceRow{{
+			Provider: "aws", Surface: "sqs", ResourceName: "orders",
+			ResourceARN: sqsQueueARN, Region: "us-east-1", HasTraceAxis: true,
+		}},
+	}
+	var recs []recommendations.Recommendation
+	h.appendAWSEventSourceRecs(context.Background(), &recs, scan, time.Now().UTC())
+	if len(recs) != 0 {
+		t.Fatalf("want 0 recs when redrive policy present, got %d", len(recs))
+	}
+}
+
+// TestAppendAWSEventSourceRecs_MixedSurfaces: an SNS topic (no log axis)
+// + an SQS queue (no redrive) in one scan produce exactly two recs, one
+// per surface — confirms the registry dispatch fans over surfaces.
+func TestAppendAWSEventSourceRecs_MixedSurfaces(t *testing.T) {
+	h := &DiscoveryHandlers{exclusionStore: &fakeExclusionStore{}}
+	scan := awsScanResponse{
+		ScanID:    "scan-mixed",
+		AccountID: "111122223333",
+		Regions:   []string{"us-east-1"},
+		EventSources: []eventSourceRow{
+			{Provider: "aws", Surface: "sns", ResourceName: "orders",
+				ResourceARN: snsTopicARN, Region: "us-east-1", HasLogAxis: false},
+			{Provider: "aws", Surface: "sqs", ResourceName: "orders-q",
+				ResourceARN: sqsQueueARN, Region: "us-east-1", HasTraceAxis: false},
+		},
+	}
+	var recs []recommendations.Recommendation
+	h.appendAWSEventSourceRecs(context.Background(), &recs, scan, time.Now().UTC())
+	if len(recs) != 2 {
+		t.Fatalf("want 2 recs (one SNS, one SQS), got %d", len(recs))
+	}
+	kinds := map[string]bool{}
+	for _, r := range recs {
+		kinds[r.ResourceKind] = true
+	}
+	if !kinds["sns-delivery-logging-enable"] || !kinds["sqs-redrive-policy-enable"] {
+		t.Errorf("expected both kinds, got %v", kinds)
+	}
+}

@@ -29,17 +29,23 @@ import (
 // extend the same shape to SQS redrive / Cloud Tasks / Event Grid /
 // Event Hubs / ONS / Pub/Sub Lite / Resource Manager.
 
-// SNSDeliveryLoggingRecommendationKind — the recommendation kind the
-// SNS delivery-logging branch emits. Matches the iacpicker doc + the
-// webhook `sns-` prefix routing (providerFromRecommendationKind → aws)
-// and the placement/disposition map entries.
-const SNSDeliveryLoggingRecommendationKind = "sns-delivery-logging-enable"
+// Recommendation kinds the event-source detection branches emit. Each
+// matches its iacpicker doc, its webhook prefix routing
+// (providerFromRecommendationKind), and its placement/disposition map
+// entries.
+const (
+	SNSDeliveryLoggingRecommendationKind = "sns-delivery-logging-enable"
+	SQSRedrivePolicyRecommendationKind   = "sqs-redrive-policy-enable"
+)
 
-// awsSNSSurface is the Surface discriminator the AWS scanner stamps on
-// SNS-topic event-source snapshots (mirrors aws.SNSSurface without
-// importing the scanner package into the picker branch — the two must
-// stay in lockstep; the CheckSNSDeliveryLogging test pins the literal).
-const awsSNSSurface = "sns"
+// Surface discriminators the scanners stamp on event-source snapshots.
+// Mirrored here (rather than importing each cloud's scanner package)
+// so the detection branch stays dependency-light; the per-Check tests
+// pin the literals against the scanner constants.
+const (
+	awsSNSSurface = "sns"
+	awsSQSSurface = "sqs"
+)
 
 // EventSourceInventoryRow is the minimal projection of a scanned
 // event-source row the event-source recommendation branch reads. The
@@ -60,6 +66,20 @@ type EventSourceInventoryRow struct {
 	// structured-logging / delivery-audit destination is already wired.
 	// The delivery-logging recommendation fires only when this is false.
 	HasLogAxis bool
+	// HasTraceAxis mirrors the scanned snapshot's trace primitive axis.
+	// Per-surface meaning: SQS → a redrive policy (→ DLQ) is configured;
+	// Event Grid → the topic uses the CloudEvents schema; Cloud Tasks →
+	// a retry policy is set. The corresponding recommendation fires when
+	// this is false.
+	HasTraceAxis bool
+	// HasReservation / HasCapture carry the two per-surface Detail-bag
+	// signals that aren't top-level axes: GCP Pub/Sub Lite reservation
+	// attachment (Detail["has_reservation"]) and Azure Event Hubs
+	// Capture (Detail["has_capture"]). The per-cloud row→inventory
+	// projection reads them out of the Detail map. False → the
+	// corresponding recommendation fires.
+	HasReservation bool
+	HasCapture     bool
 }
 
 // EventSourceScope carries the connection identity the exclusion lookup
@@ -94,6 +114,84 @@ type EventSourceRecommendationDraft struct {
 	ResourceID       string
 }
 
+// EventSourceCheck is a single event-source detection branch: it
+// self-gates on the row's Surface + the relevant config axis and returns
+// a draft when the recommendation should fire (nil otherwise). The
+// handler runs every registered check over every scanned row.
+type EventSourceCheck func(
+	ctx context.Context,
+	row EventSourceInventoryRow,
+	scope EventSourceScope,
+	exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error)
+
+// EventSourceChecks is the registry of active event-source detection
+// branches. Adding a picker to production is a one-line append here (plus
+// the Check func + its placement/disposition map entries). Each check is
+// surface-gated, so running all of them over every row is safe: a check
+// returns (nil, nil) for rows it doesn't own.
+var EventSourceChecks = []EventSourceCheck{
+	CheckSNSDeliveryLogging,
+	CheckSQSRedrive,
+}
+
+// resolveRecID picks the stable recommendation identifier for a row
+// (RecommendationID, falling back to the canonical ResourceID).
+func resolveRecID(row EventSourceInventoryRow) string {
+	if row.RecommendationID != "" {
+		return row.RecommendationID
+	}
+	return row.ResourceID
+}
+
+// eventSourceExcluded reports whether a recommendation (by ID or by
+// kind-level exclusion) has been declined for this scope. A nil store or
+// an incomplete scope means "not excluded" (the caller still fires — the
+// exclusion check is best-effort). The error is surfaced so a store
+// failure doesn't silently suppress the check.
+func eventSourceExcluded(
+	ctx context.Context,
+	exclusions EventSourceExclusionStore,
+	scope EventSourceScope,
+	recID, kind string,
+) (bool, error) {
+	if exclusions == nil || scope.ConnectionID == "" || scope.ScopeID == "" {
+		return false, nil
+	}
+	excluded, err := exclusions.ListExcludedRecommendations(
+		ctx, scope.ConnectionID, scope.ScopeID, scope.Region, 256,
+	)
+	if err != nil {
+		return false, fmt.Errorf("event source (%s): list excluded recommendations: %w", kind, err)
+	}
+	for _, ex := range excluded {
+		if ex.RecommendationID != "" && ex.RecommendationID == recID {
+			return true, nil
+		}
+		if ex.RecommendationID == "" && ex.RecommendationKind == kind {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// buildEventSourceDraft assembles the draft from a (terraform, reasoning)
+// picker result. Kept tiny so each Check reads as gate → picker → draft.
+func buildEventSourceDraft(
+	kind, recID string, row EventSourceInventoryRow, scope EventSourceScope,
+	terraform, reasoning string,
+) *EventSourceRecommendationDraft {
+	return &EventSourceRecommendationDraft{
+		Kind:             kind,
+		RecommendationID: recID,
+		Reasoning:        reasoning,
+		Terraform:        terraform,
+		ScopeID:          scope.ScopeID,
+		Region:           scope.Region,
+		ResourceID:       row.ResourceID,
+	}
+}
+
 // CheckSNSDeliveryLogging is the detection branch for the AWS SNS
 // delivery-logging kind. It fires when the row is an SNS topic whose
 // HasLogAxis is false (no per-protocol delivery-feedback role wired →
@@ -114,49 +212,51 @@ func CheckSNSDeliveryLogging(
 	scope EventSourceScope,
 	exclusions EventSourceExclusionStore,
 ) (*EventSourceRecommendationDraft, error) {
-	if row.Surface != awsSNSSurface {
+	if row.Surface != awsSNSSurface || row.HasLogAxis {
 		return nil, nil
 	}
-	// The topic already has a delivery-feedback destination wired —
-	// nothing to recommend.
-	if row.HasLogAxis {
-		return nil, nil
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, SNSDeliveryLoggingRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
 	}
-
-	recID := row.RecommendationID
-	if recID == "" {
-		recID = row.ResourceID
-	}
-
-	if exclusions != nil && scope.ConnectionID != "" && scope.ScopeID != "" {
-		excluded, err := exclusions.ListExcludedRecommendations(
-			ctx, scope.ConnectionID, scope.ScopeID, scope.Region, 256,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("sns delivery logging: list excluded recommendations: %w", err)
-		}
-		for _, ex := range excluded {
-			if ex.RecommendationID != "" && ex.RecommendationID == recID {
-				return nil, nil
-			}
-			if ex.RecommendationID == "" && ex.RecommendationKind == SNSDeliveryLoggingRecommendationKind {
-				return nil, nil
-			}
-		}
-	}
-
 	terraform, reasoning := iacpicker.PickSNSDeliveryLoggingPattern(iacpicker.RecommendationContext{
 		Provider:       "aws",
 		ResourceTFName: row.ResourceTFName,
 	})
+	return buildEventSourceDraft(SNSDeliveryLoggingRecommendationKind, recID, row, scope, terraform, reasoning), nil
+}
 
-	return &EventSourceRecommendationDraft{
-		Kind:             SNSDeliveryLoggingRecommendationKind,
-		RecommendationID: recID,
-		Reasoning:        reasoning,
-		Terraform:        terraform,
-		ScopeID:          scope.ScopeID,
-		Region:           scope.Region,
-		ResourceID:       row.ResourceID,
-	}, nil
+// CheckSQSRedrive is the detection branch for the AWS SQS
+// redrive-policy kind. It fires when the row is an SQS queue whose
+// HasTraceAxis is false — i.e. NO redrive policy is configured, so
+// failed messages vanish silently once the retention window expires
+// (the single most common AWS messaging production failure, per
+// event-source-tier-slice4 §3). The Terraform comes from
+// iacpicker.PickSQSRedrivePolicyPattern.
+//
+// Note the axis: HasTraceAxis (redrive policy present) is the fire gate,
+// NOT HasLogAxis (DLQ reachable). A queue WITH a redrive policy but an
+// unreachable cross-account DLQ (HasTraceAxis true, HasLogAxis false) is
+// the audit-only sqs-deadletter-queue-attach case, which carries no
+// Terraform and is intentionally not emitted here.
+func CheckSQSRedrive(
+	ctx context.Context,
+	row EventSourceInventoryRow,
+	scope EventSourceScope,
+	exclusions EventSourceExclusionStore,
+) (*EventSourceRecommendationDraft, error) {
+	if row.Surface != awsSQSSurface || row.HasTraceAxis {
+		return nil, nil
+	}
+	recID := resolveRecID(row)
+	excluded, err := eventSourceExcluded(ctx, exclusions, scope, recID, SQSRedrivePolicyRecommendationKind)
+	if err != nil || excluded {
+		return nil, err
+	}
+	terraform, reasoning := iacpicker.PickSQSRedrivePolicyPattern(iacpicker.RecommendationContext{
+		Provider:       "aws",
+		ResourceTFName: row.ResourceTFName,
+	})
+	return buildEventSourceDraft(SQSRedrivePolicyRecommendationKind, recID, row, scope, terraform, reasoning), nil
 }

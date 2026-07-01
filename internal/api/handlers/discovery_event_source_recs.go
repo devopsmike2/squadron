@@ -49,17 +49,23 @@ func appendEventSourceRecs(
 		if row.ResourceID == "" {
 			continue
 		}
-		draft, err := proposer.CheckSNSDeliveryLogging(ctx, row, scope, exclusions)
-		if err != nil {
-			if logger != nil {
-				logger.Warn("event-source rec build error", zap.Error(err), zap.String("surface", row.Surface))
+		// Run every registered detection branch over the row. Each check
+		// self-gates on Surface + its config axis, so a row can produce
+		// zero, one, or (for multi-signal surfaces like Cloud Tasks) more
+		// than one recommendation.
+		for _, check := range proposer.EventSourceChecks {
+			draft, err := check(ctx, row, scope, exclusions)
+			if err != nil {
+				if logger != nil {
+					logger.Warn("event-source rec build error", zap.Error(err), zap.String("surface", row.Surface))
+				}
+				continue
 			}
-			continue
+			if draft == nil {
+				continue // gate not met or excluded.
+			}
+			*recs = append(*recs, eventSourceDraftToRecommendation(*draft, scanID, now))
 		}
-		if draft == nil {
-			continue // gate not met or excluded.
-		}
-		*recs = append(*recs, eventSourceDraftToRecommendation(*draft, scanID, now))
 	}
 }
 
@@ -78,6 +84,7 @@ func awsEventSourceRowsToInventory(rows []eventSourceRow) []proposer.EventSource
 			ResourceID:       r.ResourceARN,
 			Region:           r.Region,
 			HasLogAxis:       r.HasLogAxis,
+			HasTraceAxis:     r.HasTraceAxis,
 		})
 	}
 	return out
@@ -106,7 +113,7 @@ func eventSourceDraftToRecommendation(
 		ID:          d.RecommendationID,
 		Category:    recommendations.CategoryEmptySignal,
 		Severity:    recommendations.SeverityWarn,
-		Title:       "SNS delivery-status logging not enabled",
+		Title:       eventSourceRecTitle(d.Kind),
 		Detail:      d.Reasoning,
 		GeneratedAt: now,
 		Source: &recommendations.RecommendationSource{
@@ -124,4 +131,18 @@ func eventSourceDraftToRecommendation(
 		rec.Disposition = iac.DispositionFor(rec.ResourceKind)
 	}
 	return rec
+}
+
+// eventSourceRecTitle maps an event-source recommendation kind to its
+// operator-facing card title. Unknown kinds fall back to a generic
+// event-source title so a newly-added kind never renders blank.
+func eventSourceRecTitle(kind string) string {
+	switch kind {
+	case proposer.SNSDeliveryLoggingRecommendationKind:
+		return "SNS delivery-status logging not enabled"
+	case proposer.SQSRedrivePolicyRecommendationKind:
+		return "SQS queue has no redrive policy (silent message loss)"
+	default:
+		return "Event source observability gap"
+	}
 }
