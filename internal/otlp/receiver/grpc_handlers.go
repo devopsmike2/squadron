@@ -14,6 +14,7 @@ import (
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
 // TraceService implements the OTLP Trace Service gRPC interface
@@ -123,7 +124,7 @@ func (s *TraceService) Export(ctx context.Context, req *coltracepb.ExportTraceSe
 		}
 		return &coltracepb.ExportTraceServiceResponse{
 			PartialSuccess: &coltracepb.ExportTracePartialSuccess{
-				RejectedSpans: int64(len(req.ResourceSpans)),
+				RejectedSpans: int64(countSpans(req.ResourceSpans)),
 				ErrorMessage:  "Failed to serialize request",
 			},
 		}, nil
@@ -134,9 +135,11 @@ func (s *TraceService) Export(ctx context.Context, req *coltracepb.ExportTraceSe
 		s.metrics.TraceBytes.Inc(int64(len(data)))
 	}
 
-	// Track received traces
+	// Track received traces. The counter measures SPANS ("trace spans
+	// received" per the metric help), not ResourceSpans containers — a batch
+	// with one ResourceSpans holding 100 spans is 100, not 1.
 	if s.metrics != nil {
-		s.metrics.TracesReceived.Inc(int64(len(req.ResourceSpans)))
+		s.metrics.TracesReceived.Inc(int64(countSpans(req.ResourceSpans)))
 	}
 
 	// Submit raw bytes to worker pool for async processing
@@ -154,15 +157,15 @@ func (s *TraceService) Export(ctx context.Context, req *coltracepb.ExportTraceSe
 		}
 		return &coltracepb.ExportTraceServiceResponse{
 			PartialSuccess: &coltracepb.ExportTracePartialSuccess{
-				RejectedSpans: int64(len(req.ResourceSpans)),
+				RejectedSpans: int64(countSpans(req.ResourceSpans)),
 				ErrorMessage:  "Queue full",
 			},
 		}, nil
 	}
 
-	// Track queued traces
+	// Track queued traces (span count, per the metric help — see above).
 	if s.metrics != nil {
-		s.metrics.TracesProcessed.Inc(int64(len(req.ResourceSpans)))
+		s.metrics.TracesProcessed.Inc(int64(countSpans(req.ResourceSpans)))
 	}
 
 	duration := time.Since(start)
@@ -266,6 +269,24 @@ func (s *LogsService) Export(ctx context.Context, req *collogspb.ExportLogsServi
 		zap.Duration("duration", duration))
 
 	return &collogspb.ExportLogsServiceResponse{}, nil
+}
+
+// countSpans counts the total number of spans across the resource spans,
+// walking ResourceSpans → ScopeSpans → Spans. The received/processed counters
+// (help: "trace spans received/processed") and the OTLP
+// PartialSuccess.RejectedSpans field are span counts by definition — NOT
+// ResourceSpans-container counts. Mirrors countMetricDataPoints /
+// countLogRecords, which the metrics and logs paths already use; the traces
+// path was the sole holdout still reporting len(ResourceSpans), which
+// undercounts throughput by the batch's spans-per-resource factor.
+func countSpans(resourceSpans []*tracepb.ResourceSpans) int {
+	count := 0
+	for _, rs := range resourceSpans {
+		for _, ss := range rs.ScopeSpans {
+			count += len(ss.Spans)
+		}
+	}
+	return count
 }
 
 // countMetricDataPoints counts the total number of data points in resource metrics
