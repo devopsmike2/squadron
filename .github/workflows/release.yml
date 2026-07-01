@@ -12,10 +12,20 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# Cancel a superseded publish for the same ref while it's still running so
+# rapid main pushes (dozens/day) don't pile up 40-min builds. Tag pushes are
+# NEVER cancelled — each versioned release must publish its image.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
   build-and-push-image:
     runs-on: ubuntu-latest
+    # Cap the job so a stuck emulated build fails in bounded time instead of
+    # hanging to the 6h GitHub default (observed: one 6h 0m run).
+    timeout-minutes: 45
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
     permissions:
       contents: read
@@ -62,10 +72,18 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # :latest (main/branch pushes) builds amd64 ONLY — fast, a few
+          # minutes. Multi-arch (amd64+arm64; arm64 via slow QEMU emulation of
+          # the cgo/DuckDB build, ~40min) is reserved for TAGGED releases, the
+          # supported surface where arm64 users pull a version tag. Apple
+          # Silicon can Rosetta-run the amd64 :latest.
+          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Reuse layers across runs so unchanged deps aren't rebuilt each push.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # Build squadronctl binaries for every supported platform and attach
   # them to the GitHub release. Only runs on tag pushes; branch pushes
