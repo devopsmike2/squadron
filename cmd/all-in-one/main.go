@@ -786,6 +786,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		DeleteOrchestrationInstancesBefore(ctx context.Context, before time.Time) (int64, error)
 		DeleteColdStartObservationsBefore(ctx context.Context, before time.Time) error
 		DeleteErrorRateObservationsBefore(ctx context.Context, before time.Time) error
+		DeleteDiscoveryScansBefore(ctx context.Context, before time.Time) (int64, error)
 	}
 	if gcStore, ok := appStore.(discoveryTableRetentionGC); ok {
 		const discoveryTableRetention = 90 * 24 * time.Hour
@@ -808,6 +809,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 					logger.Warn("orchestration_instance retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("orchestration_instance retention GC ran", zap.Int64("deleted", n))
+				}
+				if n, err := gcStore.DeleteDiscoveryScansBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("discovery_scans retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("discovery_scans retention GC ran", zap.Int64("deleted", n))
 				}
 				// The two observation tables' predicates return only an error
 				// (their per-resource API consumers never needed a row count).
