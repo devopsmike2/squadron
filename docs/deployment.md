@@ -150,8 +150,12 @@ Or build from source:
 ```bash
 git clone https://github.com/devopsmike2/squadron.git
 cd squadron
-make build-all-in-one
+make build            # OSS edition: builds the UI + ./cmd/all-in-one -> bin/squadron
 ```
+
+This produces the OSS edition. For the edition build model (OSS vs
+enterprise, build tags, and how the private wire files are injected) see
+[docs/build.md](build.md).
 
 ### Configure
 

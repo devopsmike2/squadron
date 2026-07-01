@@ -272,6 +272,17 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	buildEdition := wireExtensions(rolloutService)
 	logger.Info("squadron build edition", zap.String("edition", buildEdition))
 
+	// Surface the build edition on /metrics so operators can confirm
+	// which edition a running instance is (OSS vs enterprise) without
+	// reading startup logs. Value is always 1; the edition label carries
+	// the build-identity string returned by the edition wire.
+	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "squadron_build_info",
+		Help: "Squadron build identity (always 1). Label edition is the build-identity string returned by the edition wire: squadron-oss (default) or the enterprise edition.",
+	}, []string{"edition"})
+	buildInfo.WithLabelValues(buildEdition).Set(1)
+	registry.MustRegister(buildInfo)
+
 	// Resolve commercial-tier detector activation through the edition
 	// seam (extension/detectors + wire_detectors_*.go). The OSS build's
 	// provider forces this false regardless of the runtime switch — the
