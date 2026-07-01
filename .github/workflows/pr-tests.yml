@@ -76,8 +76,13 @@ jobs:
         
     - name: Install frontend dependencies
       working-directory: ui
-      run: npm install
-      
+      # npm ci (lockfile-exact), not npm install: the caret `^3.6.2` on
+      # prettier let `npm install` drift to a newer release than the
+      # package-lock's 3.8.4, and the newer prettier reformats a handful of
+      # files, failing format:check independently of any code change. ci
+      # pins to the lockfile so formatting is reproducible.
+      run: npm ci
+
     - name: Run frontend linting
       working-directory: ui
       run: npm run lint
@@ -210,7 +215,7 @@ jobs:
     - name: Install dependencies
       run: |
         go mod download
-        cd ui && npm install
+        cd ui && npm ci
         
     - name: Build full application
       run: make build

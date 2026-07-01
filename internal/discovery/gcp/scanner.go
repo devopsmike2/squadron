@@ -716,6 +716,7 @@ func (s *Scanner) buildOAuthHTTPClient(ctx context.Context) (*http.Client, error
 	if s.metricDetection {
 		scopes = append(scopes, MonitoringReadScope)
 	}
+	//nolint:staticcheck // SA1019: s.SAJSON is the operator's own service-account key supplied via the connection wizard, not untrusted external config, so the validation concern behind the deprecation does not apply.
 	creds, err := google.CredentialsFromJSON(ctx, s.SAJSON, scopes...)
 	if err != nil {
 		return nil, fmt.Errorf("gcp: parse credential JSON: %w", err)
