@@ -228,3 +228,92 @@ func TestEventSourceChecks_RegistryCoversSNSAndSQS(t *testing.T) {
 		t.Errorf("SQS row fired %d checks, want 1", got)
 	}
 }
+
+// --- GCP event-source checks (batch 2) ---
+
+func gcpRow(surface string) EventSourceInventoryRow {
+	return EventSourceInventoryRow{
+		RecommendationID: "projects/p/locations/us-central1/" + surface + "/q1",
+		Provider:         "gcp",
+		Surface:          surface,
+		ResourceTFName:   "q1",
+		ResourceID:       "projects/p/locations/us-central1/" + surface + "/q1",
+		Region:           "us-central1",
+	}
+}
+
+func TestCheckCloudTasksRetryPolicy_FiresAndSkips(t *testing.T) {
+	// Fires when no retry policy (HasTraceAxis false).
+	d, err := CheckCloudTasksRetryPolicy(context.Background(), gcpRow("cloudtasks"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "p"}, nil)
+	if err != nil || d == nil {
+		t.Fatalf("expected fire, got draft=%v err=%v", d, err)
+	}
+	if d.Kind != CloudTasksRetryPolicyRecommendationKind {
+		t.Errorf("kind = %q", d.Kind)
+	}
+	// Skips when retry policy present.
+	row := gcpRow("cloudtasks")
+	row.HasTraceAxis = true
+	d2, _ := CheckCloudTasksRetryPolicy(context.Background(), row, EventSourceScope{}, nil)
+	if d2 != nil {
+		t.Error("expected nil when retry policy present")
+	}
+}
+
+func TestCheckCloudTasksLogging_FiresAndSkips(t *testing.T) {
+	d, err := CheckCloudTasksLogging(context.Background(), gcpRow("cloudtasks"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "p"}, nil)
+	if err != nil || d == nil || d.Kind != CloudTasksLoggingRecommendationKind {
+		t.Fatalf("expected cloudtasks-logging fire, got %v err %v", d, err)
+	}
+	row := gcpRow("cloudtasks")
+	row.HasLogAxis = true
+	if d2, _ := CheckCloudTasksLogging(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when logging present")
+	}
+}
+
+func TestCheckPubSubLiteLogging_FiresAndSkips(t *testing.T) {
+	d, err := CheckPubSubLiteLogging(context.Background(), gcpRow("pubsublite"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "p"}, nil)
+	if err != nil || d == nil || d.Kind != PubSubLiteLoggingRecommendationKind {
+		t.Fatalf("expected pubsublite-logging fire, got %v err %v", d, err)
+	}
+	row := gcpRow("pubsublite")
+	row.HasLogAxis = true
+	if d2, _ := CheckPubSubLiteLogging(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when logging present")
+	}
+}
+
+// TestCheckPubSubLiteReservation_ReadsDetailSignal: reservation fires on
+// !HasReservation (the Detail["has_reservation"] signal), NOT on an axis.
+func TestCheckPubSubLiteReservation_ReadsDetailSignal(t *testing.T) {
+	d, err := CheckPubSubLiteReservation(context.Background(), gcpRow("pubsublite"),
+		EventSourceScope{ConnectionID: "c", ScopeID: "p"}, nil)
+	if err != nil || d == nil || d.Kind != PubSubLiteReservationRecommendationKind {
+		t.Fatalf("expected pubsublite-reservation fire, got %v err %v", d, err)
+	}
+	row := gcpRow("pubsublite")
+	row.HasReservation = true
+	if d2, _ := CheckPubSubLiteReservation(context.Background(), row, EventSourceScope{}, nil); d2 != nil {
+		t.Error("expected nil when reservation attached")
+	}
+}
+
+// TestEventSourceChecks_CloudTasksFiresBoth: a Cloud Tasks queue lacking
+// both retry policy AND logging fires exactly the two Cloud Tasks checks
+// (multi-signal surface), confirming the registry dispatch.
+func TestEventSourceChecks_CloudTasksFiresBoth(t *testing.T) {
+	row := gcpRow("cloudtasks") // both axes false
+	n := 0
+	for _, c := range EventSourceChecks {
+		if d, _ := c(context.Background(), row, EventSourceScope{}, nil); d != nil {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("cloud tasks row fired %d checks, want 2 (retry + logging)", n)
+	}
+}

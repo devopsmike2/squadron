@@ -111,6 +111,10 @@ func KindToResourceTypes(kind string) []string {
 		return []string{"google_pubsub_schema", "google_pubsub_topic"}
 	case "pubsub-trace-enable":
 		return []string{"google_pubsub_topic"}
+	case "cloudtasks-retry-policy-enable", "cloudtasks-logging-enable":
+		return []string{"google_cloud_tasks_queue"}
+	case "pubsublite-logging-enable", "pubsublite-reservation-attach":
+		return []string{"google_pubsub_lite_topic"}
 	case "gce-otel-label":
 		return []string{"google_compute_instance"}
 	// --- Azure ---
