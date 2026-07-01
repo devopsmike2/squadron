@@ -3175,32 +3175,32 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 			}, http.StatusInternalServerError
 		}
 
-		if result.Declined {
-			// Surface the model's reason; no audit event for
-			// recommendations_generated (nothing was generated). An empty
-			// Recommendations array — never null — so the UI's branch on
-			// .length stays simple.
-			return marshalRecResult(awsGenerateRecommendationsResponse{
-				Declined:        true,
-				Reason:          result.Reason,
-				Recommendations: []recommendations.Recommendation{},
-			})
-		}
-
 		// Walk the plan-kind result into one Recommendation per step. Each
 		// step's Terraform lands in the typed IaC field (the v0.85 Stream
 		// 2B addition); the Action payload carries the step JSON for the
 		// UI's preview flow.
+		//
+		// The LLM proposer can DECLINE when the "traditional" resource tiers
+		// (compute, databases, etc.) are empty. The deterministic picker-based
+		// recs below (regression, event-source) are INDEPENDENT of the LLM
+		// plan and derive from their own scanned tiers, so they must run even
+		// when the proposer declines — otherwise an account whose only finding
+		// is e.g. an SNS topic missing delivery logging would decline and
+		// silently drop a real recommendation.
 		now := time.Now().UTC()
-		recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
-		if err != nil {
-			if h.logger != nil {
-				h.logger.Error("aws generate recommendations: plan step marshal failed", zap.Error(err))
+		var recs []recommendations.Recommendation
+		if !result.Declined {
+			built, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+			if err != nil {
+				if h.logger != nil {
+					h.logger.Error("aws generate recommendations: plan step marshal failed", zap.Error(err))
+				}
+				return nil, &scanner.HumanizedError{
+					Code:    "PlanStepMarshalFailed",
+					Message: "Squadron could not encode the plan step. The error has been logged.",
+				}, http.StatusInternalServerError
 			}
-			return nil, &scanner.HumanizedError{
-				Code:    "PlanStepMarshalFailed",
-				Message: "Squadron could not encode the plan step. The error has been logged.",
-			}, http.StatusInternalServerError
+			recs = built
 		}
 
 		// Detection → proposal: append deterministic cold-start regression
@@ -3219,6 +3219,20 @@ func (h *DiscoveryHandlers) HandleAWSGenerateRecommendations(c *gin.Context) {
 		// fire) + exclusions. Activates the iacpicker event-source
 		// patterns that were built + tested but had no production caller.
 		h.appendAWSEventSourceRecs(ctx, &recs, req.ScanResult, now)
+
+		// If the proposer declined AND no deterministic picker rec fired,
+		// surface the decline honestly — nothing to recommend. When a
+		// deterministic rec DID fire, return it despite the empty LLM plan.
+		if result.Declined && len(recs) == 0 {
+			// No audit event for recommendations_generated (nothing was
+			// generated). An empty Recommendations array — never null — so
+			// the UI's branch on .length stays simple.
+			return marshalRecResult(awsGenerateRecommendationsResponse{
+				Declined:        true,
+				Reason:          result.Reason,
+				Recommendations: []recommendations.Recommendation{},
+			})
+		}
 
 		// Audit event. Payload deliberately omits the Terraform content —
 		// audit rows shouldn't grow with snippet size. step_count +

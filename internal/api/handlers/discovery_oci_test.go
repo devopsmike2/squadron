@@ -24,6 +24,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
+	"github.com/devopsmike2/squadron/internal/proposer"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -893,6 +894,69 @@ func TestRecommendationsForOCIScan_HappyPath(t *testing.T) {
 	}
 	if !sawProposalCreated {
 		t.Error("discovery_proposal.created audit event was not emitted")
+	}
+}
+
+// TestRecommendationsForOCIScan_DeclineStillAppendsOrchestration pins the
+// #328 live-verify fix: when the LLM proposer DECLINES (e.g. a tenancy whose
+// only resource is a Resource Manager Stack — nothing for the model to
+// instrument), the deterministic orchestration rec must still fire. Before
+// the fix, the handler returned on result.Declined BEFORE the
+// appendOCIOrchestrationRecs call, silently dropping a real logging-gap
+// finding.
+func TestRecommendationsForOCIScan_DeclineStillAppendsOrchestration(t *testing.T) {
+	mock := &mockAIProposer{
+		result: &ai.ProposalResult{
+			Declined: true,
+			Reason:   "The discovery scan returned zero instrumentable resources.",
+			Model:    "claude-test",
+		},
+	}
+	audit := &discoveryRecordingAudit{}
+	h, store, key := newOCITestHandlers(t, audit, nil)
+	h.WithOCIAIProposer(mock)
+	r := newOCIRouter(h)
+	conn := seedOCIConnection(t, store, key, "Prod", ociTestTenancyOCID, ociTestUserOCID, ociTestFingerprint, ociTestRegion)
+
+	body, err := json.Marshal(ociGenerateRecommendationsRequest{
+		ScanResult: ociScanResponse{
+			ScanID:      "scan-oci-rm-only",
+			TenancyOCID: ociTestTenancyOCID,
+			Region:      ociTestRegion,
+			Orchestrations: []awsOrchestrationRow{
+				{
+					Provider:     "oci",
+					Surface:      "resmgr",
+					ResourceName: "squadron-rm-stack",
+					ResourceARN:  "ocid1.ormstack.oc1.iad.only",
+					Region:       ociTestRegion,
+					WorkflowType: "Stack",
+					HasLogAxis:   false,
+				},
+			},
+			InstrumentedCount:   0,
+			UninstrumentedCount: 0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	w := ociDoRequest(r, http.MethodPost, "/api/v1/discovery/oci/connections/"+conn.ID+"/recommendations", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp awsGenerateRecommendationsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if resp.Declined {
+		t.Error("response Declined=true; want false — a deterministic orchestration rec fired despite the LLM decline")
+	}
+	if len(resp.Recommendations) != 1 {
+		t.Fatalf("recommendations len = %d, want 1 (resmgr-logging-enable)", len(resp.Recommendations))
+	}
+	if got := resp.Recommendations[0].ResourceKind; got != proposer.ResourceManagerLoggingRecommendationKind {
+		t.Errorf("ResourceKind = %q, want %q", got, proposer.ResourceManagerLoggingRecommendationKind)
 	}
 }
 

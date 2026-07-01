@@ -1539,24 +1539,31 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 				Message: "Squadron's AI proposer failed: " + err.Error(),
 			}, http.StatusInternalServerError
 		}
-		if result.Declined {
-			return marshalRecResult(awsGenerateRecommendationsResponse{
-				Declined:        true,
-				Reason:          result.Reason,
-				Recommendations: []recommendations.Recommendation{},
-			})
-		}
-
 		now := time.Now().UTC()
-		recs, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
-		if err != nil {
-			if h.logger != nil {
-				h.logger.Error("oci generate recommendations: plan step marshal failed", zap.Error(err))
+
+		// The LLM proposer plans instrumentation for the "traditional" resource
+		// tiers (compute, functions, databases, object stores, load balancers,
+		// clusters) and can DECLINE when those tiers are empty. The deterministic
+		// picker-based recs below (regression, event-source, orchestration) are
+		// INDEPENDENT of the LLM plan — they derive from their own scanned tiers —
+		// so they must run even when the proposer declines. Otherwise a tenancy
+		// whose only resource is e.g. a Resource Manager Stack (nothing for the
+		// LLM to instrument) would decline and silently drop a real logging-gap
+		// finding that PickResourceManagerLoggingPattern would otherwise raise
+		// (#328 live-verify).
+		var recs []recommendations.Recommendation
+		if !result.Declined {
+			built, err := buildDiscoveryRecommendations(req.ScanResult.ScanID, result.Plan.Steps, now)
+			if err != nil {
+				if h.logger != nil {
+					h.logger.Error("oci generate recommendations: plan step marshal failed", zap.Error(err))
+				}
+				return nil, &scanner.HumanizedError{
+					Code:    "PlanStepMarshalFailed",
+					Message: "Squadron could not encode the plan step. The error has been logged.",
+				}, http.StatusInternalServerError
 			}
-			return nil, &scanner.HumanizedError{
-				Code:    "PlanStepMarshalFailed",
-				Message: "Squadron could not encode the plan step. The error has been logged.",
-			}, http.StatusInternalServerError
+			recs = built
 		}
 
 		// Detection → proposal: append cold-start + error-rate regression recs
@@ -1579,6 +1586,17 @@ func (h *DiscoveryOCIHandlers) HandleRecommendationsForOCIScan(c *gin.Context) {
 		// iacpicker PickResourceManagerLoggingPattern (#328 Slice 2).
 		h.appendOCIOrchestrationRecs(ctx, &recs, req.ScanResult.Orchestrations,
 			conn.ID, conn.TenancyOCID, conn.Region, req.ScanResult.ScanID, now)
+
+		// If the proposer declined AND no deterministic picker rec fired, surface
+		// the decline honestly — there is genuinely nothing to recommend. When a
+		// deterministic rec DID fire, return it even though the LLM plan was empty.
+		if result.Declined && len(recs) == 0 {
+			return marshalRecResult(awsGenerateRecommendationsResponse{
+				Declined:        true,
+				Reason:          result.Reason,
+				Recommendations: []recommendations.Recommendation{},
+			})
+		}
 
 		if h.auditService != nil {
 			_ = h.auditService.Record(ctx, services.AuditEntry{
