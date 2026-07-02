@@ -32,6 +32,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/costspikes"
+	"github.com/devopsmike2/squadron/internal/demosim"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
@@ -521,6 +522,16 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			zap.String("fingerprint", actionSigner.Fingerprint()))
 	}
 	apiServer.SetActionStoreAndSigner(appStore, actionSigner)
+
+	// Live simulated-production demo (internal/demosim). Constructed with the
+	// application store + telemetry writer so the one-click POST /demo/enable can
+	// stand up a ~500-agent fleet and drive continuous OTLP telemetry into
+	// DuckDB, lighting up every screen without a real fleet or cloud account.
+	// Owned here (not the Server) so its background loop is cancelled on
+	// shutdown. Idempotent + demo-scoped; DELETE /demo tears it down.
+	demoSim := demosim.New(appStore, telemetryWriter, logger, demosim.Options{})
+	apiServer.SetDemoSimulator(demoSim)
+	defer demoSim.Stop()
 
 	// Commercial-tier detector activation (#152 productization). When
 	// config.CommercialDetectors.Enabled is true, wire the application store
