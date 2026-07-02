@@ -160,9 +160,15 @@ var azureMappers = map[string]mapper{
 		}
 		return "azurerm_mssql_database", r.ImportID, true
 	},
-	// object_store deliberately omitted until the blob container's non-ARM
-	// import id format is captured + live-verified — surfaces as a visible
-	// Skipped meanwhile rather than emitting a wrong import block.
+	"object_store": func(r Resource) (string, string, bool) {
+		// The Azure scanner inventories storage ACCOUNTS (not containers), so
+		// the terraform type is azurerm_storage_account, which imports by the
+		// full ARM resource id. Guard on the ARM shape.
+		if !armTypeMatches(r.ImportID, "Microsoft.Storage/storageAccounts") {
+			return "", "", false
+		}
+		return "azurerm_storage_account", r.ImportID, true
+	},
 }
 
 // armTypeMatches reports whether an Azure ARM resource id addresses the given
@@ -218,6 +224,15 @@ var gcpMappers = map[string]mapper{
 			return "", "", false
 		}
 	},
+	"object_store": func(r Resource) (string, string, bool) {
+		// google_storage_bucket imports by "{{project}}/{{bucket}}" (a
+		// documented accepted form; the scanner composes it). Guard on the
+		// two-segment shape.
+		if !isProjectSlashName(r.ImportID) {
+			return "", "", false
+		}
+		return "google_storage_bucket", r.ImportID, true
+	},
 }
 
 // isProjectSlashName reports whether s is exactly "<project>/<name>" — two
@@ -258,6 +273,15 @@ var ociMappers = map[string]mapper{
 		default:
 			return "", "", false
 		}
+	},
+	"object_store": func(r Resource) (string, string, bool) {
+		// OCI buckets have no OCID; oci_objectstorage_bucket imports by the
+		// composite "n/<namespace>/b/<bucket>" the scanner composes. Guard on
+		// that exact shape.
+		if !strings.HasPrefix(r.ImportID, "n/") || !strings.Contains(r.ImportID, "/b/") {
+			return "", "", false
+		}
+		return "oci_objectstorage_bucket", r.ImportID, true
 	},
 }
 

@@ -115,7 +115,11 @@ func (s *Scanner) probeStorageBlobLogging(ctx context.Context, accessToken, acco
 
 func projectStorageAccount(a armStorageAccount, logging bool) scanner.ObjectStoreSnapshot {
 	return scanner.ObjectStoreSnapshot{
-		ResourceID:                 a.Name,
+		ResourceID: a.Name,
+		// ImportID: the scanner inventories storage accounts (not containers);
+		// azurerm_storage_account imports by the full ARM resource id, which
+		// the ARM list returns verbatim as a.ID.
+		ImportID:                   a.ID,
 		Region:                     a.Location,
 		ServerAccessLoggingEnabled: logging,
 		Tags:                       copyTags(a.Tags),

@@ -121,12 +121,12 @@ func nonComputeToImportResources(
 		})
 	}
 	for _, o := range objs {
-		// Object stores carry no canonical terraform import id yet (blob/GCS/S3
-		// import formats differ and aren't ARM ids); ImportID stays empty so
-		// they surface as a visible Skipped until a mapper + enrichment land.
+		// Object stores carry a scanner-composed canonical ImportID now:
+		// GCP "{{project}}/{{bucket}}", Azure the account ARM id, OCI
+		// "n/{{namespace}}/b/{{bucket}}". Name drives the readable TF address.
 		out = append(out, tfimport.Resource{
 			Provider: provider, Category: "object_store",
-			ResourceID: o.ResourceID, Region: o.Region,
+			ResourceID: o.ResourceID, Name: o.ResourceID, ImportID: o.ImportID, Region: o.Region,
 		})
 	}
 	for _, l := range lbs {
