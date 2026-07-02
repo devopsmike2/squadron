@@ -10,6 +10,11 @@
 # Placeholders (__...__) are filled in by install-agent.sh.
 extensions:
   opamp:
+    # Pin the OpAMP instance_uid to the SAME UUID this collector uses for
+    # service.instance.id (below). Squadron keys OpAMP agents by instance_uid
+    # and OTLP telemetry by service.instance.id — matching them makes this host
+    # show up as ONE agent (config + metrics + logs together) instead of two.
+    instance_uid: __INSTANCE_ID__
     server:
       ws:
         endpoint: ws://__SQUADRON_HOST__:4320/v1/opamp
