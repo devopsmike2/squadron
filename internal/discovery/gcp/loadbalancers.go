@@ -46,6 +46,14 @@ func (s *Scanner) walkLoadBalancers(ctx context.Context, client *compute.Service
 					Type:       bs.LoadBalancingScheme,
 					Scheme:     gclbScheme(bs.LoadBalancingScheme),
 					Region:     region,
+					// ImportID: the backend service imports by the canonical
+					// resource path (google_compute_backend_service accepts
+					// "projects/{{project}}/global/backendServices/{{name}}",
+					// the regional variant "projects/{{project}}/regions/{{region}}/backendServices/{{name}}").
+					// The SelfLink already carries exactly that path after the
+					// API host+version prefix, so slice it out; empty when the
+					// SelfLink is absent so the mapper skips.
+					ImportID: backendServiceImportID(bs.SelfLink),
 				}
 				if snap.ResourceID == "" {
 					snap.ResourceID = bs.Name
@@ -58,6 +66,20 @@ func (s *Scanner) walkLoadBalancers(ctx context.Context, client *compute.Service
 		}
 		return nil
 	})
+}
+
+// backendServiceImportID extracts the canonical Terraform import path from a
+// backend service SelfLink. A SelfLink looks like
+// "https://www.googleapis.com/compute/v1/projects/P/global/backendServices/N"
+// (or ".../regions/R/backendServices/N"); the terraform import id is that same
+// path from "projects/" onward. Returns "" when the SelfLink lacks the
+// expected "/projects/" segment so the mapper skips rather than guess.
+func backendServiceImportID(selfLink string) string {
+	i := strings.Index(selfLink, "/projects/")
+	if i < 0 {
+		return ""
+	}
+	return selfLink[i+1:] // drop the leading slash -> "projects/..."
 }
 
 // gclbScheme maps a GCP loadBalancingScheme onto the AWS-style

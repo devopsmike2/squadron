@@ -70,7 +70,7 @@ func (s *Scanner) walkCloudSQL(ctx context.Context, client *sqladmin.Service, re
 			if s.Region != "" && inst.Region != s.Region {
 				continue
 			}
-			result.Databases = append(result.Databases, projectCloudSQLInstance(inst))
+			result.Databases = append(result.Databases, projectCloudSQLInstance(inst, s.ProjectID))
 		}
 		return nil
 	})
@@ -99,13 +99,20 @@ func (s *Scanner) walkCloudSQL(ctx context.Context, client *sqladmin.Service, re
 //     settings.insightsConfig.queryInsightsEnabled boolean. When
 //     InsightsConfig is nil entirely, treat as false (the design
 //     doc §3.1 detection rule pins this).
-func projectCloudSQLInstance(inst *sqladmin.DatabaseInstance) scanner.DatabaseInstanceSnapshot {
+func projectCloudSQLInstance(inst *sqladmin.DatabaseInstance, project string) scanner.DatabaseInstanceSnapshot {
 	snap := scanner.DatabaseInstanceSnapshot{
 		ResourceID:    inst.Name,
 		Engine:        normalizeEngine(inst.DatabaseVersion),
 		EngineVersion: extractVersion(inst.DatabaseVersion),
 		Region:        inst.Region,
 		Provider:      ProviderGCP,
+	}
+	// ImportID: google_sql_database_instance imports by "{{project}}/{{name}}"
+	// (a documented accepted form). The instance object carries no project, so
+	// it rides in from the scanner's configured ProjectID. Left empty when the
+	// project is unknown so the mapper skips rather than emit a half id.
+	if project != "" && inst.Name != "" {
+		snap.ImportID = project + "/" + inst.Name
 	}
 	if inst.Settings != nil {
 		snap.InstanceClass = inst.Settings.Tier
