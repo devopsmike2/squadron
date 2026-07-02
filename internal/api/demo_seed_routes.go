@@ -69,6 +69,13 @@ func (s *Server) handleDemoDataEnable(c *gin.Context) {
 		}
 	}
 
+	// Light up the conversational AI surfaces (Ask Squadron / Explain / Merge)
+	// with the rest of the demo. Only takes effect when no real ANTHROPIC_API_KEY
+	// is configured — a real key always wins — so keyed installs are untouched.
+	if s.aiService != nil {
+		s.aiService.SetDemoMode(true)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":            "enabled",
 		"seeded":            summary,
@@ -83,6 +90,11 @@ func (s *Server) handleDemoDataDisable(c *gin.Context) {
 	if s.appStore == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "application store is not configured"})
 		return
+	}
+
+	// Turn the conversational AI demo responder back off.
+	if s.aiService != nil {
+		s.aiService.SetDemoMode(false)
 	}
 
 	// Tear down the live simulated fleet + stop its telemetry loop first.

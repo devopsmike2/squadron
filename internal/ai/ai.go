@@ -34,6 +34,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -111,6 +112,13 @@ type Service struct {
 	cfg    Config
 	client *http.Client
 	logger *zap.Logger
+	// demoMode, when on AND no real API key is configured, makes the
+	// conversational surfaces (Ask / Explain / Merge) return canned,
+	// grounded answers instead of ErrDisabled, so they work in the
+	// one-click demo without an Anthropic account. A real key always
+	// takes precedence. Toggled by the demo enable/disable endpoint;
+	// atomic because those writes race with concurrent request reads.
+	demoMode atomic.Bool
 }
 
 // ErrDisabled is returned by every public method when the service
@@ -161,6 +169,22 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.cfg.Enabled && s.cfg.APIKey != ""
 }
 
+// SetDemoMode toggles the keyless demo responder. Wired by the demo
+// enable/disable endpoint so the conversational AI surfaces light up with the
+// rest of the one-click demo. Safe to call concurrently.
+func (s *Service) SetDemoMode(on bool) {
+	if s == nil {
+		return
+	}
+	s.demoMode.Store(on)
+}
+
+// demoActive reports whether the canned demo responder should serve this call:
+// demo mode is on and no real API key is configured (a real key always wins).
+func (s *Service) demoActive() bool {
+	return s != nil && s.demoMode.Load() && !s.Enabled()
+}
+
 // Capabilities is what /api/v1/ai/status returns. The UI uses it
 // to decide which AI buttons to show — when AI is off the buttons
 // stay hidden rather than appearing and immediately failing.
@@ -173,14 +197,19 @@ type Capabilities struct {
 // Capabilities returns the public view of the service's
 // configuration. Never includes the API key.
 func (s *Service) Capabilities() Capabilities {
-	if !s.Enabled() {
-		return Capabilities{Enabled: false}
+	if s.Enabled() {
+		return Capabilities{
+			Enabled:      true,
+			ExplainModel: s.cfg.ExplainModel,
+			MergeModel:   s.cfg.MergeModel,
+		}
 	}
-	return Capabilities{
-		Enabled:      true,
-		ExplainModel: s.cfg.ExplainModel,
-		MergeModel:   s.cfg.MergeModel,
+	// Demo mode reports capable so the UI shows the AI affordances; the
+	// responses come from the canned grounded responder, not a model.
+	if s.demoActive() {
+		return Capabilities{Enabled: true, ExplainModel: "demo", MergeModel: "demo"}
 	}
+	return Capabilities{Enabled: false}
 }
 
 // ----------------------------------------------------------------
@@ -211,6 +240,12 @@ type ExplainSnippetResponse struct {
 // Collector config snippet does. Uses the Explain model (Haiku by
 // default) because the answer is short and structural.
 func (s *Service) ExplainSnippet(ctx context.Context, req ExplainSnippetRequest) (*ExplainSnippetResponse, error) {
+	if s.demoActive() {
+		if strings.TrimSpace(req.Snippet) == "" {
+			return nil, errors.New("snippet is required")
+		}
+		return &ExplainSnippetResponse{Explanation: demoExplain(req), Model: "demo-grounded"}, nil
+	}
 	if !s.Enabled() {
 		return nil, ErrDisabled
 	}
@@ -272,6 +307,25 @@ type MergeIntoConfigResponse struct {
 	TokensOut  int    `json:"tokens_out"`
 }
 
+// demoExplain returns a plain-text, snippet-aware explanation for the keyless
+// demo responder. Not a model call — pattern-matches the snippet's apparent
+// intent so the explanation is relevant without inventing specifics.
+func demoExplain(req ExplainSnippetRequest) string {
+	s := strings.ToLower(req.Snippet + " " + req.Goal)
+	switch {
+	case strings.Contains(s, "attributes") && (strings.Contains(s, "delete") || strings.Contains(s, "drop")):
+		return "This adds an attributes processor that removes a specific attribute key from the signal before it's exported. Dropping a high-cardinality attribute (like a per-request URL or user id) cuts the number of unique time series and the bytes you ship, which is usually the single biggest lever on observability cost. Signal you actually query is preserved."
+	case strings.Contains(s, "batch"):
+		return "This configures the batch processor, which buffers telemetry and sends it in larger groups instead of one item at a time. Bigger batches mean fewer export requests and less per-request overhead to your backend, improving throughput and reducing egress cost with a small, bounded latency trade-off."
+	case strings.Contains(s, "filter"):
+		return "This adds a filter processor that drops telemetry matching a rule before export — for example noisy health-check spans or debug-level logs. It trims volume at the source so you only pay to store and query the signal that matters."
+	case strings.Contains(s, "sampl"):
+		return "This adjusts sampling so only a representative fraction of traces is exported. Lowering the sampling rate on high-volume, low-value paths reduces trace cost substantially while keeping enough coverage to investigate issues."
+	default:
+		return "This snippet adds a processor to your collector pipeline and wires it into the named pipeline's processor list. It shapes telemetry before export — typically to reduce volume or cardinality — so you keep the signal you need while trimming what you don't."
+	}
+}
+
 // MergeIntoConfig produces a merged collector config from the
 // operator's base + a recommendation snippet. Uses the Merge model
 // (Sonnet by default) because the output has to be syntactically
@@ -284,6 +338,16 @@ type MergeIntoConfigResponse struct {
 // staged rollout flow. The LLM is one tool in a chain that
 // already has rollback as a primitive.
 func (s *Service) MergeIntoConfig(ctx context.Context, req MergeIntoConfigRequest) (*MergeIntoConfigResponse, error) {
+	if s.demoActive() {
+		merged := strings.TrimRight(req.BaseYAML, "\n") +
+			"\n\n# --- demo merge (illustrative) — set ANTHROPIC_API_KEY for a real structural AI merge ---\n" +
+			strings.TrimSpace(req.SnippetYAML) + "\n"
+		return &MergeIntoConfigResponse{
+			MergedYAML: merged,
+			Summary:    "Demo mode: appended the recommended snippet to your config to show the flow. Enable AI (ANTHROPIC_API_KEY) for a structure-aware merge that places the processor under processors: and wires it into the right pipeline.",
+			Model:      "demo-grounded",
+		}, nil
+	}
 	if !s.Enabled() {
 		return nil, ErrDisabled
 	}
