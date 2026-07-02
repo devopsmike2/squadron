@@ -96,3 +96,30 @@ func (s *Storage) DeleteAuditEventsBefore(ctx context.Context, before time.Time)
 	n, _ := res.RowsAffected()
 	return n, nil
 }
+
+// DeleteIACRecommendationVerdictsBefore removes NON-EXCLUDED verdict rows
+// (exclude_from_learning = 0) whose updated_at predates the cutoff. The
+// discovery proposer's learning loop writes one iac_recommendation_verdicts
+// row per recommendation an operator acts on, and the row survives even after
+// the exclusion bit is cleared (kept so a re-toggle can report the prior state,
+// and to carry the optional check-run back-signal columns) — so on a
+// continuously-scanning deployment the table grows without bound and no other
+// path prunes it. Returns the number of rows removed.
+//
+// ACTIVE exclusions (exclude_from_learning = 1) are NEVER deleted regardless of
+// age: the bridge pulls exactly those rows to suppress "don't propose this
+// again" recommendations from the learning context, so pruning one would
+// silently resurrect a recommendation the operator declined. This mirrors the
+// "closed cost-spikes only" / "dismissed drafts only" invariant of the other
+// predicates — only rows that are no longer load-bearing are eligible.
+func (s *Storage) DeleteIACRecommendationVerdictsBefore(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM iac_recommendation_verdicts WHERE exclude_from_learning = 0 AND updated_at < ?`,
+		before.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete iac_recommendation_verdicts: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}

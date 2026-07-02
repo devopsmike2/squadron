@@ -35,6 +35,7 @@ type retentionGCContract interface {
 	DeleteColdStartObservationsBefore(ctx context.Context, before time.Time) error
 	DeleteErrorRateObservationsBefore(ctx context.Context, before time.Time) error
 	DeleteDiscoveryScansBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteIACRecommendationVerdictsBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
 // Compile-time guard: the sqlite store must satisfy every retention predicate
@@ -215,5 +216,51 @@ func TestRetention_DeleteDismissedIncidentDraftsBefore(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, kept, "%s should survive the sweep", id)
 		}
+	})
+}
+
+// TestRetention_DeleteIACRecommendationVerdictsBefore: cleared verdict rows
+// (exclude_from_learning=0) older than the cutoff are pruned, while ACTIVE
+// exclusions (exclude_from_learning=1) survive regardless of age and recent
+// cleared rows survive — mirroring the "closed/dismissed only" invariant.
+func TestRetention_DeleteIACRecommendationVerdictsBefore(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		old := time.Now().UTC().Add(-100 * 24 * time.Hour)
+		recent := time.Now().UTC().Add(-1 * 24 * time.Hour)
+
+		insert := func(id string, excluded int, updated time.Time) {
+			_, err := store.db.ExecContext(ctx,
+				`INSERT INTO iac_recommendation_verdicts
+				 (recommendation_id, connection_id, account_id, region, recommendation_kind,
+				  exclude_from_learning, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, "conn-1", "acc-1", "us-east-1", "ec2-adot",
+				excluded, updated, updated)
+			require.NoError(t, err)
+		}
+		insert("old-cleared", 0, old)       // prunable
+		insert("old-active", 1, old)        // active exclusion — must survive
+		insert("recent-cleared", 0, recent) // recent — must survive
+
+		cutoff := time.Now().UTC().Add(-90 * 24 * time.Hour)
+		n, err := store.DeleteIACRecommendationVerdictsBefore(ctx, cutoff)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), n, "only the old cleared verdict should be pruned")
+
+		var got []string
+		rows, err := store.db.QueryContext(ctx,
+			`SELECT recommendation_id FROM iac_recommendation_verdicts ORDER BY recommendation_id`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			require.NoError(t, rows.Scan(&id))
+			got = append(got, id)
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, []string{"old-active", "recent-cleared"}, got,
+			"active exclusion and recent cleared row must survive")
 	})
 }
