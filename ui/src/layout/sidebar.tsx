@@ -149,6 +149,12 @@ export function AppSidebar() {
           icon: RocketIcon,
         },
         {
+          key: "use-cases",
+          title: "Use cases",
+          url: "/use-cases",
+          icon: PlayCircle,
+        },
+        {
           key: "dashboard",
           title: "Fleet Status",
           url: "/",

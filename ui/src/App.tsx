@@ -38,6 +38,7 @@ import SettingsSiemPage from "./pages/SettingsSiem";
 import SettingsTokensPage from "./pages/SettingsTokens";
 import TelemetryPage from "./pages/Telemetry";
 import TimelinePage from "./pages/Timeline";
+import UseCasesPage from "./pages/UseCases";
 
 import "./App.css";
 import {
@@ -51,6 +52,7 @@ import { CommandPaletteHint } from "@/components/CommandPaletteHint";
 import { EventSubscriber } from "@/components/EventSubscriber";
 import { KeyboardShortcutsHelp } from "@/components/KeyboardShortcutsHelp";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { TourHost } from "@/components/tour/TourHost";
 import { SWRProvider } from "@/lib/swr-provider";
 import { ApiProvider } from "@/providers/ApiProvider";
 
@@ -143,10 +145,15 @@ function AuthBoundary() {
       <EventSubscriber />
       {/* Global keyboard shortcut system + ? help overlay. */}
       <KeyboardShortcutsHelp />
+      {/* Guided use-case tours. Mounted at root so it can navigate across
+          routes and portal a coach-mark overlay over any page. Idle until a
+          TOUR_START_EVENT fires (from the Use Cases page). */}
+      <TourHost />
       <Routes>
         {/* Main application routes */}
         <Route element={<Layout />}>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/use-cases" element={<UseCasesPage />} />
           <Route path="/quickstart" element={<QuickstartPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/groups" element={<GroupsPage />} />
