@@ -260,7 +260,7 @@ writes, item/byte-based queue bounds, per-batch enricher memo.
 | ~~OTLP receiver under load~~ | **Done in v0.89** — see `stress-tests/otlp-ingest-v0.89.md`. |
 | ~~DuckDB telemetry write throughput~~ | **Measured in v0.89, then fixed** — per-row Exec was ~6-11k items/s; the Appender rework lifted it to ~50k items/s sustained (see the report's "After the Appender rework"). |
 | ~~Insights API under concurrent ingest~~ | **Done in v0.89** — ≤23ms cold during saturation bursts. |
-| Rollout engine under N agents | Tested implicitly (10s tick across 1000 agents had no observable lag), but a dedicated test that creates a 100-stage rollout and watches the tick budget is worth doing. |
+| ~~Rollout engine under N agents~~ | **Done in v0.89** — see `stress-tests/rollout-engine-v0.89.md`. Found + fixed serial ack-blocking stage pushes (full-fleet stage ~2h → 84s) and added tick-duration metrics. |
 | Long-running stability (24h+) | Not a single-session test. Run fleetsim + otlpsim under a sustained-load harness for a day before any GA claim. |
 
 ### Reproducing
