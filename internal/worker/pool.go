@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/discovery"
@@ -73,6 +74,16 @@ type Pool struct {
 	queueSize     int
 	workerCount   int
 	submitTimeout time.Duration
+	// Byte-budget backpressure (v0.89 ingest finding 3). queueSize caps
+	// request COUNT; maxQueueBytes caps the volatile ack'd-but-unwritten
+	// backlog in DATA — the real memory bound, since a burst of large batches
+	// can hold ~500k items under the count cap alone. Item counts aren't known
+	// until the worker parses, so bytes (len(RawData)) are the only cheap
+	// signal at ingest. maxQueueBytes <= 0 disables the byte bound (count cap
+	// only). Set via SetMaxQueueBytes before Start.
+	maxQueueBytes int64
+	queuedBytes   atomic.Int64  // Σ len(RawData) of items currently in the queue
+	bytesFreed    chan struct{} // buffered(1) wake for Submit waiters when a worker frees bytes
 	// v0.36: passive OTLP discovery. Optional — nil disables the
 	// discovery hook so the worker pool's hot path is unchanged for
 	// installs that don't want it.
@@ -84,6 +95,12 @@ type Pool struct {
 // Called from main.go after construction so the existing
 // NewPool signature stays back-compat.
 func (p *Pool) SetDiscovery(svc *discovery.Service) { p.discovery = svc }
+
+// SetMaxQueueBytes sets the byte-budget bound on the volatile queue (v0.89
+// ingest finding 3). n <= 0 disables it (request-count cap only). Call before
+// Start; the existing NewPool signature stays back-compat (default: disabled),
+// so cmd/all-in-one wires the operator-configured value and tests are unchanged.
+func (p *Pool) SetMaxQueueBytes(n int64) { p.maxQueueBytes = n }
 
 // NewPool creates a new worker pool with configurable workers.
 //
@@ -97,6 +114,7 @@ func NewPool(queueSize, workerCount int, submitTimeout time.Duration, writer Tel
 	return &Pool{
 		queue:         make(chan WorkItem, queueSize),
 		shutdown:      make(chan struct{}),
+		bytesFreed:    make(chan struct{}, 1),
 		writer:        writer,
 		parser:        parser.NewOTLPParser(logger),
 		enricher:      processor.NewEnricher(agentService, logger),
@@ -141,26 +159,83 @@ func (p *Pool) Stop(timeout time.Duration) error {
 	}
 }
 
-// Submit submits a work item to the queue
+// Submit submits a work item to the queue, applying both the request-count cap
+// (the buffered channel) and — when enabled — the byte budget (maxQueueBytes),
+// under a single submit_timeout deadline. Over-budget or a full channel blocks
+// for up to submit_timeout then returns an error (the receiver maps that to a
+// 503). A single payload larger than the whole byte budget is rejected
+// immediately (it could never fit).
 func (p *Pool) Submit(item WorkItem) error {
+	sz := int64(len(item.RawData))
+
+	if p.maxQueueBytes > 0 && sz > p.maxQueueBytes {
+		return fmt.Errorf("payload %d bytes exceeds max_queue_bytes %d", sz, p.maxQueueBytes)
+	}
+
+	timer := time.NewTimer(p.submitTimeout)
+	defer timer.Stop()
+
+	// 1) Reserve the byte budget (if enabled), waiting for workers to free
+	//    space. CAS keeps concurrent submitters from over-reserving.
+	if p.maxQueueBytes > 0 {
+		for {
+			cur := p.queuedBytes.Load()
+			if cur+sz <= p.maxQueueBytes {
+				if p.queuedBytes.CompareAndSwap(cur, cur+sz) {
+					break // reserved
+				}
+				continue // lost the race; re-read and retry immediately
+			}
+			select {
+			case <-timer.C:
+				return fmt.Errorf("queue full (byte budget %d), submit timeout", p.maxQueueBytes)
+			case <-p.bytesFreed:
+				// a worker freed bytes — re-check the budget
+			case <-p.shutdown:
+				return fmt.Errorf("worker pool shutting down")
+			}
+		}
+	} else {
+		p.queuedBytes.Add(sz) // keep the gauge honest even when the bound is off
+	}
+
+	// 2) Enqueue under the same deadline (channel count cap).
 	select {
 	case p.queue <- item:
-		// The v0.89 OTLP ingest stress run showed the queue can hold
-		// tens of seconds of 202-acknowledged-but-volatile data with
-		// this gauge stuck at zero (it was declared but never set).
-		// Update it on both submit and drain so operators can see the
-		// ack-to-durability backlog. len() on a buffered channel is
-		// approximate under concurrency — fine for a gauge.
 		p.metrics.QueueDepth.Update(int64(len(p.queue)))
+		p.metrics.QueueBytes.Update(p.queuedBytes.Load())
 		return nil
-	case <-time.After(p.submitTimeout):
+	case <-timer.C:
+		p.releaseBytes(sz) // roll back the reservation
 		return fmt.Errorf("queue full, submit timeout")
+	case <-p.shutdown:
+		p.releaseBytes(sz)
+		return fmt.Errorf("worker pool shutting down")
 	}
 }
 
-// QueueDepth returns the current queue depth
+// releaseBytes returns sz bytes to the budget (on worker dequeue/drain, or when
+// a Submit rolls back a failed enqueue) and wakes one waiting submitter.
+func (p *Pool) releaseBytes(sz int64) {
+	p.queuedBytes.Add(-sz)
+	p.metrics.QueueBytes.Update(p.queuedBytes.Load())
+	// Non-blocking wake: buffered(1) coalesces bursts; a waiter re-checks the
+	// budget after each wake, so a coalesced signal never strands it.
+	select {
+	case p.bytesFreed <- struct{}{}:
+	default:
+	}
+}
+
+// QueueDepth returns the current queue depth (request count)
 func (p *Pool) QueueDepth() int {
 	return len(p.queue)
+}
+
+// QueuedBytes returns the current volatile queued payload bytes (Σ len(RawData)
+// of items awaiting write) — the byte-budget's live view.
+func (p *Pool) QueuedBytes() int64 {
+	return p.queuedBytes.Load()
 }
 
 // worker is the main worker goroutine
@@ -172,6 +247,7 @@ func (p *Pool) worker(id int) {
 	for {
 		select {
 		case item := <-p.queue:
+			p.releaseBytes(int64(len(item.RawData))) // item left the queue — free its budget + wake a waiter
 			p.metrics.QueueDepth.Update(int64(len(p.queue)))
 			p.processItem(item)
 		case <-p.shutdown:
@@ -180,6 +256,7 @@ func (p *Pool) worker(id int) {
 			for {
 				select {
 				case item := <-p.queue:
+					p.releaseBytes(int64(len(item.RawData)))
 					p.processItem(item)
 				default:
 					p.logger.Info("Worker stopped", zap.Int("worker_id", id))
