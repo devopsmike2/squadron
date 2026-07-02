@@ -811,6 +811,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		DeleteColdStartObservationsBefore(ctx context.Context, before time.Time) error
 		DeleteErrorRateObservationsBefore(ctx context.Context, before time.Time) error
 		DeleteDiscoveryScansBefore(ctx context.Context, before time.Time) (int64, error)
+		DeleteIACRecommendationVerdictsBefore(ctx context.Context, before time.Time) (int64, error)
 	}
 	if gcStore, ok := appStore.(discoveryTableRetentionGC); ok {
 		const discoveryTableRetention = 90 * 24 * time.Hour
@@ -838,6 +839,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 					logger.Warn("discovery_scans retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("discovery_scans retention GC ran", zap.Int64("deleted", n))
+				}
+				// Only cleared verdict rows (exclude_from_learning=0) are pruned;
+				// active "don't propose again" exclusions are preserved forever.
+				if n, err := gcStore.DeleteIACRecommendationVerdictsBefore(context.Background(), cutoff); err != nil {
+					logger.Warn("iac_recommendation_verdicts retention GC failed", zap.Error(err))
+				} else if n > 0 {
+					logger.Info("iac_recommendation_verdicts retention GC ran", zap.Int64("deleted", n))
 				}
 				// The two observation tables' predicates return only an error
 				// (their per-resource API consumers never needed a row count).
