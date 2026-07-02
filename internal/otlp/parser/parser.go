@@ -16,6 +16,7 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
@@ -56,14 +57,19 @@ func (p *OTLPParser) ParseTraces(data []byte) ([]otlp.TraceData, error) {
 	var traces []otlp.TraceData
 	for _, resourceSpans := range request.ResourceSpans {
 		resource := resourceSpans.Resource
-		resourceAttrs := attributesToMap(resource.Attributes)
+		resourceAttrs := resourceAttributes(resource)
 
 		// Extract agent ID from resource attributes
 		extractedAgentID := agentid.Derive(resourceAttrs)
 
 		for _, scopeSpans := range resourceSpans.ScopeSpans {
 			scope := scopeSpans.Scope
-			scopeAttrs := attributesToMap(scope.Attributes)
+			if scope == nil {
+				// Scope is optional; substitute an empty one so direct field
+				// reads (Name/Version) below are nil-safe.
+				scope = &commonpb.InstrumentationScope{}
+			}
+			scopeAttrs := scopeAttributes(scope)
 
 			for _, span := range scopeSpans.Spans {
 				spanAttrs := attributesToMap(span.Attributes)
@@ -137,14 +143,17 @@ func (p *OTLPParser) ParseMetrics(data []byte) ([]otlp.MetricSumData, []otlp.Met
 
 	for _, resourceMetrics := range request.ResourceMetrics {
 		resource := resourceMetrics.Resource
-		resourceAttrs := attributesToMap(resource.Attributes)
+		resourceAttrs := resourceAttributes(resource)
 
 		// Extract agent ID from resource attributes
 		extractedAgentID := agentid.Derive(resourceAttrs)
 
 		for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
 			scope := scopeMetrics.Scope
-			scopeAttrs := attributesToMap(scope.Attributes)
+			if scope == nil {
+				scope = &commonpb.InstrumentationScope{}
+			}
+			scopeAttrs := scopeAttributes(scope)
 
 			for _, metric := range scopeMetrics.Metrics {
 				serviceName := getServiceName(resourceAttrs)
@@ -263,14 +272,17 @@ func (p *OTLPParser) ParseLogs(data []byte) ([]otlp.LogData, error) {
 	var logs []otlp.LogData
 	for _, resourceLogs := range request.ResourceLogs {
 		resource := resourceLogs.Resource
-		resourceAttrs := attributesToMap(resource.Attributes)
+		resourceAttrs := resourceAttributes(resource)
 
 		// Extract agent ID from resource attributes
 		extractedAgentID := agentid.Derive(resourceAttrs)
 
 		for _, scopeLogs := range resourceLogs.ScopeLogs {
 			scope := scopeLogs.Scope
-			scopeAttrs := attributesToMap(scope.Attributes)
+			if scope == nil {
+				scope = &commonpb.InstrumentationScope{}
+			}
+			scopeAttrs := scopeAttributes(scope)
 
 			// Extract group information from resource attributes
 			groupID, groupName := extractGroupInfo(resourceAttrs)
@@ -309,17 +321,45 @@ func (p *OTLPParser) ParseLogs(data []byte) ([]otlp.LogData, error) {
 
 // Helper functions
 
+// resourceAttributes returns the flattened attribute map for a resource,
+// tolerating a nil resource. Per the OTLP spec a ResourceSpans/Metrics/Logs
+// may carry a nil Resource (metadata-only or partial batches from
+// non-compliant exporters); the receiver already skips these, so the parser
+// must not panic dereferencing resource.Attributes.
+func resourceAttributes(r *resourcepb.Resource) map[string]string {
+	if r == nil {
+		return map[string]string{}
+	}
+	return attributesToMap(r.Attributes)
+}
+
+// scopeAttributes returns the flattened attribute map for an instrumentation
+// scope, tolerating a nil scope (Scope is optional on every Scope* container).
+func scopeAttributes(s *commonpb.InstrumentationScope) map[string]string {
+	if s == nil {
+		return map[string]string{}
+	}
+	return attributesToMap(s.Attributes)
+}
+
 func attributesToMap(attrs []*commonpb.KeyValue) map[string]string {
 	result := make(map[string]string)
 	for _, attr := range attrs {
-		if attr.Key != "" {
-			result[attr.Key] = getAttributeValue(attr.Value)
+		// A nil KeyValue, empty key, or nil Value can all appear in
+		// non-compliant payloads; skip rather than panic. getAttributeValue
+		// also guards nil defensively.
+		if attr == nil || attr.Key == "" {
+			continue
 		}
+		result[attr.Key] = getAttributeValue(attr.Value)
 	}
 	return result
 }
 
 func getAttributeValue(value *commonpb.AnyValue) string {
+	if value == nil {
+		return ""
+	}
 	switch v := value.Value.(type) {
 	case *commonpb.AnyValue_StringValue:
 		return v.StringValue
@@ -333,16 +373,26 @@ func getAttributeValue(value *commonpb.AnyValue) string {
 	case *commonpb.AnyValue_DoubleValue:
 		return fmt.Sprintf("%f", v.DoubleValue)
 	case *commonpb.AnyValue_ArrayValue:
-		// Convert array to string representation
+		// Convert array to string representation. ArrayValue itself can be nil
+		// in a malformed payload even though the oneof arm is set.
+		if v.ArrayValue == nil {
+			return "[]"
+		}
 		var items []string
 		for _, item := range v.ArrayValue.Values {
 			items = append(items, getAttributeValue(item))
 		}
 		return fmt.Sprintf("[%s]", joinStrings(items, ","))
 	case *commonpb.AnyValue_KvlistValue:
-		// Convert key-value list to string representation
+		// Convert key-value list to string representation (nil-guarded).
+		if v.KvlistValue == nil {
+			return "{}"
+		}
 		var pairs []string
 		for _, kv := range v.KvlistValue.Values {
+			if kv == nil {
+				continue
+			}
 			pairs = append(pairs, fmt.Sprintf("%s=%s", kv.Key, getAttributeValue(kv.Value)))
 		}
 		return fmt.Sprintf("{%s}", joinStrings(pairs, ","))

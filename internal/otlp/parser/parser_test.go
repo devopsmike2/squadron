@@ -466,3 +466,60 @@ func TestParseLogs_EmptyRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, logs)
 }
+
+// TestParse_NilSafety proves the parser survives non-compliant OTLP payloads
+// (nil Resource, nil Scope, nil KeyValue, nil attribute Value, nil ArrayValue)
+// without panicking. Before the nil-safety hardening these crashed the ingest
+// worker, which has no recover() — a single malformed client could take down
+// telemetry ingest.
+func TestParse_NilSafety(t *testing.T) {
+	p := setupParserTest()
+
+	badAttrs := []*commonpb.KeyValue{
+		nil,                    // nil KeyValue
+		{Key: "k", Value: nil}, // nil Value
+		{Key: "", Value: nil},  // empty key
+		{Key: "arr", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_ArrayValue{ArrayValue: nil}}},  // nil ArrayValue
+		{Key: "kv", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: nil}}}, // nil KvlistValue
+	}
+
+	traceReq := &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{
+			{Resource: nil, ScopeSpans: []*tracepb.ScopeSpans{
+				{Scope: nil, Spans: []*tracepb.Span{{Name: "s", Attributes: badAttrs}}},
+			}},
+		},
+	}
+	tb, err := proto.Marshal(traceReq)
+	require.NoError(t, err)
+	require.NotPanics(t, func() {
+		_, err := p.ParseTraces(tb)
+		assert.NoError(t, err)
+	})
+
+	metricReq := &colmetricspb.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{
+			{Resource: nil, ScopeMetrics: []*metricspb.ScopeMetrics{{Scope: nil}}},
+		},
+	}
+	mb, err := proto.Marshal(metricReq)
+	require.NoError(t, err)
+	require.NotPanics(t, func() {
+		_, _, _, err := p.ParseMetrics(mb)
+		assert.NoError(t, err)
+	})
+
+	logReq := &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{
+			{Resource: nil, ScopeLogs: []*logspb.ScopeLogs{
+				{Scope: nil, LogRecords: []*logspb.LogRecord{{Attributes: badAttrs}}},
+			}},
+		},
+	}
+	lb, err := proto.Marshal(logReq)
+	require.NoError(t, err)
+	require.NotPanics(t, func() {
+		_, err := p.ParseLogs(lb)
+		assert.NoError(t, err)
+	})
+}
