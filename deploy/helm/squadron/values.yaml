@@ -91,8 +91,25 @@ readinessProbe:
   failureThreshold: 3
 
 podAnnotations: {}
-podSecurityContext: {}
-securityContext: {}
+
+# Pod-level security context. fsGroup is REQUIRED on plain Kubernetes when
+# persistence is enabled: the image runs as non-root UID 1001 (group 0), but a
+# freshly-provisioned PVC (e.g. Azure Disk / EBS / PD) mounts as root:root 0755,
+# so without fsGroup the container cannot create ./data/app.db and crash-loops
+# with "unable to open database file". fsGroup makes the kubelet chown the volume
+# so UID 1001 can write. OnRootMismatch avoids re-chowning a large volume every
+# start. On OpenShift, clear this (podSecurityContext: {}) and let the
+# restricted-v2 SCC assign fsGroup/UID from the namespace range instead.
+podSecurityContext:
+  fsGroup: 1001
+  fsGroupChangePolicy: OnRootMismatch
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 0
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
 nodeSelector: {}
 tolerations: []
 affinity: {}

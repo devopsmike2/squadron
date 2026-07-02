@@ -2,10 +2,10 @@ apiVersion: v2
 name: squadron
 description: Squadron — OpenTelemetry control plane + cross-cloud discovery & AI-assisted remediation (OSS, single-instance).
 type: application
-version: 0.1.0
+version: 0.1.2
 # Tracks the Squadron image tag this chart was validated against. Override
 # with image.tag in values.yaml to pin a specific release.
-appVersion: "v0.89.292"
+appVersion: "v0.89.380"
 home: https://github.com/devopsmike2/squadron
 sources:
   - https://github.com/devopsmike2/squadron
