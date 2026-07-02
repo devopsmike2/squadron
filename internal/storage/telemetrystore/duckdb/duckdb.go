@@ -737,7 +737,12 @@ func (s *Storage) CleanupOldData(ctx context.Context, retention time.Duration) e
 	// pipeline_health_samples is high-churn collector self-metrics; without
 	// it here the table grew unbounded (the FleetSummary query is time-bounded
 	// independently, so this is the disk-retention half of that fix).
-	tables := []string{"metrics_sum", "metrics_gauge", "metrics_histogram", "logs", "traces", "pipeline_health_samples"}
+	// otlp_batches (v0.24 volume-insights accounting) had the same pathology —
+	// one row per agent per ExportRequest, never swept; caught by the v0.89
+	// ingest stress pass. Its insights queries max out at a 24h window, so the
+	// retention ceiling used here (longest configured retention) always keeps
+	// everything the insights surface can ask for.
+	tables := []string{"metrics_sum", "metrics_gauge", "metrics_histogram", "logs", "traces", "pipeline_health_samples", "otlp_batches"}
 
 	for _, table := range tables {
 		query := fmt.Sprintf("DELETE FROM %s WHERE timestamp < ?", table)
