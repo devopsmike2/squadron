@@ -279,9 +279,15 @@ export default function DiscoveryAWSPage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value={ACCOUNT_TAB}>Wizard</TabsTrigger>
-          <TabsTrigger value={INVENTORY_TAB}>Inventory</TabsTrigger>
-          <TabsTrigger value={RECS_TAB}>Recommendations</TabsTrigger>
+          <TabsTrigger value={ACCOUNT_TAB} data-tour="aws-tab-account">
+            Wizard
+          </TabsTrigger>
+          <TabsTrigger value={INVENTORY_TAB} data-tour="aws-tab-inventory">
+            Inventory
+          </TabsTrigger>
+          <TabsTrigger value={RECS_TAB} data-tour="aws-tab-recommendations">
+            Recommendations
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value={ACCOUNT_TAB} forceMount className="mt-4">
