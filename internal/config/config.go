@@ -390,8 +390,35 @@ func LoadConfig(path string) (*Config, error) {
 	// exists for dev convenience and forward-compat with a future
 	// settings page that writes the file.
 	applyAIEnv(&config.AI)
+	applyLoggingEnv(&config.Logging)
 
 	return &config, nil
+}
+
+// applyLoggingEnv lets an operator override the log level/format at container
+// start without editing squadron.yaml — the knob a self-hoster reaches for first
+// when debugging. SQUADRON_LOG_LEVEL / SQUADRON_LOG_FORMAT win; the unprefixed
+// LOG_LEVEL / LOG_FORMAT are also honored because the shipped docker-compose sets
+// those (previously they were silently ignored). Empty/unset leaves the yaml (or
+// default) value intact. Pure function over LoggingConfig for testability.
+func applyLoggingEnv(c *LoggingConfig) {
+	if v := firstNonEmptyEnv("SQUADRON_LOG_LEVEL", "LOG_LEVEL"); v != "" {
+		c.Level = v
+	}
+	if v := firstNonEmptyEnv("SQUADRON_LOG_FORMAT", "LOG_FORMAT"); v != "" {
+		c.Format = v
+	}
+}
+
+// firstNonEmptyEnv returns the value of the first env var in names that is set
+// and non-empty, or "" if none are.
+func firstNonEmptyEnv(names ...string) string {
+	for _, n := range names {
+		if v := os.Getenv(n); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // applyAIEnv fills config.AI.APIKey from the env var when the yaml
