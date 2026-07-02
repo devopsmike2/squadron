@@ -403,13 +403,35 @@ export default function FleetMapPage() {
           )}
 
           {/* FLEET TAB */}
-          {view === "fleet" && topologyData && (
-            <TopologyCanvas
-              nodes={nodes}
-              edges={edges}
-              onNodeClick={onCanvasNodeClick}
-            />
-          )}
+          {view === "fleet" &&
+            topologyData &&
+            (nodes.length > 0 ? (
+              <TopologyCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodeClick={onCanvasNodeClick}
+              />
+            ) : (
+              // Empty-state instead of a silently blank canvas: the topology
+              // loaded but has no agents yet. A first-time self-hoster hitting
+              // this used to just see a blank gray area with no explanation.
+              <div className="flex h-full items-center justify-center p-8">
+                <div className="max-w-md text-center">
+                  <h2 className="text-lg font-semibold">No agents yet</h2>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    This map fills in as OpenTelemetry collectors register with
+                    Squadron over OpAMP. Deploy an agent pointed at this
+                    instance&apos;s OpAMP endpoint, or shipping OTLP telemetry,
+                    and it will appear here automatically.
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Already deployed one? Give it a few seconds to connect, then
+                    reload — if it still doesn&apos;t show, check the agent logs
+                    and that its OpAMP endpoint points at this server.
+                  </p>
+                </div>
+              </div>
+            ))}
         </div>
 
         <AgentDetailsDrawer
