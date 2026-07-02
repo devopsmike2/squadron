@@ -77,21 +77,21 @@ export const TOURS: Tour[] = [
     duration: "~2 min",
     steps: [
       {
-        route: "/discovery/aws",
+        route: "/discovery/aws?account=demo-000000000000",
         placement: "center",
         onEnter: ensureDemoData,
         title: "Instrument my cloud",
         body: "Squadron finds what in your cloud isn't sending telemetry yet, and writes the Terraform to fix it. We've loaded a sample AWS account with real findings so you can see it working — nothing to connect or configure. Click Next.",
       },
       {
-        route: "/discovery/aws",
+        route: "/discovery/aws?account=demo-000000000000",
         target: '[data-tour="aws-tab-inventory"]',
         placement: "bottom",
         title: "The discovered inventory",
         body: "Squadron has scanned the sample account and inventoried what's running — EC2, Lambda, RDS — flagging which resources are already instrumented vs. which have observability gaps. Open this tab to see it.",
       },
       {
-        route: "/discovery/aws",
+        route: "/discovery/aws?account=demo-000000000000",
         target: '[data-tour="aws-tab-recommendations"]',
         placement: "bottom",
         title: "AI recommendations, as Terraform",

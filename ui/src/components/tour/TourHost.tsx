@@ -94,7 +94,11 @@ export function TourHost() {
         // onEnter is best-effort; narration still proceeds.
       }
       if (token !== runToken.current) return;
-      if (step.route && location.pathname !== step.route) {
+      // Compare against pathname+search so routes carrying a query (e.g.
+      // "/discovery/aws?account=demo-000000000000") navigate correctly and don't
+      // re-navigate on every step that shares the same route.
+      const current = location.pathname + location.search;
+      if (step.route && current !== step.route) {
         navigate(step.route);
       }
       // Give the destination a tick to mount before polling.
