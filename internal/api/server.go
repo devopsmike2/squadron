@@ -2525,6 +2525,19 @@ func (s *Server) registerRoutes() {
 			middleware.RequireScope(services.ScopeAgentsWrite),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleDemoDisable(c) }))
 
+		// One-click "Enable demo data": seeds the FULL demo scenario across
+		// feature areas (fleet + configs + a cost spike via internal/demoseed,
+		// plus the discovery demo connection) so a first-time user sees the
+		// flagship loops working on sample data without configuring anything
+		// real. DELETE removes the demo-scoped rows. See handleDemoData* in
+		// demo_seed_routes.go.
+		v1.POST("/demo/enable",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.handleDemoDataEnable)
+		v1.DELETE("/demo",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.handleDemoDataDisable)
+
 		// v0.85 Stream 2E — connector list endpoint. Returns the
 		// display fields of every stored AWS connection so the
 		// /discovery/aws page's Account tab can render its connection
