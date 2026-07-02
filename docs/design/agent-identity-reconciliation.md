@@ -1,6 +1,6 @@
 # Design: agent-identity reconciliation (one host = one agent)
 
-Status: **accepted — Option A shipped** (promote to brain ADR 0005)
+Status: **accepted — Option A shipped; promoted to brain ADR 0005**
 Date: 2026-07-02
 
 ## Implementation (shipped)

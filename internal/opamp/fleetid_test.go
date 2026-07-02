@@ -80,6 +80,83 @@ func TestDeriveFleetId(t *testing.T) {
 	})
 }
 
+// TestReconciliation_OpAMPandOTLP_ConvergeOnServiceInstanceID is the code-level
+// equivalent of the arc's live-test definition-of-done: a third-party-style
+// collector whose OpAMP instance_uid is an opampextension-minted ULID (distinct
+// from its telemetry identity) still lands on ONE fleet card, because both the
+// OpAMP registration and the OTLP ingest path derive the fleet id from the SAME
+// shared service.instance.id via agentid.Derive.
+func TestReconciliation_OpAMPandOTLP_ConvergeOnServiceInstanceID(t *testing.T) {
+	s := &Server{}
+
+	// opampextension mints its own ULID as the wire instance_uid — it is NOT the
+	// telemetry identity. (uuid.New() stands in for "a value distinct from the
+	// service.instance.id"; the point is divergence, not the ULID format.)
+	instanceUID := uuid.New()
+
+	// The collector reports a stable UUID service.instance.id — the same value it
+	// stamps on its OTLP resource — in the AgentDescription, with host.name as a
+	// non-identifying attribute (the opampextension shape).
+	svcInstanceID := uuid.New().String()
+	desc := &protobufs.AgentDescription{
+		IdentifyingAttributes: []*protobufs.KeyValue{
+			strAttr("service.name", "otelcol-contrib"),
+			strAttr("service.instance.id", svcInstanceID),
+		},
+		NonIdentifyingAttributes: []*protobufs.KeyValue{
+			strAttr("host.name", "prod-web-07"),
+		},
+	}
+
+	opampFleetID := s.deriveFleetId(instanceUID, desc)
+
+	// The OTLP ingest path derives the agent_id from the resource attributes of
+	// the SAME collector's self-telemetry.
+	otlpAgentID := agentid.Derive(map[string]string{
+		"service.name":        "otelcol-contrib",
+		"service.instance.id": svcInstanceID,
+		"host.name":           "prod-web-07",
+	})
+
+	if opampFleetID.String() != otlpAgentID {
+		t.Fatalf("reconciliation broke: OpAMP fleet id %s != OTLP agent id %s — the host would show as two cards",
+			opampFleetID, otlpAgentID)
+	}
+	if opampFleetID == instanceUID {
+		t.Fatalf("fleet id must be the telemetry identity, not the wire ULID instance_uid")
+	}
+}
+
+// TestReconciliation_DistinctServiceInstanceID_KnownLimit pins the documented
+// boundary (design doc §"Correlation limits"): when a collector reports a
+// DIFFERENT service.instance.id over OpAMP than in its OTLP resource, the two
+// paths cannot auto-correlate — that's a misconfiguration, and host.name
+// secondary correlation is deferred. This test locks current behavior so a
+// future host.name-correlator change is a deliberate, ADR-backed decision rather
+// than an accident.
+func TestReconciliation_DistinctServiceInstanceID_KnownLimit(t *testing.T) {
+	s := &Server{}
+	instanceUID := uuid.New()
+
+	desc := &protobufs.AgentDescription{
+		IdentifyingAttributes: []*protobufs.KeyValue{
+			strAttr("service.instance.id", uuid.New().String()), // OpAMP-side id
+		},
+		NonIdentifyingAttributes: []*protobufs.KeyValue{strAttr("host.name", "prod-web-07")},
+	}
+	opampFleetID := s.deriveFleetId(instanceUID, desc)
+
+	// The OTLP path carries a *different* service.instance.id for the same host.
+	otlpAgentID := agentid.Derive(map[string]string{
+		"service.instance.id": uuid.New().String(), // distinct OTLP-side id
+		"host.name":           "prod-web-07",
+	})
+
+	if opampFleetID.String() == otlpAgentID {
+		t.Fatalf("unexpected convergence on distinct service.instance.ids — if this now passes via host.name, update the design doc + ADR 0005 and remove this guard")
+	}
+}
+
 // TestAgents_DualMap verifies the two-key index: store-facing lookups resolve by
 // fleet id, wire lookups fall back to instance_uid, rebinding drops the stale
 // fleet-id entry, and disconnect clears BOTH indexes.
