@@ -204,6 +204,45 @@ var ociMappers = map[string]mapper{
 		}
 		return "oci_core_instance", r.ImportID, true
 	},
+	"load_balancer": func(r Resource) (string, string, bool) {
+		// oci_load_balancer_load_balancer imports by the LB OCID. The OCID's
+		// own type segment ("ocid1.loadbalancer.…") is the authoritative
+		// discriminator — guard on it so a mis-populated id can't slip through.
+		if ocidType(r.ImportID) != "loadbalancer" {
+			return "", "", false
+		}
+		return "oci_load_balancer_load_balancer", r.ImportID, true
+	},
+	"database": func(r Resource) (string, string, bool) {
+		// OCI Database imports by OCID, and the OCID type segment tells the
+		// two Database-family resources apart (no reliance on the snapshot's
+		// friendly fields): a DB System is ocid1.dbsystem.…, an Autonomous
+		// Database is ocid1.autonomousdatabase.…. Anything else skips.
+		switch ocidType(r.ImportID) {
+		case "dbsystem":
+			return "oci_database_db_system", r.ImportID, true
+		case "autonomousdatabase":
+			return "oci_database_autonomous_database", r.ImportID, true
+		default:
+			return "", "", false
+		}
+	},
+}
+
+// ocidType returns the resource-type segment of an OCI OCID
+// ("ocid1.<type>.<realm>.[region].<unique>"), lower-cased, or "" when the
+// string is not a well-formed OCID. This is the canonical, self-describing
+// way to route an OCI resource to its terraform type — the id encodes its
+// own kind, so no cross-package coupling to scanner naming conventions.
+func ocidType(id string) string {
+	if !strings.HasPrefix(id, "ocid1.") {
+		return ""
+	}
+	segs := strings.Split(id, ".")
+	if len(segs) < 3 || segs[1] == "" {
+		return ""
+	}
+	return strings.ToLower(segs[1])
 }
 
 // mappersFor returns the category->mapper registry for a provider.
