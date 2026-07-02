@@ -1452,6 +1452,24 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	go startRollupGenerator(telemetryService, config, logger)
 	go startCleanupTask(telemetryService, config, logger)
 
+	// Config summary banner: one line a self-hoster can grep to confirm how the
+	// container is wired (log level, storage paths, worker pool, ports) without
+	// digging through scattered feature logs. Especially useful for debugging a
+	// misbehaving container in a later stage.
+	logger.Info("Squadron config summary",
+		zap.String("version", version),
+		zap.String("log_level", config.Logging.Level),
+		zap.String("log_format", config.Logging.Format),
+		zap.String("storage_app", config.Storage.App.Path),
+		zap.String("storage_telemetry", config.Storage.Telemetry.Path),
+		zap.Int("worker_queue_size", config.Worker.QueueSize),
+		zap.Int("workers", config.Worker.Workers),
+		zap.String("worker_timeout", config.Worker.Timeout),
+		zap.Int("api_port", config.Server.HTTPPort),
+		zap.Int("opamp_port", config.Server.OpAMPPort),
+		zap.Int("otlp_grpc_port", grpcPort),
+		zap.Int("otlp_http_port", httpPort))
+
 	logger.Info("Squadron is running",
 		zap.Int("opamp_port", config.Server.OpAMPPort),
 		zap.Int("otlp_grpc_port", grpcPort),
