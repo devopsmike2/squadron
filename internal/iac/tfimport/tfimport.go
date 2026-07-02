@@ -140,6 +140,20 @@ var azureMappers = map[string]mapper{
 		}
 		return tfType, r.ImportID, true
 	},
+	"load_balancer": func(r Resource) (string, string, bool) {
+		// azurerm_lb imports by the load balancer's ARM resource ID, which is
+		// exactly what the scanner captures as the snapshot ResourceID
+		// (LoadBalancerSnapshot: "Azure LB resource ID"). Passed through as
+		// ImportID by nonComputeToImportResources.
+		if r.ImportID == "" {
+			return "", "", false
+		}
+		return "azurerm_lb", r.ImportID, true
+	},
+	// database + object_store deliberately omitted until their per-cloud tf
+	// type + import-id format is live-verified (Azure SQL needs engine->type
+	// routing; blob containers use a non-ARM import id) — they surface as a
+	// visible Skipped meanwhile rather than emitting wrong import blocks.
 }
 
 var gcpMappers = map[string]mapper{

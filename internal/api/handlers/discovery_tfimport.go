@@ -96,6 +96,42 @@ func computeSnapshotsToImportResources(provider string, comp []scanner.ComputeIn
 	return out
 }
 
+// nonComputeToImportResources maps the canonical database / object-store /
+// load-balancer snapshots (shared by the Azure/GCP/OCI scan responses) onto
+// tfimport.Resource. Unlike compute (friendly ResourceID + a separate canonical
+// ImportID), these snapshots' ResourceID is ALREADY the provider-native
+// canonical id (Azure ARM id, GCS/S3 bucket name, GCLB forwarding-rule URL —
+// see the scanner snapshot godocs), so ImportID = ResourceID. Categories/clouds
+// without a mapper yet surface as a visible Skipped rather than being silently
+// dropped, which is what happened when these were omitted entirely.
+func nonComputeToImportResources(
+	provider string,
+	dbs []scanner.DatabaseInstanceSnapshot,
+	objs []scanner.ObjectStoreSnapshot,
+	lbs []scanner.LoadBalancerSnapshot,
+) []tfimport.Resource {
+	out := make([]tfimport.Resource, 0, len(dbs)+len(objs)+len(lbs))
+	for _, d := range dbs {
+		out = append(out, tfimport.Resource{
+			Provider: provider, Category: "database",
+			ResourceID: d.ResourceID, ImportID: d.ResourceID, Region: d.Region,
+		})
+	}
+	for _, o := range objs {
+		out = append(out, tfimport.Resource{
+			Provider: provider, Category: "object_store",
+			ResourceID: o.ResourceID, ImportID: o.ResourceID, Region: o.Region,
+		})
+	}
+	for _, l := range lbs {
+		out = append(out, tfimport.Resource{
+			Provider: provider, Category: "load_balancer",
+			ResourceID: l.ResourceID, ImportID: l.ResourceID, Name: l.Name, Region: l.Region,
+		})
+	}
+	return out
+}
+
 // renderImportResponse runs the generator + writes the standard response.
 func renderImportResponse(c *gin.Context, resources []tfimport.Resource) {
 	blocks, skipped := tfimport.Generate(resources)
@@ -117,7 +153,9 @@ func (h *DiscoveryHandlers) HandleAzureGenerateTerraformImport(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Code: "MissingSubscriptionID", Message: "scan_result.subscription_id is required."}})
 		return
 	}
-	renderImportResponse(c, computeSnapshotsToImportResources("azure", req.ScanResult.Compute))
+	res := computeSnapshotsToImportResources("azure", req.ScanResult.Compute)
+	res = append(res, nonComputeToImportResources("azure", req.ScanResult.Databases, req.ScanResult.ObjectStores, req.ScanResult.LoadBalancers)...)
+	renderImportResponse(c, res)
 }
 
 // HandleGCPGenerateTerraformImport — env->TF slice 3c preview for GCP.
@@ -131,7 +169,9 @@ func (h *DiscoveryHandlers) HandleGCPGenerateTerraformImport(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Code: "MissingProjectID", Message: "scan_result.project_id is required."}})
 		return
 	}
-	renderImportResponse(c, computeSnapshotsToImportResources("gcp", req.ScanResult.Compute))
+	res := computeSnapshotsToImportResources("gcp", req.ScanResult.Compute)
+	res = append(res, nonComputeToImportResources("gcp", req.ScanResult.Databases, req.ScanResult.ObjectStores, req.ScanResult.LoadBalancers)...)
+	renderImportResponse(c, res)
 }
 
 // HandleOCIGenerateTerraformImport — env->TF slice 3c preview for OCI.
@@ -145,5 +185,7 @@ func (h *DiscoveryHandlers) HandleOCIGenerateTerraformImport(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{Code: "MissingTenancyOCID", Message: "scan_result.tenancy_ocid is required."}})
 		return
 	}
-	renderImportResponse(c, computeSnapshotsToImportResources("oci", req.ScanResult.Compute))
+	res := computeSnapshotsToImportResources("oci", req.ScanResult.Compute)
+	res = append(res, nonComputeToImportResources("oci", req.ScanResult.Databases, req.ScanResult.ObjectStores, req.ScanResult.LoadBalancers)...)
+	renderImportResponse(c, res)
 }
