@@ -71,3 +71,37 @@ GCP reporting to Squadron running on Azure.
 publicly with API auth off. That is fine for a short throwaway test but must not be a
 production posture — enable Bearer auth and restrict the OTLP/OpAMP exposure (see
 docs/security-self-hosting.md) before any real deployment.
+
+## Agent-detail UI findings (from the live fleet)
+
+Clicking an agent showed empty Config/Metrics/Logs tabs. Root-caused live:
+
+- **Overview volume IS populated** (e.g. 75 KB metrics) — the host metrics the
+  agents send are ingested and shown. Not a bug.
+- **Config / Metrics(component throughput) / Logs empty = expected for our minimal
+  agents.** They only push host metrics over OTLP; they are not OpAMP-managed, ship
+  no logs, and don't emit the collector's own pipeline self-metrics. The UI tooltip
+  even says the Unknown pipeline-health "means we haven't seen otelcol self-metrics
+  yet."
+- **Two REAL bugs found in Squadron's own OpAMP adoption snippet** (`/api/v1/
+  quickstart/opamp-snippet`, `internal/quickstart/quickstart.go`) — a user pasting
+  it gets a crash-looping collector (fixed, commit c4e564f):
+  1. `capabilities` listed keys otelcol-contrib rejects (`reports_own_metrics`,
+     `reports_health`, `accepts_remote_config`, `accepts_packages`) →
+     `'capabilities' has invalid keys` → crash-loop. Only `reports_effective_config`
+     is a valid config key.
+  2. the `ws://` endpoint had no `tls: insecure: true`, so the extension attempted a
+     TLS handshake against the plaintext port → `tls: first record does not look
+     like a TLS handshake` → never connects.
+- After both fixes, agent-1 (reconfigured with the OpAMP extension) connected and
+  registered as an **OpAMP-managed agent** — the "otelcol-contrib" card now reports
+  version 0.111.0 + host.arch/os.type, distinct from the bare OTLP-only cards.
+- **Still empty even when managed:** Config tab (needs an operator to *assign* a
+  config via Configs/Rollouts — "no intent" is correct) and the Metrics component-
+  throughput tab (needs the collector's own-metrics channel, a deeper OpAMP feature
+  not wired by the minimal extension config). Both are separate follow-ups, not
+  deploy blockers.
+- **Identity note:** the OpAMP-managed agent registers under a fresh OpAMP
+  instance_uid, so the same VM appears both as its OTLP-discovered "gcp-vm-agent"
+  entry and its OpAMP "otelcol-contrib" entry. Whether Squadron should reconcile
+  these into one is a product question worth filing.
