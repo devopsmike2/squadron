@@ -1,0 +1,82 @@
+# Squadron on-prem agent config — full host telemetry, Squadron-managed.
+#
+# One collector that does all three jobs so the agent shows up in Squadron
+# with its config, its metric data, AND its log data:
+#   - opamp extension  -> registers + reports effective config + health (Fleet + Config tab)
+#   - hostmetrics/filelog receivers -> the host's real metrics and logs
+#   - otlp receiver     -> local apps on this host can ship to localhost:4317/4318
+#   - otlphttp exporter -> sends all of it to Squadron's OTLP endpoint (Metrics + Logs tabs)
+#
+# Placeholders (__...__) are filled in by install-agent.sh.
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ws://__SQUADRON_HOST__:4320/v1/opamp
+        # ws:// is plaintext; without this the extension attempts a TLS
+        # handshake on the plaintext port and never connects. If you front
+        # Squadron's OpAMP port with TLS, switch to wss:// and drop this.
+        tls:
+          insecure: true
+    # reports_effective_config is the only capability the extension accepts
+    # as a config key; health/own-metrics/remote-config are negotiated
+    # automatically. Listing the others makes the collector reject the config.
+    capabilities:
+      reports_effective_config: true
+
+receivers:
+  hostmetrics:
+    collection_interval: 15s
+    scrapers:
+      cpu: {}
+      memory: {}
+      load: {}
+      disk: {}
+      filesystem: {}
+      network: {}
+      paging: {}
+      processes: {}
+  filelog:
+    include:
+      - /var/log/syslog
+      - /var/log/messages
+    start_at: end
+    include_file_path: true
+    retry_on_failure:
+      enabled: true
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  resource:
+    attributes:
+      - { key: service.name, value: __SERVICE_NAME__, action: upsert }
+      - { key: service.instance.id, value: __INSTANCE_ID__, action: upsert }
+  batch: {}
+
+exporters:
+  otlphttp:
+    endpoint: http://__SQUADRON_HOST__:4318
+
+service:
+  extensions: [opamp]
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, otlp]
+      processors: [resource, batch]
+      exporters: [otlphttp]
+    logs:
+      receivers: [filelog, otlp]
+      processors: [resource, batch]
+      exporters: [otlphttp]
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlphttp]
