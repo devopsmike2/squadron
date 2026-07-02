@@ -69,6 +69,11 @@ func (s *Server) handleDemoDataEnable(c *gin.Context) {
 		}
 	}
 
+	// Register GCP / Azure / OCI demo connections too, so all four Discovery
+	// pages populate inventory + recommendations from the one click (not just
+	// AWS). Best-effort + idempotent.
+	s.enableCloudDemoConnections(c.Request.Context())
+
 	// Light up the conversational AI surfaces (Ask Squadron / Explain / Merge)
 	// with the rest of the demo. Only takes effect when no real ANTHROPIC_API_KEY
 	// is configured — a real key always wins — so keyed installs are untouched.
@@ -119,6 +124,8 @@ func (s *Server) handleDemoDataDisable(c *gin.Context) {
 			}
 		}
 	}
+	// Remove the GCP / Azure / OCI demo connections too.
+	s.removeCloudDemoConnections(c.Request.Context())
 
 	c.JSON(http.StatusOK, gin.H{"status": "disabled"})
 }
