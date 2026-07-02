@@ -1,11 +1,15 @@
 // Use Cases — the guided-demo landing page.
 //
-// A grid of flagship use-cases; picking one launches an in-app coach-mark tour
-// (TourHost) that walks the real pages, backed by real seeded data. New tours
-// are added declaratively in components/tour/tours.ts.
+// A one-click "Enable demo data" control populates every feature area with
+// clearly-labeled sample data, then a grid of flagship use-cases each launches
+// an in-app coach-mark tour (TourHost) that showcases that feature working on
+// the sample data — no real cloud, agent, or config required. New tours are
+// added declaratively in components/tour/tours.ts.
 
-import { PlayCircle, Radar, type LucideIcon } from "lucide-react";
+import { Database, PlayCircle, Radar, Trash2, type LucideIcon } from "lucide-react";
+import { useState } from "react";
 
+import { enableDemoData, removeDemoData } from "@/api/demoData";
 import { startTour, TOURS } from "@/components/tour/tours";
 import { Button } from "@/components/ui/button";
 
@@ -16,15 +20,79 @@ const ICONS: Record<string, LucideIcon> = {
 };
 
 export default function UseCasesPage() {
+  const [busy, setBusy] = useState<"enable" | "remove" | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onEnable = async () => {
+    setBusy("enable");
+    setError(null);
+    try {
+      await enableDemoData();
+      setEnabled(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not enable demo data.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onRemove = async () => {
+    setBusy("remove");
+    setError(null);
+    try {
+      await removeDemoData();
+      setEnabled(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not remove demo data.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-5xl p-6">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold">Use cases</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Pick a use case and Squadron walks you through — step by step, on the
-          real pages — how it handles that job. Each tour runs on built-in sample
-          data, so you can explore the full flow without connecting anything.
+          See how Squadron handles each job — walked through step by step on the
+          real pages, running on built-in sample data. No cloud account, agent,
+          or config required.
         </p>
+      </div>
+
+      {/* One-click demo data. Populates fleet, configs, a cost spike, and a
+          sample cloud inventory so every feature is explorable immediately. */}
+      <div className="mb-6 flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Database className="h-5 w-5" />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold">Demo data</h2>
+            <p className="text-sm text-muted-foreground">
+              {enabled
+                ? "Sample data is loaded across Fleet, Configs, Cost, and Discovery. Explore any page, or start a tour below."
+                : "Load clearly-labeled sample data across every feature so you can explore Squadron working. Remove it any time."}
+            </p>
+            {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button onClick={onEnable} disabled={busy !== null} size="sm">
+            <Database className="mr-1.5 h-4 w-4" />
+            {busy === "enable" ? "Loading…" : "Enable demo data"}
+          </Button>
+          <Button
+            onClick={onRemove}
+            disabled={busy !== null}
+            size="sm"
+            variant="outline"
+          >
+            <Trash2 className="mr-1.5 h-4 w-4" />
+            {busy === "remove" ? "Removing…" : "Remove"}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
