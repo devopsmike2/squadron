@@ -301,7 +301,10 @@ func projectSQLDatabase(server armSQLServer, db armSQLDatabase, hasInsights bool
 		region = server.Location
 	}
 	return scanner.DatabaseInstanceSnapshot{
-		ResourceID:             fmt.Sprintf("%s/%s", server.Name, db.Name),
+		ResourceID: fmt.Sprintf("%s/%s", server.Name, db.Name),
+		// db.ID is the full ARM id (.../Microsoft.Sql/servers/<s>/databases/<db>),
+		// which is exactly the azurerm_mssql_database terraform import id.
+		ImportID:               db.ID,
 		Engine:                 azureSQLEngine,
 		EngineVersion:          engineVersion,
 		InstanceClass:          db.Sku.Name,

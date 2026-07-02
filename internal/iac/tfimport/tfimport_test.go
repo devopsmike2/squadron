@@ -196,6 +196,47 @@ func TestGenerate_AzureLoadBalancer_AndNonComputeVisibleSkips(t *testing.T) {
 	}
 }
 
+func TestGenerate_AzureDatabase_ARMShapeGuarded(t *testing.T) {
+	dbID := "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Sql/servers/srv/databases/appdb"
+	// A server-level ARM id must NOT map to azurerm_mssql_database.
+	serverID := "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Sql/servers/srv"
+	blocks, skipped := Generate([]Resource{
+		{Provider: "azure", Category: "database", ResourceID: "srv/appdb", ImportID: dbID},
+		{Provider: "azure", Category: "database", ResourceID: "srv", ImportID: serverID},
+	})
+	b, ok := blockByType(blocks, "azurerm_mssql_database")
+	if !ok {
+		t.Fatalf("expected azurerm_mssql_database, got %+v", blocks)
+	}
+	if b.ImportID != dbID {
+		t.Fatalf("import id = %q, want the database ARM id %q", b.ImportID, dbID)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("server-level id must not map to a database; got %d blocks", len(blocks))
+	}
+	if len(skipped) != 1 || skipped[0].ResourceID != "srv" {
+		t.Fatalf("expected the server-level id skipped, got %+v", skipped)
+	}
+}
+
+func TestArmTypeMatches(t *testing.T) {
+	cases := []struct {
+		id, armType string
+		want        bool
+	}{
+		{"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Sql/servers/x/databases/y", "Microsoft.Sql/servers/databases", true},
+		{"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Sql/servers/x", "Microsoft.Sql/servers/databases", false},
+		{"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb", "Microsoft.Network/loadBalancers", true},
+		{"srv/appdb", "Microsoft.Sql/servers/databases", false}, // friendly name, no /providers/
+		{"", "Microsoft.Network/loadBalancers", false},
+	}
+	for _, c := range cases {
+		if got := armTypeMatches(c.id, c.armType); got != c.want {
+			t.Errorf("armTypeMatches(%q, %q) = %v, want %v", c.id, c.armType, got, c.want)
+		}
+	}
+}
+
 func TestGenerate_MultiCloud_SkipsWhenNoImportID(t *testing.T) {
 	// Without a captured canonical ImportID, non-AWS compute is skipped
 	// (never guessed from the friendly ResourceID).
