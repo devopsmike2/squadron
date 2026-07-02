@@ -114,7 +114,10 @@ func nonComputeToImportResources(
 	for _, d := range dbs {
 		out = append(out, tfimport.Resource{
 			Provider: provider, Category: "database",
-			ResourceID: d.ResourceID, ImportID: d.ImportID, Region: d.Region,
+			// Name drives the generated TF address label; the snapshot
+			// ResourceID is the operator-readable instance name, so the
+			// block reads imported_<name> rather than the raw import id.
+			ResourceID: d.ResourceID, Name: d.ResourceID, ImportID: d.ImportID, Region: d.Region,
 		})
 	}
 	for _, o := range objs {

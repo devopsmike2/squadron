@@ -288,6 +288,57 @@ func TestOcidType(t *testing.T) {
 	}
 }
 
+func TestGenerate_GCPNonCompute_Routed(t *testing.T) {
+	sqlID := "my-proj/orders-db"
+	globalLB := "projects/my-proj/global/backendServices/web-bes"
+	regionLB := "projects/my-proj/regions/us-central1/backendServices/int-bes"
+	blocks, skipped := Generate([]Resource{
+		{Provider: "gcp", Category: "database", ResourceID: "orders-db", Name: "orders-db", ImportID: sqlID},
+		{Provider: "gcp", Category: "load_balancer", ResourceID: globalLB, Name: "web-bes", ImportID: globalLB},
+		{Provider: "gcp", Category: "load_balancer", ResourceID: regionLB, Name: "int-bes", ImportID: regionLB},
+		// A single-token / URL-ish id must skip, not be guessed.
+		{Provider: "gcp", Category: "database", ResourceID: "x", ImportID: "just-a-name"},
+	})
+	want := map[string]string{
+		"google_sql_database_instance":          sqlID,
+		"google_compute_backend_service":        globalLB,
+		"google_compute_region_backend_service": regionLB,
+	}
+	for tfType, wantID := range want {
+		b, ok := blockByType(blocks, tfType)
+		if !ok {
+			t.Errorf("missing block for %s", tfType)
+			continue
+		}
+		if b.ImportID != wantID {
+			t.Errorf("%s import id = %q, want %q", tfType, b.ImportID, wantID)
+		}
+	}
+	if len(blocks) != 3 {
+		t.Fatalf("want 3 blocks, got %d: %+v", len(blocks), blocks)
+	}
+	if len(skipped) != 1 || skipped[0].ResourceID != "x" {
+		t.Fatalf("expected the single-token database skipped, got %+v", skipped)
+	}
+}
+
+func TestIsProjectSlashName(t *testing.T) {
+	cases := map[string]bool{
+		"proj/name":       true,
+		"proj/":           false,
+		"/name":           false,
+		"name":            false,
+		"proj/name/extra": false,
+		"https://x/y":     false,
+		"":                false,
+	}
+	for in, want := range cases {
+		if got := isProjectSlashName(in); got != want {
+			t.Errorf("isProjectSlashName(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestGenerate_MultiCloud_SkipsWhenNoImportID(t *testing.T) {
 	// Without a captured canonical ImportID, non-AWS compute is skipped
 	// (never guessed from the friendly ResourceID).

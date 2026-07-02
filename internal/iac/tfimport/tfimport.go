@@ -195,6 +195,38 @@ var gcpMappers = map[string]mapper{
 		}
 		return "google_compute_instance", r.ImportID, true
 	},
+	"database": func(r Resource) (string, string, bool) {
+		// google_sql_database_instance imports by "{{project}}/{{name}}"
+		// (a documented accepted form; the scanner composes it). Guard on that
+		// two-segment shape so a stray value (URL, single token) skips.
+		if !isProjectSlashName(r.ImportID) {
+			return "", "", false
+		}
+		return "google_sql_database_instance", r.ImportID, true
+	},
+	"load_balancer": func(r Resource) (string, string, bool) {
+		// GCP models a load balancer's logging/backend unit as a backend
+		// service. The scanner-enriched ImportID is the canonical resource
+		// path, which self-describes global vs regional — route on it so we
+		// pick the matching terraform type (and never mis-map).
+		switch {
+		case strings.Contains(r.ImportID, "/global/backendServices/"):
+			return "google_compute_backend_service", r.ImportID, true
+		case strings.Contains(r.ImportID, "/regions/") && strings.Contains(r.ImportID, "/backendServices/"):
+			return "google_compute_region_backend_service", r.ImportID, true
+		default:
+			return "", "", false
+		}
+	},
+}
+
+// isProjectSlashName reports whether s is exactly "<project>/<name>" — two
+// non-empty, slash-free segments joined by a single "/". This is the Cloud SQL
+// import-id shape; anything with a scheme, extra slashes, or a missing segment
+// is rejected so the mapper only emits an id form the provider accepts.
+func isProjectSlashName(s string) bool {
+	parts := strings.Split(s, "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
 
 var ociMappers = map[string]mapper{
