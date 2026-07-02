@@ -115,12 +115,37 @@ func (s *HTTPServer) setupRoutes(router *gin.Engine) {
 	router.GET("/health", s.healthCheck)
 	router.GET("/ready", s.readyCheck)
 
-	// Standard OTLP HTTP endpoints
-	router.POST("/v1/traces", s.handleOTLPTraces)
-	router.POST("/v1/metrics", s.handleOTLPMetrics)
-	router.POST("/v1/logs", s.handleOTLPLogs)
+	// Standard OTLP HTTP endpoints. The metrics middleware wires the
+	// otlp_http_* request counters/histogram that were declared in
+	// metrics.OTLPMetrics but never recorded — the v0.89 ingest stress
+	// run surfaced them reading zero under 12k+ requests. Data routes
+	// only; health probes would just add noise.
+	otlp := router.Group("/v1", s.httpMetricsMiddleware())
+	otlp.POST("/traces", s.handleOTLPTraces)
+	otlp.POST("/metrics", s.handleOTLPMetrics)
+	otlp.POST("/logs", s.handleOTLPLogs)
 
 	s.logger.Info("OTLP HTTP routes registered")
+}
+
+// httpMetricsMiddleware records the HTTP receiver's request count,
+// error count, and duration histogram. A 503 (worker queue full) is
+// the designed backpressure signal and counts as an error here so
+// operators can alert on shed load.
+func (s *HTTPServer) httpMetricsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.metrics == nil {
+			c.Next()
+			return
+		}
+		start := time.Now()
+		c.Next()
+		s.metrics.HTTPRequestsTotal.Inc(1)
+		if c.Writer.Status() >= http.StatusBadRequest {
+			s.metrics.HTTPRequestErrors.Inc(1)
+		}
+		s.metrics.HTTPRequestDuration.Record(time.Since(start))
+	}
 }
 
 // Start starts the HTTP server
