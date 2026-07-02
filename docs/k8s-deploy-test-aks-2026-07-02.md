@@ -47,3 +47,27 @@ host perms; only a real CSI PVC exposes the ownership gap.
 - AI features off (no `ANTHROPIC_API_KEY`) and API auth off — both expected defaults; the NOTES.txt and startup logs call this out.
 - Exposing all four service ports (8080/4320/4317/4318) via one LoadBalancer is fine for a test; in production split UI (ingress) from OpAMP/OTLP (LB/gRPC), as the chart NOTES already advise.
 - OpenShift path (kustomize base) not exercised in this pass — recommend a follow-up on OpenShift Local/ROSA if that's a target.
+
+## Expansion: cross-cloud fleet (5 GCE VMs → Squadron on AKS)
+
+**Date:** 2026-07-02 (same session). Azure regional vCPU quota was maxed (limit 4,
+all consumed by the AKS node pool), so the 5 agent VMs were provisioned on **GCP**
+(us-central1, ADC auth) — which also makes it a genuine multi-cloud test: agents in
+GCP reporting to Squadron running on Azure.
+
+- **5× e2-micro** Debian VMs (`squadron-agent-1..5`), created via `gcloud` with an
+  ADC access token. Each boots a startup-script that installs `otelcol-contrib`
+  v0.111.0 and exports hostmetrics (cpu/memory/load/network) over **OTLP/HTTP to the
+  Azure LoadBalancer public endpoint** `http://4.236.233.200:4318`, with a unique
+  `service.instance.id` (the VM hostname).
+- **Result:** all 5 registered in Fleet as distinct online agents within ~90s of
+  boot; combined with the in-cluster collector, **6 agents online, 2560 telemetry
+  items ingested, 0 dropped**. Squadron's public OTLP endpoint on the AKS
+  LoadBalancer handled cross-cloud ingest cleanly.
+- This exercises the OTLP receiver → worker queue → DuckDB path and passive-discovery
+  Fleet registration under a small real fleet, over the internet, from a second cloud.
+
+**Security note:** for this test the LoadBalancer exposes the UI + OTLP + OpAMP ports
+publicly with API auth off. That is fine for a short throwaway test but must not be a
+production posture — enable Bearer auth and restrict the OTLP/OpAMP exposure (see
+docs/security-self-hosting.md) before any real deployment.
