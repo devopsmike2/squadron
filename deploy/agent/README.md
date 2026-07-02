@@ -56,6 +56,15 @@ Squadron** (OpAMP remote config + Rollouts) — you don't touch the boxes again.
 
 ## Production notes
 
+- **One host = one agent card.** Squadron derives an agent's fleet identity from
+  its `service.instance.id` (falling back to `host.name`), the same way for the
+  OpAMP-management channel and the OTLP-telemetry channel — so config + telemetry
+  land on a single card even though the opamp extension mints its own ULID for
+  the wire. This template does that for you. If you hand-roll a collector and see
+  the **same host as two cards**, make sure the value it reports as
+  `service.instance.id` over OpAMP matches the one on its OTLP resource (set it
+  once via a `resource`/`resourcedetection` processor shared by both), or omit
+  `service.instance.id` entirely so both channels fall back to `host.name`.
 - The default config talks **plaintext** (`ws://`, `http://`) — fine on a trusted
   network. For untrusted paths, front Squadron with TLS (switch the config to
   `wss://` / `https://` and drop `tls.insecure`) and enable Squadron's bearer auth.
