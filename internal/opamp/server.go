@@ -12,6 +12,7 @@ import (
 	"github.com/open-telemetry/opamp-go/server/types"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/agentid"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
 )
@@ -164,9 +165,16 @@ func (s *Server) onDisconnect(conn types.Connection) {
 	if s.agentService != nil {
 		ctx := context.Background()
 		for agentId := range agentsToMarkOffline {
-			if err := s.agentService.UpdateAgentStatus(ctx, agentId, services.AgentStatusOffline); err != nil {
+			// agentsToMarkOffline is keyed by wire instance_uid; the store row is
+			// keyed by fleet id. Resolve the agent to mark the correct row offline.
+			// The tracer stays keyed by instance_uid (wire-level spans).
+			fleetId := agentId
+			if a := s.agents.FindAgent(agentId); a != nil {
+				fleetId = a.storeID()
+			}
+			if err := s.agentService.UpdateAgentStatus(ctx, fleetId, services.AgentStatusOffline); err != nil {
 				s.logger.Error("Failed to mark agent offline on disconnect",
-					zap.String("agentId", agentId.String()),
+					zap.String("agentId", fleetId.String()),
 					zap.Error(err))
 			}
 			s.tracer.EndAgentConnection(agentId, "client_disconnected")
@@ -204,6 +212,16 @@ func (s *Server) onMessage(ctx context.Context, conn types.Connection, msg *prot
 			s.metrics.MessageErrors.Inc(1)
 		}
 		return response
+	}
+
+	// Resolve the Squadron fleet id from the AgentDescription the same way the
+	// OTLP ingest path derives it (agentid.Derive), so a host that is both
+	// OpAMP-managed and shipping OTLP telemetry converges to ONE fleet row
+	// instead of two. Only recompute when a description is present; heartbeats
+	// keep the current fleet id. Falls back to instance_uid when the agent
+	// reports no usable identity (no regression vs. prior behavior).
+	if msg.AgentDescription != nil {
+		s.agents.SetFleetId(agent, s.deriveFleetId(instanceId, msg.AgentDescription))
 	}
 	// Open the per-agent connection span on the first message we
 	// see from this instance. Idempotent on subsequent messages so
@@ -418,7 +436,7 @@ func (s *Server) extractGroupInfo(desc *protobufs.AgentDescription) (groupID str
 // Priority: Agent-specific config > Group config > Default config
 func (s *Server) getConfigForAgent(ctx context.Context, agent *Agent) string {
 	// 1. Try to get agent-specific config
-	if agentConfig, err := s.agentService.GetLatestConfigForAgent(ctx, agent.InstanceId); err == nil && agentConfig != nil {
+	if agentConfig, err := s.agentService.GetLatestConfigForAgent(ctx, agent.storeID()); err == nil && agentConfig != nil {
 		s.logger.Info("Using agent-specific config",
 			zap.String("agentId", agent.InstanceIdStr),
 			zap.String("configId", agentConfig.ID))
@@ -444,8 +462,10 @@ func (s *Server) getConfigForAgent(ctx context.Context, agent *Agent) string {
 
 // persistAgent persists agent information to storage
 func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.AgentToServer) {
-	// Check if agent already exists in storage
-	existingAgent, err := s.agentService.GetAgent(ctx, agent.InstanceId)
+	// Check if agent already exists in storage. Keyed by the FLEET id (not the
+	// wire instance_uid) so this row converges with the OTLP discovery row and
+	// the telemetry agent_id for the same host — one card, config + telemetry.
+	existingAgent, err := s.agentService.GetAgent(ctx, agent.storeID())
 	if err != nil {
 		s.logger.Debug("Error checking existing agent",
 			zap.String("agentId", agent.InstanceIdStr),
@@ -468,7 +488,7 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 
 		// Create new agent
 		serviceAgent := &services.Agent{
-			ID:           agent.InstanceId,
+			ID:           agent.storeID(),
 			Name:         name,
 			Labels:       labels,
 			Status:       services.AgentStatus(status),
@@ -492,13 +512,13 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 		}
 	} else {
 		// Update existing agent
-		if err := s.agentService.UpdateAgentStatus(ctx, agent.InstanceId, services.AgentStatus(status)); err != nil {
+		if err := s.agentService.UpdateAgentStatus(ctx, agent.storeID(), services.AgentStatus(status)); err != nil {
 			s.logger.Error("Failed to update agent status",
 				zap.String("agentId", agent.InstanceIdStr),
 				zap.Error(err))
 		}
 
-		if err := s.agentService.UpdateAgentLastSeen(ctx, agent.InstanceId, now); err != nil {
+		if err := s.agentService.UpdateAgentLastSeen(ctx, agent.storeID(), now); err != nil {
 			s.logger.Error("Failed to update agent last seen",
 				zap.String("agentId", agent.InstanceIdStr),
 				zap.Error(err))
@@ -517,7 +537,7 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 			s.ensureAgentGroup(ctx, agent, now)
 
 			registration := &services.Agent{
-				ID:        agent.InstanceId,
+				ID:        agent.storeID(),
 				Name:      name,
 				Labels:    labels,
 				Version:   version,
@@ -533,7 +553,7 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 
 		// Update effective config if present
 		if agent.EffectiveConfig != "" {
-			if err := s.agentService.UpdateAgentEffectiveConfig(ctx, agent.InstanceId, agent.EffectiveConfig); err != nil {
+			if err := s.agentService.UpdateAgentEffectiveConfig(ctx, agent.storeID(), agent.EffectiveConfig); err != nil {
 				s.logger.Error("Failed to update agent effective config",
 					zap.String("agentId", agent.InstanceIdStr),
 					zap.Error(err))
@@ -584,6 +604,51 @@ func (s *Server) ensureAgentGroup(ctx context.Context, agent *Agent, now time.Ti
 		// Group exists, set GroupID
 		agent.GroupID = &existingGroup.ID
 	}
+}
+
+// deriveFleetId computes the Squadron fleet id for an OpAMP agent from its
+// AgentDescription, mirroring the OTLP ingest path (agentid.Derive) so both
+// converge on the same identity. If the description carries no usable identity
+// (agentid returns the "default" sentinel) or the derived value isn't a valid
+// UUID, it falls back to the wire instance_uid — preserving today's behavior
+// for agents that report nothing correlatable.
+func (s *Server) deriveFleetId(instanceId uuid.UUID, desc *protobufs.AgentDescription) uuid.UUID {
+	if desc == nil {
+		return instanceId
+	}
+	derived := agentid.Derive(fleetIdentityAttrs(desc))
+	if derived == "default" {
+		return instanceId
+	}
+	parsed, err := uuid.Parse(derived)
+	if err != nil {
+		return instanceId
+	}
+	return parsed
+}
+
+// fleetIdentityAttrs pulls the identity-bearing attributes agentid.Derive keys
+// off (service.instance.id, host.name, service.name) out of the description's
+// identifying + non-identifying attributes.
+func fleetIdentityAttrs(desc *protobufs.AgentDescription) map[string]string {
+	attrs := make(map[string]string, 3)
+	all := append(desc.IdentifyingAttributes, desc.NonIdentifyingAttributes...)
+	for _, attr := range all {
+		if attr.Value == nil {
+			continue
+		}
+		switch attr.Key {
+		case "service.instance.id", "host.name", "service.name":
+			if v := attr.Value.GetStringValue(); v != "" {
+				// Identifying attributes win; don't let a non-identifying dup
+				// clobber a value we already captured.
+				if _, seen := attrs[attr.Key]; !seen {
+					attrs[attr.Key] = v
+				}
+			}
+		}
+	}
+	return attrs
 }
 
 // extractAgentName extracts the agent name from agent description
@@ -765,12 +830,14 @@ func (s *Server) calcConnectionSettings(agent *Agent, response *protobufs.Server
 		response.ConnectionSettings = &protobufs.ConnectionSettingsOffers{}
 	}
 
-	// Create headers with agent ID for filtering
+	// Create headers with the agent's Squadron identity for filtering. Use the
+	// fleet id so any self-telemetry tagged with this header correlates to the
+	// same fleet row as the agent's config and host telemetry.
 	headers := &protobufs.Headers{
 		Headers: []*protobufs.Header{
 			{
 				Key:   "x-squadron-agent-id",
-				Value: agent.InstanceIdStr,
+				Value: agent.FleetIdStr,
 			},
 		},
 	}
