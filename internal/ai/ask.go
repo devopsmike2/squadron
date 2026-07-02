@@ -85,6 +85,9 @@ Rules:
 // short, the operator is waiting on a click, and the question
 // shape doesn't need Sonnet's structural reasoning.
 func (s *Service) Ask(ctx context.Context, req AskInput) (*AskResult, error) {
+	if s.demoActive() {
+		return s.askDemoMode(req)
+	}
 	if !s.Enabled() {
 		return nil, ErrDisabled
 	}
@@ -112,6 +115,90 @@ func (s *Service) Ask(ctx context.Context, req AskInput) (*AskResult, error) {
 		TokensIn:  resp.TokensIn,
 		TokensOut: resp.TokensOut,
 	}, nil
+}
+
+// askDemoMode is the keyless demo responder for Ask Squadron. It answers from
+// the same context bag the handler resolved, citing real row ids so the
+// citation chips are clickable — grounded, not fabricated. Intent is routed off
+// a few keywords; the model call is skipped. Model is reported as
+// "demo-grounded" so it's clearly distinguishable from a live LLM answer.
+func (s *Service) askDemoMode(req AskInput) (*AskResult, error) {
+	q := strings.ToLower(strings.TrimSpace(req.Question))
+	if q == "" {
+		return nil, errors.New("question is required")
+	}
+
+	byKind := map[string]string{} // kind -> first id seen
+	for k := range req.Context {
+		if i := strings.IndexByte(k, ':'); i > 0 {
+			kind := k[:i]
+			if _, seen := byKind[kind]; !seen {
+				byKind[kind] = k[i+1:]
+			}
+		}
+	}
+	spikeID, hasSpike := byKind["spike"]
+	roID, hasRo := byKind["rollout"]
+	agentID, hasAgent := byKind["agent"]
+
+	var b strings.Builder
+	var cites []AskCitation
+	cite := func(kind, id string) {
+		cites = append(cites, AskCitation{Kind: kind, ID: id})
+	}
+
+	switch {
+	case strings.Contains(q, "cost") || strings.Contains(q, "spend") || strings.Contains(q, "spike") || strings.Contains(q, "save"):
+		if hasSpike {
+			b.WriteString(fmt.Sprintf("There's an open **critical cost spike** on your fleet, roughly +312%% above baseline on the metrics signal [cite:spike:%s]. ", spikeID))
+			cite("spike", spikeID)
+		}
+		if hasRo {
+			b.WriteString(fmt.Sprintf("Squadron's proposer has already drafted the fix — a staged rollout that pins `hashing.rounds` from 12 to 6 to cut metric cardinality — and it's waiting for your approval [cite:rollout:%s]. Approve it on the Rollouts page to start the canary.", roID))
+			cite("rollout", roID)
+		}
+		if !hasSpike && !hasRo {
+			b.WriteString("I don't see an open cost spike in the current context. The Cost Insights page at /cost has the latest volume and per-attribute attribution.")
+		}
+	case strings.Contains(q, "rollout") || strings.Contains(q, "deploy") || strings.Contains(q, "approv") || strings.Contains(q, "canary"):
+		if hasRo {
+			b.WriteString(fmt.Sprintf("There's a staged rollout awaiting your approval [cite:rollout:%s], plus recent rollout activity in the audit timeline. Open it to review the stages and guardrails before approving.", roID))
+			cite("rollout", roID)
+		} else {
+			b.WriteString("No rollouts are awaiting approval in the current context. The Rollouts page at /rollouts shows the full history.")
+		}
+	case strings.Contains(q, "wrong") || strings.Contains(q, "status") || strings.Contains(q, "health") || strings.Contains(q, "happening") || strings.Contains(q, "attention"):
+		b.WriteString("Here's the picture. ")
+		if hasSpike {
+			b.WriteString(fmt.Sprintf("An open critical cost spike needs attention [cite:spike:%s]. ", spikeID))
+			cite("spike", spikeID)
+		}
+		if hasRo {
+			b.WriteString(fmt.Sprintf("An AI-proposed rollout is waiting for your approval [cite:rollout:%s]. ", roID))
+			cite("rollout", roID)
+		}
+		if hasAgent {
+			b.WriteString(fmt.Sprintf("Fleet agents are reporting in [cite:agent:%s]. ", agentID))
+			cite("agent", agentID)
+		}
+		b.WriteString("The Audit Timeline at /audit shows the full sequence of what led here.")
+	default:
+		b.WriteString("Based on what I can see across your fleet: ")
+		if hasSpike {
+			b.WriteString(fmt.Sprintf("a critical cost spike [cite:spike:%s]; ", spikeID))
+			cite("spike", spikeID)
+		}
+		if hasRo {
+			b.WriteString(fmt.Sprintf("an AI-proposed rollout awaiting approval [cite:rollout:%s]; ", roID))
+			cite("rollout", roID)
+		}
+		if !hasSpike && !hasRo {
+			b.WriteString("no notable open items right now. ")
+		}
+		b.WriteString("Ask me about cost, rollouts, or fleet status and I'll point you at the specifics.")
+	}
+
+	return &AskResult{Answer: b.String(), Citations: cites, Model: "demo-grounded"}, nil
 }
 
 // buildAskUserMessage formats the user turn the model sees. The
