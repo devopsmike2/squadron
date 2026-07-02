@@ -192,7 +192,9 @@ func isDBLifecycleAvailable(state string) bool {
 //     the slice-2 detection axis (see helper godoc).
 func projectDBSystem(dbs dbSystem, fallbackRegion string) scanner.DatabaseInstanceSnapshot {
 	return scanner.DatabaseInstanceSnapshot{
-		ResourceID:                dbs.DisplayName,
+		ResourceID: dbs.DisplayName,
+		// ImportID: oci_database_db_system imports by the DB System OCID.
+		ImportID:                  dbs.ID,
 		Engine:                    dbEngineOracle,
 		EngineVersion:             dbs.Version,
 		InstanceClass:             dbs.Shape,
@@ -225,7 +227,9 @@ func projectDBSystem(dbs dbSystem, fallbackRegion string) scanner.DatabaseInstan
 // proposer.
 func projectAutonomousDatabase(adb autonomousDatabase, fallbackRegion string) scanner.DatabaseInstanceSnapshot {
 	return scanner.DatabaseInstanceSnapshot{
-		ResourceID:                adb.DisplayName,
+		ResourceID: adb.DisplayName,
+		// ImportID: oci_database_autonomous_database imports by the ADB OCID.
+		ImportID:                  adb.ID,
 		Engine:                    dbEngineOracle,
 		EngineVersion:             fmt.Sprintf("autonomous-%s", strings.ToLower(adb.DbWorkload)),
 		InstanceClass:             fmt.Sprintf("ocpu-%d", adb.CpuCoreCount),

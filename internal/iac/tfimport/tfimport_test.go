@@ -237,6 +237,57 @@ func TestArmTypeMatches(t *testing.T) {
 	}
 }
 
+func TestGenerate_OCINonCompute_OCIDRouted(t *testing.T) {
+	lbID := "ocid1.loadbalancer.oc1.iad.aaaaaaaalb"
+	dbSysID := "ocid1.dbsystem.oc1.iad.aaaaaaaadbsys"
+	adbID := "ocid1.autonomousdatabase.oc1.iad.aaaaaaaaadb"
+	blocks, skipped := Generate([]Resource{
+		{Provider: "oci", Category: "load_balancer", ResourceID: lbID, ImportID: lbID, Name: "web-lb"},
+		{Provider: "oci", Category: "database", ResourceID: "prod-dbsys", ImportID: dbSysID},
+		{Provider: "oci", Category: "database", ResourceID: "prod-adw", ImportID: adbID},
+		// Not an OCID → must skip, never guess.
+		{Provider: "oci", Category: "database", ResourceID: "mystery", ImportID: "not-an-ocid"},
+	})
+	want := map[string]string{
+		"oci_load_balancer_load_balancer":  lbID,
+		"oci_database_db_system":           dbSysID,
+		"oci_database_autonomous_database": adbID,
+	}
+	for tfType, wantID := range want {
+		b, ok := blockByType(blocks, tfType)
+		if !ok {
+			t.Errorf("missing block for %s", tfType)
+			continue
+		}
+		if b.ImportID != wantID {
+			t.Errorf("%s import id = %q, want %q", tfType, b.ImportID, wantID)
+		}
+	}
+	if len(blocks) != 3 {
+		t.Fatalf("want 3 blocks, got %d: %+v", len(blocks), blocks)
+	}
+	if len(skipped) != 1 || skipped[0].ResourceID != "mystery" {
+		t.Fatalf("expected the non-OCID database skipped, got %+v", skipped)
+	}
+}
+
+func TestOcidType(t *testing.T) {
+	cases := map[string]string{
+		"ocid1.loadbalancer.oc1.iad.aaaa":       "loadbalancer",
+		"ocid1.dbsystem.oc1.iad.aaaa":           "dbsystem",
+		"ocid1.autonomousdatabase.oc1.iad.aaaa": "autonomousdatabase",
+		"ocid1.instance.oc1.iad.aaaa":           "instance",
+		"not-an-ocid":                           "",
+		"ocid1.":                                "",
+		"":                                      "",
+	}
+	for in, want := range cases {
+		if got := ocidType(in); got != want {
+			t.Errorf("ocidType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestGenerate_MultiCloud_SkipsWhenNoImportID(t *testing.T) {
 	// Without a captured canonical ImportID, non-AWS compute is skipped
 	// (never guessed from the friendly ResourceID).

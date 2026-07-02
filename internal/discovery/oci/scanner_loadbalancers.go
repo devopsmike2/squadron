@@ -78,7 +78,11 @@ func (s *Scanner) scanLoadBalancers(ctx context.Context, sk *SigningKey, comps [
 				covered = hasLog
 			}
 			result.LoadBalancers = append(result.LoadBalancers, scanner.LoadBalancerSnapshot{
-				ResourceID:        lb.ID,
+				ResourceID: lb.ID,
+				// ImportID: oci_load_balancer_load_balancer imports by the LB OCID.
+				// It equals ResourceID here, but the tfimport contract reads the
+				// canonical id from ImportID, so set it explicitly for the mapper.
+				ImportID:          lb.ID,
 				Name:              lb.DisplayName,
 				Type:              "load-balancer",
 				Scheme:            scheme,
