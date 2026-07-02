@@ -17,9 +17,20 @@ import (
 type Agent struct {
 	// Some fields in this struct are exported so that we can render them in the UI.
 
-	// Agent's instance id. This is an immutable field.
+	// Agent's instance id. This is an immutable field. It is the raw OpAMP
+	// instance_uid off the wire (msg.InstanceUid) and is what the OpAMP
+	// subsystem uses to route messages, spans, and connection settings.
 	InstanceId    uuid.UUID
 	InstanceIdStr string
+
+	// Agent's Squadron fleet id — the identity under which this agent is
+	// persisted in the store and correlated with OTLP telemetry. Derived from
+	// the AgentDescription via agentid.Derive so a host that is both
+	// OpAMP-managed and shipping OTLP resolves to ONE fleet row. Defaults to
+	// InstanceId until a description is seen (and as a no-regression fallback
+	// when the description carries no usable identity). Guarded by mux.
+	FleetId    uuid.UUID
+	FleetIdStr string
 
 	// Group information
 	GroupID   *string
@@ -64,7 +75,12 @@ func NewAgent(
 	agent := &Agent{
 		InstanceId:    instanceId,
 		InstanceIdStr: instanceId.String(),
-		conn:          conn,
+		// Default the fleet id to the wire instance id. Recomputed from the
+		// AgentDescription on the first message that carries one (SetFleetId),
+		// and kept as-is when no usable identity is reported (no regression).
+		FleetId:    instanceId,
+		FleetIdStr: instanceId.String(),
+		conn:       conn,
 	}
 	tslConn, ok := conn.Connection().(*tls.Conn)
 	if ok {
@@ -91,6 +107,8 @@ func (agent *Agent) CloneReadonly() *Agent {
 	return &Agent{
 		InstanceId:                  agent.InstanceId,
 		InstanceIdStr:               agent.InstanceIdStr,
+		FleetId:                     agent.FleetId,
+		FleetIdStr:                  agent.FleetIdStr,
 		GroupID:                     agent.GroupID,
 		GroupName:                   agent.GroupName,
 		conn:                        agent.conn,
@@ -103,6 +121,28 @@ func (agent *Agent) CloneReadonly() *Agent {
 		ClientCertOfferError:        agent.ClientCertOfferError,
 		remoteConfig:                agent.remoteConfig,
 	}
+}
+
+// setFleetId updates the agent's fleet id under its own mux. Called only by
+// Agents.SetFleetId, which additionally maintains the fleet-id index and
+// serializes on the Agents mux, so this stays a small leaf write.
+func (agent *Agent) setFleetId(fleetId uuid.UUID) {
+	agent.mux.Lock()
+	defer agent.mux.Unlock()
+	agent.FleetId = fleetId
+	agent.FleetIdStr = fleetId.String()
+}
+
+// storeID returns the id under which this agent is persisted and correlated —
+// the Squadron fleet id — falling back to the wire instance id if the fleet id
+// was never set (an agent constructed directly, e.g. in a test, or before any
+// AgentDescription arrived). Guards the invariant that a zero UUID is never
+// used as a store primary key.
+func (agent *Agent) storeID() uuid.UUID {
+	if agent.FleetId != (uuid.UUID{}) {
+		return agent.FleetId
+	}
+	return agent.InstanceId
 }
 
 // hasCapability checks if the agent has a specific capability
