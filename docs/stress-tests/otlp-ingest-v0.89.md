@@ -117,6 +117,45 @@ OTLP receiver shape, but its contract is "the queue is small and
 drains fast." Finding 3 is what makes that contract true; finding 1
 is what lets an operator verify it.
 
+## After the Appender rework (finding 3 — closed)
+
+The follow-up landed immediately after this report: the four hot
+writers (`traces`, `logs`, `metrics_sum`, `metrics_gauge`) now go
+through the DuckDB Appender inside an explicit transaction on a
+pinned connection (`internal/storage/telemetrystore/duckdb/append.go`).
+Histograms, pipeline-health, and batch-meta keep the prepared path
+(low volume; histogram LIST columns need separate appender
+verification).
+
+Measured old-vs-new on the SAME machine (M-series Mac, both variants
+built from adjacent commits, identical 2,000 req/s × 12s × 32-sender
+scenario, fresh data dir each):
+
+| | per-row Exec (old) | Appender (new) |
+|---|---|---|
+| Accepted | 13,900 req (971/s — server-throttled) | 22,099 req (1,826/s — full client rate) |
+| Accept latency | p95 129ms / p99 214ms / max 307ms | **p95 3.0ms / p99 5.3ms / max 15.9ms** |
+| Durable at load end | 195,400 / 695,000 (28%) | 654,450 / 1,104,950 (59%) |
+| Drain complete | t+45s | **t+≤15s** (first post-load poll) |
+| Sustained persist rate | ~11-12k items/s | **~50k items/s while accepting full load** |
+| Reconciliation | exact | exact, zero 503s |
+
+The ack-to-durability window at saturation shrank from ~45s to ≤15s
+while ingesting 59% more data. Two semantics notes: (a) the appender
+path is *more* atomic than before — sums/gauges previously committed
+every 50 rows, so a mid-batch failure could leave partial chunks;
+now the whole batch is one transaction and a retry cannot duplicate
+(`TestAppendRows_ErrorLeavesZeroRows` pins this, and it's load-bearing:
+go-duckdb v1.8.3's `Appender.Close` flushes even on the error path,
+so the rollback is what guarantees zero rows). (b) `AppendRow`
+requires every schema column in order — the writer round-trip tests
+in `writers_test.go` pin column order, JSON columns, and
+empty-string→NULL flattening against a real DuckDB file.
+
+Still open from finding 3: item/byte-based queue bounds (the queue is
+still 10,000 *requests*). With the faster drain the volatile window
+is much smaller, but the bound is still in the wrong unit.
+
 ## Regression bar
 
 - `cmd/otlpsim` tests run in CI (`go test ./cmd/otlpsim/`); the
@@ -125,9 +164,11 @@ is what lets an operator verify it.
 - Re-run the baseline scenario after any change to the receiver,
   worker pool, or DuckDB writers: baseline (200 req/s) must stay
   zero-503 / zero-dead-letter with exact reconciliation.
-- After the Appender rework (finding 3), re-measure the saturation
-  drain rate and update this document; the 6-11k items/s figure is
-  the number to beat.
+- The Appender rework landed (see "After the Appender rework"):
+  ~50k items/s sustained persist on M-series hardware is the new
+  number to beat, with drain-complete ≤15s after a 12s saturation
+  burst. The writer round-trip tests + the zero-rows-on-error test
+  must stay green.
 
 ## How to run
 
