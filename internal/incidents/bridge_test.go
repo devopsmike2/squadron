@@ -162,6 +162,7 @@ func TestBridge_HappyPath_PersistsDraftAndAudit(t *testing.T) {
 	// One incident.drafted audit event.
 	require.Len(t, audit.entries, 1)
 	assert.Equal(t, services.AuditEventIncidentDrafted, audit.entries[0].EventType)
+	assert.Equal(t, services.AuditActorSystem, audit.entries[0].Actor) // background daemon
 	assert.Equal(t, "a1", audit.entries[0].Payload["action_request_id"])
 }
 
@@ -182,6 +183,7 @@ func TestBridge_Declined_EmitsAuditNoDraft(t *testing.T) {
 	assert.Empty(t, store.drafts, "no draft should be persisted when the model declines")
 	require.Len(t, audit.entries, 1)
 	assert.Equal(t, services.AuditEventIncidentDraftDeclined, audit.entries[0].EventType)
+	assert.Equal(t, services.AuditActorSystem, audit.entries[0].Actor) // background daemon
 	assert.Equal(t, "dry run noise", audit.entries[0].Payload["reason"])
 }
 

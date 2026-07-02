@@ -397,6 +397,9 @@ func TestAudit_ResultSuccessEmitsActionExecuted(t *testing.T) {
 	assert.Equal(t, reqID, entry.TargetID)
 	assert.Equal(t, "executed", entry.Action)
 	assert.Equal(t, "rid-audit", entry.Payload["runner_id"])
+	// Runner-posted result has no operator on the request context, so the
+	// system actor must be stamped (empty Actor violates the audit contract).
+	assert.Equal(t, services.AuditActorSystem, entry.Actor)
 }
 
 // TestAudit_ResultFailureEmitsActionFailed verifies the terminator
@@ -411,6 +414,7 @@ func TestAudit_ResultFailureEmitsActionFailed(t *testing.T) {
 
 	entry := lastEntry(t, audit, services.AuditEventActionFailed)
 	assert.Equal(t, "failed", entry.Action)
+	assert.Equal(t, services.AuditActorSystem, entry.Actor)
 }
 
 // TestAudit_ResultDeniedEmitsActionDenied verifies the terminator
@@ -428,6 +432,7 @@ func TestAudit_ResultDeniedEmitsActionDenied(t *testing.T) {
 	entry := lastEntry(t, audit, services.AuditEventActionDenied)
 	assert.Equal(t, "denied", entry.Action)
 	assert.Equal(t, "signature: expired", entry.Payload["denied_for"])
+	assert.Equal(t, services.AuditActorSystem, entry.Actor)
 }
 
 // TestActionsHandlers_NilStore_503NotPanic pins the v0.89.212 defense: a
