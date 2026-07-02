@@ -141,19 +141,51 @@ var azureMappers = map[string]mapper{
 		return tfType, r.ImportID, true
 	},
 	"load_balancer": func(r Resource) (string, string, bool) {
-		// azurerm_lb imports by the load balancer's ARM resource ID, which is
-		// exactly what the scanner captures as the snapshot ResourceID
-		// (LoadBalancerSnapshot: "Azure LB resource ID"). Passed through as
-		// ImportID by nonComputeToImportResources.
-		if r.ImportID == "" {
+		// azurerm_lb imports by the load balancer's full ARM resource ID
+		// (the scanner-enriched ImportID = armLoadBalancer.ID). Guard on the
+		// ARM shape so we only ever emit a type we've actually matched.
+		if !armTypeMatches(r.ImportID, "Microsoft.Network/loadBalancers") {
 			return "", "", false
 		}
 		return "azurerm_lb", r.ImportID, true
 	},
-	// database + object_store deliberately omitted until their per-cloud tf
-	// type + import-id format is live-verified (Azure SQL needs engine->type
-	// routing; blob containers use a non-ARM import id) — they surface as a
-	// visible Skipped meanwhile rather than emitting wrong import blocks.
+	"database": func(r Resource) (string, string, bool) {
+		// The Azure scanner walks the Microsoft.Sql surface and captures each
+		// database's full ARM id (.../servers/<s>/databases/<db>), which is the
+		// azurerm_mssql_database import id. Guard on the ARM shape so a future
+		// engine (postgres/mysql flexible servers, different ARM types) skips
+		// rather than mis-mapping to azurerm_mssql_database.
+		if !armTypeMatches(r.ImportID, "Microsoft.Sql/servers/databases") {
+			return "", "", false
+		}
+		return "azurerm_mssql_database", r.ImportID, true
+	},
+	// object_store deliberately omitted until the blob container's non-ARM
+	// import id format is captured + live-verified — surfaces as a visible
+	// Skipped meanwhile rather than emitting a wrong import block.
+}
+
+// armTypeMatches reports whether an Azure ARM resource id addresses the given
+// resource type. armType is the "<Namespace>/<type>[/<childType>...]" path
+// (e.g. "Microsoft.Sql/servers/databases"); the id must contain the namespace
+// under providers/ and each successive type segment, so a server-level id does
+// not match a database type and vice versa.
+func armTypeMatches(armID, armType string) bool {
+	i := strings.Index(armID, "/providers/")
+	if i < 0 {
+		return false
+	}
+	segs := strings.Split(strings.Trim(armID[i+len("/providers/"):], "/"), "/")
+	if len(segs) < 2 {
+		return false
+	}
+	// After providers/: <namespace>/<type>/<name>[/<type2>/<name2>...].
+	// Build the canonical "<namespace>/<type>[/<type2>...]" path.
+	got := segs[0] // namespace
+	for j := 1; j < len(segs); j += 2 {
+		got += "/" + segs[j]
+	}
+	return strings.EqualFold(got, armType)
 }
 
 var gcpMappers = map[string]mapper{

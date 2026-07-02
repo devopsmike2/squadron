@@ -378,9 +378,18 @@ type ComputeInstanceSnapshot struct {
 // substrate's instrumented-count tally treats the row as covered only
 // when both are on.
 type DatabaseInstanceSnapshot struct {
-	// ResourceID is the provider-native ID: RDS DB instance ARN /
-	// Cloud SQL connection name / Azure SQL resource ID.
+	// ResourceID is the operator-readable native ID: RDS DB instance
+	// identifier / Cloud SQL connection name / Azure "server/database".
+	// This is NOT necessarily a valid `terraform import` ID — see ImportID.
 	ResourceID string `json:"resource_id"`
+
+	// ImportID — env->Terraform arc — the provider-canonical
+	// `terraform import` ID when it differs from ResourceID. AWS: empty
+	// (the AWS mapper derives the identifier from ResourceID). Azure: the
+	// full ARM resource ID (e.g. .../Microsoft.Sql/servers/<s>/databases/<db>).
+	// Empty means "no safe import ID captured" — the import-block generator
+	// skips rather than guess a wrong id.
+	ImportID string `json:"import_id,omitempty"`
 
 	// Engine is the provider-typed engine string: "postgres",
 	// "mysql", "mariadb", "sqlserver", "oracle", "aurora-postgresql",
@@ -528,9 +537,17 @@ type ObjectStoreSnapshot struct {
 // elasticloadbalancing:ModifyLoadBalancerAttributes — discovery is
 // strictly read-only.
 type LoadBalancerSnapshot struct {
-	// ResourceID is the provider-native ID: ALB / NLB / Gateway LB
-	// ARN / GCLB forwarding rule URL / Azure LB resource ID.
+	// ResourceID is the operator-readable native ID: ALB/NLB/Gateway LB
+	// ARN / GCLB forwarding-rule name / Azure LB name. This is NOT
+	// necessarily a valid `terraform import` ID — see ImportID.
 	ResourceID string `json:"resource_id"`
+
+	// ImportID — env->Terraform arc — the provider-canonical
+	// `terraform import` ID when it differs from ResourceID. AWS: empty
+	// (the ARN in ResourceID already is the import ID). Azure: the full
+	// ARM resource ID (.../Microsoft.Network/loadBalancers/<name>). Empty
+	// means "no safe import ID captured" — the generator skips.
+	ImportID string `json:"import_id,omitempty"`
 
 	// Name is the operator-readable name. Often the trailing
 	// component of ResourceID but kept separate so the UI doesn't

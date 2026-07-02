@@ -129,6 +129,7 @@ func projectAzureLB(lb armLoadBalancer, logging bool) scanner.LoadBalancerSnapsh
 	}
 	return scanner.LoadBalancerSnapshot{
 		ResourceID:        lb.Name,
+		ImportID:          lb.ID, // full ARM id — the azurerm_lb terraform import id
 		Name:              lb.Name,
 		Type:              lb.Sku.Name,
 		Scheme:            scheme,

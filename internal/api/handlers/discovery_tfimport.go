@@ -96,14 +96,14 @@ func computeSnapshotsToImportResources(provider string, comp []scanner.ComputeIn
 	return out
 }
 
-// nonComputeToImportResources maps the canonical database / object-store /
-// load-balancer snapshots (shared by the Azure/GCP/OCI scan responses) onto
-// tfimport.Resource. Unlike compute (friendly ResourceID + a separate canonical
-// ImportID), these snapshots' ResourceID is ALREADY the provider-native
-// canonical id (Azure ARM id, GCS/S3 bucket name, GCLB forwarding-rule URL —
-// see the scanner snapshot godocs), so ImportID = ResourceID. Categories/clouds
-// without a mapper yet surface as a visible Skipped rather than being silently
-// dropped, which is what happened when these were omitted entirely.
+// nonComputeToImportResources maps the database / object-store / load-balancer
+// snapshots (shared by the Azure/GCP/OCI scan responses) onto tfimport.Resource.
+// Like compute, the snapshot ResourceID is an operator-readable NAME (not a
+// valid terraform import id), so the canonical id rides on the separate
+// scanner-enriched ImportID; the mapper skips when ImportID is empty rather than
+// guess. Categories/clouds without an ImportID or a mapper surface as a visible
+// Skipped instead of being silently dropped (which is what happened when these
+// were omitted from the handler entirely).
 func nonComputeToImportResources(
 	provider string,
 	dbs []scanner.DatabaseInstanceSnapshot,
@@ -114,19 +114,22 @@ func nonComputeToImportResources(
 	for _, d := range dbs {
 		out = append(out, tfimport.Resource{
 			Provider: provider, Category: "database",
-			ResourceID: d.ResourceID, ImportID: d.ResourceID, Region: d.Region,
+			ResourceID: d.ResourceID, ImportID: d.ImportID, Region: d.Region,
 		})
 	}
 	for _, o := range objs {
+		// Object stores carry no canonical terraform import id yet (blob/GCS/S3
+		// import formats differ and aren't ARM ids); ImportID stays empty so
+		// they surface as a visible Skipped until a mapper + enrichment land.
 		out = append(out, tfimport.Resource{
 			Provider: provider, Category: "object_store",
-			ResourceID: o.ResourceID, ImportID: o.ResourceID, Region: o.Region,
+			ResourceID: o.ResourceID, Region: o.Region,
 		})
 	}
 	for _, l := range lbs {
 		out = append(out, tfimport.Resource{
 			Provider: provider, Category: "load_balancer",
-			ResourceID: l.ResourceID, ImportID: l.ResourceID, Name: l.Name, Region: l.Region,
+			ResourceID: l.ResourceID, ImportID: l.ImportID, Name: l.Name, Region: l.Region,
 		})
 	}
 	return out
