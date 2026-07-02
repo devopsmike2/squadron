@@ -55,6 +55,7 @@ temp/
 /all-in-one
 /squadronctl
 /fleetsim
+/otlpsim
 /webhook-echo
 /squadron-action-runner
 

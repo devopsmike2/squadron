@@ -77,6 +77,14 @@ fleetsim:
 	CGO_ENABLED=0 go build -o $(BUILD_DIR)/fleetsim ./cmd/fleetsim
 	@echo "Run: ./$(BUILD_DIR)/fleetsim --count=100"
 
+# Build otlpsim — synthetic OTLP/HTTP load generator for the ingest
+# path (receiver → worker pool → DuckDB). Sibling of fleetsim; see
+# docs/scale-testing.md for usage.
+otlpsim:
+	@echo "Building otlpsim..."
+	CGO_ENABLED=0 go build -o $(BUILD_DIR)/otlpsim ./cmd/otlpsim
+	@echo "Run: ./$(BUILD_DIR)/otlpsim --rate=200 --duration=60s"
+
 # Build squadronctl for the host platform. No CGO needed — the CLI
 # does not link SQLite/DuckDB so it cross-compiles trivially.
 build-cli:
