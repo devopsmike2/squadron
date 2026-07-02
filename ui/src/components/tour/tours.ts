@@ -5,7 +5,7 @@
 // anchors on the elements a step points at, so tours are decoupled from styling
 // churn. See docs/design/guided-demo-tours.md.
 
-import { enableDemoConnection } from "@/api/discovery";
+import { enableDemoData } from "@/api/demoData";
 
 export type TourPlacement = "top" | "bottom" | "left" | "right" | "center";
 
@@ -49,17 +49,20 @@ export function startTour(tourId: string): void {
 
 // --- Registry ---------------------------------------------------------------
 
-// Guard so the demo-enable side-effect only fires once per tour run even though
+// Guard so the demo-seed side-effect only fires once per tour run even though
 // onEnter is invoked on every (re)entry to step 0.
 let demoEnsured = false;
-async function ensureAWSDemo(): Promise<void> {
+async function ensureDemoData(): Promise<void> {
   if (demoEnsured) return;
   try {
-    await enableDemoConnection();
+    // Seed the FULL demo scenario (fleet + config + cost spike + discovery), so
+    // every feature the tours showcase is already populated with sample data —
+    // the user never has to connect a cloud or deploy an agent. Idempotent.
+    await enableDemoData();
     demoEnsured = true;
   } catch {
-    // Non-fatal: if the demo connection already exists (idempotent upsert) or
-    // the user is offline, the tour still narrates over whatever is present.
+    // Non-fatal: if demo data already exists (idempotent) or the request fails,
+    // the tour still narrates over whatever is present.
     demoEnsured = true;
   }
 }
@@ -76,35 +79,28 @@ export const TOURS: Tour[] = [
       {
         route: "/discovery/aws",
         placement: "center",
-        onEnter: ensureAWSDemo,
+        onEnter: ensureDemoData,
         title: "Instrument my cloud",
-        body: "Squadron finds what in your cloud isn't sending telemetry yet, and writes the Terraform to fix it. We've loaded a sample AWS account so you can see the whole flow. Click Next to begin.",
-      },
-      {
-        route: "/discovery/aws",
-        target: '[data-tour="aws-tab-account"]',
-        placement: "bottom",
-        title: "1. Connect an account",
-        body: "Normally you'd connect a real AWS account here with a read-only role. For the demo we've wired a sample account already — so we can skip straight to the results.",
+        body: "Squadron finds what in your cloud isn't sending telemetry yet, and writes the Terraform to fix it. We've loaded a sample AWS account with real findings so you can see it working — nothing to connect or configure. Click Next.",
       },
       {
         route: "/discovery/aws",
         target: '[data-tour="aws-tab-inventory"]',
         placement: "bottom",
-        title: "2. Discover the inventory",
-        body: "Squadron scans the account and inventories what's running — EC2, Lambda, RDS — and flags which resources are already instrumented vs. which have observability gaps. Open this tab to see the sample inventory.",
+        title: "The discovered inventory",
+        body: "Squadron has scanned the sample account and inventoried what's running — EC2, Lambda, RDS — flagging which resources are already instrumented vs. which have observability gaps. Open this tab to see it.",
       },
       {
         route: "/discovery/aws",
         target: '[data-tour="aws-tab-recommendations"]',
         placement: "bottom",
-        title: "3. Get AI recommendations",
+        title: "AI recommendations, as Terraform",
         body: "For each gap, Squadron proposes a concrete fix — the right OTel/ADOT setup for that resource — as merge-ready Terraform. From here you'd open a pull request straight to your IaC repo. That's the loop: scan → gaps → fix, as code.",
       },
       {
         placement: "center",
         title: "That's the instrument-my-cloud loop",
-        body: "Point Squadron at a real account and it does exactly this against your infrastructure. Explore the sample inventory and recommendations on your own, or pick another use case from the Use Cases page.",
+        body: "Point Squadron at a real account and it does exactly this against your infrastructure. Explore the sample inventory and recommendations on your own, or pick another use case.",
       },
     ],
   },
