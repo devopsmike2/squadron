@@ -43,6 +43,8 @@ import {
   type ReactElement,
 } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+
+import { DEMO_ACCOUNT_ID } from "@/api/demoData";
 import useSWR from "swr";
 
 import {
@@ -312,6 +314,16 @@ export default function DiscoveryAWSPage() {
                 setRecsScanID(scanID);
                 setRecsRegion(region);
                 setActiveTab(RECS_TAB);
+              }}
+              // Same as onRecommendations but WITHOUT hopping to the Recs tab —
+              // used by the demo auto-populate so both Inventory and
+              // Recommendations are ready without yanking the user off the tab
+              // they're looking at.
+              onRecommendationsQuiet={(r, accountID, scanID, region) => {
+                setRecs(r);
+                setRecsAccountID(accountID);
+                setRecsScanID(scanID);
+                setRecsRegion(region);
               }}
             />
           )}
@@ -1007,6 +1019,7 @@ function AccountEmptyState({
 
 function InventoryTab({
   onRecommendations,
+  onRecommendationsQuiet,
   initialAccountID,
 }: {
   // Called when the proposer responds (declined or otherwise) so the
@@ -1020,6 +1033,14 @@ function InventoryTab({
   // — the scanner enforces non-empty); first region of result.regions
   // otherwise, matching the chunk-5 v1 single-region posture.
   onRecommendations: (
+    r: GenerateRecommendationsResponse,
+    accountID: string,
+    scanID: string,
+    region: string,
+  ) => void;
+  // Like onRecommendations but does not switch to the Recs tab. Used by the
+  // demo auto-populate so both tabs are ready without a jarring tab jump.
+  onRecommendationsQuiet?: (
     r: GenerateRecommendationsResponse,
     accountID: string,
     scanID: string,
@@ -1085,6 +1106,51 @@ function InventoryTab({
       setGenerating(false);
     }
   }, [result, generating, onRecommendations]);
+
+  // --- Demo auto-populate ---------------------------------------------------
+  // The built-in demo account exists purely to SHOW features working on sample
+  // data. Its scan + recommendations short-circuit to canned data server-side,
+  // so instead of making the user click "Run scan" then "Generate", we drive
+  // both automatically when the demo account is selected. Real accounts are
+  // untouched (the effects gate on the reserved demo id).
+  const isDemoAccount = selected === DEMO_ACCOUNT_ID;
+  const demoRecsFired = useRef(false);
+
+  // 1. Auto-scan the demo account once it's selected and nothing's loaded yet.
+  useEffect(() => {
+    if (isDemoAccount && !result && !scanning && !error) {
+      void onRun();
+    }
+  }, [isDemoAccount, result, scanning, error, onRun]);
+
+  // 2. After the demo scan lands, auto-generate its recommendations — quietly,
+  //    so the user stays on whatever tab they're viewing. Fires once per mount.
+  useEffect(() => {
+    if (
+      isDemoAccount &&
+      result &&
+      !generating &&
+      !demoRecsFired.current &&
+      onRecommendationsQuiet
+    ) {
+      demoRecsFired.current = true;
+      void (async () => {
+        try {
+          const r = await generateAWSRecommendations(result.account_id, result);
+          const region = result.regions[0] ?? "";
+          onRecommendationsQuiet(
+            r,
+            result.account_id,
+            result.scan_id,
+            region,
+          );
+        } catch {
+          // Non-fatal: the Recs tab still offers a manual Generate button.
+          demoRecsFired.current = false;
+        }
+      })();
+    }
+  }, [isDemoAccount, result, generating, onRecommendationsQuiet]);
 
   return (
     <div className="space-y-4">

@@ -5,6 +5,11 @@
 
 import { apiDelete, apiPost } from "./base";
 
+/** The reserved AWS account id of the built-in demo connection (matches
+ *  internal/discovery/demo.SentinelAccountID). Selecting it makes the discovery
+ *  scan + recommendations short-circuit to canned sample data. */
+export const DEMO_ACCOUNT_ID = "demo-000000000000";
+
 export interface EnableDemoDataResponse {
   status: string;
   discovery_enabled: boolean;
