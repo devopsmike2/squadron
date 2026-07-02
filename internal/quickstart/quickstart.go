@@ -200,14 +200,21 @@ extensions:
     server:
       ws:
         endpoint: %s
-    # capabilities the agent reports to Squadron. Conservative
-    # defaults; Squadron honors all of them.
+        # The endpoint above is plaintext (ws://). Without this the
+        # collector's opamp extension attempts a TLS handshake against
+        # the plaintext port and fails ("tls: first record does not
+        # look like a TLS handshake"). Drop this block only if you
+        # front Squadron's OpAMP port with TLS and switch to wss://.
+        tls:
+          insecure: true
+    # Report the effective config so Squadron's Config tab and
+    # drift detection work. NOTE: this is the only capability the
+    # collector's opamp extension accepts as a config key — health,
+    # own-metrics, and remote-config are negotiated automatically by
+    # the extension, and listing them here makes the collector reject
+    # the config ("'capabilities' has invalid keys") and crash-loop.
     capabilities:
       reports_effective_config: true
-      reports_own_metrics: true
-      reports_health: true
-      accepts_remote_config: true
-      accepts_packages: false
 %s
 service:
   # Append "opamp" to your existing service.extensions list if
