@@ -52,10 +52,28 @@ func (s *Server) handleDemoDataEnable(c *gin.Context) {
 		}
 	}
 
+	// Live simulated production: stand up the ~500-agent fleet + its
+	// continuous telemetry loop so every screen (fleet, per-agent
+	// logs/metrics/traces, cost, savings) is populated and alive. Best-effort
+	// and idempotent: the static demoseed rows above are already committed, so a
+	// simulator hiccup shouldn't fail the enable. nil simulator = feature not
+	// wired (e.g. no telemetry backend) → static demo only.
+	fleetAgents := 0
+	if s.demoSimulator != nil {
+		if n, serr := s.demoSimulator.Enable(c.Request.Context()); serr != nil {
+			if s.logger != nil {
+				s.logger.Warn("demo data enable: simulator failed", zap.Error(serr))
+			}
+		} else {
+			fleetAgents = n
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":            "enabled",
 		"seeded":            summary,
 		"discovery_enabled": discoveryEnabled,
+		"fleet_agents":      fleetAgents,
 	})
 }
 
@@ -65,6 +83,13 @@ func (s *Server) handleDemoDataDisable(c *gin.Context) {
 	if s.appStore == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "application store is not configured"})
 		return
+	}
+
+	// Tear down the live simulated fleet + stop its telemetry loop first.
+	if s.demoSimulator != nil {
+		if serr := s.demoSimulator.Disable(c.Request.Context()); serr != nil && s.logger != nil {
+			s.logger.Warn("demo data disable: simulator teardown failed", zap.Error(serr))
+		}
 	}
 
 	if err := demoseed.Remove(c.Request.Context(), s.appStore); err != nil {

@@ -23,6 +23,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/billing"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/costspikes"
+	"github.com/devopsmike2/squadron/internal/demosim"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -358,6 +359,11 @@ type Server struct {
 	// key from env after NewServer.
 	appStore     applicationstore.ApplicationStore
 	actionSigner *actions.Signer
+	// demoSimulator drives the in-process "live simulated production"
+	// demo fleet + telemetry loop. Wired post-construction from main.go
+	// (which holds the telemetry writer); nil leaves the one-click demo
+	// at the static demoseed rows only. See internal/demosim.
+	demoSimulator *demosim.Simulator
 	// v0.54 Move 3 — incident drafter publishers. Map of provider
 	// name to Publisher. Always contains the clipboard publisher;
 	// main.go conditionally registers github when the matching env
@@ -604,6 +610,13 @@ func (s *Server) SetAIService(svc *ai.Service) {
 // surface disabled by skipping the call.
 func (s *Server) SetDiscoveryCredStore(store credstore.Store) {
 	s.discoveryCredStore = store
+}
+
+// SetDemoSimulator wires the in-process demo environment simulator. Optional:
+// nil leaves POST /demo/enable at the static demoseed rows. Mirrors the other
+// post-construction setters so NewServer's signature doesn't grow.
+func (s *Server) SetDemoSimulator(sim *demosim.Simulator) {
+	s.demoSimulator = sim
 }
 
 // SetDiscoveryCredKey wires the credstore encryption key the Save

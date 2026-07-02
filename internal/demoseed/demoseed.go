@@ -12,7 +12,10 @@ package demoseed
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -174,14 +177,30 @@ func seedConfig(ctx context.Context, store types.ApplicationStore) error {
 		return nil
 	}
 	return store.CreateConfig(ctx, &types.Config{
-		ID:         ConfigID,
-		Name:       "demo-baseline",
-		GroupID:    &groupID,
-		ConfigHash: "demo-baseline-v1",
+		ID:      ConfigID,
+		Name:    "demo-baseline",
+		GroupID: &groupID,
+		// Real content hash (not a literal) so the drift check — which hashes
+		// the agent's effective_config the same way — reads the demo agent as
+		// "synced" rather than spuriously "drifted".
+		ConfigHash: hashConfigContent(BaselineYAML),
 		Content:    BaselineYAML,
 		Version:    1,
 		CreatedAt:  time.Now().UTC(),
 	})
+}
+
+// hashConfigContent mirrors the application service's drift hash exactly
+// (sha256 over TrimSpace + CRLF->LF normalized content), so a config whose
+// stored hash comes from here compares equal to an agent whose
+// effective_config is that same content.
+func hashConfigContent(content string) string {
+	normalized := strings.ReplaceAll(strings.TrimSpace(content), "\r\n", "\n")
+	if normalized == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(normalized))
+	return fmt.Sprintf("%x", sum)
 }
 
 func seedAgent(ctx context.Context, store types.ApplicationStore) (uuid.UUID, error) {
