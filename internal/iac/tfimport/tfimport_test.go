@@ -170,6 +170,32 @@ func TestGenerate_MultiCloud_Compute(t *testing.T) {
 	}
 }
 
+func TestGenerate_AzureLoadBalancer_AndNonComputeVisibleSkips(t *testing.T) {
+	lbID := "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/web-lb"
+	blocks, skipped := Generate([]Resource{
+		{Provider: "azure", Category: "load_balancer", ResourceID: lbID, ImportID: lbID, Name: "web-lb", Region: "eastus"},
+		// No mapper yet — must surface as a *visible* Skipped, not vanish.
+		{Provider: "azure", Category: "database", ResourceID: "/subscriptions/s/db", ImportID: "/subscriptions/s/db"},
+		{Provider: "azure", Category: "object_store", ResourceID: "https://acct.blob.core.windows.net/data", ImportID: "https://acct.blob.core.windows.net/data"},
+		{Provider: "gcp", Category: "load_balancer", ResourceID: "fr-url", ImportID: "fr-url"},
+	})
+
+	b, ok := blockByType(blocks, "azurerm_lb")
+	if !ok {
+		t.Fatalf("expected an azurerm_lb block, got %+v", blocks)
+	}
+	if b.ImportID != lbID {
+		t.Fatalf("azurerm_lb import id = %q, want the ARM resource id %q", b.ImportID, lbID)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("only the Azure LB should map; got %d blocks", len(blocks))
+	}
+	// database + object_store (azure) + load_balancer (gcp) → 3 visible skips.
+	if len(skipped) != 3 {
+		t.Fatalf("expected 3 visible skips, got %d: %+v", len(skipped), skipped)
+	}
+}
+
 func TestGenerate_MultiCloud_SkipsWhenNoImportID(t *testing.T) {
 	// Without a captured canonical ImportID, non-AWS compute is skipped
 	// (never guessed from the friendly ResourceID).
