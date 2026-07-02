@@ -1403,6 +1403,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// (pause / resume / abort) land on the same parent span the
 	// engine opened.
 	rolloutEngine := rollouts.NewEngine(rolloutService, agentService, auditService, appStore, rolloutTelemetry, configSender, eventBroker, rolloutTracer, configsTracer, logger)
+	// v0.89 scale pass — tick-loop instrumentation (duration /
+	// slow-tick counters). Per-tick work grows with fleet size ×
+	// active rollouts, so tick time against the 5s budget is the
+	// engine's primary health signal.
+	rolloutEngine.SetMetrics(metrics.NewRolloutMetrics(metricsFactory))
 	// v0.52 — wire engine-level Compliance Pack extension points
 	// (currently the change-window provider). OSS installs NoOp;
 	// Compliance Pack installs a store-backed provider.

@@ -29,6 +29,7 @@ import (
 	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
+	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
@@ -88,6 +89,10 @@ type Engine struct {
 	// in its own implementation without changing the OSS NewEngine
 	// signature. Added in v0.52 as part of the open-core split.
 	changeWindowProvider changewindow.Provider
+	// metrics instruments the tick loop (duration / slow-tick
+	// counters). Wired post-construction via SetMetrics; nil
+	// disables recording. Added in the v0.89 scale pass.
+	metrics *metrics.RolloutMetrics
 	// v0.89.14 (#630) — action runner steps in plans, slice 1.
 	// actionDispatcher is the boundary the engine uses to sign +
 	// persist action_requests for kind=action plan steps and to
@@ -115,6 +120,14 @@ func (e *Engine) SetActionDispatcher(d services.ActionDispatcher) {
 // enforcement. Called by the wire layer (wire_oss.go installs
 // NoOpProvider; wire_compliance.go installs the real one). nil is
 // a valid value and disables enforcement (the OSS default).
+// SetMetrics wires the engine's tick instrumentation. Setter (not a
+// NewEngine parameter) for the same back-compat reason as
+// SetActionDispatcher — existing constructors and test mocks stay
+// untouched; a nil receiver field simply disables recording.
+func (e *Engine) SetMetrics(m *metrics.RolloutMetrics) {
+	e.metrics = m
+}
+
 func (e *Engine) SetChangeWindowProvider(p changewindow.Provider) {
 	e.changeWindowProvider = p
 }
@@ -308,7 +321,30 @@ func (e *Engine) loop() {
 }
 
 // tick scans for active rollouts and advances each one's state machine.
+//
+// Instrumented since the v0.89 scale pass: per-tick work grows with
+// fleet size × active rollouts (abort-criteria evaluation lists the
+// whole fleet per rollout; a stage advance pushes config to each
+// canary agent synchronously), so tick duration against the 5s budget
+// is the engine's primary health signal.
 func (e *Engine) tick() {
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		if e.metrics != nil {
+			e.metrics.TickDuration.Record(elapsed)
+			e.metrics.TicksTotal.Inc(1)
+			if elapsed > tickInterval {
+				e.metrics.SlowTicks.Inc(1)
+			}
+		}
+		if elapsed > tickInterval {
+			e.logger.Warn("rollout engine tick exceeded tick interval",
+				zap.Duration("elapsed", elapsed),
+				zap.Duration("budget", tickInterval))
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -798,23 +834,12 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		return
 	}
 
-	for _, agent := range canary {
-		// Same per-agent push span as applyStage, with the rollback
-		// source so operators can filter for rollback-driven pushes
-		// specifically.
-		push := e.configsTracer.BeginPush(ctx, agent.ID.String(), r.PreviousConfigID, r.GroupID, configs.SourceRollout)
-		if err := e.commander.SendConfigToAgentWithContext(push.Context(), agent.ID, previous.Content); err != nil {
-			push.RecordNack(err.Error())
-			push.End()
-			e.logger.Warn("rollout engine: rollback push failed for agent",
-				zap.String("rollout_id", r.ID),
-				zap.String("agent_id", agent.ID.String()),
-				zap.Error(err))
-			continue
-		}
-		push.RecordAck()
-		push.End()
-	}
+	// Same bounded-concurrency fan-out as applyStage — a rollback is
+	// the moment the operator most needs the old config back on every
+	// canary agent quickly, so it must not serialize ack round-trips
+	// either.
+	e.pushConfigToAgents(ctx, r, canary, r.PreviousConfigID, previous.Content,
+		"rollout engine: rollback push failed for agent")
 }
 
 // applyStage pushes the target config to the resolved canary set for the
@@ -859,26 +884,58 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 	ids := make([]uuid.UUID, 0, len(canary))
 	for _, agent := range canary {
 		ids = append(ids, agent.ID)
-		// Each per-agent push gets its own OTel span. Bracketing the
-		// synchronous SendConfigToAgent call captures both the ack
-		// case (RecordAck) and the timeout / agent-not-found case
-		// (RecordNack with the error message as reason).
-		push := e.configsTracer.BeginPush(ctx, agent.ID.String(), r.TargetConfigID, r.GroupID, configs.SourceRollout)
-		if err := e.commander.SendConfigToAgentWithContext(push.Context(), agent.ID, target.Content); err != nil {
-			push.RecordNack(err.Error())
-			push.End()
-			e.logger.Warn("rollout engine: stage push failed for agent",
-				zap.String("rollout_id", r.ID),
-				zap.String("agent_id", agent.ID.String()),
-				zap.Error(err))
-			// We tolerate per-agent failures — the next tick can retry
-			// when the agent reconnects. We don't fail the whole stage.
-			continue
-		}
-		push.RecordAck()
-		push.End()
 	}
+	// Push concurrently (bounded). The audit payload keeps listing
+	// every ATTEMPTED agent in canary order — identical to the old
+	// serial loop, which also appended before pushing.
+	e.pushConfigToAgents(ctx, r, canary, r.TargetConfigID, target.Content,
+		"rollout engine: stage push failed for agent")
 	return ids, nil
+}
+
+// pushConcurrency bounds the parallel per-agent config pushes within
+// one stage application or rollback. The v0.89 scale pass measured
+// the old serial loop at one FULL ack round-trip per agent
+// (SendConfigToAgentWithContext blocks until the agent confirms, and
+// opamp-go clients coalesce status sends), which put a full-fleet
+// stage at hours for 1000 agents. Pushes to distinct agents are
+// independent WebSocket sends, so overlapping the ack waits is safe;
+// the bound keeps goroutine count and OpAMP server load sane.
+const pushConcurrency = 128
+
+// pushConfigToAgents fans content out to every agent with bounded
+// concurrency, preserving the old loop's per-push semantics exactly:
+// one OTel push span per agent (ack/nack recorded), per-agent
+// failures logged-and-tolerated (the stage/rollback proceeds — the
+// next stage's superset push is the retry path).
+func (e *Engine) pushConfigToAgents(ctx context.Context, r *services.Rollout, agents []*services.Agent, configID, content, failureMsg string) {
+	sem := make(chan struct{}, pushConcurrency)
+	var wg sync.WaitGroup
+	for _, agent := range agents {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(agent *services.Agent) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			// Each per-agent push gets its own OTel span. Bracketing
+			// the synchronous SendConfigToAgentWithContext call
+			// captures both the ack case (RecordAck) and the timeout /
+			// agent-not-found case (RecordNack with the error message).
+			push := e.configsTracer.BeginPush(ctx, agent.ID.String(), configID, r.GroupID, configs.SourceRollout)
+			if err := e.commander.SendConfigToAgentWithContext(push.Context(), agent.ID, content); err != nil {
+				push.RecordNack(err.Error())
+				push.End()
+				e.logger.Warn(failureMsg,
+					zap.String("rollout_id", r.ID),
+					zap.String("agent_id", agent.ID.String()),
+					zap.Error(err))
+				return
+			}
+			push.RecordAck()
+			push.End()
+		}(agent)
+	}
+	wg.Wait()
 }
 
 // evaluateAbortCriteria returns a non-empty reason string if the rollout
