@@ -234,15 +234,34 @@ OTLP ingest burst is unmeasured; the cache mostly absorbs that, but
 a v0.24.x stress pass with concurrent `otlp_batches` writers is
 worth doing before any enterprise GA claim.
 
+### After v0.89: OTLP ingest under load (otlpsim)
+
+The three OTLP-side deferrals below were closed in v0.89 by
+`otlpsim` — a synthetic OTLP/HTTP load generator, sibling of
+fleetsim (`make otlpsim`; shares fleetsim's deterministic agent
+UUIDs so the two compose). Full methodology, findings, and the
+regression bar live in `stress-tests/otlp-ingest-v0.89.md`.
+
+Headlines: clean at moderate load (zero loss, exact
+client-vs-`otlp_batches` reconciliation, p99 6ms); at saturation
+the receiver accepts ~5-10× faster than the 3-worker DuckDB write
+path persists, leaving up to ~500k 202-acked items volatile in the
+queue for 60-90+s — previously invisible because the queue-depth
+gauge and `otlp_http_*` metrics were declared but never wired
+(fixed in that pass, along with the missing `otlp_batches`
+retention sweep). Insights queries during a heavy burst stayed
+≤23ms cold / ~1ms warm. Follow-ups filed: DuckDB Appender bulk
+writes, item/byte-based queue bounds, per-batch enricher memo.
+
 ### What we deliberately did NOT load-test
 
 | Path | Why deferred |
 |------|--------------|
-| OTLP receiver under load | Different code path from OpAMP. Needs a synthetic OTLP generator. Will be v0.22.x. |
-| DuckDB telemetry write throughput | Tied to the OTLP path above. |
-| Insights API under concurrent ingest | See "After v0.24" — steady-state reads are measured and well under target, but query latency *during* a heavy OTLP burst is unmeasured. The 15s cache likely absorbs most of it. Wants a v0.24.x stress pass with concurrent `otlp_batches` writers. |
+| ~~OTLP receiver under load~~ | **Done in v0.89** — see `stress-tests/otlp-ingest-v0.89.md`. |
+| ~~DuckDB telemetry write throughput~~ | **Measured in v0.89** — ~6-11k items/s on 4 cores with per-row Exec; Appender rework filed. |
+| ~~Insights API under concurrent ingest~~ | **Done in v0.89** — ≤23ms cold during saturation bursts. |
 | Rollout engine under N agents | Tested implicitly (10s tick across 1000 agents had no observable lag), but a dedicated test that creates a 100-stage rollout and watches the tick budget is worth doing. |
-| Long-running stability (24h+) | Not a single-session test. Run fleetsim under a sustained-load harness for a day before any GA claim. |
+| Long-running stability (24h+) | Not a single-session test. Run fleetsim + otlpsim under a sustained-load harness for a day before any GA claim. |
 
 ### Reproducing
 
