@@ -507,6 +507,11 @@ func (h *ActionsHandlers) HandlePostActionResult(c *gin.Context) {
 			payload["plan_step_origin"] = "standalone"
 		}
 		_ = h.audit.Record(c.Request.Context(), services.AuditEntry{
+			// The runner posts this result asynchronously — there's no
+			// operator on the request context (unlike action.dispatched), so
+			// stamp the system actor explicitly rather than leaving Actor empty
+			// (which violates the AuditEntry contract's actor enum).
+			Actor:      services.AuditActorSystem,
 			EventType:  eventType,
 			TargetType: services.AuditTargetActionRequest,
 			TargetID:   existing.ID,

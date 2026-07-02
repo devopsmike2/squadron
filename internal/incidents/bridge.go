@@ -274,6 +274,7 @@ func (b *Bridge) handleOne(ctx context.Context, req *types.ActionRequest) {
 	if res.Declined {
 		log.Info("incidents: drafter declined", zap.String("reason", res.Reason))
 		b.recordAudit(ctx, services.AuditEntry{
+			Actor:      services.AuditActorSystem, // background drafter daemon
 			EventType:  services.AuditEventIncidentDraftDeclined,
 			TargetType: services.AuditTargetIncidentDraft,
 			TargetID:   req.ID,
@@ -307,6 +308,7 @@ func (b *Bridge) handleOne(ctx context.Context, req *types.ActionRequest) {
 		zap.String("title", res.Title),
 	)
 	b.recordAudit(ctx, services.AuditEntry{
+		Actor:      services.AuditActorSystem, // background drafter daemon
 		EventType:  services.AuditEventIncidentDrafted,
 		TargetType: services.AuditTargetIncidentDraft,
 		TargetID:   draft.ID,
