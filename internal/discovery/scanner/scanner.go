@@ -516,6 +516,14 @@ type ObjectStoreSnapshot struct {
 	// ComputeInstanceSnapshot. Empty when GetBucketTagging returns
 	// NoSuchTagSet.
 	Tags map[string]string `json:"tags,omitempty"`
+
+	// ImportID is the provider-canonical terraform import ID when the
+	// scanner captured it: GCP "{{project}}/{{bucket}}", Azure the storage
+	// account's full ARM id, OCI "n/{{namespace}}/b/{{bucket}}". Empty for
+	// AWS (ResourceID already equals the aws_s3_bucket import id = bucket
+	// name) and when the scanner couldn't compose it. The non-AWS
+	// object-store mappers REQUIRE it.
+	ImportID string `json:"import_id,omitempty"`
 }
 
 // LoadBalancerSnapshot is the category-typed view of a managed load

@@ -339,6 +339,46 @@ func TestIsProjectSlashName(t *testing.T) {
 	}
 }
 
+func TestGenerate_ObjectStores_MultiCloud(t *testing.T) {
+	gcsID := "my-proj/my-bucket"
+	azID := "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/mystg"
+	ociID := "n/idgwbmqnpzqs/b/my-oci-bucket"
+	blocks, skipped := Generate([]Resource{
+		{Provider: "aws", Category: "object_store", ResourceID: "my-logs-bucket"}, // AWS: ResourceID path
+		{Provider: "gcp", Category: "object_store", ResourceID: "my-bucket", Name: "my-bucket", ImportID: gcsID},
+		{Provider: "azure", Category: "object_store", ResourceID: "mystg", Name: "mystg", ImportID: azID},
+		{Provider: "oci", Category: "object_store", ResourceID: "my-oci-bucket", Name: "my-oci-bucket", ImportID: ociID},
+		// A container-level ARM id must NOT map to azurerm_storage_account.
+		{Provider: "azure", Category: "object_store", ResourceID: "c1",
+			ImportID: "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/mystg/blobServices/default/containers/c1"},
+	})
+	want := map[string]string{
+		"aws_s3_bucket":            "my-logs-bucket",
+		"google_storage_bucket":    gcsID,
+		"azurerm_storage_account":  azID,
+		"oci_objectstorage_bucket": ociID,
+	}
+	for tfType, wantID := range want {
+		b, ok := blockByType(blocks, tfType)
+		if !ok {
+			t.Errorf("missing block for %s", tfType)
+			continue
+		}
+		if b.ImportID != wantID {
+			t.Errorf("%s import id = %q, want %q", tfType, b.ImportID, wantID)
+		}
+	}
+	if len(blocks) != 4 {
+		t.Fatalf("want 4 object-store blocks, got %d: %+v", len(blocks), blocks)
+	}
+	// The container-level ARM id (storageAccounts/.../containers/c1) must skip:
+	// armTypeMatches requires the canonical type path to equal exactly
+	// "Microsoft.Storage/storageAccounts", and the container id is longer.
+	if len(skipped) != 1 || skipped[0].ResourceID != "c1" {
+		t.Fatalf("expected the container-level id skipped, got %+v", skipped)
+	}
+}
+
 func TestGenerate_MultiCloud_SkipsWhenNoImportID(t *testing.T) {
 	// Without a captured canonical ImportID, non-AWS compute is skipped
 	// (never guessed from the friendly ResourceID).

@@ -54,6 +54,16 @@ func (s *Scanner) objectStorageEndpoint() string {
 // listLogsForOCIResource detection the streaming/topic/queue tiers use).
 // A Logging-call failure dims the axis to false and is recorded once as
 // a partial failure rather than aborting the bucket walk.
+// ociBucketImportID composes the terraform import id for an OCI Object
+// Storage bucket: "n/<namespace>/b/<bucket>". Empty when either component is
+// missing so the mapper skips rather than emit a malformed id.
+func ociBucketImportID(namespace, bucket string) string {
+	if namespace == "" || bucket == "" {
+		return ""
+	}
+	return "n/" + namespace + "/b/" + bucket
+}
+
 func (s *Scanner) scanObjectStorage(ctx context.Context, sk *SigningKey, comps []ociCompartment, result *scanner.Result) {
 	ns, nsErr := s.getNamespace(ctx, sk)
 	if nsErr != nil {
@@ -91,11 +101,13 @@ func (s *Scanner) scanObjectStorage(ctx context.Context, sk *SigningKey, comps [
 			detail, detErr := s.getBucket(ctx, sk, ns, b.Name)
 			if detErr != nil {
 				recordPartialFailure(result, ServiceIDObjectStorage, classifyOCITierError(ServiceIDObjectStorage, "bucket", detErr))
-				result.ObjectStores = append(result.ObjectStores, scanner.ObjectStoreSnapshot{ResourceID: b.Name, Region: s.Region, ServerAccessLoggingEnabled: covered})
+				result.ObjectStores = append(result.ObjectStores, scanner.ObjectStoreSnapshot{ResourceID: b.Name, ImportID: ociBucketImportID(ns, b.Name), Region: s.Region, ServerAccessLoggingEnabled: covered})
 				continue
 			}
 			result.ObjectStores = append(result.ObjectStores, scanner.ObjectStoreSnapshot{
-				ResourceID:                 detail.Name,
+				ResourceID: detail.Name,
+				// ImportID: oci_objectstorage_bucket imports by "n/<namespace>/b/<bucket>".
+				ImportID:                   ociBucketImportID(ns, detail.Name),
 				Region:                     s.Region,
 				ServerAccessLoggingEnabled: covered,
 				Tags:                       flattenTags(detail.FreeformTags, detail.DefinedTags),

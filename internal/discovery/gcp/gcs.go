@@ -65,6 +65,12 @@ func (s *Scanner) walkGCS(ctx context.Context, client *storage.Service, result *
 				Region:     strings.ToLower(b.Location),
 				Tags:       b.Labels,
 			}
+			// ImportID: google_storage_bucket imports by "{{project}}/{{bucket}}"
+			// (a documented accepted form). The bucket object carries no
+			// project, so it rides in from the scanner's ProjectID.
+			if s.ProjectID != "" && b.Name != "" {
+				snap.ImportID = s.ProjectID + "/" + b.Name
+			}
 			// GCS usage/storage logging → the S3 ServerAccessLogging
 			// equivalent. Logging.LogBucket non-empty means logs are
 			// delivered to a target bucket.
