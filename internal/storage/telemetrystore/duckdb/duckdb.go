@@ -11,7 +11,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/otlp"
 	"github.com/devopsmike2/squadron/internal/storage/telemetrystore/types"
 	"github.com/google/uuid"
-	_ "github.com/marcboeker/go-duckdb"
+	duckdb "github.com/marcboeker/go-duckdb"
 	"go.uber.org/zap"
 )
 
@@ -769,62 +769,49 @@ func (s *Storage) Close() error {
 	return nil
 }
 
-// WriteTracesFromOTLP writes trace data from OTLP parser format
+// WriteTracesFromOTLP writes trace data from OTLP parser format via
+// the DuckDB Appender (bulk path — see append.go for the atomicity
+// contract). AppendRow requires every column of the traces table in
+// schema order; span_kind, status_message, events, and links are not
+// populated by the OTLP parser and land as NULL, exactly as the old
+// column-subset INSERT left them.
 func (s *Storage) WriteTracesFromOTLP(ctx context.Context, traces []otlp.TraceData) error {
 	if len(traces) == 0 {
 		return nil
 	}
 
-	query := `
-		INSERT INTO traces (
-			timestamp, agent_id, group_id, group_name, trace_id, span_id, parent_span_id,
-			service_name, span_name, duration, status_code, resource_attributes, span_attributes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
+	err := s.appendRows(ctx, "traces", func(ap *duckdb.Appender) error {
+		for i := range traces {
+			trace := &traces[i]
+			resourceAttrsJSON, _ := json.Marshal(trace.ResourceAttributes)
+			spanAttrsJSON, _ := json.Marshal(trace.SpanAttributes)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	stmt, err := tx.PrepareContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, trace := range traces {
-		resourceAttrsJSON, _ := json.Marshal(trace.ResourceAttributes)
-		spanAttrsJSON, _ := json.Marshal(trace.SpanAttributes)
-
-		var parentSpanID interface{}
-		if trace.ParentSpanId != "" {
-			parentSpanID = trace.ParentSpanId
+			if err := ap.AppendRow(
+				trace.Timestamp,                 // timestamp
+				trace.AgentID,                   // agent_id
+				trace.GroupID,                   // group_id
+				trace.GroupName,                 // group_name
+				trace.TraceId,                   // trace_id
+				trace.SpanId,                    // span_id
+				nullIfEmpty(trace.ParentSpanId), // parent_span_id
+				trace.ServiceName,               // service_name
+				trace.SpanName,                  // span_name
+				nil,                             // span_kind (not populated by the parser)
+				trace.Duration,                  // duration
+				trace.StatusCode,                // status_code
+				nil,                             // status_message (not populated)
+				string(resourceAttrsJSON),       // resource_attributes
+				string(spanAttrsJSON),           // span_attributes
+				nil,                             // events (not populated)
+				nil,                             // links (not populated)
+			); err != nil {
+				return fmt.Errorf("failed to append trace: %w", err)
+			}
 		}
-
-		_, err = stmt.ExecContext(ctx,
-			trace.Timestamp,
-			trace.AgentID,
-			trace.GroupID,
-			trace.GroupName,
-			trace.TraceId,
-			trace.SpanId,
-			parentSpanID,
-			trace.ServiceName,
-			trace.SpanName,
-			trace.Duration,
-			trace.StatusCode,
-			string(resourceAttrsJSON),
-			string(spanAttrsJSON),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to insert trace: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	s.logger.Debug("Wrote OTLP traces to DuckDB", zap.Int("count", len(traces)))
@@ -837,59 +824,33 @@ func (s *Storage) WriteLogsFromOTLP(ctx context.Context, logs []otlp.LogData) er
 		return nil
 	}
 
-	query := `
-		INSERT INTO logs (
-			timestamp, agent_id, group_id, group_name, service_name,
-			severity_text, severity_number, body, trace_id, span_id,
-			resource_attributes, log_attributes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
+	err := s.appendRows(ctx, "logs", func(ap *duckdb.Appender) error {
+		for i := range logs {
+			log := &logs[i]
+			resourceAttrsJSON, _ := json.Marshal(log.ResourceAttributes)
+			logAttrsJSON, _ := json.Marshal(log.LogAttributes)
 
-	tx, err := s.db.BeginTx(ctx, nil)
+			if err := ap.AppendRow(
+				log.Timestamp,             // timestamp
+				log.AgentID,               // agent_id
+				log.GroupID,               // group_id
+				log.GroupName,             // group_name
+				log.ServiceName,           // service_name
+				log.SeverityText,          // severity_text
+				log.SeverityNumber,        // severity_number
+				log.Body,                  // body
+				nullIfEmpty(log.TraceId),  // trace_id
+				nullIfEmpty(log.SpanId),   // span_id
+				string(resourceAttrsJSON), // resource_attributes
+				string(logAttrsJSON),      // log_attributes
+			); err != nil {
+				return fmt.Errorf("failed to append log: %w", err)
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	stmt, err := tx.PrepareContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, log := range logs {
-		resourceAttrsJSON, _ := json.Marshal(log.ResourceAttributes)
-		logAttrsJSON, _ := json.Marshal(log.LogAttributes)
-
-		var traceID, spanID interface{}
-		if log.TraceId != "" {
-			traceID = log.TraceId
-		}
-		if log.SpanId != "" {
-			spanID = log.SpanId
-		}
-
-		_, err = stmt.ExecContext(ctx,
-			log.Timestamp,
-			log.AgentID,
-			log.GroupID,
-			log.GroupName,
-			log.ServiceName,
-			log.SeverityText,
-			log.SeverityNumber,
-			log.Body,
-			traceID,
-			spanID,
-			string(resourceAttrsJSON),
-			string(logAttrsJSON),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to insert log: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return err
 	}
 
 	s.logger.Debug("Wrote OTLP logs to DuckDB", zap.Int("count", len(logs)))
@@ -940,154 +901,71 @@ func (s *Storage) WriteMetricsFromOTLP(ctx context.Context, sums []otlp.MetricSu
 	return nil
 }
 
+// writeOTLPSums bulk-writes sum data points via the Appender (see
+// append.go). The old path committed every 50 rows, so a mid-batch
+// failure could leave earlier chunks persisted; the appender makes
+// the whole slice one atomic flush, which is strictly stronger and
+// keeps the worker pool's retry-without-duplicates contract.
 func (s *Storage) writeOTLPSums(ctx context.Context, sums []otlp.MetricSumData) error {
 	if len(sums) == 0 {
 		return nil
 	}
 
-	query := `
-		INSERT INTO metrics_sum (
-			timestamp, agent_id, group_id, group_name, service_name,
-			metric_name, metric_description, value, resource_attributes, metric_attributes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	s.logger.Debug("Starting writeOTLPSums transaction", zap.Int("count", len(sums)))
-
-	// Process in smaller batches to avoid overwhelming the database
-	batchSize := 50
-	for i := 0; i < len(sums); i += batchSize {
-		end := i + batchSize
-		if end > len(sums) {
-			end = len(sums)
-		}
-
-		batch := sums[i:end]
-		s.logger.Debug("Processing batch", zap.Int("start", i), zap.Int("end", end), zap.Int("batch_size", len(batch)))
-
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			s.logger.Error("Failed to begin transaction", zap.Error(err))
-			return fmt.Errorf("failed to begin transaction: %w", err)
-		}
-
-		stmt, err := tx.PrepareContext(ctx, query)
-		if err != nil {
-			_ = tx.Rollback()
-			s.logger.Error("Failed to prepare statement", zap.Error(err))
-			return fmt.Errorf("failed to prepare statement: %w", err)
-		}
-
-		for j, m := range batch {
+	return s.appendRows(ctx, "metrics_sum", func(ap *duckdb.Appender) error {
+		for i := range sums {
+			m := &sums[i]
 			resourceAttrsJSON, _ := json.Marshal(m.ResourceAttributes)
 			metricAttrsJSON, _ := json.Marshal(m.Attributes)
 
-			_, err = stmt.ExecContext(ctx,
-				m.TimeUnix,
-				m.AgentID,
-				m.GroupID,
-				m.GroupName,
-				m.ServiceName,
-				m.MetricName,
-				m.MetricDescription,
-				m.Value,
-				string(resourceAttrsJSON),
-				string(metricAttrsJSON),
-			)
-			if err != nil {
-				stmt.Close()
-				_ = tx.Rollback()
-				s.logger.Error("Failed to insert sum metric", zap.Error(err), zap.Int("batch_index", j), zap.String("metric_name", m.MetricName))
-				return fmt.Errorf("failed to insert sum metric: %w", err)
+			if err := ap.AppendRow(
+				m.TimeUnix,                // timestamp
+				m.AgentID,                 // agent_id
+				m.GroupID,                 // group_id
+				m.GroupName,               // group_name
+				m.ServiceName,             // service_name
+				m.MetricName,              // metric_name
+				m.MetricDescription,       // metric_description
+				m.Value,                   // value
+				string(resourceAttrsJSON), // resource_attributes
+				string(metricAttrsJSON),   // metric_attributes
+			); err != nil {
+				return fmt.Errorf("failed to append sum metric %q: %w", m.MetricName, err)
 			}
 		}
-
-		stmt.Close()
-		if err := tx.Commit(); err != nil {
-			s.logger.Error("Failed to commit transaction", zap.Error(err))
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
-		s.logger.Debug("Batch committed successfully", zap.Int("batch_size", len(batch)))
-	}
-
-	s.logger.Debug("All batches completed successfully")
-	return nil
+		return nil
+	})
 }
 
+// writeOTLPGauges bulk-writes gauge data points via the Appender —
+// same shape and atomicity upgrade as writeOTLPSums.
 func (s *Storage) writeOTLPGauges(ctx context.Context, gauges []otlp.MetricGaugeData) error {
 	if len(gauges) == 0 {
 		return nil
 	}
 
-	query := `
-		INSERT INTO metrics_gauge (
-			timestamp, agent_id, group_id, group_name, service_name,
-			metric_name, metric_description, value, resource_attributes, metric_attributes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	s.logger.Debug("Starting writeOTLPGauges transaction", zap.Int("count", len(gauges)))
-
-	// Process in smaller batches to avoid overwhelming the database
-	batchSize := 50
-	for i := 0; i < len(gauges); i += batchSize {
-		end := i + batchSize
-		if end > len(gauges) {
-			end = len(gauges)
-		}
-
-		batch := gauges[i:end]
-		s.logger.Debug("Processing gauge batch", zap.Int("start", i), zap.Int("end", end), zap.Int("batch_size", len(batch)))
-
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			s.logger.Error("Failed to begin transaction", zap.Error(err))
-			return fmt.Errorf("failed to begin transaction: %w", err)
-		}
-
-		stmt, err := tx.PrepareContext(ctx, query)
-		if err != nil {
-			_ = tx.Rollback()
-			s.logger.Error("Failed to prepare statement", zap.Error(err))
-			return fmt.Errorf("failed to prepare statement: %w", err)
-		}
-
-		for j, m := range batch {
+	return s.appendRows(ctx, "metrics_gauge", func(ap *duckdb.Appender) error {
+		for i := range gauges {
+			m := &gauges[i]
 			resourceAttrsJSON, _ := json.Marshal(m.ResourceAttributes)
 			metricAttrsJSON, _ := json.Marshal(m.Attributes)
 
-			_, err = stmt.ExecContext(ctx,
-				m.TimeUnix,
-				m.AgentID,
-				m.GroupID,
-				m.GroupName,
-				m.ServiceName,
-				m.MetricName,
-				m.MetricDescription,
-				m.Value,
-				string(resourceAttrsJSON),
-				string(metricAttrsJSON),
-			)
-			if err != nil {
-				stmt.Close()
-				_ = tx.Rollback()
-				s.logger.Error("Failed to insert gauge metric", zap.Error(err), zap.Int("batch_index", j), zap.String("metric_name", m.MetricName))
-				return fmt.Errorf("failed to insert gauge metric: %w", err)
+			if err := ap.AppendRow(
+				m.TimeUnix,                // timestamp
+				m.AgentID,                 // agent_id
+				m.GroupID,                 // group_id
+				m.GroupName,               // group_name
+				m.ServiceName,             // service_name
+				m.MetricName,              // metric_name
+				m.MetricDescription,       // metric_description
+				m.Value,                   // value
+				string(resourceAttrsJSON), // resource_attributes
+				string(metricAttrsJSON),   // metric_attributes
+			); err != nil {
+				return fmt.Errorf("failed to append gauge metric %q: %w", m.MetricName, err)
 			}
 		}
-
-		stmt.Close()
-		if err := tx.Commit(); err != nil {
-			s.logger.Error("Failed to commit transaction", zap.Error(err))
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
-		s.logger.Debug("Gauge batch committed successfully", zap.Int("batch_size", len(batch)))
-	}
-
-	s.logger.Debug("All gauge batches completed successfully")
-	return nil
+		return nil
+	})
 }
 
 func (s *Storage) writeOTLPHistograms(ctx context.Context, histograms []otlp.MetricHistogramData) error {
