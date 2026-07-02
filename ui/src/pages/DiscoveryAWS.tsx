@@ -164,7 +164,15 @@ export default function DiscoveryAWSPage() {
   // a controlled value the auto-switch would require ref-driven
   // imperative trigger-clicks, which Radix Tabs handles cleanly but
   // is harder to test.
-  const [activeTab, setActiveTab] = useState<string>(ACCOUNT_TAB);
+  // Land on the Inventory tab when a specific account is deep-linked
+  // (?account=<id>) — that operator (or the guided demo) wants results, not the
+  // connect wizard. No account param (or ?account=all) keeps the Wizard default.
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const p = new URLSearchParams(window.location.search).get(
+      ACCOUNT_QUERY_PARAM,
+    );
+    return p && p !== ACCOUNT_ALL ? INVENTORY_TAB : ACCOUNT_TAB;
+  });
 
   // Recommendations live at the page level too — Inventory writes
   // them, Recommendations reads them. State is per-session: refreshing
