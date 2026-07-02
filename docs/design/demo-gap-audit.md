@@ -1,12 +1,53 @@
 # Demo Gap Audit — every claimed capability vs. what the demo actually shows
 
-Status: **for sign-off** · Owner: Squadron · Date: 2026-07-02
+Status: **signed off + building** · Owner: Squadron · Date: 2026-07-02
 
 > Purpose. Before building anything, enumerate every capability Squadron
 > claims, verify what the code actually does, and state exactly what the
 > one-click demo shows for it today — fully, partially, or nothing — plus the
 > precise fix to reach full-capability. This is the gate. Nothing gets built
 > until the target state below is signed off.
+
+---
+
+## Build status (updated as phases land, each live-verified)
+
+The build plan in §4 was signed off and is being delivered phase by phase, each
+one live-verified in the running container before commit.
+
+- **Phase T — live telemetry ingest** — ✅ shipped, v0.89.381. In-process
+  simulator drives real OTLP metrics/logs/traces into DuckDB; per-agent
+  Logs/Metrics tabs, Cost Insights, and Savings (13 $-quantified recs, incl. the
+  noisy-attribute drop) populate live.
+- **Phase F — 500-agent fleet** — ✅ shipped, v0.89.381. ~500 agents across 5
+  production-like groups with realistic status/version/drift spread; drift hash
+  matches the service formula. (Same commit fixes demoseed's lone agent reading
+  spuriously "drifted".)
+- **Phase S — operational seed** — ✅ shipped, v0.89.382. AI-proposed rollout
+  (pending_approval) + a mid-flight rollout that advances to succeeded, runner +
+  executed action, incident drafts (draft + published), 3 disabled alert rules,
+  and an 8-event backdated audit/timeline trail (30-event timeline).
+- **Phase AI — deterministic proposer + keyless AI** — ✅ shipped, v0.89.383.
+  Flagship loop seeded deterministically (no proposer-bridge dependency); Ask
+  Squadron / Explain / Merge answer keyless via a grounded demo responder (real
+  key always wins). Verified: real Ask answered the seeded data live; keyless
+  path unit-covered.
+- **Phase PR — 4-cloud discovery parity** — ✅ shipped, v0.89.384. One-click
+  enable registers GCP/Azure/OCI demo connections (not just AWS); each scan
+  short-circuits to canned inventory (3 compute + 2 databases); teardown removes
+  all three.
+- **Phase U — polish + one-click orchestration** — ⏳ remaining. Frontend-heavy:
+  config version-history tab, inline lint in the editor, a demo-safe preview-PR
+  UX (the Terraform-import blocks already render server-side; only "Open PR"
+  needs a token), and packaging the whole thing as one clearly-labeled "Enable
+  demo environment" control with a final full-surface browser pass. Best done in
+  a frontend-focused session with browser (Claude-in-Chrome) verification.
+
+Net: the demo has gone from a four-row facade to a genuinely alive product
+across every major backend surface — fleet, telemetry, cost/savings, the full
+cost-spike → AI-proposal → rollout → action → incident → audit loop,
+conversational AI, and four-cloud discovery — each proven in the running
+container. Phase U closes the remaining UI polish.
 
 ---
 
