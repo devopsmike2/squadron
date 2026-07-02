@@ -145,6 +145,13 @@ func (p *Pool) Stop(timeout time.Duration) error {
 func (p *Pool) Submit(item WorkItem) error {
 	select {
 	case p.queue <- item:
+		// The v0.89 OTLP ingest stress run showed the queue can hold
+		// tens of seconds of 202-acknowledged-but-volatile data with
+		// this gauge stuck at zero (it was declared but never set).
+		// Update it on both submit and drain so operators can see the
+		// ack-to-durability backlog. len() on a buffered channel is
+		// approximate under concurrency — fine for a gauge.
+		p.metrics.QueueDepth.Update(int64(len(p.queue)))
 		return nil
 	case <-time.After(p.submitTimeout):
 		return fmt.Errorf("queue full, submit timeout")
@@ -165,6 +172,7 @@ func (p *Pool) worker(id int) {
 	for {
 		select {
 		case item := <-p.queue:
+			p.metrics.QueueDepth.Update(int64(len(p.queue)))
 			p.processItem(item)
 		case <-p.shutdown:
 			// Drain remaining items
