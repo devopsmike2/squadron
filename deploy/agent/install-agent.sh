@@ -33,7 +33,20 @@ done
 
 [ -n "$SQUADRON_HOST" ] || { echo "ERROR: --squadron-host is required (Squadron's host/IP reachable from this server)" >&2; exit 2; }
 [ "$(id -u)" = "0" ] || { echo "ERROR: run as root (sudo)" >&2; exit 2; }
-[ -n "$INSTANCE_ID" ] || INSTANCE_ID="$(hostname)"
+
+# Stable per-host UUID used as BOTH service.instance.id (OTLP) and the OpAMP
+# instance_uid, so Squadron sees one agent (config + metrics + logs) not two.
+# Persisted so restarts/re-runs keep the same identity.
+UID_FILE=/etc/otelcol-contrib/instance-uid
+mkdir -p /etc/otelcol-contrib
+if [ -z "$INSTANCE_ID" ]; then
+  if [ -s "$UID_FILE" ]; then
+    INSTANCE_ID="$(cat "$UID_FILE")"
+  else
+    INSTANCE_ID="$(cat /proc/sys/kernel/random/uuid)"
+  fi
+fi
+echo "$INSTANCE_ID" > "$UID_FILE"
 
 # ---- detect arch + package format --------------------------------------------
 case "$(uname -m)" in
