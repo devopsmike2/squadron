@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -466,58 +465,4 @@ func TestParseLogs_EmptyRequest(t *testing.T) {
 	logs, err := parser.ParseLogs(data)
 	require.NoError(t, err)
 	assert.Empty(t, logs)
-}
-
-// TestGetAgentID_StableIdentitySynthesis pins the widened agent-identity
-// resolution: agents that don't emit a UUID service.instance.id still get
-// a deterministic UUID so passive OTLP discovery (and telemetry keying)
-// can register them, instead of the old "default" drop.
-func TestGetAgentID_StableIdentitySynthesis(t *testing.T) {
-	// 1. UUID service.instance.id is used verbatim.
-	u := "756d93e3-9e49-44fa-b0b4-0e2da2f3ca2a"
-	if got := getAgentID(map[string]string{"service.instance.id": u}); got != u {
-		t.Fatalf("uuid service.instance.id: got %q want %q", got, u)
-	}
-
-	// 2. Non-UUID service.instance.id -> stable, valid UUID.
-	a := getAgentID(map[string]string{"service.instance.id": "collector-7"})
-	b := getAgentID(map[string]string{"service.instance.id": "collector-7"})
-	if a != b {
-		t.Fatalf("non-uuid instance.id not deterministic: %q vs %q", a, b)
-	}
-	if _, err := uuid.Parse(a); err != nil {
-		t.Fatalf("non-uuid instance.id did not yield a UUID: %q (%v)", a, err)
-	}
-
-	// 3. No service.instance.id but host.name -> stable UUID, and distinct
-	//    hosts get distinct ids.
-	h1 := getAgentID(map[string]string{"host.name": "ip-10-0-0-1"})
-	h1b := getAgentID(map[string]string{"host.name": "ip-10-0-0-1"})
-	h2 := getAgentID(map[string]string{"host.name": "ip-10-0-0-2"})
-	if h1 != h1b {
-		t.Fatalf("host.name not deterministic: %q vs %q", h1, h1b)
-	}
-	if h1 == h2 {
-		t.Fatalf("distinct hosts collided to same agent id: %q", h1)
-	}
-	if _, err := uuid.Parse(h1); err != nil {
-		t.Fatalf("host.name did not yield a UUID: %q (%v)", h1, err)
-	}
-
-	// 4. service.name fallback when neither instance.id nor host.name set.
-	s := getAgentID(map[string]string{"service.name": "checkout"})
-	if _, err := uuid.Parse(s); err != nil {
-		t.Fatalf("service.name did not yield a UUID: %q (%v)", s, err)
-	}
-
-	// 5. Precedence: a UUID service.instance.id wins over host.name.
-	withBoth := getAgentID(map[string]string{"service.instance.id": u, "host.name": "ip-10-0-0-1"})
-	if withBoth != u {
-		t.Fatalf("instance.id should win over host.name: got %q", withBoth)
-	}
-
-	// 6. Truly anonymous telemetry keeps the legacy sentinel.
-	if got := getAgentID(map[string]string{}); got != "default" {
-		t.Fatalf("empty attrs: got %q want \"default\"", got)
-	}
 }

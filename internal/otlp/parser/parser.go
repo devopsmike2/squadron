@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/agentid"
 	"github.com/devopsmike2/squadron/internal/otlp"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
@@ -59,7 +59,7 @@ func (p *OTLPParser) ParseTraces(data []byte) ([]otlp.TraceData, error) {
 		resourceAttrs := attributesToMap(resource.Attributes)
 
 		// Extract agent ID from resource attributes
-		extractedAgentID := getAgentID(resourceAttrs)
+		extractedAgentID := agentid.Derive(resourceAttrs)
 
 		for _, scopeSpans := range resourceSpans.ScopeSpans {
 			scope := scopeSpans.Scope
@@ -140,7 +140,7 @@ func (p *OTLPParser) ParseMetrics(data []byte) ([]otlp.MetricSumData, []otlp.Met
 		resourceAttrs := attributesToMap(resource.Attributes)
 
 		// Extract agent ID from resource attributes
-		extractedAgentID := getAgentID(resourceAttrs)
+		extractedAgentID := agentid.Derive(resourceAttrs)
 
 		for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
 			scope := scopeMetrics.Scope
@@ -266,7 +266,7 @@ func (p *OTLPParser) ParseLogs(data []byte) ([]otlp.LogData, error) {
 		resourceAttrs := attributesToMap(resource.Attributes)
 
 		// Extract agent ID from resource attributes
-		extractedAgentID := getAgentID(resourceAttrs)
+		extractedAgentID := agentid.Derive(resourceAttrs)
 
 		for _, scopeLogs := range resourceLogs.ScopeLogs {
 			scope := scopeLogs.Scope
@@ -356,52 +356,6 @@ func getServiceName(attrs map[string]string) string {
 		return serviceName
 	}
 	return "unknown-service"
-}
-
-// squadronAgentNamespace is a fixed UUIDv5 namespace used to derive a
-// stable agent identity when telemetry lacks a UUID service.instance.id.
-// It is an arbitrary but constant UUID — do not change it, or previously
-// derived agent IDs would shift and existing agents would re-register as
-// new ones.
-var squadronAgentNamespace = uuid.MustParse("7c0f5d2e-6b1a-4f3c-9e2d-1a2b3c4d5e6f")
-
-// stableAgentUUID derives a deterministic UUIDv5 from a seed string. The
-// same seed always yields the same UUID, so an agent that restarts keeps
-// its identity (discovery refreshes last_seen instead of creating a dup).
-func stableAgentUUID(seed string) string {
-	return uuid.NewSHA1(squadronAgentNamespace, []byte(seed)).String()
-}
-
-// getAgentID resolves a stable, UUID-shaped agent identity from resource
-// attributes. Agent identity is keyed off a UUID everywhere downstream
-// (telemetry storage, enrichment, and passive OTLP discovery), so an
-// agent that does not emit a UUID service.instance.id was previously
-// dropped from Fleet entirely — discovery silently skipped it. To widen
-// coverage to the many real-world collectors (infra/hostmetrics agents in
-// particular) that omit service.instance.id or set a non-UUID value, we
-// synthesize a deterministic UUID from the best available identifier:
-//
-//  1. A UUID service.instance.id is used verbatim (the OTel-compliant case).
-//  2. A non-UUID service.instance.id is hashed into a stable UUID.
-//  3. Otherwise host.name (then service.name) is hashed — this is what
-//     lets a plain hostmetrics collector register.
-//  4. Only telemetry with no identifying attributes at all falls back to
-//     the legacy "default" sentinel (treated as unidentifiable by both the
-//     enricher and discovery).
-func getAgentID(attrs map[string]string) string {
-	if v, exists := attrs["service.instance.id"]; exists && v != "" {
-		if _, err := uuid.Parse(v); err == nil {
-			return v
-		}
-		return stableAgentUUID("service.instance.id:" + v)
-	}
-	if host := attrs["host.name"]; host != "" {
-		return stableAgentUUID("host.name:" + host)
-	}
-	if svc := attrs["service.name"]; svc != "" {
-		return stableAgentUUID("service.name:" + svc)
-	}
-	return "default"
 }
 
 // extractGroupInfo extracts group ID and name from resource attributes
