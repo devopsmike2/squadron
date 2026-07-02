@@ -97,6 +97,13 @@ func Seed(ctx context.Context, store types.ApplicationStore, force bool) (Summar
 	if err != nil {
 		return Summary{}, err
 	}
+	// Operational state: an AI-proposed rollout awaiting approval, a mid-flight
+	// rollout, a runner + executed action, incident drafts, alert rules, and the
+	// backdated audit/timeline trail — so the flagship loop and the
+	// Rollouts/Actions/Incidents/Alerts/Timeline/Audit surfaces are populated.
+	if err := SeedOperational(ctx, store); err != nil {
+		return Summary{}, err
+	}
 	return Summary{
 		GroupID: GroupID,
 		Config:  ConfigID,
@@ -111,6 +118,12 @@ func Seed(ctx context.Context, store types.ApplicationStore, force bool) (Summar
 // place (orphaned once its group is gone — harmless and invisible). Best-effort:
 // a missing row is not an error.
 func Remove(ctx context.Context, store types.ApplicationStore) error {
+	// Tear down operational rows first (alert rules deleted, runner revoked;
+	// rollouts/actions/incidents/audit left orphaned like the demo config).
+	if err := RemoveOperational(ctx, store); err != nil {
+		return err
+	}
+
 	// Delete the demo agent (found by its reserved name).
 	agents, err := store.ListAgents(ctx)
 	if err == nil {
