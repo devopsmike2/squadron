@@ -107,10 +107,16 @@ accept path.
    anywhere from 10k to millions of items depending on batch size —
    backpressure semantics should be item- or byte-based so the
    volatile window is bounded in data, not requests.
-4. **Enricher does N identical lookups per batch (follow-up card).**
-   `enrichTelemetry` calls `agentService.GetAgent` once per item; a
-   50-item single-agent batch does 50 identical SQLite lookups.
-   A per-batch memo (or small TTL cache) removes ~98% of them.
+4. **Enricher does N identical lookups per batch — RESOLVED (v0.89.379).**
+   `enrichTelemetry` called `agentService.GetAgent` once per item; a
+   50-item single-agent batch did 50 identical SQLite lookups.
+   Fixed with a per-batch, caller-owned local memo (`map[agentID]*Agent`,
+   threaded through `enrichTelemetry`) that caches both hits and misses, so
+   the lookup collapses to once per unique agent id per batch (~98% fewer on
+   single-agent bursts). Local (not a struct field) => the singleton
+   `Enricher` stays race-free under the worker pool's concurrent workers
+   (pinned by `enricher_test.go`, incl. a `-race` concurrency test). Output
+   is byte-identical to the pre-memo path.
 
 Design intent worth writing down: 202-then-async is a legitimate
 OTLP receiver shape, but its contract is "the queue is small and
