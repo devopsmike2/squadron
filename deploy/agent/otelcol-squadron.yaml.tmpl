@@ -70,6 +70,13 @@ exporters:
 service:
   extensions: [opamp]
   telemetry:
+    # This resource is what the collector reports about ITSELF over OpAMP
+    # (the AgentDescription). Setting host.name/service.name here makes the
+    # agent show up in Squadron's fleet as this hostname instead of the
+    # generic collector binary name "otelcol-contrib".
+    resource:
+      host.name: __SERVICE_NAME__
+      service.name: __SERVICE_NAME__
     logs:
       level: info
   pipelines:

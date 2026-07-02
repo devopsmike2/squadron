@@ -518,3 +518,32 @@ func TestPersistAgent_ExistingAgent_NoDescription_SkipsRegistration(t *testing.T
 	mockService.AssertNotCalled(t, "UpdateAgentRegistration", mock.Anything, mock.Anything)
 	mockService.AssertExpectations(t)
 }
+
+func TestExtractAgentName(t *testing.T) {
+	s := &Server{}
+	cases := []struct {
+		name string
+		desc *protobufs.AgentDescription
+		want string
+	}{
+		{"nil description", nil, "unknown"},
+		{"host.name preferred over generic service.name",
+			&protobufs.AgentDescription{IdentifyingAttributes: []*protobufs.KeyValue{
+				strAttr("service.name", "otelcol-contrib"), strAttr("host.name", "web-01")}}, "web-01"},
+		{"service.name when no host.name",
+			&protobufs.AgentDescription{IdentifyingAttributes: []*protobufs.KeyValue{
+				strAttr("service.name", "payments-api")}}, "payments-api"},
+		{"agent.name explicit override wins over host.name",
+			&protobufs.AgentDescription{
+				IdentifyingAttributes:    []*protobufs.KeyValue{strAttr("host.name", "web-01")},
+				NonIdentifyingAttributes: []*protobufs.KeyValue{strAttr("agent.name", "custom")}}, "custom"},
+		{"no usable attrs", &protobufs.AgentDescription{}, "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := s.extractAgentName(tc.desc); got != tc.want {
+				t.Fatalf("extractAgentName = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

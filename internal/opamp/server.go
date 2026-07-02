@@ -592,16 +592,31 @@ func (s *Server) extractAgentName(desc *protobufs.AgentDescription) string {
 		return "unknown"
 	}
 
-	// Look for service.name or agent.name
 	attrs := append(desc.IdentifyingAttributes, desc.NonIdentifyingAttributes...)
-	for _, attr := range attrs {
-		if attr.Key == "service.name" || attr.Key == "agent.name" {
-			if attr.Value != nil && attr.Value.GetStringValue() != "" {
-				return attr.Value.GetStringValue()
+	get := func(key string) string {
+		for _, attr := range attrs {
+			if attr.Key == key && attr.Value != nil {
+				if v := attr.Value.GetStringValue(); v != "" {
+					return v
+				}
 			}
 		}
+		return ""
 	}
 
+	// Precedence mirrors the OTLP discovery path (internal/discovery/service.go):
+	// prefer a per-host identifier over service.name, which defaults to the
+	// collector binary name ("otelcol-contrib") and makes every agent in the
+	// fleet look identical. agent.name is an explicit Squadron override and wins.
+	if v := get("agent.name"); v != "" {
+		return v
+	}
+	if v := get("host.name"); v != "" {
+		return v
+	}
+	if v := get("service.name"); v != "" {
+		return v
+	}
 	return "unknown"
 }
 
