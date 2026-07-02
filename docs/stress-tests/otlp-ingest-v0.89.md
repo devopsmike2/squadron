@@ -100,13 +100,20 @@ accept path.
    `pipeline_health_samples` did before it was added to that list.
    Now swept with the same retention ceiling.
 3. **Write path is per-row cgo Exec; queue is sized in requests, not
-   items/bytes (follow-up card).** 3 workers × per-row
-   `stmt.ExecContext` tops out ~6-11k items/s on 4 cores. DuckDB's
-   Appender API is the intended bulk path and should raise the
-   ceiling substantially. Related: a 10,000-**request** queue holds
-   anywhere from 10k to millions of items depending on batch size —
-   backpressure semantics should be item- or byte-based so the
-   volatile window is bounded in data, not requests.
+   items/bytes — BOTH HALVES RESOLVED.** (a) The per-row
+   `stmt.ExecContext` write path (~6-11k items/s) was replaced by the
+   DuckDB Appender bulk path in **v0.89.379-era slice 2** (~11k → ~50k
+   items/s). (b) The queue-bounds half is closed in **v0.89.380**: a
+   10,000-**request** queue could hold 10k–millions of items depending on
+   batch size, so the byte-budget bound `worker.max_queue_bytes` (default
+   256 MiB; the request-count cap is kept as a secondary belt) now bounds
+   the volatile ack-to-durable window in DATA. Item counts aren't known
+   until the worker parses, so bytes (`len(RawData)`) are the only cheap
+   signal at ingest — an item-count bound would require parsing in the
+   receiver hot path, defeating the 202-fast-ack design. Over-budget
+   submits wait up to `submit_timeout` then 503 (contract unchanged); a
+   single payload larger than the whole budget is rejected immediately;
+   new gauge `worker_queue_bytes`. See ADR 0004.
 4. **Enricher does N identical lookups per batch — RESOLVED (v0.89.379).**
    `enrichTelemetry` called `agentService.GetAgent` once per item; a
    50-item single-agent batch did 50 identical SQLite lookups.

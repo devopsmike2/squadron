@@ -11,6 +11,11 @@ type WorkerMetrics struct {
 	// Queue depth — useful for spotting backpressure / saturation.
 	QueueDepth Gauge `metric:"worker_queue_depth" tags:"component=worker" help:"Current depth of the worker pool queue"`
 
+	// Queue bytes — the volatile ack'd-but-unwritten backlog in DATA, the
+	// real memory bound (queue_depth counts requests, whose per-request
+	// item/byte size varies wildly). Bounded by worker.max_queue_bytes.
+	QueueBytes Gauge `metric:"worker_queue_bytes" tags:"component=worker" help:"Current queued OTLP payload bytes awaiting write (volatile ack-to-durable backlog)"`
+
 	// Write retry counters — per signal type.
 	TraceWriteRetries  Counter `metric:"worker_trace_write_retries_total"  tags:"component=worker,signal=traces"  help:"Total trace write attempts that failed and were retried"`
 	MetricWriteRetries Counter `metric:"worker_metric_write_retries_total" tags:"component=worker,signal=metrics" help:"Total metric write attempts that failed and were retried"`

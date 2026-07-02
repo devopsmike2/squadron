@@ -357,9 +357,17 @@ type LoggingConfig struct {
 
 // WorkerConfig contains worker pool configuration
 type WorkerConfig struct {
-	QueueSize int    `yaml:"queue_size"`
-	Workers   int    `yaml:"workers"`
-	Timeout   string `yaml:"timeout"` // Duration string like "5s", "1m"
+	QueueSize int `yaml:"queue_size"`
+	// MaxQueueBytes bounds the volatile ack'd-but-unwritten backlog in DATA
+	// (Σ raw OTLP payload bytes queued), the real memory ceiling — queue_size
+	// only caps request COUNT, whose per-request size varies wildly, so a
+	// burst of large batches could hold ~500k items volatile. Item counts
+	// aren't known until the worker parses, so bytes are the only cheap signal
+	// at ingest. 0/unset => 256 MiB default (applied in cmd/all-in-one);
+	// negative => unbounded (request-count cap only).
+	MaxQueueBytes int    `yaml:"max_queue_bytes,omitempty"`
+	Workers       int    `yaml:"workers"`
+	Timeout       string `yaml:"timeout"` // Duration string like "5s", "1m"
 }
 
 // LoadConfig loads configuration from a YAML file

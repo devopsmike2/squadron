@@ -341,6 +341,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Pass workerMetrics so retry/dead-letter counters land on /metrics.
 	workerPool := worker.NewPool(config.Worker.QueueSize, config.Worker.Workers, workerTimeout, telemetryWriter, agentService, workerMetrics, logger)
 
+	// v0.89 ingest finding 3: bound the volatile ack'd-but-unwritten backlog by
+	// BYTES, not just request count. 0/unset => 256 MiB default; negative =>
+	// unbounded (request-count cap only). Item counts aren't known until the
+	// worker parses, so bytes are the only cheap signal at ingest.
+	maxQueueBytes := int64(config.Worker.MaxQueueBytes)
+	switch {
+	case maxQueueBytes == 0:
+		maxQueueBytes = 256 << 20 // 256 MiB default
+	case maxQueueBytes < 0:
+		maxQueueBytes = 0 // explicit opt-out => disable the byte bound
+	}
+	workerPool.SetMaxQueueBytes(maxQueueBytes)
+
 	// v0.36: passive OTLP discovery. The worker pool calls
 	// discoverySvc.RegisterIfUnknown for each unique agent_id
 	// it sees in incoming OTLP batches. Unknown ids become
