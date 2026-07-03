@@ -34,7 +34,10 @@ export function AskSquadronHero() {
   if (!capabilities?.enabled) return null;
 
   return (
-    <Card className="border-violet-500/30 bg-gradient-to-br from-violet-500/5 to-transparent">
+    <Card
+      data-tour="ask-squadron-hero"
+      className="border-violet-500/30 bg-gradient-to-br from-violet-500/5 to-transparent"
+    >
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-violet-500/15 text-violet-600 dark:text-violet-400">

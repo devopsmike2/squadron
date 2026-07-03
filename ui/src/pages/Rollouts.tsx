@@ -550,7 +550,11 @@ export default function RolloutsPage() {
           </p>
         </div>
         {!showForm && (
-          <Button onClick={() => setShowForm(true)} className="gap-1">
+          <Button
+            data-tour="rollouts-new"
+            onClick={() => setShowForm(true)}
+            className="gap-1"
+          >
             <Plus className="h-4 w-4" />
             New rollout
           </Button>

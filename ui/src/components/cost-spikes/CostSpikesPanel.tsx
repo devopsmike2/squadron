@@ -58,6 +58,7 @@ export function CostSpikesBanner() {
   return (
     <a
       href="/savings"
+      data-tour="cost-spike-banner"
       className={`flex items-center gap-3 rounded-md border p-3 text-sm transition-colors ${
         isCritical
           ? "border-destructive/50 bg-destructive/10"
