@@ -276,3 +276,56 @@ func TestAppendRows_ErrorLeavesZeroRows(t *testing.T) {
 		t.Fatalf("failed append must leave zero rows, got %d", n)
 	}
 }
+
+// TestAppendRowsMulti_ErrorLeavesZeroRows pins the CROSS-TABLE retry contract
+// that WriteMetricsFromOTLP depends on: sums + gauges append successfully, then
+// the histogram fill fails partway. Because all three tables share one
+// transaction, the failure must roll back the already-buffered sum and gauge
+// rows too — otherwise a worker retry of the whole metric batch would re-append
+// them and double-count. Before this fix each table committed independently, so
+// the sum and gauge rows would have survived the histogram failure.
+func TestAppendRowsMulti_ErrorLeavesZeroRows(t *testing.T) {
+	s := newTestStorage(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	sums := []otlp.MetricSumData{{
+		TimeUnix: now, AgentID: "agent-1", ServiceName: "svc",
+		MetricName: "s.count", Value: 1,
+	}}
+	gauges := []otlp.MetricGaugeData{{
+		TimeUnix: now, AgentID: "agent-1", ServiceName: "svc",
+		MetricName: "g.depth", Value: 2,
+	}}
+
+	errInjected := errors.New("injected histogram fill failure")
+	err := s.appendRowsMulti(ctx,
+		tableAppend{table: "metrics_sum", fill: otlpSumsFill(sums)},
+		tableAppend{table: "metrics_gauge", fill: otlpGaugesFill(gauges)},
+		tableAppend{table: "metrics_histogram", fill: func(ap *duckdb.Appender) error {
+			// Buffer a real row first, then fail — exercises the
+			// buffered-but-must-roll-back path across all three tables.
+			if err := ap.AppendRow(
+				now, "agent-1", "", "", "svc", "h.latency", "",
+				int64(1), 1.0, 0.0, 1.0,
+				[]int64{1}, []float64{1}, "{}", "{}",
+			); err != nil {
+				return err
+			}
+			return errInjected
+		}},
+	)
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("appendRowsMulti should propagate the injected error, got %v", err)
+	}
+
+	for _, table := range []string{"metrics_sum", "metrics_gauge", "metrics_histogram"} {
+		var n int
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 0 {
+			t.Fatalf("%s: cross-table rollback must leave zero rows, got %d", table, n)
+		}
+	}
+}
