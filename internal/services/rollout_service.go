@@ -401,6 +401,14 @@ type Rollout struct {
 	// opt-in posture.
 	ExcludeFromLearning bool `json:"exclude_from_learning,omitempty"`
 
+	// Version is the storage optimistic-concurrency counter, carried through
+	// the ↔ types.Rollout mapping so the engine's Persist writes participate in
+	// the compare-and-swap. A loaded rollout keeps its stored Version (via
+	// toServiceRollout) and writes it back (via toStorageRollout); a stale
+	// write then loses to a concurrent operator Pause/Abort with
+	// ErrRolloutVersionConflict instead of clobbering it.
+	Version int `json:"version,omitempty"`
+
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
