@@ -297,6 +297,21 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			zap.String("edition", buildEdition))
 	}
 
+	// Resolve the identity seam (extension/identity + wire_identity_*.go).
+	// The OSS build wires bearer-token auth, the flat-scope authorizer
+	// (allow/deny identical to middleware.RequireScope), and a single
+	// implicit tenant — observable behavior is unchanged. The enterprise
+	// edition wires SSO/RBAC/multi-tenant providers against the same
+	// interfaces. Slice 1 (ADR 0006) wires and reports the providers; later
+	// slices route the auth middleware and store scoping through idSeam's
+	// Authorizer and TenantResolver.
+	idSeam := identityProviders()
+	logger.Info("squadron identity seam",
+		zap.String("edition", buildEdition),
+		zap.String("authenticator", idSeam.Authenticator.Name()),
+		zap.String("tenant_mode", idSeam.TenantResolver.Resolve(context.Background())),
+	)
+
 	// Bootstrap an initial token if auth is enabled and the store has
 	// none yet. Operators see this token in stderr on first start; they
 	// copy it, use it to log in, create proper labeled tokens, and
