@@ -350,10 +350,15 @@ func (p *Pool) processItem(item WorkItem) {
 			zap.Error(writeErr))
 
 	case WorkItemTypeMetrics:
-		sums, gauges, histograms, err := p.parser.ParseMetrics(item.RawData)
+		sums, gauges, histograms, droppedUnsupported, err := p.parser.ParseMetrics(item.RawData)
 		if err != nil {
 			p.logger.Error("Failed to parse metrics", zap.Error(err))
 			return
+		}
+		// Data points whose type we don't persist yet (exp-histogram, summary,
+		// unknown) are counted here so the loss is alertable, not silent.
+		if droppedUnsupported > 0 {
+			p.metrics.MetricDroppedUnsupported.Inc(int64(droppedUnsupported))
 		}
 		p.enricher.EnrichMetrics(ctx, sums, gauges, histograms)
 

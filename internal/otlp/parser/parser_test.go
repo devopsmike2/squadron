@@ -206,7 +206,7 @@ func TestParseMetrics_Sum(t *testing.T) {
 	data, err := proto.Marshal(request)
 	require.NoError(t, err)
 
-	sums, gauges, histograms, err := parser.ParseMetrics(data)
+	sums, gauges, histograms, _, err := parser.ParseMetrics(data)
 	require.NoError(t, err)
 	require.Len(t, sums, 1)
 	assert.Empty(t, gauges)
@@ -262,7 +262,7 @@ func TestParseMetrics_Gauge(t *testing.T) {
 	data, err := proto.Marshal(request)
 	require.NoError(t, err)
 
-	sums, gauges, histograms, err := parser.ParseMetrics(data)
+	sums, gauges, histograms, _, err := parser.ParseMetrics(data)
 	require.NoError(t, err)
 	assert.Empty(t, sums)
 	require.Len(t, gauges, 1)
@@ -271,6 +271,76 @@ func TestParseMetrics_Gauge(t *testing.T) {
 	gauge := gauges[0]
 	assert.Equal(t, "test.gauge", gauge.MetricName)
 	assert.Equal(t, 100.0, gauge.Value)
+}
+
+// TestParseMetrics_UnsupportedTypesDropped verifies that exponential-histogram
+// and summary data points (which Squadron doesn't persist yet) are COUNTED as
+// dropped rather than silently swallowed, while supported metrics still parse.
+func TestParseMetrics_UnsupportedTypesDropped(t *testing.T) {
+	parser := setupParserTest()
+	now := time.Now()
+
+	request := &colmetricspb.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{
+			{
+				Resource: &resourcepb.Resource{Attributes: makeResourceAttributes()},
+				ScopeMetrics: []*metricspb.ScopeMetrics{
+					{
+						Scope: &commonpb.InstrumentationScope{Name: "test-scope"},
+						Metrics: []*metricspb.Metric{
+							{
+								Name: "supported.counter",
+								Data: &metricspb.Metric_Sum{
+									Sum: &metricspb.Sum{
+										DataPoints: []*metricspb.NumberDataPoint{
+											{
+												TimeUnixNano: uint64(now.UnixNano()),
+												Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: 1},
+											},
+										},
+									},
+								},
+							},
+							{
+								Name: "dropped.exp_histogram",
+								Data: &metricspb.Metric_ExponentialHistogram{
+									ExponentialHistogram: &metricspb.ExponentialHistogram{
+										DataPoints: []*metricspb.ExponentialHistogramDataPoint{
+											{TimeUnixNano: uint64(now.UnixNano())},
+											{TimeUnixNano: uint64(now.UnixNano())},
+										},
+									},
+								},
+							},
+							{
+								Name: "dropped.summary",
+								Data: &metricspb.Metric_Summary{
+									Summary: &metricspb.Summary{
+										DataPoints: []*metricspb.SummaryDataPoint{
+											{TimeUnixNano: uint64(now.UnixNano())},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	data, err := proto.Marshal(request)
+	require.NoError(t, err)
+
+	sums, gauges, histograms, dropped, err := parser.ParseMetrics(data)
+	require.NoError(t, err)
+	// Supported metric still lands.
+	require.Len(t, sums, 1)
+	assert.Empty(t, gauges)
+	assert.Empty(t, histograms)
+	// 2 exp-histogram points + 1 summary point counted as dropped, not silently
+	// swallowed.
+	assert.Equal(t, 3, dropped)
 }
 
 func TestParseMetrics_Histogram(t *testing.T) {
@@ -316,7 +386,7 @@ func TestParseMetrics_Histogram(t *testing.T) {
 	data, err := proto.Marshal(request)
 	require.NoError(t, err)
 
-	sums, gauges, histograms, err := parser.ParseMetrics(data)
+	sums, gauges, histograms, _, err := parser.ParseMetrics(data)
 	require.NoError(t, err)
 	assert.Empty(t, sums)
 	assert.Empty(t, gauges)
@@ -333,7 +403,7 @@ func TestParseMetrics_Histogram(t *testing.T) {
 func TestParseMetrics_InvalidData(t *testing.T) {
 	parser := setupParserTest()
 
-	_, _, _, err := parser.ParseMetrics([]byte("invalid data"))
+	_, _, _, _, err := parser.ParseMetrics([]byte("invalid data"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to unmarshal metrics")
 }
@@ -505,7 +575,7 @@ func TestParse_NilSafety(t *testing.T) {
 	mb, err := proto.Marshal(metricReq)
 	require.NoError(t, err)
 	require.NotPanics(t, func() {
-		_, _, _, err := p.ParseMetrics(mb)
+		_, _, _, _, err := p.ParseMetrics(mb)
 		assert.NoError(t, err)
 	})
 

@@ -25,6 +25,12 @@ type WorkerMetrics struct {
 	TraceDeadLetters  Counter `metric:"worker_trace_dead_letters_total"  tags:"component=worker,signal=traces"  help:"Trace writes that failed after exhausting retries"`
 	MetricDeadLetters Counter `metric:"worker_metric_dead_letters_total" tags:"component=worker,signal=metrics" help:"Metric writes that failed after exhausting retries"`
 	LogDeadLetters    Counter `metric:"worker_log_dead_letters_total"    tags:"component=worker,signal=logs"    help:"Log writes that failed after exhausting retries"`
+
+	// Data points dropped because their OTLP metric type isn't persisted yet
+	// (exponential histograms, summaries, unknown types). These count toward
+	// "metrics received" but never land in storage — alert on this being
+	// non-zero to catch a customer sending an unsupported metric shape.
+	MetricDroppedUnsupported Counter `metric:"worker_metric_dropped_unsupported_total" tags:"component=worker,signal=metrics" help:"OTLP metric data points dropped because their type is not persisted (exp-histogram, summary, unknown)"`
 }
 
 // NewWorkerMetrics creates and initializes worker pool metrics.

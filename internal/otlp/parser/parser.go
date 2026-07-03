@@ -131,15 +131,26 @@ func (p *OTLPParser) ParseTraces(data []byte) ([]otlp.TraceData, error) {
 }
 
 // ParseMetrics parses OTLP metrics data
-func (p *OTLPParser) ParseMetrics(data []byte) ([]otlp.MetricSumData, []otlp.MetricGaugeData, []otlp.MetricHistogramData, error) {
+// ParseMetrics decodes an OTLP metrics payload into the sum/gauge/histogram
+// shapes Squadron persists. It also returns the number of data points DROPPED
+// because their metric type isn't persisted yet (exponential histograms,
+// summaries, or any unknown/unset type). Those points used to vanish silently
+// while still counting toward "metrics received"; returning the count lets the
+// worker surface it as an alertable metric instead of silent data loss.
+func (p *OTLPParser) ParseMetrics(data []byte) ([]otlp.MetricSumData, []otlp.MetricGaugeData, []otlp.MetricHistogramData, int, error) {
 	var request colmetricspb.ExportMetricsServiceRequest
 	if err := proto.Unmarshal(data, &request); err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to unmarshal metrics: %w", err)
+		return nil, nil, nil, 0, fmt.Errorf("failed to unmarshal metrics: %w", err)
 	}
 
 	var sumMetrics []otlp.MetricSumData
 	var gaugeMetrics []otlp.MetricGaugeData
 	var histogramMetrics []otlp.MetricHistogramData
+
+	// Track data points we can't persist yet so the loss is visible (log +
+	// returned count) rather than silent.
+	droppedUnsupported := 0
+	droppedByType := map[string]int{}
 
 	for _, resourceMetrics := range request.ResourceMetrics {
 		resource := resourceMetrics.Resource
@@ -254,12 +265,43 @@ func (p *OTLPParser) ParseMetrics(data []byte) ([]otlp.MetricSumData, []otlp.Met
 						}
 						histogramMetrics = append(histogramMetrics, metricData)
 					}
+
+				case *metricspb.Metric_ExponentialHistogram:
+					// Not persisted yet (no exp-histogram storage table). Count
+					// the points so the drop is visible instead of silent —
+					// exponential histograms are the default for several modern
+					// OTel SDKs, so this is real data if a customer uses them.
+					if eh := metric.GetExponentialHistogram(); eh != nil {
+						n := len(eh.DataPoints)
+						droppedUnsupported += n
+						droppedByType["exponential_histogram"] += n
+					}
+
+				case *metricspb.Metric_Summary:
+					// Not persisted yet (Prometheus-compat summaries).
+					if sm := metric.GetSummary(); sm != nil {
+						n := len(sm.DataPoints)
+						droppedUnsupported += n
+						droppedByType["summary"] += n
+					}
+
+				default:
+					// Unknown/unset metric type — malformed payload or a future
+					// OTLP kind. Count it so it isn't silently swallowed.
+					droppedUnsupported++
+					droppedByType["unknown"]++
 				}
 			}
 		}
 	}
 
-	return sumMetrics, gaugeMetrics, histogramMetrics, nil
+	if droppedUnsupported > 0 {
+		p.logger.Warn("dropped unsupported OTLP metric data points (type not persisted yet)",
+			zap.Int("dropped_data_points", droppedUnsupported),
+			zap.Any("by_type", droppedByType))
+	}
+
+	return sumMetrics, gaugeMetrics, histogramMetrics, droppedUnsupported, nil
 }
 
 // ParseLogs parses OTLP logs data
