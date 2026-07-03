@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/confignorm"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
@@ -780,19 +780,17 @@ func computeConfigDrift(intent *ConfigIntent, effectiveConfig string, includeDif
 	return ConfigDriftStatusDrifted, details
 }
 
+// normalizeConfigContent and hashConfigContent delegate to the canonical
+// confignorm package so drift detection, the rollout preview diff
+// (internal/configdiff), and config-creation hashing (api/handlers) all
+// normalize and fingerprint config content identically. See confignorm's
+// package doc for why divergence here was a real bug.
 func normalizeConfigContent(content string) string {
-	normalized := strings.TrimSpace(content)
-	normalized = strings.ReplaceAll(normalized, "\r\n", "\n")
-	return normalized
+	return confignorm.Normalize(content)
 }
 
 func hashConfigContent(content string) string {
-	normalized := normalizeConfigContent(content)
-	if normalized == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(normalized))
-	return fmt.Sprintf("%x", sum)
+	return confignorm.Hash(content)
 }
 
 func buildUnifiedDiff(expected, actual string) string {

@@ -1,12 +1,9 @@
 package handlers
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
+	"github.com/devopsmike2/squadron/internal/confignorm"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -387,11 +385,10 @@ func validateOTelConfig(content string) ([]string, error) {
 	return warnings, nil
 }
 
-// hashConfig creates a hash of the config content
+// hashConfig creates a content fingerprint of the config. It delegates to the
+// canonical confignorm.Hash so the ConfigHash stored at create time matches the
+// hash drift detection recomputes from an agent's effective config — same
+// normalization, same digest.
 func hashConfig(content string) string {
-	// Normalize whitespace and newlines for consistent hashing
-	normalized := strings.TrimSpace(content)
-	normalized = strings.ReplaceAll(normalized, "\r\n", "\n")
-	hash := sha256.Sum256([]byte(normalized))
-	return hex.EncodeToString(hash[:])
+	return confignorm.Hash(content)
 }

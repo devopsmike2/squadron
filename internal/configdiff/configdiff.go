@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	"github.com/pmezard/go-difflib/difflib"
+
+	"github.com/devopsmike2/squadron/internal/confignorm"
 )
 
 // Result is the diff between two config strings.
@@ -107,22 +109,21 @@ func Diff(current, target string) Result {
 	}
 }
 
-// normalize canonicalizes line endings and trailing newlines so the diff
-// reflects real content changes, not incidental formatting.
+// normalize canonicalizes config content so the preview diff reflects real
+// content changes, not incidental formatting.
 //
-// CRLF->LF conversion matches the drift-detection normalization
-// (services.normalizeConfigContent). Without it, a config whose only
-// difference from the current one is its line endings (e.g. an operator
-// pastes a Windows-CRLF snippet, or the effective config comes back with
-// different endings) splits into per-line values like "receivers:\r\n" vs
-// "receivers:\n" — so EVERY line reads as changed and the preview renders the
-// whole file as removed+re-added with inflated add/remove counts, while drift
-// detection (which normalizes CRLF) correctly reports the agent as synced. The
-// trailing-newline trim then keeps a missing terminator from rendering as a
-// phantom diff line.
+// It delegates to confignorm.Normalize — the SAME canonicalizer drift
+// detection uses — so the preview and drift agree by construction. This was
+// previously a local reimplementation that only trimmed trailing newlines; it
+// diverged from drift's full-whitespace trim, so a target differing from the
+// current config by nothing but leading/trailing whitespace (a pasted snippet
+// with a leading blank line, trailing spaces) rendered here as a real change
+// yet was reported "synced" the moment it was delivered. Sharing one
+// normalizer keeps the preview honest: what it shows is what drift will
+// conclude. (CRLF->LF folding, the original reason this existed, is retained
+// inside confignorm.Normalize.)
 func normalize(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.TrimRight(s, "\n")
+	return confignorm.Normalize(s)
 }
 
 // itoa is a tiny helper to avoid importing strconv just for one call

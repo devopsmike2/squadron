@@ -108,3 +108,38 @@ func TestDiff_IdenticalIgnoresLineEndings(t *testing.T) {
 		t.Fatalf("expected exactly one line changed (+1/-1), got +%d -%d", r2.Added, r2.Removed)
 	}
 }
+
+// TestDiff_SurroundingWhitespaceOnly_MatchesDrift pins the fix for the
+// preview-vs-drift divergence: the preview normalizer previously trimmed only
+// trailing newlines, so a target differing from the current config by nothing
+// but leading/trailing whitespace rendered as a real change here — while drift
+// detection (which trims ALL surrounding whitespace) called the delivered
+// result "synced." Both now route through confignorm.Normalize, so a
+// whitespace-only difference must be Identical with zero add/remove, exactly as
+// drift will conclude. (Regresses on TrimRight-only normalization.)
+func TestDiff_SurroundingWhitespaceOnly_MatchesDrift(t *testing.T) {
+	base := "receivers:\n  otlp: {}\nservice:\n  pipelines: {}"
+	variants := map[string]string{
+		"leading blank line": "\n" + base,
+		"leading spaces":     "  " + base,
+		"trailing spaces":    base + "   ",
+		"trailing newlines":  base + "\n\n",
+	}
+	for name, target := range variants {
+		t.Run(name, func(t *testing.T) {
+			r := Diff(base, target)
+			if !r.Identical {
+				t.Fatalf("whitespace-only difference must be Identical (drift would say synced); got %+v", r)
+			}
+			if r.Added != 0 || r.Removed != 0 {
+				t.Fatalf("expected 0 added/removed, got +%d -%d", r.Added, r.Removed)
+			}
+		})
+	}
+
+	// A genuine content change is still detected.
+	changed := "receivers:\n  otlp: {}\nservice:\n  pipelines: {traces: {}}"
+	if r := Diff(base, changed); r.Identical {
+		t.Fatalf("a real content change must not collapse to Identical: %+v", r)
+	}
+}
