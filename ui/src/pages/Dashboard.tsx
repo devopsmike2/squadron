@@ -168,8 +168,16 @@ function DriftDonut({ agents }: { agents: Agent[] | undefined }) {
     .map((k) => ({ name: DRIFT_META[k].label, key: k, value: tally[k] }))
     .filter((d) => d.value > 0);
   const synced = tally.synced;
-  const syncedPct = total > 0 ? Math.round((synced / total) * 100) : 0;
-  const allSynced = total > 0 && synced === total;
+  // Sync % is only meaningful for agents that HAVE an assigned config
+  // ("managed" = synced or drifted). Agents with no_intent have no config
+  // bound yet and no_effective haven't reported back — neither is "out of
+  // sync" in a bad way, so counting them in the denominator makes a fresh
+  // fleet read as a scary "0% synced" when nothing is actually wrong. When
+  // no agent is managed yet, syncedPct is null and the donut shows a neutral
+  // label instead of 0%.
+  const managed = tally.synced + tally.drifted;
+  const syncedPct = managed > 0 ? Math.round((synced / managed) * 100) : null;
+  const allSynced = managed > 0 && synced === managed;
 
   return (
     <Card className="bg-card/80 border-border/70 backdrop-blur">
@@ -232,12 +240,28 @@ function DriftDonut({ agents }: { agents: Agent[] | undefined }) {
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <div className="font-tabular text-3xl font-semibold leading-none tracking-tight text-foreground">
-                {syncedPct}%
-              </div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">
-                Synced
-              </div>
+              {syncedPct !== null ? (
+                <>
+                  <div className="font-tabular text-3xl font-semibold leading-none tracking-tight text-foreground">
+                    {syncedPct}%
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">
+                    Synced
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+                    of {managed} managed
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-base font-semibold leading-none tracking-tight text-muted-foreground">
+                    {total > 0 ? "No config" : "—"}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1.5 text-center px-2">
+                    {total > 0 ? "bound yet" : "No agents"}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
