@@ -192,8 +192,14 @@ func (s *Storage) SaveErrorRateObservation(
 // is <= 0 the query is unfiltered on window_hours (returns rows for
 // any window). When since is the zero time the lower bound on
 // observed_at is dropped.
+// connectionID scopes the read to a single connection. The write key is
+// UNIQUE(connection_id, resource_arn, observed_at, window_hours), so passing a
+// non-empty connectionID keeps a caller from reading another connection's
+// observation for the same resource_arn. Empty = unscoped (the resource-ARN-only
+// HTTP read endpoints carry no connection dimension yet).
 func (s *Storage) ListErrorRateObservations(
 	ctx context.Context,
+	connectionID string,
 	resourceARN string,
 	windowHours int,
 	since time.Time,
@@ -214,6 +220,10 @@ func (s *Storage) ListErrorRateObservations(
 		FROM error_rate_observation
 		WHERE resource_arn = ?`
 	args := []any{resourceARN}
+	if connectionID != "" {
+		query += " AND connection_id = ?"
+		args = append(args, connectionID)
+	}
 	if windowHours > 0 {
 		query += " AND window_hours = ?"
 		args = append(args, windowHours)
@@ -263,8 +273,11 @@ func (s *Storage) ListErrorRateObservations(
 // The chunk-2 per-resource error_rate API endpoint uses this to
 // populate the "current_window" + "baseline_window" sub-shapes
 // (two calls, one per window_hours value).
+// connectionID scopes the read to a single connection (empty = unscoped); see
+// ListErrorRateObservations for the rationale.
 func (s *Storage) LatestErrorRateObservation(
 	ctx context.Context,
+	connectionID string,
 	resourceARN string,
 	windowHours int,
 ) (ErrorRateObservationRow, bool, error) {
@@ -272,21 +285,25 @@ func (s *Storage) LatestErrorRateObservation(
 		return ErrorRateObservationRow{}, false, nil
 	}
 
-	const stmt = `SELECT
+	query := `SELECT
 		id, connection_id, provider, surface,
 		account_id, region, resource_arn,
 		observed_at, window_hours, error_count,
 		invocation_count, error_rate, snapshot_json
 		FROM error_rate_observation
-		WHERE resource_arn = ? AND window_hours = ?
-		ORDER BY observed_at DESC
-		LIMIT 1`
+		WHERE resource_arn = ? AND window_hours = ?`
+	args := []any{resourceARN, windowHours}
+	if connectionID != "" {
+		query += " AND connection_id = ?"
+		args = append(args, connectionID)
+	}
+	query += " ORDER BY observed_at DESC LIMIT 1"
 
 	var (
 		r          ErrorRateObservationRow
 		observedAt time.Time
 	)
-	err := s.db.QueryRowContext(ctx, stmt, resourceARN, windowHours).Scan(
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&r.ID, &r.ConnectionID, &r.Provider, &r.Surface,
 		&r.AccountID, &r.Region, &r.ResourceARN,
 		&observedAt, &r.WindowHours, &r.ErrorCount,

@@ -36,7 +36,7 @@ type errorRateRowOutcome struct {
 	err   error
 }
 
-func (s *stubErrorRateReader) LatestErrorRateObservation(_ context.Context, resourceARN string, windowHours int) (sqlite.ErrorRateObservationRow, bool, error) {
+func (s *stubErrorRateReader) LatestErrorRateObservation(_ context.Context, _ string, resourceARN string, windowHours int) (sqlite.ErrorRateObservationRow, bool, error) {
 	if s.rows == nil {
 		return sqlite.ErrorRateObservationRow{}, false, nil
 	}

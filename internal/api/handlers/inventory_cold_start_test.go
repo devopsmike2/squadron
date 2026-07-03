@@ -43,6 +43,7 @@ func (s *stubColdStartStore) key(arn string, hours int) string {
 
 func (s *stubColdStartStore) LatestColdStartObservation(
 	_ context.Context,
+	_ string,
 	resourceARN string,
 	windowHours int,
 ) (sqlite.ColdStartObservationRow, bool, error) {
