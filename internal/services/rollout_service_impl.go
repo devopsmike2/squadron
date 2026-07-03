@@ -5,8 +5,6 @@ package services
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -836,7 +834,6 @@ func (s *RolloutServiceImpl) materializePlanStepConfig(ctx context.Context, step
 		return fmt.Errorf("plan step %d: agent service not wired; cannot materialize inline config", stepIndex)
 	}
 
-	hash := sha256.Sum256([]byte(snippet))
 	configID := uuid.NewString()
 	gid := groupID
 	// Config name encodes the plan and step for forensic clarity.
@@ -846,10 +843,16 @@ func (s *RolloutServiceImpl) materializePlanStepConfig(ctx context.Context, step
 	name := fmt.Sprintf("ai-plan-%s-step-%d", planID[:8], stepIndex)
 
 	cfg := &Config{
-		ID:         configID,
-		Name:       name,
-		GroupID:    &gid,
-		ConfigHash: hex.EncodeToString(hash[:]),
+		ID:      configID,
+		Name:    name,
+		GroupID: &gid,
+		// Hash with the SAME normalization (TrimSpace + CRLF->LF) that
+		// computeConfigDrift applies to the agent's effective config before
+		// comparing. Hashing raw bytes here — while Content preserves the
+		// operator's exact snippet for the push — made any snippet with
+		// surrounding whitespace/CRLF report false drift forever against a
+		// perfectly-synced agent, tripping the rollout's drift-abort criteria.
+		ConfigHash: hashConfigContent(snippet),
 		Content:    snippet,
 		Version:    1,
 		CreatedAt:  time.Now().UTC(),
