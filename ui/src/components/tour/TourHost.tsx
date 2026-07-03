@@ -18,13 +18,13 @@ import {
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import {
   findTour,
   TOUR_START_EVENT,
   type Tour,
   type TourStep,
 } from "@/components/tour/tours";
+import { Button } from "@/components/ui/button";
 
 const SPOTLIGHT_PAD = 8;
 const CARD_WIDTH = 380;
@@ -221,7 +221,8 @@ function cardAnchorStyle(
   const gap = SPOTLIGHT_PAD + 10;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const clampLeft = (l: number) => Math.max(12, Math.min(l, vw - CARD_WIDTH - 12));
+  const clampLeft = (l: number) =>
+    Math.max(12, Math.min(l, vw - CARD_WIDTH - 12));
 
   switch (placement) {
     case "top":
