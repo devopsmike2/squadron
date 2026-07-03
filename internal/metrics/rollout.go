@@ -22,6 +22,25 @@ type RolloutMetrics struct {
 	// degrades from "every 5s" toward "whenever the previous tick
 	// finishes".
 	SlowTicks Counter `metric:"rollout_engine_slow_ticks_total" tags:"component=rollouts" help:"Ticks that took longer than the tick interval"`
+
+	// VersionConflicts counts optimistic-concurrency conflicts the engine hit
+	// on persist — a concurrent writer (almost always an operator
+	// Pause/Abort/Resume) updated the rollout row after this tick's snapshot.
+	// A nonzero rate means operators and the engine are contending on the same
+	// rollouts; it is the denominator for the retried/yielded split below.
+	VersionConflicts Counter `metric:"rollout_engine_version_conflicts_total" tags:"component=rollouts" help:"Optimistic-concurrency conflicts detected on rollout persist"`
+
+	// VersionConflictsRetried counts conflicts the engine reconciled: it
+	// reloaded the fresh row, confirmed its intended transition still applied,
+	// re-projected it, and persisted — so the DB converged within the same
+	// tick (used at the stage-apply sites where the agent push already fired).
+	VersionConflictsRetried Counter `metric:"rollout_engine_version_conflicts_retried_total" tags:"component=rollouts" help:"Version conflicts the engine reconciled by reloading and re-applying its transition"`
+
+	// VersionConflictsYielded counts conflicts where the engine deferred to the
+	// concurrent writer: the reloaded state no longer permitted the transition
+	// (the operator's Pause/Abort won), so the engine skipped its change and
+	// let the operator's intent stand. This is the guard doing its job.
+	VersionConflictsYielded Counter `metric:"rollout_engine_version_conflicts_yielded_total" tags:"component=rollouts" help:"Version conflicts where the engine yielded to a concurrent (operator) write"`
 }
 
 // NewRolloutMetrics creates and initializes rollout engine metrics.

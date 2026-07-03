@@ -145,33 +145,115 @@ func (e *Engine) RolloutService() services.RolloutService {
 // version conflict (ErrRolloutVersionConflict) means a concurrent writer —
 // almost always an operator Pause/Abort/Resume — updated the row after this
 // tick's List snapshot was taken. That writer's intent takes precedence, so the
-// conflict is an EXPECTED event, not an error: it's logged at Info and the
-// caller skips the rest of this tick's work for the rollout. The engine re-lists
-// from storage every tick (~5s), so it re-reads the operator's new state and
-// re-decides against it next pass — no state is lost, the operator simply wins
-// the race. Any other persist error is logged at Warn (the prior behavior).
+// conflict is an EXPECTED event, not an error: the engine yields (records the
+// collision metric + a rollout.update_superseded audit, logs at Info) and the
+// caller skips the rest of this tick's work. The engine re-lists from storage
+// every tick (~5s), so it re-reads the operator's new state and re-decides
+// against it next pass — no state is lost, the operator simply wins the race.
+// Any other persist error is logged at Warn (the prior behavior).
 //
-// `action` names the transition for the log line. The error is returned
+// `action` names the transition for the log/metric/audit. The error is returned
 // unchanged so existing call sites keep their control flow (return vs continue).
-//
-// Note: at the stage-apply sites (start/advance/rollback) the agent config push
-// has already fired before Persist, so a conflict there leaves the DB one tick
-// behind agent reality until the next active tick (or operator Resume) reconciles
-// via an idempotent re-push. That bounded lag is acceptable; upgrading those
-// sites to reload-and-retry is a documented future refinement.
+// Sites where a real side-effect (an agent config push) has already fired use
+// persistWithReconcile instead, so the DB converges within the same tick.
 func (e *Engine) persist(ctx context.Context, r *services.Rollout, action string) error {
 	err := e.rolloutService.Persist(ctx, r)
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, applicationstore.ErrRolloutVersionConflict):
-		e.logger.Info("rollout engine: update superseded by a concurrent write; skipping this tick (re-reconciles next tick)",
-			zap.String("rollout_id", r.ID), zap.String("action", action))
+		e.noteConflict()
+		e.noteYield(ctx, r, action, "skipped; reconciles next tick")
 	default:
 		e.logger.Warn("rollout engine: persist failed",
 			zap.String("rollout_id", r.ID), zap.String("action", action), zap.Error(err))
 	}
 	return err
+}
+
+// persistWithReconcile is persist for the stage-apply sites (start / advance /
+// rollback), where the agent config push has ALREADY fired before the write. A
+// plain yield there would leave the stored state one tick behind agent reality
+// until the next active tick reconciled it. Instead, on a version conflict the
+// engine reloads the fresh row and asks `reapply` whether its transition still
+// holds against the concurrent writer's state:
+//
+//   - reapply returns true → it has re-projected the transition onto `fresh`;
+//     the engine persists once more so the DB converges THIS tick, copies the
+//     reconciled state back onto r (so the caller's subsequent audit/publish
+//     see it), counts a retry, and returns nil.
+//   - reapply returns false → the reloaded state no longer permits the
+//     transition (an operator Pause/Abort won); the engine yields cleanly
+//     (nil error — the operator's intent stands and there is nothing to do).
+//
+// The retry is bounded to a single attempt: a second conflict, a failed reload,
+// or a persist error yields rather than looping, so a hot row can never spin the
+// tick. Any non-conflict persist error is returned as before.
+func (e *Engine) persistWithReconcile(ctx context.Context, r *services.Rollout, action string, reapply func(fresh *services.Rollout) bool) error {
+	err := e.rolloutService.Persist(ctx, r)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, applicationstore.ErrRolloutVersionConflict) {
+		e.logger.Warn("rollout engine: persist failed",
+			zap.String("rollout_id", r.ID), zap.String("action", action), zap.Error(err))
+		return err
+	}
+	e.noteConflict()
+
+	fresh, gErr := e.rolloutService.Get(ctx, r.ID)
+	if gErr != nil || fresh == nil {
+		e.noteYield(ctx, r, action, "reload failed after conflict; reconciles next tick")
+		return err
+	}
+	if !reapply(fresh) {
+		// The concurrent writer's state makes the transition moot — a clean,
+		// expected win for the operator; not an error for the caller.
+		e.noteYield(ctx, r, action, "concurrent state supersedes transition")
+		return nil
+	}
+	if rErr := e.rolloutService.Persist(ctx, fresh); rErr != nil {
+		e.noteYield(ctx, r, action, "reconcile retry re-conflicted; reconciles next tick")
+		return rErr
+	}
+	// Reflect the reconciled row back onto r so the caller's follow-up audit /
+	// publishStateChange render the converged state, not the pre-reload copy.
+	*r = *fresh
+	e.noteRetry()
+	e.logger.Info("rollout engine: reconciled after a concurrent write; store converged this tick",
+		zap.String("rollout_id", r.ID), zap.String("action", action))
+	return nil
+}
+
+// noteConflict / noteRetry / noteYield centralize the collision telemetry so the
+// metric increments stay nil-safe (metrics are optional) and the yield path
+// consistently emits the operator-facing audit event.
+func (e *Engine) noteConflict() {
+	if e.metrics != nil {
+		e.metrics.VersionConflicts.Inc(1)
+	}
+}
+
+func (e *Engine) noteRetry() {
+	if e.metrics != nil {
+		e.metrics.VersionConflictsRetried.Inc(1)
+	}
+}
+
+// noteYield records the guard deferring to a concurrent write: a metric bump, an
+// Info log, and a rollout.update_superseded audit event so the operator can SEE
+// on the timeline (and via SIEM) that their Pause/Abort took precedence over the
+// engine's `action`.
+func (e *Engine) noteYield(ctx context.Context, r *services.Rollout, action, resolution string) {
+	if e.metrics != nil {
+		e.metrics.VersionConflictsYielded.Inc(1)
+	}
+	e.logger.Info("rollout engine: update superseded by a concurrent write; operator's change stands",
+		zap.String("rollout_id", r.ID), zap.String("action", action), zap.String("resolution", resolution))
+	e.recordAudit(ctx, r, "rollout.update_superseded", "update_superseded", map[string]any{
+		"engine_action": action,
+		"resolution":    resolution,
+	})
 }
 
 // AgentService returns the underlying agent service. Exposed so
@@ -524,7 +606,19 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 			zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
-	if err := e.persist(ctx, r, "start"); err != nil {
+	// The stage-0 config push already fired; reconcile so the store converges
+	// this tick unless an operator moved the rollout off pending in the window.
+	targetStage := r.CurrentStage
+	startedAt := r.StageStartedAt
+	if err := e.persistWithReconcile(ctx, r, "start", func(fresh *services.Rollout) bool {
+		if fresh.State != services.RolloutStatePending {
+			return false // an operator Pause/Abort won the race — honor it
+		}
+		fresh.State = services.RolloutStateInProgress
+		fresh.CurrentStage = targetStage
+		fresh.StageStartedAt = startedAt
+		return true
+	}); err != nil {
 		return
 	}
 	e.recordStageApplied(ctx, r, ids)
@@ -577,7 +671,23 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		r.CurrentStage--
 		return
 	}
-	if err := e.persist(ctx, r, "advance"); err != nil {
+	// The next-stage config push already fired; reconcile so the store converges
+	// this tick. Only re-apply if the fresh row is still in_progress and exactly
+	// one stage behind (our expected pre-advance position) — otherwise a
+	// concurrent operator Pause/Abort or another writer moved it, and we yield.
+	advancedStage := r.CurrentStage
+	advancedStartedAt := r.StageStartedAt
+	if err := e.persistWithReconcile(ctx, r, "advance", func(fresh *services.Rollout) bool {
+		if fresh.State != services.RolloutStateInProgress {
+			return false
+		}
+		if fresh.CurrentStage != advancedStage-1 {
+			return false // stage diverged under us — don't force
+		}
+		fresh.CurrentStage = advancedStage
+		fresh.StageStartedAt = advancedStartedAt
+		return true
+	}); err != nil {
 		return
 	}
 	// Emit the stage-applied (and, for a zero-agent stage, empty_canary)
@@ -820,7 +930,17 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		r.State = services.RolloutStateRolledBack
 		now := time.Now().UTC()
 		r.CompletedAt = &now
-		_ = e.persist(ctx, r, "rolled_back")
+		// Terminal bookkeeping after the rollback push already fired — force it
+		// to land this tick unless the row is somehow already rolled_back.
+		completedAt := r.CompletedAt
+		_ = e.persistWithReconcile(ctx, r, "rolled_back", func(fresh *services.Rollout) bool {
+			if fresh.State == services.RolloutStateRolledBack {
+				return false // already recorded — nothing to do
+			}
+			fresh.State = services.RolloutStateRolledBack
+			fresh.CompletedAt = completedAt
+			return true
+		})
 		e.recordAudit(ctx, r, "rollout.rolled_back", "rolled_back", nil)
 		e.publishStateChange(r, "rolled_back")
 		// End the rollout span with rolled_back status. The Error
