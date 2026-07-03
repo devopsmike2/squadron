@@ -246,6 +246,18 @@ func cappedIDs(lists [][]string, cap int) []string {
 	return out
 }
 
+// driftWarn logs a drift-path failure. These are best-effort/fail-open (a lost
+// drift event never fails the scan), but silently swallowing the error made a
+// missing drift signal impossible to diagnose — so the store/parse failure
+// modes get a Warn with the scope for context.
+func driftWarn(logger *zap.Logger, msg, provider, scopeID string, err error) {
+	if logger == nil {
+		return
+	}
+	logger.Warn("discovery scan drift: "+msg,
+		zap.String("provider", provider), zap.String("scope_id", scopeID), zap.Error(err))
+}
+
 // emitDriftIfChanged diffs the two most recent persisted scans for
 // (provider, scopeID) and records a discovery.scan_drift_detected audit event
 // when something changed. No-op when fewer than two scans exist (the first
@@ -257,16 +269,25 @@ func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, 
 	if store == nil || audit == nil {
 		return
 	}
+	// Distinguish genuine failures (log at Warn so a lost drift signal is
+	// diagnosable) from the legitimately-quiet "fewer than two scans" case (the
+	// first scheduled scan has nothing to compare against — no log, no event).
 	recs, err := store.ListDiscoveryScans(ctx, provider, scopeID, 2)
-	if err != nil || len(recs) < 2 {
+	if err != nil {
+		driftWarn(logger, "list scans failed", provider, scopeID, err)
+		return
+	}
+	if len(recs) < 2 {
 		return
 	}
 	newer, err := store.GetDiscoveryScan(ctx, recs[0].ScanID)
 	if err != nil || newer == nil {
+		driftWarn(logger, "fetch newer scan failed", provider, scopeID, err)
 		return
 	}
 	older, err := store.GetDiscoveryScan(ctx, recs[1].ScanID)
 	if err != nil || older == nil {
+		driftWarn(logger, "fetch older scan failed", provider, scopeID, err)
 		return
 	}
 	// A partial scan is not a trustworthy inventory: a tier/IAM failure (e.g.
@@ -288,6 +309,9 @@ func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, 
 	}
 	diff, err := discoverydrift.Between(older.ResultJSON, newer.ResultJSON)
 	if err != nil {
+		// Malformed persisted scan JSON: the diff can't be trusted, so no event
+		// — but log it, otherwise the drift signal vanishes with no trace.
+		driftWarn(logger, "diff computation failed", provider, scopeID, err)
 		return
 	}
 	if diff.TotalAdded == 0 && diff.TotalRemoved == 0 && diff.TotalInstrumentationChanged == 0 {
