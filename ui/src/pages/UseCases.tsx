@@ -6,8 +6,16 @@
 // the sample data — no real cloud, agent, or config required. New tours are
 // added declaratively in components/tour/tours.ts.
 
-import { Database, PlayCircle, Radar, Trash2, type LucideIcon } from "lucide-react";
+import {
+  ArrowRight,
+  Database,
+  PlayCircle,
+  Radar,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { enableDemoData, removeDemoData } from "@/api/demoData";
 import { startTour, TOURS } from "@/components/tour/tours";
@@ -20,16 +28,27 @@ const ICONS: Record<string, LucideIcon> = {
 };
 
 export default function UseCasesPage() {
+  const navigate = useNavigate();
   const [busy, setBusy] = useState<"enable" | "remove" | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const onEnable = async () => {
+  // One-click orchestration: seed the full demo scenario and land the user
+  // straight on a populated page, collapsing the old two-step (enable here,
+  // then go hunt for a page to look at). If the data's already loaded we skip
+  // the seed and just navigate. Fleet Status is the landing target because
+  // it's the app's home and the demo seeds a live fleet + cost spike there.
+  const onEnableAndExplore = async () => {
+    if (enabled) {
+      navigate("/");
+      return;
+    }
     setBusy("enable");
     setError(null);
     try {
       await enableDemoData();
       setEnabled(true);
+      navigate("/");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not enable demo data.");
     } finally {
@@ -79,9 +98,24 @@ export default function UseCasesPage() {
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          <Button onClick={onEnable} disabled={busy !== null} size="sm">
-            <Database className="mr-1.5 h-4 w-4" />
-            {busy === "enable" ? "Loading…" : "Enable demo data"}
+          <Button
+            onClick={onEnableAndExplore}
+            disabled={busy !== null}
+            size="sm"
+          >
+            {busy === "enable" ? (
+              "Loading…"
+            ) : enabled ? (
+              <>
+                Explore Fleet
+                <ArrowRight className="ml-1.5 h-4 w-4" />
+              </>
+            ) : (
+              <>
+                <Database className="mr-1.5 h-4 w-4" />
+                Enable &amp; explore
+              </>
+            )}
           </Button>
           <Button
             onClick={onRemove}
