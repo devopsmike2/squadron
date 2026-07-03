@@ -65,6 +65,73 @@ const scenes = [
     waitFor: "text=AI Assist",
     description: "Config editor with AI Assist dropdown visible",
   },
+  {
+    // Discovery inventory on the built-in demo account. The deep-link
+    // ?account=demo-000000000000 auto-selects the demo connection, lands on
+    // the Inventory tab, and auto-runs the (canned) scan — no cloud creds,
+    // no clicks. The result is a realistic mixed inventory: 5 EC2 (some
+    // instrumented, some not, incl. a Windows box), 3 Lambda, 2 RDS.
+    name: "07-discovery-inventory",
+    url: "/discovery/aws?account=demo-000000000000",
+    waitFor: "text=Scan result for account",
+    description:
+      "Discovery inventory — instrumented vs uninstrumented compute, functions & databases (AWS · GCP · Azure · OCI)",
+    afterLoad: async (page) => {
+      // Dismiss any first-run onboarding toast so it doesn't intrude.
+      await page.keyboard.press("Escape").catch(() => {});
+      // The Wizard tab is forceMount and sits above the results, so scroll
+      // the populated scan result into frame.
+      const anchor = page
+        .getByText("Scan result for account", { exact: false })
+        .first();
+      await anchor.scrollIntoViewIfNeeded().catch(() => {});
+      await page.evaluate(() => window.scrollBy(0, -90));
+      await page.waitForTimeout(1000);
+    },
+  },
+  {
+    // Same demo account — after the auto-scan, the demo recommendations
+    // auto-generate. Switch to the Recommendations tab to show the AI plan:
+    // merge-ready Terraform steps (ADOT collector, Lambda layer, RDS levers)
+    // an operator reviews and opens as a PR.
+    name: "08-discovery-recommendations",
+    url: "/discovery/aws?account=demo-000000000000",
+    waitFor: "text=Scan result for account",
+    description: "AI recommendations → merge-ready Terraform, review & open a PR",
+    afterLoad: async (page) => {
+      await page.keyboard.press("Escape").catch(() => {});
+      // Demo recs auto-generate right after the auto-scan — give them a beat.
+      await page.waitForTimeout(4500);
+      try {
+        await page
+          .getByRole("tab", { name: /recommendations/i })
+          .first()
+          .click({ timeout: 3000 });
+      } catch {}
+      // Wait for the canned demo plan to render.
+      const recAnchor = page
+        .getByText("Install the ADOT Collector", { exact: false })
+        .first();
+      try {
+        await recAnchor.waitFor({ timeout: 8000 });
+        await recAnchor.scrollIntoViewIfNeeded();
+        await page.evaluate(() => window.scrollBy(0, -120));
+      } catch {}
+      await page.waitForTimeout(1000);
+    },
+  },
+  {
+    name: "09-rollouts",
+    url: "/rollouts",
+    waitFor: "text=Stage a new config",
+    description: "Staged config rollouts with AI reasoning + approval gates",
+  },
+  {
+    name: "10-audit",
+    url: "/audit",
+    waitFor: "text=Every state change in Squadron",
+    description: "Audit log — incidents, drift transitions, alerts, every action",
+  },
 ];
 
 async function main() {
@@ -75,6 +142,18 @@ async function main() {
     viewport: VIEWPORT,
     deviceScaleFactor: 2, // retina for sharp screenshots
     colorScheme: "dark",
+  });
+
+  // Suppress the one-shot "Press ⌘K to jump anywhere" onboarding toast so it
+  // doesn't intrude on any marketing screenshot. The hint fires once per
+  // browser gated on this localStorage flag (CommandPaletteHint.tsx); setting
+  // it before first paint keeps the toast from ever appearing.
+  await context.addInitScript(() => {
+    try {
+      localStorage.setItem("squadron.hint.cmdk.v1", new Date().toISOString());
+    } catch {
+      /* storage disabled — nothing to do */
+    }
   });
 
   for (const scene of scenes) {
