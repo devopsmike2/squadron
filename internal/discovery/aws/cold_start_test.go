@@ -306,7 +306,7 @@ func (s *recordingColdStartStore) SaveColdStartObservation(_ context.Context, ro
 	return nil
 }
 
-func (s *recordingColdStartStore) LatestColdStartObservation(_ context.Context, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error) {
+func (s *recordingColdStartStore) LatestColdStartObservation(_ context.Context, _ string, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := len(s.rows) - 1; i >= 0; i-- {

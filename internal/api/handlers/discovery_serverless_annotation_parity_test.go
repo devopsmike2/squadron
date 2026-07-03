@@ -25,7 +25,7 @@ import (
 type parityErrorRateStore struct{}
 
 func (parityErrorRateStore) LatestErrorRateObservation(
-	_ context.Context, resourceARN string, _ int,
+	_ context.Context, _ string, resourceARN string, _ int,
 ) (sqlite.ErrorRateObservationRow, bool, error) {
 	return sqlite.ErrorRateObservationRow{
 		ResourceARN:     resourceARN,

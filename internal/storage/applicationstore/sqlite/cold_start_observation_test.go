@@ -49,7 +49,7 @@ func TestColdStartObservation_SaveAndList_RoundTrip(t *testing.T) {
 		require.NoError(t, store.SaveColdStartObservation(ctx,
 			makeColdStartRow("conn-1", arn, now, 24, 4230.5)))
 
-		got, err := store.ListColdStartObservations(ctx, arn, 24, time.Time{})
+		got, err := store.ListColdStartObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		assert.Equal(t, "conn-1", got[0].ConnectionID)
@@ -61,6 +61,53 @@ func TestColdStartObservation_SaveAndList_RoundTrip(t *testing.T) {
 		assert.Equal(t, 142, got[0].SampleCount)
 		assert.True(t, got[0].ObservedAt.Equal(now), "observed_at round-trip")
 		assert.NotEmpty(t, got[0].SnapshotJSON)
+	})
+}
+
+// TestColdStartObservation_ScopedByConnection — two connections observing the
+// SAME resource_arn produce distinct rows (the write key includes
+// connection_id). A non-empty connectionID scopes the read to that connection
+// so a caller can't read another connection's observation; an empty
+// connectionID stays unscoped and returns the newest across connections.
+func TestColdStartObservation_ScopedByConnection(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+
+		const arn = "arn:aws:lambda:us-east-1:123456789012:function:shared"
+		older := time.Date(2026, 6, 25, 10, 0, 0, 0, time.UTC)
+		newer := time.Date(2026, 6, 25, 14, 0, 0, 0, time.UTC)
+
+		// conn-A observed earlier (p95 1000), conn-B observed later (p95 9000).
+		require.NoError(t, store.SaveColdStartObservation(ctx,
+			makeColdStartRow("conn-A", arn, older, 24, 1000)))
+		require.NoError(t, store.SaveColdStartObservation(ctx,
+			makeColdStartRow("conn-B", arn, newer, 24, 9000)))
+
+		// Scoped to conn-A → conn-A's row, even though conn-B's is newer.
+		a, ok, err := store.LatestColdStartObservation(ctx, "conn-A", arn, 24)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, "conn-A", a.ConnectionID)
+		assert.InDelta(t, 1000.0, a.P95Ms, 0.001, "must NOT bleed conn-B's p95")
+
+		// Scoped to conn-B → conn-B's row.
+		b, ok, err := store.LatestColdStartObservation(ctx, "conn-B", arn, 24)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, "conn-B", b.ConnectionID)
+
+		// Unscoped ("") → newest across connections (conn-B).
+		u, ok, err := store.LatestColdStartObservation(ctx, "", arn, 24)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, "conn-B", u.ConnectionID)
+
+		// List scoped to conn-A returns only conn-A's row.
+		list, err := store.ListColdStartObservations(ctx, "conn-A", arn, 24, time.Time{})
+		require.NoError(t, err)
+		require.Len(t, list, 1)
+		assert.Equal(t, "conn-A", list[0].ConnectionID)
 	})
 }
 
@@ -87,7 +134,7 @@ func TestColdStartObservation_SaveDuplicate_HandlesUniqueConstraint(t *testing.T
 		updated.SampleCount = 200
 		require.NoError(t, store.SaveColdStartObservation(ctx, updated))
 
-		got, err := store.ListColdStartObservations(ctx, arn, 24, time.Time{})
+		got, err := store.ListColdStartObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1, "duplicate upsert must NOT produce a second row")
 		assert.InDelta(t, 5500.0, got[0].P95Ms, 0.001, "p95 refreshed")
@@ -114,18 +161,18 @@ func TestColdStartObservation_LatestForResource_ReturnsMostRecent(t *testing.T) 
 				makeColdStartRow("conn-1", arn, ts, 24, 1000.0+float64(ts.Day()))))
 		}
 
-		latest, ok, err := store.LatestColdStartObservation(ctx, arn, 24)
+		latest, ok, err := store.LatestColdStartObservation(ctx, "", arn, 24)
 		require.NoError(t, err)
 		require.True(t, ok, "latest must be found")
 		assert.True(t, latest.ObservedAt.Equal(t2), "latest observed_at must be t2")
 
 		// Not-found path — different window_hours value.
-		_, ok, err = store.LatestColdStartObservation(ctx, arn, 168)
+		_, ok, err = store.LatestColdStartObservation(ctx, "", arn, 168)
 		require.NoError(t, err)
 		assert.False(t, ok, "no rows at window_hours=168 → ok==false")
 
 		// Not-found path — unknown resource_arn.
-		_, ok, err = store.LatestColdStartObservation(ctx,
+		_, ok, err = store.LatestColdStartObservation(ctx, "",
 			"arn:aws:lambda:us-east-1:123456789012:function:absent", 24)
 		require.NoError(t, err)
 		assert.False(t, ok, "absent resource_arn → ok==false")
@@ -153,13 +200,13 @@ func TestColdStartObservation_ListSince_FiltersCorrectly(t *testing.T) {
 
 		// since = 2026-06-20 → only the recent row passes.
 		cutoff := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
-		got, err := store.ListColdStartObservations(ctx, arn, 24, cutoff)
+		got, err := store.ListColdStartObservations(ctx, "", arn, 24, cutoff)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		assert.True(t, got[0].ObservedAt.Equal(recent), "only the recent row must pass")
 
 		// since = zero time → both rows pass.
-		got, err = store.ListColdStartObservations(ctx, arn, 24, time.Time{})
+		got, err = store.ListColdStartObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		assert.Len(t, got, 2, "zero-time since must drop the lower bound")
 	})
@@ -183,7 +230,7 @@ func TestColdStartObservation_DeleteBefore_RemovesOldRows(t *testing.T) {
 			makeColdStartRow("conn-1", arn, recent, 24, 2000.0)))
 
 		// Sanity — both rows present before the sweep.
-		got, err := store.ListColdStartObservations(ctx, arn, 24, time.Time{})
+		got, err := store.ListColdStartObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 2)
 
@@ -192,7 +239,7 @@ func TestColdStartObservation_DeleteBefore_RemovesOldRows(t *testing.T) {
 		cutoff := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 		require.NoError(t, store.DeleteColdStartObservationsBefore(ctx, cutoff))
 
-		got, err = store.ListColdStartObservations(ctx, arn, 24, time.Time{})
+		got, err = store.ListColdStartObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1, "old row must be deleted")
 		assert.True(t, got[0].ObservedAt.Equal(recent), "the surviving row must be the recent one")
@@ -222,17 +269,17 @@ func TestColdStartObservation_DistinctWindowHours_DontCollide(t *testing.T) {
 			makeColdStartRow("conn-1", arn, now, 168, 2820.0)))
 
 		// Unfiltered query (windowHours=0) returns both rows.
-		got, err := store.ListColdStartObservations(ctx, arn, 0, time.Time{})
+		got, err := store.ListColdStartObservations(ctx, "", arn, 0, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 2, "both window_hours rows must coexist at the same observed_at")
 
 		// Per-window queries return the right row each.
-		current, ok, err := store.LatestColdStartObservation(ctx, arn, 24)
+		current, ok, err := store.LatestColdStartObservation(ctx, "", arn, 24)
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.InDelta(t, 4230.0, current.P95Ms, 0.001)
 
-		baseline, ok, err := store.LatestColdStartObservation(ctx, arn, 168)
+		baseline, ok, err := store.LatestColdStartObservation(ctx, "", arn, 168)
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.InDelta(t, 2820.0, baseline.P95Ms, 0.001)
@@ -292,7 +339,7 @@ func TestMigration_v13_to_v14_Idempotent(t *testing.T) {
 		// Re-run the inline migration.
 		require.NoError(t, store.migrate())
 
-		got, err := store.ListColdStartObservations(ctx,
+		got, err := store.ListColdStartObservations(ctx, "",
 			"arn:aws:lambda:us-east-1:111111111111:function:idempotent", 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1, "pre-existing row must survive the re-migration")

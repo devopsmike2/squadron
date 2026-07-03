@@ -50,6 +50,7 @@ import (
 type ErrorRateObservationStore interface {
 	LatestErrorRateObservation(
 		ctx context.Context,
+		connectionID string,
 		resourceARN string,
 		windowHours int,
 	) (sqlite.ErrorRateObservationRow, bool, error)
@@ -102,7 +103,7 @@ func AnnotateServerlessWithErrorRate(
 		arn := snapshots[i].ResourceARN
 
 		current, currentOK, err := store.LatestErrorRateObservation(
-			ctx, arn, proposer.ErrorRateCurrentWindowHours,
+			ctx, "", arn, proposer.ErrorRateCurrentWindowHours,
 		)
 		if err != nil {
 			if logger != nil {
@@ -133,7 +134,7 @@ func AnnotateServerlessWithErrorRate(
 		// predicate as false (the cell renders un-colored) and
 		// keeps CurrentErrorRate populated.
 		baseline, baselineOK, err := store.LatestErrorRateObservation(
-			ctx, arn, proposer.ErrorRateBaselineWindowHours,
+			ctx, "", arn, proposer.ErrorRateBaselineWindowHours,
 		)
 		if err != nil {
 			if logger != nil {

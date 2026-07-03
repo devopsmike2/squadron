@@ -34,7 +34,7 @@ type coldStartRowOutcome struct {
 	err   error
 }
 
-func (s *stubColdStartReader) LatestColdStartObservation(_ context.Context, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error) {
+func (s *stubColdStartReader) LatestColdStartObservation(_ context.Context, _ string, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error) {
 	if s.rows == nil {
 		return sqlite.ColdStartObservationRow{}, false, nil
 	}

@@ -66,6 +66,7 @@ type ColdStartResponse struct {
 type ColdStartObservationReader interface {
 	LatestColdStartObservation(
 		ctx context.Context,
+		connectionID string,
 		resourceARN string,
 		windowHours int,
 	) (sqlite.ColdStartObservationRow, bool, error)
@@ -197,7 +198,7 @@ func (h *DiscoveryServerlessColdStartHandlers) HandleColdStart(c *gin.Context) {
 	currentHours := h.constants.CurrentWindowHours()
 	baselineHours := h.constants.BaselineWindowHours()
 
-	current, currentFound, err := h.store.LatestColdStartObservation(ctx, resourceARN, currentHours)
+	current, currentFound, err := h.store.LatestColdStartObservation(ctx, "", resourceARN, currentHours)
 	if err != nil {
 		h.logger.Warn("cold start: current window lookup failed",
 			zap.String("resource_arn", resourceARN),
@@ -206,7 +207,7 @@ func (h *DiscoveryServerlessColdStartHandlers) HandleColdStart(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "cold-start lookup failed"})
 		return
 	}
-	baseline, baselineFound, err := h.store.LatestColdStartObservation(ctx, resourceARN, baselineHours)
+	baseline, baselineFound, err := h.store.LatestColdStartObservation(ctx, "", resourceARN, baselineHours)
 	if err != nil {
 		h.logger.Warn("cold start: baseline window lookup failed",
 			zap.String("resource_arn", resourceARN),

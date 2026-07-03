@@ -38,7 +38,7 @@ type fakeObsStore struct{}
 func (fakeObsStore) SaveColdStartObservation(_ context.Context, _ sqlite.ColdStartObservationRow) error {
 	return nil
 }
-func (fakeObsStore) LatestColdStartObservation(_ context.Context, _ string, _ int) (sqlite.ColdStartObservationRow, bool, error) {
+func (fakeObsStore) LatestColdStartObservation(_ context.Context, _ string, _ string, _ int) (sqlite.ColdStartObservationRow, bool, error) {
 	return sqlite.ColdStartObservationRow{}, false, nil
 }
 func (fakeObsStore) SaveErrorRateObservation(_ context.Context, _ sqlite.ErrorRateObservationRow) error {

@@ -109,7 +109,7 @@ func AnnotateServerlessWithColdStart(
 		}
 		arn := snapshots[i].ResourceARN
 
-		current, currentOK, err := lookup.LatestColdStartObservation(ctx, arn, currentHours)
+		current, currentOK, err := lookup.LatestColdStartObservation(ctx, "", arn, currentHours)
 		if err != nil {
 			if logger != nil {
 				logger.Warn("inventory cold_start lookup failed",
@@ -142,7 +142,7 @@ func AnnotateServerlessWithColdStart(
 		// younger than 7 days — in that case the threshold can't
 		// trip, so we stamp ExceedsThreshold=false and let the UI
 		// render the cell at the default color.
-		baseline, baselineOK, err := lookup.LatestColdStartObservation(ctx, arn, baselineHours)
+		baseline, baselineOK, err := lookup.LatestColdStartObservation(ctx, "", arn, baselineHours)
 		if err != nil {
 			if logger != nil {
 				logger.Warn("inventory cold_start baseline lookup failed",

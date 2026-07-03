@@ -79,7 +79,7 @@ const ColdStartBaselineMinimumSamples = 50
 // live there from chunk 1 (cold_start_observation.go).
 type ColdStartStore interface {
 	SaveColdStartObservation(ctx context.Context, row sqlite.ColdStartObservationRow) error
-	LatestColdStartObservation(ctx context.Context, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error)
+	LatestColdStartObservation(ctx context.Context, connectionID string, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error)
 }
 
 // ColdStartDetectionResult captures the outcome of one detection

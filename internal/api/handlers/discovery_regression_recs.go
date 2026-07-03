@@ -139,14 +139,14 @@ func appendColdStartRegressionRecs(
 		// the reasoning text. Optional — absence just yields a terser reasoning
 		// string, never a dropped recommendation.
 		if coldStartStore != nil {
-			if base, ok, err := coldStartStore.LatestColdStartObservation(ctx, sv.ResourceARN, regressionBaselineWindowHours); err == nil && ok {
+			if base, ok, err := coldStartStore.LatestColdStartObservation(ctx, scope.ConnectionID, sv.ResourceARN, regressionBaselineWindowHours); err == nil && ok {
 				baselineP95 = base.P95Ms
 				baselineSamples = base.SampleCount
 				if base.P95Ms > 0 {
 					ratio = currentP95 / base.P95Ms
 				}
 			}
-			if cur, ok, err := coldStartStore.LatestColdStartObservation(ctx, sv.ResourceARN, regressionCurrentWindowHours); err == nil && ok {
+			if cur, ok, err := coldStartStore.LatestColdStartObservation(ctx, scope.ConnectionID, sv.ResourceARN, regressionCurrentWindowHours); err == nil && ok {
 				currentSamples = cur.SampleCount
 			}
 		}
@@ -211,8 +211,8 @@ func appendErrorRateRegressionRecs(
 		if build == nil {
 			continue
 		}
-		cur, okCur, errCur := errorRateStore.LatestErrorRateObservation(ctx, sv.ResourceARN, regressionCurrentWindowHours)
-		base, okBase, errBase := errorRateStore.LatestErrorRateObservation(ctx, sv.ResourceARN, regressionBaselineWindowHours)
+		cur, okCur, errCur := errorRateStore.LatestErrorRateObservation(ctx, scope.ConnectionID, sv.ResourceARN, regressionCurrentWindowHours)
+		base, okBase, errBase := errorRateStore.LatestErrorRateObservation(ctx, scope.ConnectionID, sv.ResourceARN, regressionBaselineWindowHours)
 		if errCur != nil || errBase != nil || !okCur || !okBase {
 			continue
 		}

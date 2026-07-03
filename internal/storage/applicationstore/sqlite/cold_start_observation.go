@@ -185,8 +185,15 @@ func (s *Storage) SaveColdStartObservation(
 // branch always scopes by resource_arn. When windowHours is <= 0 the
 // query is unfiltered on window_hours (returns rows for any window).
 // When since is the zero time the lower bound on observed_at is dropped.
+// connectionID scopes the read to a single connection. The write key is
+// UNIQUE(connection_id, resource_arn, observed_at, window_hours), so two
+// connections observing the same resource_arn produce distinct rows; passing a
+// non-empty connectionID keeps a caller from reading another connection's
+// observation. An empty connectionID leaves the read unscoped (the
+// resource-ARN-only HTTP read endpoints carry no connection dimension yet).
 func (s *Storage) ListColdStartObservations(
 	ctx context.Context,
+	connectionID string,
 	resourceARN string,
 	windowHours int,
 	since time.Time,
@@ -207,6 +214,10 @@ func (s *Storage) ListColdStartObservations(
 		FROM cold_start_observation
 		WHERE resource_arn = ?`
 	args := []any{resourceARN}
+	if connectionID != "" {
+		query += " AND connection_id = ?"
+		args = append(args, connectionID)
+	}
 	if windowHours > 0 {
 		query += " AND window_hours = ?"
 		args = append(args, windowHours)
@@ -256,8 +267,11 @@ func (s *Storage) ListColdStartObservations(
 // The chunk-3 per-resource cold_start API endpoint uses this to populate
 // the "current_window" + "baseline_window" sub-shapes (two calls, one
 // per window_hours value).
+// connectionID scopes the read to a single connection (empty = unscoped); see
+// ListColdStartObservations for the rationale.
 func (s *Storage) LatestColdStartObservation(
 	ctx context.Context,
+	connectionID string,
 	resourceARN string,
 	windowHours int,
 ) (ColdStartObservationRow, bool, error) {
@@ -265,21 +279,25 @@ func (s *Storage) LatestColdStartObservation(
 		return ColdStartObservationRow{}, false, nil
 	}
 
-	const stmt = `SELECT
+	query := `SELECT
 		id, connection_id, provider, surface,
 		account_id, region, resource_arn,
 		observed_at, window_hours, p95_ms,
 		sample_count, snapshot_json
 		FROM cold_start_observation
-		WHERE resource_arn = ? AND window_hours = ?
-		ORDER BY observed_at DESC
-		LIMIT 1`
+		WHERE resource_arn = ? AND window_hours = ?`
+	args := []any{resourceARN, windowHours}
+	if connectionID != "" {
+		query += " AND connection_id = ?"
+		args = append(args, connectionID)
+	}
+	query += " ORDER BY observed_at DESC LIMIT 1"
 
 	var (
 		r          ColdStartObservationRow
 		observedAt time.Time
 	)
-	err := s.db.QueryRowContext(ctx, stmt, resourceARN, windowHours).Scan(
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&r.ID, &r.ConnectionID, &r.Provider, &r.Surface,
 		&r.AccountID, &r.Region, &r.ResourceARN,
 		&observedAt, &r.WindowHours, &r.P95Ms,

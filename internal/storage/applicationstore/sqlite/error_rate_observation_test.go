@@ -53,7 +53,7 @@ func TestErrorRateObservation_SaveAndList_RoundTrip(t *testing.T) {
 		require.NoError(t, store.SaveErrorRateObservation(ctx,
 			makeErrorRateRow("conn-1", arn, now, 24, 87, 3200)))
 
-		got, err := store.ListErrorRateObservations(ctx, arn, 24, time.Time{})
+		got, err := store.ListErrorRateObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		assert.Equal(t, "conn-1", got[0].ConnectionID)
@@ -91,7 +91,7 @@ func TestErrorRateObservation_SaveDuplicate_HandlesUniqueConstraint(t *testing.T
 		updated := makeErrorRateRow("conn-1", arn, now, 24, 200, 5000)
 		require.NoError(t, store.SaveErrorRateObservation(ctx, updated))
 
-		got, err := store.ListErrorRateObservations(ctx, arn, 24, time.Time{})
+		got, err := store.ListErrorRateObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1, "duplicate upsert must NOT produce a second row")
 		assert.Equal(t, 200, got[0].ErrorCount, "error_count refreshed")
@@ -119,19 +119,19 @@ func TestErrorRateObservation_LatestForResource_ReturnsMostRecent(t *testing.T) 
 				makeErrorRateRow("conn-1", arn, ts, 24, 50+i*10, 2000+i*100)))
 		}
 
-		latest, ok, err := store.LatestErrorRateObservation(ctx, arn, 24)
+		latest, ok, err := store.LatestErrorRateObservation(ctx, "", arn, 24)
 		require.NoError(t, err)
 		require.True(t, ok, "latest must be found")
 		assert.True(t, latest.ObservedAt.Equal(t2), "latest observed_at must be t2")
 		assert.Equal(t, 70, latest.ErrorCount, "latest error_count = the t2 row's value")
 
 		// Not-found path — different window_hours value.
-		_, ok, err = store.LatestErrorRateObservation(ctx, arn, 168)
+		_, ok, err = store.LatestErrorRateObservation(ctx, "", arn, 168)
 		require.NoError(t, err)
 		assert.False(t, ok, "no rows at window_hours=168 → ok==false")
 
 		// Not-found path — unknown resource_arn.
-		_, ok, err = store.LatestErrorRateObservation(ctx,
+		_, ok, err = store.LatestErrorRateObservation(ctx, "",
 			"arn:aws:lambda:us-east-1:123456789012:function:absent", 24)
 		require.NoError(t, err)
 		assert.False(t, ok, "absent resource_arn → ok==false")
@@ -159,13 +159,13 @@ func TestErrorRateObservation_ListSince_FiltersCorrectly(t *testing.T) {
 
 		// since = 2026-06-20 → only the recent row passes.
 		cutoff := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
-		got, err := store.ListErrorRateObservations(ctx, arn, 24, cutoff)
+		got, err := store.ListErrorRateObservations(ctx, "", arn, 24, cutoff)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		assert.True(t, got[0].ObservedAt.Equal(recent), "only the recent row must pass")
 
 		// since = zero time → both rows pass.
-		got, err = store.ListErrorRateObservations(ctx, arn, 24, time.Time{})
+		got, err = store.ListErrorRateObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		assert.Len(t, got, 2, "zero-time since must drop the lower bound")
 	})
@@ -189,7 +189,7 @@ func TestErrorRateObservation_DeleteBefore_RemovesOldRows(t *testing.T) {
 			makeErrorRateRow("conn-1", arn, recent, 24, 80, 2000)))
 
 		// Sanity — both rows present before the sweep.
-		got, err := store.ListErrorRateObservations(ctx, arn, 24, time.Time{})
+		got, err := store.ListErrorRateObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 2)
 
@@ -198,7 +198,7 @@ func TestErrorRateObservation_DeleteBefore_RemovesOldRows(t *testing.T) {
 		cutoff := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 		require.NoError(t, store.DeleteErrorRateObservationsBefore(ctx, cutoff))
 
-		got, err = store.ListErrorRateObservations(ctx, arn, 24, time.Time{})
+		got, err = store.ListErrorRateObservations(ctx, "", arn, 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1, "old row must be deleted")
 		assert.True(t, got[0].ObservedAt.Equal(recent), "the surviving row must be the recent one")
@@ -229,18 +229,18 @@ func TestErrorRateObservation_DistinctWindowHours_DontCollide(t *testing.T) {
 			makeErrorRateRow("conn-1", arn, now, 168, 192, 22400)))
 
 		// Unfiltered query (windowHours=0) returns both rows.
-		got, err := store.ListErrorRateObservations(ctx, arn, 0, time.Time{})
+		got, err := store.ListErrorRateObservations(ctx, "", arn, 0, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 2, "both window_hours rows must coexist at the same observed_at")
 
 		// Per-window queries return the right row each.
-		current, ok, err := store.LatestErrorRateObservation(ctx, arn, 24)
+		current, ok, err := store.LatestErrorRateObservation(ctx, "", arn, 24)
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, 87, current.ErrorCount, "current row carries the 24h count")
 		assert.Equal(t, 3200, current.InvocationCount)
 
-		baseline, ok, err := store.LatestErrorRateObservation(ctx, arn, 168)
+		baseline, ok, err := store.LatestErrorRateObservation(ctx, "", arn, 168)
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, 192, baseline.ErrorCount, "baseline row carries the 168h count")
@@ -297,7 +297,7 @@ func TestMigration_v14_to_v15_Idempotent(t *testing.T) {
 		// Re-run the inline migration.
 		require.NoError(t, store.migrate())
 
-		got, err := store.ListErrorRateObservations(ctx,
+		got, err := store.ListErrorRateObservations(ctx, "",
 			"arn:aws:lambda:us-east-1:111111111111:function:idempotent", 24, time.Time{})
 		require.NoError(t, err)
 		require.Len(t, got, 1, "pre-existing row must survive the re-migration")

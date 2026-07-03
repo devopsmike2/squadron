@@ -25,6 +25,7 @@ type stubErrorRateStore struct {
 
 func (s *stubErrorRateStore) LatestErrorRateObservation(
 	_ context.Context,
+	_ string,
 	resourceARN string,
 	windowHours int,
 ) (sqlite.ErrorRateObservationRow, bool, error) {

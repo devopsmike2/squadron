@@ -36,7 +36,7 @@ func (s *recordingColdStartStore) SaveColdStartObservation(_ context.Context, ro
 	return nil
 }
 
-func (s *recordingColdStartStore) LatestColdStartObservation(_ context.Context, _ string, _ int) (sqlite.ColdStartObservationRow, bool, error) {
+func (s *recordingColdStartStore) LatestColdStartObservation(_ context.Context, _ string, _ string, _ int) (sqlite.ColdStartObservationRow, bool, error) {
 	return sqlite.ColdStartObservationRow{}, false, nil
 }
 

@@ -78,6 +78,7 @@ type ErrorRateResponse struct {
 type ErrorRateObservationReader interface {
 	LatestErrorRateObservation(
 		ctx context.Context,
+		connectionID string,
 		resourceARN string,
 		windowHours int,
 	) (sqlite.ErrorRateObservationRow, bool, error)
@@ -155,7 +156,7 @@ func (h *DiscoveryServerlessErrorRateHandlers) HandleErrorRate(c *gin.Context) {
 	currentHours := proposer.ErrorRateCurrentWindowHours
 	baselineHours := proposer.ErrorRateBaselineWindowHours
 
-	current, currentFound, err := h.store.LatestErrorRateObservation(ctx, resourceARN, currentHours)
+	current, currentFound, err := h.store.LatestErrorRateObservation(ctx, "", resourceARN, currentHours)
 	if err != nil {
 		h.logger.Warn("error rate: current window lookup failed",
 			zap.String("resource_arn", resourceARN),
@@ -164,7 +165,7 @@ func (h *DiscoveryServerlessErrorRateHandlers) HandleErrorRate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error-rate lookup failed"})
 		return
 	}
-	baseline, baselineFound, err := h.store.LatestErrorRateObservation(ctx, resourceARN, baselineHours)
+	baseline, baselineFound, err := h.store.LatestErrorRateObservation(ctx, "", resourceARN, baselineHours)
 	if err != nil {
 		h.logger.Warn("error rate: baseline window lookup failed",
 			zap.String("resource_arn", resourceARN),
