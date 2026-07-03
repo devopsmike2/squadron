@@ -269,6 +269,23 @@ func emitDriftIfChanged(ctx context.Context, store handlers.DiscoveryScanStore, 
 	if err != nil || older == nil {
 		return
 	}
+	// A partial scan is not a trustworthy inventory: a tier/IAM failure (e.g.
+	// AccessDenied on ec2:DescribeInstances) sets Partial=true and yields an
+	// empty or short category, which the diff would read as "everything
+	// removed" — not because resources disappeared but because they were never
+	// scanned. Worse, once a full scan follows a persisted partial one, the
+	// partial becomes the older side and the same absence reads as "everything
+	// added". Either side being partial makes the before/after untrustworthy,
+	// so skip until two consecutive full scans give a real comparison. (The
+	// scan itself is still persisted for history; only the drift signal waits.)
+	if newer.Partial || older.Partial {
+		if logger != nil {
+			logger.Debug("discovery scan drift skipped: partial scan in comparison window",
+				zap.String("provider", provider), zap.String("scope_id", scopeID),
+				zap.Bool("newer_partial", newer.Partial), zap.Bool("older_partial", older.Partial))
+		}
+		return
+	}
 	diff, err := discoverydrift.Between(older.ResultJSON, newer.ResultJSON)
 	if err != nil {
 		return
