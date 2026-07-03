@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/otlp"
@@ -968,89 +967,59 @@ func (s *Storage) writeOTLPGauges(ctx context.Context, gauges []otlp.MetricGauge
 	})
 }
 
+// writeOTLPHistograms bulk-writes histogram data points via the Appender —
+// same atomicity contract as writeOTLPSums/writeOTLPGauges.
+//
+// Previously this path chunked the slice into 50-row batches, each in its OWN
+// BeginTx/Commit. That broke the worker pool's retry-without-duplicates contract
+// (see appendRows): if a transient DuckDB error hit on, say, the 3rd chunk, the
+// first two chunks had already committed, and the worker's writeWithRetry re-ran
+// the ENTIRE WriteMetricsFromOTLP — re-inserting those rows and silently
+// double-counting histogram counts/sums. Routing through appendRows wraps the
+// whole write in a single BEGIN/COMMIT on a pinned connection, so on ANY error
+// zero rows persist and the batch is safe to retry (TestAppendRows_ErrorLeavesZeroRows).
+//
+// bucket_counts is BIGINT[] but OTLP carries the counts as uint64, so each slice
+// is copied into an []int64 the Appender can bind to the LIST column.
 func (s *Storage) writeOTLPHistograms(ctx context.Context, histograms []otlp.MetricHistogramData) error {
 	if len(histograms) == 0 {
 		return nil
 	}
 
-	query := `
-		INSERT INTO metrics_histogram (
-			timestamp, agent_id, group_id, group_name, service_name,
-			metric_name, metric_description, count, sum, min, max,
-			bucket_counts, explicit_bounds, resource_attributes, metric_attributes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	s.logger.Debug("Starting writeOTLPHistograms transaction", zap.Int("count", len(histograms)))
-
-	// Process in smaller batches to avoid overwhelming the database
-	batchSize := 50
-	for i := 0; i < len(histograms); i += batchSize {
-		end := i + batchSize
-		if end > len(histograms) {
-			end = len(histograms)
-		}
-
-		batch := histograms[i:end]
-		s.logger.Debug("Processing histogram batch", zap.Int("start", i), zap.Int("end", end), zap.Int("batch_size", len(batch)))
-
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			s.logger.Error("Failed to begin transaction", zap.Error(err))
-			return fmt.Errorf("failed to begin transaction: %w", err)
-		}
-
-		stmt, err := tx.PrepareContext(ctx, query)
-		if err != nil {
-			_ = tx.Rollback()
-			s.logger.Error("Failed to prepare statement", zap.Error(err))
-			return fmt.Errorf("failed to prepare statement: %w", err)
-		}
-
-		for j, m := range batch {
+	return s.appendRows(ctx, "metrics_histogram", func(ap *duckdb.Appender) error {
+		for i := range histograms {
+			m := &histograms[i]
 			resourceAttrsJSON, _ := json.Marshal(m.ResourceAttributes)
 			metricAttrsJSON, _ := json.Marshal(m.Attributes)
 
-			// Convert slices to arrays for DuckDB
-			bucketCountsStr := fmt.Sprintf("[%s]", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(m.BucketCounts)), ","), "[]"))
-			explicitBoundsStr := fmt.Sprintf("[%s]", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(m.ExplicitBounds)), ","), "[]"))
+			// bucket_counts BIGINT[] expects int64; OTLP carries uint64.
+			bucketCounts := make([]int64, len(m.BucketCounts))
+			for j, c := range m.BucketCounts {
+				bucketCounts[j] = int64(c)
+			}
 
-			_, err = stmt.ExecContext(ctx,
-				m.TimeUnix,
-				m.AgentID,
-				m.GroupID,
-				m.GroupName,
-				m.ServiceName,
-				m.MetricName,
-				m.MetricDescription,
-				m.Count,
-				m.Sum,
-				m.Min,
-				m.Max,
-				bucketCountsStr,
-				explicitBoundsStr,
-				string(resourceAttrsJSON),
-				string(metricAttrsJSON),
-			)
-			if err != nil {
-				stmt.Close()
-				_ = tx.Rollback()
-				s.logger.Error("Failed to insert histogram metric", zap.Error(err), zap.Int("batch_index", j), zap.String("metric_name", m.MetricName))
-				return fmt.Errorf("failed to insert histogram metric: %w", err)
+			if err := ap.AppendRow(
+				m.TimeUnix,                // timestamp
+				m.AgentID,                 // agent_id
+				m.GroupID,                 // group_id
+				m.GroupName,               // group_name
+				m.ServiceName,             // service_name
+				m.MetricName,              // metric_name
+				m.MetricDescription,       // metric_description
+				int64(m.Count),            // count (BIGINT)
+				m.Sum,                     // sum
+				m.Min,                     // min
+				m.Max,                     // max
+				bucketCounts,              // bucket_counts (BIGINT[])
+				m.ExplicitBounds,          // explicit_bounds (DOUBLE[])
+				string(resourceAttrsJSON), // resource_attributes
+				string(metricAttrsJSON),   // metric_attributes
+			); err != nil {
+				return fmt.Errorf("failed to append histogram metric %q: %w", m.MetricName, err)
 			}
 		}
-
-		stmt.Close()
-		if err := tx.Commit(); err != nil {
-			s.logger.Error("Failed to commit transaction", zap.Error(err))
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
-		s.logger.Debug("Histogram batch committed successfully", zap.Int("batch_size", len(batch)))
-	}
-
-	s.logger.Debug("All histogram batches completed successfully")
-	return nil
+		return nil
+	})
 }
 
 // WriteBatchMeta inserts one row into otlp_batches. Best-effort —
