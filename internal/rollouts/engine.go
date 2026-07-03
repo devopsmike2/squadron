@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -138,6 +139,39 @@ func (e *Engine) SetChangeWindowProvider(p changewindow.Provider) {
 // widened constructor signature. Read-only by convention.
 func (e *Engine) RolloutService() services.RolloutService {
 	return e.rolloutService
+}
+
+// persist writes the rollout via the service and classifies the outcome. A
+// version conflict (ErrRolloutVersionConflict) means a concurrent writer —
+// almost always an operator Pause/Abort/Resume — updated the row after this
+// tick's List snapshot was taken. That writer's intent takes precedence, so the
+// conflict is an EXPECTED event, not an error: it's logged at Info and the
+// caller skips the rest of this tick's work for the rollout. The engine re-lists
+// from storage every tick (~5s), so it re-reads the operator's new state and
+// re-decides against it next pass — no state is lost, the operator simply wins
+// the race. Any other persist error is logged at Warn (the prior behavior).
+//
+// `action` names the transition for the log line. The error is returned
+// unchanged so existing call sites keep their control flow (return vs continue).
+//
+// Note: at the stage-apply sites (start/advance/rollback) the agent config push
+// has already fired before Persist, so a conflict there leaves the DB one tick
+// behind agent reality until the next active tick (or operator Resume) reconciles
+// via an idempotent re-push. That bounded lag is acceptable; upgrading those
+// sites to reload-and-retry is a documented future refinement.
+func (e *Engine) persist(ctx context.Context, r *services.Rollout, action string) error {
+	err := e.rolloutService.Persist(ctx, r)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, applicationstore.ErrRolloutVersionConflict):
+		e.logger.Info("rollout engine: update superseded by a concurrent write; skipping this tick (re-reconciles next tick)",
+			zap.String("rollout_id", r.ID), zap.String("action", action))
+	default:
+		e.logger.Warn("rollout engine: persist failed",
+			zap.String("rollout_id", r.ID), zap.String("action", action), zap.Error(err))
+	}
+	return err
 }
 
 // AgentService returns the underlying agent service. Exposed so
@@ -443,10 +477,7 @@ func (e *Engine) applyBlackoutCheck(ctx context.Context, r *services.Rollout) bo
 		if r.LastBlackoutReason != "" {
 			r.LastBlackoutReason = ""
 			r.LastBlackoutAt = nil
-			if err := e.rolloutService.Persist(ctx, r); err != nil {
-				e.logger.Warn("rollout engine: failed to clear blackout reason",
-					zap.String("rollout_id", r.ID), zap.Error(err))
-			}
+			_ = e.persist(ctx, r, "clear blackout reason")
 		}
 		return false
 	}
@@ -456,10 +487,7 @@ func (e *Engine) applyBlackoutCheck(ctx context.Context, r *services.Rollout) bo
 	now := time.Now().UTC()
 	r.LastBlackoutReason = active.Name
 	r.LastBlackoutAt = &now
-	if err := e.rolloutService.Persist(ctx, r); err != nil {
-		e.logger.Warn("rollout engine: failed to persist blackout reason",
-			zap.String("rollout_id", r.ID), zap.Error(err))
-	}
+	_ = e.persist(ctx, r, "persist blackout reason")
 	// Audit once per (rollout, window) pair so the log doesn't
 	// thrash every 5s. Detect via reason change.
 	if previousReason != active.Name {
@@ -496,8 +524,7 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 			zap.String("rollout_id", r.ID), zap.Error(err))
 		return
 	}
-	if err := e.rolloutService.Persist(ctx, r); err != nil {
-		e.logger.Warn("rollout engine: failed to persist start", zap.String("rollout_id", r.ID), zap.Error(err))
+	if err := e.persist(ctx, r, "start"); err != nil {
 		return
 	}
 	e.recordStageApplied(ctx, r, ids)
@@ -550,8 +577,7 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		r.CurrentStage--
 		return
 	}
-	if err := e.rolloutService.Persist(ctx, r); err != nil {
-		e.logger.Warn("rollout engine: failed to persist advance", zap.String("rollout_id", r.ID), zap.Error(err))
+	if err := e.persist(ctx, r, "advance"); err != nil {
 		return
 	}
 	// Emit the stage-applied (and, for a zero-agent stage, empty_canary)
@@ -570,8 +596,7 @@ func (e *Engine) finish(ctx context.Context, r *services.Rollout) {
 	r.State = services.RolloutStateSucceeded
 	now := time.Now().UTC()
 	r.CompletedAt = &now
-	if err := e.rolloutService.Persist(ctx, r); err != nil {
-		e.logger.Warn("rollout engine: failed to persist completion", zap.String("rollout_id", r.ID), zap.Error(err))
+	if err := e.persist(ctx, r, "finish"); err != nil {
 		return
 	}
 	e.recordAudit(ctx, r, "rollout.succeeded", "succeeded", nil)
@@ -641,11 +666,7 @@ func (e *Engine) advancePlan(ctx context.Context, r *services.Rollout) {
 		return
 	}
 	next.State = services.RolloutStatePending
-	if err := e.rolloutService.Persist(ctx, next); err != nil {
-		e.logger.Warn("rollout engine: failed to promote next plan step",
-			zap.String("plan_id", r.PlanID),
-			zap.Int("next_step", next.PlanStepIndex),
-			zap.Error(err))
+	if err := e.persist(ctx, next, "promote next plan step"); err != nil {
 		return
 	}
 	e.recordAudit(ctx, next, "plan.step_started", "plan_step_started", map[string]any{
@@ -664,8 +685,7 @@ func (e *Engine) advancePlan(ctx context.Context, r *services.Rollout) {
 func (e *Engine) triggerAbort(ctx context.Context, r *services.Rollout, reason string) {
 	r.State = services.RolloutStateAborted
 	r.AbortReason = reason
-	if err := e.rolloutService.Persist(ctx, r); err != nil {
-		e.logger.Warn("rollout engine: failed to persist abort", zap.String("rollout_id", r.ID), zap.Error(err))
+	if err := e.persist(ctx, r, "abort"); err != nil {
 		return
 	}
 	e.recordAudit(ctx, r, "rollout.aborted", "aborted", map[string]any{"reason": reason})
@@ -800,10 +820,7 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		r.State = services.RolloutStateRolledBack
 		now := time.Now().UTC()
 		r.CompletedAt = &now
-		if err := e.rolloutService.Persist(ctx, r); err != nil {
-			e.logger.Warn("rollout engine: failed to persist rolled_back state",
-				zap.String("rollout_id", r.ID), zap.Error(err))
-		}
+		_ = e.persist(ctx, r, "rolled_back")
 		e.recordAudit(ctx, r, "rollout.rolled_back", "rolled_back", nil)
 		e.publishStateChange(r, "rolled_back")
 		// End the rollout span with rolled_back status. The Error

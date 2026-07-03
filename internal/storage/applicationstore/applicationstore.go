@@ -86,3 +86,9 @@ const (
 	StepKindRollout = types.StepKindRollout
 	StepKindAction  = types.StepKindAction
 )
+
+// ErrRolloutVersionConflict re-exports the storage-layer optimistic-concurrency
+// sentinel so callers that reference this package's aliased rollout types (the
+// rollout engine, in particular) can match the conflict via errors.Is without
+// importing the types package directly.
+var ErrRolloutVersionConflict = types.ErrRolloutVersionConflict

@@ -1283,7 +1283,18 @@ func (s *RolloutServiceImpl) Resume(ctx context.Context, id string) (*Rollout, e
 // (state transitions, current_stage bumps, etc.). Wraps the storage call
 // so the engine doesn't take an application-store dependency directly.
 func (s *RolloutServiceImpl) Persist(ctx context.Context, rollout *Rollout) error {
-	return s.appStore.UpdateRollout(ctx, toStorageRollout(rollout))
+	// toStorageRollout builds a throwaway storage struct; the optimistic-
+	// concurrency CAS bumps ITS Version on success. Propagate that back onto
+	// the caller's *Rollout so a subsequent Persist on the same object (the
+	// engine advances then, e.g., clears a blackout badge within one tick)
+	// carries the fresh version and doesn't self-conflict against its own
+	// prior write.
+	storage := toStorageRollout(rollout)
+	if err := s.appStore.UpdateRollout(ctx, storage); err != nil {
+		return err
+	}
+	rollout.Version = storage.Version
+	return nil
 }
 
 // Approve transitions a rollout from pending_approval to pending so the
@@ -1753,9 +1764,12 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		// so memory stays consistent across UpdateRollout cycles
 		// driven by the exclude-from-learning handler.
 		ExcludeFromLearning: r.ExcludeFromLearning,
-		CreatedAt:           r.CreatedAt,
-		UpdatedAt:           r.UpdatedAt,
-		CompletedAt:         r.CompletedAt,
+		// Optimistic-concurrency counter: carried through so the engine's
+		// Persist participates in the storage CAS (see Rollout.Version).
+		Version:     r.Version,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
+		CompletedAt: r.CompletedAt,
 	}
 }
 
@@ -1851,8 +1865,11 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		// so memory stays consistent across UpdateRollout cycles
 		// driven by the exclude-from-learning handler.
 		ExcludeFromLearning: r.ExcludeFromLearning,
-		CreatedAt:           r.CreatedAt,
-		UpdatedAt:           r.UpdatedAt,
-		CompletedAt:         r.CompletedAt,
+		// Optimistic-concurrency counter: a loaded rollout keeps its stored
+		// Version so the engine's later Persist can CAS against it.
+		Version:     r.Version,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
+		CompletedAt: r.CompletedAt,
 	}
 }
