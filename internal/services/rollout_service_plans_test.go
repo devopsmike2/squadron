@@ -972,3 +972,50 @@ func TestRollout_StandaloneHasEmptyPlanFields(t *testing.T) {
 	assert.Empty(t, created.PlanID)
 	assert.Equal(t, 0, created.PlanStepIndex)
 }
+
+// Regression: the ConfigHash stored for a materialized inline snippet must be
+// computed with the SAME normalization (TrimSpace + CRLF->LF) that
+// computeConfigDrift applies to the agent's effective config. Before the fix
+// the snippet was hashed raw, so a snippet carrying surrounding whitespace/CRLF
+// hashed differently than the normalized agent config and reported false drift
+// forever — tripping the rollout's drift-abort criteria on the AI-plan loop.
+func TestRollout_MaterializedInlineSnippetHashMatchesDriftNormalization(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	gid := "g"
+	require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "G"}))
+	agentSvc := NewAgentService(store, nil, nil, nil, zap.NewNop())
+	svc := &RolloutServiceImpl{appStore: store, agentService: agentSvc, logger: zap.NewNop()}
+
+	// Same logical config (a lint-valid collector config): one clean, one padded
+	// with a leading blank CRLF line + trailing whitespace. TrimSpace + CRLF->LF
+	// normalize the padding away; both must hash identically.
+	clean := "receivers:\n  otlp:\n    protocols:\n      grpc: {}\nprocessors:\n  batch: {}\nexporters:\n  debug: {}\nservice:\n  pipelines:\n    metrics:\n      receivers: [otlp]\n      processors: [batch]\n      exporters: [debug]\n"
+	padded := "\r\n" + clean + "  \n\n"
+
+	mk := func(snippet string) *types.Config {
+		created, _, err := svc.CreatePlan(ctx, []RolloutInput{{
+			Name: "s", GroupID: gid, InlineConfigSnippet: snippet,
+			Stages: []RolloutStage{{Mode: RolloutStageModePercent, Percentage: 100}},
+		}})
+		require.NoError(t, err)
+		require.Len(t, created, 1)
+		cfg, err := store.GetConfig(ctx, created[0].TargetConfigID)
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		return cfg
+	}
+
+	pc := mk(padded)
+	cc := mk(clean)
+
+	// Content preserves the operator's exact bytes for the push...
+	assert.Equal(t, padded, pc.Content)
+	// ...but the ConfigHash is normalized, so padded and clean hash identically
+	// (this assertion FAILS on the pre-fix raw-bytes hash).
+	assert.Equal(t, cc.ConfigHash, pc.ConfigHash,
+		"padded and clean snippets must produce the same normalized ConfigHash")
+	// And it equals exactly what computeConfigDrift computes for the agent.
+	assert.Equal(t, hashConfigContent(padded), pc.ConfigHash)
+	assert.NotEmpty(t, pc.ConfigHash)
+}
