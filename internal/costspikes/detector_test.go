@@ -302,6 +302,30 @@ func TestDetectorDisabledPricerIsNoOp(t *testing.T) {
 	}
 }
 
+// TestDetectorBaselineTrimsSingleOutlierOnSmallPool pins the small-history
+// robustness fix. With a pool in the range the gate admits (samples>=5 →
+// pool>=4), a literal 10% trim rounds to zero, so a single anomalous reading
+// would fully inflate the baseline mean — exactly what the trim exists to
+// prevent. The fix forces one off each end, so the single highest and lowest
+// samples are excluded and the baseline stays at the steady value.
+func TestDetectorBaselineTrimsSingleOutlierOnSmallPool(t *testing.T) {
+	det := New(DefaultConfig(), &fakeStore{}, &fakePricer{enabled: true}, &fakeInsights{})
+	// baseline() pools all but the most-recent sample. These six give a
+	// 5-element pool {100,100,100,100,5000}: without the fix the mean is
+	// (400+5000)/5 = 1080; with it, the low 100 and the 5000 blip are trimmed,
+	// leaving {100,100,100} → 100.
+	for _, v := range []float64{100, 100, 100, 100, 5000, 100} {
+		det.recordSample(v)
+	}
+	got, ok := det.baseline()
+	if !ok {
+		t.Fatal("baseline should be available with 6 samples")
+	}
+	if got != 100 {
+		t.Fatalf("baseline = %v, want 100 (single outlier must be trimmed on a small pool)", got)
+	}
+}
+
 // Belt-and-suspenders: verify the ID generator returns distinct
 // values across rapid back-to-back calls. The detector relies on
 // this for uniqueness within a single second.

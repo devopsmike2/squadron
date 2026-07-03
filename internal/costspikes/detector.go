@@ -246,7 +246,21 @@ func (d *Detector) baseline() (float64, bool) {
 	// Trim top + bottom 10% to be robust against single anomalous
 	// readings (a brief blip shouldn't permanently raise the
 	// baseline and cause us to miss the next spike).
+	//
+	// A literal 10% rounds to zero for the small pools this gate still
+	// admits (samples>=5 → pool>=4, so len(pool)/10 == 0 until 10 pooled
+	// samples). With trim==0 the mean is fully exposed to a single
+	// anomalous reading — precisely what this trim exists to prevent, and
+	// worst of all in the early-warm-up window where a spurious high
+	// reading would inflate the baseline and SUPPRESS the next real spike.
+	// So force at least one off each end whenever the pool can spare it
+	// (>2 elements → >=1 remains), which guarantees the single highest and
+	// single lowest sample are always excluded. At pool>=20 the 10% takes
+	// over naturally.
 	trim := len(pool) / 10
+	if trim == 0 && len(pool) > 2 {
+		trim = 1
+	}
 	pool = pool[trim : len(pool)-trim]
 	if len(pool) == 0 {
 		return 0, false
