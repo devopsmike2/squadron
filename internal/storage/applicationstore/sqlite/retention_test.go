@@ -240,14 +240,35 @@ func TestRetention_DeleteIACRecommendationVerdictsBefore(t *testing.T) {
 				excluded, updated, updated)
 			require.NoError(t, err)
 		}
+		insertCheckRun := func(id string, excluded int, updated time.Time, runID *int64, conclusion *string) {
+			_, err := store.db.ExecContext(ctx,
+				`INSERT INTO iac_recommendation_verdicts
+				 (recommendation_id, connection_id, account_id, region, recommendation_kind,
+				  exclude_from_learning, created_at, updated_at, check_run_id, check_run_conclusion)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, "conn-1", "acc-1", "us-east-1", "ec2-adot",
+				excluded, updated, updated, runID, conclusion)
+			require.NoError(t, err)
+		}
+		runID := int64(4242)
+		concluded := "success"
+
 		insert("old-cleared", 0, old)       // prunable
 		insert("old-active", 1, old)        // active exclusion — must survive
 		insert("recent-cleared", 0, recent) // recent — must survive
+		// OPEN check-run row aged past the cutoff: check_run_id set, conclusion
+		// NULL. Load-bearing — the merge/close webhook still needs it to post the
+		// final conclusion — so it must survive despite being old + cleared.
+		insertCheckRun("old-open-checkrun", 0, old, &runID, nil)
+		// RESOLVED check-run row aged past the cutoff: back-signal already
+		// delivered (conclusion set), so it is prunable like any old cleared row.
+		insertCheckRun("old-resolved-checkrun", 0, old, &runID, &concluded)
 
 		cutoff := time.Now().UTC().Add(-90 * 24 * time.Hour)
 		n, err := store.DeleteIACRecommendationVerdictsBefore(ctx, cutoff)
 		require.NoError(t, err)
-		require.Equal(t, int64(1), n, "only the old cleared verdict should be pruned")
+		require.Equal(t, int64(2), n,
+			"old cleared verdict + resolved check-run row pruned; open check-run row protected")
 
 		var got []string
 		rows, err := store.db.QueryContext(ctx,
@@ -260,7 +281,7 @@ func TestRetention_DeleteIACRecommendationVerdictsBefore(t *testing.T) {
 			got = append(got, id)
 		}
 		require.NoError(t, rows.Err())
-		require.Equal(t, []string{"old-active", "recent-cleared"}, got,
-			"active exclusion and recent cleared row must survive")
+		require.Equal(t, []string{"old-active", "old-open-checkrun", "recent-cleared"}, got,
+			"active exclusion, OPEN check-run row, and recent cleared row must survive")
 	})
 }
