@@ -107,9 +107,21 @@ func Diff(current, target string) Result {
 	}
 }
 
-// normalize strips the trailing newline if present so files that differ
-// only by trailing-whitespace are treated as identical.
+// normalize canonicalizes line endings and trailing newlines so the diff
+// reflects real content changes, not incidental formatting.
+//
+// CRLF->LF conversion matches the drift-detection normalization
+// (services.normalizeConfigContent). Without it, a config whose only
+// difference from the current one is its line endings (e.g. an operator
+// pastes a Windows-CRLF snippet, or the effective config comes back with
+// different endings) splits into per-line values like "receivers:\r\n" vs
+// "receivers:\n" — so EVERY line reads as changed and the preview renders the
+// whole file as removed+re-added with inflated add/remove counts, while drift
+// detection (which normalizes CRLF) correctly reports the agent as synced. The
+// trailing-newline trim then keeps a missing terminator from rendering as a
+// phantom diff line.
 func normalize(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
 	return strings.TrimRight(s, "\n")
 }
 
