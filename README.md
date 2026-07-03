@@ -27,6 +27,10 @@ open http://localhost:8080/quickstart
 | ![Cost Insights](./marketing/scenes/03-cost-insights.png) | ![Recommendations](./marketing/scenes/04-recommendations.png) |
 | **Fleet Status** — live overview of agents, drift, alerts, and recent activity. | **Config Editor** — Monaco-powered with AI Assist + Squadron Lint + live pipeline view. |
 | ![Fleet Status](./marketing/scenes/05-fleet-status.png) | ![Config Editor](./marketing/scenes/06-config-editor.png) |
+| **Discovery** — scan AWS · GCP · Azure · OCI for what's running and what's missing OpenTelemetry (compute, functions, databases). | **AI recommendations** — a merge-ready Terraform fix per gap; review it, then open a PR (or copy the snippet). |
+| ![Discovery inventory](./marketing/scenes/07-discovery-inventory.png) | ![AI recommendations](./marketing/scenes/08-discovery-recommendations.png) |
+| **Staged rollouts** — deploy config changes in stages with AI reasoning and approval gates; drift is caught and reversible. | **Audit log** — every state change: incidents, drift transitions, alerts, rollouts, approvals. |
+| ![Staged rollouts](./marketing/scenes/09-rollouts.png) | ![Audit log](./marketing/scenes/10-audit.png) |
 
 > Squadron is a fork of and derivative work based on
 > [Lawrence OSS](https://github.com/getlawrence/lawrence-oss),
