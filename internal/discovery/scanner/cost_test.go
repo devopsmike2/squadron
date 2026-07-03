@@ -135,3 +135,30 @@ func TestCostQuerier_SkeletonReturnsNotImplemented(t *testing.T) {
 	assert.Equal(t, "arn:aws:sqs:...:dlq", res.ResourceID, "skeleton echoes request fields")
 	assert.False(t, res.Covered, "not-measured by default")
 }
+
+// TestNewCostBudgetGovernorFromUSD_ExactMicroUSD: dollars->micro-USD must use
+// exact arithmetic, not float truncation. Before the fix, MicroUSD(0.33*1e6)
+// yielded 329999 (0.33*1e6 == 329999.9999... in float64), silently gating one
+// $0.01 cost query short of the operator's intended budget.
+func TestNewCostBudgetGovernorFromUSD_ExactMicroUSD(t *testing.T) {
+	cases := map[float64]MicroUSD{
+		0.33: 330000,  // the truncation-prone case (was 329999)
+		1.10: 1100000, // another inexact float product
+		0.01: 10000,   // one cost query's worth
+		5.0:  5000000, // whole dollars
+		2.50: 2500000, // exact half
+	}
+	for usd, want := range cases {
+		g := NewCostBudgetGovernorFromUSD(usd)
+		assert.Equal(t, want, g.Ceiling(), "budget $%.2f should map to %d micro-USD", usd, want)
+	}
+
+	// The $0.33 budget must authorize exactly 33 sequential $0.01 queries and
+	// reject the 34th — the operator-visible symptom of the truncation bug.
+	g := NewCostBudgetGovernorFromUSD(0.33)
+	const perCall MicroUSD = 10000 // $0.01
+	for i := 0; i < 33; i++ {
+		assert.NoErrorf(t, g.Authorize(perCall), "call %d of 33 must be authorized", i+1)
+	}
+	assert.Error(t, g.Authorize(perCall), "the 34th $0.01 call must exceed the $0.33 budget")
+}

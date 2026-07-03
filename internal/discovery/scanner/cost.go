@@ -323,6 +323,16 @@ func NewCostBudgetGovernorFromUSD(budgetUSD float64) *CostBudgetGovernor {
 	if budgetUSD <= 0 {
 		return NewCostBudgetGovernor(DefaultMonthlyCostBudgetMicroUSD, DefaultCostBudgetWindow)
 	}
-	ceiling := MicroUSD(budgetUSD * float64(MicroUSDPerDollar))
+	// Convert dollars->micro-USD via the exact-arithmetic parser instead of
+	// float math. MicroUSD(budgetUSD * 1e6) TRUNCATES: 0.33*1e6 evaluates to
+	// 329999.9999... in float64, so a $0.33 budget became 329999 micro-USD
+	// (not 330000) and silently gated one $0.01 cost query short — the exact
+	// float-for-money anti-pattern ParseDecimalToMicroUSD exists to avoid.
+	// Rendering to a 6-decimal string rounds at micro precision, then the
+	// parser does the conversion with integer arithmetic.
+	ceiling, err := ParseDecimalToMicroUSD(fmt.Sprintf("%.6f", budgetUSD))
+	if err != nil || ceiling <= 0 {
+		return NewCostBudgetGovernor(DefaultMonthlyCostBudgetMicroUSD, DefaultCostBudgetWindow)
+	}
 	return NewCostBudgetGovernor(ceiling, DefaultCostBudgetWindow)
 }
