@@ -80,3 +80,31 @@ func TestDiff_UnifiedDiffShape(t *testing.T) {
 	require.True(strings.Contains(r.Unified, "+++ target"), "should have target header")
 	require.True(strings.Contains(r.Unified, "@@"), "should have at least one hunk header")
 }
+
+// TestDiff_IdenticalIgnoresLineEndings: a config that differs from the current
+// one ONLY by line endings (CRLF vs LF) must render as identical, not as a
+// spurious whole-file diff. This aligns configdiff with drift detection
+// (services.normalizeConfigContent), which normalizes CRLF->LF and would report
+// the agent as synced. Before the fix every line read as changed.
+func TestDiff_IdenticalIgnoresLineEndings(t *testing.T) {
+	lf := "receivers:\n  otlp:\n    protocols:\n      grpc: {}\nservice:\n  pipelines: {}\n"
+	crlf := strings.ReplaceAll(lf, "\n", "\r\n")
+
+	r := Diff(lf, crlf)
+	if !r.Identical {
+		t.Fatalf("CRLF-vs-LF-only difference must be Identical; got %+v", r)
+	}
+	if r.Added != 0 || r.Removed != 0 {
+		t.Fatalf("expected 0 added/removed for line-ending-only diff, got +%d -%d", r.Added, r.Removed)
+	}
+
+	// A real content change under CRLF must still be detected (one line changed).
+	crlfChanged := strings.ReplaceAll("receivers:\n  otlp:\n    protocols:\n      grpc: {}\nservice:\n  pipelines: {x: 1}\n", "\n", "\r\n")
+	r2 := Diff(lf, crlfChanged)
+	if r2.Identical {
+		t.Fatalf("a real content change must not be reported identical: %+v", r2)
+	}
+	if r2.Added != 1 || r2.Removed != 1 {
+		t.Fatalf("expected exactly one line changed (+1/-1), got +%d -%d", r2.Added, r2.Removed)
+	}
+}
