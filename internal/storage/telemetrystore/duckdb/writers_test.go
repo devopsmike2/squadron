@@ -148,10 +148,13 @@ func TestWriteMetricsFromOTLP_Appender(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	// 120 sums + 120 gauges: crosses the old 50-row chunk boundary to
-	// prove counts stay exact, and exercises both appender tables.
+	// 120 of each: crosses the old 50-row chunk boundary (histograms used to
+	// commit per-50-row batch, which broke the retry-without-duplicates
+	// contract) to prove counts stay exact, and exercises all three appender
+	// tables.
 	var sums []otlp.MetricSumData
 	var gauges []otlp.MetricGaugeData
+	var histograms []otlp.MetricHistogramData
 	for i := 0; i < 120; i++ {
 		sums = append(sums, otlp.MetricSumData{
 			TimeUnix: now, AgentID: "agent-1", ServiceName: "svc",
@@ -163,15 +166,23 @@ func TestWriteMetricsFromOTLP_Appender(t *testing.T) {
 			MetricName: "synthetic.queue.depth", Value: float64(i) / 2,
 			Attributes: map[string]string{"shard": "b"},
 		})
+		histograms = append(histograms, otlp.MetricHistogramData{
+			TimeUnix: now, AgentID: "agent-1", ServiceName: "svc",
+			MetricName: "synthetic.latency", Count: uint64(i), Sum: float64(i) * 1.5,
+			Min: 0, Max: float64(i),
+			BucketCounts:   []uint64{uint64(i), uint64(i) + 1, uint64(i) + 2},
+			ExplicitBounds: []float64{1, 5, 10},
+			Attributes:     map[string]string{"shard": "c"},
+		})
 	}
-	if err := s.WriteMetricsFromOTLP(ctx, sums, gauges, nil); err != nil {
+	if err := s.WriteMetricsFromOTLP(ctx, sums, gauges, histograms); err != nil {
 		t.Fatalf("WriteMetricsFromOTLP: %v", err)
 	}
 
 	for _, q := range []struct {
 		table string
 		want  int
-	}{{"metrics_sum", 120}, {"metrics_gauge", 120}} {
+	}{{"metrics_sum", 120}, {"metrics_gauge", 120}, {"metrics_histogram", 120}} {
 		var n int
 		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+q.table).Scan(&n); err != nil {
 			t.Fatalf("count %s: %v", q.table, err)
@@ -191,6 +202,31 @@ func TestWriteMetricsFromOTLP_Appender(t *testing.T) {
 	}
 	if v != 119 || shard != "a" {
 		t.Fatalf("sum round-trip mismatch: v=%v shard=%q", v, shard)
+	}
+
+	// Histogram scalars + the BIGINT[]/DOUBLE[] LIST columns survive the
+	// appender round-trip (the path the old prepared-statement code serialized
+	// as array-literal strings; the Appender binds the slices natively).
+	var hcount int64
+	var hsum float64
+	var b0, b1, b2 int64
+	var eb0, eb1, eb2 float64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count, sum,
+		       bucket_counts[1], bucket_counts[2], bucket_counts[3],
+		       explicit_bounds[1], explicit_bounds[2], explicit_bounds[3]
+		FROM metrics_histogram WHERE count = 100`).
+		Scan(&hcount, &hsum, &b0, &b1, &b2, &eb0, &eb1, &eb2); err != nil {
+		t.Fatalf("query histogram: %v", err)
+	}
+	if hcount != 100 || hsum != 150 {
+		t.Fatalf("histogram scalar round-trip mismatch: count=%d sum=%v", hcount, hsum)
+	}
+	if b0 != 100 || b1 != 101 || b2 != 102 {
+		t.Fatalf("bucket_counts round-trip mismatch: [%d %d %d]", b0, b1, b2)
+	}
+	if eb0 != 1 || eb1 != 5 || eb2 != 10 {
+		t.Fatalf("explicit_bounds round-trip mismatch: [%v %v %v]", eb0, eb1, eb2)
 	}
 }
 
