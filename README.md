@@ -1,13 +1,18 @@
 # Squadron
 
-**The open-source OpenTelemetry control plane that pays for itself.**
+**The open-source OpenTelemetry control plane for coverage, cost,
+and safe rollouts.**
 
-Squadron is for small and mid-sized teams running OpenTelemetry
-collectors and watching the telemetry bill climb. It tells you
-where your bytes are going, what to fix, and how much you'd save
-— in dollars, not megabytes — then deploys the fix through a safe
-staged rollout. AI explains every recommendation in plain English
-and can merge suggested snippets into your existing configs.
+Squadron continuously discovers what's running across AWS, GCP,
+Azure, and OCI, finds the resources with missing or broken
+OpenTelemetry instrumentation, and opens a merge-ready Terraform
+pull request that fixes the gap — HCL-aware merged into your
+existing config and gated on `terraform validate` before it
+reaches you. It also shows where your telemetry bytes are going
+and what they cost — in dollars, not megabytes — and ships config
+changes through safe, staged rollouts with drift detection and a
+full audit trail. AI explains every recommendation in plain
+English; you review and merge.
 
 Self-hosted. Free. One Docker command to start — no clone, no build:
 
