@@ -112,9 +112,21 @@ func (s *Storage) DeleteAuditEventsBefore(ctx context.Context, before time.Time)
 // silently resurrect a recommendation the operator declined. This mirrors the
 // "closed cost-spikes only" / "dismissed drafts only" invariant of the other
 // predicates — only rows that are no longer load-bearing are eligible.
+//
+// OPEN check-run rows are likewise protected: a row carrying a check_run_id
+// whose check_run_conclusion is still NULL is load-bearing — the PR-merge/close
+// webhook reads it to post the check run's final conclusion to GitHub. Deleting
+// it (e.g. a PR that stays open, idle past the cutoff) would make the webhook
+// fail-open and the check run would never resolve. Once the conclusion is set,
+// or if the row never had a check run (check_run_id IS NULL), the back-signal is
+// done and the row is prunable. updated_at is bumped on every check-run write,
+// so the age filter only ever sees genuinely idle rows.
 func (s *Storage) DeleteIACRecommendationVerdictsBefore(ctx context.Context, before time.Time) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM iac_recommendation_verdicts WHERE exclude_from_learning = 0 AND updated_at < ?`,
+		`DELETE FROM iac_recommendation_verdicts
+		 WHERE exclude_from_learning = 0
+		   AND updated_at < ?
+		   AND (check_run_id IS NULL OR check_run_conclusion IS NOT NULL)`,
 		before.UTC(),
 	)
 	if err != nil {
