@@ -128,6 +128,52 @@ func TestParseTraces_Success(t *testing.T) {
 	assert.NotEmpty(t, trace.SpanId)
 }
 
+// TestParseTraces_DurationClampsUnderflow verifies span durations don't wrap to
+// a garbage value when the end timestamp is unset (0) or precedes the start
+// (clock skew) — both are clamped to 0 instead of ~1.8e19 ns.
+func TestParseTraces_DurationClampsUnderflow(t *testing.T) {
+	parser := setupParserTest()
+	start := uint64(time.Now().UnixNano())
+
+	span := func(name string, startN, endN uint64) *tracepb.Span {
+		return &tracepb.Span{
+			TraceId:           []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+			SpanId:            []byte{1, 2, 3, 4, 5, 6, 7, 8},
+			Name:              name,
+			StartTimeUnixNano: startN,
+			EndTimeUnixNano:   endN,
+		}
+	}
+
+	request := &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			Resource: &resourcepb.Resource{Attributes: makeResourceAttributes()},
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Scope: &commonpb.InstrumentationScope{Name: "test-scope"},
+				Spans: []*tracepb.Span{
+					span("unset-end", start, 0),                // end missing
+					span("skewed", start, start-1_000_000),     // end < start
+					span("normal", start, start+2_000_000_000), // +2s
+				},
+			}},
+		}},
+	}
+
+	data, err := proto.Marshal(request)
+	require.NoError(t, err)
+	traces, err := parser.ParseTraces(data)
+	require.NoError(t, err)
+	require.Len(t, traces, 3)
+
+	byName := map[string]int64{}
+	for _, tr := range traces {
+		byName[tr.SpanName] = tr.Duration
+	}
+	assert.Equal(t, int64(0), byName["unset-end"], "unset end → 0, not wrapped")
+	assert.Equal(t, int64(0), byName["skewed"], "end<start → 0, not wrapped")
+	assert.Equal(t, int64(2_000_000_000), byName["normal"], "normal duration intact")
+}
+
 func TestParseTraces_InvalidData(t *testing.T) {
 	parser := setupParserTest()
 
