@@ -856,41 +856,38 @@ func (s *Storage) WriteLogsFromOTLP(ctx context.Context, logs []otlp.LogData) er
 	return nil
 }
 
-// WriteMetricsFromOTLP writes metric data from OTLP parser format
+// WriteMetricsFromOTLP writes metric data from OTLP parser format.
+//
+// The three metric tables (metrics_sum, metrics_gauge, metrics_histogram) from
+// one OTLP batch are written in a SINGLE transaction via appendRowsMulti, not
+// three independent ones. This is load-bearing for the worker pool's
+// retry-without-duplicates contract: writeWithRetry retries the whole
+// WriteMetricsFromOTLP on error, so if the writes committed table-by-table, a
+// failure on (say) histograms after sums+gauges had already committed would
+// re-append sums+gauges on the retry and silently double-count them. One
+// transaction across the batch means any error rolls all three back, so a
+// retry starts from zero rows. Per-table atomicity was necessary but not
+// sufficient — the batch is the correct atomicity boundary.
 func (s *Storage) WriteMetricsFromOTLP(ctx context.Context, sums []otlp.MetricSumData, gauges []otlp.MetricGaugeData, histograms []otlp.MetricHistogramData) error {
 	s.logger.Debug("WriteMetricsFromOTLP called",
 		zap.Int("sums", len(sums)),
 		zap.Int("gauges", len(gauges)),
 		zap.Int("histograms", len(histograms)))
 
-	// Write sums
+	appends := make([]tableAppend, 0, 3)
 	if len(sums) > 0 {
-		s.logger.Debug("Writing sum metrics", zap.Int("count", len(sums)))
-		if err := s.writeOTLPSums(ctx, sums); err != nil {
-			s.logger.Error("Failed to write sum metrics", zap.Error(err))
-			return err
-		}
-		s.logger.Debug("Successfully wrote sum metrics")
+		appends = append(appends, tableAppend{table: "metrics_sum", fill: otlpSumsFill(sums)})
 	}
-
-	// Write gauges
 	if len(gauges) > 0 {
-		s.logger.Debug("Writing gauge metrics", zap.Int("count", len(gauges)))
-		if err := s.writeOTLPGauges(ctx, gauges); err != nil {
-			s.logger.Error("Failed to write gauge metrics", zap.Error(err))
-			return err
-		}
-		s.logger.Debug("Successfully wrote gauge metrics")
+		appends = append(appends, tableAppend{table: "metrics_gauge", fill: otlpGaugesFill(gauges)})
+	}
+	if len(histograms) > 0 {
+		appends = append(appends, tableAppend{table: "metrics_histogram", fill: otlpHistogramsFill(histograms)})
 	}
 
-	// Write histograms
-	if len(histograms) > 0 {
-		s.logger.Debug("Writing histogram metrics", zap.Int("count", len(histograms)))
-		if err := s.writeOTLPHistograms(ctx, histograms); err != nil {
-			s.logger.Error("Failed to write histogram metrics", zap.Error(err))
-			return err
-		}
-		s.logger.Debug("Successfully wrote histogram metrics")
+	if err := s.appendRowsMulti(ctx, appends...); err != nil {
+		s.logger.Error("Failed to write OTLP metrics", zap.Error(err))
+		return err
 	}
 
 	s.logger.Debug("Wrote OTLP metrics to DuckDB",
@@ -900,17 +897,11 @@ func (s *Storage) WriteMetricsFromOTLP(ctx context.Context, sums []otlp.MetricSu
 	return nil
 }
 
-// writeOTLPSums bulk-writes sum data points via the Appender (see
-// append.go). The old path committed every 50 rows, so a mid-batch
-// failure could leave earlier chunks persisted; the appender makes
-// the whole slice one atomic flush, which is strictly stronger and
-// keeps the worker pool's retry-without-duplicates contract.
-func (s *Storage) writeOTLPSums(ctx context.Context, sums []otlp.MetricSumData) error {
-	if len(sums) == 0 {
-		return nil
-	}
-
-	return s.appendRows(ctx, "metrics_sum", func(ap *duckdb.Appender) error {
+// otlpSumsFill returns the Appender fill closure for sum data points. The old
+// per-row path committed every 50 rows; the Appender makes the whole slice one
+// flush inside the caller's transaction (see appendRowsMulti).
+func otlpSumsFill(sums []otlp.MetricSumData) func(ap *duckdb.Appender) error {
+	return func(ap *duckdb.Appender) error {
 		for i := range sums {
 			m := &sums[i]
 			resourceAttrsJSON, _ := json.Marshal(m.ResourceAttributes)
@@ -932,17 +923,13 @@ func (s *Storage) writeOTLPSums(ctx context.Context, sums []otlp.MetricSumData) 
 			}
 		}
 		return nil
-	})
+	}
 }
 
-// writeOTLPGauges bulk-writes gauge data points via the Appender —
-// same shape and atomicity upgrade as writeOTLPSums.
-func (s *Storage) writeOTLPGauges(ctx context.Context, gauges []otlp.MetricGaugeData) error {
-	if len(gauges) == 0 {
-		return nil
-	}
-
-	return s.appendRows(ctx, "metrics_gauge", func(ap *duckdb.Appender) error {
+// otlpGaugesFill returns the Appender fill closure for gauge data points —
+// same shape as otlpSumsFill.
+func otlpGaugesFill(gauges []otlp.MetricGaugeData) func(ap *duckdb.Appender) error {
+	return func(ap *duckdb.Appender) error {
 		for i := range gauges {
 			m := &gauges[i]
 			resourceAttrsJSON, _ := json.Marshal(m.ResourceAttributes)
@@ -964,29 +951,14 @@ func (s *Storage) writeOTLPGauges(ctx context.Context, gauges []otlp.MetricGauge
 			}
 		}
 		return nil
-	})
+	}
 }
 
-// writeOTLPHistograms bulk-writes histogram data points via the Appender —
-// same atomicity contract as writeOTLPSums/writeOTLPGauges.
-//
-// Previously this path chunked the slice into 50-row batches, each in its OWN
-// BeginTx/Commit. That broke the worker pool's retry-without-duplicates contract
-// (see appendRows): if a transient DuckDB error hit on, say, the 3rd chunk, the
-// first two chunks had already committed, and the worker's writeWithRetry re-ran
-// the ENTIRE WriteMetricsFromOTLP — re-inserting those rows and silently
-// double-counting histogram counts/sums. Routing through appendRows wraps the
-// whole write in a single BEGIN/COMMIT on a pinned connection, so on ANY error
-// zero rows persist and the batch is safe to retry (TestAppendRows_ErrorLeavesZeroRows).
-//
-// bucket_counts is BIGINT[] but OTLP carries the counts as uint64, so each slice
-// is copied into an []int64 the Appender can bind to the LIST column.
-func (s *Storage) writeOTLPHistograms(ctx context.Context, histograms []otlp.MetricHistogramData) error {
-	if len(histograms) == 0 {
-		return nil
-	}
-
-	return s.appendRows(ctx, "metrics_histogram", func(ap *duckdb.Appender) error {
+// otlpHistogramsFill returns the Appender fill closure for histogram data
+// points. bucket_counts is BIGINT[] but OTLP carries the counts as uint64, so
+// each slice is copied into an []int64 the Appender can bind to the LIST column.
+func otlpHistogramsFill(histograms []otlp.MetricHistogramData) func(ap *duckdb.Appender) error {
+	return func(ap *duckdb.Appender) error {
 		for i := range histograms {
 			m := &histograms[i]
 			resourceAttrsJSON, _ := json.Marshal(m.ResourceAttributes)
@@ -1019,7 +991,7 @@ func (s *Storage) writeOTLPHistograms(ctx context.Context, histograms []otlp.Met
 			}
 		}
 		return nil
-	})
+	}
 }
 
 // WriteBatchMeta inserts one row into otlp_batches. Best-effort —
