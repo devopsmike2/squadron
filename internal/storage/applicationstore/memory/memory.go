@@ -843,6 +843,10 @@ func (s *Store) CreateRollout(ctx context.Context, r *types.Rollout) error {
 	if rolloutCopy.StepKind == "" {
 		rolloutCopy.StepKind = types.StepKindRollout
 	}
+	// Optimistic-concurrency baseline, mirroring the SQLite column default.
+	if rolloutCopy.Version == 0 {
+		rolloutCopy.Version = 1
+	}
 	s.rollouts[r.ID] = &rolloutCopy
 	return nil
 }
@@ -916,7 +920,8 @@ func (s *Store) ListRollouts(ctx context.Context, filter types.RolloutFilter) ([
 func (s *Store) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.rollouts[r.ID]; !ok {
+	stored, ok := s.rollouts[r.ID]
+	if !ok {
 		return fmt.Errorf("rollout not found: %s", r.ID)
 	}
 	rolloutCopy := copyRollout(r)
@@ -930,6 +935,22 @@ func (s *Store) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	if rolloutCopy.StepKind == "" {
 		rolloutCopy.StepKind = types.StepKindRollout
 	}
+	// Optimistic-concurrency guard, mirroring the SQLite store. A caller
+	// carrying a loaded Version (>0) only commits if it still matches the
+	// stored row, else ErrRolloutVersionConflict — catching the engine-vs-
+	// operator lost-update race. Version==0 callers take the blind
+	// last-write-wins path (still advancing the counter), so behavior is
+	// unchanged until callers thread a loaded Version through.
+	if r.Version > 0 {
+		if stored.Version != r.Version {
+			return types.ErrRolloutVersionConflict
+		}
+		rolloutCopy.Version = r.Version + 1
+		s.rollouts[r.ID] = &rolloutCopy
+		r.Version = rolloutCopy.Version
+		return nil
+	}
+	rolloutCopy.Version = stored.Version + 1
 	s.rollouts[r.ID] = &rolloutCopy
 	return nil
 }
