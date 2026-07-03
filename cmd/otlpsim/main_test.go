@@ -33,7 +33,7 @@ func TestBuildPayload_AgentAttribution(t *testing.T) {
 		if items != cfg.itemsPerReq {
 			t.Fatalf("metrics items = %d, want %d", items, cfg.itemsPerReq)
 		}
-		sums, gauges, _, err := p.ParseMetrics(body)
+		sums, gauges, _, _, err := p.ParseMetrics(body)
 		if err != nil {
 			t.Fatalf("server parser rejected metrics payload: %v", err)
 		}
