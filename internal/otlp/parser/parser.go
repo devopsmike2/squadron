@@ -113,7 +113,7 @@ func (p *OTLPParser) ParseTraces(data []byte) ([]otlp.TraceData, error) {
 					ScopeVersion:       scope.Version,
 					ScopeAttributes:    scopeAttrs,
 					SpanAttributes:     spanAttrs,
-					Duration:           int64(span.EndTimeUnixNano - span.StartTimeUnixNano),
+					Duration:           spanDurationNanos(span.StartTimeUnixNano, span.EndTimeUnixNano),
 					StatusCode:         getStatusCode(span.Status),
 					StatusMessage:      getStatusMessage(span.Status),
 					Events:             events,
@@ -128,6 +128,19 @@ func (p *OTLPParser) ParseTraces(data []byte) ([]otlp.TraceData, error) {
 	}
 
 	return traces, nil
+}
+
+// spanDurationNanos returns end-start in nanoseconds, clamped to 0 when the end
+// timestamp is missing (0) or precedes the start. OTLP *_time_unix_nano fields
+// are uint64 on the wire, so when end < start — an unset end (0), cross-core or
+// NTP clock skew, or a still-open span flushed early — the subtraction wraps
+// near 2^64 and int64() yields a garbage ~1.8e19-ns "duration" that pollutes
+// every p50/p99 rollup and slow-span query. Clamp instead of storing nonsense.
+func spanDurationNanos(startUnixNano, endUnixNano uint64) int64 {
+	if endUnixNano <= startUnixNano {
+		return 0
+	}
+	return int64(endUnixNano - startUnixNano)
 }
 
 // ParseMetrics parses OTLP metrics data
