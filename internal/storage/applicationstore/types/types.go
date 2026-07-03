@@ -2,11 +2,22 @@ package types
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/google/uuid"
 )
+
+// ErrRolloutVersionConflict is returned by UpdateRollout when the caller's
+// in-memory Rollout.Version no longer matches the stored row — i.e. another
+// writer (a concurrent operator Pause/Abort or the rollout engine tick)
+// updated the row since this copy was loaded. It lets callers detect the
+// lost-update race and reload rather than silently clobbering the other
+// writer. The guard is only enforced when the caller carries a non-zero
+// Version (see Rollout.Version); legacy callers that leave it zero fall back
+// to a blind last-write-wins so behavior is unchanged until they opt in.
+var ErrRolloutVersionConflict = errors.New("rollout version conflict: row modified since load")
 
 // ApplicationStore interface for managing application data
 type ApplicationStore interface {
@@ -740,6 +751,16 @@ type Rollout struct {
 	// storage layer; the schema v5 migration backfills every
 	// existing row to 0 so post-upgrade behavior matches the design.
 	ExcludeFromLearning bool `json:"exclude_from_learning,omitempty"`
+
+	// Version is the optimistic-concurrency counter, incremented on every
+	// UpdateRollout. A write whose in-memory Version no longer matches the
+	// stored row is rejected with ErrRolloutVersionConflict, catching the
+	// lost-update race between the rollout engine's tick and a concurrent
+	// operator Pause/Abort/Resume. Zero means "unset": legacy callers that
+	// don't load-then-update leave it 0 and UpdateRollout falls back to a
+	// blind last-write-wins for them, so the guard stays inert until callers
+	// thread a loaded Version through (see the services layer wiring).
+	Version int `json:"version,omitempty"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`

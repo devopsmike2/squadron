@@ -194,7 +194,13 @@ func (s *Storage) migrate() error {
 		-- ALTER TABLE in the migrations slice below covers existing
 		-- databases; this column is in the CREATE TABLE so fresh
 		-- deployments (which skip the ALTER) still get the column.
-		exclude_from_learning INTEGER NOT NULL DEFAULT 0
+		exclude_from_learning INTEGER NOT NULL DEFAULT 0,
+		-- Optimistic-concurrency counter. Bumped on every UpdateRollout;
+		-- a CAS-guarded update rejects a write whose loaded version no
+		-- longer matches, catching the engine-vs-operator lost-update
+		-- race. DEFAULT 1 so fresh rows (and the ALTER-backfilled
+		-- pre-existing rows) start at a well-defined baseline.
+		version INTEGER NOT NULL DEFAULT 1
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_rollouts_state ON rollouts(state);
@@ -607,6 +613,12 @@ func (s *Storage) migrate() error {
 			exclude_from_learning,
 			COALESCE(approved_at, rejected_at) DESC
 		) WHERE proposed_by='ai' AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)`,
+
+		// Optimistic-concurrency counter for rollouts (engine-vs-operator
+		// lost-update guard). DEFAULT 1 backfills every existing row to a
+		// well-defined baseline; the CREATE TABLE above carries the same
+		// column so fresh databases (which skip this ALTER) match.
+		`ALTER TABLE rollouts ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
 
 		// v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3) — discovery
 		// proposer's ListDiscoveryVerdicts query unions
@@ -2121,7 +2133,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -2138,7 +2150,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -2199,7 +2211,7 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 	// excluded AI rollouts; the original v4 partial idx_ai_verdicts
 	// is preserved for back-compat with deployments that haven't
 	// completed the migration yet.
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version
 		FROM rollouts
 		WHERE group_id = ?
 		  AND proposed_by = 'ai'
@@ -2896,7 +2908,9 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		}
 		evidenceJSON = string(buf)
 	}
-	stmt := `
+	// SET clause + its bound values are shared by both the CAS and the legacy
+	// path; only the version handling + WHERE differ (built below).
+	setClause := `
 		UPDATE rollouts
 		SET name = ?, group_id = ?, target_config_id = ?, previous_config_id = ?,
 		    stages = ?, abort_criteria = ?, notification_url = ?,
@@ -2908,10 +2922,8 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?,
 		    rolled_back_from_id = ?, plan_id = ?, plan_step_index = ?,
 		    step_kind = ?, action_request_id = ?,
-		    exclude_from_learning = ?
-		WHERE id = ?
-	`
-	res, err := s.db.ExecContext(ctx, stmt,
+		    exclude_from_learning = ?`
+	setArgs := []any{
 		r.Name, r.GroupID, r.TargetConfigID,
 		nullableString(r.PreviousConfigID),
 		string(stagesJSON), string(criteriaJSON),
@@ -2926,28 +2938,54 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(r.RejectedBy),
 		r.RejectedAt,
 		nullableString(r.ApprovalNotes),
-		// v0.49 blackout columns.
 		nullableString(r.LastBlackoutReason),
 		r.LastBlackoutAt,
-		// v0.53 proposal provenance columns.
 		proposedBy,
 		nullableString(r.ProposalReasoning),
 		nullableString(evidenceJSON),
-		// v0.60 rollback chain.
 		nullableString(r.RolledBackFromID),
-		// v0.69 plan grouping.
 		nullableString(r.PlanID),
 		r.PlanStepIndex,
-		// v0.89.14 action steps.
 		nullableString(r.StepKind),
 		nullableString(r.ActionRequestID),
-		// v0.89.26 (#642) — per-rollout exclude-from-learning flag.
-		// This is the column the exclude-from-learning endpoint
-		// flips; UpdateRollout is the only path that persists the
-		// post-create change.
 		boolToInt(r.ExcludeFromLearning),
-		r.ID,
-	)
+	}
+
+	// Optimistic-concurrency guard. A caller carrying a loaded Version (>0)
+	// gets a CAS: bump to Version+1 only if the stored row still matches, so a
+	// write racing a concurrent operator Pause/Abort or an engine tick is
+	// rejected with ErrRolloutVersionConflict rather than silently clobbering
+	// the other writer. Legacy callers that leave Version==0 take the blind
+	// last-write-wins path (still advancing the column so CAS has meaningful
+	// values once callers opt in) — behavior is unchanged for them.
+	if r.Version > 0 {
+		newVersion := r.Version + 1
+		stmt := setClause + `, version = ? WHERE id = ? AND version = ?`
+		args := append(append([]any{}, setArgs...), newVersion, r.ID, r.Version)
+		res, err := s.db.ExecContext(ctx, stmt, args...)
+		if err != nil {
+			return fmt.Errorf("failed to update rollout: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			// Zero rows means either the id is gone or another writer moved
+			// the version on. Disambiguate so callers get the right signal.
+			var one int
+			switch qerr := s.db.QueryRowContext(ctx, `SELECT 1 FROM rollouts WHERE id = ?`, r.ID).Scan(&one); qerr {
+			case sql.ErrNoRows:
+				return fmt.Errorf("rollout not found: %s", r.ID)
+			case nil:
+				return types.ErrRolloutVersionConflict
+			default:
+				return fmt.Errorf("failed to update rollout: %w", qerr)
+			}
+		}
+		r.Version = newVersion
+		return nil
+	}
+
+	stmt := setClause + `, version = version + 1 WHERE id = ?`
+	args := append(append([]any{}, setArgs...), r.ID)
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update rollout: %w", err)
 	}
@@ -3019,6 +3057,7 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&planID, &planStepIndex,
 		&stepKind, &actionRequestID,
 		&excludeFromLearningInt,
+		&r.Version,
 	); err != nil {
 		return nil, err
 	}
