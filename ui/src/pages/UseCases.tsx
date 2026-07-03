@@ -8,9 +8,13 @@
 
 import {
   ArrowRight,
+  Coins,
   Database,
+  FileCode,
   PlayCircle,
   Radar,
+  Rocket,
+  Server,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -25,6 +29,10 @@ import { Button } from "@/components/ui/button";
 const ICONS: Record<string, LucideIcon> = {
   Radar,
   PlayCircle,
+  Rocket,
+  Coins,
+  Server,
+  FileCode,
 };
 
 export default function UseCasesPage() {

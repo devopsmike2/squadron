@@ -94,9 +94,15 @@ Tours must run on real data end-to-end:
   **"Instrument my cloud"** (discovery demo already seeded). tsc/build gate; ship.
 - **Slice 1**: extract seed logic → package; in-app demo-seed endpoint (fleet
   group+config+agents, cost-spike+incident) + disable; tests; ship.
-- **Slice 2+**: author the remaining four tours against real seeded data + the
-  `data-tour` anchors they need; live-verify each on a running stack; update
-  `docs/demo.md`; ship per tour.
+- **Slice 2+** (shipped): authored the remaining four tours — `config-rollout`,
+  `cost-spike-fix`, `onprem-onboarding`, `env-to-terraform` — in
+  `components/tour/tours.ts`, against real seeded data. Compact, always-present
+  elements carry `data-tour` anchors for spotlighting (`rollouts-new`,
+  `cost-spike-banner`, `ask-squadron-hero`, `aws-tab-inventory`, `aws-generate-tf`);
+  steps over tall, full-height surfaces (config list, quickstart landing) use a
+  centered narration card instead, since spotlighting a page-height element
+  positions the card poorly. Each tour live-verified on a running stack
+  (nav + demo-seed + spotlight/centered rendering). tsc/eslint/prettier/vitest gate.
 
 ## Non-goals / risks
 

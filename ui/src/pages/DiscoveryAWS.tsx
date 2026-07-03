@@ -43,10 +43,9 @@ import {
   type ReactElement,
 } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-
-import { DEMO_ACCOUNT_ID } from "@/api/demoData";
 import useSWR from "swr";
 
+import { DEMO_ACCOUNT_ID } from "@/api/demoData";
 import {
   enableDemoConnection,
   generateAWSRecommendations,
@@ -1146,12 +1145,7 @@ function InventoryTab({
         try {
           const r = await generateAWSRecommendations(result.account_id, result);
           const region = result.regions[0] ?? "";
-          onRecommendationsQuiet(
-            r,
-            result.account_id,
-            result.scan_id,
-            region,
-          );
+          onRecommendationsQuiet(r, result.account_id, result.scan_id, region);
         } catch {
           // Non-fatal: the Recs tab still offers a manual Generate button.
           demoRecsFired.current = false;
@@ -1331,7 +1325,7 @@ function ScanResultPanel({
               Recommendation generation failed: {genError}
             </p>
           )}
-          <div className="border-t pt-3">
+          <div data-tour="aws-generate-tf" className="border-t pt-3">
             <TerraformAdoptCard
               onGenerate={() =>
                 generateAWSTerraformImport(result.account_id, result)
