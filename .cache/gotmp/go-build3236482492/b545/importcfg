@@ -1,0 +1,12 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/aws/aws-sdk-go-v2/aws=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/50/5091a0d2df06d646851da95eb5ba75e8dc1d46965216c3be7470797e6e90cb44-d
+packagefile github.com/aws/aws-sdk-go-v2/aws/retry=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build3236482492/b504/_pkg_.a
+packagefile github.com/aws/aws-sdk-go-v2/internal/sdk=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/3f/3ffd858c26a9c0701fc933bbcacf972fafcebe7431535c5c11c70da4be46bf45-d
+packagefile github.com/aws/aws-sdk-go-v2/service/sts=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build3236482492/b546/_pkg_.a
+packagefile github.com/aws/aws-sdk-go-v2/service/sts/types=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build3236482492/b555/_pkg_.a
+packagefile os=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/53/53dd0b64ff9e62b1a215821c59193170815e83099343bc924816afbaf3b287f1-d
+packagefile strconv=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1b/1babfda9f827651a53390ae0f2d2176264a3317964c29905981373f2f4e7601a-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

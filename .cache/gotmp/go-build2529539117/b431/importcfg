@@ -1,0 +1,15 @@
+# import config
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/quic-go/quic-go/internal/congestion=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b432/_pkg_.a
+packagefile github.com/quic-go/quic-go/internal/monotime=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b433/_pkg_.a
+packagefile github.com/quic-go/quic-go/internal/protocol=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b434/_pkg_.a
+packagefile github.com/quic-go/quic-go/internal/qerr=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b438/_pkg_.a
+packagefile github.com/quic-go/quic-go/internal/utils=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b436/_pkg_.a
+packagefile github.com/quic-go/quic-go/internal/wire=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b439/_pkg_.a
+packagefile github.com/quic-go/quic-go/qlog=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b437/_pkg_.a
+packagefile github.com/quic-go/quic-go/qlogwriter=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b440/_pkg_.a
+packagefile iter=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/92/922fe5d082c26fa0bf680b8a2b7e38e703e1bc7271cc6d33442c54c54fd6bd5a-d
+packagefile slices=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/51/51d132ade362b95f853e3616bc6cacd979edc58b4947aaf444909046cc685e6e-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

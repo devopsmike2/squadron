@@ -1,0 +1,9 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/devopsmike2/squadron/internal/config=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/12/129bbee827ed49d6790a30221aa1f10b57c4dd24c90a4fc7cfaae38c3fd65dc9-d
+packagefile github.com/devopsmike2/squadron/internal/storage/applicationstore/memory=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f6/f67e2c877d234dae3d07fcbba1ab4338cda48c163b81f0e231044f505283da1c-d
+packagefile github.com/devopsmike2/squadron/internal/storage/applicationstore/sqlite=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b308/_pkg_.a
+packagefile github.com/devopsmike2/squadron/internal/storage/applicationstore/types=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b6/b6557b24fb5d8acc8f66be94c801a10ce81c7f3b1f4236b3059e28a2ca1f09ee-d
+packagefile go.uber.org/zap=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/28/2870adada484959f774497f057f0a6617c4e97e5880b8cd00ed8d1f16603bc93-d
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d

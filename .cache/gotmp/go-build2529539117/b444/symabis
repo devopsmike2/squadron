@@ -1,0 +1,5 @@
+def golang.org/x/crypto/chacha20.xorKeyStreamVX ABI0
+ref golang.org/x/crypto/chacha20.constants ABI0
+ref golang.org/x/crypto/chacha20.incRotMatrix ABI0
+ref golang.org/x/crypto/chacha20.constants ABI0
+ref golang.org/x/crypto/chacha20.incRotMatrix ABI0

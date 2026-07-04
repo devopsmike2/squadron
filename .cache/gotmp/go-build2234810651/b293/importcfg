@@ -1,0 +1,4 @@
+# import config
+packagefile crypto/sha256=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f6/f6f506b35d981f2bdbd485cd3152564e85560b0a1759c1a5db5d5c5b3d94b3d9-d
+packagefile encoding/hex=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b174/_pkg_.a
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d

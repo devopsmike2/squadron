@@ -1,0 +1,15 @@
+./agent_config.go
+./agent_connection.go
+./agent_core.go
+./agent_status.go
+./agents.go
+./config_sender.go
+./server.go
+./traceparent.go
+./tracer.go
+./agent_race_test.go
+./config_sender_test.go
+./fleetid_test.go
+./server_test.go
+./traceparent_test.go
+./tracer_test.go

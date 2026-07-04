@@ -1,0 +1,5 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile github.com/devopsmike2/squadron/internal/otlp=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b312/_pkg_.a
+packagefile github.com/google/uuid=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f0/f04b4f56961a66e90d5d598d81b0b20b8bb3896c13a6085c1223081bb775fdaa-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

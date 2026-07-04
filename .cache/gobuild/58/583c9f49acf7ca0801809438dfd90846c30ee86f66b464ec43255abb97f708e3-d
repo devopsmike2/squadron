@@ -1,0 +1,4 @@
+# test log
+getenv TMPDIR
+getenv SQUADRON_TRACEINDEX_MAX_ROWS
+open /tmp/sqtmp

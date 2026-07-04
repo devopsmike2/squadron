@@ -1,0 +1,5 @@
+# import config
+packagefile crypto/tls=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/54/54b86730653f193136b601fe8a2570a859a5bf4b2e57402758faf148c6c3c234-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/quic-go/quic-go/internal/protocol=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b434/_pkg_.a
+packagefile net=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f5/f5e9ae14f4e8b7e047491af93e6c3a1257e8608c46d4421eaeb2d0344e7bd325-d

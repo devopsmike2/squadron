@@ -1,0 +1,5 @@
+# import config
+packagefile go.uber.org/zap/buffer=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b230/_pkg_.a
+packagefile go.uber.org/zap/internal/bufferpool=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b232/_pkg_.a
+packagefile go.uber.org/zap/internal/pool=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b231/_pkg_.a
+packagefile runtime=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/58/5830c2ae9094bd458e64f3132cf445fd27291915aba7ff7ca88dfb82bef5a4e2-d

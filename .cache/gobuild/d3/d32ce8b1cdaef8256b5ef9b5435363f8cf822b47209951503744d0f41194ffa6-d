@@ -1,0 +1,6 @@
+./callbacks.go
+./errors.go
+./instanceid.go
+./logger.go
+./packagessyncer.go
+./startsettings.go

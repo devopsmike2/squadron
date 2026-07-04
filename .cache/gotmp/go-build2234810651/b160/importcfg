@@ -1,0 +1,10 @@
+# import config
+importmap golang.org/x/crypto/chacha20=vendor/golang.org/x/crypto/chacha20
+importmap golang.org/x/crypto/internal/alias=vendor/golang.org/x/crypto/internal/alias
+importmap golang.org/x/crypto/internal/poly1305=vendor/golang.org/x/crypto/internal/poly1305
+packagefile crypto/cipher=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/09/09fb4f6598d6b6f72b08d2b9021f8cd129c9570b6a2dff05feddf32ed609d276-d
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile vendor/golang.org/x/crypto/chacha20=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b161/_pkg_.a
+packagefile vendor/golang.org/x/crypto/internal/alias=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b162/_pkg_.a
+packagefile vendor/golang.org/x/crypto/internal/poly1305=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b163/_pkg_.a

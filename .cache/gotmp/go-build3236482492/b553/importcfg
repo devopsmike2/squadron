@@ -1,0 +1,6 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/aws/aws-sdk-go-v2/aws/middleware=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/af/af0438f14682af15c02ca0ad2d02987dda22e8248c029a6d1365b8ee69a853c0-d
+packagefile github.com/aws/aws-sdk-go-v2/aws/signer/v4=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build3236482492/b518/_pkg_.a
+packagefile github.com/aws/smithy-go/middleware=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/69/6918b91bd827cf568eb6f90c00fa08b209588fd5bb271ab71f492884694db1fa-d

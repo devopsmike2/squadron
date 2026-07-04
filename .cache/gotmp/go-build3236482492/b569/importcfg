@@ -1,0 +1,5 @@
+# import config
+packagefile github.com/aws/aws-sdk-go-v2/aws=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/50/5091a0d2df06d646851da95eb5ba75e8dc1d46965216c3be7470797e6e90cb44-d
+packagefile github.com/aws/aws-sdk-go-v2/internal/endpoints/v2=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build3236482492/b528/_pkg_.a
+packagefile github.com/aws/smithy-go/logging=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/69/69939209b6fec541fc57ca4437ff624924c75061d9a3cb236edc8ae4bff1fa40-d
+packagefile regexp=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/6e/6e7d8252d799017eb152807ad0605d3c5678d9b07c2441c45a44c844e84001bb-d

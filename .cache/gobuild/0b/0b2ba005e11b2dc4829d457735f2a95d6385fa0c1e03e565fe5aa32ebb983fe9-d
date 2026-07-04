@@ -1,0 +1,10 @@
+./alert.go
+./api.go
+./drift.go
+./init.go
+./opamp.go
+./otlp.go
+./prometheus.go
+./rollout.go
+./types.go
+./worker.go

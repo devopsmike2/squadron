@@ -1,0 +1,6 @@
+./config.go
+./factory.go
+./interfaces.go
+./reader.go
+./types.go
+./writer.go

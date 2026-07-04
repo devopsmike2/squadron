@@ -1,0 +1,4 @@
+# import config
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d
+packagefile net/http=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b127/_pkg_.a
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d

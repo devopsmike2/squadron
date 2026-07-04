@@ -1,0 +1,5 @@
+# import config
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile github.com/pierrec/lz4/v4/internal/lz4errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b361/_pkg_.a
+packagefile math/bits=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/cd/cd7d7c68092e25878b1cc2ec11d926f6db0cec5f0572853dfa846942cd4486a8-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d

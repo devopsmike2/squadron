@@ -1,0 +1,8 @@
+# import config
+packagefile encoding/json=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f8/f868dec40285ef0c9f54bb0c2114193d93ed17a07e6de14f8d503b1dc0c381d3-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/goccy/go-json/internal/encoder=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b332/_pkg_.a
+packagefile github.com/goccy/go-json/internal/runtime=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b331/_pkg_.a
+packagefile math=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0a/0a029901884ed0a4d4938b02c37c4b4602d0ae85cdfea62da6939a6c52c6f4c8-d
+packagefile reflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0d/0d3483078e24f47682d55b5d7e631265bbc4e180f58e091e9f7a20b1e093ecaa-d
+packagefile sort=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/71/7110e6ca2f4c1c0cbd61ba03bab231e96496e81ebc0470b5a21952c8766c222b-d

@@ -60,6 +60,44 @@ func TestRolloutService_CreateAndGet(t *testing.T) {
 	assert.Len(t, got.Stages, 2)
 }
 
+func TestRolloutService_Create_ErrorRateWindowDefault(t *testing.T) {
+	// ADR 0008 — a new rollout that sets an error-rate criterion without an
+	// explicit window should default to the trailing window; one that sets
+	// the window explicitly (including 0 for legacy) should be respected;
+	// one with no error-rate criterion should stay at 0.
+	ctx := context.Background()
+
+	t.Run("defaults when error-rate set and window unset", func(t *testing.T) {
+		store := memory.NewStore()
+		svc := NewRolloutService(store, nil, nil, zap.NewNop())
+		in := validRolloutInput(t, store)
+		in.AbortCriteria = RolloutAbortCriteria{MaxErrorLogsPerMinute: 5}
+		r, err := svc.Create(ctx, in)
+		require.NoError(t, err)
+		assert.Equal(t, defaultErrorRateWindowSeconds, r.AbortCriteria.ErrorRateWindowSeconds)
+	})
+
+	t.Run("explicit window is preserved", func(t *testing.T) {
+		store := memory.NewStore()
+		svc := NewRolloutService(store, nil, nil, zap.NewNop())
+		in := validRolloutInput(t, store)
+		in.AbortCriteria = RolloutAbortCriteria{MaxErrorLogsPerMinute: 5, ErrorRateWindowSeconds: 45}
+		r, err := svc.Create(ctx, in)
+		require.NoError(t, err)
+		assert.Equal(t, 45, r.AbortCriteria.ErrorRateWindowSeconds)
+	})
+
+	t.Run("no error-rate criterion leaves window at 0", func(t *testing.T) {
+		store := memory.NewStore()
+		svc := NewRolloutService(store, nil, nil, zap.NewNop())
+		in := validRolloutInput(t, store)
+		in.AbortCriteria = RolloutAbortCriteria{MaxDriftedAgents: 1}
+		r, err := svc.Create(ctx, in)
+		require.NoError(t, err)
+		assert.Equal(t, 0, r.AbortCriteria.ErrorRateWindowSeconds)
+	})
+}
+
 func TestRolloutService_Validation(t *testing.T) {
 	store := memory.NewStore()
 	svc := NewRolloutService(store, nil, nil, zap.NewNop())

@@ -1,0 +1,22 @@
+# import config
+importmap golang.org/x/crypto/cryptobyte=vendor/golang.org/x/crypto/cryptobyte
+importmap golang.org/x/crypto/cryptobyte/asn1=vendor/golang.org/x/crypto/cryptobyte/asn1
+packagefile crypto=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e0/e06c0cc693789fa29a632eee7421c3b368e1ca3aa0e5a686dd3d70525c5ace8e-d
+packagefile crypto/ecdh=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b137/_pkg_.a
+packagefile crypto/elliptic=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b142/_pkg_.a
+packagefile crypto/internal/boring=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/51/51381b63a95961b78d25d0a80097d2dc7181724a83084417c6a9ef1fbf619773-d
+packagefile crypto/internal/boring/bbig=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b143/_pkg_.a
+packagefile crypto/internal/fips140/ecdsa=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b144/_pkg_.a
+packagefile crypto/internal/fips140/nistec=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b139/_pkg_.a
+packagefile crypto/internal/fips140cache=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b099/_pkg_.a
+packagefile crypto/internal/fips140hash=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b146/_pkg_.a
+packagefile crypto/internal/fips140only=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/60/602f6bf709b23dbd0eaceec59fbd3dd80bb799e58a3d33961cec7265f63b55e9-d
+packagefile crypto/internal/randutil=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1d/1de09fa8287364f4587ea915ef9e68efb78650d6c9fd4881336f370ce3a759da-d
+packagefile crypto/sha512=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b148/_pkg_.a
+packagefile crypto/subtle=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/206c91cc914f55dc261cbd7d3e40949179253279bda4f62642002446775aa523-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile vendor/golang.org/x/crypto/cryptobyte=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b149/_pkg_.a
+packagefile vendor/golang.org/x/crypto/cryptobyte/asn1=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b152/_pkg_.a
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d
+packagefile math/big=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b108/_pkg_.a
+packagefile math/rand/v2=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a6/a6f6d30577c0e57a83638a9b98729e3da37d4a113c36abd0e7f2aa625c579dd8-d

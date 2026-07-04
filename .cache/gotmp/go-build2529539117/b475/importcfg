@@ -1,0 +1,16 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/aws/aws-sdk-go-v2/internal/rand=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b476/_pkg_.a
+packagefile github.com/aws/aws-sdk-go-v2/internal/sdk=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b477/_pkg_.a
+packagefile github.com/aws/aws-sdk-go-v2/internal/sync/singleflight=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b478/_pkg_.a
+packagefile github.com/aws/smithy-go/auth/bearer=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b479/_pkg_.a
+packagefile github.com/aws/smithy-go/logging=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b483/_pkg_.a
+packagefile github.com/aws/smithy-go/middleware=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b482/_pkg_.a
+packagefile github.com/aws/smithy-go/ptr=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b495/_pkg_.a
+packagefile github.com/aws/smithy-go/transport/http=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b484/_pkg_.a
+packagefile net/http=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/5b/5b0be87a620ff647f2556b76bbe599ee09305790126248b4c873dd8b52acc418-d
+packagefile reflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0d/0d3483078e24f47682d55b5d7e631265bbc4e180f58e091e9f7a20b1e093ecaa-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile sync/atomic=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e7/e7998ede3e1cba1b614523cda9b5ef381f2dbf03ea306a15d10a14103699d5d0-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

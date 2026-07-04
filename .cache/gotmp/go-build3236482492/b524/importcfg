@@ -1,0 +1,3 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile github.com/aws/aws-sdk-go-v2/aws=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/50/5091a0d2df06d646851da95eb5ba75e8dc1d46965216c3be7470797e6e90cb44-d

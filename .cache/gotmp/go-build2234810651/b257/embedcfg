@@ -1,0 +1,10 @@
+{
+	"Patterns": {
+		"editions_defaults.binpb": [
+			"editions_defaults.binpb"
+		]
+	},
+	"Files": {
+		"editions_defaults.binpb": "/sessions/great-funny-faraday/go/pkg/mod/google.golang.org/protobuf@v1.36.11/internal/editiondefaults/editions_defaults.binpb"
+	}
+}

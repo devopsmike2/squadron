@@ -1,0 +1,12 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile database/sql=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/202bd2821f218b2bea86475a5735b865d3b30c35beac44d692436eb37179514e-d
+packagefile database/sql/driver=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/70/704c49a74f43722703da3c5f1f9e817b3ea75c05a227d6b34ca99290fcb109f0-d
+packagefile encoding/json=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f8/f868dec40285ef0c9f54bb0c2114193d93ed17a07e6de14f8d503b1dc0c381d3-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/devopsmike2/squadron/internal/otlp=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/cb/cbcfd1bbfc10c5adf1afc0063d0ca9ff8b3ca3e8482872d6716aa27ea065fb81-d
+packagefile github.com/devopsmike2/squadron/internal/storage/telemetrystore/types=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/2f/2f58eef2b296b6250ae1dea3d93a5eb17cd2367a4736c5e92676f9ab1d7e969e-d
+packagefile github.com/google/uuid=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f0/f04b4f56961a66e90d5d598d81b0b20b8bb3896c13a6085c1223081bb775fdaa-d
+packagefile github.com/marcboeker/go-duckdb=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b314/_pkg_.a
+packagefile go.uber.org/zap=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/28/2870adada484959f774497f057f0a6617c4e97e5880b8cd00ed8d1f16603bc93-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

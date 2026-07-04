@@ -1,0 +1,9 @@
+# import config
+packagefile bufio=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/74/74fa5fea13dee38e33164cb4ed46a85427157f293146228b33a82713b7e7f51b-d
+packagefile compress/flate=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/66/66185525a2299dfeaa571e899152a7b8b826792b6867367a74b4a7b41c24d98c-d
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile hash=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/ac/ac62fc736fa2bf38d959c0088b6c8f1fc7abaa8a2d48fdd9f57078c5efc14aa4-d
+packagefile hash/adler32=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b383/_pkg_.a
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d

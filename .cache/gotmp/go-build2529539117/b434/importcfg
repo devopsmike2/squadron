@@ -1,0 +1,15 @@
+# import config
+packagefile crypto/rand=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/be/be9c7c76e1bceaad00f4c77d07873cef104ce5c206e852ca8842fbea096436be-d
+packagefile crypto/tls=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/54/54b86730653f193136b601fe8a2570a859a5bf4b2e57402758faf148c6c3c234-d
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile encoding/hex=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d9/d95dd450abf4c06a7350b50399507e1eef6d6a4e9a7034b6bd03b58d7cf85e97-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/quic-go/quic-go/quicvarint=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b435/_pkg_.a
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d
+packagefile math=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0a/0a029901884ed0a4d4938b02c37c4b4602d0ae85cdfea62da6939a6c52c6f4c8-d
+packagefile math/rand/v2=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a6/a6f6d30577c0e57a83638a9b98729e3da37d4a113c36abd0e7f2aa625c579dd8-d
+packagefile slices=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/51/51d132ade362b95f853e3616bc6cacd979edc58b4947aaf444909046cc685e6e-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d
+packagefile sync/atomic=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e7/e7998ede3e1cba1b614523cda9b5ef381f2dbf03ea306a15d10a14103699d5d0-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

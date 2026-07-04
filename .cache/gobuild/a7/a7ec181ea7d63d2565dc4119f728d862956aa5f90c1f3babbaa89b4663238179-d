@@ -1,0 +1,6 @@
+./doc.go
+./memory.go
+./migrations.go
+./sqlite.go
+./store.go
+./types.go

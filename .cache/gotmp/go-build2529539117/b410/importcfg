@@ -1,0 +1,6 @@
+# import config
+packagefile bytes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/30/3062c49db67e0a19fa6366bd56273a28c3c46784b76bd41b35a8d6c1896f10d7-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/pelletier/go-toml/v2/internal/characters=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b408/_pkg_.a
+packagefile unicode=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/c9/c90e923b71d417c3ecb63f099796dc31efe52a897cbae72a64ca7ea1436dd532-d

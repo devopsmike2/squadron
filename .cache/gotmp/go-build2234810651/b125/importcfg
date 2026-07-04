@@ -1,0 +1,9 @@
+# import config
+packagefile internal/abi=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/45/45fad77fe44a53c0e3f054bafffaadd10a21a2f85e707d063d49edc5c37588b6-d
+packagefile internal/goarch=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0d/0d0c89860b18480493490e70295c659f81707bf0e3b49a04715f98a54363237e-d
+packagefile internal/stringslite=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/07/0733c16cf8bf17ae6b6682dd5d1e5915022ce511e163caf59a0dcdc1133ae9bf-d
+packagefile internal/sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/bc/bc55547dd88e2b11c02fe34fce36c69a66986c065c477bcbe94fa76122866ad7-d
+packagefile runtime=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/58/5830c2ae9094bd458e64f3132cf445fd27291915aba7ff7ca88dfb82bef5a4e2-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d
+packagefile sync/atomic=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e7/e7998ede3e1cba1b614523cda9b5ef381f2dbf03ea306a15d10a14103699d5d0-d
+packagefile weak=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b100/_pkg_.a

@@ -1,0 +1,10 @@
+# import config
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile internal/godebug=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/85/85a95f4cd9777cfed58342e737c7a5ce0747a73fc9539b27059de852a2ef3e43-d
+packagefile maps=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b066/_pkg_.a
+packagefile net/netip=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b124/_pkg_.a
+packagefile path=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b3/b3d6f0a378c9b23a4d59f7e93c4ace3e516443f0f06fa5e9f9a044d4760bb6f4-d
+packagefile slices=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/51/51d132ade362b95f853e3616bc6cacd979edc58b4947aaf444909046cc685e6e-d
+packagefile strconv=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1b/1babfda9f827651a53390ae0f2d2176264a3317964c29905981373f2f4e7601a-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d

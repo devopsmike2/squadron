@@ -1,0 +1,12 @@
+# import config
+packagefile bytes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/30/3062c49db67e0a19fa6366bd56273a28c3c46784b76bd41b35a8d6c1896f10d7-d
+packagefile debug/macho=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b381/_pkg_.a
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile github.com/gabriel-vasile/mimetype/internal/charset=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b377/_pkg_.a
+packagefile github.com/gabriel-vasile/mimetype/internal/csv=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b385/_pkg_.a
+packagefile github.com/gabriel-vasile/mimetype/internal/json=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b386/_pkg_.a
+packagefile github.com/gabriel-vasile/mimetype/internal/markup=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b378/_pkg_.a
+packagefile github.com/gabriel-vasile/mimetype/internal/scan=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b379/_pkg_.a
+packagefile slices=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/51/51d132ade362b95f853e3616bc6cacd979edc58b4947aaf444909046cc685e6e-d
+packagefile strconv=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1b/1babfda9f827651a53390ae0f2d2176264a3317964c29905981373f2f4e7601a-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

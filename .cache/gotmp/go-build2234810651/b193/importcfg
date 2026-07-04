@@ -1,0 +1,15 @@
+# import config
+importmap golang.org/x/net/http/httpguts=vendor/golang.org/x/net/http/httpguts
+importmap golang.org/x/net/http2/hpack=vendor/golang.org/x/net/http2/hpack
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile vendor/golang.org/x/net/http/httpguts=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b176/_pkg_.a
+packagefile vendor/golang.org/x/net/http2/hpack=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b186/_pkg_.a
+packagefile net/http/httptrace=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b190/_pkg_.a
+packagefile net/textproto=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b184/_pkg_.a
+packagefile net/url=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b175/_pkg_.a
+packagefile sort=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/71/7110e6ca2f4c1c0cbd61ba03bab231e96496e81ebc0470b5a21952c8766c222b-d
+packagefile strconv=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1b/1babfda9f827651a53390ae0f2d2176264a3317964c29905981373f2f4e7601a-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d

@@ -1,0 +1,7 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile github.com/quic-go/quic-go=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b430/_pkg_.a
+packagefile github.com/quic-go/quic-go/qlog=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b437/_pkg_.a
+packagefile github.com/quic-go/quic-go/qlogwriter=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b440/_pkg_.a
+packagefile github.com/quic-go/quic-go/qlogwriter/jsontext=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b441/_pkg_.a
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

@@ -1,0 +1,7 @@
+# import config
+packagefile crypto/cipher=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/09/09fb4f6598d6b6f72b08d2b9021f8cd129c9570b6a2dff05feddf32ed609d276-d
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile golang.org/x/crypto/chacha20=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b444/_pkg_.a
+packagefile golang.org/x/crypto/internal/alias=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/39/39d71da653cfde7ced161b6c886104133c2a4b47ae7bea7b7b2e96b3ed2667bd-d
+packagefile golang.org/x/crypto/internal/poly1305=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/dd/ddeb69da039854902ed5814e6fd1219729db9294321325957351f009e5b93589-d

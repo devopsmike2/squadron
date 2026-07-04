@@ -1,0 +1,5 @@
+# import config
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile golang.org/x/text/transform=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b458/_pkg_.a
+packagefile golang.org/x/text/unicode/bidi=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b459/_pkg_.a
+packagefile unicode/utf8=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/05/055ab2afa9cb82fbf09dbea9412c3cea3970e1867d91770360af6321fe8defea-d

@@ -1,0 +1,5 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile go.opentelemetry.io/otel/attribute=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/51/51ff4eea2cf8106f466273eed613a70d2c6ca46a48e0acf4ad327fe61d34f358-d
+packagefile go.opentelemetry.io/otel/codes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/42/420834f36c89430c20e3fef6c42c096a517f8350e460304cd1182215c5bdae23-d
+packagefile go.opentelemetry.io/otel/trace=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e0/e0e638ccab0d19ecc888e7fbce7d340d0f64cdf70ddea0d3d46cb0b8b8723206-d

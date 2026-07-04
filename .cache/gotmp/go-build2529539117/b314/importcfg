@@ -1,0 +1,20 @@
+# import config
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile database/sql=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/202bd2821f218b2bea86475a5735b865d3b30c35beac44d692436eb37179514e-d
+packagefile database/sql/driver=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/70/704c49a74f43722703da3c5f1f9e817b3ea75c05a227d6b34ca99290fcb109f0-d
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/apache/arrow-go/v18/arrow=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/73/73be8265bf38f5e07e04314089d2e72ce9851524188c53442ad05852fdd7488c-d
+packagefile github.com/apache/arrow-go/v18/arrow/array=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/2a/2a9188a9a5e286931d84d3816d65b595a16cc14d8bd0dbfd3ec7675b1f0fbd6d-d
+packagefile github.com/apache/arrow-go/v18/arrow/cdata=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/ea/eaf99609aa7dc4ed40418872123a286b424cab22f706438939f1bbdbfd657eaf-d
+packagefile github.com/mitchellh/mapstructure=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e8/e8099971b3180d0db4caf2e8df1bb475fb560f08c177f59fc00f85fa3d33038a-d
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d
+packagefile math/big=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/33/33272eaeff547c22ef415c6afb2ddca6fd47f92fc750913212610a0f61dc33a6-d
+packagefile net/url=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/25/2503a42c4664dcbf9145069c0cc45ac88a2199b3f1e83766cb04cdff2ddd873b-d
+packagefile reflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0d/0d3483078e24f47682d55b5d7e631265bbc4e180f58e091e9f7a20b1e093ecaa-d
+packagefile runtime=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/58/5830c2ae9094bd458e64f3132cf445fd27291915aba7ff7ca88dfb82bef5a4e2-d
+packagefile runtime/cgo=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f7/f7c2c2b634e86ba66d890d6145eb31d952414602aea00d466ebbedab592c5b60-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d
+packagefile syscall=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4f/4f5e1476adaad53bf2602bf4efc450090d7339df219e729fd5525fd121072f5f-d

@@ -1,0 +1,4 @@
+# import config
+packagefile internal/godebugs=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/2b/2bbc8af9172b735554c4e6d436039fb591979354f8b69e341b5cd4e30cfeb6f0-d
+packagefile math=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0a/0a029901884ed0a4d4938b02c37c4b4602d0ae85cdfea62da6939a6c52c6f4c8-d
+packagefile runtime=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/58/5830c2ae9094bd458e64f3132cf445fd27291915aba7ff7ca88dfb82bef5a4e2-d

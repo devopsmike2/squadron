@@ -1,0 +1,14 @@
+# import config
+packagefile bytes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/30/3062c49db67e0a19fa6366bd56273a28c3c46784b76bd41b35a8d6c1896f10d7-d
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile encoding/json=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f8/f868dec40285ef0c9f54bb0c2114193d93ed17a07e6de14f8d503b1dc0c381d3-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/devopsmike2/squadron/internal/alerts=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a7/a72e4c7f7f768eb88b0c9856766530374900d17e153e81331334eda9feef53be-d
+packagefile github.com/devopsmike2/squadron/internal/events=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/60/60b97fd59a6f61a7ff491e0600ce52eed6bb1f19d78d749b1af33a78b20df15a-d
+packagefile github.com/devopsmike2/squadron/internal/metrics=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e2/e2b0c368e95323e8c2cf59d564935d93ee113f8c8fb2bf9d982dfae1c8f579b2-d
+packagefile github.com/devopsmike2/squadron/internal/query=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b290/_pkg_.a
+packagefile github.com/devopsmike2/squadron/internal/services=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b291/_pkg_.a
+packagefile go.uber.org/zap=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/28/2870adada484959f774497f057f0a6617c4e97e5880b8cd00ed8d1f16603bc93-d
+packagefile net/http=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/5b/5b0be87a620ff647f2556b76bbe599ee09305790126248b4c873dd8b52acc418-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

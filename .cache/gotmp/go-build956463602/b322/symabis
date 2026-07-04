@@ -1,0 +1,4 @@
+def golang.org/x/sys/cpu.getisar0 ABI0
+def golang.org/x/sys/cpu.getisar1 ABI0
+def golang.org/x/sys/cpu.getpfr0 ABI0
+def golang.org/x/sys/cpu.getzfr0 ABI0

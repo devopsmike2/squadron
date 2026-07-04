@@ -1,0 +1,7 @@
+# import config
+importmap golang.org/x/text/transform=vendor/golang.org/x/text/transform
+importmap golang.org/x/text/unicode/bidi=vendor/golang.org/x/text/unicode/bidi
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile vendor/golang.org/x/text/transform=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b179/_pkg_.a
+packagefile vendor/golang.org/x/text/unicode/bidi=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b180/_pkg_.a
+packagefile unicode/utf8=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/05/055ab2afa9cb82fbf09dbea9412c3cea3970e1867d91770360af6321fe8defea-d

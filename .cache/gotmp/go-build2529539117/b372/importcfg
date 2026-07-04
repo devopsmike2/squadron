@@ -1,0 +1,24 @@
+# import config
+packagefile bytes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/30/3062c49db67e0a19fa6366bd56273a28c3c46784b76bd41b35a8d6c1896f10d7-d
+packagefile encoding=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/93/93e5eb09ca305a8c5c627dad621d0babb4aeb593876ed3ba8907af48408f0e42-d
+packagefile encoding/xml=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b370/_pkg_.a
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/gin-gonic/gin/codec/json=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b373/_pkg_.a
+packagefile github.com/gin-gonic/gin/internal/bytesconv=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b374/_pkg_.a
+packagefile github.com/go-playground/validator/v10=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b375/_pkg_.a
+packagefile github.com/goccy/go-yaml=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b398/_pkg_.a
+packagefile github.com/pelletier/go-toml/v2=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b407/_pkg_.a
+packagefile github.com/ugorji/go/codec=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b411/_pkg_.a
+packagefile go.mongodb.org/mongo-driver/v2/bson=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b419/_pkg_.a
+packagefile google.golang.org/protobuf/proto=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/8e/8e63da9a6f3f300110d0ca65e8e523e423f0e0ca93798ed5830d82228bdce16d-d
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d
+packagefile maps=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/89/89d368fba6bae59116e55d433d9ebc1e5df18d2b0d7514ffbd336b411bac8004-d
+packagefile mime/multipart=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/af/af8d3c8e35e40be171846424758cbc01a319ea8317a86f6d84494193cef74eb5-d
+packagefile net/http=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/5b/5b0be87a620ff647f2556b76bbe599ee09305790126248b4c873dd8b52acc418-d
+packagefile net/textproto=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/09/095ab38acac4dcb455a3ed6881e196188f74a83af3790cfb3557db88e5df3b16-d
+packagefile reflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0d/0d3483078e24f47682d55b5d7e631265bbc4e180f58e091e9f7a20b1e093ecaa-d
+packagefile strconv=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1b/1babfda9f827651a53390ae0f2d2176264a3317964c29905981373f2f4e7601a-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

@@ -307,6 +307,10 @@ type RolloutAbortCriteria struct {
 	MaxDriftedAgents           int `json:"max_drifted_agents"`
 	MaxErrorLogsPerMinute      int `json:"max_error_logs_per_minute,omitempty"`
 	MinDwellSecondsBeforeAbort int `json:"min_dwell_seconds_before_abort,omitempty"`
+	// ErrorRateWindowSeconds: trailing window for the error-rate check.
+	// > 0 evaluates errors/min over the last N seconds (a late burst is
+	// not diluted); 0 keeps the legacy whole-stage average. See ADR 0008.
+	ErrorRateWindowSeconds int `json:"error_rate_window_seconds,omitempty"`
 }
 
 // Rollout is the service-layer view of an applicationstore.Rollout.

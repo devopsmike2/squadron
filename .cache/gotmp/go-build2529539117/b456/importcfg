@@ -1,0 +1,9 @@
+# import config
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile golang.org/x/text/secure/bidirule=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b457/_pkg_.a
+packagefile golang.org/x/text/unicode/bidi=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b459/_pkg_.a
+packagefile golang.org/x/text/unicode/norm=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b460/_pkg_.a
+packagefile math=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0a/0a029901884ed0a4d4938b02c37c4b4602d0ae85cdfea62da6939a6c52c6f4c8-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile unicode=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/c9/c90e923b71d417c3ecb63f099796dc31efe52a897cbae72a64ca7ea1436dd532-d
+packagefile unicode/utf8=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/05/055ab2afa9cb82fbf09dbea9412c3cea3970e1867d91770360af6321fe8defea-d

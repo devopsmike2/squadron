@@ -1,0 +1,4 @@
+def github.com/apache/arrow-go/v18/internal/utils._int32_max_min_neon ABI0
+def github.com/apache/arrow-go/v18/internal/utils._uint32_max_min_neon ABI0
+def github.com/apache/arrow-go/v18/internal/utils._int64_max_min_neon ABI0
+def github.com/apache/arrow-go/v18/internal/utils._uint64_max_min_neon ABI0

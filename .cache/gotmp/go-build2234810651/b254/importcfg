@@ -1,0 +1,22 @@
+# import config
+packagefile bytes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/30/3062c49db67e0a19fa6366bd56273a28c3c46784b76bd41b35a8d6c1896f10d7-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile google.golang.org/protobuf/encoding/protowire=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b248/_pkg_.a
+packagefile google.golang.org/protobuf/internal/descfmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b255/_pkg_.a
+packagefile google.golang.org/protobuf/internal/descopts=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b256/_pkg_.a
+packagefile google.golang.org/protobuf/internal/editiondefaults=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b257/_pkg_.a
+packagefile google.golang.org/protobuf/internal/encoding/defval=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b259/_pkg_.a
+packagefile google.golang.org/protobuf/internal/encoding/messageset=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b264/_pkg_.a
+packagefile google.golang.org/protobuf/internal/errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b249/_pkg_.a
+packagefile google.golang.org/protobuf/internal/genid=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b265/_pkg_.a
+packagefile google.golang.org/protobuf/internal/pragma=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b252/_pkg_.a
+packagefile google.golang.org/protobuf/internal/strs=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b262/_pkg_.a
+packagefile google.golang.org/protobuf/proto=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b266/_pkg_.a
+packagefile google.golang.org/protobuf/reflect/protoreflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b247/_pkg_.a
+packagefile google.golang.org/protobuf/reflect/protoregistry=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b268/_pkg_.a
+packagefile math=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0a/0a029901884ed0a4d4938b02c37c4b4602d0ae85cdfea62da6939a6c52c6f4c8-d
+packagefile reflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0d/0d3483078e24f47682d55b5d7e631265bbc4e180f58e091e9f7a20b1e093ecaa-d
+packagefile sort=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/71/7110e6ca2f4c1c0cbd61ba03bab231e96496e81ebc0470b5a21952c8766c222b-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d
+packagefile sync/atomic=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e7/e7998ede3e1cba1b614523cda9b5ef381f2dbf03ea306a15d10a14103699d5d0-d

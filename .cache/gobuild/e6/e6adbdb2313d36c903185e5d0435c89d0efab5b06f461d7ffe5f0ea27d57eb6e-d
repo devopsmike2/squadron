@@ -1,0 +1,9 @@
+./doc.go
+./flush.go
+./index.go
+./inventory_keying.go
+./keying.go
+./quality.go
+./quality_rules.go
+./quality_w3c.go
+./types.go

@@ -1,0 +1,7 @@
+# import config
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile internal/bytealg=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d4/d4a797a913149cc2acc1d4068bbfce3b52d2d1b6cd0b737e01fddafe27e80c78-d
+packagefile internal/stringslite=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/07/0733c16cf8bf17ae6b6682dd5d1e5915022ce511e163caf59a0dcdc1133ae9bf-d
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d
+packagefile io/fs=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/c4/c40fba486748c6b86110901604ae9d7619f5ea90ab2d752bf96791185a4e64e2-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

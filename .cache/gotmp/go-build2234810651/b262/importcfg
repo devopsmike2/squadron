@@ -1,0 +1,7 @@
+# import config
+packagefile go/token=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/37/37137bc5a18b0a9d6d14fdff3f5f919165ffa8443226db028ccee7a24b8319a6-d
+packagefile google.golang.org/protobuf/internal/flags=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b261/_pkg_.a
+packagefile google.golang.org/protobuf/reflect/protoreflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b247/_pkg_.a
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile unicode=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/c9/c90e923b71d417c3ecb63f099796dc31efe52a897cbae72a64ca7ea1436dd532-d
+packagefile unicode/utf8=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/05/055ab2afa9cb82fbf09dbea9412c3cea3970e1867d91770360af6321fe8defea-d

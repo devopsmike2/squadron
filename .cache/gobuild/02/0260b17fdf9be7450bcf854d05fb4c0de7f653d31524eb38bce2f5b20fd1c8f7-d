@@ -1,0 +1,4 @@
+=== RUN   TestListAlertRules_ReturnsAllRows
+--- PASS: TestListAlertRules_ReturnsAllRows (0.01s)
+PASS
+ok  	github.com/devopsmike2/squadron/internal/storage/applicationstore/sqlite	0.017s

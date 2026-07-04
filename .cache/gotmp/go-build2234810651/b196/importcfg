@@ -1,0 +1,6 @@
+# import config
+packagefile github.com/go-logr/logr=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b197/_pkg_.a
+packagefile go.opentelemetry.io/otel/internal/global=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b201/_pkg_.a
+packagefile go.opentelemetry.io/otel/metric=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b218/_pkg_.a
+packagefile go.opentelemetry.io/otel/propagation=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b220/_pkg_.a
+packagefile go.opentelemetry.io/otel/trace=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b212/_pkg_.a

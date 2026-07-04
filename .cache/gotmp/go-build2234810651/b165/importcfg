@@ -1,0 +1,5 @@
+# import config
+packagefile crypto/internal/fips140/alias=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0e/0e88b67553d49202d4cf4f748984eaad919411a59981c7cf55b7c9d51cf9bb71-d
+packagefile crypto/internal/fips140only=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/60/602f6bf709b23dbd0eaceec59fbd3dd80bb799e58a3d33961cec7265f63b55e9-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile strconv=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1b/1babfda9f827651a53390ae0f2d2176264a3317964c29905981373f2f4e7601a-d

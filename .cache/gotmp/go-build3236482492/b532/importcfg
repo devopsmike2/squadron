@@ -1,0 +1,4 @@
+# import config
+packagefile github.com/aws/smithy-go=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7c/7c97c85302add8fad90e35ded987ac6fcd4ff518c74a810531e4bc8be3ce4b14-d
+packagefile net/http=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/5b/5b0be87a620ff647f2556b76bbe599ee09305790126248b4c873dd8b52acc418-d
+packagefile net/url=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/25/2503a42c4664dcbf9145069c0cc45ac88a2199b3f1e83766cb04cdff2ddd873b-d

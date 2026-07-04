@@ -1,0 +1,11 @@
+./audit.go
+./aws.go
+./azure_sp.go
+./crypto.go
+./doc.go
+./gcp_sa.go
+./migrations.go
+./oci_signing_key.go
+./sqlite.go
+./store.go
+./webhook_secret.go

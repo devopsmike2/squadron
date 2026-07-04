@@ -1,0 +1,8 @@
+./interface.go
+_cgo_gotypes.go
+cdata.cgo1.go
+cdata_allocate.cgo1.go
+cdata_exports.cgo1.go
+exports.cgo1.go
+import_allocator.cgo1.go
+_cgo_import.go

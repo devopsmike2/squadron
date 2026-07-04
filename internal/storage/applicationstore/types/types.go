@@ -633,14 +633,24 @@ type RolloutAbortCriteria struct {
 	MaxDriftedAgents int `json:"max_drifted_agents"`
 
 	// MaxErrorLogsPerMinute: if the canary agents collectively produce
-	// more than this many ERROR/FATAL log records per minute (averaged
-	// over the dwell window so far), abort. 0 disables the check.
+	// more than this many ERROR/FATAL log records per minute, abort. The
+	// window over which the rate is measured is governed by
+	// ErrorRateWindowSeconds (trailing window when > 0, else whole-stage
+	// average). 0 disables the check.
 	MaxErrorLogsPerMinute int `json:"max_error_logs_per_minute,omitempty"`
 
 	// MinDwellSecondsBeforeAbort: how long after a stage starts the
 	// engine waits before applying error-rate criteria. Gives newly-
 	// pushed agents time to flush startup noise. Default 30s.
 	MinDwellSecondsBeforeAbort int `json:"min_dwell_seconds_before_abort,omitempty"`
+
+	// ErrorRateWindowSeconds: trailing window (in seconds) over which the
+	// error-rate criterion is evaluated. When > 0, the engine measures
+	// ERROR/FATAL logs per minute over the last N seconds instead of
+	// averaging over the whole stage — so a late burst isn't diluted by
+	// earlier clean minutes. 0 (the zero value, and the value for pre-v0.90
+	// rows) preserves the legacy whole-stage-average behavior. See ADR 0008.
+	ErrorRateWindowSeconds int `json:"error_rate_window_seconds,omitempty"`
 }
 
 // Rollout is one safe staged config rollout against a group.

@@ -1,0 +1,9 @@
+# import config
+packagefile bytes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/30/3062c49db67e0a19fa6366bd56273a28c3c46784b76bd41b35a8d6c1896f10d7-d
+packagefile crypto/internal/fips140=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/ba/ba4e87554ed5a05e48dd80791bcaedcdb508721c8fe99232627eeaf16f34c237-d
+packagefile crypto/internal/fips140/check=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/62/6297ac4d2623398144978938ef9df56fc0a032eb98dec119273c4c44eba38979-d
+packagefile crypto/internal/fips140/drbg=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/f0/f06892d9d3ddbd1a761a9bac4c8547a5604a05e77a9b74199fceae5ba8e40955-d
+packagefile crypto/internal/fips140/sha3=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/34/34ea3889c0003aa951151a89f9a535f121dfc4db876637f5a4dfa6560b22f364-d
+packagefile crypto/internal/fips140/subtle=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e5/e51b7d0c4b9ba2ea295ad502633e24dac02514f7f883c828112c6b328d84c75d-d
+packagefile crypto/internal/fips140deps/byteorder=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/3b/3b5be930d2158c48abe120f8d7b0f46288318e7e08a83f54a7014cb5de1d86ac-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d

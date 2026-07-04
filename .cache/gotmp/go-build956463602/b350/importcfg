@@ -1,0 +1,26 @@
+# import config
+packagefile bytes=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/30/3062c49db67e0a19fa6366bd56273a28c3c46784b76bd41b35a8d6c1896f10d7-d
+packagefile context=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/b8/b81468040f61780357590bf6607d1e2d6aa2a50f74b91b7f32eb60ae94a9abad-d
+packagefile encoding/binary=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/1c/1c4b9b407d74a2c530b5939eda7cd073a209b947d0f152f0e39ce6907ba8f8bc-d
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile github.com/apache/arrow-go/v18/arrow=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b315/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/array=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b341/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/arrio=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b348/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/bitutil=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b316/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/endian=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b317/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/internal=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b349/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/internal/debug=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b318/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/internal/dictutils=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b351/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/internal/flatbuf=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b319/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/arrow/memory=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b321/_pkg_.a
+packagefile github.com/apache/arrow-go/v18/internal/utils=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b344/_pkg_.a
+packagefile github.com/google/flatbuffers/go=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b320/_pkg_.a
+packagefile github.com/klauspost/compress/zstd=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b352/_pkg_.a
+packagefile github.com/pierrec/lz4/v4=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build956463602/b359/_pkg_.a
+packagefile io=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/7e/7e716fdd2dd38dd7afd3ff7293479fb4d1f17db9d1214dfb2a636f822dcf0d31-d
+packagefile math=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0a/0a029901884ed0a4d4938b02c37c4b4602d0ae85cdfea62da6939a6c52c6f4c8-d
+packagefile math/bits=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/cd/cd7d7c68092e25878b1cc2ec11d926f6db0cec5f0572853dfa846942cd4486a8-d
+packagefile sort=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/71/7110e6ca2f4c1c0cbd61ba03bab231e96496e81ebc0470b5a21952c8766c222b-d
+packagefile sync=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/a4/a4bc335ba9cb494af3c3548ebc09e7c20f5bf31c4adc2541d970547e3be0dedc-d
+packagefile sync/atomic=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e7/e7998ede3e1cba1b614523cda9b5ef381f2dbf03ea306a15d10a14103699d5d0-d

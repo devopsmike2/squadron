@@ -1,0 +1,6 @@
+./register_restart_docker.go
+./register_restart_systemd.go
+./register_run_shell_allowlist.go
+./registry.go
+./signer.go
+./types.go

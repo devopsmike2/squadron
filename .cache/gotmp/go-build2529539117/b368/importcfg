@@ -1,0 +1,7 @@
+# import config
+packagefile github.com/devopsmike2/squadron/internal/services=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b291/_pkg_.a
+packagefile github.com/gin-gonic/gin=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2529539117/b369/_pkg_.a
+packagefile go.uber.org/zap=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/28/2870adada484959f774497f057f0a6617c4e97e5880b8cd00ed8d1f16603bc93-d
+packagefile net/http=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/5b/5b0be87a620ff647f2556b76bbe599ee09305790126248b4c873dd8b52acc418-d
+packagefile strings=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/4a/4adce4f90d1eec4b81ff1503b02721ddb3cc432a4d935ca6b7feb353598f23fc-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

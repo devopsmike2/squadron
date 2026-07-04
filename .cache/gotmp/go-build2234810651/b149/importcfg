@@ -1,0 +1,9 @@
+# import config
+importmap golang.org/x/crypto/cryptobyte/asn1=vendor/golang.org/x/crypto/cryptobyte/asn1
+packagefile encoding/asn1=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b150/_pkg_.a
+packagefile errors=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/e6/e681d725bb29a53af43f065bd868fa49556668fcf281747a39c78c27597d43e5-d
+packagefile fmt=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/d7/d7633f2659aadb208884550327e2147f2340c07cae06bc5e183d083f427d338d-d
+packagefile vendor/golang.org/x/crypto/cryptobyte/asn1=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b152/_pkg_.a
+packagefile math/big=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b108/_pkg_.a
+packagefile reflect=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/0d/0d3483078e24f47682d55b5d7e631265bbc4e180f58e091e9f7a20b1e093ecaa-d
+packagefile time=/sessions/great-funny-faraday/mnt/squadron/.cache/gobuild/20/20c0a7284255364500f68158d692c52011f71dab49e0b6c6379cd7ee1e75ce36-d

@@ -1,0 +1,6 @@
+./doc.go
+./github_pat.go
+./memory.go
+./migrations.go
+./sqlite.go
+./store.go

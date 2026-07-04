@@ -1,0 +1,4 @@
+# import config
+packagefile golang.org/x/crypto/internal/alias=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b299/_pkg_.a
+packagefile golang.org/x/crypto/internal/poly1305=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b300/_pkg_.a
+packagefile golang.org/x/crypto/salsa20/salsa=/sessions/great-funny-faraday/mnt/squadron/.cache/gotmp/go-build2234810651/b301/_pkg_.a
