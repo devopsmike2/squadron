@@ -19,6 +19,11 @@ import (
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
+// defaultErrorRateWindowSeconds is the trailing window applied at Create
+// time to new rollouts that set an error-rate abort criterion without an
+// explicit window. See ADR 0008.
+const defaultErrorRateWindowSeconds = 120
+
 // RolloutServiceImpl is the canonical implementation backed by an
 // ApplicationStore. It performs validation, snapshots the previous config
 // for rollback at Create time, and records audit entries on create + abort.
@@ -179,6 +184,15 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		// allowed
 	default:
 		return nil, fmt.Errorf("invalid proposed_by %q (must be one of operator, ai, system)", proposedBy)
+	}
+	// v0.90 — error-rate trailing window (ADR 0008). New rollouts that set
+	// an error-rate criterion but leave the window unset default to a
+	// trailing window, so the abort signal reflects a recent burst rather
+	// than a whole-stage average. Existing/in-flight rollouts (window 0)
+	// keep the legacy whole-stage-average behavior; the engine treats 0 as
+	// legacy and never imposes this default on them mid-run.
+	if input.AbortCriteria.MaxErrorLogsPerMinute > 0 && input.AbortCriteria.ErrorRateWindowSeconds == 0 {
+		input.AbortCriteria.ErrorRateWindowSeconds = defaultErrorRateWindowSeconds
 	}
 	rollout := &Rollout{
 		ID:                uuid.New().String(),
@@ -1678,6 +1692,9 @@ func validateRolloutInput(in RolloutInput) error {
 	if in.AbortCriteria.MinDwellSecondsBeforeAbort < 0 {
 		return fmt.Errorf("abort_criteria.min_dwell_seconds_before_abort must be >= 0")
 	}
+	if in.AbortCriteria.ErrorRateWindowSeconds < 0 {
+		return fmt.Errorf("abort_criteria.error_rate_window_seconds must be >= 0")
+	}
 	return nil
 }
 
@@ -1730,6 +1747,7 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 			MaxDriftedAgents:           r.AbortCriteria.MaxDriftedAgents,
 			MaxErrorLogsPerMinute:      r.AbortCriteria.MaxErrorLogsPerMinute,
 			MinDwellSecondsBeforeAbort: r.AbortCriteria.MinDwellSecondsBeforeAbort,
+			ErrorRateWindowSeconds:     r.AbortCriteria.ErrorRateWindowSeconds,
 		},
 		NotificationURL: r.NotificationURL,
 		State:           applicationstore.RolloutState(r.State),
@@ -1831,6 +1849,7 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 			MaxDriftedAgents:           r.AbortCriteria.MaxDriftedAgents,
 			MaxErrorLogsPerMinute:      r.AbortCriteria.MaxErrorLogsPerMinute,
 			MinDwellSecondsBeforeAbort: r.AbortCriteria.MinDwellSecondsBeforeAbort,
+			ErrorRateWindowSeconds:     r.AbortCriteria.ErrorRateWindowSeconds,
 		},
 		NotificationURL: r.NotificationURL,
 		State:           RolloutState(r.State),

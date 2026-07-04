@@ -1108,7 +1108,22 @@ func (e *Engine) evaluateAbortCriteria(ctx context.Context, r *services.Rollout,
 			for _, a := range canary {
 				ids = append(ids, a.ID)
 			}
-			rate, err := e.telemetry.CanaryErrorLogsPerMinute(ctx, ids, *r.StageStartedAt)
+			// ADR 0008 — error-rate window. With ErrorRateWindowSeconds > 0
+			// we measure errors/min over a trailing window (the last N
+			// seconds) instead of averaging over the whole stage, so a late
+			// burst isn't diluted by earlier clean minutes. The window start
+			// is clamped to never precede stage start (early in a stage the
+			// window is simply "since stage start" — identical to legacy).
+			// ErrorRateWindowSeconds == 0 (pre-v0.90 / unset) keeps the
+			// legacy whole-stage-average behavior unchanged.
+			evalSince := *r.StageStartedAt
+			if w := r.AbortCriteria.ErrorRateWindowSeconds; w > 0 {
+				trailingStart := time.Now().Add(-time.Duration(w) * time.Second)
+				if trailingStart.After(evalSince) {
+					evalSince = trailingStart
+				}
+			}
+			rate, err := e.telemetry.CanaryErrorLogsPerMinute(ctx, ids, evalSince)
 			if err == nil && rate > float64(r.AbortCriteria.MaxErrorLogsPerMinute) {
 				return fmt.Sprintf("canary error log rate %.1f/min exceeded max %d/min",
 					rate, r.AbortCriteria.MaxErrorLogsPerMinute)

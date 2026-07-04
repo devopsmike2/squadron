@@ -7,6 +7,7 @@ import (
 	"context"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -363,4 +364,93 @@ func TestEngine_EvaluateAbortCriteria_NoAbortBelowThreshold(t *testing.T) {
 	}
 	reason := e.evaluateAbortCriteria(context.Background(), r, r.Stages[0])
 	assert.Empty(t, reason, "1 drifted agent under threshold of 2 should not abort")
+}
+
+// windowedTelemetry is a faithful test double for TelemetryReader: it holds
+// a set of error-event timestamps and computes errors/min over [since, now)
+// exactly the way the real DuckDB-backed adapter does (COUNT in window /
+// window minutes). It records the `since` it was handed so tests can assert
+// how the engine sizes the evaluation window. See ADR 0008.
+type windowedTelemetry struct {
+	errorTimes []time.Time
+	lastSince  time.Time
+}
+
+func (w *windowedTelemetry) CanaryErrorLogsPerMinute(_ context.Context, _ []uuid.UUID, since time.Time) (float64, error) {
+	w.lastSince = since
+	minutes := time.Since(since).Minutes()
+	if minutes < 0.05 {
+		return 0, nil
+	}
+	n := 0
+	for _, t := range w.errorTimes {
+		if !t.Before(since) {
+			n++
+		}
+	}
+	return float64(n) / minutes, nil
+}
+
+func TestEngine_EvaluateAbortCriteria_ErrorRateTrailingWindow_CatchesLateBurst(t *testing.T) {
+	// A stage that has dwelled 30 minutes with a burst of 100 ERROR logs
+	// concentrated in the final minute. Whole-stage average dilutes it to
+	// ~3.3/min (under a 10/min threshold) — the bug. A 120s trailing window
+	// sees 100 errors over 2 minutes = 50/min and aborts — the fix (ADR 0008).
+	ctx := context.Background()
+	now := time.Now()
+	stageStart := now.Add(-30 * time.Minute)
+
+	errs := make([]time.Time, 100)
+	for i := range errs {
+		errs[i] = now.Add(-30 * time.Second) // all in the last minute
+	}
+	tel := &windowedTelemetry{errorTimes: errs}
+
+	stub := &stubAgentService{agents: makeAgents(2, "group-a")}
+	e := &Engine{agentService: stub, logger: zap.NewNop(), telemetry: tel}
+
+	base := services.Rollout{
+		GroupID:        "group-a",
+		Stages:         []services.RolloutStage{{Percentage: 100}},
+		StageStartedAt: &stageStart,
+	}
+
+	// Legacy whole-stage average (window 0): burst is diluted, no abort.
+	legacy := base
+	legacy.AbortCriteria = services.RolloutAbortCriteria{MaxErrorLogsPerMinute: 10, ErrorRateWindowSeconds: 0}
+	assert.Empty(t, e.evaluateAbortCriteria(ctx, &legacy, legacy.Stages[0]),
+		"whole-stage average should dilute the late burst and not abort")
+	assert.WithinDuration(t, stageStart, tel.lastSince, 2*time.Second,
+		"legacy path must evaluate since stage start")
+
+	// Trailing 120s window: burst dominates, abort fires.
+	trailing := base
+	trailing.AbortCriteria = services.RolloutAbortCriteria{MaxErrorLogsPerMinute: 10, ErrorRateWindowSeconds: 120}
+	reason := e.evaluateAbortCriteria(ctx, &trailing, trailing.Stages[0])
+	assert.Contains(t, reason, "error log rate", "trailing window should catch the late burst")
+	assert.WithinDuration(t, now.Add(-120*time.Second), tel.lastSince, 2*time.Second,
+		"trailing path must evaluate over the last window seconds")
+}
+
+func TestEngine_EvaluateAbortCriteria_ErrorRateWindowClampedToStageStart(t *testing.T) {
+	// Stage started 60s ago (past the 30s warmup) but the configured window
+	// is 120s, so the trailing start would precede stage start. The engine
+	// must clamp to stage start and never count pre-stage telemetry.
+	ctx := context.Background()
+	now := time.Now()
+	stageStart := now.Add(-60 * time.Second)
+
+	tel := &windowedTelemetry{errorTimes: nil}
+	stub := &stubAgentService{agents: makeAgents(2, "group-a")}
+	e := &Engine{agentService: stub, logger: zap.NewNop(), telemetry: tel}
+
+	r := services.Rollout{
+		GroupID:        "group-a",
+		Stages:         []services.RolloutStage{{Percentage: 100}},
+		StageStartedAt: &stageStart,
+		AbortCriteria:  services.RolloutAbortCriteria{MaxErrorLogsPerMinute: 10, ErrorRateWindowSeconds: 120},
+	}
+	_ = e.evaluateAbortCriteria(ctx, &r, r.Stages[0])
+	assert.WithinDuration(t, stageStart, tel.lastSince, 2*time.Second,
+		"window wider than stage age must clamp to stage start")
 }
