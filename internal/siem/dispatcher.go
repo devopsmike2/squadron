@@ -97,7 +97,8 @@ func (d *Dispatcher) Dispatch(ev Event) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, w := range d.workers {
-		if !w.dest.MatchesFilter(ev.EventType) {
+		cfg := w.cfg.Load()
+		if !cfg.dest.MatchesFilter(ev.EventType) {
 			continue
 		}
 		select {
@@ -105,7 +106,7 @@ func (d *Dispatcher) Dispatch(ev Event) {
 		default:
 			d.dropped.Add(1)
 			d.logger.Warn("siem: dropping event, queue full",
-				zap.String("destination", w.dest.Name),
+				zap.String("destination", cfg.dest.Name),
 				zap.String("event_type", ev.EventType))
 		}
 	}
@@ -138,10 +139,11 @@ func (d *Dispatcher) reload(ctx context.Context) {
 		}
 		d.mu.Lock()
 		if existing, ok := d.workers[dest.ID]; ok {
-			// Hot-swap config so URL/secret edits take effect
-			// without losing the in-flight queue.
-			existing.dest = dest
-			existing.exporter = exp
+			// Hot-swap config so URL/secret edits take effect without
+			// losing the in-flight queue. Atomic swap of the whole
+			// config so the worker goroutine never observes a torn
+			// dest/exporter pair (or races this write).
+			existing.cfg.Store(&workerConfig{dest: dest, exporter: exp})
 		} else {
 			w := newWorker(dest, exp, d.logger)
 			d.workers[dest.ID] = w
@@ -172,22 +174,30 @@ func (d *Dispatcher) shutdownAll() {
 
 // --- worker ----------------------------------------------------------
 
-type worker struct {
+// workerConfig is the per-worker mutable config (destination + its built
+// exporter). It is held behind an atomic.Pointer and swapped as a unit on
+// reload, so the worker goroutine reading it never observes a torn
+// dest/exporter pair and never races the reload goroutine's write.
+type workerConfig struct {
 	dest     *Destination
 	exporter Exporter
-	in       chan Event
-	done     chan struct{}
-	logger   *zap.Logger
+}
+
+type worker struct {
+	cfg    atomic.Pointer[workerConfig]
+	in     chan Event
+	done   chan struct{}
+	logger *zap.Logger
 }
 
 func newWorker(dest *Destination, exp Exporter, logger *zap.Logger) *worker {
-	return &worker{
-		dest:     dest,
-		exporter: exp,
-		in:       make(chan Event, queueCapacity),
-		done:     make(chan struct{}),
-		logger:   logger,
+	w := &worker{
+		in:     make(chan Event, queueCapacity),
+		done:   make(chan struct{}),
+		logger: logger,
 	}
+	w.cfg.Store(&workerConfig{dest: dest, exporter: exp})
+	return w
 }
 
 func (w *worker) run() {
@@ -211,16 +221,20 @@ func (w *worker) stop() {
 // freshness matters more than this event's eventual delivery once
 // the SIEM has been down for minutes.
 func (w *worker) deliver(ev Event) {
+	// Snapshot the config once for this event's whole retry loop, so a
+	// mid-delivery reload can't tear the dest/exporter pair. The read is
+	// lock-free (atomic load) and never races the reload writer.
+	cfg := w.cfg.Load()
 	backoff := 500 * time.Millisecond
 	for attempt := 0; attempt < retryAttempts; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := w.exporter.Send(ctx, ev)
+		err := cfg.exporter.Send(ctx, ev)
 		cancel()
 		if err == nil {
 			return
 		}
 		w.logger.Warn("siem: export attempt failed",
-			zap.String("destination", w.dest.Name),
+			zap.String("destination", cfg.dest.Name),
 			zap.Int("attempt", attempt+1),
 			zap.Error(err))
 		if attempt == retryAttempts-1 {
