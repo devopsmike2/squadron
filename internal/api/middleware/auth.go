@@ -91,10 +91,19 @@ func RequireBearer(auth services.AuthService, logger *zap.Logger) gin.HandlerFun
 			return
 		}
 
+		// ADR 0011: carry the token's tenant onto the actor so the enterprise
+		// TenantResolver can derive the request tenant from ActorFromContext.
+		// Empty defaults to the OSS single tenant; inert in OSS (the
+		// SingleTenantResolver ignores it and always returns DefaultTenant).
+		tenant := token.TenantID
+		if tenant == "" {
+			tenant = identity.DefaultTenant
+		}
 		actor := services.AuthActor{
 			TokenID:    token.ID,
 			TokenLabel: token.Label,
 			Scopes:     token.Scopes,
+			Tenant:     tenant,
 		}
 		c.Set(AuthActorContextKey, actor)
 		// Also stash on the request context so service-layer audit

@@ -280,6 +280,7 @@ func toServiceToken(t *applicationstore.APIToken) *APIToken {
 		LastUsedAt: t.LastUsedAt,
 		RevokedAt:  t.RevokedAt,
 		ExpiresAt:  t.ExpiresAt,
+		TenantID:   t.TenantID, // ADR 0011: thread tenant through to the actor
 	}
 	if len(t.Scopes) > 0 {
 		out.Scopes = make([]string, len(t.Scopes))

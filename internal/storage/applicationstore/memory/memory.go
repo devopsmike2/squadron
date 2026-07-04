@@ -1346,7 +1346,13 @@ func (s *Store) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
 			return fmt.Errorf("api token hash collision")
 		}
 	}
-	s.apiTokens[t.ID] = copyToken(t)
+	stored := copyToken(t)
+	// ADR 0011: mirror the sqlite store's insert default — an unset tenant
+	// lands in the OSS single tenant 'default'.
+	if stored.TenantID == "" {
+		stored.TenantID = "default"
+	}
+	s.apiTokens[t.ID] = stored
 	return nil
 }
 

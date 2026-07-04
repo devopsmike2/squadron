@@ -574,6 +574,12 @@ type APIToken struct {
 	// tokens issued before v0.11 have ExpiresAt=nil and stay valid
 	// until explicitly revoked.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// TenantID is the tenant this token authenticates into (ADR 0011).
+	// Threaded through to services.APIToken and AuthActor.Tenant so the
+	// enterprise TenantResolver can derive a request's tenant off the token.
+	// Defaults to "default" (the OSS single tenant); inert in OSS.
+	TenantID string `json:"tenant_id,omitempty"`
 }
 
 // RolloutState is the lifecycle position of a Rollout.

@@ -28,6 +28,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
@@ -149,7 +150,11 @@ func (e *Evaluator) loop() {
 // tick lists current rules, evaluates the ones whose interval has elapsed.
 // Rule listing errors are logged and the loop continues on the next tick.
 func (e *Evaluator) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// ADR 0011: the evaluator fires EVERY tenant's alert rules each tick, so
+	// it runs on a system (all-tenant) context. Inert in OSS; the enterprise
+	// scoped store reads a system context as "apply no tenant predicate" so no
+	// tenant's alerts silently stop firing.
+	ctx, cancel := context.WithTimeout(identity.WithSystemContext(context.Background()), 30*time.Second)
 	defer cancel()
 
 	rules, err := e.alertService.ListAlertRules(ctx)

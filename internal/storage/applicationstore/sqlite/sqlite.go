@@ -214,7 +214,13 @@ func (s *Storage) migrate() error {
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		last_used_at DATETIME,
 		revoked_at DATETIME,
-		expires_at DATETIME                   -- nullable; nil = never expires
+		expires_at DATETIME,                  -- nullable; nil = never expires
+		-- ADR 0011: the tenant this token authenticates into. Threaded to
+		-- AuthActor.Tenant so the enterprise TenantResolver can derive a
+		-- request's tenant off the token. 'default' is the OSS single tenant;
+		-- inert here (SingleTenantResolver ignores it). Also added via the
+		-- migrations slice below so pre-3a databases upgrade in place.
+		tenant_id TEXT NOT NULL DEFAULT 'default'
 	);
 
 	-- ALTER TABLE for upgrades from pre-v0.10 schemas. SQLite ignores
@@ -404,6 +410,12 @@ func (s *Storage) migrate() error {
 		// Nullable — pre-v0.11 tokens upgrade with no expiry and
 		// stay valid until explicitly revoked.
 		`ALTER TABLE api_tokens ADD COLUMN expires_at DATETIME`,
+		// ADR 0011 (slice 3a): api_tokens gain a tenant_id. Threaded to
+		// AuthActor.Tenant so the enterprise TenantResolver derives the
+		// request tenant off the token. Existing rows backfill to the OSS
+		// single tenant 'default'. Idempotent via the duplicate-column
+		// swallow below (fresh DBs already carry it from createTables).
+		`ALTER TABLE api_tokens ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		// v0.5: rollouts gain an optional notification_url for the
 		// webhook-notifications feature. Missing here in earlier
 		// releases meant any dev DB created before v0.5 stayed
@@ -3193,26 +3205,37 @@ func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
 	if err != nil {
 		return err
 	}
+	// ADR 0011: persist the token's tenant. Empty defaults to the OSS single
+	// tenant so pre-3a callers (which never set TenantID) keep inserting into
+	// 'default' — matching the column DEFAULT and the enterprise backfill.
+	tenantID := t.TenantID
+	if tenantID == "" {
+		tenantID = "default"
+	}
 	stmt := `
-		INSERT INTO api_tokens (id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO api_tokens (id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
-		t.ID, t.Label, t.Hash, scopesJSON, t.CreatedAt, t.LastUsedAt, t.RevokedAt, t.ExpiresAt); err != nil {
+		t.ID, t.Label, t.Hash, scopesJSON, t.CreatedAt, t.LastUsedAt, t.RevokedAt, t.ExpiresAt, tenantID); err != nil {
 		return fmt.Errorf("failed to create api token: %w", err)
 	}
 	return nil
 }
 
 func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.APIToken, error) {
-	stmt := `SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at FROM api_tokens WHERE hash = ?`
+	// ADR 0011: the lookup stays BY HASH ONLY — this is the pre-auth
+	// validation path, run before any tenant is known; the tenant is read
+	// off the returned row (call #3). A tenant predicate here would break
+	// authentication.
+	stmt := `SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at, tenant_id FROM api_tokens WHERE hash = ?`
 	t := &types.APIToken{}
 	var (
 		scopesJSON                       string
 		lastUsedAt, revokedAt, expiresAt sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx, stmt, hash).Scan(
-		&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt, &expiresAt)
+		&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt, &expiresAt, &t.TenantID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -3237,7 +3260,7 @@ func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.AP
 // audit consumers can still resolve old token IDs to labels.
 func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
 	stmt := `
-		SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at
+		SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at, tenant_id
 		FROM api_tokens
 		ORDER BY created_at DESC
 	`
@@ -3253,7 +3276,7 @@ func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) 
 			scopesJSON                       string
 			lastUsedAt, revokedAt, expiresAt sql.NullTime
 		)
-		if err := rows.Scan(&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt, &expiresAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Label, &t.Hash, &scopesJSON, &t.CreatedAt, &lastUsedAt, &revokedAt, &expiresAt, &t.TenantID); err != nil {
 			return nil, err
 		}
 		t.Scopes = unmarshalScopes(scopesJSON)

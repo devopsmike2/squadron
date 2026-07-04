@@ -28,6 +28,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/extension/changewindow"
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
@@ -461,7 +462,11 @@ func (e *Engine) tick() {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// ADR 0011: the engine advances EVERY tenant's rollouts each tick, so it
+	// runs on a system (all-tenant) context. Inert in OSS (the pass-through
+	// store ignores the tenant); the enterprise scoped store reads a system
+	// context as "apply no tenant predicate" so no tenant's rollouts stall.
+	ctx, cancel := context.WithTimeout(identity.WithSystemContext(context.Background()), 30*time.Second)
 	defer cancel()
 
 	// Pending and in_progress rollouts both need processing. Aborted
