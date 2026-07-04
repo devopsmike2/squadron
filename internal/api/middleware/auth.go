@@ -206,11 +206,15 @@ func RequireScope(required string) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// resolveResource inspects the matched route to populate the Resource
+		// the Authorizer scopes against (ADR 0010). INERT under the OSS
+		// ScopeAuthorizer, which ignores it — the enterprise role-based
+		// Authorizer uses it for resource-aware decisions.
 		decision := authorizer.Authorize(c.Request.Context(), identity.Principal{
 			ID:     actor.TokenID,
 			Label:  actor.TokenLabel,
 			Scopes: actor.Scopes,
-		}, required, identity.Resource{})
+		}, required, resolveResource(c))
 		if !decision.Allow {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error":          "forbidden",

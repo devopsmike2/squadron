@@ -351,6 +351,11 @@ type Server struct {
 	// per-call evidence for NIST CSF PR.AA-04 and CIP-007-6 R4.1.2.
 	// Added in v0.52.
 	accessAuditMiddleware gin.HandlerFunc
+	// enterpriseRBACHandler serves the /api/v1/rbac/* role/binding/permission
+	// management API (ADR 0010). Wired by the enterprise build edition via
+	// SetEnterpriseRBACHandler; OSS leaves it nil so those routes return 404.
+	// Read at request time by the late-bound wildcard in registerRoutes.
+	enterpriseRBACHandler EnterpriseRBACHandler
 	// v0.53 Move 2 — action runner. The actions handler needs the
 	// raw applicationstore to read/write action_runner_registrations
 	// and action_requests; it also needs the Ed25519 signer to
@@ -542,6 +547,46 @@ func (s *Server) SetSiemService(svc services.SiemService) {
 // mounted when this is non-nil at Run time.
 func (s *Server) SetAccessAuditMiddleware(m gin.HandlerFunc) {
 	s.accessAuditMiddleware = m
+}
+
+// EnterpriseRBACHandler is the seam the enterprise edition implements to serve
+// the role / binding / permission management API under /api/v1/rbac (ADR 0010).
+// It receives requests that have already passed RequireBearer + ResolveTenant;
+// the path suffix after /api/v1/rbac is available via c.Param("path"). The
+// handler is responsible for its own authorization (managing roles is an
+// RBAC-admin operation). OSS never provides one, so the routes 404.
+type EnterpriseRBACHandler interface {
+	HandleRBAC(c *gin.Context)
+}
+
+// SetEnterpriseRBACHandler installs the enterprise RBAC management handler that
+// backs /api/v1/rbac/* (ADR 0010). The enterprise build's wire layer calls this
+// once after NewServer; OSS never calls it (or passes nil), leaving RBAC
+// management unmounted (404). Not safe for concurrent use with in-flight
+// requests — call it during startup, before the server accepts traffic.
+func (s *Server) SetEnterpriseRBACHandler(h EnterpriseRBACHandler) {
+	s.enterpriseRBACHandler = h
+}
+
+// mountEnterpriseRBAC registers the late-bound /api/v1/rbac/* wildcard on the
+// given route group (ADR 0010). registerRoutes runs inside NewServer, before
+// the wire layer calls SetEnterpriseRBACHandler, so the closure reads
+// s.enterpriseRBACHandler at REQUEST time: OSS (nil handler) returns 404; the
+// enterprise edition serves its role/binding/permission handler. The group
+// already carries RequireBearer + ResolveTenant; the enterprise handler
+// enforces its own RBAC-admin authorization. Extracted from registerRoutes so
+// the seam is unit-testable with a bare *Server.
+func (s *Server) mountEnterpriseRBAC(rg gin.IRouter) {
+	rg.Any("/rbac/*path", func(c *gin.Context) {
+		if s.enterpriseRBACHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "RBAC management is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseRBACHandler.HandleRBAC(c)
+	})
 }
 
 // SetActionStoreAndSigner wires the action runner dependencies
@@ -2169,6 +2214,9 @@ func (s *Server) registerRoutes() {
 	// request context, after RequireBearer so an enterprise resolver sees the actor.
 	v1.Use(middleware.ResolveTenant())
 	{
+		// ADR 0010 — RBAC management API seam under /api/v1/rbac/*.
+		s.mountEnterpriseRBAC(v1)
+
 		// Auth token management lives under /api/v1/auth/tokens.
 		// Bootstrap problem: the first token has to be created without
 		// a token. That's handled by the bootstrap-token-on-first-start
