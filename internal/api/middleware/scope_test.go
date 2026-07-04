@@ -4,6 +4,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 )
@@ -98,4 +100,37 @@ func TestRequireScope_AuthDisabledPassesThrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/scoped", nil)
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code, "auth-disabled deploys must pass through scope checks")
+}
+
+// (The empty-scopes legacy-full-access branch is pinned at the authorizer
+// unit level in extension/identity/identity_test.go — tokens can no longer be
+// issued with empty scopes, so it can't be exercised through the issue path
+// here.)
+
+// denyAllAuthorizer is a test double proving RequireScope consults the wired
+// identity.Authorizer rather than a hardcoded scope check.
+type denyAllAuthorizer struct{}
+
+func (denyAllAuthorizer) Authorize(context.Context, identity.Principal, string, identity.Resource) identity.Decision {
+	return identity.Decision{Allow: false, Reason: "denied by test authorizer"}
+}
+
+// TestRequireScope_ConsultsWiredAuthorizer proves slice 2's indirection:
+// SetAuthorizer swaps the decision-maker, so a deny-all authorizer 403s even a
+// wildcard token that the OSS default would allow. Restores the default so
+// sibling tests are unaffected (the authorizer is process-global).
+func TestRequireScope_ConsultsWiredAuthorizer(t *testing.T) {
+	SetAuthorizer(denyAllAuthorizer{})
+	defer SetAuthorizer(identity.ScopeAuthorizer{})
+
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	_, plaintext, err := svc.Issue(t.Context(), "wildcard", []string{services.ScopeWildcard}, nil)
+	require.NoError(t, err)
+
+	r := newScopedRouter(svc, services.ScopeAgentsRead)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/scoped", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code, "wired deny-all authorizer must override the default")
 }

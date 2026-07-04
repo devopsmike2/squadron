@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -123,12 +124,39 @@ func ActorFromGin(c *gin.Context) services.AuthActor {
 	return services.AuthActor{}
 }
 
+// authorizer is the authorization decision-maker the scope middleware
+// consults. It defaults to the OSS flat-scope authorizer, whose allow/deny
+// is byte-identical to the historical services.AuthActor.HasScope semantics.
+// main.go overrides it once at startup via SetAuthorizer with the edition's
+// wired identity.Authorizer (ADR 0006 — the enterprise edition supplies a
+// role-based, deny-by-default authorizer here). The RequireScope closure
+// reads this at request time, so a startup-time SetAuthorizer takes effect
+// for every route.
+var authorizer identity.Authorizer = identity.ScopeAuthorizer{}
+
+// SetAuthorizer installs the process-wide authorizer the scope middleware
+// consults. Called once from main.go with the edition's identity provider
+// bundle (idSeam.Authorizer). A nil argument is ignored, keeping the OSS
+// default. Not safe for concurrent use with in-flight requests — call it
+// during startup, before the server accepts traffic.
+func SetAuthorizer(a identity.Authorizer) {
+	if a != nil {
+		authorizer = a
+	}
+}
+
 // RequireScope returns Gin middleware that enforces a specific scope
 // on the authenticated actor. Must run AFTER RequireBearer — that's
 // the middleware that puts the actor on the context. If no actor is
 // present (auth disabled server-side) the scope check is skipped —
 // auth-disabled deployments behave as before, and operators who turn
 // auth on get authorization with the same flag flip.
+//
+// The decision is delegated to the wired identity.Authorizer (ADR 0006).
+// The OSS default (identity.ScopeAuthorizer) reproduces the historical
+// flat-scope check exactly; the enterprise edition can supply a role-based,
+// resource-aware, deny-by-default authorizer without any change here. The
+// 403 response body is unchanged regardless of the authorizer.
 //
 // 401 vs 403:
 //   - 401 unauthorized = "I don't know who you are" (no/bad token).
@@ -144,7 +172,12 @@ func RequireScope(required string) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if !actor.HasScope(required) {
+		decision := authorizer.Authorize(c.Request.Context(), identity.Principal{
+			ID:     actor.TokenID,
+			Label:  actor.TokenLabel,
+			Scopes: actor.Scopes,
+		}, required, identity.Resource{})
+		if !decision.Allow {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error":          "forbidden",
 				"detail":         "token does not have the required scope",
