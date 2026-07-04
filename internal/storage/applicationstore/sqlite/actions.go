@@ -33,8 +33,9 @@ func (s *Storage) CreateActionRunnerRegistration(ctx context.Context, r *types.A
 		// system-context inserts.
 		tenant = identity.DefaultTenant
 	}
-	// TODO(ADR 0011 slice 3b'): conflict target / PK must move to
-	// (tenant_id, runner_id) when this table is rebuilt.
+	// ADR 0011 slice 3b′: the PK is now composite (tenant_id, runner_id), so
+	// two tenants may register the same runner_id independently; a duplicate
+	// runner_id WITHIN a tenant is still rejected by the PK.
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO action_runner_registrations
 		  (runner_id, hostname, public_key_pem, capabilities_json, registered_at, last_seen_at, revoked_at, tenant_id)

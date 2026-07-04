@@ -151,7 +151,7 @@ func (s *Storage) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS alert_rules (
 		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL UNIQUE,
+		name TEXT NOT NULL,
 		description TEXT,
 		query TEXT NOT NULL,
 		threshold_operator TEXT NOT NULL,
@@ -160,13 +160,15 @@ func (s *Storage) migrate() error {
 		severity TEXT NOT NULL,
 		enabled INTEGER NOT NULL DEFAULT 1,
 		webhook_url TEXT,
-		-- ADR 0011 slice 3b: per-tenant scoping column (see agents). The
-		-- name UNIQUE constraint stays single-column for now — the
-		-- composite-key rebuild to (tenant_id, name) is deferred to slice
-		-- 3b'.
+		-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
 		tenant_id TEXT NOT NULL DEFAULT 'default',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		-- ADR 0011 slice 3b′: the alert-rule name is unique WITHIN a tenant,
+		-- not globally — two tenants may each own a rule named "high-cpu".
+		-- Fresh DBs get the composite UNIQUE here; pre-3b′ DBs are rebuilt to
+		-- this shape by runTenantKeyRebuilds (which then no-ops on re-runs).
+		UNIQUE(tenant_id, name)
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
@@ -260,10 +262,18 @@ func (s *Storage) migrate() error {
 	-- across re-evaluations. No FK — recommendations are computed
 	-- on-demand, not stored.
 	CREATE TABLE IF NOT EXISTS recommendation_dismissals (
-		recommendation_id TEXT PRIMARY KEY,
+		recommendation_id TEXT NOT NULL,
 		dismissed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		dismissed_by TEXT NOT NULL DEFAULT 'system',
-		reason TEXT
+		reason TEXT,
+		-- ADR 0011 slice 3b′: dismissals are keyed per-tenant so the same
+		-- recommendation_id can be dismissed independently in two tenants.
+		-- Fresh DBs get the composite PK here; pre-3b′ DBs are rebuilt to
+		-- this shape by runTenantKeyRebuilds. The tenant_id column itself is
+		-- added by the migrations slice (idempotent), which runs before the
+		-- rebuild; on a fresh DB it is present from this CREATE.
+		tenant_id TEXT NOT NULL DEFAULT 'default',
+		PRIMARY KEY(tenant_id, recommendation_id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_rec_dismissals_dismissed_at ON recommendation_dismissals(dismissed_at);
 
@@ -319,12 +329,17 @@ func (s *Storage) migrate() error {
 	-- natural key — CI knows hostnames, not OpAMP-discovered UUIDs.
 	-- labels_json is the standard map[string]string serialization.
 	CREATE TABLE IF NOT EXISTS expected_agents (
-		hostname TEXT PRIMARY KEY,
+		hostname TEXT NOT NULL,
 		labels_json TEXT NOT NULL DEFAULT '{}',
 		source TEXT NOT NULL DEFAULT '',
 		expected_since DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		notes TEXT NOT NULL DEFAULT ''
+		notes TEXT NOT NULL DEFAULT '',
+		-- ADR 0011 slice 3b′: hostname is unique WITHIN a tenant — two
+		-- tenants can each track the same hostname. Fresh DBs get the
+		-- composite PK here; pre-3b′ DBs are rebuilt by runTenantKeyRebuilds.
+		tenant_id TEXT NOT NULL DEFAULT 'default',
+		PRIMARY KEY(tenant_id, hostname)
 	);
 	CREATE INDEX IF NOT EXISTS idx_expected_agents_source ON expected_agents(source);
 
@@ -518,13 +533,19 @@ func (s *Storage) migrate() error {
 		// a given proposal) and by status (the dispatch loop sweeps
 		// pending requests).
 		`CREATE TABLE IF NOT EXISTS action_runner_registrations (
-			runner_id TEXT PRIMARY KEY,
+			runner_id TEXT NOT NULL,
 			hostname TEXT NOT NULL,
 			public_key_pem TEXT NOT NULL,
 			capabilities_json TEXT NOT NULL,
 			registered_at DATETIME NOT NULL,
 			last_seen_at DATETIME NOT NULL,
-			revoked_at DATETIME
+			revoked_at DATETIME,
+			-- ADR 0011 slice 3b′: runner_id is unique WITHIN a tenant. Fresh
+			-- DBs get the composite PK here; pre-3b′ DBs are rebuilt by
+			-- runTenantKeyRebuilds. tenant_id is also added by the migrations
+			-- slice ALTER (idempotent) so upgraded DBs converge on this shape.
+			tenant_id TEXT NOT NULL DEFAULT 'default',
+			PRIMARY KEY(tenant_id, runner_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS action_requests (
 			id TEXT PRIMARY KEY,
@@ -695,7 +716,7 @@ func (s *Storage) migrate() error {
 		// See docs/proposals/531-proposer-learning-slice2.md §4.2,
 		// §5.2, §10 contract items 7+8+9.
 		`CREATE TABLE IF NOT EXISTS iac_recommendation_verdicts (
-			recommendation_id      TEXT PRIMARY KEY,
+			recommendation_id      TEXT NOT NULL,
 			connection_id          TEXT NOT NULL,
 			account_id             TEXT NOT NULL,
 			region                 TEXT NOT NULL,
@@ -705,7 +726,14 @@ func (s *Storage) migrate() error {
 			excluded_at            TIMESTAMP,
 			excluded_by            TEXT,
 			created_at             TIMESTAMP NOT NULL,
-			updated_at             TIMESTAMP NOT NULL
+			updated_at             TIMESTAMP NOT NULL,
+			-- ADR 0011 slice 3b′: a recommendation_id is unique WITHIN a
+			-- tenant. Fresh DBs get the composite PK here; pre-3b′ DBs are
+			-- rebuilt by runTenantKeyRebuilds (which copies the 7 check_run_*
+			-- columns added by later ALTERs since it reads the live column
+			-- list). tenant_id is also added by the migrations slice ALTER.
+			tenant_id              TEXT NOT NULL DEFAULT 'default',
+			PRIMARY KEY(tenant_id, recommendation_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_iac_rec_verdicts_scope ON iac_recommendation_verdicts(connection_id, account_id, region, exclude_from_learning)`,
 
@@ -763,7 +791,7 @@ func (s *Storage) migrate() error {
 		//
 		// See docs/proposals/trace-integration-slice1.md §4 and §12.
 		`CREATE TABLE IF NOT EXISTS trace_resource_seen (
-			resource_key             TEXT PRIMARY KEY,
+			resource_key             TEXT NOT NULL,
 			provider                 TEXT NOT NULL,
 			scope_id                 TEXT,
 			resource_id_hint         TEXT,
@@ -774,7 +802,13 @@ func (s *Storage) migrate() error {
 			root_span_count_24h      INTEGER NOT NULL,
 			attributes_json          TEXT,
 			match_confidence         TEXT NOT NULL,
-			updated_at               TIMESTAMP NOT NULL
+			updated_at               TIMESTAMP NOT NULL,
+			-- ADR 0011 slice 3b′: resource_key is unique WITHIN a tenant.
+			-- Fresh DBs get the composite PK here; pre-3b′ DBs are rebuilt by
+			-- runTenantKeyRebuilds. tenant_id is also added by the migrations
+			-- slice ALTER (idempotent).
+			tenant_id                TEXT NOT NULL DEFAULT 'default',
+			PRIMARY KEY(tenant_id, resource_key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_provider_scope ON trace_resource_seen(provider, scope_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_last_seen ON trace_resource_seen(last_seen_at)`,
@@ -1022,9 +1056,11 @@ func (s *Storage) migrate() error {
 		// The six composite-key tables (expected_agents,
 		// recommendation_dismissals, iac_recommendation_verdicts,
 		// trace_resource_seen, action_runner_registrations, alert_rules)
-		// get the tenant_id COLUMN + index here, but their PK/UNIQUE stays
-		// single-column for now. TODO(ADR 0011 slice 3b'): rebuild those
-		// tables so the conflict target becomes (tenant_id, <key>).
+		// get the tenant_id COLUMN + index here; their PK/UNIQUE is then
+		// rebuilt to the composite (tenant_id, <key>) by runTenantKeyRebuilds
+		// (ADR 0011 slice 3b′), which runs after this loop. Fresh DBs are born
+		// with the composite key from their CREATE TABLE above, so the rebuild
+		// guard no-ops on them.
 		`ALTER TABLE agents ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id)`,
 		`ALTER TABLE groups ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
@@ -1086,6 +1122,18 @@ func (s *Storage) migrate() error {
 				s.logger.Debug("Migration skipped or failed", zap.Error(err))
 			}
 		}
+	}
+
+	// ADR 0011 slice 3b′ — the six composite-key table rebuilds run AFTER the
+	// swallow-`migrations` loop above (so tenant_id exists on every table and
+	// existing rows are backfilled to 'default'). Unlike that loop, these are
+	// guarded, transactional, and error-PROPAGATING: a failed rebuild fails
+	// boot loudly rather than silently corrupting data. Each rebuild is a
+	// no-op once the composite key exists, so this is safe to run every boot.
+	// Inert in OSS (single 'default' tenant ⇒ a (tenant_id, key) composite
+	// behaves identically to key).
+	if err := runTenantKeyRebuilds(s.db, s.logger); err != nil {
+		return fmt.Errorf("tenant-key rebuilds (ADR 0011 slice 3b′): %w", err)
 	}
 
 	s.logger.Debug("Database migrations completed")
@@ -2077,9 +2125,9 @@ func (s *Storage) DeleteSavedQuery(ctx context.Context, id string) error {
 // Alert rule management
 
 func (s *Storage) CreateAlertRule(ctx context.Context, rule *types.AlertRule) error {
-	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
-	// name) when this table is rebuilt — the name UNIQUE constraint is
-	// currently single-column, so two tenants can't yet share a rule name.
+	// ADR 0011 slice 3b′: the alert-rule name UNIQUE constraint is now
+	// composite (tenant_id, name), so two tenants may each own a rule with
+	// the same name while a duplicate name WITHIN a tenant is still rejected.
 	tenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return err
@@ -2963,9 +3011,9 @@ func (s *Storage) SetRecommendationExclusion(
 	}
 	// ADR 0011 slice 3b — resolve the tenant scope. The reads/writes below
 	// are scoped so a tenant can't observe or mutate another tenant's
-	// verdict row. tenantPred is empty in the inert/system path.
-	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
-	// recommendation_id) when this table is rebuilt.
+	// verdict row. tenantPred is empty in the inert/system path. The upsert's
+	// ON CONFLICT target is the composite (tenant_id, recommendation_id) key
+	// (ADR 0011 slice 3b′) so two tenants can hold the same recommendation_id.
 	scopeTenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return false, err
@@ -3069,7 +3117,7 @@ func (s *Storage) SetRecommendationExclusion(
 		recommendation_kind, resource_id, exclude_from_learning,
 		excluded_at, excluded_by, created_at, updated_at, tenant_id
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(recommendation_id) DO UPDATE SET
+	ON CONFLICT(tenant_id, recommendation_id) DO UPDATE SET
 		connection_id         = excluded.connection_id,
 		account_id            = excluded.account_id,
 		region                = excluded.region,
@@ -3225,8 +3273,10 @@ func (s *Storage) SetCheckRunForRecommendation(
 	}
 	// ADR 0011 slice 3b — tenant scope. The existence probe + UPDATE are
 	// tenant-scoped so a tenant can't touch another tenant's row; the
-	// INSERT stamps the row's tenant. TODO(ADR 0011 slice 3b'): conflict
-	// target must move to (tenant_id, recommendation_id) when rebuilt.
+	// INSERT stamps the row's tenant. This method reads-then-UPDATE-or-
+	// INSERTs (no ON CONFLICT), so the slice 3b′ composite key
+	// (tenant_id, recommendation_id) is enforced by the rebuilt PK on the
+	// INSERT path; the scoped probe already selects the right tenant's row.
 	scopeTenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return err
@@ -3958,11 +4008,12 @@ func (s *Storage) DismissRecommendation(ctx context.Context, d *types.Recommenda
 		// system-context inserts.
 		tenant = identity.DefaultTenant
 	}
-	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
-	// recommendation_id) when this table is rebuilt.
+	// ADR 0011 slice 3b′: the conflict target is the composite
+	// (tenant_id, recommendation_id) key so a dismissal in one tenant can't
+	// overwrite another tenant's dismissal of the same recommendation_id.
 	stmt := `INSERT INTO recommendation_dismissals (recommendation_id, dismissed_at, dismissed_by, reason, tenant_id)
 	         VALUES (?, ?, ?, ?, ?)
-	         ON CONFLICT(recommendation_id) DO UPDATE SET
+	         ON CONFLICT(tenant_id, recommendation_id) DO UPDATE SET
 	             dismissed_at = excluded.dismissed_at,
 	             dismissed_by = excluded.dismissed_by,
 	             reason       = excluded.reason,
@@ -4413,11 +4464,12 @@ func (s *Storage) UpsertExpectedAgent(ctx context.Context, e *types.ExpectedAgen
 		// system-context inserts.
 		tenant = identity.DefaultTenant
 	}
-	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
-	// hostname) when this table is rebuilt.
+	// ADR 0011 slice 3b′: the conflict target is the composite
+	// (tenant_id, hostname) key so two tenants can each track the same
+	// hostname without one tenant's upsert clobbering the other's row.
 	stmt := `INSERT INTO expected_agents (hostname, labels_json, source, expected_since, updated_at, notes, tenant_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(hostname) DO UPDATE SET
+		ON CONFLICT(tenant_id, hostname) DO UPDATE SET
 			labels_json = excluded.labels_json,
 			source = excluded.source,
 			updated_at = excluded.updated_at,
