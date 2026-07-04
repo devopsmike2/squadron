@@ -146,6 +146,15 @@ func (h *DiscoveryServerlessErrorRateHandlers) HandleErrorRate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id (resource ARN) is required"})
 		return
 	}
+	// ADR 0009 — connection scope is required so the read is confined to the
+	// caller's connection. Without it the store read is unscoped and can
+	// return another connection's observation for the same resource ARN
+	// (cross-connection bleed). Mirrors the sibling exclusion endpoints.
+	connectionID := strings.TrimSpace(c.Query("connection_id"))
+	if connectionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "connection_id query parameter is required"})
+		return
+	}
 
 	if h.store == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no error-rate observations recorded for resource"})
@@ -156,7 +165,7 @@ func (h *DiscoveryServerlessErrorRateHandlers) HandleErrorRate(c *gin.Context) {
 	currentHours := proposer.ErrorRateCurrentWindowHours
 	baselineHours := proposer.ErrorRateBaselineWindowHours
 
-	current, currentFound, err := h.store.LatestErrorRateObservation(ctx, "", resourceARN, currentHours)
+	current, currentFound, err := h.store.LatestErrorRateObservation(ctx, connectionID, resourceARN, currentHours)
 	if err != nil {
 		h.logger.Warn("error rate: current window lookup failed",
 			zap.String("resource_arn", resourceARN),
@@ -165,7 +174,7 @@ func (h *DiscoveryServerlessErrorRateHandlers) HandleErrorRate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error-rate lookup failed"})
 		return
 	}
-	baseline, baselineFound, err := h.store.LatestErrorRateObservation(ctx, "", resourceARN, baselineHours)
+	baseline, baselineFound, err := h.store.LatestErrorRateObservation(ctx, connectionID, resourceARN, baselineHours)
 	if err != nil {
 		h.logger.Warn("error rate: baseline window lookup failed",
 			zap.String("resource_arn", resourceARN),
