@@ -335,6 +335,51 @@ func TestHandleOTLP_UncompressedStillWorks(t *testing.T) {
 	require.Len(t, idx.calls(), 1)
 }
 
+// TestHandleOTLP_OversizeRawBodyRejected pins the memory-exhaustion cap:
+// a raw (uncompressed) OTLP body larger than maxOTLPRequestBytes must be
+// rejected rather than buffered whole, so an unauthenticated client
+// cannot OOM the ingest port. Without the http.MaxBytesReader cap the
+// handler would io.ReadAll the entire body into memory.
+func TestHandleOTLP_OversizeRawBodyRejected(t *testing.T) {
+	idx := newRecordingIndex()
+	_, router := newTestHTTPServer(t, idx)
+	body := make([]byte, maxOTLPRequestBytes+1024) // just over the cap
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, "over-limit raw body must be rejected, not buffered")
+	require.Empty(t, idx.calls(), "an over-limit body must never reach the trace index")
+}
+
+// TestHandleOTLP_GzipBombRejected pins the decompression-bomb cap: a
+// small gzip body that expands past maxOTLPDecompressedBytes must be
+// rejected before the full expansion is retained. The compressed-body
+// cap alone can't catch this (the compressed bytes are tiny) — the
+// io.LimitReader on the decompressed stream is what stops it.
+func TestHandleOTLP_GzipBombRejected(t *testing.T) {
+	idx := newRecordingIndex()
+	_, router := newTestHTTPServer(t, idx)
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	chunk := make([]byte, 1<<20) // 1 MiB of zeros; streamed so the test stays low-mem
+	for written := 0; written <= maxOTLPDecompressedBytes; written += len(chunk) {
+		_, err := gz.Write(chunk)
+		require.NoError(t, err)
+	}
+	require.NoError(t, gz.Close())
+	require.Less(t, buf.Len(), 1<<20, "gzip of zeros should compress to well under 1 MiB (that's the bomb)")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(buf.Bytes()))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("Content-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, "gzip bomb must be rejected at the decompressed-size cap")
+	require.Empty(t, idx.calls(), "a decompression bomb must never reach the trace index")
+}
+
 // buildTraceRequestJSON serializes an ExportTraceServiceRequest with the
 // OTLP/JSON (protojson) encoding — the wire shape a Content-Type:
 // application/json client sends.
