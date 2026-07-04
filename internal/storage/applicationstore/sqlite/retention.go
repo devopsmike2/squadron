@@ -22,10 +22,20 @@ import (
 // anomaly must stay visible on the alerts panel until the detector closes
 // it. Returns the number of rows removed.
 func (s *Storage) DeleteClosedCostSpikeEventsBefore(ctx context.Context, before time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM cost_spike_events WHERE ended_at IS NOT NULL AND ended_at < ?`,
-		before.UTC(),
-	)
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune). A non-system caller scopes to its own
+	// tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `DELETE FROM cost_spike_events WHERE ended_at IS NOT NULL AND ended_at < ?`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete closed cost_spike_events: %w", err)
 	}
@@ -39,10 +49,20 @@ func (s *Storage) DeleteClosedCostSpikeEventsBefore(ctx context.Context, before 
 // bounds both table size and that endpoint's full-table scan. Returns the
 // number of rows removed.
 func (s *Storage) DeleteRecommendationOutcomesBefore(ctx context.Context, before time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM recommendation_outcomes WHERE applied_at < ?`,
-		before.UTC(),
-	)
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune). A non-system caller scopes to its own
+	// tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `DELETE FROM recommendation_outcomes WHERE applied_at < ?`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete recommendation_outcomes: %w", err)
 	}
@@ -61,10 +81,20 @@ func (s *Storage) DeleteRecommendationOutcomesBefore(ctx context.Context, before
 // regardless of age, mirroring the "closed cost-spikes only" invariant.
 // Returns the number of rows removed.
 func (s *Storage) DeleteDismissedIncidentDraftsBefore(ctx context.Context, before time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM incident_drafts WHERE status = 'dismissed' AND updated_at < ?`,
-		before.UTC(),
-	)
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune). A non-system caller scopes to its own
+	// tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `DELETE FROM incident_drafts WHERE status = 'dismissed' AND updated_at < ?`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete dismissed incident_drafts: %w", err)
 	}
@@ -86,10 +116,20 @@ func (s *Storage) DeleteDismissedIncidentDraftsBefore(ctx context.Context, befor
 // delete unconditionally — the enable/window gating lives entirely at the
 // call site.
 func (s *Storage) DeleteAuditEventsBefore(ctx context.Context, before time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM audit_events WHERE timestamp < ?`,
-		before.UTC(),
-	)
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune). A non-system caller scopes to its own
+	// tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `DELETE FROM audit_events WHERE timestamp < ?`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete audit_events: %w", err)
 	}
@@ -122,13 +162,23 @@ func (s *Storage) DeleteAuditEventsBefore(ctx context.Context, before time.Time)
 // done and the row is prunable. updated_at is bumped on every check-run write,
 // so the age filter only ever sees genuinely idle rows.
 func (s *Storage) DeleteIACRecommendationVerdictsBefore(ctx context.Context, before time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM iac_recommendation_verdicts
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune). A non-system caller scopes to its own
+	// tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `DELETE FROM iac_recommendation_verdicts
 		 WHERE exclude_from_learning = 0
 		   AND updated_at < ?
-		   AND (check_run_id IS NULL OR check_run_conclusion IS NOT NULL)`,
-		before.UTC(),
-	)
+		   AND (check_run_id IS NULL OR check_run_conclusion IS NOT NULL)`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete iac_recommendation_verdicts: %w", err)
 	}

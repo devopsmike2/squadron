@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/google/uuid"
 )
 
@@ -67,6 +68,18 @@ func (s *Storage) SaveServerless(
 	if len(rows) == 0 {
 		return nil
 	}
+	// ADR 0011 slice 3b — per-cloud scans run under WithSystemContext
+	// (apply=false → rowTenant=DefaultTenant); a tenant-scoped caller stamps
+	// its tenant. The (connection_id, scan_id, resource_arn) conflict target
+	// is the scanner's natural per-resource idempotency key and stays as-is.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
@@ -78,8 +91,8 @@ func (s *Storage) SaveServerless(
 		provider, surface, account_id, region,
 		resource_name, resource_arn, runtime,
 		has_trace_axis, has_otel_distro,
-		last_seen_at, snapshot_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		last_seen_at, snapshot_json, tenant_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(connection_id, scan_id, resource_arn) DO UPDATE SET
 		provider        = excluded.provider,
 		surface         = excluded.surface,
@@ -90,7 +103,8 @@ func (s *Storage) SaveServerless(
 		has_trace_axis  = excluded.has_trace_axis,
 		has_otel_distro = excluded.has_otel_distro,
 		last_seen_at    = excluded.last_seen_at,
-		snapshot_json   = excluded.snapshot_json`
+		snapshot_json   = excluded.snapshot_json,
+		tenant_id       = excluded.tenant_id`
 
 	for _, r := range rows {
 		if r.ConnectionID == "" {
@@ -126,6 +140,7 @@ func (s *Storage) SaveServerless(
 			boolToInt(r.HasOTelDistro),
 			lastSeenAt,
 			r.SnapshotJSON,
+			rowTenant,
 		); err != nil {
 			return fmt.Errorf("upsert serverless_instance row %q: %w", r.ResourceARN, err)
 		}
@@ -154,35 +169,30 @@ func (s *Storage) ListServerless(
 	if connectionID == "" {
 		return nil, nil
 	}
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if scanID == "" {
-		const stmt = `SELECT
-			connection_id, scan_id, provider, surface,
-			account_id, region, resource_name,
-			COALESCE(resource_arn, ''),
-			COALESCE(runtime, ''),
-			has_trace_axis, has_otel_distro,
-			last_seen_at, snapshot_json
-			FROM serverless_instance
-			WHERE connection_id = ?
-			ORDER BY created_at DESC`
-		rows, err = s.db.QueryContext(ctx, stmt, connectionID)
-	} else {
-		const stmt = `SELECT
-			connection_id, scan_id, provider, surface,
-			account_id, region, resource_name,
-			COALESCE(resource_arn, ''),
-			COALESCE(runtime, ''),
-			has_trace_axis, has_otel_distro,
-			last_seen_at, snapshot_json
-			FROM serverless_instance
-			WHERE connection_id = ? AND scan_id = ?
-			ORDER BY created_at DESC`
-		rows, err = s.db.QueryContext(ctx, stmt, connectionID, scanID)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
 	}
+	stmt := `SELECT
+		connection_id, scan_id, provider, surface,
+		account_id, region, resource_name,
+		COALESCE(resource_arn, ''),
+		COALESCE(runtime, ''),
+		has_trace_axis, has_otel_distro,
+		last_seen_at, snapshot_json
+		FROM serverless_instance
+		WHERE connection_id = ?`
+	args := []any{connectionID}
+	if scanID != "" {
+		stmt += ` AND scan_id = ?`
+		args = append(args, scanID)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY created_at DESC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query serverless_instance: %w", err)
 	}
@@ -232,10 +242,20 @@ func (s *Storage) DeleteServerlessBefore(
 	ctx context.Context,
 	before time.Time,
 ) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM serverless_instance WHERE created_at < ?`,
-		before.UTC(),
-	)
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune, correct). A non-system caller scopes to
+	// its own tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `DELETE FROM serverless_instance WHERE created_at < ?`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete serverless_instance: %w", err)
 	}

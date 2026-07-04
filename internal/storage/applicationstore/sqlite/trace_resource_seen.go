@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/traceindex"
 )
 
@@ -55,6 +56,19 @@ func (s *Storage) UpsertTraceResources(
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	// ADR 0011 slice 3b — the trace flush runs under WithSystemContext in
+	// production (apply=false → rowTenant=DefaultTenant, no eviction
+	// predicate → fleet-wide LRU). A non-system caller stamps the rows with
+	// its tenant. TODO(ADR 0011 slice 3b'): conflict target must move to
+	// (tenant_id, resource_key) when this table is rebuilt.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin tx: %w", err)
@@ -64,8 +78,8 @@ func (s *Storage) UpsertTraceResources(
 	const stmt = `INSERT INTO trace_resource_seen (
 		resource_key, provider, scope_id, resource_id_hint, service_name,
 		first_seen_at, last_seen_at, span_count_24h, root_span_count_24h,
-		attributes_json, match_confidence, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		attributes_json, match_confidence, updated_at, tenant_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(resource_key) DO UPDATE SET
 		provider             = excluded.provider,
 		scope_id             = excluded.scope_id,
@@ -76,7 +90,8 @@ func (s *Storage) UpsertTraceResources(
 		root_span_count_24h  = trace_resource_seen.root_span_count_24h + excluded.root_span_count_24h,
 		attributes_json      = excluded.attributes_json,
 		match_confidence     = excluded.match_confidence,
-		updated_at           = excluded.updated_at`
+		updated_at           = excluded.updated_at,
+		tenant_id            = excluded.tenant_id`
 
 	for _, r := range rows {
 		var scopeID, hint, attrJSON, svc any
@@ -109,6 +124,7 @@ func (s *Storage) UpsertTraceResources(
 			attrJSON,
 			conf,
 			r.UpdatedAt.UTC(),
+			rowTenant,
 		); err != nil {
 			return 0, fmt.Errorf("failed to upsert trace_resource_seen row %q: %w", r.ResourceKey, err)
 		}
@@ -158,7 +174,11 @@ func (s *Storage) GetTraceResource(
 	if key == "" {
 		return nil, fmt.Errorf("resource_key required")
 	}
-	const stmt = `SELECT
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT
 		resource_key, provider,
 		COALESCE(scope_id, ''),
 		COALESCE(resource_id_hint, ''),
@@ -169,11 +189,16 @@ func (s *Storage) GetTraceResource(
 		match_confidence, updated_at
 		FROM trace_resource_seen
 		WHERE resource_key = ?`
+	args := []any{key}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	var (
 		r    traceindex.ResourceRow
 		conf string
 	)
-	err := s.db.QueryRowContext(ctx, stmt, key).Scan(
+	err = s.db.QueryRowContext(ctx, stmt, args...).Scan(
 		&r.ResourceKey, &r.Provider,
 		&r.ScopeID, &r.ResourceIDHint, &r.ServiceName,
 		&r.FirstSeenAt, &r.LastSeenAt,
@@ -211,7 +236,11 @@ func (s *Storage) ListTraceResourcesByScope(
 	if limit <= 0 || limit > 100_000 {
 		limit = 1000
 	}
-	const stmt = `SELECT
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT
 		resource_key, provider,
 		COALESCE(scope_id, ''),
 		COALESCE(resource_id_hint, ''),
@@ -223,10 +252,17 @@ func (s *Storage) ListTraceResourcesByScope(
 		FROM trace_resource_seen
 		WHERE provider = ?
 		  AND (scope_id = ? OR (? = '' AND scope_id IS NULL))
-		  AND last_seen_at >= ?
+		  AND last_seen_at >= ?`
+	args := []any{provider, scopeID, scopeID, since.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
 		ORDER BY last_seen_at DESC
 		LIMIT ?`
-	rows, err := s.db.QueryContext(ctx, stmt, provider, scopeID, scopeID, since.UTC(), limit)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list trace_resource_seen rows: %w", err)
 	}
@@ -266,11 +302,20 @@ func (s *Storage) CountTraceResourcesByScope(
 	if provider == "" {
 		return 0, nil
 	}
-	const stmt = `SELECT COUNT(*) FROM trace_resource_seen
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `SELECT COUNT(*) FROM trace_resource_seen
 		WHERE provider = ?
 		  AND (scope_id = ? OR (? = '' AND scope_id IS NULL))`
+	args := []any{provider, scopeID, scopeID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, stmt, provider, scopeID, scopeID).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(ctx, stmt, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("failed to count trace_resource_seen: %w", err)
 	}
 	return n, nil
