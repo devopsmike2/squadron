@@ -617,6 +617,7 @@ func (e *Engine) start(ctx context.Context, r *services.Rollout) {
 		fresh.State = services.RolloutStateInProgress
 		fresh.CurrentStage = targetStage
 		fresh.StageStartedAt = startedAt
+		fresh.PushedAgentIDs = r.PushedAgentIDs // ADR 0007 — carry the cumulative pushed-set through reconcile
 		return true
 	}); err != nil {
 		return
@@ -686,6 +687,7 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		}
 		fresh.CurrentStage = advancedStage
 		fresh.StageStartedAt = advancedStartedAt
+		fresh.PushedAgentIDs = r.PushedAgentIDs // ADR 0007 — carry the cumulative pushed-set through reconcile
 		return true
 	}); err != nil {
 		return
@@ -964,7 +966,7 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		return
 	}
 
-	canary, err := e.canaryAgents(ctx, r)
+	canary, err := e.cumulativePushedAgents(ctx, r)
 	if err != nil {
 		e.logger.Warn("rollout engine: failed to compute canary set for rollback",
 			zap.String("rollout_id", r.ID), zap.Error(err))
@@ -1027,7 +1029,36 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 	// serial loop, which also appended before pushing.
 	e.pushConfigToAgents(ctx, r, canary, r.TargetConfigID, target.Content,
 		"rollout engine: stage push failed for agent")
+	// ADR 0007 — record these agents into the cumulative pushed-set so
+	// rollback and the health-gate cover every agent this rollout has ever
+	// pushed the target config to, not just the current stage's cohort. The
+	// caller persists r right after applyStage (start/advance), so the union
+	// lands durably this tick.
+	r.PushedAgentIDs = unionPushedAgentIDs(r.PushedAgentIDs, ids)
 	return ids, nil
+}
+
+// unionPushedAgentIDs merges the given agent IDs into the existing
+// (stringified) pushed-set, de-duplicating and returning a sorted slice for
+// deterministic persistence and audit output. See ADR 0007.
+func unionPushedAgentIDs(existing []string, ids []uuid.UUID) []string {
+	seen := make(map[string]struct{}, len(existing)+len(ids))
+	out := make([]string, 0, len(existing)+len(ids))
+	for _, s := range existing {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	for _, id := range ids {
+		s := id.String()
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pushConcurrency bounds the parallel per-agent config pushes within
@@ -1078,7 +1109,10 @@ func (e *Engine) pushConfigToAgents(ctx context.Context, r *services.Rollout, ag
 // evaluateAbortCriteria returns a non-empty reason string if the rollout
 // should be aborted now, or "" if it should continue.
 func (e *Engine) evaluateAbortCriteria(ctx context.Context, r *services.Rollout, stage services.RolloutStage) string {
-	canary, err := e.canaryAgents(ctx, r)
+	// ADR 0007 — evaluate health over the cumulative pushed-set, not just the
+	// current stage's cohort, so an earlier-pushed label-mode agent that fell
+	// out of the current selector still counts toward drift/error-rate aborts.
+	canary, err := e.cumulativePushedAgents(ctx, r)
 	if err != nil {
 		// Don't auto-abort on transient list failures.
 		return ""
@@ -1139,6 +1173,64 @@ func (e *Engine) evaluateAbortCriteria(ctx context.Context, r *services.Rollout,
 // the agents that have actually had the new config pushed to them.
 func (e *Engine) canaryAgents(ctx context.Context, r *services.Rollout) ([]*services.Agent, error) {
 	return e.canaryAgentsForStage(ctx, r, r.CurrentStage)
+}
+
+// cumulativePushedAgents returns every live agent this rollout has pushed the
+// target config to across all stages — the persisted cumulative pushed-set
+// (r.PushedAgentIDs) resolved against the live fleet and unioned with the
+// current stage's cohort. Rollback and the health-gate use this instead of the
+// current-stage-only canaryAgents so a label-mode agent pushed in an earlier
+// stage that no longer matches the current selector is still restored on
+// rollback and still counted for abort evaluation. See ADR 0007.
+//
+// The union guarantees the result is always a superset of canaryAgents, so the
+// cumulative set never covers *fewer* agents than the pre-ADR-0007 behavior.
+// For an empty pushed-set (pre-v0.90 / in-flight rollouts) this degrades
+// exactly to the current-stage cohort. Percent-mode rollouts are unaffected —
+// their cohorts are already superset-progressive, so the stored set is a subset
+// of the current cohort and the union adds nothing.
+func (e *Engine) cumulativePushedAgents(ctx context.Context, r *services.Rollout) ([]*services.Agent, error) {
+	current, err := e.canaryAgents(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.PushedAgentIDs) == 0 {
+		return current, nil
+	}
+	pushed := make(map[string]struct{}, len(r.PushedAgentIDs))
+	for _, id := range r.PushedAgentIDs {
+		pushed[id] = struct{}{}
+	}
+	all, err := e.agentService.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]struct{}, len(current))
+	out := make([]*services.Agent, 0, len(current)+len(pushed))
+	for _, a := range current {
+		if _, ok := seen[a.ID]; !ok {
+			seen[a.ID] = struct{}{}
+			out = append(out, a)
+		}
+	}
+	// Add pushed-set agents still in the target group that aren't already in
+	// the current cohort. Group-scoping matches canary selection; departed
+	// agents drop out naturally (ListAgents won't return them).
+	for _, a := range all {
+		if a.GroupID == nil || *a.GroupID != r.GroupID {
+			continue
+		}
+		if _, ok := pushed[a.ID.String()]; !ok {
+			continue
+		}
+		if _, ok := seen[a.ID]; ok {
+			continue
+		}
+		seen[a.ID] = struct{}{}
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	return out, nil
 }
 
 // canaryAgentsForStage returns the deterministic canary set for the given

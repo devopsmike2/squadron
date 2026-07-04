@@ -620,6 +620,16 @@ func (s *Storage) migrate() error {
 		// column so fresh databases (which skip this ALTER) match.
 		`ALTER TABLE rollouts ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
 
+		// v0.90 (ADR 0007) — cumulative pushed-agent set. JSON array of the
+		// agent IDs this rollout has pushed the target config to across all
+		// stages. Rollback + health-gate operate over this union (not just
+		// the current stage's cohort) so a label-mode agent pushed in an
+		// earlier stage that no longer matches the current selector isn't
+		// stranded on the new config or excluded from abort evaluation. NULL
+		// on every pre-v0.90 / in-flight row; scanRollout decodes NULL as an
+		// empty slice and the engine falls back to the current cohort.
+		`ALTER TABLE rollouts ADD COLUMN pushed_agent_ids TEXT`,
+
 		// v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3) — discovery
 		// proposer's ListDiscoveryVerdicts query unions
 		// recommendation.pr_merged AND
@@ -2133,7 +2143,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE id = ?`
 	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -2150,7 +2160,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE 1=1"
 	var args []any
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
@@ -2211,7 +2221,7 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 	// excluded AI rollouts; the original v4 partial idx_ai_verdicts
 	// is preserved for back-compat with deployments that haven't
 	// completed the migration yet.
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids
 		FROM rollouts
 		WHERE group_id = ?
 		  AND proposed_by = 'ai'
@@ -2908,6 +2918,17 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		}
 		evidenceJSON = string(buf)
 	}
+	// v0.90 (ADR 0007) — encode the cumulative pushed-agent set. Empty stays
+	// NULL via nullableString so pre-v0.90 rows and empty sets round-trip
+	// identically.
+	pushedAgentIDsJSON := ""
+	if len(r.PushedAgentIDs) > 0 {
+		buf, mErr := json.Marshal(r.PushedAgentIDs)
+		if mErr != nil {
+			return fmt.Errorf("failed to marshal rollout pushed agent ids: %w", mErr)
+		}
+		pushedAgentIDsJSON = string(buf)
+	}
 	// SET clause + its bound values are shared by both the CAS and the legacy
 	// path; only the version handling + WHERE differ (built below).
 	setClause := `
@@ -2922,7 +2943,7 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?,
 		    rolled_back_from_id = ?, plan_id = ?, plan_step_index = ?,
 		    step_kind = ?, action_request_id = ?,
-		    exclude_from_learning = ?`
+		    exclude_from_learning = ?, pushed_agent_ids = ?`
 	setArgs := []any{
 		r.Name, r.GroupID, r.TargetConfigID,
 		nullableString(r.PreviousConfigID),
@@ -2949,6 +2970,7 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(r.StepKind),
 		nullableString(r.ActionRequestID),
 		boolToInt(r.ExcludeFromLearning),
+		nullableString(pushedAgentIDsJSON),
 	}
 
 	// Optimistic-concurrency guard. A caller carrying a loaded Version (>0)
@@ -3042,6 +3064,9 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		// Stored as INTEGER NOT NULL DEFAULT 0 so this is a plain
 		// int — every row has a value after the schema v5 migration.
 		excludeFromLearningInt int
+		// v0.90 (ADR 0007) — cumulative pushed-agent set. NULL on every
+		// pre-v0.90 / in-flight row; decoded to an empty slice below.
+		pushedAgentIDsJSON sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -3058,10 +3083,19 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&stepKind, &actionRequestID,
 		&excludeFromLearningInt,
 		&r.Version,
+		&pushedAgentIDsJSON,
 	); err != nil {
 		return nil, err
 	}
 	r.ExcludeFromLearning = excludeFromLearningInt != 0
+	// v0.90 (ADR 0007) — decode the cumulative pushed-agent set. NULL/empty
+	// yields a nil slice, which the engine treats as "no cumulative record"
+	// and falls back to the current-stage cohort.
+	if pushedAgentIDsJSON.Valid && pushedAgentIDsJSON.String != "" {
+		if err := json.Unmarshal([]byte(pushedAgentIDsJSON.String), &r.PushedAgentIDs); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal pushed agent ids: %w", err)
+		}
+	}
 	if rolledBackFromID.Valid {
 		r.RolledBackFromID = rolledBackFromID.String
 	}

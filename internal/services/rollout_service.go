@@ -329,6 +329,12 @@ type Rollout struct {
 	StageStartedAt *time.Time   `json:"stage_started_at,omitempty"`
 	AbortReason    string       `json:"abort_reason,omitempty"`
 
+	// PushedAgentIDs — cumulative set of agent IDs pushed the target config
+	// across all stages. Rollback + health-gate operate over this (not just
+	// the current cohort) so label-mode agents that dropped out of the
+	// current selector aren't stranded. Engine-managed. See ADR 0007.
+	PushedAgentIDs []string `json:"pushed_agent_ids,omitempty"`
+
 	// v0.47 — approval workflow. When RequireApproval is true,
 	// rollouts created via Create start in RolloutStatePendingApproval
 	// and the engine refuses to advance them until an approver

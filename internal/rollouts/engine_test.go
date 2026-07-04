@@ -366,6 +366,84 @@ func TestEngine_EvaluateAbortCriteria_NoAbortBelowThreshold(t *testing.T) {
 	assert.Empty(t, reason, "1 drifted agent under threshold of 2 should not abort")
 }
 
+func TestEngine_CumulativePushedAgents_IncludesEarlierStageAgentsDroppedFromSelector(t *testing.T) {
+	// ADR 0007 — the label-mode stranding bug. Three agents in group-a:
+	// the current stage's selector (role=canary) matches only a1 and a2, but
+	// a0 was pushed the new config in an earlier stage (role was "canary"
+	// then, re-labeled to "old" since). The cumulative pushed-set must still
+	// include a0 so rollback restores it and the health-gate watches it —
+	// even though a0 no longer matches the current selector.
+	agents := makeAgents(3, "group-a")
+	agents[0].Labels = map[string]string{"role": "old"}    // dropped out of the current selector
+	agents[1].Labels = map[string]string{"role": "canary"} // current cohort
+	agents[2].Labels = map[string]string{"role": "canary"} // current cohort
+	stub := &stubAgentService{agents: agents}
+	e := &Engine{agentService: stub, logger: zap.NewNop()}
+
+	r := &services.Rollout{
+		GroupID: "group-a",
+		Stages: []services.RolloutStage{{
+			Mode:          services.RolloutStageModeLabel,
+			LabelSelector: map[string]string{"role": "canary"},
+		}},
+		// a0 + a1 were pushed in earlier stages; a0 has since dropped out of
+		// the selector.
+		PushedAgentIDs: []string{agents[0].ID.String(), agents[1].ID.String()},
+	}
+
+	got, err := e.cumulativePushedAgents(context.Background(), r)
+	require.NoError(t, err)
+	ids := map[uuid.UUID]bool{}
+	for _, a := range got {
+		ids[a.ID] = true
+	}
+	assert.True(t, ids[agents[0].ID], "earlier-stage agent that dropped out of the selector must still be covered")
+	assert.True(t, ids[agents[1].ID], "current-cohort agent present")
+	assert.True(t, ids[agents[2].ID], "current-cohort agent present")
+	assert.Len(t, got, 3, "union of current cohort {a1,a2} and pushed-set {a0,a1}")
+
+	// Sanity: the current-stage-only selection would strand a0.
+	current, err := e.canaryAgents(context.Background(), r)
+	require.NoError(t, err)
+	assert.Len(t, current, 2, "current-stage cohort misses the dropped-out agent (the pre-ADR-0007 bug)")
+}
+
+func TestEngine_CumulativePushedAgents_EmptySetFallsBackToCurrentCohort(t *testing.T) {
+	// In-flight / pre-v0.90 rollouts have an empty pushed-set. The cumulative
+	// resolution must then degrade exactly to the current-stage cohort — no
+	// coverage regression relative to the old behavior.
+	agents := makeAgents(3, "group-a")
+	agents[0].Labels = map[string]string{"role": "old"}
+	agents[1].Labels = map[string]string{"role": "canary"}
+	agents[2].Labels = map[string]string{"role": "canary"}
+	stub := &stubAgentService{agents: agents}
+	e := &Engine{agentService: stub, logger: zap.NewNop()}
+
+	r := &services.Rollout{
+		GroupID: "group-a",
+		Stages: []services.RolloutStage{{
+			Mode:          services.RolloutStageModeLabel,
+			LabelSelector: map[string]string{"role": "canary"},
+		}},
+		PushedAgentIDs: nil,
+	}
+	got, err := e.cumulativePushedAgents(context.Background(), r)
+	require.NoError(t, err)
+	assert.Len(t, got, 2, "empty pushed-set degrades to the current-stage cohort")
+}
+
+func TestUnionPushedAgentIDs(t *testing.T) {
+	a := uuid.UUID{1}
+	b := uuid.UUID{2}
+	c := uuid.UUID{3}
+	// Existing has a,b; adding b (dup) + c. Result should be a,b,c sorted, no dup.
+	out := unionPushedAgentIDs([]string{a.String(), b.String()}, []uuid.UUID{b, c})
+	assert.Equal(t, []string{a.String(), b.String(), c.String()}, out)
+	// Sorted + deduped regardless of input order.
+	out2 := unionPushedAgentIDs(nil, []uuid.UUID{c, a, a})
+	assert.Equal(t, []string{a.String(), c.String()}, out2)
+}
+
 // windowedTelemetry is a faithful test double for TelemetryReader: it holds
 // a set of error-event timestamps and computes errors/min over [since, now)
 // exactly the way the real DuckDB-backed adapter does (COUNT in window /

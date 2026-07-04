@@ -1754,6 +1754,7 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		CurrentStage:    r.CurrentStage,
 		StageStartedAt:  r.StageStartedAt,
 		AbortReason:     r.AbortReason,
+		PushedAgentIDs:  r.PushedAgentIDs,
 		// v0.47 approval fields.
 		RequireApproval: r.RequireApproval,
 		RequestedBy:     r.RequestedBy,
@@ -1856,6 +1857,7 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		CurrentStage:    r.CurrentStage,
 		StageStartedAt:  r.StageStartedAt,
 		AbortReason:     r.AbortReason,
+		PushedAgentIDs:  r.PushedAgentIDs,
 		// v0.47 approval fields.
 		RequireApproval: r.RequireApproval,
 		RequestedBy:     r.RequestedBy,
