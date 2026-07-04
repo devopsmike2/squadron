@@ -21,15 +21,13 @@ jobs:
         go-version: '1.25'
         cache: true
         
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+    # NOTE: intentionally NO manual actions/cache step here. `actions/setup-go`
+    # above with `cache: true` already caches ~/go/pkg/mod + ~/.cache/go-build
+    # keyed on go.sum (with restore-key fallback). A second actions/cache over
+    # the SAME paths caused intermittent `tar: ... Cannot open: File exists`
+    # failures (Go job exit 2): setup-go's restore populated the dirs first, then
+    # the manual cache untarred its archive over the now-existing files and tar
+    # aborted. One cache owner per path. See knowledge/ci-gotchas.md.
           
     - name: Install dependencies
       run: go mod download
@@ -121,15 +119,13 @@ jobs:
         go-version: '1.25'
         cache: true
         
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+    # NOTE: intentionally NO manual actions/cache step here. `actions/setup-go`
+    # above with `cache: true` already caches ~/go/pkg/mod + ~/.cache/go-build
+    # keyed on go.sum (with restore-key fallback). A second actions/cache over
+    # the SAME paths caused intermittent `tar: ... Cannot open: File exists`
+    # failures (Go job exit 2): setup-go's restore populated the dirs first, then
+    # the manual cache untarred its archive over the now-existing files and tar
+    # aborted. One cache owner per path. See knowledge/ci-gotchas.md.
           
     - name: Install dependencies
       run: go mod download
