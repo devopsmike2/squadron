@@ -28,6 +28,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
+	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/billing"
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/configs"
@@ -311,6 +312,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		zap.String("authenticator", idSeam.Authenticator.Name()),
 		zap.String("tenant_mode", idSeam.TenantResolver.Resolve(context.Background())),
 	)
+	// Route the API scope middleware through the wired authorizer (ADR 0006
+	// slice 2). OSS installs the flat-scope authorizer — behavior identical to
+	// the historical RequireScope — while the enterprise edition installs a
+	// role-based one. Set once here, during startup, before the server serves.
+	middleware.SetAuthorizer(idSeam.Authorizer)
 
 	// Bootstrap an initial token if auth is enabled and the store has
 	// none yet. Operators see this token in stderr on first start; they
