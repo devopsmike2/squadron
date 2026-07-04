@@ -1130,7 +1130,7 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 		agents = append(agents, &agent)
 	}
 
-	return agents, nil
+	return agents, rows.Err()
 }
 
 func (s *Storage) UpdateAgentStatus(ctx context.Context, id uuid.UUID, status types.AgentStatus) error {
@@ -1362,7 +1362,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 		groups = append(groups, &group)
 	}
 
-	return groups, nil
+	return groups, rows.Err()
 }
 
 // UpdateGroup writes mutable fields. ID and CreatedAt are immutable;
@@ -1633,7 +1633,7 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 		configs = append(configs, &config)
 	}
 
-	return configs, nil
+	return configs, rows.Err()
 }
 
 // Saved query management
@@ -1700,7 +1700,7 @@ func (s *Storage) ListSavedQueries(ctx context.Context) ([]*types.SavedQuery, er
 		queries = append(queries, &sq)
 	}
 
-	return queries, nil
+	return queries, rows.Err()
 }
 
 func (s *Storage) UpdateSavedQuery(ctx context.Context, query *types.SavedQuery) error {
@@ -1815,7 +1815,7 @@ func (s *Storage) ListAlertRules(ctx context.Context) ([]*types.AlertRule, error
 		rule.Enabled = enabledInt != 0
 		rules = append(rules, rule)
 	}
-	return rules, nil
+	return rules, rows.Err()
 }
 
 func (s *Storage) UpdateAlertRule(ctx context.Context, rule *types.AlertRule) error {
@@ -1973,7 +1973,7 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		}
 		out = append(out, e)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // GetAuditEvent fetches one audit row by ID. Returns (nil, nil) when no
@@ -2182,7 +2182,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // ListAIVerdictsForGroup returns AI-originated rollouts on the
@@ -2233,7 +2233,7 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // ListDiscoveryVerdicts — v0.89.36 (#655 Stream 53, #531 slice 2
@@ -4147,7 +4147,7 @@ func (s *Storage) ListSiemDestinations(ctx context.Context) ([]*types.SiemDestin
 		}
 		out = append(out, d)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (s *Storage) UpdateSiemDestination(ctx context.Context, d *types.SiemDestination) error {

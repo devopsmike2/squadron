@@ -101,7 +101,7 @@ func (s *Storage) ListActionRunnerRegistrations(ctx context.Context) ([]*types.A
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // RevokeActionRunnerRegistration marks the runner as revoked.
@@ -224,7 +224,7 @@ func (s *Storage) ListActionRequests(ctx context.Context, filter types.ActionReq
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // scanActionRequest is the shared scanner used by both row and rows

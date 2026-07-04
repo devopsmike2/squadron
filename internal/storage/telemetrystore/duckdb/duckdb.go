@@ -403,7 +403,7 @@ func (s *Storage) QueryMetrics(ctx context.Context, query types.MetricQuery) ([]
 		metrics = append(metrics, m)
 	}
 
-	return metrics, nil
+	return metrics, rows.Err()
 }
 
 // QueryLogs queries logs from DuckDB
@@ -481,7 +481,7 @@ func (s *Storage) QueryLogs(ctx context.Context, query types.LogQuery) ([]types.
 		logs = append(logs, l)
 	}
 
-	return logs, nil
+	return logs, rows.Err()
 }
 
 // QueryTraces queries traces from DuckDB
@@ -546,7 +546,7 @@ func (s *Storage) QueryTraces(ctx context.Context, query types.TraceQuery) ([]ty
 		traces = append(traces, t)
 	}
 
-	return traces, nil
+	return traces, rows.Err()
 }
 
 // CreateRollups creates pre-aggregated rollup data
@@ -679,7 +679,7 @@ func (s *Storage) QueryRollups(ctx context.Context, query types.RollupQuery) ([]
 		rollups = append(rollups, r)
 	}
 
-	return rollups, nil
+	return rollups, rows.Err()
 }
 
 // QueryRaw executes a raw SQL query and returns results as a map
