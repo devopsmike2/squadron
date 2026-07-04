@@ -50,8 +50,10 @@ func (cs *ConfigSender) SendConfigToAgentWithContext(ctx context.Context, agentI
 		return fmt.Errorf("agent not found")
 	}
 
-	// Check if agent has capability to accept remote config
-	if !agent.hasCapability(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRemoteConfig) {
+	// Check if agent has capability to accept remote config. Use the locked
+	// accessor: this runs on the rollout/API goroutine, concurrently with the
+	// agent's own OpAMP connection goroutine updating agent.Status.
+	if !agent.HasCapability(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRemoteConfig) {
 		return fmt.Errorf("agent does not support remote config")
 	}
 
@@ -88,8 +90,9 @@ func (cs *ConfigSender) RestartAgent(agentId uuid.UUID) error {
 		return fmt.Errorf("agent not found")
 	}
 
-	// Check if agent has capability to accept restart command
-	if !agent.hasCapability(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRestartCommand) {
+	// Check if agent has capability to accept restart command. Locked accessor:
+	// runs off the agent's connection goroutine (see SendConfigToAgentWithContext).
+	if !agent.HasCapability(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRestartCommand) {
 		return fmt.Errorf("agent does not support restart command")
 	}
 
