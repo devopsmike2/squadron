@@ -317,6 +317,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// the historical RequireScope — while the enterprise edition installs a
 	// role-based one. Set once here, during startup, before the server serves.
 	middleware.SetAuthorizer(idSeam.Authorizer)
+	// Install the wired tenant resolver the ResolveTenant middleware consults
+	// (ADR 0006 slice 3). OSS resolves the single implicit "default" tenant;
+	// the enterprise edition derives a real tenant from the principal.
+	middleware.SetTenantResolver(idSeam.TenantResolver)
 
 	// Bootstrap an initial token if auth is enabled and the store has
 	// none yet. Operators see this token in stderr on first start; they

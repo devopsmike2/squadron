@@ -157,6 +157,30 @@ type SingleTenantResolver struct{}
 // Resolve always returns DefaultTenant in the OSS build.
 func (SingleTenantResolver) Resolve(context.Context) string { return DefaultTenant }
 
+// tenantContextKey is the unexported key under which the resolved tenant id
+// rides on a context.Context. An unexported defined type keeps external
+// packages from colliding with or reading the key directly.
+type tenantContextKey struct{}
+
+// WithTenant returns a context carrying the given tenant id. The auth
+// middleware stamps this once per request from the wired TenantResolver
+// (ADR 0006 slice 3), so downstream service/store layers can scope by tenant
+// without re-resolving it.
+func WithTenant(ctx context.Context, tenant string) context.Context {
+	return context.WithValue(ctx, tenantContextKey{}, tenant)
+}
+
+// TenantFromContext returns the tenant id carried by ctx, or DefaultTenant
+// when none is present. The default keeps single-tenant OSS behavior and
+// background contexts (which never pass through the stamping middleware)
+// safe: a reader always gets a usable tenant, never an empty string.
+func TenantFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(tenantContextKey{}).(string); ok && v != "" {
+		return v
+	}
+	return DefaultTenant
+}
+
 // OSSProviders returns the open-core default provider bundle. The OSS wire
 // file (cmd/all-in-one/wire_identity_oss.go) returns this; the enterprise
 // wire file returns its own bundle. Exposed as a constructor so the wire
