@@ -175,6 +175,24 @@ func (s *HTTPServer) Stop(ctx context.Context) error {
 	return nil
 }
 
+const (
+	// maxOTLPRequestBytes caps the raw (possibly gzip-compressed) OTLP/HTTP
+	// request body. Without a cap, io.ReadAll buffers an arbitrarily large
+	// body into memory before it is handed to the worker pool as
+	// WorkItem.RawData — the queue-bounds work caps the NUMBER of queued
+	// items, not the bytes per item, so an unbounded body is an
+	// unauthenticated memory-exhaustion DoS on the ingest port. 16 MiB is
+	// well above a normal OTLP batch (the gRPC receiver's implicit ceiling
+	// is gRPC's 4 MiB default MaxRecvMsgSize) while bounding per-request RAM.
+	maxOTLPRequestBytes = 16 << 20 // 16 MiB
+	// maxOTLPDecompressedBytes caps the DECOMPRESSED size when the client
+	// sends Content-Encoding: gzip. gzip can expand ~1000x, so capping only
+	// the compressed body is insufficient — a few-MiB upload would expand to
+	// gigabytes (a decompression bomb). This bounds the expanded stream. 64
+	// MiB leaves generous headroom for large legitimate batches.
+	maxOTLPDecompressedBytes = 64 << 20 // 64 MiB
+)
+
 // readRequestBody reads the OTLP request body, transparently
 // decompressing it when the client sets Content-Encoding: gzip. The
 // OTLP/HTTP spec permits gzip-compressed payloads and the upstream
@@ -182,17 +200,31 @@ func (s *HTTPServer) Stop(ctx context.Context) error {
 // compressed bytes reach proto.Unmarshal and fail with "invalid
 // wire-format data" (HTTP 400), silently dropping telemetry from any
 // standard OTLP client.
+//
+// The read is bounded on two axes to stop unauthenticated DoS: the raw
+// body via http.MaxBytesReader (maxOTLPRequestBytes), and — for gzip —
+// the decompressed stream via io.LimitReader (maxOTLPDecompressedBytes).
+// Both are needed: the compressed cap alone can't stop a gzip bomb.
 func (s *HTTPServer) readRequestBody(c *gin.Context) ([]byte, error) {
-	var reader io.Reader = c.Request.Body
+	var reader io.Reader = http.MaxBytesReader(c.Writer, c.Request.Body, maxOTLPRequestBytes)
 	if strings.EqualFold(c.GetHeader("Content-Encoding"), "gzip") {
-		gz, err := gzip.NewReader(c.Request.Body)
+		gz, err := gzip.NewReader(reader)
 		if err != nil {
 			return nil, err
 		}
 		defer gz.Close()
-		reader = gz
+		// Read one byte past the cap so an over-limit body is detected
+		// (rejected) rather than silently truncated.
+		reader = io.LimitReader(gz, maxOTLPDecompressedBytes+1)
 	}
-	return io.ReadAll(reader)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxOTLPDecompressedBytes {
+		return nil, fmt.Errorf("otlp request body exceeds decompressed size limit of %d bytes", maxOTLPDecompressedBytes)
+	}
+	return data, nil
 }
 
 // unmarshalOTLPRequest decodes an OTLP/HTTP request body into msg, selecting
