@@ -356,6 +356,11 @@ type Server struct {
 	// SetEnterpriseRBACHandler; OSS leaves it nil so those routes return 404.
 	// Read at request time by the late-bound wildcard in registerRoutes.
 	enterpriseRBACHandler EnterpriseRBACHandler
+	// enterpriseTenantHandler serves the /api/v1/tenants/* tenant management API
+	// (ADR 0011 slice 3c). Wired by the enterprise build edition via
+	// SetEnterpriseTenantHandler; OSS leaves it nil so those routes return 404.
+	// Read at request time by the late-bound wildcard in registerRoutes.
+	enterpriseTenantHandler EnterpriseTenantHandler
 	// v0.53 Move 2 — action runner. The actions handler needs the
 	// raw applicationstore to read/write action_runner_registrations
 	// and action_requests; it also needs the Ed25519 signer to
@@ -586,6 +591,49 @@ func (s *Server) mountEnterpriseRBAC(rg gin.IRouter) {
 			return
 		}
 		s.enterpriseRBACHandler.HandleRBAC(c)
+	})
+}
+
+// EnterpriseTenantHandler is the seam the enterprise edition implements to serve
+// the tenant management API under /api/v1/tenants (ADR 0011 slice 3c). It
+// receives requests that have already passed RequireBearer + ResolveTenant; the
+// path suffix after /api/v1/tenants is available via c.Param("path"). The
+// handler is responsible for its own authorization (managing tenants is a
+// privileged operation — tenants:write on mutations / tenants:read on reads).
+// OSS never provides one, so the routes 404.
+type EnterpriseTenantHandler interface {
+	HandleTenants(c *gin.Context)
+}
+
+// SetEnterpriseTenantHandler installs the enterprise tenant management handler
+// that backs /api/v1/tenants/* (ADR 0011 slice 3c). The enterprise build's wire
+// layer calls this once after NewServer; OSS never calls it (or passes nil),
+// leaving tenant management unmounted (404). Not safe for concurrent use with
+// in-flight requests — call it during startup, before the server accepts
+// traffic.
+func (s *Server) SetEnterpriseTenantHandler(h EnterpriseTenantHandler) {
+	s.enterpriseTenantHandler = h
+}
+
+// mountEnterpriseTenants registers the late-bound /api/v1/tenants/* wildcard on
+// the given route group (ADR 0011 slice 3c). registerRoutes runs inside
+// NewServer, before the wire layer calls SetEnterpriseTenantHandler, so the
+// closure reads s.enterpriseTenantHandler at REQUEST time: OSS (nil handler)
+// returns 404; the enterprise edition serves its tenant CRUD handler. The group
+// already carries RequireBearer + ResolveTenant; the enterprise handler enforces
+// its own tenants:read / tenants:write authorization. Extracted from
+// registerRoutes so the seam is unit-testable with a bare *Server. Mirrors
+// mountEnterpriseRBAC.
+func (s *Server) mountEnterpriseTenants(rg gin.IRouter) {
+	rg.Any("/tenants/*path", func(c *gin.Context) {
+		if s.enterpriseTenantHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "tenant management is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseTenantHandler.HandleTenants(c)
 	})
 }
 
@@ -2216,6 +2264,10 @@ func (s *Server) registerRoutes() {
 	{
 		// ADR 0010 — RBAC management API seam under /api/v1/rbac/*.
 		s.mountEnterpriseRBAC(v1)
+
+		// ADR 0011 slice 3c — tenant management API seam under
+		// /api/v1/tenants/*.
+		s.mountEnterpriseTenants(v1)
 
 		// Auth token management lives under /api/v1/auth/tokens.
 		// Bootstrap problem: the first token has to be created without
