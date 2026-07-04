@@ -877,6 +877,10 @@ func copyRollout(r *types.Rollout) types.Rollout {
 		out.EvidenceRefs = make([]types.RolloutEvidenceRef, len(r.EvidenceRefs))
 		copy(out.EvidenceRefs, r.EvidenceRefs)
 	}
+	if r.PushedAgentIDs != nil {
+		out.PushedAgentIDs = make([]string, len(r.PushedAgentIDs))
+		copy(out.PushedAgentIDs, r.PushedAgentIDs)
+	}
 	return out
 }
 
