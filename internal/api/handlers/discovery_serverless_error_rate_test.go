@@ -28,6 +28,9 @@ import (
 // Mirrors stubColdStartReader's shape.
 type stubErrorRateReader struct {
 	rows map[string]map[int]errorRateRowOutcome
+	// gotConnectionID records the connectionID the handler threaded into the
+	// last call (ADR 0009 connection-scoping assertion).
+	gotConnectionID string
 }
 
 type errorRateRowOutcome struct {
@@ -36,7 +39,8 @@ type errorRateRowOutcome struct {
 	err   error
 }
 
-func (s *stubErrorRateReader) LatestErrorRateObservation(_ context.Context, _ string, resourceARN string, windowHours int) (sqlite.ErrorRateObservationRow, bool, error) {
+func (s *stubErrorRateReader) LatestErrorRateObservation(_ context.Context, connectionID string, resourceARN string, windowHours int) (sqlite.ErrorRateObservationRow, bool, error) {
+	s.gotConnectionID = connectionID
 	if s.rows == nil {
 		return sqlite.ErrorRateObservationRow{}, false, nil
 	}
@@ -93,7 +97,7 @@ func TestErrorRateEndpoint_ShapeMatches_Section6_1(t *testing.T) {
 	r := newErrorRateHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -131,6 +135,10 @@ func TestErrorRateEndpoint_ShapeMatches_Section6_1(t *testing.T) {
 	if resp.ResourceARN != arn {
 		t.Errorf("ResourceARN = %q, want %q", resp.ResourceARN, arn)
 	}
+	// ADR 0009 — the handler must thread connection_id into the store call.
+	if reader.gotConnectionID != "conn-1" {
+		t.Errorf("store connectionID = %q, want %q (connection_id not threaded)", reader.gotConnectionID, "conn-1")
+	}
 	if resp.CurrentWindow.WindowHours != 24 {
 		t.Errorf("CurrentWindow.WindowHours = %d, want 24", resp.CurrentWindow.WindowHours)
 	}
@@ -163,6 +171,24 @@ func TestErrorRateEndpoint_ShapeMatches_Section6_1(t *testing.T) {
 	}
 }
 
+// TestErrorRateEndpoint_MissingConnectionID_Returns400 — ADR 0009. A
+// request without connection_id must be rejected rather than falling
+// through to an unscoped (cross-connection) read.
+func TestErrorRateEndpoint_MissingConnectionID_Returns400(t *testing.T) {
+	arn := "arn:aws:lambda:us-east-1:123456789012:function:scoped"
+	reader := &stubErrorRateReader{}
+	reader.set(arn, 24, 87, 3200, 0.02719, time.Now().UTC())
+	reader.set(arn, 168, 192, 22400, 0.00857, time.Now().UTC())
+	r := newErrorRateHandler(reader)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate", nil) // no connection_id
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 when connection_id missing", w.Code)
+	}
+}
+
 // TestErrorRateEndpoint_404WhenNoData — store returns ok=false for
 // both windows → 404. Matches the cold-start "no observations
 // recorded for resource" posture.
@@ -172,7 +198,7 @@ func TestErrorRateEndpoint_404WhenNoData(t *testing.T) {
 	r := newErrorRateHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
@@ -186,7 +212,7 @@ func TestErrorRateEndpoint_404WhenNilStore(t *testing.T) {
 	r := newErrorRateHandler(nil)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/fn/error_rate", nil)
+		"/api/v1/discovery/aws/inventory/serverless/fn/error_rate?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 (nil store)", w.Code)
@@ -207,7 +233,7 @@ func TestErrorRateEndpoint_StoreErrorReturns500(t *testing.T) {
 	r := newErrorRateHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", w.Code)
@@ -248,7 +274,7 @@ func TestErrorRateEndpoint_WouldFireReflectsAllGates(t *testing.T) {
 			r := newErrorRateHandler(reader)
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet,
-				"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate", nil)
+				"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate?connection_id=conn-1", nil)
 			r.ServeHTTP(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
@@ -281,7 +307,7 @@ func TestErrorRateEndpoint_NearZeroBaseline_SurfacesBaselineAdjusted(t *testing.
 	r := newErrorRateHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/error_rate?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())

@@ -26,6 +26,9 @@ func init() { gin.SetMode(gin.TestMode) }
 // + bool + error so each test can pin a specific edge case.
 type stubColdStartReader struct {
 	rows map[string]map[int]coldStartRowOutcome
+	// gotConnectionID records the connectionID the handler threaded into
+	// the last call, so tests can assert the ADR 0009 connection-scoping.
+	gotConnectionID string
 }
 
 type coldStartRowOutcome struct {
@@ -34,7 +37,8 @@ type coldStartRowOutcome struct {
 	err   error
 }
 
-func (s *stubColdStartReader) LatestColdStartObservation(_ context.Context, _ string, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error) {
+func (s *stubColdStartReader) LatestColdStartObservation(_ context.Context, connectionID string, resourceARN string, windowHours int) (sqlite.ColdStartObservationRow, bool, error) {
+	s.gotConnectionID = connectionID
 	if s.rows == nil {
 		return sqlite.ColdStartObservationRow{}, false, nil
 	}
@@ -91,7 +95,7 @@ func TestColdStartEndpoint_ShapeMatches_Section6_1(t *testing.T) {
 	r := newColdStartHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -103,6 +107,11 @@ func TestColdStartEndpoint_ShapeMatches_Section6_1(t *testing.T) {
 	}
 	if resp.ResourceARN != arn {
 		t.Errorf("ResourceARN = %q, want %q", resp.ResourceARN, arn)
+	}
+	// ADR 0009 — the handler must thread the connection_id query param into
+	// the store call so the read is connection-scoped.
+	if reader.gotConnectionID != "conn-1" {
+		t.Errorf("store connectionID = %q, want %q (connection_id not threaded)", reader.gotConnectionID, "conn-1")
 	}
 	if resp.CurrentWindow.WindowHours != 24 {
 		t.Errorf("CurrentWindow.WindowHours = %d, want 24", resp.CurrentWindow.WindowHours)
@@ -142,7 +151,7 @@ func TestColdStartEndpoint_404WhenNoObservations(t *testing.T) {
 	r := newColdStartHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
@@ -160,7 +169,7 @@ func TestColdStartEndpoint_404WhenOnlyCurrentWindow(t *testing.T) {
 	r := newColdStartHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 when baseline absent", w.Code)
@@ -175,7 +184,7 @@ func TestColdStartEndpoint_NilStore_Returns404(t *testing.T) {
 	r := newColdStartHandler(nil)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/fn/cold_start", nil)
+		"/api/v1/discovery/aws/inventory/serverless/fn/cold_start?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 (nil store)", w.Code)
@@ -197,7 +206,7 @@ func TestColdStartEndpoint_StoreErrorReturns500(t *testing.T) {
 	r := newColdStartHandler(reader)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start", nil)
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", w.Code)
@@ -231,7 +240,7 @@ func TestColdStartEndpoint_RatioCalculatedFromLatestObservations(t *testing.T) {
 			r := newColdStartHandler(reader)
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet,
-				"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start", nil)
+				"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start?connection_id=conn-1", nil)
 			r.ServeHTTP(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d", w.Code)
@@ -281,7 +290,7 @@ func TestColdStartEndpoint_ExceedsThresholdReflectsDetectionLogic(t *testing.T) 
 			r := newColdStartHandler(reader)
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet,
-				"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start", nil)
+				"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start?connection_id=conn-1", nil)
 			r.ServeHTTP(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d", w.Code)
@@ -310,10 +319,28 @@ func TestColdStartEndpoint_EmptyIDReturns400(t *testing.T) {
 	r := newColdStartHandler(&stubColdStartReader{})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/discovery/aws/inventory/serverless/%20/cold_start", nil)
+		"/api/v1/discovery/aws/inventory/serverless/%20/cold_start?connection_id=conn-1", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for whitespace id", w.Code)
+	}
+}
+
+// TestColdStartEndpoint_MissingConnectionID_Returns400 — ADR 0009. A
+// request without connection_id must be rejected rather than falling
+// through to an unscoped (cross-connection) read.
+func TestColdStartEndpoint_MissingConnectionID_Returns400(t *testing.T) {
+	arn := "arn:aws:lambda:us-east-1:123456789012:function:scoped"
+	reader := &stubColdStartReader{}
+	reader.set(arn, 24, 800, 50, time.Now().UTC())
+	reader.set(arn, 168, 500, 500, time.Now().UTC())
+	r := newColdStartHandler(reader)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/discovery/aws/inventory/serverless/"+url.PathEscape(arn)+"/cold_start", nil) // no connection_id
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 when connection_id missing", w.Code)
 	}
 }
 
