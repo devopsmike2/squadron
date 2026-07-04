@@ -89,12 +89,17 @@ func (agent *Agent) shouldOfferOwnTelemetry() (metrics, traces, logs bool) {
 	return metrics, traces, logs
 }
 
-// SendRestartCommand sends a restart command to the agent
+// SendRestartCommand sends a restart command to the agent. Called from the
+// rollout/API RestartAgent paths (off the connection goroutine), so the
+// agent.Status read is taken under the read lock to avoid racing the
+// connection goroutine's UpdateStatus writer.
 func (agent *Agent) SendRestartCommand() {
+	agent.mux.RLock()
 	var capabilities uint64
 	if agent.Status != nil {
 		capabilities = agent.Status.Capabilities
 	}
+	agent.mux.RUnlock()
 
 	agent.SendToAgent(
 		&protobufs.ServerToAgent{

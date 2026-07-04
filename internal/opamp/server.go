@@ -281,7 +281,9 @@ func (s *Server) onMessage(ctx context.Context, conn types.Connection, msg *prot
 func (s *Server) GetEffectiveConfig(agentId uuid.UUID) (string, error) {
 	agent := s.agents.FindAgent(agentId)
 	if agent != nil {
-		return agent.EffectiveConfig, nil
+		// Locked read: the connection goroutine may be updating EffectiveConfig
+		// while this API-goroutine call reads it.
+		return agent.EffectiveConfigSnapshot(), nil
 	}
 	return "", fmt.Errorf("agent %s not found", agentId)
 }
@@ -327,8 +329,9 @@ func (s *Server) RestartAgent(agentId uuid.UUID) error {
 		return fmt.Errorf("agent not found")
 	}
 
-	// Check if agent has capability to accept restart command
-	if !agent.hasCapability(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRestartCommand) {
+	// Check if agent has capability to accept restart command. Locked accessor:
+	// this API-goroutine call can race the agent's connection goroutine.
+	if !agent.HasCapability(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRestartCommand) {
 		return fmt.Errorf("agent does not support restart command")
 	}
 

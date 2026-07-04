@@ -145,9 +145,38 @@ func (agent *Agent) storeID() uuid.UUID {
 	return agent.InstanceId
 }
 
-// hasCapability checks if the agent has a specific capability
+// hasCapability checks if the agent has a specific capability.
+//
+// This is the UNLOCKED form: it reads agent.Status without taking agent.mux and
+// therefore assumes the caller already holds the lock (it is called from
+// processStatusUpdate while UpdateStatus holds agent.mux.Lock, and from the
+// connection-goroutine paths that run inside that same OnMessage call). It must
+// NOT take the lock itself — agent.mux is a non-reentrant sync.RWMutex, so an
+// RLock here would self-deadlock the status-update path. External goroutines
+// (the rollout config-sender, API handlers) must use HasCapability instead.
 func (agent *Agent) hasCapability(capability protobufs.AgentCapabilities) bool {
 	return agent.Status != nil && agent.Status.Capabilities&uint64(capability) != 0
+}
+
+// HasCapability reports whether the agent advertises the given capability. Safe
+// to call from any goroutine: it takes the read lock before reading Status, so
+// it will not race the OpAMP connection goroutine's UpdateStatus writer (which
+// swaps agent.Status under the write lock). Use this from external callers such
+// as the rollout config-sender and API handlers; the connection goroutine's own
+// under-lock paths use the unexported hasCapability.
+func (agent *Agent) HasCapability(capability protobufs.AgentCapabilities) bool {
+	agent.mux.RLock()
+	defer agent.mux.RUnlock()
+	return agent.hasCapability(capability)
+}
+
+// EffectiveConfigSnapshot returns the agent's last-reported effective config
+// under the read lock, so an API-goroutine read cannot race the connection
+// goroutine updating agent.EffectiveConfig in updateEffectiveConfig.
+func (agent *Agent) EffectiveConfigSnapshot() string {
+	agent.mux.RLock()
+	defer agent.mux.RUnlock()
+	return agent.EffectiveConfig
 }
 
 // GetConnection returns the agent's connection
