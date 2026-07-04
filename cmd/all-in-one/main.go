@@ -136,6 +136,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		logger.Fatal("Failed to create application store", zap.Error(err))
 	}
+	// Wrap the store with the edition's tenant-scoping decorator (ADR 0006
+	// slice 4). OSS returns it unchanged — single implicit tenant, no query
+	// rewrite, no migration. The enterprise decorator scopes reads/writes by
+	// identity.TenantFromContext(ctx) (stamped by middleware.ResolveTenant).
+	// NOTE: the optional store interfaces main.go type-asserts below
+	// (CostSpikeStore, retention GCs, observation readers, …) must be
+	// preserved by any enterprise decorator — forward them, or scope at the
+	// query layer instead of wrapping. The OSS pass-through keeps them intact.
+	appStore = scopedApplicationStore(appStore)
 
 	// Ensure application store factory is properly closed on shutdown
 	defer func() {
