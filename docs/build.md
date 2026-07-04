@@ -27,6 +27,10 @@ build tree and picked up under the edition build tag.
   serverless regression detectors — AWS Lambda cold-start / error-rate via
   Lambda Insights (#152) and Azure Functions cold-start / error-rate via
   Application Insights (#153).
+- **Identity** (`enterprise` tag): SSO (SAML/OIDC) + SCIM, role-based access
+  control, and multi-tenant isolation. OSS keeps bearer tokens + flat scopes +
+  a single implicit tenant; the enterprise edition supplies a role-based
+  authorizer and a per-tenant scoped store against the same seam. See ADR 0006.
 
 The `compliance` seam predates the umbrella and keeps its own tag, so the
 enterprise build sets both (`-tags "enterprise compliance"`). New paid
@@ -41,8 +45,9 @@ Every extension point has three pieces:
    the private enterprise repo can import it across module boundaries.
    Current interfaces: `extension/policy` (group approval),
    `extension/changewindow` (rollout blackout windows), `extension/siem`
-   (audit fan-out dispatcher), and `extension/detectors` (commercial-tier
-   detector activation).
+   (audit fan-out dispatcher), `extension/detectors` (commercial-tier
+   detector activation), and `extension/identity` (authentication,
+   authorization, and tenant resolution — ADR 0006).
 2. **A no-op / limited default provider** wired by the OSS build. This is
    the working OSS behaviour: the feature is inert (groups can carry
    `require_approval` metadata but the engine doesn't enforce it; SIEM
@@ -58,6 +63,8 @@ not care which edition is active:
 |---|---|---|
 | Compliance | `wire_oss.go` → no-op providers, returns `squadron-oss` | `wire_compliance.go` → panics with guidance |
 | Commercial detectors | `wire_detectors_oss.go` → `detectors.NoOpProvider` | `wire_detectors_enterprise.go` → panics with guidance |
+| Identity (authn/authz/tenant) | `wire_identity_oss.go` → `identity.OSSProviders` (bearer + flat-scope + single tenant) | `wire_identity_enterprise.go` → panics with guidance |
+| Tenant-scoped store | `wire_scopedstore_oss.go` → identity pass-through | `wire_scopedstore_enterprise.go` → panics with guidance |
 
 The edition-tagged files that ship in **this** (open-core) repo are
 **stubs**: they compile so `go build -tags <edition>` type-checks the seam,
