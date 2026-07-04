@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
@@ -83,6 +84,12 @@ func (s *Storage) migrate() error {
 			capabilities TEXT,
 			effective_config TEXT,
 			discovery_source TEXT NOT NULL DEFAULT 'opamp',
+			-- ADR 0011 slice 3b (M2 query-layer scoping): the tenant this
+			-- row belongs to. 'default' is the OSS single tenant; inert in
+			-- the OSS build (every row is 'default' so the tenant predicate
+			-- is a no-op). Also added via the migrations slice below so
+			-- pre-3b databases upgrade in place.
+			tenant_id TEXT NOT NULL DEFAULT 'default',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
@@ -107,6 +114,8 @@ func (s *Storage) migrate() error {
 			-- migration so this column round trips identically on
 			-- both fresh and migrated databases.
 			learn_from_verdicts INTEGER NOT NULL DEFAULT 1,
+			-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
+			tenant_id TEXT NOT NULL DEFAULT 'default',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
@@ -119,6 +128,8 @@ func (s *Storage) migrate() error {
 			config_hash TEXT NOT NULL,
 			content TEXT NOT NULL,
 			version INTEGER NOT NULL DEFAULT 1,
+			-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
+			tenant_id TEXT NOT NULL DEFAULT 'default',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
 			FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
@@ -130,6 +141,8 @@ func (s *Storage) migrate() error {
 		description TEXT,
 		query TEXT NOT NULL,
 		tags TEXT,
+		-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
+		tenant_id TEXT NOT NULL DEFAULT 'default',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -147,6 +160,11 @@ func (s *Storage) migrate() error {
 		severity TEXT NOT NULL,
 		enabled INTEGER NOT NULL DEFAULT 1,
 		webhook_url TEXT,
+		-- ADR 0011 slice 3b: per-tenant scoping column (see agents). The
+		-- name UNIQUE constraint stays single-column for now — the
+		-- composite-key rebuild to (tenant_id, name) is deferred to slice
+		-- 3b'.
+		tenant_id TEXT NOT NULL DEFAULT 'default',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -162,6 +180,8 @@ func (s *Storage) migrate() error {
 		target_id TEXT,
 		action TEXT NOT NULL,
 		payload TEXT,
+		-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
+		tenant_id TEXT NOT NULL DEFAULT 'default',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -200,7 +220,9 @@ func (s *Storage) migrate() error {
 		-- longer matches, catching the engine-vs-operator lost-update
 		-- race. DEFAULT 1 so fresh rows (and the ALTER-backfilled
 		-- pre-existing rows) start at a well-defined baseline.
-		version INTEGER NOT NULL DEFAULT 1
+		version INTEGER NOT NULL DEFAULT 1,
+		-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
+		tenant_id TEXT NOT NULL DEFAULT 'default'
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_rollouts_state ON rollouts(state);
@@ -981,6 +1003,80 @@ func (s *Storage) migrate() error {
 			created_at DATETIME NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_discovery_scans_scope ON discovery_scans(provider, scope_id, started_at DESC)`,
+
+		// ADR 0011 slice 3b (M2 query-layer scoping) — per-tenant tables
+		// gain a tenant_id column + a supporting index. Existing rows
+		// backfill to the OSS single tenant 'default'; fresh DBs also carry
+		// the column from their CREATE TABLE (agents/groups/configs/
+		// saved_queries/alert_rules/audit_events/rollouts) or pick it up
+		// here (the remaining tables are created via CREATE TABLE IF NOT
+		// EXISTS above, and this ALTER runs after every CREATE so fresh and
+		// upgraded databases converge on the same shape). Idempotent via
+		// the duplicate-column swallow. GLOBAL tables
+		// (webhook_delivery_dedupe, _migrations_done) deliberately get NO
+		// tenant_id — they carry no per-tenant data.
+		//
+		// api_tokens already gained tenant_id in slice 3a (above); only its
+		// index is added here.
+		//
+		// The six composite-key tables (expected_agents,
+		// recommendation_dismissals, iac_recommendation_verdicts,
+		// trace_resource_seen, action_runner_registrations, alert_rules)
+		// get the tenant_id COLUMN + index here, but their PK/UNIQUE stays
+		// single-column for now. TODO(ADR 0011 slice 3b'): rebuild those
+		// tables so the conflict target becomes (tenant_id, <key>).
+		`ALTER TABLE agents ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id)`,
+		`ALTER TABLE groups ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_groups_tenant ON groups(tenant_id)`,
+		`ALTER TABLE configs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_configs_tenant ON configs(tenant_id)`,
+		`ALTER TABLE saved_queries ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_saved_queries_tenant ON saved_queries(tenant_id)`,
+		`ALTER TABLE alert_rules ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_alert_rules_tenant ON alert_rules(tenant_id)`,
+		`ALTER TABLE audit_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id)`,
+		`ALTER TABLE rollouts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_rollouts_tenant ON rollouts(tenant_id)`,
+		// api_tokens.tenant_id added in slice 3a — index only.
+		`CREATE INDEX IF NOT EXISTS idx_api_tokens_tenant ON api_tokens(tenant_id)`,
+		`ALTER TABLE recommendation_dismissals ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_recommendation_dismissals_tenant ON recommendation_dismissals(tenant_id)`,
+		`ALTER TABLE recommendation_outcomes ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_recommendation_outcomes_tenant ON recommendation_outcomes(tenant_id)`,
+		`ALTER TABLE cost_spike_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_cost_spike_events_tenant ON cost_spike_events(tenant_id)`,
+		`ALTER TABLE expected_agents ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_expected_agents_tenant ON expected_agents(tenant_id)`,
+		`ALTER TABLE deploy_targets ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_deploy_targets_tenant ON deploy_targets(tenant_id)`,
+		`ALTER TABLE deploy_runs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_deploy_runs_tenant ON deploy_runs(tenant_id)`,
+		`ALTER TABLE siem_destinations ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_siem_destinations_tenant ON siem_destinations(tenant_id)`,
+		`ALTER TABLE action_runner_registrations ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_action_runner_registrations_tenant ON action_runner_registrations(tenant_id)`,
+		`ALTER TABLE action_requests ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_action_requests_tenant ON action_requests(tenant_id)`,
+		`ALTER TABLE incident_drafts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_incident_drafts_tenant ON incident_drafts(tenant_id)`,
+		`ALTER TABLE iac_recommendation_verdicts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_iac_recommendation_verdicts_tenant ON iac_recommendation_verdicts(tenant_id)`,
+		`ALTER TABLE trace_resource_seen ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_tenant ON trace_resource_seen(tenant_id)`,
+		`ALTER TABLE serverless_instance ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_serverless_instance_tenant ON serverless_instance(tenant_id)`,
+		`ALTER TABLE orchestration_instance ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_orchestration_instance_tenant ON orchestration_instance(tenant_id)`,
+		`ALTER TABLE event_source_instance ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_event_source_instance_tenant ON event_source_instance(tenant_id)`,
+		`ALTER TABLE cold_start_observation ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_cold_start_observation_tenant ON cold_start_observation(tenant_id)`,
+		`ALTER TABLE error_rate_observation ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_error_rate_observation_tenant ON error_rate_observation(tenant_id)`,
+		`ALTER TABLE discovery_scans ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE INDEX IF NOT EXISTS idx_discovery_scans_tenant ON discovery_scans(tenant_id)`,
 	}
 
 	for _, migration := range migrations {
@@ -1018,12 +1114,21 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	if source == "" {
 		source = "opamp"
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	query := `
-		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, tenant_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err = s.db.ExecContext(ctx, query,
 		agent.ID.String(),
 		agent.Name,
 		string(labelsJSON),
@@ -1034,6 +1139,7 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 		agent.Version,
 		string(capabilitiesJSON),
 		source,
+		tenant,
 		agent.CreatedAt,
 		agent.UpdatedAt,
 	)
@@ -1050,10 +1156,19 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 	// v0.51 — tombstoned rows are excluded from the operational
 	// view. Audit events keyed by ID still resolve via the
 	// audit_events table.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
 		FROM agents WHERE id = ? AND deleted_at IS NULL
 	`
+	args := []any{id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
 	var agent types.Agent
 	var labelsJSON, capabilitiesJSON string
@@ -1061,7 +1176,7 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 	var effectiveConfig sql.NullString
 	var discoverySource sql.NullString
 
-	err := s.db.QueryRowContext(ctx, query, id.String()).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&agentIDStr,
 		&agent.Name,
 		&labelsJSON,
@@ -1101,12 +1216,21 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 	// v0.51 — exclude tombstoned (soft-deleted) agents by default.
 	// The audit trail for the agent persists indefinitely; the
 	// operational view shows only live agents.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
-		FROM agents WHERE deleted_at IS NULL ORDER BY created_at DESC
-	`
+		FROM agents WHERE deleted_at IS NULL`
+	var args []any
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY created_at DESC`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list agents: %w", err)
 	}
@@ -1156,9 +1280,18 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 }
 
 func (s *Storage) UpdateAgentStatus(ctx context.Context, id uuid.UUID, status types.AgentStatus) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+	args := []any{string(status), id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
-	result, err := s.db.ExecContext(ctx, query, string(status), id.String())
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update agent status: %w", err)
 	}
@@ -1173,9 +1306,18 @@ func (s *Storage) UpdateAgentStatus(ctx context.Context, id uuid.UUID, status ty
 }
 
 func (s *Storage) UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSeen time.Time) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE agents SET last_seen = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+	args := []any{lastSeen, id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
-	result, err := s.db.ExecContext(ctx, query, lastSeen, id.String())
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update agent last seen: %w", err)
 	}
@@ -1189,9 +1331,18 @@ func (s *Storage) UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSee
 }
 
 func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, effectiveConfig string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE agents SET effective_config = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+	args := []any{effectiveConfig, id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
-	result, err := s.db.ExecContext(ctx, query, effectiveConfig, id.String())
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update agent effective config: %w", err)
 	}
@@ -1213,12 +1364,22 @@ func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, 
 // are left untouched by their own update paths.
 func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agent) error {
 	labelsJSON, _ := json.Marshal(agent.Labels)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE agents
 		SET name = ?, labels = ?, version = ?, group_id = ?, group_name = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL`
-	result, err := s.db.ExecContext(ctx, query,
+	args := []any{
 		agent.Name, string(labelsJSON), agent.Version,
-		agent.GroupID, agent.GroupName, agent.ID.String())
+		agent.GroupID, agent.GroupName, agent.ID.String(),
+	}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update agent registration: %w", err)
 	}
@@ -1235,9 +1396,18 @@ func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 	// DELETE so the row remains for audit history (CIP-007-6 R4.3).
 	// The agent.decommissioned audit event carries the operator's
 	// identity and timing; the row carries the tombstone marker.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE agents SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`
 	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, query, now, now, id.String())
+	args := []any{now, now, id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete agent: %w", err)
 	}
@@ -1285,12 +1455,21 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 	// migration's DEFAULT 1 backfills every pre-existing row to opt-
 	// in; this INSERT path writes exactly what the caller intends.
 
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	query := `
-		INSERT INTO groups (id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO groups (id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, tenant_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err = s.db.ExecContext(ctx, query,
 		group.ID,
 		group.Name,
 		string(labelsJSON),
@@ -1298,6 +1477,7 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 		boolToInt(group.RequireApprovalForRollback),
 		cw,
 		boolToInt(group.LearnFromVerdicts),
+		tenant,
 		group.CreatedAt,
 		group.UpdatedAt,
 	)
@@ -1311,7 +1491,16 @@ func (s *Storage) CreateGroup(ctx context.Context, group *types.Group) error {
 }
 
 func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at FROM groups WHERE id = ?`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
 	var group types.Group
 	var labelsJSON string
@@ -1319,7 +1508,7 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 	var requireApprovalForRollback int
 	var learnFromVerdicts int
 
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&group.ID,
 		&group.Name,
 		&labelsJSON,
@@ -1346,9 +1535,19 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 }
 
 func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
-	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at FROM groups ORDER BY created_at DESC`
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at FROM groups`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY created_at DESC`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list groups: %w", err)
 	}
@@ -1397,12 +1596,16 @@ func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 	if cw == "" {
 		cw = "[]"
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	query := `
 		UPDATE groups
 		SET name = ?, labels = ?, require_approval = ?, require_approval_for_rollback = ?, change_windows = ?, learn_from_verdicts = ?, updated_at = ?
 		WHERE id = ?
 	`
-	result, err := s.db.ExecContext(ctx, query,
+	args := []any{
 		group.Name,
 		string(labelsJSON),
 		boolToInt(group.RequireApproval),
@@ -1411,7 +1614,12 @@ func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 		boolToInt(group.LearnFromVerdicts),
 		group.UpdatedAt,
 		group.ID,
-	)
+	}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update group: %w", err)
 	}
@@ -1423,9 +1631,18 @@ func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 }
 
 func (s *Storage) DeleteGroup(ctx context.Context, id string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	query := `DELETE FROM groups WHERE id = ?`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
-	result, err := s.db.ExecContext(ctx, query, id)
+	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete group: %w", err)
 	}
@@ -1441,12 +1658,21 @@ func (s *Storage) DeleteGroup(ctx context.Context, id string) error {
 
 // Config management
 func (s *Storage) CreateConfig(ctx context.Context, config *types.Config) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	query := `
-		INSERT INTO configs (id, name, agent_id, group_id, config_hash, content, version, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO configs (id, name, agent_id, group_id, config_hash, content, version, tenant_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err = s.db.ExecContext(ctx, query,
 		config.ID,
 		config.Name,
 		config.AgentID,
@@ -1454,6 +1680,7 @@ func (s *Storage) CreateConfig(ctx context.Context, config *types.Config) error 
 		config.ConfigHash,
 		config.Content,
 		config.Version,
+		tenant,
 		config.CreatedAt,
 	)
 
@@ -1466,13 +1693,22 @@ func (s *Storage) CreateConfig(ctx context.Context, config *types.Config) error 
 }
 
 func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT id, name, agent_id, group_id, config_hash, content, version, created_at FROM configs WHERE id = ?`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
 	var config types.Config
 	var agentIDStr, groupIDStr sql.NullString
 	var nameStr sql.NullString
 
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&config.ID,
 		&nameStr,
 		&agentIDStr,
@@ -1505,10 +1741,20 @@ func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, erro
 }
 
 func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID) (*types.Config, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		SELECT id, name, agent_id, group_id, config_hash, content, version, created_at
 		FROM configs
-		WHERE agent_id = ?
+		WHERE agent_id = ?`
+	args := []any{agentID.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	query += `
 		ORDER BY version DESC, created_at DESC
 		LIMIT 1
 	`
@@ -1517,7 +1763,7 @@ func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID
 	var agentIDStr, groupIDStr sql.NullString
 	var nameStr sql.NullString
 
-	err := s.db.QueryRowContext(ctx, query, agentID.String()).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&config.ID,
 		&nameStr,
 		&agentIDStr,
@@ -1550,10 +1796,20 @@ func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID
 }
 
 func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (*types.Config, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		SELECT id, name, agent_id, group_id, config_hash, content, version, created_at
 		FROM configs
-		WHERE group_id = ?
+		WHERE group_id = ?`
+	args := []any{groupID}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	query += `
 		ORDER BY version DESC, created_at DESC
 		LIMIT 1
 	`
@@ -1562,7 +1818,7 @@ func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (
 	var agentIDStr, groupIDStr sql.NullString
 	var nameStr sql.NullString
 
-	err := s.db.QueryRowContext(ctx, query, groupID).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&config.ID,
 		&nameStr,
 		&agentIDStr,
@@ -1595,8 +1851,16 @@ func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (
 }
 
 func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([]*types.Config, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT id, name, agent_id, group_id, config_hash, content, version, created_at FROM configs WHERE 1=1`
 	args := []interface{}{}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 
 	if filter.AgentID != nil {
 		query += ` AND agent_id = ?`
@@ -1661,16 +1925,26 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 // Saved query management
 func (s *Storage) CreateSavedQuery(ctx context.Context, query *types.SavedQuery) error {
 	tagsJSON, _ := json.Marshal(query.Tags)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `
-		INSERT INTO saved_queries (id, name, description, query, tags, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO saved_queries (id, name, description, query, tags, tenant_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := s.db.ExecContext(ctx, stmt,
+	_, err = s.db.ExecContext(ctx, stmt,
 		query.ID,
 		query.Name,
 		query.Description,
 		query.Query,
 		string(tagsJSON),
+		tenant,
 		query.CreatedAt,
 		query.UpdatedAt,
 	)
@@ -1682,10 +1956,19 @@ func (s *Storage) CreateSavedQuery(ctx context.Context, query *types.SavedQuery)
 }
 
 func (s *Storage) GetSavedQuery(ctx context.Context, id string) (*types.SavedQuery, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	stmt := `SELECT id, name, description, query, tags, created_at, updated_at FROM saved_queries WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	var sq types.SavedQuery
 	var tagsJSON sql.NullString
-	if err := s.db.QueryRowContext(ctx, stmt, id).Scan(&sq.ID, &sq.Name, &sq.Description, &sq.Query, &tagsJSON, &sq.CreatedAt, &sq.UpdatedAt); err != nil {
+	if err := s.db.QueryRowContext(ctx, stmt, args...).Scan(&sq.ID, &sq.Name, &sq.Description, &sq.Query, &tagsJSON, &sq.CreatedAt, &sq.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -1698,12 +1981,22 @@ func (s *Storage) GetSavedQuery(ctx context.Context, id string) (*types.SavedQue
 }
 
 func (s *Storage) ListSavedQueries(ctx context.Context) ([]*types.SavedQuery, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	stmt := `
 		SELECT id, name, description, query, tags, created_at, updated_at
-		FROM saved_queries
+		FROM saved_queries`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
 		ORDER BY updated_at DESC
 	`
-	rows, err := s.db.QueryContext(ctx, stmt)
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list saved queries: %w", err)
 	}
@@ -1727,19 +2020,28 @@ func (s *Storage) ListSavedQueries(ctx context.Context) ([]*types.SavedQuery, er
 
 func (s *Storage) UpdateSavedQuery(ctx context.Context, query *types.SavedQuery) error {
 	tagsJSON, _ := json.Marshal(query.Tags)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `
 		UPDATE saved_queries
 		SET name = ?, description = ?, query = ?, tags = ?, updated_at = ?
 		WHERE id = ?
 	`
-	result, err := s.db.ExecContext(ctx, stmt,
+	args := []any{
 		query.Name,
 		query.Description,
 		query.Query,
 		string(tagsJSON),
 		query.UpdatedAt,
 		query.ID,
-	)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update saved query: %w", err)
 	}
@@ -1751,8 +2053,17 @@ func (s *Storage) UpdateSavedQuery(ctx context.Context, query *types.SavedQuery)
 }
 
 func (s *Storage) DeleteSavedQuery(ctx context.Context, id string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `DELETE FROM saved_queries WHERE id = ?`
-	result, err := s.db.ExecContext(ctx, stmt, id)
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete saved query: %w", err)
 	}
@@ -1766,11 +2077,23 @@ func (s *Storage) DeleteSavedQuery(ctx context.Context, id string) error {
 // Alert rule management
 
 func (s *Storage) CreateAlertRule(ctx context.Context, rule *types.AlertRule) error {
+	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
+	// name) when this table is rebuilt — the name UNIQUE constraint is
+	// currently single-column, so two tenants can't yet share a rule name.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `
-		INSERT INTO alert_rules (id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO alert_rules (id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, tenant_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := s.db.ExecContext(ctx, stmt,
+	_, err = s.db.ExecContext(ctx, stmt,
 		rule.ID,
 		rule.Name,
 		rule.Description,
@@ -1781,6 +2104,7 @@ func (s *Storage) CreateAlertRule(ctx context.Context, rule *types.AlertRule) er
 		string(rule.Severity),
 		boolToInt(rule.Enabled),
 		rule.WebhookURL,
+		tenant,
 		rule.CreatedAt,
 		rule.UpdatedAt,
 	)
@@ -1792,11 +2116,20 @@ func (s *Storage) CreateAlertRule(ctx context.Context, rule *types.AlertRule) er
 }
 
 func (s *Storage) GetAlertRule(ctx context.Context, id string) (*types.AlertRule, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	stmt := `SELECT id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at FROM alert_rules WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	rule := &types.AlertRule{}
 	var op, severity string
 	var enabledInt int
-	if err := s.db.QueryRowContext(ctx, stmt, id).Scan(
+	if err := s.db.QueryRowContext(ctx, stmt, args...).Scan(
 		&rule.ID, &rule.Name, &rule.Description, &rule.Query,
 		&op, &rule.ThresholdValue, &rule.IntervalSeconds, &severity,
 		&enabledInt, &rule.WebhookURL, &rule.CreatedAt, &rule.UpdatedAt,
@@ -1813,8 +2146,18 @@ func (s *Storage) GetAlertRule(ctx context.Context, id string) (*types.AlertRule
 }
 
 func (s *Storage) ListAlertRules(ctx context.Context) ([]*types.AlertRule, error) {
-	stmt := `SELECT id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at FROM alert_rules ORDER BY name ASC`
-	rows, err := s.db.QueryContext(ctx, stmt)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at FROM alert_rules`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY name ASC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list alert rules: %w", err)
 	}
@@ -1841,19 +2184,28 @@ func (s *Storage) ListAlertRules(ctx context.Context) ([]*types.AlertRule, error
 }
 
 func (s *Storage) UpdateAlertRule(ctx context.Context, rule *types.AlertRule) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `
 		UPDATE alert_rules
 		SET name = ?, description = ?, query = ?, threshold_operator = ?, threshold_value = ?,
 		    interval_seconds = ?, severity = ?, enabled = ?, webhook_url = ?, updated_at = ?
 		WHERE id = ?
 	`
-	result, err := s.db.ExecContext(ctx, stmt,
+	args := []any{
 		rule.Name, rule.Description, rule.Query,
 		string(rule.ThresholdOperator), rule.ThresholdValue,
 		rule.IntervalSeconds, string(rule.Severity),
 		boolToInt(rule.Enabled), rule.WebhookURL,
 		rule.UpdatedAt, rule.ID,
-	)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update alert rule: %w", err)
 	}
@@ -1865,8 +2217,17 @@ func (s *Storage) UpdateAlertRule(ctx context.Context, rule *types.AlertRule) er
 }
 
 func (s *Storage) DeleteAlertRule(ctx context.Context, id string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `DELETE FROM alert_rules WHERE id = ?`
-	result, err := s.db.ExecContext(ctx, stmt, id)
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete alert rule: %w", err)
 	}
@@ -1898,9 +2259,19 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 			return fmt.Errorf("failed to marshal audit payload: %w", err)
 		}
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (background jobs write audit rows under
+		// WithSystemContext). TODO(3b'): per-owner tenant for system-context
+		// inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `
-		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
@@ -1908,7 +2279,7 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 	if e.Timestamp.IsZero() {
 		e.Timestamp = e.CreatedAt
 	}
-	_, err := s.db.ExecContext(ctx, stmt,
+	_, err = s.db.ExecContext(ctx, stmt,
 		e.ID,
 		e.Timestamp,
 		e.Actor,
@@ -1917,6 +2288,7 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		nullableString(e.TargetID),
 		e.Action,
 		string(payloadJSON),
+		tenant,
 		e.CreatedAt,
 	)
 	if err != nil {
@@ -1934,10 +2306,18 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		limit = maxAuditLimit
 	}
 
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// Build a parameterized query. We always add a LIMIT clause; the rest
 	// of the clauses are appended conditionally.
 	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE 1=1"
 	var args []any
+	if apply {
+		q += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	if filter.EventType != "" {
 		q += " AND event_type = ?"
 		args = append(args, filter.EventType)
@@ -2001,15 +2381,24 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 // GetAuditEvent fetches one audit row by ID. Returns (nil, nil) when no
 // row matches so the caller can render a 404 distinct from a 500.
 func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEvent, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE id = ?"
-	row := s.db.QueryRowContext(ctx, q, id)
+	args := []any{id}
+	if apply {
+		q += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, q, args...)
 
 	e := &types.AuditEvent{}
 	var targetID sql.NullString
 	var payload sql.NullString
 	var aiExplanation, aiModel sql.NullString
 	var aiGeneratedAt sql.NullTime
-	err := row.Scan(
+	err = row.Scan(
 		&e.ID, &e.Timestamp, &e.Actor, &e.EventType, &e.TargetType,
 		&targetID, &e.Action, &payload, &e.CreatedAt,
 		&aiExplanation, &aiModel, &aiGeneratedAt,
@@ -2043,8 +2432,17 @@ func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEve
 // row. The row stays otherwise immutable; this is the one mutation the
 // audit log allows. Returns an error if no row matches the supplied id.
 func (s *Storage) UpdateAuditEventExplanation(ctx context.Context, id, explanation, model string, generatedAt time.Time) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `UPDATE audit_events SET ai_explanation = ?, ai_explanation_model = ?, ai_explanation_generated_at = ? WHERE id = ?`
-	res, err := s.db.ExecContext(ctx, stmt, explanation, model, generatedAt, id)
+	args := []any{explanation, model, generatedAt, id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update audit explanation: %w", err)
 	}
@@ -2101,9 +2499,18 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		}
 		evidenceJSON = string(buf)
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -2144,6 +2551,8 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		// operators flip it later via the exclude-from-learning
 		// endpoint, which calls UpdateRollout.
 		boolToInt(r.ExcludeFromLearning),
+		// ADR 0011 slice 3b — tenant scope.
+		tenant,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create rollout: %w", err)
@@ -2155,8 +2564,17 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 // as ints, so the same helper handles rollouts.require_approval.
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE id = ?`
-	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, id))
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	r, err := s.scanRollout(s.db.QueryRowContext(ctx, stmt, args...))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -2172,8 +2590,16 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 		limit = 1000
 	}
 
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE 1=1"
 	var args []any
+	if apply {
+		q += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	if filter.GroupID != "" {
 		q += " AND group_id = ?"
 		args = append(args, filter.GroupID)
@@ -2233,16 +2659,27 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 	// excluded AI rollouts; the original v4 partial idx_ai_verdicts
 	// is preserved for back-compat with deployments that haven't
 	// completed the migration yet.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids
 		FROM rollouts
 		WHERE group_id = ?
 		  AND proposed_by = 'ai'
 		  AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)
 		  AND COALESCE(approved_at, rejected_at) >= ?
-		  AND exclude_from_learning = 0
+		  AND exclude_from_learning = 0`
+	args := []any{groupID, since}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
 		ORDER BY COALESCE(approved_at, rejected_at) DESC
 		LIMIT ?`
-	rows, err := s.db.QueryContext(ctx, stmt, groupID, since, limit)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list AI verdicts for group: %w", err)
 	}
@@ -2334,7 +2771,13 @@ func (s *Storage) ListDiscoveryVerdicts(
 	// JSON1 extension handles all four extracts as a single ranged
 	// scan thanks to the v7 partial index on
 	// (event_type, timestamp DESC).
-	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// ADR 0011: a tenant must not see another tenant's verdicts (even
+	// cross-cloud); AND the tenant predicate onto the base scope match.
+	stmt := `SELECT timestamp, event_type, payload FROM audit_events
 		WHERE event_type IN (?, ?)
 		  AND timestamp >= ?
 		  AND json_extract(payload, '$.connection_id') = ?
@@ -2342,16 +2785,22 @@ func (s *Storage) ListDiscoveryVerdicts(
 		       OR json_extract(payload, '$.project_id') = ?
 		       OR json_extract(payload, '$.subscription_id') = ?
 		       OR json_extract(payload, '$.tenancy_ocid') = ?)
-		  AND json_extract(payload, '$.region') = ?
-		ORDER BY timestamp DESC
-		LIMIT ?`
-	rows, err := s.db.QueryContext(ctx, stmt,
+		  AND json_extract(payload, '$.region') = ?`
+	args := []any{
 		"recommendation.pr_merged",
 		"recommendation.pr_closed_not_merged",
 		since,
 		connectionID, scopeID, scopeID, scopeID, scopeID, region,
-		limit,
-	)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
+		ORDER BY timestamp DESC
+		LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list discovery verdicts: %w", err)
 	}
@@ -2512,6 +2961,25 @@ func (s *Storage) SetRecommendationExclusion(
 	if rec.RecommendationKind == "" {
 		return false, fmt.Errorf("recommendation_kind required")
 	}
+	// ADR 0011 slice 3b — resolve the tenant scope. The reads/writes below
+	// are scoped so a tenant can't observe or mutate another tenant's
+	// verdict row. tenantPred is empty in the inert/system path.
+	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
+	// recommendation_id) when this table is rebuilt.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return false, err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
+	tenantPred := ""
+	var tenantArgs []any
+	if apply {
+		tenantPred = ` AND tenant_id = ?`
+		tenantArgs = append(tenantArgs, scopeTenant)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to begin tx: %w", err)
@@ -2526,8 +2994,8 @@ func (s *Storage) SetRecommendationExclusion(
 		prevExcluded bool
 	)
 	var existingExcluded sql.NullInt64
-	const selectStmt = `SELECT exclude_from_learning FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
-	if err := tx.QueryRowContext(ctx, selectStmt, rec.RecommendationID).Scan(&existingExcluded); err != nil {
+	selectStmt := `SELECT exclude_from_learning FROM iac_recommendation_verdicts WHERE recommendation_id = ?` + tenantPred
+	if err := tx.QueryRowContext(ctx, selectStmt, append([]any{rec.RecommendationID}, tenantArgs...)...).Scan(&existingExcluded); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return false, fmt.Errorf("failed to read prior exclusion: %w", err)
 		}
@@ -2550,8 +3018,8 @@ func (s *Storage) SetRecommendationExclusion(
 	if hadRow {
 		// Preserve the original created_at by reading it back. Cheap;
 		// the row is already loaded into the cache.
-		const cstmt = `SELECT created_at FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
-		if err := tx.QueryRowContext(ctx, cstmt, rec.RecommendationID).Scan(&createdAt); err != nil {
+		cstmt := `SELECT created_at FROM iac_recommendation_verdicts WHERE recommendation_id = ?` + tenantPred
+		if err := tx.QueryRowContext(ctx, cstmt, append([]any{rec.RecommendationID}, tenantArgs...)...).Scan(&createdAt); err != nil {
 			return false, fmt.Errorf("failed to read prior created_at: %w", err)
 		}
 	}
@@ -2584,8 +3052,8 @@ func (s *Storage) SetRecommendationExclusion(
 		// reading them back and writing them through.
 		var curAt sql.NullTime
 		var curBy sql.NullString
-		const stampStmt = `SELECT excluded_at, excluded_by FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
-		if err := tx.QueryRowContext(ctx, stampStmt, rec.RecommendationID).Scan(&curAt, &curBy); err != nil {
+		stampStmt := `SELECT excluded_at, excluded_by FROM iac_recommendation_verdicts WHERE recommendation_id = ?` + tenantPred
+		if err := tx.QueryRowContext(ctx, stampStmt, append([]any{rec.RecommendationID}, tenantArgs...)...).Scan(&curAt, &curBy); err != nil {
 			return false, fmt.Errorf("failed to read prior stamps: %w", err)
 		}
 		if curAt.Valid {
@@ -2599,8 +3067,8 @@ func (s *Storage) SetRecommendationExclusion(
 	const upsertStmt = `INSERT INTO iac_recommendation_verdicts (
 		recommendation_id, connection_id, account_id, region,
 		recommendation_kind, resource_id, exclude_from_learning,
-		excluded_at, excluded_by, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		excluded_at, excluded_by, created_at, updated_at, tenant_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(recommendation_id) DO UPDATE SET
 		connection_id         = excluded.connection_id,
 		account_id            = excluded.account_id,
@@ -2610,7 +3078,8 @@ func (s *Storage) SetRecommendationExclusion(
 		exclude_from_learning = excluded.exclude_from_learning,
 		excluded_at           = excluded.excluded_at,
 		excluded_by           = excluded.excluded_by,
-		updated_at            = excluded.updated_at`
+		updated_at            = excluded.updated_at,
+		tenant_id             = excluded.tenant_id`
 	var resourceID any
 	if rec.ResourceID != "" {
 		resourceID = rec.ResourceID
@@ -2627,6 +3096,7 @@ func (s *Storage) SetRecommendationExclusion(
 		stampBy,
 		createdAt,
 		now,
+		rowTenant,
 	); err != nil {
 		return false, fmt.Errorf("failed to upsert recommendation exclusion: %w", err)
 	}
@@ -2659,17 +3129,28 @@ func (s *Storage) ListExcludedRecommendations(
 	if connectionID == "" || accountID == "" || region == "" {
 		return nil, nil
 	}
-	const stmt = `SELECT recommendation_id, connection_id, account_id, region,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT recommendation_id, connection_id, account_id, region,
 		recommendation_kind, COALESCE(resource_id, ''),
 		excluded_at, COALESCE(excluded_by, '')
 		FROM iac_recommendation_verdicts
 		WHERE connection_id = ?
 		  AND account_id = ?
 		  AND region = ?
-		  AND exclude_from_learning = 1
+		  AND exclude_from_learning = 1`
+	args := []any{connectionID, accountID, region}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
 		ORDER BY excluded_at DESC
 		LIMIT ?`
-	rows, err := s.db.QueryContext(ctx, stmt, connectionID, accountID, region, limit)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list excluded recommendations: %w", err)
 	}
@@ -2742,6 +3223,24 @@ func (s *Storage) SetCheckRunForRecommendation(
 	if rec.RecommendationKind == "" {
 		return fmt.Errorf("recommendation_kind required")
 	}
+	// ADR 0011 slice 3b — tenant scope. The existence probe + UPDATE are
+	// tenant-scoped so a tenant can't touch another tenant's row; the
+	// INSERT stamps the row's tenant. TODO(ADR 0011 slice 3b'): conflict
+	// target must move to (tenant_id, recommendation_id) when rebuilt.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
+	tenantPred := ""
+	var tenantArgs []any
+	if apply {
+		tenantPred = ` AND tenant_id = ?`
+		tenantArgs = append(tenantArgs, scopeTenant)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
@@ -2753,9 +3252,9 @@ func (s *Storage) SetCheckRunForRecommendation(
 	// write structure under a transaction so the two methods race
 	// cleanly on the same recommendation_id.
 	var hadRow bool
-	const existsStmt = `SELECT 1 FROM iac_recommendation_verdicts WHERE recommendation_id = ?`
+	existsStmt := `SELECT 1 FROM iac_recommendation_verdicts WHERE recommendation_id = ?` + tenantPred
 	var one int
-	if err := tx.QueryRowContext(ctx, existsStmt, rec.RecommendationID).Scan(&one); err != nil {
+	if err := tx.QueryRowContext(ctx, existsStmt, append([]any{rec.RecommendationID}, tenantArgs...)...).Scan(&one); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("failed to read row presence: %w", err)
 		}
@@ -2795,7 +3294,7 @@ func (s *Storage) SetCheckRunForRecommendation(
 	}
 
 	if hadRow {
-		const upd = `UPDATE iac_recommendation_verdicts SET
+		upd := `UPDATE iac_recommendation_verdicts SET
 			check_run_owner       = ?,
 			check_run_repo        = ?,
 			check_run_id          = ?,
@@ -2804,11 +3303,12 @@ func (s *Storage) SetCheckRunForRecommendation(
 			check_run_conclusion  = ?,
 			check_run_updated_at  = ?,
 			updated_at            = ?
-		WHERE recommendation_id = ?`
-		if _, err := tx.ExecContext(ctx, upd,
+		WHERE recommendation_id = ?` + tenantPred
+		updArgs := append([]any{
 			owner, repo, checkID, headSHA, statusVal, conclusion_, now, now,
 			rec.RecommendationID,
-		); err != nil {
+		}, tenantArgs...)
+		if _, err := tx.ExecContext(ctx, upd, updArgs...); err != nil {
 			return fmt.Errorf("failed to update check run state: %w", err)
 		}
 	} else {
@@ -2830,9 +3330,9 @@ func (s *Storage) SetCheckRunForRecommendation(
 			check_run_owner, check_run_repo,
 			check_run_id, check_run_head_sha, check_run_status,
 			check_run_conclusion, check_run_updated_at,
-			created_at, updated_at
+			created_at, updated_at, tenant_id
 		) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL,
-		          ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if _, err := tx.ExecContext(ctx, ins,
 			rec.RecommendationID,
 			rec.ConnectionID,
@@ -2842,7 +3342,7 @@ func (s *Storage) SetCheckRunForRecommendation(
 			resourceID,
 			owner, repo,
 			checkID, headSHA, statusVal, conclusion_, now,
-			now, now,
+			now, now, rowTenant,
 		); err != nil {
 			return fmt.Errorf("failed to insert check run state: %w", err)
 		}
@@ -2877,7 +3377,11 @@ func (s *Storage) GetCheckRunForRecommendation(
 	if recommendationID == "" {
 		return types.CheckRunRef{}, "", "", false, fmt.Errorf("recommendation_id required")
 	}
-	const stmt = `SELECT
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return types.CheckRunRef{}, "", "", false, err
+	}
+	stmt := `SELECT
 		COALESCE(check_run_owner, ''),
 		COALESCE(check_run_repo, ''),
 		COALESCE(check_run_id, 0),
@@ -2886,12 +3390,17 @@ func (s *Storage) GetCheckRunForRecommendation(
 		COALESCE(check_run_conclusion, '')
 		FROM iac_recommendation_verdicts
 		WHERE recommendation_id = ?`
+	args := []any{recommendationID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	var (
 		ref        types.CheckRunRef
 		status     string
 		conclusion string
 	)
-	if err := s.db.QueryRowContext(ctx, stmt, recommendationID).Scan(
+	if err := s.db.QueryRowContext(ctx, stmt, args...).Scan(
 		&ref.Owner,
 		&ref.Repo,
 		&ref.CheckID,
@@ -2992,19 +3501,40 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	// the other writer. Legacy callers that leave Version==0 take the blind
 	// last-write-wins path (still advancing the column so CAS has meaningful
 	// values once callers opt in) — behavior is unchanged for them.
+	// ADR 0011 slice 3b — add the tenant predicate to BOTH the CAS and the
+	// legacy WHERE so a tenant can't mutate (or version-race) another
+	// tenant's rollout row. tenantPred / tenantArgs are empty in the
+	// system/inert path.
+	tenant, apply, tErr := tenantScope(ctx)
+	if tErr != nil {
+		return tErr
+	}
+	tenantPred := ""
+	var tenantArgs []any
+	if apply {
+		tenantPred = ` AND tenant_id = ?`
+		tenantArgs = append(tenantArgs, tenant)
+	}
+
 	if r.Version > 0 {
 		newVersion := r.Version + 1
-		stmt := setClause + `, version = ? WHERE id = ? AND version = ?`
+		stmt := setClause + `, version = ? WHERE id = ? AND version = ?` + tenantPred
 		args := append(append([]any{}, setArgs...), newVersion, r.ID, r.Version)
+		args = append(args, tenantArgs...)
 		res, err := s.db.ExecContext(ctx, stmt, args...)
 		if err != nil {
 			return fmt.Errorf("failed to update rollout: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			// Zero rows means either the id is gone or another writer moved
-			// the version on. Disambiguate so callers get the right signal.
+			// Zero rows means either the id is gone (for this tenant) or
+			// another writer moved the version on. Disambiguate so callers
+			// get the right signal. The existence probe is tenant-scoped too
+			// so a cross-tenant id reads as not-found, not a version
+			// conflict.
+			existsStmt := `SELECT 1 FROM rollouts WHERE id = ?` + tenantPred
+			existsArgs := append([]any{r.ID}, tenantArgs...)
 			var one int
-			switch qerr := s.db.QueryRowContext(ctx, `SELECT 1 FROM rollouts WHERE id = ?`, r.ID).Scan(&one); qerr {
+			switch qerr := s.db.QueryRowContext(ctx, existsStmt, existsArgs...).Scan(&one); qerr {
 			case sql.ErrNoRows:
 				return fmt.Errorf("rollout not found: %s", r.ID)
 			case nil:
@@ -3017,8 +3547,9 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		return nil
 	}
 
-	stmt := setClause + `, version = version + 1 WHERE id = ?`
+	stmt := setClause + `, version = version + 1 WHERE id = ?` + tenantPred
 	args := append(append([]any{}, setArgs...), r.ID)
+	args = append(args, tenantArgs...)
 	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update rollout: %w", err)
@@ -3205,12 +3736,24 @@ func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
 	if err != nil {
 		return err
 	}
-	// ADR 0011: persist the token's tenant. Empty defaults to the OSS single
-	// tenant so pre-3a callers (which never set TenantID) keep inserting into
-	// 'default' — matching the column DEFAULT and the enterprise backfill.
+	// ADR 0011: persist the token's tenant. The token's own TenantID is
+	// authoritative (a token authenticates INTO a specific tenant). When
+	// the caller didn't set it, fall back to the request's tenant context
+	// (slice 3b) rather than a bare "default" — so a tenant-scoped caller
+	// mints tokens into its own tenant. In the OSS/inert path the context
+	// tenant resolves to "default", matching the pre-3b behavior and the
+	// column DEFAULT.
 	tenantID := t.TenantID
 	if tenantID == "" {
-		tenantID = "default"
+		scopeTenant, apply, err := tenantScope(ctx)
+		if err != nil {
+			return err
+		}
+		if apply {
+			tenantID = scopeTenant
+		} else {
+			tenantID = identity.DefaultTenant
+		}
 	}
 	stmt := `
 		INSERT INTO api_tokens (id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at, tenant_id)
@@ -3259,12 +3802,22 @@ func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.AP
 // Revoked tokens stay in the list so the UI can show a full history and
 // audit consumers can still resolve old token IDs to labels.
 func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	stmt := `
 		SELECT id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at, tenant_id
-		FROM api_tokens
+		FROM api_tokens`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
 		ORDER BY created_at DESC
 	`
-	rows, err := s.db.QueryContext(ctx, stmt)
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list api tokens: %w", err)
 	}
@@ -3329,8 +3882,17 @@ func unmarshalScopes(s string) []string {
 // error. Concurrent-update races resolve as "newest write wins", which
 // is fine since the column is only used for display.
 func (s *Storage) UpdateAPITokenLastUsed(ctx context.Context, id string, at time.Time) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `UPDATE api_tokens SET last_used_at = ? WHERE id = ?`
-	_, err := s.db.ExecContext(ctx, stmt, at, id)
+	args := []any{at, id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	_, err = s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update api token last_used_at: %w", err)
 	}
@@ -3341,8 +3903,17 @@ func (s *Storage) UpdateAPITokenLastUsed(ctx context.Context, id string, at time
 // keep their original revoked_at — there's no point re-stamping a
 // revocation that already happened.
 func (s *Storage) RevokeAPIToken(ctx context.Context, id string, at time.Time) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`
-	res, err := s.db.ExecContext(ctx, stmt, at, id)
+	args := []any{at, id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to revoke api token: %w", err)
 	}
@@ -3378,13 +3949,25 @@ func (s *Storage) DismissRecommendation(ctx context.Context, d *types.Recommenda
 	if by == "" {
 		by = "system"
 	}
-	stmt := `INSERT INTO recommendation_dismissals (recommendation_id, dismissed_at, dismissed_by, reason)
-	         VALUES (?, ?, ?, ?)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
+	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
+	// recommendation_id) when this table is rebuilt.
+	stmt := `INSERT INTO recommendation_dismissals (recommendation_id, dismissed_at, dismissed_by, reason, tenant_id)
+	         VALUES (?, ?, ?, ?, ?)
 	         ON CONFLICT(recommendation_id) DO UPDATE SET
 	             dismissed_at = excluded.dismissed_at,
 	             dismissed_by = excluded.dismissed_by,
-	             reason       = excluded.reason`
-	if _, err := s.db.ExecContext(ctx, stmt, d.RecommendationID, when, by, d.Reason); err != nil {
+	             reason       = excluded.reason,
+	             tenant_id    = excluded.tenant_id`
+	if _, err := s.db.ExecContext(ctx, stmt, d.RecommendationID, when, by, d.Reason, tenant); err != nil {
 		return fmt.Errorf("failed to dismiss recommendation: %w", err)
 	}
 	return nil
@@ -3396,9 +3979,17 @@ func (s *Storage) RestoreRecommendation(ctx context.Context, recommendationID st
 	if recommendationID == "" {
 		return fmt.Errorf("recommendation_id required")
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM recommendation_dismissals WHERE recommendation_id = ?`,
-		recommendationID); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM recommendation_dismissals WHERE recommendation_id = ?`
+	args := []any{recommendationID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("failed to restore recommendation: %w", err)
 	}
 	return nil
@@ -3411,10 +4002,18 @@ func (s *Storage) IsRecommendationDismissed(ctx context.Context, recommendationI
 	if recommendationID == "" {
 		return false, nil
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return false, err
+	}
+	stmt := `SELECT COUNT(*) FROM recommendation_dismissals WHERE recommendation_id = ?`
+	args := []any{recommendationID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	var n int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM recommendation_dismissals WHERE recommendation_id = ?`,
-		recommendationID).Scan(&n)
+	err = s.db.QueryRowContext(ctx, stmt, args...).Scan(&n)
 	if err != nil {
 		return false, fmt.Errorf("failed to check dismissal: %w", err)
 	}
@@ -3425,10 +4024,19 @@ func (s *Storage) IsRecommendationDismissed(ctx context.Context, recommendationI
 // Cheap because operators only ever accumulate dozens of these in
 // practice — not paginated for v0.25.
 func (s *Storage) ListRecommendationDismissals(ctx context.Context) ([]*types.RecommendationDismissal, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT recommendation_id, dismissed_at, dismissed_by, COALESCE(reason, '')
-		 FROM recommendation_dismissals
-		 ORDER BY dismissed_at DESC`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT recommendation_id, dismissed_at, dismissed_by, COALESCE(reason, '')
+		 FROM recommendation_dismissals`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY dismissed_at DESC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list dismissals: %w", err)
 	}
@@ -3464,21 +4072,30 @@ func (s *Storage) CreateRecommendationOutcome(ctx context.Context, o *types.Reco
 	if o.AppliedBy == "" {
 		o.AppliedBy = "system"
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `INSERT INTO recommendation_outcomes
 		(id, recommendation_id, applied_at, applied_by, title, category,
 		 signal, attribute_key, baseline_bytes_per_hour,
 		 est_savings_per_month_usd_at_apply, last_observed_bytes_per_hour,
-		 last_observed_at, realized_savings_per_month_usd, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 last_observed_at, realized_savings_per_month_usd, status, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var lastObs interface{}
 	if !o.LastObservedAt.IsZero() {
 		lastObs = o.LastObservedAt
 	}
-	_, err := s.db.ExecContext(ctx, stmt,
+	_, err = s.db.ExecContext(ctx, stmt,
 		o.ID, o.RecommendationID, o.AppliedAt, o.AppliedBy, o.Title, o.Category,
 		o.Signal, o.AttributeKey, o.BaselineBytesPerHour,
 		o.EstSavingsPerMonthUSDAtApply, o.LastObservedBytesPerHour,
-		lastObs, o.RealizedSavingsPerMonthUSD, o.Status)
+		lastObs, o.RealizedSavingsPerMonthUSD, o.Status, tenant)
 	if err != nil {
 		return fmt.Errorf("failed to create recommendation outcome: %w", err)
 	}
@@ -3495,15 +4112,25 @@ func (s *Storage) UpdateRecommendationOutcome(ctx context.Context, o *types.Reco
 	if o == nil || o.ID == "" {
 		return fmt.Errorf("id required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `UPDATE recommendation_outcomes SET
 		last_observed_bytes_per_hour = ?,
 		last_observed_at = ?,
 		realized_savings_per_month_usd = ?,
 		status = ?
 		WHERE id = ?`
-	_, err := s.db.ExecContext(ctx, stmt,
+	args := []any{
 		o.LastObservedBytesPerHour, o.LastObservedAt,
-		o.RealizedSavingsPerMonthUSD, o.Status, o.ID)
+		o.RealizedSavingsPerMonthUSD, o.Status, o.ID,
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	_, err = s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update outcome: %w", err)
 	}
@@ -3514,13 +4141,22 @@ func (s *Storage) UpdateRecommendationOutcome(ctx context.Context, o *types.Reco
 // newest applies first. Small table in practice; no pagination
 // concern at the v0.28 scale.
 func (s *Storage) ListRecommendationOutcomes(ctx context.Context) ([]*types.RecommendationOutcome, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, recommendation_id, applied_at, applied_by, title, category,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT id, recommendation_id, applied_at, applied_by, title, category,
 		        signal, attribute_key, baseline_bytes_per_hour,
 		        est_savings_per_month_usd_at_apply, last_observed_bytes_per_hour,
 		        last_observed_at, realized_savings_per_month_usd, status
-		 FROM recommendation_outcomes
-		 ORDER BY applied_at DESC`)
+		 FROM recommendation_outcomes`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY applied_at DESC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list outcomes: %w", err)
 	}
@@ -3566,16 +4202,26 @@ func (s *Storage) CreateCostSpikeEvent(ctx context.Context, e *types.CostSpikeEv
 	if e.Severity == "" {
 		e.Severity = "warn"
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (the cost-spike detector runs under
+		// WithSystemContext). TODO(3b'): per-owner tenant for system-context
+		// inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `INSERT INTO cost_spike_events
 		(id, started_at, ended_at, severity, signal,
 		 baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
-		 attribution_json, acknowledged_at, acknowledged_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := s.db.ExecContext(ctx, stmt,
+		 attribution_json, acknowledged_at, acknowledged_by, tenant_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = s.db.ExecContext(ctx, stmt,
 		e.ID, e.StartedAt.UTC(), nullableTime(e.EndedAt),
 		e.Severity, e.Signal, e.BaselineMonthlyUSD, e.PeakMonthlyUSD,
 		e.PeakPctAboveBaseline, e.AttributionJSON,
-		nullableTime(e.AcknowledgedAt), e.AcknowledgedBy)
+		nullableTime(e.AcknowledgedAt), e.AcknowledgedBy, tenant)
 	if err != nil {
 		return fmt.Errorf("failed to create cost spike event: %w", err)
 	}
@@ -3589,17 +4235,27 @@ func (s *Storage) UpdateCostSpikeEvent(ctx context.Context, e *types.CostSpikeEv
 	if e == nil || e.ID == "" {
 		return fmt.Errorf("id required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	stmt := `UPDATE cost_spike_events SET
 		ended_at = ?, severity = ?, signal = ?,
 		baseline_monthly_usd = ?, peak_monthly_usd = ?,
 		peak_pct_above_baseline = ?, attribution_json = ?,
 		acknowledged_at = ?, acknowledged_by = ?
 		WHERE id = ?`
-	_, err := s.db.ExecContext(ctx, stmt,
+	args := []any{
 		nullableTime(e.EndedAt), e.Severity, e.Signal,
 		e.BaselineMonthlyUSD, e.PeakMonthlyUSD, e.PeakPctAboveBaseline,
 		e.AttributionJSON, nullableTime(e.AcknowledgedAt),
-		e.AcknowledgedBy, e.ID)
+		e.AcknowledgedBy, e.ID,
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	_, err = s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update cost spike event: %w", err)
 	}
@@ -3608,11 +4264,21 @@ func (s *Storage) UpdateCostSpikeEvent(ctx context.Context, e *types.CostSpikeEv
 
 // GetCostSpikeEvent returns one spike by id, or nil if not found.
 func (s *Storage) GetCostSpikeEvent(ctx context.Context, id string) (*types.CostSpikeEvent, error) {
-	row := s.db.QueryRowContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, started_at, ended_at, severity, signal,
 		       baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
 		       attribution_json, acknowledged_at, acknowledged_by
-		FROM cost_spike_events WHERE id = ?`, id)
+		FROM cost_spike_events WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	e := &types.CostSpikeEvent{}
 	var endedAt, ackAt sql.NullTime
 	if err := row.Scan(&e.ID, &e.StartedAt, &endedAt, &e.Severity, &e.Signal,
@@ -3635,21 +4301,30 @@ func (s *Storage) GetCostSpikeEvent(ctx context.Context, id string) (*types.Cost
 // ListCostSpikeEvents returns events newest-first. Filter.Status
 // scopes to open/closed/all (default all).
 func (s *Storage) ListCostSpikeEvents(ctx context.Context, filter types.CostSpikeFilter) ([]*types.CostSpikeEvent, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := `SELECT id, started_at, ended_at, severity, signal,
 		       baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
 		       attribution_json, acknowledged_at, acknowledged_by
-		FROM cost_spike_events`
+		FROM cost_spike_events WHERE 1=1`
+	var args []any
+	if apply {
+		q += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	switch filter.Status {
 	case "open":
-		q += " WHERE ended_at IS NULL"
+		q += " AND ended_at IS NULL"
 	case "closed":
-		q += " WHERE ended_at IS NOT NULL"
+		q += " AND ended_at IS NOT NULL"
 	}
 	q += " ORDER BY started_at DESC"
 	if filter.Limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", filter.Limit)
 	}
-	rows, err := s.db.QueryContext(ctx, q)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list cost spike events: %w", err)
 	}
@@ -3677,13 +4352,23 @@ func (s *Storage) ListCostSpikeEvents(ctx context.Context, filter types.CostSpik
 // LatestOpenCostSpike returns the newest spike with no ended_at,
 // or nil if none. The detector uses it to decide append-vs-create.
 func (s *Storage) LatestOpenCostSpike(ctx context.Context) (*types.CostSpikeEvent, error) {
-	row := s.db.QueryRowContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, started_at, ended_at, severity, signal,
 		       baseline_monthly_usd, peak_monthly_usd, peak_pct_above_baseline,
 		       attribution_json, acknowledged_at, acknowledged_by
 		FROM cost_spike_events
-		WHERE ended_at IS NULL
-		ORDER BY started_at DESC LIMIT 1`)
+		WHERE ended_at IS NULL`
+	var args []any
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY started_at DESC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	e := &types.CostSpikeEvent{}
 	var endedAt, ackAt sql.NullTime
 	if err := row.Scan(&e.ID, &e.StartedAt, &endedAt, &e.Severity, &e.Signal,
@@ -3719,16 +4404,28 @@ func (s *Storage) UpsertExpectedAgent(ctx context.Context, e *types.ExpectedAgen
 	}
 	e.UpdatedAt = time.Now().UTC()
 	labelsJSON, _ := json.Marshal(e.Labels)
-	stmt := `INSERT INTO expected_agents (hostname, labels_json, source, expected_since, updated_at, notes)
-		VALUES (?, ?, ?, ?, ?, ?)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
+	// TODO(ADR 0011 slice 3b'): conflict target must move to (tenant_id,
+	// hostname) when this table is rebuilt.
+	stmt := `INSERT INTO expected_agents (hostname, labels_json, source, expected_since, updated_at, notes, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(hostname) DO UPDATE SET
 			labels_json = excluded.labels_json,
 			source = excluded.source,
 			updated_at = excluded.updated_at,
-			notes = excluded.notes`
+			notes = excluded.notes,
+			tenant_id = excluded.tenant_id`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		e.Hostname, string(labelsJSON), e.Source,
-		e.ExpectedSince.UTC(), e.UpdatedAt.UTC(), e.Notes); err != nil {
+		e.ExpectedSince.UTC(), e.UpdatedAt.UTC(), e.Notes, tenant); err != nil {
 		return fmt.Errorf("failed to upsert expected agent: %w", err)
 	}
 	return nil
@@ -3741,8 +4438,17 @@ func (s *Storage) DeleteExpectedAgent(ctx context.Context, hostname string) erro
 	if hostname == "" {
 		return fmt.Errorf("hostname required")
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM expected_agents WHERE hostname = ?`, hostname); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM expected_agents WHERE hostname = ?`
+	args := []any{hostname}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("failed to delete expected agent: %w", err)
 	}
 	return nil
@@ -3751,10 +4457,18 @@ func (s *Storage) DeleteExpectedAgent(ctx context.Context, hostname string) erro
 // ListExpectedAgents returns every expected entry, optionally
 // filtered to one source pipeline. An empty source returns all.
 func (s *Storage) ListExpectedAgents(ctx context.Context, source string) ([]*types.ExpectedAgent, error) {
-	q := `SELECT hostname, labels_json, source, expected_since, updated_at, notes FROM expected_agents`
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT hostname, labels_json, source, expected_since, updated_at, notes FROM expected_agents WHERE 1=1`
 	args := []interface{}{}
+	if apply {
+		q += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	if source != "" {
-		q += ` WHERE source = ?`
+		q += ` AND source = ?`
 		args = append(args, source)
 	}
 	q += ` ORDER BY hostname`
@@ -3787,21 +4501,39 @@ func (s *Storage) ReplaceExpectedAgentsForSource(ctx context.Context, source str
 	if source == "" {
 		return fmt.Errorf("source required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	rowTenant := tenant
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		rowTenant = identity.DefaultTenant
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM expected_agents WHERE source = ?`, source); err != nil {
+	// Delete only THIS tenant's rows for the source (when scoped) so the
+	// bulk-rotate can't wipe another tenant's inventory for the same
+	// pipeline name.
+	delStmt := `DELETE FROM expected_agents WHERE source = ?`
+	delArgs := []any{source}
+	if apply {
+		delStmt += ` AND tenant_id = ?`
+		delArgs = append(delArgs, tenant)
+	}
+	if _, err := tx.ExecContext(ctx, delStmt, delArgs...); err != nil {
 		return fmt.Errorf("delete by source: %w", err)
 	}
 
 	prepared, err := tx.PrepareContext(ctx,
 		`INSERT OR REPLACE INTO expected_agents
-			(hostname, labels_json, source, expected_since, updated_at, notes)
-			VALUES (?, ?, ?, ?, ?, ?)`)
+			(hostname, labels_json, source, expected_since, updated_at, notes, tenant_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -3819,7 +4551,7 @@ func (s *Storage) ReplaceExpectedAgentsForSource(ctx context.Context, source str
 		}
 		if _, err := prepared.ExecContext(ctx,
 			e.Hostname, string(labelsJSON), source,
-			expected.UTC(), now, e.Notes); err != nil {
+			expected.UTC(), now, e.Notes, rowTenant); err != nil {
 			return fmt.Errorf("insert %s: %w", e.Hostname, err)
 		}
 	}
@@ -3852,15 +4584,24 @@ func (s *Storage) CreateDeployTarget(ctx context.Context, t *types.DeployTarget)
 	}
 	t.UpdatedAt = now
 	inputsJSON, _ := json.Marshal(t.DefaultInputs)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `INSERT INTO deploy_targets (
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
-		config_id, inventory_path, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		config_id, inventory_path, tenant_id, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		t.ID, t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo,
 		t.GitHubWorkflow, t.GitHubBranch, t.EncryptedCredential,
-		string(inputsJSON), t.ConfigID, t.InventoryPath,
+		string(inputsJSON), t.ConfigID, t.InventoryPath, tenant,
 		t.CreatedAt.UTC(), t.UpdatedAt.UTC(),
 	); err != nil {
 		return fmt.Errorf("failed to create deploy target: %w", err)
@@ -3874,29 +4615,47 @@ func (s *Storage) UpdateDeployTarget(ctx context.Context, t *types.DeployTarget)
 	}
 	t.UpdatedAt = time.Now().UTC()
 	inputsJSON, _ := json.Marshal(t.DefaultInputs)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	tenantPred := ""
+	var tenantArgs []any
+	if apply {
+		tenantPred = ` AND tenant_id = ?`
+		tenantArgs = append(tenantArgs, tenant)
+	}
 	// Only update the credential when it's been re-supplied. The
 	// "leave the existing credential alone" path is critical so the
 	// UI can render edit forms without round-tripping the secret.
 	if len(t.EncryptedCredential) > 0 {
+		args := []any{
+			t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
+			t.GitHubBranch, t.EncryptedCredential, string(inputsJSON), t.ConfigID,
+			t.InventoryPath, t.UpdatedAt.UTC(), t.ID,
+		}
+		args = append(args, tenantArgs...)
 		_, err := s.db.ExecContext(ctx, `UPDATE deploy_targets SET
 			name = ?, provider = ?, github_owner = ?, github_repo = ?, github_workflow = ?,
 			github_branch = ?, encrypted_credential = ?, default_inputs_json = ?,
-			config_id = ?, inventory_path = ?, updated_at = ? WHERE id = ?`,
-			t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
-			t.GitHubBranch, t.EncryptedCredential, string(inputsJSON), t.ConfigID,
-			t.InventoryPath, t.UpdatedAt.UTC(), t.ID)
+			config_id = ?, inventory_path = ?, updated_at = ? WHERE id = ?`+tenantPred,
+			args...)
 		if err != nil {
 			return fmt.Errorf("update deploy target (with credential): %w", err)
 		}
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE deploy_targets SET
-		name = ?, provider = ?, github_owner = ?, github_repo = ?, github_workflow = ?,
-		github_branch = ?, default_inputs_json = ?,
-		config_id = ?, inventory_path = ?, updated_at = ? WHERE id = ?`,
+	args := []any{
 		t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
 		t.GitHubBranch, string(inputsJSON), t.ConfigID,
-		t.InventoryPath, t.UpdatedAt.UTC(), t.ID)
+		t.InventoryPath, t.UpdatedAt.UTC(), t.ID,
+	}
+	args = append(args, tenantArgs...)
+	_, err = s.db.ExecContext(ctx, `UPDATE deploy_targets SET
+		name = ?, provider = ?, github_owner = ?, github_repo = ?, github_workflow = ?,
+		github_branch = ?, default_inputs_json = ?,
+		config_id = ?, inventory_path = ?, updated_at = ? WHERE id = ?`+tenantPred,
+		args...)
 	if err != nil {
 		return fmt.Errorf("update deploy target: %w", err)
 	}
@@ -3907,11 +4666,21 @@ func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.Deploy
 	if id == "" {
 		return nil, fmt.Errorf("id required")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
 		config_id, inventory_path, created_at, updated_at
-		FROM deploy_targets WHERE id = ?`, id)
+		FROM deploy_targets WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	t := &types.DeployTarget{}
 	var inputsJSON string
 	var cred []byte
@@ -3932,11 +4701,22 @@ func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.Deploy
 }
 
 func (s *Storage) ListDeployTargets(ctx context.Context) ([]*types.DeployTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
 		config_id, inventory_path, created_at, updated_at
-		FROM deploy_targets ORDER BY name`)
+		FROM deploy_targets`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY name`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list deploy targets: %w", err)
 	}
@@ -3968,8 +4748,17 @@ func (s *Storage) DeleteDeployTarget(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("id required")
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM deploy_targets WHERE id = ?`, id); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM deploy_targets WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("delete deploy target: %w", err)
 	}
 	return nil
@@ -3993,15 +4782,24 @@ func (s *Storage) CreateDeployRun(ctx context.Context, r *types.DeployRun) error
 	}
 	inputsJSON, _ := json.Marshal(r.Inputs)
 	hostsJSON, _ := json.Marshal(r.ExpectedHosts)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
 	stmt := `INSERT INTO deploy_runs (
 		id, target_id, requested_by, requested_at, inputs_json,
 		github_run_id, github_run_url, status, conclusion, completed_at,
-		expected_hosts_json, verification_state, verified_at, notes
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := s.db.ExecContext(ctx, stmt,
+		expected_hosts_json, verification_state, verified_at, notes, tenant_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.TargetID, r.RequestedBy, r.RequestedAt.UTC(), string(inputsJSON),
 		r.GitHubRunID, r.GitHubRunURL, r.Status, r.Conclusion, nullableTime(r.CompletedAt),
-		string(hostsJSON), r.VerificationState, nullableTime(r.VerifiedAt), r.Notes,
+		string(hostsJSON), r.VerificationState, nullableTime(r.VerifiedAt), r.Notes, tenant,
 	)
 	if err != nil {
 		return fmt.Errorf("create deploy run: %w", err)
@@ -4021,14 +4819,25 @@ func (s *Storage) UpdateDeployRun(ctx context.Context, r *types.DeployRun) error
 	}
 	inputsJSON, _ := json.Marshal(r.Inputs)
 	hostsJSON, _ := json.Marshal(r.ExpectedHosts)
-	_, err := s.db.ExecContext(ctx, `UPDATE deploy_runs SET
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `UPDATE deploy_runs SET
 		inputs_json = ?, github_run_id = ?, github_run_url = ?, status = ?,
 		conclusion = ?, completed_at = ?, expected_hosts_json = ?,
 		verification_state = ?, verified_at = ?, notes = ?
-		WHERE id = ?`,
+		WHERE id = ?`
+	args := []any{
 		string(inputsJSON), r.GitHubRunID, r.GitHubRunURL, r.Status,
 		r.Conclusion, nullableTime(r.CompletedAt), string(hostsJSON),
-		r.VerificationState, nullableTime(r.VerifiedAt), r.Notes, r.ID)
+		r.VerificationState, nullableTime(r.VerifiedAt), r.Notes, r.ID,
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	_, err = s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update deploy run: %w", err)
 	}
@@ -4039,11 +4848,21 @@ func (s *Storage) GetDeployRun(ctx context.Context, id string) (*types.DeployRun
 	if id == "" {
 		return nil, fmt.Errorf("id required")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT
 		id, target_id, requested_by, requested_at, inputs_json,
 		github_run_id, github_run_url, status, conclusion, completed_at,
 		expected_hosts_json, verification_state, verified_at, notes
-		FROM deploy_runs WHERE id = ?`, id)
+		FROM deploy_runs WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	r := &types.DeployRun{}
 	var inputsJSON, hostsJSON string
 	var completedAt, verifiedAt sql.NullTime
@@ -4073,12 +4892,20 @@ func (s *Storage) GetDeployRun(ctx context.Context, id string) (*types.DeployRun
 }
 
 func (s *Storage) ListDeployRuns(ctx context.Context, filter types.DeployRunFilter) ([]*types.DeployRun, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := `SELECT
 		id, target_id, requested_by, requested_at, inputs_json,
 		github_run_id, github_run_url, status, conclusion, completed_at,
 		expected_hosts_json, verification_state, verified_at, notes
 		FROM deploy_runs WHERE 1=1`
 	args := []interface{}{}
+	if apply {
+		q += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	if filter.TargetID != "" {
 		q += " AND target_id = ?"
 		args = append(args, filter.TargetID)
@@ -4157,15 +4984,24 @@ func (s *Storage) CreateSiemDestination(ctx context.Context, d *types.SiemDestin
 	if prefixes == "" {
 		prefixes = "[]"
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (rare). TODO(3b'): per-owner tenant for
+		// system-context inserts.
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO siem_destinations (
 			id, name, type, url, secret, enabled, event_type_prefixes_json,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			tenant_id, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		d.ID, d.Name, d.Type, d.URL, d.Secret,
 		boolToInt(d.Enabled), prefixes,
-		d.CreatedAt, d.UpdatedAt,
+		tenant, d.CreatedAt, d.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create siem destination: %w", err)
@@ -4174,11 +5010,20 @@ func (s *Storage) CreateSiemDestination(ctx context.Context, d *types.SiemDestin
 }
 
 func (s *Storage) GetSiemDestination(ctx context.Context, id string) (*types.SiemDestination, error) {
-	row := s.db.QueryRowContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, name, type, url, secret, enabled, event_type_prefixes_json,
 		       last_event_sent_at, last_error, last_error_at, created_at, updated_at
-		FROM siem_destinations WHERE id = ?
-	`, id)
+		FROM siem_destinations WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	d, err := scanSiemDestination(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -4187,11 +5032,21 @@ func (s *Storage) GetSiemDestination(ctx context.Context, id string) (*types.Sie
 }
 
 func (s *Storage) ListSiemDestinations(ctx context.Context) ([]*types.SiemDestination, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, name, type, url, secret, enabled, event_type_prefixes_json,
 		       last_event_sent_at, last_error, last_error_at, created_at, updated_at
-		FROM siem_destinations ORDER BY name
-	`)
+		FROM siem_destinations`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY name`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list siem destinations: %w", err)
 	}
@@ -4213,15 +5068,24 @@ func (s *Storage) UpdateSiemDestination(ctx context.Context, d *types.SiemDestin
 	if prefixes == "" {
 		prefixes = "[]"
 	}
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `
 		UPDATE siem_destinations
 		SET name = ?, type = ?, url = ?, secret = ?, enabled = ?,
 		    event_type_prefixes_json = ?, updated_at = ?
-		WHERE id = ?
-	`,
+		WHERE id = ?`
+	args := []any{
 		d.Name, d.Type, d.URL, d.Secret, boolToInt(d.Enabled),
 		prefixes, d.UpdatedAt, d.ID,
-	)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update siem destination: %w", err)
 	}
@@ -4232,7 +5096,17 @@ func (s *Storage) UpdateSiemDestination(ctx context.Context, d *types.SiemDestin
 }
 
 func (s *Storage) DeleteSiemDestination(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM siem_destinations WHERE id = ?`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM siem_destinations WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete siem destination: %w", err)
 	}
@@ -4247,11 +5121,20 @@ func (s *Storage) DeleteSiemDestination(ctx context.Context, id string) error {
 // dispatcher's writes don't race with an operator editing the URL
 // or secret at the same moment.
 func (s *Storage) UpdateSiemDestinationStatus(ctx context.Context, id string, sentAt *time.Time, errMsg string, errAt *time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `
 		UPDATE siem_destinations
 		SET last_event_sent_at = ?, last_error = ?, last_error_at = ?
-		WHERE id = ?
-	`, sentAt, nullableString(errMsg), errAt, id)
+		WHERE id = ?`
+	args := []any{sentAt, nullableString(errMsg), errAt, id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	_, err = s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update siem destination status: %w", err)
 	}
@@ -4330,22 +5213,34 @@ func (s *Storage) ListCrossScopeDiscoveryVerdicts(
 	// keys). Keyed on SCOPE, not connection: one IaC repo serves PRs for
 	// multiple clouds, so a cross-cloud verdict can share the current
 	// connection_id and must still surface.
-	const stmt = `SELECT timestamp, event_type, payload FROM audit_events
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// ADR 0011: a tenant must not see another tenant's verdicts, even
+	// cross-cloud; AND the tenant predicate onto the cross-scope match.
+	stmt := `SELECT timestamp, event_type, payload FROM audit_events
 		WHERE event_type IN (?, ?)
 		  AND timestamp >= ?
 		  AND COALESCE(json_extract(payload, '$.account_id'), '') != ?
 		  AND COALESCE(json_extract(payload, '$.project_id'), '') != ?
 		  AND COALESCE(json_extract(payload, '$.subscription_id'), '') != ?
-		  AND COALESCE(json_extract(payload, '$.tenancy_ocid'), '') != ?
-		ORDER BY timestamp DESC
-		LIMIT ?`
-	rows, err := s.db.QueryContext(ctx, stmt,
+		  AND COALESCE(json_extract(payload, '$.tenancy_ocid'), '') != ?`
+	args := []any{
 		"recommendation.pr_merged",
 		"recommendation.pr_closed_not_merged",
 		since,
 		excludeScopeID, excludeScopeID, excludeScopeID, excludeScopeID,
-		limit,
-	)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
+		ORDER BY timestamp DESC
+		LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list cross-scope discovery verdicts: %w", err)
 	}

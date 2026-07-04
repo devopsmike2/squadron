@@ -279,9 +279,13 @@ func TestEventSourceInstance_SchemaIsAdditiveJSON(t *testing.T) {
 			"account_id", "region", "resource_name", "resource_arn",
 			"source_type", "has_trace_axis", "has_log_axis",
 			"last_seen_at", "snapshot_json", "created_at",
+			// ADR 0011 slice 3b (M2 query-layer scoping): tenant_id is an
+			// additive column appended by the migrations slice — consistent
+			// with this table's additive-JSON contract.
+			"tenant_id",
 		}
 		assert.Equal(t, want, cols,
-			"event_source_instance column set must match v0.89.100 (additive-JSON contract)")
+			"event_source_instance column set must match v0.89.100 + ADR 0011 tenant_id (additive-JSON contract)")
 	})
 }
 

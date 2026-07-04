@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/google/uuid"
 )
 
@@ -137,11 +138,24 @@ func (s *Storage) SaveColdStartObservation(
 		id = uuid.NewString()
 	}
 
+	// ADR 0011 slice 3b — the metric substrate runs under WithSystemContext
+	// (apply=false → rowTenant=DefaultTenant). The (connection_id,
+	// resource_arn, observed_at, window_hours) conflict target is the
+	// observation's natural key and stays.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
+
 	const stmt = `INSERT INTO cold_start_observation (
 		id, connection_id, provider, surface, account_id, region,
 		resource_arn, observed_at, window_hours, p95_ms,
-		sample_count, snapshot_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		sample_count, snapshot_json, tenant_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(connection_id, resource_arn, observed_at, window_hours) DO UPDATE SET
 		provider      = excluded.provider,
 		surface       = excluded.surface,
@@ -149,7 +163,8 @@ func (s *Storage) SaveColdStartObservation(
 		region        = excluded.region,
 		p95_ms        = excluded.p95_ms,
 		sample_count  = excluded.sample_count,
-		snapshot_json = excluded.snapshot_json`
+		snapshot_json = excluded.snapshot_json,
+		tenant_id     = excluded.tenant_id`
 
 	observedAt := row.ObservedAt
 	if observedAt.IsZero() {
@@ -171,6 +186,7 @@ func (s *Storage) SaveColdStartObservation(
 		row.P95Ms,
 		row.SampleCount,
 		row.SnapshotJSON,
+		rowTenant,
 	); err != nil {
 		return fmt.Errorf("upsert cold_start_observation: %w", err)
 	}
@@ -201,6 +217,10 @@ func (s *Storage) ListColdStartObservations(
 	if resourceARN == "" {
 		return nil, nil
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build the query incrementally so the optional filters compose
 	// cleanly. Indexed lookups: idx_coldstart_resource covers the
@@ -214,6 +234,10 @@ func (s *Storage) ListColdStartObservations(
 		FROM cold_start_observation
 		WHERE resource_arn = ?`
 	args := []any{resourceARN}
+	if apply {
+		query += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	if connectionID != "" {
 		query += " AND connection_id = ?"
 		args = append(args, connectionID)
@@ -278,6 +302,10 @@ func (s *Storage) LatestColdStartObservation(
 	if resourceARN == "" {
 		return ColdStartObservationRow{}, false, nil
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return ColdStartObservationRow{}, false, err
+	}
 
 	query := `SELECT
 		id, connection_id, provider, surface,
@@ -287,6 +315,10 @@ func (s *Storage) LatestColdStartObservation(
 		FROM cold_start_observation
 		WHERE resource_arn = ? AND window_hours = ?`
 	args := []any{resourceARN, windowHours}
+	if apply {
+		query += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	if connectionID != "" {
 		query += " AND connection_id = ?"
 		args = append(args, connectionID)
@@ -297,7 +329,7 @@ func (s *Storage) LatestColdStartObservation(
 		r          ColdStartObservationRow
 		observedAt time.Time
 	)
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&r.ID, &r.ConnectionID, &r.Provider, &r.Surface,
 		&r.AccountID, &r.Region, &r.ResourceARN,
 		&observedAt, &r.WindowHours, &r.P95Ms,
@@ -328,10 +360,20 @@ func (s *Storage) DeleteColdStartObservationsBefore(
 	ctx context.Context,
 	before time.Time,
 ) error {
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM cold_start_observation WHERE observed_at < ?`,
-		before.UTC(),
-	); err != nil {
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune). A non-system caller scopes to its own
+	// tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM cold_start_observation WHERE observed_at < ?`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("delete cold_start_observation: %w", err)
 	}
 	return nil

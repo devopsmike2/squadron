@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/google/uuid"
 )
 
@@ -141,11 +142,24 @@ func (s *Storage) SaveErrorRateObservation(
 		id = uuid.NewString()
 	}
 
+	// ADR 0011 slice 3b — the metric substrate runs under WithSystemContext
+	// (apply=false → rowTenant=DefaultTenant). The (connection_id,
+	// resource_arn, observed_at, window_hours) conflict target is the
+	// observation's natural key and stays.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
+
 	const stmt = `INSERT INTO error_rate_observation (
 		id, connection_id, provider, surface, account_id, region,
 		resource_arn, observed_at, window_hours, error_count,
-		invocation_count, error_rate, snapshot_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		invocation_count, error_rate, snapshot_json, tenant_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(connection_id, resource_arn, observed_at, window_hours) DO UPDATE SET
 		provider         = excluded.provider,
 		surface          = excluded.surface,
@@ -154,7 +168,8 @@ func (s *Storage) SaveErrorRateObservation(
 		error_count      = excluded.error_count,
 		invocation_count = excluded.invocation_count,
 		error_rate       = excluded.error_rate,
-		snapshot_json    = excluded.snapshot_json`
+		snapshot_json    = excluded.snapshot_json,
+		tenant_id        = excluded.tenant_id`
 
 	observedAt := row.ObservedAt
 	if observedAt.IsZero() {
@@ -177,6 +192,7 @@ func (s *Storage) SaveErrorRateObservation(
 		row.InvocationCount,
 		row.ErrorRate,
 		row.SnapshotJSON,
+		rowTenant,
 	); err != nil {
 		return fmt.Errorf("upsert error_rate_observation: %w", err)
 	}
@@ -207,6 +223,10 @@ func (s *Storage) ListErrorRateObservations(
 	if resourceARN == "" {
 		return nil, nil
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build the query incrementally so the optional filters compose
 	// cleanly. Indexed lookups: idx_errorrate_resource covers the
@@ -220,6 +240,10 @@ func (s *Storage) ListErrorRateObservations(
 		FROM error_rate_observation
 		WHERE resource_arn = ?`
 	args := []any{resourceARN}
+	if apply {
+		query += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	if connectionID != "" {
 		query += " AND connection_id = ?"
 		args = append(args, connectionID)
@@ -284,6 +308,10 @@ func (s *Storage) LatestErrorRateObservation(
 	if resourceARN == "" {
 		return ErrorRateObservationRow{}, false, nil
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return ErrorRateObservationRow{}, false, err
+	}
 
 	query := `SELECT
 		id, connection_id, provider, surface,
@@ -293,6 +321,10 @@ func (s *Storage) LatestErrorRateObservation(
 		FROM error_rate_observation
 		WHERE resource_arn = ? AND window_hours = ?`
 	args := []any{resourceARN, windowHours}
+	if apply {
+		query += " AND tenant_id = ?"
+		args = append(args, tenant)
+	}
 	if connectionID != "" {
 		query += " AND connection_id = ?"
 		args = append(args, connectionID)
@@ -303,7 +335,7 @@ func (s *Storage) LatestErrorRateObservation(
 		r          ErrorRateObservationRow
 		observedAt time.Time
 	)
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&r.ID, &r.ConnectionID, &r.Provider, &r.Surface,
 		&r.AccountID, &r.Region, &r.ResourceARN,
 		&observedAt, &r.WindowHours, &r.ErrorCount,
@@ -333,10 +365,20 @@ func (s *Storage) DeleteErrorRateObservationsBefore(
 	ctx context.Context,
 	before time.Time,
 ) error {
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM error_rate_observation WHERE observed_at < ?`,
-		before.UTC(),
-	); err != nil {
+	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
+	// predicate → fleet-wide prune). A non-system caller scopes to its own
+	// tenant.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM error_rate_observation WHERE observed_at < ?`
+	args := []any{before.UTC()}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("delete error_rate_observation: %w", err)
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -27,18 +28,28 @@ func (s *Storage) CreateIncidentDraft(ctx context.Context, d *types.IncidentDraf
 	if d.Status == "" {
 		d.Status = "draft"
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		// System-context insert (the drafter bridge runs under
+		// WithSystemContext). TODO(3b'): per-owner tenant for system-context
+		// inserts.
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO incident_drafts
 		  (id, action_request_id, rollout_id, status, title, body_markdown,
 		   draft_content_json, provider, external_id, external_url,
-		   created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   tenant_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		d.ID, nullString(d.ActionRequestID), nullString(d.RolloutID),
 		d.Status, d.Title, d.BodyMarkdown,
 		nullString(d.DraftContentJSON), nullString(d.Provider),
 		nullString(d.ExternalID), nullString(d.ExternalURL),
-		d.CreatedAt, d.UpdatedAt,
+		tenant, d.CreatedAt, d.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create incident draft: %w", err)
@@ -52,16 +63,25 @@ func (s *Storage) CreateIncidentDraft(ctx context.Context, d *types.IncidentDraf
 // dismiss it.
 func (s *Storage) UpdateIncidentDraft(ctx context.Context, d *types.IncidentDraft) error {
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `
 		UPDATE incident_drafts
 		   SET status = ?, title = ?, body_markdown = ?, draft_content_json = ?,
 		       provider = ?, external_id = ?, external_url = ?, updated_at = ?
-		 WHERE id = ?
-	`,
+		 WHERE id = ?`
+	args := []any{
 		d.Status, d.Title, d.BodyMarkdown, nullString(d.DraftContentJSON),
 		nullString(d.Provider), nullString(d.ExternalID), nullString(d.ExternalURL),
 		now, d.ID,
-	)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update incident draft: %w", err)
 	}
@@ -74,13 +94,22 @@ func (s *Storage) UpdateIncidentDraft(ctx context.Context, d *types.IncidentDraf
 
 // GetIncidentDraft returns the draft by ID, or nil when missing.
 func (s *Storage) GetIncidentDraft(ctx context.Context, id string) (*types.IncidentDraft, error) {
-	row := s.db.QueryRowContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, action_request_id, rollout_id, status, title, body_markdown,
 		       draft_content_json, provider, external_id, external_url,
 		       created_at, updated_at
 		  FROM incident_drafts
-		 WHERE id = ?
-	`, id)
+		 WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	return scanIncidentDraft(row)
 }
 
@@ -91,15 +120,26 @@ func (s *Storage) GetIncidentDraftByActionRequestID(ctx context.Context, actionR
 	if actionRequestID == "" {
 		return nil, nil
 	}
-	row := s.db.QueryRowContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, action_request_id, rollout_id, status, title, body_markdown,
 		       draft_content_json, provider, external_id, external_url,
 		       created_at, updated_at
 		  FROM incident_drafts
-		 WHERE action_request_id = ?
+		 WHERE action_request_id = ?`
+	args := []any{actionRequestID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += `
 		 ORDER BY created_at DESC
 		 LIMIT 1
-	`, actionRequestID)
+	`
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	return scanIncidentDraft(row)
 }
 
@@ -113,6 +153,10 @@ func (s *Storage) ListIncidentDrafts(ctx context.Context, filter types.IncidentD
 	if limit > 1000 {
 		limit = 1000
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `
 		SELECT id, action_request_id, rollout_id, status, title, body_markdown,
 		       draft_content_json, provider, external_id, external_url,
@@ -121,6 +165,10 @@ func (s *Storage) ListIncidentDrafts(ctx context.Context, filter types.IncidentD
 		 WHERE 1=1
 	`
 	var args []any
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
 	if filter.ActionRequestID != "" {
 		query += ` AND action_request_id = ?`
 		args = append(args, filter.ActionRequestID)
