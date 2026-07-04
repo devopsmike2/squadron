@@ -86,11 +86,16 @@ func NewTestServer(t *testing.T, useMemory bool) *TestServer {
 	// Create temp directory for test databases
 	tempDir := t.TempDir()
 
+	// Allocate all four ports at once so they are guaranteed distinct (see
+	// findFreePorts). Allocating them one at a time previously let the OS hand
+	// the same ephemeral port to two fields, so two servers would try to bind
+	// it -> flaky "bind: address already in use".
+	ports := findFreePorts(4)
 	ts := &TestServer{
-		HTTPPort:     findFreePort(),
-		OpAMPPort:    findFreePort(),
-		OTLPGRPCPort: findFreePort(),
-		OTLPHTTPPort: findFreePort(),
+		HTTPPort:     ports[0],
+		OpAMPPort:    ports[1],
+		OTLPGRPCPort: ports[2],
+		OTLPHTTPPort: ports[3],
 		logger:       logger,
 		tempDir:      tempDir,
 		t:            t,
@@ -369,14 +374,30 @@ func (ts *TestServer) DELETE(path string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
-// findFreePort finds an available port
-func findFreePort() int {
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		panic(err)
+// findFreePorts returns n distinct free TCP ports. It opens all n listeners
+// SIMULTANEOUSLY before closing any of them, so the OS cannot hand the same
+// ephemeral port back to two calls — the bug that made the servers collide
+// (e.g. OTLPGRPCPort == OTLPHTTPPort -> "bind: address already in use").
+// Allocating one at a time (open→close→open) let the freshly-closed port be
+// re-handed to the next call. Ports are still bound-then-released here, so a
+// tiny release→re-bind window remains, but the intra-set duplication that
+// caused the flake is gone. See knowledge/ci-gotchas.md.
+func findFreePorts(n int) []int {
+	listeners := make([]net.Listener, 0, n)
+	ports := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			panic(err)
+		}
+		listeners = append(listeners, l)
+		ports = append(ports, l.Addr().(*net.TCPAddr).Port)
 	}
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port
+	// Release only after all n are reserved, so all n ports are distinct.
+	for _, l := range listeners {
+		_ = l.Close()
+	}
+	return ports
 }
 
 // smokeAgentLister adapts the agent service to pipelinehealth.AgentLister for
