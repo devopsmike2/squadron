@@ -145,6 +145,40 @@ func SetAuthorizer(a identity.Authorizer) {
 	}
 }
 
+// tenantResolver is the resolver the ResolveTenant middleware consults to
+// map a request to its tenant. It defaults to the OSS single-tenant resolver
+// (every request runs under identity.DefaultTenant). main.go overrides it once
+// at startup via SetTenantResolver with the edition's wired resolver (ADR 0006
+// — the enterprise edition derives a real tenant from the authenticated
+// principal).
+var tenantResolver identity.TenantResolver = identity.SingleTenantResolver{}
+
+// SetTenantResolver installs the process-wide tenant resolver the
+// ResolveTenant middleware consults. Called once from main.go with
+// idSeam.TenantResolver. A nil argument is ignored, keeping the OSS default.
+// Not safe for concurrent use with in-flight requests — call it during
+// startup, before the server accepts traffic.
+func SetTenantResolver(r identity.TenantResolver) {
+	if r != nil {
+		tenantResolver = r
+	}
+}
+
+// ResolveTenant returns Gin middleware that resolves the request's tenant via
+// the wired identity.TenantResolver and stamps it onto the request context
+// (identity.WithTenant), so downstream service/store layers can scope by it.
+// OSS resolves the single implicit identity.DefaultTenant; the enterprise
+// edition derives a real tenant from the authenticated principal. Mount it
+// AFTER RequireBearer so an enterprise resolver can see the actor; it is safe
+// (and a no-op-shaped default) to mount even when auth is disabled.
+func ResolveTenant() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenant := tenantResolver.Resolve(c.Request.Context())
+		c.Request = c.Request.WithContext(identity.WithTenant(c.Request.Context(), tenant))
+		c.Next()
+	}
+}
+
 // RequireScope returns Gin middleware that enforces a specific scope
 // on the authenticated actor. Must run AFTER RequireBearer — that's
 // the middleware that puts the actor on the context. If no actor is

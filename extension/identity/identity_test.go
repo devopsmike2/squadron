@@ -96,3 +96,25 @@ func TestOSSProviders_WiresDefaults(t *testing.T) {
 		t.Errorf("Authenticator.Name() = %q, want %q", name, "bearer")
 	}
 }
+
+// TestTenantContext_Roundtrip confirms WithTenant/TenantFromContext carry a
+// tenant id through a context.
+func TestTenantContext_Roundtrip(t *testing.T) {
+	ctx := WithTenant(context.Background(), "acme")
+	if got := TenantFromContext(ctx); got != "acme" {
+		t.Fatalf("TenantFromContext = %q, want %q", got, "acme")
+	}
+}
+
+// TestTenantFromContext_DefaultsWhenAbsentOrEmpty confirms a reader always
+// gets a usable tenant: DefaultTenant when the context carries none (e.g. a
+// background context that never passed through the stamping middleware) or an
+// empty string. This keeps single-tenant OSS and later store decorators safe.
+func TestTenantFromContext_DefaultsWhenAbsentOrEmpty(t *testing.T) {
+	if got := TenantFromContext(context.Background()); got != DefaultTenant {
+		t.Fatalf("absent tenant = %q, want %q", got, DefaultTenant)
+	}
+	if got := TenantFromContext(WithTenant(context.Background(), "")); got != DefaultTenant {
+		t.Fatalf("empty tenant = %q, want %q", got, DefaultTenant)
+	}
+}

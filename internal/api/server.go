@@ -2165,6 +2165,9 @@ func (s *Server) registerRoutes() {
 			v1.Use(s.accessAuditMiddleware)
 		}
 	}
+	// ADR 0006 slice 3: stamp the resolved tenant (OSS: "default") onto the
+	// request context, after RequireBearer so an enterprise resolver sees the actor.
+	v1.Use(middleware.ResolveTenant())
 	{
 		// Auth token management lives under /api/v1/auth/tokens.
 		// Bootstrap problem: the first token has to be created without

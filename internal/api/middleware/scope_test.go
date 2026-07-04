@@ -134,3 +134,46 @@ func TestRequireScope_ConsultsWiredAuthorizer(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusForbidden, w.Code, "wired deny-all authorizer must override the default")
 }
+
+// tenantEchoRouter mounts ResolveTenant in front of a handler that echoes the
+// resolved tenant read back from the request context.
+func tenantEchoRouter(seen *string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(ResolveTenant())
+	r.GET("/t", func(c *gin.Context) {
+		*seen = identity.TenantFromContext(c.Request.Context())
+		c.Status(http.StatusOK)
+	})
+	return r
+}
+
+// TestResolveTenant_StampsDefault confirms the OSS ResolveTenant middleware
+// stamps identity.DefaultTenant onto the request context (single-tenant OSS).
+func TestResolveTenant_StampsDefault(t *testing.T) {
+	var seen string
+	r := tenantEchoRouter(&seen)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/t", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, identity.DefaultTenant, seen)
+}
+
+// fixedTenantResolver is a test double returning a constant tenant.
+type fixedTenantResolver struct{ tenant string }
+
+func (f fixedTenantResolver) Resolve(context.Context) string { return f.tenant }
+
+// TestResolveTenant_ConsultsWiredResolver confirms SetTenantResolver swaps the
+// resolver, so the middleware stamps the wired tenant. Restores the OSS
+// default (the resolver is process-global).
+func TestResolveTenant_ConsultsWiredResolver(t *testing.T) {
+	SetTenantResolver(fixedTenantResolver{tenant: "acme"})
+	defer SetTenantResolver(identity.SingleTenantResolver{})
+
+	var seen string
+	r := tenantEchoRouter(&seen)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/t", nil))
+	assert.Equal(t, "acme", seen)
+}
