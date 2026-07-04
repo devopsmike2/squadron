@@ -36,6 +36,17 @@ const Wildcard = "*"
 // the authenticated identity instead.
 const DefaultTenant = "default"
 
+// SystemTenant is the reserved marker (ADR 0011) that a background job stamps
+// on its context to mean "operate across ALL tenants" — retention GCs, the
+// rollout engine tick, the deploy poller, the alert evaluator, etc. It is NOT
+// a real tenant: the enterprise scoped store treats a system context as
+// "apply no tenant predicate", never as a literal WHERE tenant_id = '__system__'.
+// It is deliberately distinct from DefaultTenant so that a MISSED stamp on a
+// fleet-wide job degrades to DefaultTenant (visibly-empty results, or an
+// enterprise fail-fast) rather than silently scoping to — or corrupting — the
+// default tenant.
+const SystemTenant = "__system__"
+
 // Principal is the adapted, extension-safe identity of a request's caller.
 // It mirrors the fields of internal/services.AuthActor WITHOUT importing
 // it, keeping this package free of internal/ dependencies.
@@ -179,6 +190,41 @@ func TenantFromContext(ctx context.Context) string {
 		return v
 	}
 	return DefaultTenant
+}
+
+// TenantFromContextOK is like TenantFromContext but reports whether a tenant
+// was EXPLICITLY stamped on the context (ADR 0011). The bool distinguishes
+// "unstamped background context" (ok=false) from "stamped as DefaultTenant"
+// (ok=true) — a distinction TenantFromContext erases by always returning
+// DefaultTenant. OSS keeps using TenantFromContext (legacy fallback); the
+// enterprise scoped store uses this to fail fast when a resolvable path runs on
+// an unstamped context, so every enterprise background job is forced to stamp
+// its tenant (WithSystemContext for all-tenant, WithTenant for per-owner).
+// ResolveTenant stamps even the OSS default, so a real HTTP request is always
+// ok=true.
+func TenantFromContextOK(ctx context.Context) (string, bool) {
+	if v, ok := ctx.Value(tenantContextKey{}).(string); ok && v != "" {
+		return v, true
+	}
+	return DefaultTenant, false
+}
+
+// WithSystemContext stamps ctx as a system (all-tenant) context (ADR 0011) — a
+// background job declaring "operate across every tenant". Implemented as
+// WithTenant(ctx, SystemTenant) so it flows through the same context key; the
+// enterprise scoped store recognizes SystemTenant via IsSystemContext and
+// applies no tenant predicate.
+func WithSystemContext(ctx context.Context) context.Context {
+	return WithTenant(ctx, SystemTenant)
+}
+
+// IsSystemContext reports whether ctx was stamped as a system (all-tenant)
+// context. The enterprise scoped store uses this to skip tenant filtering for
+// fleet-wide background work (retention GC, the rollout engine, the deploy
+// poller, the alert evaluator, …).
+func IsSystemContext(ctx context.Context) bool {
+	v, ok := ctx.Value(tenantContextKey{}).(string)
+	return ok && v == SystemTenant
 }
 
 // OSSProviders returns the open-core default provider bundle. The OSS wire

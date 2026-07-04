@@ -160,6 +160,11 @@ type APIToken struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+
+	// TenantID is the tenant this token authenticates into (ADR 0011).
+	// Set into AuthActor.Tenant in RequireBearer so the enterprise
+	// TenantResolver can derive a request's tenant. Inert in OSS.
+	TenantID string `json:"tenant_id,omitempty"`
 }
 
 // IsExpired reports whether the token has an expiry and that expiry
@@ -205,6 +210,13 @@ type AuthActor struct {
 	TokenID    string
 	TokenLabel string
 	Scopes     []string
+
+	// Tenant is the tenant the authenticated token belongs to (ADR 0011).
+	// Set in RequireBearer from APIToken.TenantID (default identity.DefaultTenant
+	// when empty). The enterprise TenantResolver reads this off
+	// ActorFromContext(ctx) to scope the request; inert in OSS, where the
+	// SingleTenantResolver always returns DefaultTenant regardless.
+	Tenant string
 }
 
 // HasScope mirrors APIToken.HasScope. Defined on the actor so the

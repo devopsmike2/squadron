@@ -118,3 +118,44 @@ func TestTenantFromContext_DefaultsWhenAbsentOrEmpty(t *testing.T) {
 		t.Fatalf("empty tenant = %q, want %q", got, DefaultTenant)
 	}
 }
+
+// TestTenantFromContextOK_DistinguishesStamped confirms the ADR 0011 bit: an
+// unstamped context reports ok=false (enterprise fail-fast trigger) while a
+// context stamped as DefaultTenant reports ok=true — the distinction
+// TenantFromContext erases.
+func TestTenantFromContextOK_DistinguishesStamped(t *testing.T) {
+	if v, ok := TenantFromContextOK(context.Background()); ok || v != DefaultTenant {
+		t.Fatalf("unstamped: got (%q,%v), want (%q,false)", v, ok, DefaultTenant)
+	}
+	if v, ok := TenantFromContextOK(WithTenant(context.Background(), DefaultTenant)); !ok || v != DefaultTenant {
+		t.Fatalf("stamped-default: got (%q,%v), want (%q,true)", v, ok, DefaultTenant)
+	}
+	if v, ok := TenantFromContextOK(WithTenant(context.Background(), "acme")); !ok || v != "acme" {
+		t.Fatalf("stamped-acme: got (%q,%v), want (acme,true)", v, ok)
+	}
+	if _, ok := TenantFromContextOK(WithTenant(context.Background(), "")); ok {
+		t.Fatalf("empty stamp must report ok=false")
+	}
+}
+
+// TestSystemContext confirms the all-tenant marker is distinct from
+// DefaultTenant and recognized by IsSystemContext, while a real/default tenant
+// is not a system context.
+func TestSystemContext(t *testing.T) {
+	if SystemTenant == DefaultTenant {
+		t.Fatal("SystemTenant must be distinct from DefaultTenant")
+	}
+	sys := WithSystemContext(context.Background())
+	if !IsSystemContext(sys) {
+		t.Fatal("WithSystemContext must be recognized by IsSystemContext")
+	}
+	if v, ok := TenantFromContextOK(sys); !ok || v != SystemTenant {
+		t.Fatalf("system ctx: got (%q,%v), want (%q,true)", v, ok, SystemTenant)
+	}
+	if IsSystemContext(WithTenant(context.Background(), "acme")) {
+		t.Fatal("a real tenant must not be a system context")
+	}
+	if IsSystemContext(context.Background()) {
+		t.Fatal("an unstamped context must not be a system context")
+	}
+}

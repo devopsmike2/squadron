@@ -22,6 +22,7 @@ import (
 
 	"encoding/base64"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/alerting"
@@ -763,7 +764,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// path closes the API server and then the process exits;
 		// a stray tick during shutdown is harmless because
 		// Detector.Tick is pure (no goroutines of its own).
-		detectorCtx := context.Background()
+		// ADR 0011: stamp system (all-tenant) — the detector sweeps every
+		// tenant's cost spikes. Inert in OSS (the pass-through store ignores
+		// the tenant); the enterprise scoped store reads it as "no predicate".
+		detectorCtx := identity.WithSystemContext(context.Background())
 		go func() {
 			t := time.NewTicker(60 * time.Second)
 			defer t.Stop()
@@ -798,22 +802,26 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}
 	if gcStore, ok := appStore.(operatorTableRetentionGC); ok {
 		const operatorTableRetention = 90 * 24 * time.Hour
+		// ADR 0011: system (all-tenant) context — retention GC prunes every
+		// tenant's rows. Inert in OSS; the enterprise scoped store reads this
+		// as "apply no tenant predicate" so no tenant is silently skipped.
+		gcCtx := identity.WithSystemContext(context.Background())
 		go func() {
 			t := time.NewTicker(24 * time.Hour)
 			defer t.Stop()
 			for range t.C {
 				cutoff := time.Now().UTC().Add(-operatorTableRetention)
-				if n, err := gcStore.DeleteClosedCostSpikeEventsBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteClosedCostSpikeEventsBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("cost_spike_events retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("cost_spike_events retention GC ran", zap.Int64("deleted", n))
 				}
-				if n, err := gcStore.DeleteRecommendationOutcomesBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteRecommendationOutcomesBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("recommendation_outcomes retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("recommendation_outcomes retention GC ran", zap.Int64("deleted", n))
 				}
-				if n, err := gcStore.DeleteDismissedIncidentDraftsBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteDismissedIncidentDraftsBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("incident_drafts retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("incident_drafts retention GC ran", zap.Int64("deleted", n))
@@ -853,44 +861,47 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	}
 	if gcStore, ok := appStore.(discoveryTableRetentionGC); ok {
 		const discoveryTableRetention = 90 * 24 * time.Hour
+		// ADR 0011: system (all-tenant) context — see the operator-table GC
+		// above. Inert in OSS; enterprise reads it as "no tenant predicate".
+		gcCtx := identity.WithSystemContext(context.Background())
 		go func() {
 			t := time.NewTicker(24 * time.Hour)
 			defer t.Stop()
 			for range t.C {
 				cutoff := time.Now().UTC().Add(-discoveryTableRetention)
-				if n, err := gcStore.DeleteServerlessBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteServerlessBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("serverless_instance retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("serverless_instance retention GC ran", zap.Int64("deleted", n))
 				}
-				if n, err := gcStore.DeleteEventSourceInstancesBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteEventSourceInstancesBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("event_source_instance retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("event_source_instance retention GC ran", zap.Int64("deleted", n))
 				}
-				if n, err := gcStore.DeleteOrchestrationInstancesBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteOrchestrationInstancesBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("orchestration_instance retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("orchestration_instance retention GC ran", zap.Int64("deleted", n))
 				}
-				if n, err := gcStore.DeleteDiscoveryScansBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteDiscoveryScansBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("discovery_scans retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("discovery_scans retention GC ran", zap.Int64("deleted", n))
 				}
 				// Only cleared verdict rows (exclude_from_learning=0) are pruned;
 				// active "don't propose again" exclusions are preserved forever.
-				if n, err := gcStore.DeleteIACRecommendationVerdictsBefore(context.Background(), cutoff); err != nil {
+				if n, err := gcStore.DeleteIACRecommendationVerdictsBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("iac_recommendation_verdicts retention GC failed", zap.Error(err))
 				} else if n > 0 {
 					logger.Info("iac_recommendation_verdicts retention GC ran", zap.Int64("deleted", n))
 				}
 				// The two observation tables' predicates return only an error
 				// (their per-resource API consumers never needed a row count).
-				if err := gcStore.DeleteColdStartObservationsBefore(context.Background(), cutoff); err != nil {
+				if err := gcStore.DeleteColdStartObservationsBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("cold_start_observation retention GC failed", zap.Error(err))
 				}
-				if err := gcStore.DeleteErrorRateObservationsBefore(context.Background(), cutoff); err != nil {
+				if err := gcStore.DeleteErrorRateObservationsBefore(gcCtx, cutoff); err != nil {
 					logger.Warn("error_rate_observation retention GC failed", zap.Error(err))
 				}
 			}
@@ -928,12 +939,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			DeleteAuditEventsBefore(ctx context.Context, before time.Time) (int64, error)
 		}
 		if gcStore, ok := appStore.(auditRetentionGC); ok {
+			// ADR 0011: system (all-tenant) context — the audit-log GC prunes
+			// every tenant's compliance events. Inert in OSS.
+			gcCtx := identity.WithSystemContext(context.Background())
 			go func() {
 				t := time.NewTicker(24 * time.Hour)
 				defer t.Stop()
 				for range t.C {
 					cutoff := time.Now().UTC().Add(-window)
-					if n, err := gcStore.DeleteAuditEventsBefore(context.Background(), cutoff); err != nil {
+					if n, err := gcStore.DeleteAuditEventsBefore(gcCtx, cutoff); err != nil {
 						logger.Warn("audit_events retention GC failed", zap.Error(err))
 					} else if n > 0 {
 						logger.Info("audit_events retention GC ran", zap.Int64("deleted", n))
@@ -992,11 +1006,14 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// Polling loop: every 60s the service walks queued +
 		// in_progress runs and refreshes their status. v0.35 adds
 		// a webhook receiver so this drops to a sync fallback.
+		// ADR 0011: system (all-tenant) context — the deploy poller
+		// advances every tenant's open runs. Inert in OSS.
+		deploySyncCtx := identity.WithSystemContext(context.Background())
 		go func() {
 			t := time.NewTicker(60 * time.Second)
 			defer t.Stop()
 			for range t.C {
-				_ = deploySvc.SyncOpenRuns(context.Background())
+				_ = deploySvc.SyncOpenRuns(deploySyncCtx)
 			}
 		}()
 		logger.Info("Deploy integration enabled (GitHub Actions, polling every 60s)")
@@ -1008,7 +1025,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// surface automatically.
 		walker := discovery.NewGHAWalker(appStore, deploySvc, ghProvider,
 			discovery.DefaultGHAWalkInterval, discovery.DefaultGHALookback, logger)
-		go walker.Run(context.Background())
+		// ADR 0011: read-all/write-per-owner bridge. The walk phase lists
+		// every tenant's deploy history (system), but each UpsertExpectedAgent
+		// write belongs to the owning row's tenant. Slice 3a stamps the whole
+		// loop system (inert in OSS; correct-enough in enterprise until the
+		// per-write derivation lands).
+		// TODO(ADR 0011 slice 3b): per-write tenant derivation from the owning row.
+		go walker.Run(identity.WithSystemContext(context.Background()))
 	}
 
 	// v0.50 SIEM export. Same disabled-on-missing-key pattern as
@@ -1069,7 +1092,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			DestinationExtra: config.SilentAgents.DestinationExtra,
 			PublicBaseURL:    config.SilentAgents.PublicBaseURL,
 		}, appStore, logger)
-		go watcher.Run(context.Background())
+		// ADR 0011: system (all-tenant) context — the watcher polls every
+		// tenant's agent table for healthy<->silent transitions. Inert in OSS.
+		go watcher.Run(identity.WithSystemContext(context.Background()))
 	} else {
 		logger.Info("Silent-agent watcher disabled (set silent_agents.enabled=true to enable)")
 	}
@@ -1146,7 +1171,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 							zap.String("value", cdRaw))
 					}
 				}
-				scanSchedCtx, scanSchedCancel := context.WithCancel(context.Background())
+				// ADR 0011: read-all/write-per-owner bridge. The scheduler
+				// re-scans every tenant's connections (system read), but each
+				// persisted scan / drift row belongs to the owning connection's
+				// tenant. Slice 3a stamps the loop system (inert in OSS).
+				// TODO(ADR 0011 slice 3b): per-write tenant derivation from the owning row.
+				scanSchedCtx, scanSchedCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
 				apiServer.StartDiscoveryScanScheduler(scanSchedCtx, d, driftCooldown)
 				defer scanSchedCancel()
 				logger.Info("discovery scan scheduler enabled",
@@ -1197,7 +1227,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// captures + replays a legitimate signed delivery. See
 		// docs/webhook-listener.md §"Slice 2 roadmap".
 		apiServer.SetIaCGitHubWebhookStore(appStore)
-		webhookDedupeGCCtx, webhookDedupeGCCancel := context.WithCancel(context.Background())
+		// ADR 0011: system (all-tenant) context — the dedupe GC prunes every
+		// tenant's replay-protection rows. Inert in OSS.
+		webhookDedupeGCCtx, webhookDedupeGCCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
 		handlers.StartWebhookDedupeGC(webhookDedupeGCCtx, appStore, logger)
 		defer webhookDedupeGCCancel()
 		logger.Info("iac github webhook listener: dedupe store wired and GC sweeper started",
@@ -1305,7 +1337,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		logger.Fatal("failed to construct incidents bridge", zap.Error(err))
 	}
-	incidentsCtx, incidentsCancel := context.WithCancel(context.Background())
+	// ADR 0011: read-all/write-per-owner bridge. The drafter polls every
+	// tenant's open incidents (system read), but each drafted row belongs to
+	// the owning incident's tenant. Slice 3a stamps the loop system (inert in
+	// OSS; correct-enough in enterprise until per-write derivation lands).
+	// TODO(ADR 0011 slice 3b): per-write tenant derivation from the owning row.
+	incidentsCtx, incidentsCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
 	incidentsBridge.Start(incidentsCtx)
 	defer func() {
 		incidentsCancel()
@@ -1425,7 +1462,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		proposer.DefaultConfig(),
 		logger,
 	)
-	proposerCtx, proposerCancel := context.WithCancel(context.Background())
+	// ADR 0011: read-all/write-per-owner bridge. The proposer polls every
+	// tenant's open cost-spike events (system read), but each proposed rollout
+	// belongs to the owning event's tenant. Slice 3a stamps the loop system
+	// (inert in OSS; correct-enough in enterprise until per-write lands).
+	// TODO(ADR 0011 slice 3b): per-write tenant derivation from the owning row.
+	proposerCtx, proposerCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
 	proposerBridge.Start(proposerCtx)
 	defer func() {
 		proposerCancel()
@@ -1665,7 +1707,9 @@ func startRollupGenerator(telemetryService services.TelemetryQueryService, confi
 	defer ticker.Stop()
 
 	for range ticker.C {
-		ctx := context.Background()
+		// ADR 0011: system (all-tenant) context — rollups aggregate every
+		// tenant's telemetry. Inert in OSS.
+		ctx := identity.WithSystemContext(context.Background())
 		now := time.Now()
 
 		// Generate rollups based on time intervals
@@ -1734,7 +1778,9 @@ func startCleanupTask(telemetryService services.TelemetryQueryService, config *c
 	defer ticker.Stop()
 
 	for range ticker.C {
-		ctx := context.Background()
+		// ADR 0011: system (all-tenant) context — cleanup prunes every
+		// tenant's old telemetry. Inert in OSS.
+		ctx := identity.WithSystemContext(context.Background())
 		if err := telemetryService.CleanupOldData(ctx, retention); err != nil {
 			logger.Error("Failed to cleanup old telemetry data", zap.Error(err))
 		} else {
