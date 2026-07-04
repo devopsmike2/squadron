@@ -33,10 +33,12 @@ func readTraceIndexMaxRowsEnv() int {
 
 // UpsertTraceResources — v0.89.74 (#705 Stream 103, slice 1 chunk 1).
 // Batched flush sink for the traceindex Index. Each row is applied
-// via INSERT ... ON CONFLICT(resource_key) DO UPDATE so the row's
-// span_count_24h accumulates across re-observations, last_seen_at +
-// attributes_json + updated_at refresh to the new values, and
-// first_seen_at stays pinned at the original observation.
+// via INSERT ... ON CONFLICT(tenant_id, resource_key) DO UPDATE (the
+// ADR 0011 slice 3b′ composite key, so two tenants can hold the same
+// resource_key) so the row's span_count_24h accumulates across
+// re-observations, last_seen_at + attributes_json + updated_at refresh
+// to the new values, and first_seen_at stays pinned at the original
+// observation.
 //
 // After the upsert pass the method counts rows in trace_resource_seen
 // and, if over the maxRows cap (set from SQUADRON_TRACEINDEX_MAX_ROWS
@@ -59,8 +61,18 @@ func (s *Storage) UpsertTraceResources(
 	// ADR 0011 slice 3b — the trace flush runs under WithSystemContext in
 	// production (apply=false → rowTenant=DefaultTenant, no eviction
 	// predicate → fleet-wide LRU). A non-system caller stamps the rows with
-	// its tenant. TODO(ADR 0011 slice 3b'): conflict target must move to
-	// (tenant_id, resource_key) when this table is rebuilt.
+	// its tenant. The upsert's ON CONFLICT target is the slice 3b′ composite
+	// (tenant_id, resource_key) key, so two tenants can hold the same
+	// resource_key without collision.
+	//
+	// TODO(ADR 0011 slice 3b′): the LRU cap (count + evict-oldest below) is
+	// deliberately GLOBAL, not per-tenant. The production flush runs under a
+	// system context (no tenant to scope by), and SQUADRON_TRACEINDEX_MAX_ROWS
+	// is a fleet-wide storage budget, so a fleet-wide LRU is the correct
+	// behavior for the flush path. Making the cap per-tenant would need a
+	// per-tenant budget + a tenant to evict within, which the system-context
+	// flush does not carry; deferred until a per-tenant trace budget exists.
+	// Inert in OSS (single tenant ⇒ global == per-tenant).
 	scopeTenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return 0, err
@@ -80,7 +92,7 @@ func (s *Storage) UpsertTraceResources(
 		first_seen_at, last_seen_at, span_count_24h, root_span_count_24h,
 		attributes_json, match_confidence, updated_at, tenant_id
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(resource_key) DO UPDATE SET
+	ON CONFLICT(tenant_id, resource_key) DO UPDATE SET
 		provider             = excluded.provider,
 		scope_id             = excluded.scope_id,
 		resource_id_hint     = COALESCE(NULLIF(excluded.resource_id_hint, ''), trace_resource_seen.resource_id_hint),
