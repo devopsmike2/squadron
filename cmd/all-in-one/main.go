@@ -529,6 +529,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// SetX accessor so the middleware order in v1.Use() stays
 	// deterministic (auth → access audit → handler).
 	wireAPIServerExtensions(apiServer, auditService, logger)
+	// Wire the enterprise RBAC management handler seam (ADR 0010 slice 2b).
+	// OSS is a no-op (RBAC routes stay 404); the enterprise edition installs
+	// its role/binding/permission handler via SetEnterpriseRBACHandler.
+	enterpriseServerWiring(apiServer)
 	// v0.53 — wire action runner dependencies. The signer's key
 	// loads from SQUADRON_ACTION_SIGNING_KEY (base64 of 32 raw
 	// bytes); when unset we generate a fresh key at startup so dev
