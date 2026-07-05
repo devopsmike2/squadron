@@ -36,6 +36,7 @@ import RolloutsPage from "./pages/Rollouts";
 import RunnersPage from "./pages/Runners";
 import SavingsPage from "./pages/Savings";
 import SettingsSiemPage from "./pages/SettingsSiem";
+import SettingsSSOPage from "./pages/SettingsSSO";
 import SettingsTokensPage from "./pages/SettingsTokens";
 import TelemetryPage from "./pages/Telemetry";
 import TimelinePage from "./pages/Timeline";
@@ -254,6 +255,7 @@ function AuthBoundary() {
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/settings/tokens" element={<SettingsTokensPage />} />
           <Route path="/settings/siem" element={<SettingsSiemPage />} />
+          <Route path="/settings/sso" element={<SettingsSSOPage />} />
         </Route>
       </Routes>
       {/* hasToken is referenced so React's lint doesn't strip the

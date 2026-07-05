@@ -42,6 +42,7 @@ import {
   Cpu,
   Cloud,
   Github,
+  Fingerprint,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -381,6 +382,12 @@ export function AppSidebar() {
           title: "SIEM export",
           url: "/settings/siem",
           icon: ServerCog,
+        },
+        {
+          key: "settings-sso",
+          title: "SSO & identity",
+          url: "/settings/sso",
+          icon: Fingerprint,
         },
       ],
     },
