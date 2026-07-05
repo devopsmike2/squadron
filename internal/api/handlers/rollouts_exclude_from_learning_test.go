@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -104,7 +106,15 @@ func doExcludePost(t *testing.T, h *RolloutHandlers, rolloutID string, excluded 
 	c.Request, _ = http.NewRequest(http.MethodPost, "/", bytes.NewBuffer(raw))
 	c.Request.Header.Set("Content-Type", "application/json")
 	if actor != "" {
-		c.Set("auth_actor", actor)
+		// Stash the actor the way the auth middleware does: a
+		// services.AuthActor under middleware.AuthActorContextKey (the
+		// canonical key actorFromContext reads via middleware.ActorFromGin).
+		// The test passes the pre-formatted "operator:<label>" string that
+		// AuthActor.String() produces, so strip the "operator:" prefix to
+		// recover the TokenLabel that round-trips back to the same value.
+		c.Set(middleware.AuthActorContextKey, services.AuthActor{
+			TokenLabel: strings.TrimPrefix(actor, "operator:"),
+		})
 	}
 	h.HandleExcludeFromLearning(c)
 	return w
