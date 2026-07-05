@@ -108,8 +108,9 @@ Some config switches gate **cost/safety**, not access:
   per-scan Lambda Insights / Application Insights API cost. In OSS it is
   inert.
 - `serverless_metric_detection.enabled` — the **native-metric** serverless
-  detectors (AWS `Errors`/`Invocations`). This one is genuinely OSS: it
-  stays a runtime switch and is **not** behind an edition tag.
+  detectors (AWS `Errors`/`Invocations`, plus the GCP and OCI native Cloud
+  Monitoring cold-start + error-rate detectors). This one is genuinely OSS:
+  it stays a runtime switch and is **not** behind an edition tag.
 
 See [docs/oss-vs-enterprise.md](oss-vs-enterprise.md) for the full boundary
 and [docs/architecture/oss-enterprise-separation.md](architecture/oss-enterprise-separation.md)

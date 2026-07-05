@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -469,13 +470,11 @@ func (h *DeployHandlers) HandleLintConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"findings": findings, "config_id": t.ConfigID})
 }
 
-// actorFromContext extracts the auth actor for audit trails. Falls
-// back to "anonymous" when auth is disabled.
+// actorFromContext extracts the auth actor label for audit trails. It reads
+// the actor stashed by the auth middleware under AuthActorContextKey via the
+// canonical middleware.ActorFromGin helper (the legacy "auth_actor" string key
+// never matched, so attribution silently defaulted). When auth is disabled the
+// actor is zero-valued and String() yields the system actor label.
 func actorFromContext(c *gin.Context) string {
-	if v, ok := c.Get("auth_actor"); ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return "anonymous"
+	return middleware.ActorFromGin(c).String()
 }

@@ -264,15 +264,13 @@ func (h *RolloutHandlers) HandleAbortRollout(c *gin.Context) {
 // Added in v0.60.0.
 func (h *RolloutHandlers) HandleRollBackRollout(c *gin.Context) {
 	id := c.Param("id")
-	// The operator is read from the auth context the same way Approve
-	// and Reject read theirs. Falls back to "operator" so dev/no-auth
-	// mode still records something useful in the audit payload.
-	operator := "operator"
-	if actor, ok := c.Get("auth_actor"); ok {
-		if s, ok := actor.(string); ok && s != "" {
-			operator = s
-		}
-	}
+	// The operator is read from the auth context via the canonical
+	// middleware.ActorFromGin helper (the legacy "auth_actor" string key never
+	// matched the AuthActorContextKey the middleware stashes under, so this
+	// silently defaulted). String() yields "operator:<label>" for an
+	// authenticated token and the system actor label under no-auth mode, so the
+	// audit payload still records something useful.
+	operator := middleware.ActorFromGin(c).String()
 
 	r, err := h.rolloutService.RollBack(c.Request.Context(), id, operator)
 	if err != nil {
@@ -642,12 +640,13 @@ func (h *RolloutHandlers) HandleCreatePlan(c *gin.Context) {
 	// sufficient to create a config-only plan. Acceptance test
 	// #5 exercises both branches via the real middleware chain.
 	if services.HasActionStep(req.Steps) {
-		actor := middleware.ActorFromGin(c)
-		// Auth-disabled deployments leave actor.IsZero() true and
-		// fall through — mirrors the RequireScope middleware
-		// posture for backwards compatibility with the
-		// SQUADRON_DISABLE_AUTH dev flag.
-		if !actor.IsZero() && !actor.HasScope(services.ScopeActionsWrite) {
+		// v0.89.x — route the payload-gated actions:write requirement through the
+		// wired Authorizer (ADR 0017) instead of the legacy AuthActor.HasScope, so
+		// the enterprise deny-by-default role decision is honored. AuthorizeScope
+		// returns true when auth is disabled (zero actor), preserving the
+		// SQUADRON_DISABLE_AUTH fall-through, and reproduces the old flat-scope
+		// allow under the OSS ScopeAuthorizer.
+		if !middleware.AuthorizeScope(c, services.ScopeActionsWrite) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error":          "forbidden",
 				"detail":         "plan contains action steps; token requires both rollouts:write and actions:write",

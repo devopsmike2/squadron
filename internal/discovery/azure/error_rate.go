@@ -23,12 +23,13 @@ import (
 //
 // Wire shape parity: per-row DetectErrorRate + the
 // runErrorRateDetectionForServerless helper + the WithErrorRateStore
-// setter mirror the cold-start chunk pattern. The Azure scanner's
-// Scan() lifecycle does NOT yet call runColdStartDetectionForServerless
-// (cold-start arc deferred this wiring); the error-rate branch
-// matches that posture — the helper is callable directly by tests
-// and by future scan wiring, but Scan() is not modified here so
-// the cross-cloud cold-start vs error-rate symmetry holds.
+// setter mirror the cold-start chunk pattern. NOTE: Azure's commercial
+// (App Insights) cold-start + error-rate detection IS wired into Scan()
+// via the dedicated runAzureServerlessCommercialDetection enrichment pass
+// (commercial_activation.go), which is gated on the commercial-detectors
+// edition. This helper + WithErrorRateStore remain the native-metric
+// wire-shape parity surface (callable by tests and future native wiring);
+// they are distinct from the commercial App Insights path.
 
 // ErrorRateRatioFloor mirrors proposer.ErrorRateRatioFloor.
 const ErrorRateRatioFloor = 2.0

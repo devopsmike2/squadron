@@ -249,3 +249,26 @@ func RequireScope(required string) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// AuthorizeScope runs the wired Authorizer for an in-handler scope check that
+// can't be expressed as route-level RequireScope middleware — e.g. a scope
+// gated on the request payload. It returns true if the actor is allowed the
+// required scope. When auth is disabled server-side (zero actor) it returns
+// true, mirroring RequireScope's skip. The decision goes through the same
+// process-wide authorizer as RequireScope (ADR 0006/0010): INERT under the OSS
+// ScopeAuthorizer (flat-scope allow reproduces the historical HasScope check),
+// while the enterprise deny-by-default, resource-aware Authorizer sees the
+// requirement. The caller owns the 403 response body (so a handler can attach
+// a payload-specific detail message).
+func AuthorizeScope(c *gin.Context, required string) bool {
+	actor := ActorFromGin(c)
+	if actor.IsZero() {
+		return true
+	}
+	decision := authorizer.Authorize(c.Request.Context(), identity.Principal{
+		ID:     actor.TokenID,
+		Label:  actor.TokenLabel,
+		Scopes: actor.Scopes,
+	}, required, resolveResource(c))
+	return decision.Allow
+}
