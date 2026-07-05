@@ -11,6 +11,7 @@ export interface OIDCConnection {
   client_id: string;
   redirect_uri: string;
   tenant_id: string;
+  tenant_claim: string;
   scopes: string[];
   default_role: string;
   display_name: string;
@@ -25,6 +26,7 @@ export interface OIDCConnectionInput {
   client_secret: string; // required on create
   redirect_uri: string;
   tenant_id: string;
+  tenant_claim?: string;
   scopes: string[];
   default_role: string;
   display_name: string;
@@ -39,6 +41,7 @@ export interface OIDCConnectionUpdate {
   client_secret?: string;
   redirect_uri: string;
   tenant_id: string;
+  tenant_claim?: string;
   scopes: string[];
   default_role: string;
   display_name: string;
