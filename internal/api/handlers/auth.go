@@ -57,6 +57,19 @@ func (h *AuthHandlers) HandleCreateToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "detail": err.Error()})
 		return
 	}
+	// ADR 0013 D1 — the public token-create API must not mint a token whose
+	// label is reserved for break-glass admin. The enterprise RBAC edition
+	// keys its bootstrap-admin grant on the token LABEL, so an `auth:write`
+	// holder minting a `bootstrap`-labeled token here would self-escalate to
+	// cross-tenant admin. The reserved set is EMPTY in OSS (inert); the
+	// enterprise wire populates it with its bootstrap labels. The internal
+	// first-start bootstrapAuthToken calls Issue directly (not this handler),
+	// so it can still mint the label. Match is case-insensitive on the
+	// trimmed value so `Bootstrap` can't bypass `bootstrap`.
+	if services.IsReservedTokenLabel(req.Label) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "label is reserved"})
+		return
+	}
 	token, plaintext, err := h.authService.Issue(c.Request.Context(), req.Label, req.Scopes, req.ExpiresAt)
 	if err != nil {
 		msg := err.Error()
