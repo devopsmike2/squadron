@@ -118,6 +118,15 @@ const (
 	// mounts no SCIM routes (handler nil → 404).
 	ScopeSCIMRead  = "scim:read"
 	ScopeSCIMWrite = "scim:write"
+
+	// ADR 0016 — SSO administration. sso:read covers listing OIDC connections;
+	// sso:write covers OIDC-connection create/update/delete + minting SCIM
+	// service tokens. Gated by the enterprise SSO-admin handler through the RBAC
+	// authorizer (deny-by-default; bootstrap-admin passes). Inert in OSS:
+	// defining a scope changes nothing until a route requires it, and OSS mounts
+	// no /api/v1/sso routes (handler nil → 404).
+	ScopeSSORead  = "sso:read"
+	ScopeSSOWrite = "sso:write"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -138,6 +147,7 @@ func AllScopes() []string {
 		ScopeActionsRead, ScopeActionsWrite,
 		ScopeIncidentsRead, ScopeIncidentsWrite,
 		ScopeSCIMRead, ScopeSCIMWrite,
+		ScopeSSORead, ScopeSSOWrite,
 	}
 }
 

@@ -376,6 +376,13 @@ type Server struct {
 	// like /health and /metrics (ADR 0014 D4). Read at request time by the
 	// late-bound wildcard in registerRoutes.
 	enterpriseOIDCHandler EnterpriseOIDCHandler
+	// enterpriseSSOAdminHandler serves the /api/v1/sso/* SSO admin API (ADR
+	// 0016): authenticated OIDC-connection CRUD + SCIM service-token minting.
+	// Wired by the enterprise build via SetEnterpriseSSOAdminHandler; OSS leaves
+	// it nil so those routes return 404. Mounted UNDER the bearer group (it's a
+	// privileged admin surface, sso:read/sso:write). Read at request time by the
+	// late-bound wildcard in registerRoutes.
+	enterpriseSSOAdminHandler EnterpriseSSOAdminHandler
 	// v0.53 Move 2 — action runner. The actions handler needs the
 	// raw applicationstore to read/write action_runner_registrations
 	// and action_requests; it also needs the Ed25519 signer to
@@ -696,6 +703,51 @@ func (s *Server) mountEnterpriseSCIM(rg gin.IRouter) {
 			return
 		}
 		s.enterpriseSCIMHandler.HandleSCIM(c)
+	})
+}
+
+// EnterpriseSSOAdminHandler is the seam the enterprise edition implements to
+// serve the SSO admin API under /api/v1/sso (ADR 0016): authenticated OIDC-
+// connection CRUD (with server-side secret sealing) + SCIM service-token
+// minting. It receives requests that have already passed RequireBearer +
+// ResolveTenant; the path suffix after /api/v1/sso is available via
+// c.Param("path"). The handler enforces its own sso:read / sso:write
+// authorization through the enterprise authorizer. OSS never provides one, so
+// the routes 404 — SSO connection management + SCIM-token minting are enterprise
+// features.
+type EnterpriseSSOAdminHandler interface {
+	HandleSSOAdmin(c *gin.Context)
+}
+
+// SetEnterpriseSSOAdminHandler installs the enterprise SSO admin handler that
+// backs /api/v1/sso/* (ADR 0016). The enterprise build's wire layer calls this
+// once after NewServer; OSS never calls it (or passes nil), leaving the SSO
+// admin API unmounted (404). Not safe for concurrent use with in-flight
+// requests — call it during startup, before the server accepts traffic.
+func (s *Server) SetEnterpriseSSOAdminHandler(h EnterpriseSSOAdminHandler) {
+	s.enterpriseSSOAdminHandler = h
+}
+
+// mountEnterpriseSSO registers the late-bound /api/v1/sso/* wildcard on the
+// given route group (ADR 0016). registerRoutes runs inside NewServer, before
+// the wire layer calls SetEnterpriseSSOAdminHandler, so the closure reads
+// s.enterpriseSSOAdminHandler at REQUEST time: OSS (nil handler) returns 404;
+// the enterprise edition serves OIDC-connection CRUD + SCIM-token minting.
+// Mounted UNDER the bearer group (the same v1 group as mountEnterpriseSCIM) —
+// SSO administration is a privileged action, so it must sit behind
+// RequireBearer; the enterprise handler enforces its own sso:read / sso:write
+// authorization. Extracted from registerRoutes so the seam is unit-testable
+// with a bare *Server. Mirrors mountEnterpriseSCIM.
+func (s *Server) mountEnterpriseSSO(rg gin.IRouter) {
+	rg.Any("/sso/*path", func(c *gin.Context) {
+		if s.enterpriseSSOAdminHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "SSO administration is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseSSOAdminHandler.HandleSSOAdmin(c)
 	})
 }
 
@@ -2403,6 +2455,12 @@ func (s *Server) registerRoutes() {
 		// RequireBearer. OSS leaves the handler nil → 404 (all SCIM routes,
 		// ServiceProviderConfig included).
 		s.mountEnterpriseSCIM(v1)
+
+		// ADR 0016 — SSO admin API seam under /api/v1/sso/*: authenticated
+		// OIDC-connection CRUD + SCIM service-token minting. Mounted UNDER the
+		// bearer group (privileged admin, sso:read/sso:write). OSS leaves the
+		// handler nil → 404.
+		s.mountEnterpriseSSO(v1)
 
 		// Auth token management lives under /api/v1/auth/tokens.
 		// Bootstrap problem: the first token has to be created without
