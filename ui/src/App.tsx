@@ -13,6 +13,7 @@ import ActionsPage from "./pages/Actions";
 import AgentsPage from "./pages/Agents";
 import AlertsPage from "./pages/Alerts";
 import AuditPage from "./pages/Audit";
+import AuthCallbackPage from "./pages/AuthCallback";
 import ConfigsPage from "./pages/Configs";
 import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
@@ -106,16 +107,22 @@ function AuthBoundary() {
     };
   }, [nav]);
 
-  const onLoginPage = location.pathname === "/login";
+  // Pre-auth routes render standalone (no Layout, no global subscriptions that
+  // would fire authenticated fetches). /auth/callback is the OIDC→frontend
+  // handoff landing (ADR 0014): it must be treated as pre-auth so no authed
+  // fetch / 401 bounce fires before it stores the minted bearer.
+  const isPreAuthRoute =
+    location.pathname === "/login" || location.pathname === "/auth/callback";
   const hasToken = Boolean(getAuthToken());
 
-  // Login route mounts standalone (no Layout, no global subscriptions
-  // that would try to fetch authenticated endpoints). Once authenticated
-  // the operator gets the full app.
-  if (onLoginPage) {
+  // Login + callback routes mount standalone (no Layout, no global
+  // subscriptions that would try to fetch authenticated endpoints). Once
+  // authenticated the operator gets the full app.
+  if (isPreAuthRoute) {
     return (
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
         {/* Other paths under unauthenticated bounce back to /login.
             React-router needs a fallback that doesn't cause a render
             loop with our redirect, so this is just defensive. */}
