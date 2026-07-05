@@ -132,6 +132,96 @@ func TestRequireBearer_OptionsPassThrough(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, w.Code)
 }
 
+// strictIdentityCleanup resets all three process-wide toggles the slice-4d
+// enforcement reads, so a strict-mode test can't leak into the others (these are
+// global setters mirroring the enterprise wire).
+func strictIdentityCleanup(t *testing.T) {
+	t.Cleanup(func() {
+		services.SetStrictIdentitySource(false)
+		services.SetReservedTokenLabels(nil)
+		services.SetReservedTokenLabelPrefixes(nil)
+	})
+}
+
+// TestRequireBearer_StrictOff_RawTokenAuthenticates pins the OSS inertness of
+// slice 4d: with StrictIdentitySource() false (the OSS default), a raw operator
+// token (label `ci-bot`, not linked to any OIDC/SCIM identity) authenticates
+// exactly as before — the enforcement block is skipped entirely.
+func TestRequireBearer_StrictOff_RawTokenAuthenticates(t *testing.T) {
+	strictIdentityCleanup(t)
+	// Strict OFF (default) — do not flip the toggle.
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	_, plaintext, err := svc.Issue(t.Context(), "ci-bot", []string{services.ScopeWildcard}, nil)
+	require.NoError(t, err)
+
+	r := newTestRouter(svc)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"actor":"ci-bot"`)
+}
+
+// TestRequireBearer_StrictOn_RawToken_401 pins the enterprise-side enforcement:
+// with strict on and the reserved allow-set populated (as the enterprise wire
+// does), a raw operator token whose label is not a validated identity source is
+// rejected. The reject is the EXACT generic bad-token 401 — no provenance leak.
+func TestRequireBearer_StrictOn_RawToken_401(t *testing.T) {
+	strictIdentityCleanup(t)
+	services.SetReservedTokenLabels([]string{"bootstrap"})
+	services.SetReservedTokenLabelPrefixes([]string{"oidc:", "scim:"})
+	services.SetStrictIdentitySource(true)
+
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	_, plaintext, err := svc.Issue(t.Context(), "ci-bot", []string{services.ScopeWildcard}, nil)
+	require.NoError(t, err)
+
+	r := newTestRouter(svc)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	// Indistinguishable from a bad/revoked token 401 — no "identity source" or
+	// label echoed in the body.
+	assert.Contains(t, w.Body.String(), "invalid or revoked token")
+	assert.NotContains(t, w.Body.String(), "ci-bot")
+	assert.NotContains(t, w.Body.String(), "identity source")
+}
+
+// TestRequireBearer_StrictOn_ValidatedIdentity_200 pins that under strict, a
+// token from a validated identity source — bootstrap break-glass (exact) or an
+// oidc:/scim: prefixed identity/service token — still authenticates.
+func TestRequireBearer_StrictOn_ValidatedIdentity_200(t *testing.T) {
+	strictIdentityCleanup(t)
+	services.SetReservedTokenLabels([]string{"bootstrap"})
+	services.SetReservedTokenLabelPrefixes([]string{"oidc:", "scim:"})
+	services.SetStrictIdentitySource(true)
+
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	r := newTestRouter(svc)
+
+	// Internal mint (like the OIDC/SCIM/bootstrap paths) bypasses the public
+	// reserved-label handler and calls Issue directly.
+	for _, label := range []string{"bootstrap", "oidc:alice@example.com", "scim:svc-token"} {
+		t.Run(label, func(t *testing.T) {
+			_, plaintext, err := svc.Issue(t.Context(), label, []string{services.ScopeWildcard}, nil)
+			require.NoError(t, err)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			req.Header.Set("Authorization", "Bearer "+plaintext)
+			r.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.Contains(t, w.Body.String(), label)
+		})
+	}
+}
+
 func TestRequireBearer_ActorAlsoOnRequestContext(t *testing.T) {
 	// The middleware must populate BOTH the Gin context (for handlers)
 	// and the request's context.Context (for service-layer code that

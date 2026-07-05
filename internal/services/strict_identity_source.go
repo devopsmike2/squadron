@@ -50,3 +50,21 @@ func StrictIdentitySource() bool {
 	defer strictIdentitySourceMu.RUnlock()
 	return strictIdentitySource
 }
+
+// IdentitySourceValidated reports whether the given token label comes from a
+// validated identity source (slice 4d). A token is a validated identity source
+// iff its label is a reserved identity/service label — i.e. it is in the
+// bootstrap exact-set OR carries a reserved `oidc:` / `scim:` prefix registered
+// by the enterprise wire (SetReservedTokenLabels / SetReservedTokenLabelPrefixes).
+// A raw operator label (e.g. `ci-bot`) is NOT validated.
+//
+// This is a deliberately thin wrapper over IsReservedTokenLabel so the strict
+// predicate and the reserved-label substrate can never drift apart: the exact
+// set of labels the enterprise reserves (and therefore mints only internally)
+// is precisely the set that counts as a validated identity source. INERT in
+// OSS — the reserved sets are empty, so this returns false for everything, but
+// the RequireBearer enforcement is gated on StrictIdentitySource() (also false
+// in OSS), so a raw token still authenticates.
+func IdentitySourceValidated(label string) bool {
+	return IsReservedTokenLabel(label)
+}
