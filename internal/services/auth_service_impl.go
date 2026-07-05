@@ -73,6 +73,108 @@ const (
 // behavior in APIToken.HasScope exists only for tokens persisted
 // before v0.10.
 func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []string, expiresAt *time.Time) (*APIToken, string, error) {
+	stored, plaintext, err := buildToken(label, scopes, expiresAt)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := s.appStore.CreateAPIToken(ctx, stored); err != nil {
+		return nil, "", fmt.Errorf("failed to persist token: %w", err)
+	}
+	s.logger.Info("issued api token",
+		zap.String("token_id", stored.ID),
+		zap.String("label", stored.Label),
+		zap.Strings("scopes", stored.Scopes))
+	s.emitIssuedAudit(ctx, stored)
+	return toServiceToken(stored), plaintext, nil
+}
+
+// IssueTx mints a token as part of a caller-owned transaction: it does the same
+// validation / entropy / hashing / row-build as Issue, but runs the INSERT
+// through the supplied Execer (a *sql.Tx) instead of the store's own *sql.DB, so
+// the write commits or rolls back with the caller's other writes. This is the
+// OSS half of the ADR-0015 transactional-mint seam — an enterprise SSO overlay
+// wraps this token INSERT together with its tenant-assign + RBAC-bind writes in
+// ONE tx on its shared handle, so the mint is truly atomic (no revoke-on-failure
+// compensation, no orphaned token).
+//
+// IMPORTANT: IssueTx deliberately does NOT emit the api_token.issued audit event.
+// The write may still roll back after IssueTx returns (if a later step in the
+// caller's tx fails), and auditing a token that never persisted would be untrue.
+// The caller emits the issued audit AFTER it commits; EmitIssuedAudit exposes the
+// canonical event shape for that. Inert in OSS: nothing here calls IssueTx.
+//
+// It is intentionally NOT part of the AuthService interface (so OSS test fakes
+// and any alternate implementation are unaffected); the enterprise overlay
+// reaches it by type-assertion, exactly as main.go reaches SetAuditService.
+func (s *AuthServiceImpl) IssueTx(ctx context.Context, exec applicationstore.Execer, label string, scopes []string, expiresAt *time.Time) (*APIToken, string, error) {
+	if exec == nil {
+		return nil, "", fmt.Errorf("IssueTx: nil execer")
+	}
+	txStore, ok := s.appStore.(interface {
+		CreateAPITokenTx(ctx context.Context, exec applicationstore.Execer, t *applicationstore.APIToken) error
+	})
+	if !ok {
+		return nil, "", fmt.Errorf("IssueTx: application store does not support transactional token creation")
+	}
+	stored, plaintext, err := buildToken(label, scopes, expiresAt)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := txStore.CreateAPITokenTx(ctx, exec, stored); err != nil {
+		return nil, "", fmt.Errorf("failed to persist token: %w", err)
+	}
+	s.logger.Info("issued api token (tx)",
+		zap.String("token_id", stored.ID),
+		zap.String("label", stored.Label),
+		zap.Strings("scopes", stored.Scopes))
+	return toServiceToken(stored), plaintext, nil
+}
+
+// EmitIssuedAudit records the canonical api_token.issued audit event for a token
+// that was minted via IssueTx, to be called by the caller AFTER its transaction
+// commits (IssueTx itself does not emit — see its doc). Nil-safe: no-op when no
+// audit service is wired. tok is the service-layer token returned by IssueTx.
+func (s *AuthServiceImpl) EmitIssuedAudit(ctx context.Context, tok *APIToken) {
+	if tok == nil {
+		return
+	}
+	stored := &applicationstore.APIToken{
+		ID:        tok.ID,
+		Label:     tok.Label,
+		Scopes:    tok.Scopes,
+		ExpiresAt: tok.ExpiresAt,
+	}
+	s.emitIssuedAudit(ctx, stored)
+}
+
+// emitIssuedAudit fans out the api_token.issued audit event (v0.51, CIP-007-6
+// R5.3 / SOC 2 CC6.2). Nil-safe. Shared by Issue (inline) and EmitIssuedAudit
+// (post-commit for the IssueTx path) so the event payload is defined once.
+func (s *AuthServiceImpl) emitIssuedAudit(ctx context.Context, stored *applicationstore.APIToken) {
+	if s.audit == nil {
+		return
+	}
+	payload := map[string]any{
+		"label":  stored.Label,
+		"scopes": stored.Scopes,
+	}
+	if stored.ExpiresAt != nil {
+		payload["expires_at"] = stored.ExpiresAt.Format(time.RFC3339)
+	}
+	_ = s.audit.Record(ctx, AuditEntry{
+		EventType:  "api_token.issued",
+		TargetType: "api_token",
+		TargetID:   stored.ID,
+		Action:     "issued",
+		Payload:    payload,
+	})
+}
+
+// buildToken performs the label/scope/expiry validation, generates the token
+// entropy, and builds the stored row + plaintext. Shared by Issue and IssueTx so
+// the two mint paths validate and hash identically. It does NOT touch the store
+// or audit — the caller persists (with or without a tx) and audits.
+func buildToken(label string, scopes []string, expiresAt *time.Time) (*applicationstore.APIToken, string, error) {
 	label = strings.TrimSpace(label)
 	if len(label) < labelMinLen {
 		return nil, "", fmt.Errorf("label is required")
@@ -133,34 +235,7 @@ func (s *AuthServiceImpl) Issue(ctx context.Context, label string, scopes []stri
 		CreatedAt: now,
 		ExpiresAt: expiresAt,
 	}
-	if err := s.appStore.CreateAPIToken(ctx, stored); err != nil {
-		return nil, "", fmt.Errorf("failed to persist token: %w", err)
-	}
-	s.logger.Info("issued api token",
-		zap.String("token_id", stored.ID),
-		zap.String("label", stored.Label),
-		zap.Strings("scopes", normalized))
-	// v0.51 — emit api_token.issued audit event for CIP-007-6 R5.3
-	// (authorize access changes) and SOC 2 CC6.2 (user authorization).
-	// Payload includes label, scopes, and expiry so an auditor can
-	// reconstruct who got what authority and when.
-	if s.audit != nil {
-		payload := map[string]any{
-			"label":  stored.Label,
-			"scopes": normalized,
-		}
-		if stored.ExpiresAt != nil {
-			payload["expires_at"] = stored.ExpiresAt.Format(time.RFC3339)
-		}
-		_ = s.audit.Record(ctx, AuditEntry{
-			EventType:  "api_token.issued",
-			TargetType: "api_token",
-			TargetID:   stored.ID,
-			Action:     "issued",
-			Payload:    payload,
-		})
-	}
-	return toServiceToken(stored), plaintext, nil
+	return stored, plaintext, nil
 }
 
 // List returns every token Squadron has ever issued, revoked or not,
