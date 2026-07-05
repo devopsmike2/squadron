@@ -107,6 +107,17 @@ const (
 	// people who dispatch fleet actions.
 	ScopeIncidentsRead  = "incidents:read"
 	ScopeIncidentsWrite = "incidents:write"
+
+	// ADR 0014 Arc C — SCIM 2.0 provisioning (slice 4a defines the scopes;
+	// slice 4c guards the routes with RequireScope). scim:read covers
+	// ServiceProviderConfig + Users/Groups reads; scim:write covers
+	// provisioning (create/update/patch/delete + the active:false deprovision
+	// signal). The IdP holds a reserved-label, tenant-bound token carrying
+	// scim:* and provisions only into its own tenant (D3). Inert in OSS:
+	// defining a scope changes nothing until a route requires it, and OSS
+	// mounts no SCIM routes (handler nil → 404).
+	ScopeSCIMRead  = "scim:read"
+	ScopeSCIMWrite = "scim:write"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -126,6 +137,7 @@ func AllScopes() []string {
 		ScopeSiemRead, ScopeSiemWrite,
 		ScopeActionsRead, ScopeActionsWrite,
 		ScopeIncidentsRead, ScopeIncidentsWrite,
+		ScopeSCIMRead, ScopeSCIMWrite,
 	}
 }
 

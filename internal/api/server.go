@@ -361,6 +361,21 @@ type Server struct {
 	// SetEnterpriseTenantHandler; OSS leaves it nil so those routes return 404.
 	// Read at request time by the late-bound wildcard in registerRoutes.
 	enterpriseTenantHandler EnterpriseTenantHandler
+	// enterpriseSCIMHandler serves the /api/v1/scim/v2/* SCIM 2.0 provisioning
+	// API (ADR 0014 Arc C slice 4a/4c). Wired by the enterprise build edition
+	// via SetEnterpriseSCIMHandler; OSS leaves it nil so those routes return
+	// 404. Mounted UNDER the bearer group (authenticated by a reserved-label,
+	// scim:*-scoped, tenant-bound service token — ADR 0014 D3). Read at request
+	// time by the late-bound wildcard in registerRoutes.
+	enterpriseSCIMHandler EnterpriseSCIMHandler
+	// enterpriseOIDCHandler serves the /auth/oidc/* browser SSO endpoints
+	// (login + callback) (ADR 0014 Arc C slice 4a/4b). Wired by the enterprise
+	// build edition via SetEnterpriseOIDCHandler; OSS leaves it nil so those
+	// routes return 404. Mounted OUTSIDE the bearer group — /auth/oidc/login and
+	// /callback are PRE-authentication (a browser starting SSO has no token yet),
+	// like /health and /metrics (ADR 0014 D4). Read at request time by the
+	// late-bound wildcard in registerRoutes.
+	enterpriseOIDCHandler EnterpriseOIDCHandler
 	// v0.53 Move 2 — action runner. The actions handler needs the
 	// raw applicationstore to read/write action_runner_registrations
 	// and action_requests; it also needs the Ed25519 signer to
@@ -634,6 +649,98 @@ func (s *Server) mountEnterpriseTenants(rg gin.IRouter) {
 			return
 		}
 		s.enterpriseTenantHandler.HandleTenants(c)
+	})
+}
+
+// EnterpriseSCIMHandler is the seam the enterprise edition implements to serve
+// the SCIM 2.0 provisioning API under /api/v1/scim/v2 (ADR 0014 Arc C, D3). It
+// receives requests that have already passed RequireBearer + ResolveTenant; the
+// path suffix after /api/v1/scim/v2 is available via c.Param("path"). The
+// handler is responsible for its own authorization — SCIM endpoints are
+// authenticated by a reserved-label, scim:*-scoped, tenant-bound service token
+// on the existing bearer/scope/tenant stack (the IdP stores that token and
+// provisions only into its own tenant). OSS never provides one, so the routes
+// 404 — including /scim/v2/ServiceProviderConfig: OSS has no SCIM, so every
+// SCIM route (discovery included) is unmounted. The public-vs-authed
+// ServiceProviderConfig question is an enterprise (slice 4c) decision.
+type EnterpriseSCIMHandler interface {
+	HandleSCIM(c *gin.Context)
+}
+
+// SetEnterpriseSCIMHandler installs the enterprise SCIM provisioning handler
+// that backs /api/v1/scim/v2/* (ADR 0014 Arc C). The enterprise build's wire
+// layer calls this once after NewServer; OSS never calls it (or passes nil),
+// leaving SCIM unmounted (404). Not safe for concurrent use with in-flight
+// requests — call it during startup, before the server accepts traffic.
+func (s *Server) SetEnterpriseSCIMHandler(h EnterpriseSCIMHandler) {
+	s.enterpriseSCIMHandler = h
+}
+
+// mountEnterpriseSCIM registers the late-bound /api/v1/scim/v2/* wildcard on the
+// given route group (ADR 0014 Arc C, D3/D4). registerRoutes runs inside
+// NewServer, before the wire layer calls SetEnterpriseSCIMHandler, so the
+// closure reads s.enterpriseSCIMHandler at REQUEST time: OSS (nil handler)
+// returns 404; the enterprise edition serves its SCIM Users/Groups handler.
+// Mounted UNDER the bearer group (the same v1 group as mountEnterpriseRBAC) —
+// SCIM is authenticated by the SCIM service token, so it must sit behind
+// RequireBearer. The enterprise handler enforces its own scim:read / scim:write
+// authorization. Extracted from registerRoutes so the seam is unit-testable with
+// a bare *Server. Mirrors mountEnterpriseRBAC.
+func (s *Server) mountEnterpriseSCIM(rg gin.IRouter) {
+	rg.Any("/scim/v2/*path", func(c *gin.Context) {
+		if s.enterpriseSCIMHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "SCIM provisioning is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseSCIMHandler.HandleSCIM(c)
+	})
+}
+
+// EnterpriseOIDCHandler is the seam the enterprise edition implements to serve
+// the OIDC browser-SSO endpoints under /auth/oidc (ADR 0014 Arc C, D0/D4):
+// /auth/oidc/login (redirect to the IdP with state/PKCE) and /auth/oidc/callback
+// (exchange the code, verify the ID token, mint a Squadron bearer token). The
+// path suffix after /auth/oidc is available via c.Param("path"). These routes
+// are PRE-authentication — a browser starting SSO has no bearer token yet — so
+// they mount OUTSIDE the RequireBearer group, alongside /health and /metrics.
+// The handler manages its own request handling. OSS never provides one, so the
+// routes 404.
+type EnterpriseOIDCHandler interface {
+	HandleOIDC(c *gin.Context)
+}
+
+// SetEnterpriseOIDCHandler installs the enterprise OIDC SSO handler that backs
+// /auth/oidc/* (ADR 0014 Arc C). The enterprise build's wire layer calls this
+// once after NewServer; OSS never calls it (or passes nil), leaving OIDC login
+// unmounted (404). Not safe for concurrent use with in-flight requests — call it
+// during startup, before the server accepts traffic.
+func (s *Server) SetEnterpriseOIDCHandler(h EnterpriseOIDCHandler) {
+	s.enterpriseOIDCHandler = h
+}
+
+// mountEnterpriseOIDC registers the late-bound /auth/oidc/* wildcard on the
+// given router (ADR 0014 Arc C, D0/D4). registerRoutes runs inside NewServer,
+// before the wire layer calls SetEnterpriseOIDCHandler, so the closure reads
+// s.enterpriseOIDCHandler at REQUEST time: OSS (nil handler) returns 404; the
+// enterprise edition serves its login/callback handler. Mounted OUTSIDE the
+// bearer group (directly on s.router, like /health and /metrics) because OIDC
+// login is pre-authentication — RequireBearer must NOT intercept it, or a
+// tokenless browser could never start SSO. Extracted from registerRoutes so the
+// seam is unit-testable with a bare *Server. Mirrors mountEnterpriseRBAC but on
+// the root router rather than the /api/v1 group.
+func (s *Server) mountEnterpriseOIDC(rg gin.IRouter) {
+	rg.Any("/auth/oidc/*path", func(c *gin.Context) {
+		if s.enterpriseOIDCHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "OIDC single sign-on is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseOIDCHandler.HandleOIDC(c)
 	})
 }
 
@@ -2182,6 +2289,13 @@ func (s *Server) registerRoutes() {
 	// Health check — public so load balancers can probe.
 	s.router.GET("/health", healthHandlers.HandleHealth)
 
+	// ADR 0014 Arc C slice 4a — OIDC browser-SSO seam under /auth/oidc/*
+	// (login + callback). Mounted OUTSIDE the /api/v1 bearer group, directly
+	// on the root router alongside /health and /metrics, because OIDC login is
+	// PRE-authentication: a browser starting SSO has no bearer token yet, so
+	// RequireBearer must NOT intercept it. OSS leaves the handler nil → 404.
+	s.mountEnterpriseOIDC(s.router)
+
 	// PUBLIC route: GitHub doesn't authenticate to Squadron's API; the
 	// HMAC signature IS the auth. Do NOT add auth middleware here.
 	// v0.89.23 #639 Stream 40 — receives pull_request events from the
@@ -2268,6 +2382,14 @@ func (s *Server) registerRoutes() {
 		// ADR 0011 slice 3c — tenant management API seam under
 		// /api/v1/tenants/*.
 		s.mountEnterpriseTenants(v1)
+
+		// ADR 0014 Arc C slice 4a — SCIM 2.0 provisioning API seam under
+		// /api/v1/scim/v2/*. Mounted UNDER the bearer group: SCIM is
+		// authenticated by a reserved-label, scim:*-scoped, tenant-bound
+		// service token that the IdP stores (D3), so it must sit behind
+		// RequireBearer. OSS leaves the handler nil → 404 (all SCIM routes,
+		// ServiceProviderConfig included).
+		s.mountEnterpriseSCIM(v1)
 
 		// Auth token management lives under /api/v1/auth/tokens.
 		// Bootstrap problem: the first token has to be created without
