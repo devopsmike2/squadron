@@ -20,6 +20,10 @@ type fakeWalkerStore struct {
 	mu       sync.Mutex
 	targets  []*apptypes.DeployTarget
 	expected map[string]*apptypes.ExpectedAgent
+	// ADR 0013 D6-a — capture the tenant resolved from the upsert ctx so
+	// the isolation test can assert the expected_agents row landed in the
+	// owning deploy target's tenant, not `default`.
+	lastUpsertTenant string
 }
 
 func newFakeWalkerStore() *fakeWalkerStore {
@@ -36,9 +40,10 @@ func (f *fakeWalkerStore) GetDeployTarget(_ context.Context, id string) (*apptyp
 	}
 	return nil, nil
 }
-func (f *fakeWalkerStore) UpsertExpectedAgent(_ context.Context, e *apptypes.ExpectedAgent) error {
+func (f *fakeWalkerStore) UpsertExpectedAgent(ctx context.Context, e *apptypes.ExpectedAgent) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastUpsertTenant = effectiveWriteTenant(ctx)
 	f.expected[e.Hostname] = e
 	return nil
 }

@@ -152,9 +152,15 @@ type fakeRollouts struct {
 	planSteps []services.RolloutInput
 	planErr   error
 	planID    string
+	// ADR 0013 D6-a — capture the tenant resolved from the write ctx so
+	// the isolation test can assert the per-owner rollout landed in the
+	// owning group's tenant, not `default`.
+	lastCreateTenant     string
+	lastCreatePlanTenant string
 }
 
-func (f *fakeRollouts) Create(_ context.Context, in services.RolloutInput) (*services.Rollout, error) {
+func (f *fakeRollouts) Create(ctx context.Context, in services.RolloutInput) (*services.Rollout, error) {
+	f.lastCreateTenant = effectiveWriteTenant(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -162,7 +168,8 @@ func (f *fakeRollouts) Create(_ context.Context, in services.RolloutInput) (*ser
 	return &services.Rollout{ID: "rollout-" + in.Name}, nil
 }
 
-func (f *fakeRollouts) CreatePlan(_ context.Context, steps []services.RolloutInput) ([]*services.Rollout, string, error) {
+func (f *fakeRollouts) CreatePlan(ctx context.Context, steps []services.RolloutInput) ([]*services.Rollout, string, error) {
+	f.lastCreatePlanTenant = effectiveWriteTenant(ctx)
 	if f.planErr != nil {
 		return nil, "", f.planErr
 	}
