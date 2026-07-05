@@ -14,7 +14,7 @@ package iacconnstore
 // migration per bump, applied in order, idempotent SQL inside each
 // step. Existing migrations are NEVER edited after merge — they ran
 // against historical databases and edits desynchronize the schema.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // migration0001IaCConnections is the initial schema. One table for
 // IaC repository connections, parallel to credstore's
@@ -90,6 +90,23 @@ ALTER TABLE iac_connections ADD COLUMN webhook_secret_sealed BLOB;
 INSERT OR IGNORE INTO schema_version (version) VALUES (3);
 `
 
+// migration0004TenantID — ADR 0012 §Decision 3 (multi-tenancy slice
+// 3d). Adds the tenant_id column that keys each connection to the
+// tenant that owns it. NOT NULL DEFAULT 'default' so pre-3d rows
+// backfill to the OSS single-tenant sentinel — inert in OSS, where
+// every connection is created under identity.DefaultTenant. The GitHub
+// webhook receiver reads this column to scope its store writes to the
+// connection's tenant (a matched delivery carries no operator identity).
+//
+// SQLite doesn't support ALTER TABLE ... ADD COLUMN IF NOT EXISTS; the
+// migrate runner already tolerates the "duplicate column name" error
+// (isDuplicateColumnErr) so re-running on an up-to-date database is a
+// no-op — the same idempotency migration0002 and migration0003 rely on.
+const migration0004TenantID = `
+ALTER TABLE iac_connections ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+INSERT OR IGNORE INTO schema_version (version) VALUES (4);
+`
+
 // migrations is the ordered list of schema migrations. Index N is the
 // SQL applied at version N+1. New entries are appended; existing
 // entries are never edited.
@@ -97,4 +114,5 @@ var migrations = []string{
 	migration0001IaCConnections,
 	migration0002LearnFromAcceptedRecommendations,
 	migration0003WebhookSecretSealed,
+	migration0004TenantID,
 }

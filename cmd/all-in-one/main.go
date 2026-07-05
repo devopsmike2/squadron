@@ -340,7 +340,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// quiet. See docs/auth.md for the recovery flow if every token is
 	// lost.
 	if config.Auth.Enabled {
-		if err := bootstrapAuthToken(context.Background(), authService, logger); err != nil {
+		// ADR 0012 §4 — bootstrap runs authService.List/Issue on a bare
+		// background context. Stamp it as an explicit all-tenant system
+		// operation so it stays a boot-time fleet-wide op under enterprise
+		// strict mode (which would otherwise reject the unstamped context).
+		// Inert in OSS (single tenant).
+		if err := bootstrapAuthToken(identity.WithSystemContext(context.Background()), authService, logger); err != nil {
 			logger.Fatal("Failed to bootstrap auth token", zap.Error(err))
 		}
 	} else {
@@ -462,10 +467,29 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Info("Quality index enabled", zap.Duration("window", time.Hour))
 	}
 
+	// ADR 0012 §1 — bind this instance's OTLP ingest to a single tenant.
+	// The OTLP receiver is unauthenticated and its worker pool mints a
+	// fresh context decoupled from the connection, so there is no per-
+	// request identity to derive a tenant from: the operator pins one via
+	// ingest.otlp.tenant_id and it rides on every WorkItem the receiver
+	// submits. Empty is inert (the worker stamps identity.DefaultTenant),
+	// so OSS — where multi-tenancy resolves everything to "default" — is
+	// unchanged. Non-fatal warn here so an operator who forgets the binding
+	// in a multi-tenant deployment sees that ingest lands in "default";
+	// 3d-5's enterprise strict-mode gate is where this becomes fatal.
+	otlpIngestTenant := config.Ingest.OTLP.TenantID
+	if otlpIngestTenant == "" {
+		logger.Warn("ingest.otlp.tenant_id is not set — OTLP ingest will land in the default tenant",
+			zap.String("tenant", identity.DefaultTenant))
+	} else {
+		logger.Info("OTLP ingest bound to tenant", zap.String("tenant", otlpIngestTenant))
+	}
+
 	grpcServer, err := receiver.NewGRPCServer(grpcPort, otlpMetrics, workerPool, logger)
 	if err != nil {
 		logger.Fatal("Failed to create gRPC server", zap.Error(err))
 	}
+	grpcServer.SetTenant(otlpIngestTenant)
 	if traceIndex != nil {
 		grpcServer.SetTraceIndex(traceIndex)
 	}
@@ -485,6 +509,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		logger.Fatal("Failed to create HTTP server", zap.Error(err))
 	}
+	httpServer.SetTenant(otlpIngestTenant)
 	if traceIndex != nil {
 		httpServer.SetTraceIndex(traceIndex)
 	}
@@ -507,7 +532,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// package consumes — keeps the traceindex package free of a
 	// services import that would create a cycle with the storage
 	// layer.
-	traceFlushCtx, traceFlushCancel := context.WithCancel(context.Background())
+	// ADR 0012 §4 — the trace-index flusher runs UpsertTraceResources on a
+	// long-lived background context. Stamp it as a system (all-tenant)
+	// context so the flush is an explicit fleet-wide op (fleet-wide LRU, no
+	// tenant predicate) under enterprise strict mode. Inert in OSS.
+	traceFlushCtx, traceFlushCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
 	defer traceFlushCancel()
 	if traceIndex != nil {
 		flushAudit := &traceIndexAuditAdapter{audit: auditService}

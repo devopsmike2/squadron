@@ -21,11 +21,13 @@ import (
 
 // GRPCServer represents the gRPC OTLP receiver server
 type GRPCServer struct {
-	server       *grpc.Server
-	listener     net.Listener
-	logger       *zap.Logger
-	port         int
-	traceService *TraceService
+	server         *grpc.Server
+	listener       net.Listener
+	logger         *zap.Logger
+	port           int
+	traceService   *TraceService
+	metricsService *MetricsService
+	logsService    *LogsService
 }
 
 // NewGRPCServer creates a new gRPC server instance
@@ -55,11 +57,29 @@ func NewGRPCServer(port int, metricsInstance *metrics.OTLPMetrics, workerPool *w
 	reflection.Register(server)
 
 	return &GRPCServer{
-		server:       server,
-		logger:       logger,
-		port:         port,
-		traceService: traceService,
+		server:         server,
+		logger:         logger,
+		port:           port,
+		traceService:   traceService,
+		metricsService: metricsService,
+		logsService:    logsService,
 	}, nil
+}
+
+// SetTenant binds all three OTLP gRPC services (traces/metrics/logs) to the
+// ADR 0012 §1 ingest tenant, so cmd/all-in-one wires ingest.otlp.tenant_id
+// from a single call site regardless of transport. Empty leaves the worker
+// to stamp DefaultTenant (inert in OSS). Mirrors SetTraceIndex.
+func (s *GRPCServer) SetTenant(tenant string) {
+	if s.traceService != nil {
+		s.traceService.SetTenant(tenant)
+	}
+	if s.metricsService != nil {
+		s.metricsService.SetTenant(tenant)
+	}
+	if s.logsService != nil {
+		s.logsService.SetTenant(tenant)
+	}
 }
 
 // SetTraceIndex wires the slice-1 chunk-2 traceindex Observer onto

@@ -31,6 +31,33 @@ type Config struct {
 	ServerlessMetricDetection ServerlessMetricDetectionConfig `yaml:"serverless_metric_detection,omitempty"`
 
 	AuditRetention AuditRetentionConfig `yaml:"audit_retention,omitempty"`
+
+	Ingest IngestConfig `yaml:"ingest,omitempty"`
+}
+
+// IngestConfig groups the operator-facing tuning for the ingest paths.
+// Today it carries only the OTLP receiver's tenant binding (ADR 0012 §1),
+// but it is a natural home for future per-listener ingest knobs.
+type IngestConfig struct {
+	OTLP OTLPIngestConfig `yaml:"otlp,omitempty"`
+}
+
+// OTLPIngestConfig binds this instance's OTLP ingest to a single tenant
+// (ADR 0012 §1, "single tenant per instance"). The OTLP receiver
+// (gRPC/HTTP) is unauthenticated and its worker pool mints a fresh
+// context decoupled from the connection, so there is no per-request
+// identity to derive a tenant from — the operator pins one here and it
+// is threaded onto every WorkItem the receiver submits.
+//
+// Empty (the default) is treated as identity.DefaultTenant, so OSS —
+// where multi-tenancy is inert and everything resolves to "default" —
+// is unchanged. In the enterprise edition an empty value is the signal
+// that OTLP ingest would silently land in the default tenant; 3d-5's
+// strict-mode gate reads TenantID to fail fast on that misconfiguration.
+type OTLPIngestConfig struct {
+	// TenantID is the tenant every OTLP-ingested item is stamped with.
+	// Empty => identity.DefaultTenant (inert in OSS).
+	TenantID string `yaml:"tenant_id,omitempty"`
 }
 
 // AuditRetentionConfig is the operator-facing switch for pruning the

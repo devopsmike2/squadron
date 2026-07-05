@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/discovery"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/otlp"
@@ -59,6 +60,25 @@ type WorkItem struct {
 	Type      WorkItemType
 	RawData   []byte // Raw protobuf bytes
 	Timestamp time.Time
+	// Tenant is the tenant this item's writes are scoped to (ADR 0012 §1,
+	// "single tenant per instance"). The OTLP receiver stamps it from the
+	// operator-configured ingest.otlp.tenant_id; processItem stamps the
+	// processing context with it via identity.WithTenant so passive-
+	// discovery agent writes land in the configured tenant. Empty =>
+	// identity.DefaultTenant (inert in OSS — everything resolves to
+	// "default"). See tenantOrDefault.
+	Tenant string
+}
+
+// tenantOrDefault maps a WorkItem's configured tenant to the tenant its
+// processing context is stamped with: an empty tenant resolves to
+// identity.DefaultTenant (ADR 0012 §1). Extracted so the stamping logic in
+// processItem is unit-testable without exercising the whole worker path.
+func tenantOrDefault(tenant string) string {
+	if tenant == "" {
+		return identity.DefaultTenant
+	}
+	return tenant
 }
 
 // Pool represents a worker pool
@@ -321,7 +341,13 @@ func (p *Pool) writeWithRetry(ctx context.Context, signal string, retries, deadL
 // not propagate, since the real telemetry has already been written.
 func (p *Pool) processItem(item WorkItem) {
 	start := time.Now()
-	ctx := context.Background()
+	// ADR 0012 §1 — the OTLP receiver is unauthenticated and this worker
+	// mints a fresh context decoupled from the connection, so there is no
+	// per-request identity to derive a tenant from. Stamp the base context
+	// with the item's configured ingest tenant (empty => DefaultTenant) so
+	// the passive-discovery agent writes (discovery.RegisterIfUnknown) land
+	// in the right tenant. Inert in OSS: everything resolves to "default".
+	ctx := identity.WithTenant(context.Background(), tenantOrDefault(item.Tenant))
 	totalBytes := int64(len(item.RawData))
 
 	switch item.Type {

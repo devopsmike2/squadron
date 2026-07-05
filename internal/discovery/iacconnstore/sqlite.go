@@ -203,14 +203,26 @@ func (s *sqliteStore) Create(ctx context.Context, conn *IaCConnection) error {
 		learnInt = 0
 	}
 
+	// ADR 0012 §Decision 3: default the tenant to the OSS single-tenant
+	// sentinel when the caller left it empty. The create handler stamps
+	// identity.TenantFromContext(ctx) onto the struct before Create; an
+	// unstamped struct (direct test construction, background path) still
+	// lands a valid "default" row rather than an empty tenant.
+	tenantID := conn.TenantID
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	conn.TenantID = tenantID
+
 	const stmt = `
 		INSERT INTO iac_connections (
 			connection_id, provider, auth_kind, repo_full_name, default_branch,
 			repo_layout, branch_prefix, reviewer_team_handle,
 			placement_map_json, cred_ciphertext,
 			learn_from_accepted_recommendations,
+			tenant_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		conn.ConnectionID,
@@ -224,6 +236,7 @@ func (s *sqliteStore) Create(ctx context.Context, conn *IaCConnection) error {
 		string(placementJSON),
 		conn.CredCiphertext,
 		learnInt,
+		tenantID,
 		now.Format(timestampLayout),
 		now.Format(timestampLayout),
 	); err != nil {
@@ -246,6 +259,7 @@ func (s *sqliteStore) Get(ctx context.Context, connectionID string) (*IaCConnect
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
 		       learn_from_accepted_recommendations,
+		       tenant_id,
 		       created_at, updated_at
 		FROM iac_connections
 		WHERE connection_id = ?
@@ -276,6 +290,7 @@ func (s *sqliteStore) GetByRepoFullName(ctx context.Context, repoFullName string
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
 		       learn_from_accepted_recommendations,
+		       tenant_id,
 		       created_at, updated_at
 		FROM iac_connections
 		WHERE repo_full_name = ?
@@ -300,6 +315,7 @@ func (s *sqliteStore) List(ctx context.Context) ([]*IaCConnection, error) {
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
 		       learn_from_accepted_recommendations,
+		       tenant_id,
 		       created_at, updated_at
 		FROM iac_connections
 		ORDER BY created_at ASC, connection_id ASC
@@ -491,6 +507,7 @@ func scanConnection(r rowScanner) (*IaCConnection, error) {
 		reviewerTeamHandle sql.NullString
 		placementJSON      string
 		learnFromAccepted  int
+		tenantID           string
 		createdAt          string
 		updatedAt          string
 	)
@@ -506,12 +523,20 @@ func scanConnection(r rowScanner) (*IaCConnection, error) {
 		&placementJSON,
 		&conn.CredCiphertext,
 		&learnFromAccepted,
+		&tenantID,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
 		return nil, err
 	}
 	conn.LearnFromAcceptedRecommendations = learnFromAccepted != 0
+	// ADR 0012 §Decision 3: NOT NULL DEFAULT 'default' guarantees a
+	// non-empty value on disk, but guard the empty case so a hand-edited
+	// row still reads back the OSS single-tenant sentinel.
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	conn.TenantID = tenantID
 	if branchPrefix.Valid {
 		conn.BranchPrefix = branchPrefix.String
 	}
