@@ -53,6 +53,11 @@ type RolloutEvidenceRef = types.RolloutEvidenceRef
 type APIToken = types.APIToken
 type SiemDestination = types.SiemDestination
 
+// Execer is the minimal write surface (ExecContext) satisfied by both *sql.DB
+// and *sql.Tx. Re-exported so callers can name it without reaching into the
+// types subpackage. See ADR 0015 — the transactional-mint seam.
+type Execer = types.Execer
+
 // Re-export constants
 const (
 	AgentStatusOnline  = types.AgentStatusOnline

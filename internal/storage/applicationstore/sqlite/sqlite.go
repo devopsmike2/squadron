@@ -3806,6 +3806,29 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 // exists and RevokedAt is null, the request is authenticated.
 
 func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
+	return s.createAPIToken(ctx, s.db, t)
+}
+
+// CreateAPITokenTx runs the token INSERT through the caller-supplied Execer
+// (a *sql.Tx) instead of the store's own *sql.DB, so the write can be part of a
+// larger caller-owned transaction. It is behaviorally identical to
+// CreateAPIToken otherwise (same tenant resolution, same statement). This is the
+// OSS half of the ADR-0015 transactional-mint seam: an enterprise overlay drives
+// a single tx on its shared handle covering the token INSERT (here) plus its own
+// tenant-assign + RBAC-bind writes, making the whole mint atomic with no
+// revoke-on-failure compensation. Inert in OSS — nothing here calls it.
+func (s *Storage) CreateAPITokenTx(ctx context.Context, exec types.Execer, t *types.APIToken) error {
+	if exec == nil {
+		return fmt.Errorf("CreateAPITokenTx: nil execer")
+	}
+	return s.createAPIToken(ctx, exec, t)
+}
+
+// createAPIToken is the shared body behind CreateAPIToken (standalone, exec =
+// s.db) and CreateAPITokenTx (exec = a caller's *sql.Tx). Both *sql.DB and
+// *sql.Tx satisfy types.Execer, so the tenant resolution + INSERT live in one
+// place and can't drift between the two entry points.
+func (s *Storage) createAPIToken(ctx context.Context, exec types.Execer, t *types.APIToken) error {
 	scopesJSON, err := marshalScopes(t.Scopes)
 	if err != nil {
 		return err
@@ -3833,7 +3856,7 @@ func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
 		INSERT INTO api_tokens (id, label, hash, scopes, created_at, last_used_at, revoked_at, expires_at, tenant_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	if _, err := s.db.ExecContext(ctx, stmt,
+	if _, err := exec.ExecContext(ctx, stmt,
 		t.ID, t.Label, t.Hash, scopesJSON, t.CreatedAt, t.LastUsedAt, t.RevokedAt, t.ExpiresAt, tenantID); err != nil {
 		return fmt.Errorf("failed to create api token: %w", err)
 	}

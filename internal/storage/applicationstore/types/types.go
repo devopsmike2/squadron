@@ -2,12 +2,26 @@ package types
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/google/uuid"
 )
+
+// Execer is the minimal write surface needed to run a store INSERT/UPDATE as
+// part of a caller-owned unit of work. Both *sql.DB and *sql.Tx satisfy it, so
+// a store method taking an Execer can run either standalone (pass the store's
+// own *sql.DB) or inside an externally-managed transaction (pass a *sql.Tx).
+//
+// This is the seam that lets an enterprise overlay wrap an OSS store write
+// (e.g. token mint) together with its own writes (tenant assign + RBAC bind) in
+// a single transaction on one connection — see ADR 0015. It is inert in OSS:
+// only the non-transactional wrappers are wired here.
+type Execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
 
 // ErrRolloutVersionConflict is returned by UpdateRollout when the caller's
 // in-memory Rollout.Version no longer matches the stored row — i.e. another
