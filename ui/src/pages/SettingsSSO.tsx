@@ -54,6 +54,7 @@ const emptyForm = (): ConnForm => ({
   client_secret: "",
   redirect_uri: `${window.location.origin}/auth/oidc/callback`,
   tenant_id: "default",
+  tenant_claim: "",
   scopes: ["openid", "email", "profile"],
   default_role: "",
   display_name: "",
@@ -100,6 +101,7 @@ export default function SettingsSSOPage() {
         client_secret: "", // blank = keep existing
         redirect_uri: editing.redirect_uri,
         tenant_id: editing.tenant_id,
+        tenant_claim: editing.tenant_claim ?? "",
         scopes: editing.scopes ?? [],
         default_role: editing.default_role,
         display_name: editing.display_name,
@@ -124,14 +126,19 @@ export default function SettingsSSOPage() {
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Empty tenant_claim = "unset" server-side; send the trimmed value.
+      const payload = {
+        ...form,
+        tenant_claim: (form.tenant_claim ?? "").trim(),
+      };
       if (editing) {
         // Omit client_secret when blank so the existing sealed secret is kept.
-        const { client_secret, ...rest } = form;
+        const { client_secret, ...rest } = payload;
         const patch =
           client_secret.trim() !== "" ? { ...rest, client_secret } : rest;
         await updateSSOConnection(editing.id, patch);
       } else {
-        await createSSOConnection(form);
+        await createSSOConnection(payload);
       }
       setDrawerOpen(false);
       await mutate(CONNECTIONS_KEY);
@@ -297,6 +304,14 @@ export default function SettingsSSOPage() {
                     </code>
                   </div>
                 )}
+                {c.tenant_claim && (
+                  <div>
+                    Tenant claim:{" "}
+                    <code className="rounded bg-muted px-1">
+                      {c.tenant_claim}
+                    </code>
+                  </div>
+                )}
                 {c.scopes && c.scopes.length > 0 && (
                   <div>Scopes: {c.scopes.join(" ")}</div>
                 )}
@@ -413,6 +428,23 @@ export default function SettingsSSOPage() {
               />
               <p className="mt-1 text-[11px] text-muted-foreground">
                 Every user who logs in through this connection is homed here.
+              </p>
+            </div>
+
+            <div>
+              <Label htmlFor="sso-tenant-claim">Tenant claim (optional)</Label>
+              <Input
+                id="sso-tenant-claim"
+                value={form.tenant_claim ?? ""}
+                onChange={(e) =>
+                  setForm({ ...form, tenant_claim: e.target.value })
+                }
+                placeholder="org_id"
+                className="font-mono text-xs"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                ID-token claim whose value selects the tenant. Leave empty to
+                use the fixed tenant above.
               </p>
             </div>
 
