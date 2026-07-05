@@ -138,6 +138,53 @@ func TestOnDisconnect_StampsConnectionTenant(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
+// TestRawConnTenant covers the reject-decision input (ADR 0012 §Decision 2):
+// the raw x-squadron-tenant header value with NO DefaultTenant fallback, so an
+// absent header reads as empty ("no tenant declared") rather than "default".
+func TestRawConnTenant(t *testing.T) {
+	assert.Equal(t, "", rawConnTenant(nil))
+
+	reqEmpty, _ := http.NewRequest(http.MethodGet, "/", nil)
+	assert.Equal(t, "", rawConnTenant(reqEmpty))
+
+	reqTenant, _ := http.NewRequest(http.MethodGet, "/", nil)
+	reqTenant.Header.Set(tenantHeader, "acme")
+	assert.Equal(t, "acme", rawConnTenant(reqTenant))
+}
+
+// shouldRejectConn replicates the OnConnectingFunc reject predicate so the seam
+// decision is unit-tested without standing up a live OpAMP listener. Reject iff
+// the flag is on AND no tenant is declared on the wire.
+func shouldRejectConn(request *http.Request) bool {
+	return rejectUntenantedConnections && rawConnTenant(request) == ""
+}
+
+// TestRejectUntenantedConnectionsSeam proves the ADR 0012 §Decision 2 contract:
+//   - flag ON  + empty header   → rejected
+//   - flag ON  + header present  → accepted
+//   - flag OFF + empty header   → accepted (OSS inert)
+func TestRejectUntenantedConnectionsSeam(t *testing.T) {
+	// The OSS package default MUST be reject-off (inert).
+	assert.False(t, rejectUntenantedConnections, "OSS default is reject-off")
+
+	// Restore the default no matter what.
+	defer SetRejectUntenantedConnections(false)
+
+	reqEmpty, _ := http.NewRequest(http.MethodGet, "/", nil)
+	reqTenant, _ := http.NewRequest(http.MethodGet, "/", nil)
+	reqTenant.Header.Set(tenantHeader, "acme")
+
+	// Flag ON (enterprise strict).
+	SetRejectUntenantedConnections(true)
+	assert.True(t, shouldRejectConn(reqEmpty), "flag on + empty header → reject")
+	assert.False(t, shouldRejectConn(reqTenant), "flag on + tenant header → accept")
+
+	// Flag OFF (OSS): never reject, even on an empty header.
+	SetRejectUntenantedConnections(false)
+	assert.False(t, shouldRejectConn(reqEmpty), "flag off + empty header → accept (inert)")
+	assert.False(t, shouldRejectConn(reqTenant), "flag off + tenant header → accept")
+}
+
 // fakeTenantConn is a minimal comparable types.Connection used as a map key in
 // the disconnect test. Its methods are never invoked on the offline path.
 type fakeTenantConn struct{}
