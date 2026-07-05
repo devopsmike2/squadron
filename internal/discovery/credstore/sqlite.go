@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -155,14 +156,36 @@ func NewStore(ctx context.Context, db *sql.DB, backend SecretsBackend, audit Aud
 // migrate applies every entry in migrations in order. Each migration's
 // SQL is self-idempotent (CREATE TABLE IF NOT EXISTS, INSERT OR
 // IGNORE, DROP TABLE IF EXISTS) so reapplying on an up-to-date
-// database is a no-op.
+// database is a no-op — with one exception: ALTER TABLE ... ADD COLUMN
+// cannot be expressed idempotently in SQLite. The runner tolerates the
+// "duplicate column name" error on re-run so the ADR 0013 §D6-b
+// migration0003TenantID can land on existing databases without
+// breaking startup on the second boot (mirroring iacconnstore's
+// migrate). Prior to D6-b credstore had no ALTER migration and so no
+// guard; the guard is added here alongside the first ALTER.
 func (s *sqliteStore) migrate(ctx context.Context) error {
 	for i, stmt := range migrations {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			if isDuplicateColumnErr(err) {
+				continue
+			}
 			return fmt.Errorf("apply migration %d: %w", i+1, err)
 		}
 	}
 	return nil
+}
+
+// isDuplicateColumnErr reports whether err is the SQLite-driver surface
+// of an ALTER TABLE ADD COLUMN against a column that already exists.
+// SQLite phrases it as "duplicate column name: <col>". Mirrors
+// iacconnstore.isDuplicateColumnErr so a re-run of the ADR 0013 §D6-b
+// ADD COLUMN migration against an already-migrated database is a no-op
+// rather than a startup error.
+func isDuplicateColumnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "duplicate column name")
 }
 
 // timestampLayout is the on-disk timestamp format. RFC3339Nano gives us
@@ -210,15 +233,30 @@ func (s *sqliteStore) StoreConnection(ctx context.Context, conn CloudConnection)
 		created = now
 	}
 
+	// ADR 0013 §D6-b: default the owner tenant to the OSS single-tenant
+	// sentinel when the caller left it empty. The AWS save handler
+	// stamps identity.TenantFromContext(ctx) onto the struct before
+	// StoreConnection; an unstamped struct (direct test construction,
+	// background path) still lands a valid "default" row.
+	tenantID := conn.TenantID
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	conn.TenantID = tenantID
+
 	// SQLite UPSERT preserves created_at when the row already exists by
 	// excluding it from the DO UPDATE SET clause. updated_at is always
-	// stamped to now.
+	// stamped to now. tenant_id is likewise EXCLUDED from DO UPDATE SET:
+	// ownership is immutable (ADR 0013 §D6-b), so a re-save of an
+	// existing connection preserves the tenant that first created it
+	// rather than re-stamping it from the re-saver's context.
 	const stmt = `
 		INSERT INTO cloud_connections (
 			account_id, provider, connection_type, display_name, regions,
 			credentials_ciphertext, credentials_nonce,
+			tenant_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(account_id) DO UPDATE SET
 			provider = excluded.provider,
 			connection_type = excluded.connection_type,
@@ -236,6 +274,7 @@ func (s *sqliteStore) StoreConnection(ctx context.Context, conn CloudConnection)
 		string(regionsJSON),
 		conn.Credentials,
 		conn.CredentialsNonce,
+		tenantID,
 		created.Format(timestampLayout),
 		now.Format(timestampLayout),
 	); err != nil {
@@ -253,6 +292,7 @@ func (s *sqliteStore) GetConnection(ctx context.Context, accountID string) (*Clo
 	const stmt = `
 		SELECT account_id, provider, connection_type, display_name, regions,
 		       credentials_ciphertext, credentials_nonce,
+		       tenant_id,
 		       created_at, updated_at
 		FROM cloud_connections
 		WHERE account_id = ?
@@ -279,6 +319,7 @@ func (s *sqliteStore) ListConnections(ctx context.Context, filter ListFilter) ([
 	const base = `
 		SELECT account_id, provider, connection_type, display_name, regions,
 		       credentials_ciphertext, credentials_nonce,
+		       tenant_id,
 		       created_at, updated_at
 		FROM cloud_connections
 	`
@@ -353,6 +394,7 @@ func scanConnection(r rowScanner, _ SecretsBackend) (*CloudConnection, error) {
 		regionsJSON string
 		ciphertext  []byte
 		nonce       []byte
+		tenantID    string
 		createdAt   string
 		updatedAt   string
 	)
@@ -364,6 +406,7 @@ func scanConnection(r rowScanner, _ SecretsBackend) (*CloudConnection, error) {
 		&regionsJSON,
 		&ciphertext,
 		&nonce,
+		&tenantID,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -371,6 +414,14 @@ func scanConnection(r rowScanner, _ SecretsBackend) (*CloudConnection, error) {
 	}
 	conn.Provider = Provider(provider)
 	conn.ConnectionType = ConnectionType(connType)
+
+	// ADR 0013 §D6-b: NOT NULL DEFAULT 'default' guarantees a non-empty
+	// value on disk, but guard the empty case so a hand-edited row still
+	// reads back the OSS single-tenant sentinel.
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	conn.TenantID = tenantID
 
 	if err := json.Unmarshal([]byte(regionsJSON), &conn.Regions); err != nil {
 		return nil, fmt.Errorf("credstore: unmarshal regions JSON for %s: %w", conn.AccountID, err)

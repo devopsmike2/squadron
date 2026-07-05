@@ -47,6 +47,18 @@ type OCIConnection struct {
 	// Callers do not supply this on Create.
 	ID string `json:"id"`
 
+	// OwnerTenantID is the Squadron tenant that OWNS this connection
+	// (ADR 0013 §D6-b). This is DISTINCT from the TenancyOCID field
+	// below, which is the OCI tenancy OCID (a cloud-side identifier).
+	// OwnerTenantID is stamped at Create from the authenticated actor's
+	// tenant so the discovery rescan scheduler can scope its
+	// discovery_scans store writes to the owning tenant — a scheduled
+	// rescan runs under WithSystemContext and carries no operator
+	// identity. Resolves to identity.DefaultTenant ("default") in the
+	// OSS single-tenant build — inert until the enterprise
+	// TenantResolver derives a real tenant from the identity.
+	OwnerTenantID string `json:"squadron_tenant_id"`
+
 	// DisplayName is the operator-supplied human-readable label for
 	// the connection. Surfaces in the discovery UI's connection list
 	// and audit timeline.
@@ -54,7 +66,9 @@ type OCIConnection struct {
 
 	// TenancyOCID is the OCI tenancy OCID
 	// (ocid1.tenancy.oc1..<unique_id>). The scanner uses this to
-	// build the OCI ConfigurationProvider.
+	// build the OCI ConfigurationProvider. NOTE: this is the OCI
+	// cloud-side tenancy identifier, NOT the Squadron owner tenant
+	// (see OwnerTenantID above).
 	TenancyOCID string `json:"tenancy_ocid"`
 
 	// UserOCID is the OCI user OCID

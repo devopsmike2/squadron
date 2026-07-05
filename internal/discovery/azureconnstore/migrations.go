@@ -16,7 +16,7 @@ package azureconnstore
 // order, idempotent SQL inside each step. Existing migrations are
 // NEVER edited after merge — they ran against historical databases
 // and edits desynchronize the schema.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // migration0001AzureConnections is the initial schema for the Azure
 // discovery slice 1 arc (#674 chunk 1). One table for Azure
@@ -55,9 +55,35 @@ CREATE INDEX IF NOT EXISTS idx_azure_connections_subscription_id
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 `
 
+// migration0002SquadronTenantID — ADR 0013 §D6-b (multi-tenancy slice
+// D6-b). Adds the Squadron owner-tenant column that keys each Azure
+// connection to the tenant that owns it.
+//
+// ⚠️ This is DISTINCT from the existing tenant_id column, which is the
+// Azure AD tenant the Service Principal lives in (required, non-default,
+// a UUID). The Squadron owner tenant is a separate namespace — hence
+// the squadron_tenant_id column name / SquadronTenantID struct field.
+//
+// NOT NULL DEFAULT 'default' so pre-D6-b rows backfill to the OSS
+// single-tenant sentinel — inert in OSS, where every connection is
+// created under identity.DefaultTenant. The discovery rescan scheduler
+// reads this column to scope its discovery_scans store writes to the
+// connection's owning tenant (a scheduled rescan runs under
+// WithSystemContext and carries no operator identity).
+//
+// SQLite doesn't support ALTER TABLE ... ADD COLUMN IF NOT EXISTS; the
+// migrate runner already tolerates the "duplicate column name" error
+// (isDuplicateColumnErr) so re-running on an up-to-date database is a
+// no-op — mirroring iacconnstore's migration0004TenantID.
+const migration0002SquadronTenantID = `
+ALTER TABLE azure_connections ADD COLUMN squadron_tenant_id TEXT NOT NULL DEFAULT 'default';
+INSERT OR IGNORE INTO schema_version (version) VALUES (2);
+`
+
 // migrations is the ordered list of schema migrations. Index N is the
 // SQL applied at version N+1. New entries are appended; existing
 // entries are never edited.
 var migrations = []string{
 	migration0001AzureConnections,
+	migration0002SquadronTenantID,
 }

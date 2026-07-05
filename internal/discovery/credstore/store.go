@@ -118,6 +118,18 @@ type CloudConnection struct {
 	// backend cannot decrypt without it. Never logged.
 	CredentialsNonce []byte `json:"-"`
 
+	// TenantID is the Squadron tenant that owns this connection (ADR
+	// 0013 §D6-b). Stamped at StoreConnection from the authenticated
+	// actor's tenant so the discovery rescan scheduler can scope its
+	// discovery_scans store writes to the owning tenant — a scheduled
+	// rescan runs under WithSystemContext and carries no operator
+	// identity. Resolves to identity.DefaultTenant ("default") in the
+	// OSS single-tenant build — inert until the enterprise
+	// TenantResolver derives a real tenant from the identity. The UPSERT
+	// preserves this column on update (ownership is immutable); it is
+	// only written on the initial INSERT.
+	TenantID string `json:"tenant_id"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

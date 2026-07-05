@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
@@ -398,6 +399,13 @@ func (h *DiscoveryGCPHandlers) HandleCreateGCPConnection(c *gin.Context) {
 		Region:                           strings.TrimSpace(req.Region),
 		SealedSA:                         sealed,
 		LearnFromAcceptedRecommendations: true,
+		// ADR 0013 §D6-b: stamp the connection with the authenticated
+		// actor's tenant so the discovery rescan scheduler can scope its
+		// discovery_scans store writes to this connection's tenant later.
+		// Resolves to identity.DefaultTenant ("default") in the OSS
+		// single-tenant build — inert until the enterprise TenantResolver
+		// derives a real tenant from the identity.
+		TenantID: identity.TenantFromContext(c.Request.Context()),
 	}
 	if err := h.store.Create(c.Request.Context(), conn); err != nil {
 		if h.logger != nil {

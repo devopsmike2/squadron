@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
@@ -447,12 +448,20 @@ func (h *DiscoveryOCIHandlers) HandleCreateOCIConnection(c *gin.Context) {
 	}
 
 	conn := &ociconnstore.OCIConnection{
-		DisplayName:                      strings.TrimSpace(req.DisplayName),
-		TenancyOCID:                      strings.TrimSpace(req.TenancyOCID),
-		UserOCID:                         strings.TrimSpace(req.UserOCID),
-		Fingerprint:                      strings.TrimSpace(req.Fingerprint),
-		SealedPrivateKey:                 sealed,
-		Region:                           strings.TrimSpace(req.Region),
+		DisplayName:      strings.TrimSpace(req.DisplayName),
+		TenancyOCID:      strings.TrimSpace(req.TenancyOCID),
+		UserOCID:         strings.TrimSpace(req.UserOCID),
+		Fingerprint:      strings.TrimSpace(req.Fingerprint),
+		SealedPrivateKey: sealed,
+		Region:           strings.TrimSpace(req.Region),
+		// ADR 0013 §D6-b: stamp the Squadron owner tenant from the
+		// authenticated actor's tenant so the discovery rescan scheduler
+		// can scope its discovery_scans store writes to this connection's
+		// owning tenant later. This is DISTINCT from the OCI TenancyOCID
+		// above. Resolves to identity.DefaultTenant ("default") in the OSS
+		// single-tenant build — inert until the enterprise TenantResolver
+		// derives a real tenant from the identity.
+		OwnerTenantID:                    identity.TenantFromContext(c.Request.Context()),
 		LearnFromAcceptedRecommendations: true,
 	}
 	if err := h.store.Create(c.Request.Context(), conn); err != nil {
