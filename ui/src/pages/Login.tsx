@@ -146,7 +146,10 @@ export default function LoginPage() {
                   variant="outline"
                   className="w-full"
                   onClick={() => {
-                    window.location.href = `${BACKEND_HOSTNAME}/auth/oidc/login?conn=${encodeURIComponent(conn.id)}&return_to=/`;
+                    // return_to must be the frontend callback route so the token
+                    // fragment lands where AuthCallback parses it (not "/", where
+                    // nothing reads the hash → token dropped → 401 bounce).
+                    window.location.href = `${BACKEND_HOSTNAME}/auth/oidc/login?conn=${encodeURIComponent(conn.id)}&return_to=/auth/callback`;
                   }}
                 >
                   {conn.display_name || conn.id}
