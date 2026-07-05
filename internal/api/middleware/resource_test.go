@@ -29,10 +29,16 @@ func TestDeriveResourceType(t *testing.T) {
 		want     string
 	}{
 		// Rollouts — plans are more specific than the bare rollout prefix.
+		// The COLLECTION route (no :id) must also resolve to "rollout" so an
+		// all_resources rollout-typed RBAC permission can authorize the LIST —
+		// a trailing slash on the mapping prefix would (and did) break this.
+		{"/api/v1/rollouts", "rollout"},
 		{"/api/v1/rollouts/:id", "rollout"},
 		{"/api/v1/rollouts/:id/abort", "rollout"},
 		{"/api/v1/rollouts/plans/:id", "rollout-plan"},
 		{"/api/v1/rollout-recipes/templates", "rollout-recipe"},
+		// rollout-recipes must NOT be captured by the /rollouts prefix.
+		{"/api/v1/rollout-recipes", "rollout-recipe"},
 		// Discovery — the connection :id is the RBAC scope axis; nested
 		// scans/recommendations still resolve to the connection class.
 		{"/api/v1/discovery/aws/connections/:id", "discovery-connection"},
