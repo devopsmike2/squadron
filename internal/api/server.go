@@ -721,6 +721,19 @@ func (s *Server) SetEnterpriseOIDCHandler(h EnterpriseOIDCHandler) {
 	s.enterpriseOIDCHandler = h
 }
 
+// AuthService returns the token AuthService the server was constructed with
+// (ADR 0014 Arc C slice 4b). The enterprise OIDC handler needs it to MINT a
+// Squadron bearer token on successful IdP login (D0/D10: Issue → the mint
+// chain) — the callback ends with an ID token but returns a normal opaque
+// Squadron token, so every subsequent request flows through the unchanged
+// RequireBearer path. Exposed as a read-only accessor rather than threaded
+// through a new setter because enterpriseServerWiring already receives the
+// *Server, and NewServer sets s.authService before that wiring runs. OSS code
+// never calls this; it is an inert accessor there.
+func (s *Server) AuthService() services.AuthService {
+	return s.authService
+}
+
 // mountEnterpriseOIDC registers the late-bound /auth/oidc/* wildcard on the
 // given router (ADR 0014 Arc C, D0/D4). registerRoutes runs inside NewServer,
 // before the wire layer calls SetEnterpriseOIDCHandler, so the closure reads
