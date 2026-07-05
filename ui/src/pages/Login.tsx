@@ -14,21 +14,40 @@
 // when unauthenticated.
 
 import { KeyRound } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { listAPITokens } from "@/api/auth";
 import { setAuthToken } from "@/api/auth-store";
+import { listOIDCConnections, type OIDCConnection } from "@/api/oidc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { BACKEND_HOSTNAME } from "@/config";
 
 export default function LoginPage() {
   const nav = useNavigate();
   const [token, setToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connections, setConnections] = useState<OIDCConnection[]>([]);
+
+  // Probe for enterprise SSO connections on the ROOT origin (not /api/v1). OSS
+  // 404s → [] → no SSO buttons render (login screen unchanged).
+  useEffect(() => {
+    let active = true;
+    listOIDCConnections()
+      .then((conns) => {
+        if (active) setConnections(conns);
+      })
+      .catch(() => {
+        if (active) setConnections([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -103,6 +122,38 @@ export default function LoginPage() {
               {submitting ? "Verifying..." : "Sign in"}
             </Button>
           </form>
+          {/* Enterprise SSO (ADR 0014). Renders only when the connections probe
+              returned ≥1 active IdP connection; each button is a full-page
+              navigation to the OIDC login route on the root origin (the IdP
+              redirect must be a browser navigation, not a fetch). In OSS the
+              probe 404s → no connections → nothing extra renders. */}
+          {connections.length > 0 && (
+            <div className="space-y-2 pt-4">
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-card px-2 text-muted-foreground">
+                    or continue with
+                  </span>
+                </div>
+              </div>
+              {connections.map((conn) => (
+                <Button
+                  key={conn.id}
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    window.location.href = `${BACKEND_HOSTNAME}/auth/oidc/login?conn=${encodeURIComponent(conn.id)}&return_to=/`;
+                  }}
+                >
+                  {conn.display_name || conn.id}
+                </Button>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
