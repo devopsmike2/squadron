@@ -26,6 +26,23 @@ import (
 // keeping OSS single-tenant behavior inert.
 const tenantHeader = "x-squadron-tenant"
 
+// rejectUntenantedConnections gates whether an OpAMP connection presenting no
+// x-squadron-tenant header is rejected at connect time. It mirrors the
+// sqlite.SetStrictTenantScoping seam: the enterprise wire calls
+// SetRejectUntenantedConnections(true) at startup so untenanted ingress is
+// refused (ADR 0012 §Decision 2); OSS never calls it, leaving it false, so an
+// empty header resolves to identity.DefaultTenant and the connection is
+// accepted — OSS single-tenant behavior stays inert.
+var rejectUntenantedConnections bool
+
+// SetRejectUntenantedConnections toggles rejection of OpAMP connections that
+// declare no tenant via the x-squadron-tenant header. The enterprise wire sets
+// it true at startup (mirroring sqlite.SetStrictTenantScoping) so untenanted
+// telemetry ingress is rejected with 401; OSS never calls it, leaving it false
+// → empty header falls back to identity.DefaultTenant and the connection is
+// accepted (legacy single-tenant behavior).
+func SetRejectUntenantedConnections(v bool) { rejectUntenantedConnections = v }
+
 // DefaultOTelConfig provides the default OpenTelemetry Collector configuration
 const DefaultOTelConfig = `receivers:
   otlp:
@@ -136,8 +153,19 @@ func (s *Server) Start(port int) error {
 					// inert.
 					//
 					// ADR 0012 §Decision 2: enterprise strict rejects empty
-					// x-squadron-tenant — layered at the enterprise wire. OSS
-					// does NOT reject here.
+					// x-squadron-tenant — flipped on via
+					// SetRejectUntenantedConnections at the enterprise wire. OSS
+					// leaves the flag false and does NOT reject here.
+					if rejectUntenantedConnections && rawConnTenant(request) == "" {
+						if s.metrics != nil {
+							s.metrics.MessageErrors.Inc(1)
+						}
+						s.logger.Warn("rejecting untenanted OpAMP connection: no x-squadron-tenant header (strict tenant scoping)")
+						return types.ConnectionResponse{
+							Accept:         false,
+							HTTPStatusCode: http.StatusUnauthorized,
+						}
+					}
 					connTenant := resolveConnTenant(request)
 					return types.ConnectionResponse{
 						Accept: true,
@@ -186,6 +214,19 @@ func resolveConnTenant(request *http.Request) string {
 		return t
 	}
 	return identity.DefaultTenant
+}
+
+// rawConnTenant returns the raw x-squadron-tenant header value (empty when
+// absent or when the request is nil), WITHOUT the DefaultTenant fallback. It is
+// the reject-decision input: SetRejectUntenantedConnections uses it to
+// distinguish "no tenant declared" (empty → reject under strict) from a
+// declared tenant. Kept separate from resolveConnTenant so the accept path
+// still gets the DefaultTenant fallback in OSS. ADR 0012 §Decision 2.
+func rawConnTenant(request *http.Request) string {
+	if request == nil {
+		return ""
+	}
+	return request.Header.Get(tenantHeader)
 }
 
 func (s *Server) onDisconnect(conn types.Connection, connTenant string) {
