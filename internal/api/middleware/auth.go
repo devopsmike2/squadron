@@ -91,6 +91,20 @@ func RequireBearer(auth services.AuthService, logger *zap.Logger) gin.HandlerFun
 			return
 		}
 
+		// ADR 0014 slice 4d — strict identity-source enforcement. Gated on
+		// StrictIdentitySource() FIRST so OSS (flag false) is byte-identical:
+		// this whole block is skipped and a raw operator token authenticates as
+		// before. When the enterprise wire flips the toggle on, a bearer whose
+		// label is not a validated identity source (bootstrap / oidc: / scim:)
+		// is rejected. The reject reuses the EXACT generic 401 used for a
+		// bad/revoked token above — no provenance leak (do not echo the label or
+		// mention "identity source"), so a strict reject is indistinguishable
+		// from an ordinary bad-token 401.
+		if services.StrictIdentitySource() && !services.IdentitySourceValidated(token.Label) {
+			abortUnauthorized(c, "invalid or revoked token")
+			return
+		}
+
 		// ADR 0011: carry the token's tenant onto the actor so the enterprise
 		// TenantResolver can derive the request tenant from ActorFromContext.
 		// Empty defaults to the OSS single tenant; inert in OSS (the
