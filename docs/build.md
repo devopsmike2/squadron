@@ -114,3 +114,31 @@ Some config switches gate **cost/safety**, not access:
 See [docs/oss-vs-enterprise.md](oss-vs-enterprise.md) for the full boundary
 and [docs/architecture/oss-enterprise-separation.md](architecture/oss-enterprise-separation.md)
 for the contract every future paid feature follows.
+
+## Editions contract: OSS-inert guarantees
+
+The RBAC + multi-tenancy work (ADRs 0006/0010/0011/0012) added several
+enterprise **capability seams** to this open-core repo. Every one is **inert in
+the OSS build** — it changes no OSS runtime behavior — and only becomes
+load-bearing when the enterprise wire files are compiled in under the
+`enterprise` tag. The OSS test suite *proves* this inertness; each seam below is
+paired with the editions-contract test that locks it, so a regression fails a
+test rather than silently changing edition behavior.
+
+| Seam (in this repo) | OSS-inert behavior | Test that locks it |
+|---|---|---|
+| `identity.Authenticator` / `Authorizer` / `TenantResolver` (`extension/identity`) | OSS wires `BearerAuthenticator` + `ScopeAuthorizer` (flat scope, empty = legacy full access) + `SingleTenantResolver` (always `DefaultTenant`) | `cmd/all-in-one/editions_contract_test.go::TestOSSEdition_IdentityProviders`; `extension/identity/identity_test.go::TestOSSProviders_WiresDefaults`, `TestSingleTenantResolver_AlwaysDefault` |
+| `ScopeAuthorizer` resource-awareness | The authorizer **ignores** the `Resource` passed by `RequireScope` — a decision with `Resource{}` and with `Resource{Type,ID}` is identical | `extension/identity/identity_test.go::TestScopeAuthorizer_IgnoresResource` (+ `TestScopeAuthorizer_MirrorsHasScope` pins empty-scope → allow) |
+| Scoped store (`scopedApplicationStore`) | Identity **pass-through** — returns exactly the store it was given, so the ~9 optional store interfaces `main.go` type-asserts stay intact | `cmd/all-in-one/editions_contract_test.go::TestOSSEdition_ScopedStoreIsPassthrough` |
+| SQLite `tenant_id` predicate (`tenant_scope.go`) | Single `default` tenant → `WHERE tenant_id='default'` returns everything; reads/writes round-trip byte-identically to pre-tenancy behavior | `internal/storage/applicationstore/sqlite/tenant_scope_contract_test.go::TestTenantScope_OSSByteIdentical` (+ `_Isolation`, `_SystemSeesAll` prove the enterprise-active behavior) |
+| `sqlite.SetStrictTenantScoping` | Never called in OSS → `strictTenantScoping` stays **false**; an unstamped context falls back to `DefaultTenant` (no error) | `internal/storage/applicationstore/sqlite/tenant_scope_contract_test.go::TestTenantScope_StrictFlag` asserts the default is off and only errors once explicitly flipped on |
+| `SetEnterpriseRBACHandler` + `/api/v1/rbac/*` | Handler left nil → the late-bound route returns **404** (`"RBAC management is an enterprise feature"`) | `internal/api/enterprise_rbac_seam_test.go::TestEnterpriseRBACSeam_OSS404` (+ `_ServesWhenWired` proves the injected path) |
+| `SetEnterpriseTenantHandler` + `/api/v1/tenants/*` | Handler left nil → the late-bound route returns **404** (`"tenant management is an enterprise feature"`) | `internal/api/enterprise_tenant_seam_test.go::TestEnterpriseTenantSeam_OSS404` (+ `_ServesWhenWired`) |
+| `opamp.SetRejectUntenantedConnections` | Never called in OSS → `rejectUntenantedConnections` stays **false**; a connection with no `x-squadron-tenant` header is accepted onto `DefaultTenant` | `internal/opamp/server_tenant_test.go::TestRejectUntenantedConnectionsSeam` asserts the OSS default is reject-off; `TestResolveConnTenant` pins empty-header → `DefaultTenant` |
+| `ingest.otlp.tenant_id` (`internal/config`) | Defaults to `default`; OTLP ingest is stamped `default` and inert — no fail-fast in OSS | covered by the config default + the OTLP stamping path (the enterprise fatal-check lives only in the enterprise wire) |
+
+The through-line: the OSS build has a single implicit `default` tenant, strict
+scoping off, flat-scope authorization that ignores resources, nil enterprise
+handlers (→ 404), and a pass-through scoped store. The enterprise edition
+supplies real providers against these same seams — the boundary is *which code
+is compiled in*, and the tests above prove the OSS side never drifts.
