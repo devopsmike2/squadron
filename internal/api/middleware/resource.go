@@ -53,13 +53,19 @@ var routeResourceType = []struct {
 	// Discovery — the connection :id is the tenant/account scope dimension.
 	// Scans/recommendations/observability nest under a connection, so they all
 	// resolve to the connection class (the axis RBAC predicates scope on).
-	{"/api/v1/discovery/", "discovery-connection"},
+	// NOTE: no trailing slash — deriveResourceType picks the LONGEST matching
+	// prefix, so a trailing slash is unnecessary AND buggy: it would exclude the
+	// bare collection route (e.g. "/api/v1/rollouts" list) from matching, leaving
+	// it type-"" so a rollout-typed RBAC permission could never authorize the
+	// LIST. (Caught by SCIM/RBAC e2e: a rollout-operator role couldn't GET
+	// /rollouts.) Keep these prefixes slash-free.
+	{"/api/v1/discovery", "discovery-connection"},
 	{"/api/v1/iac/github/connections", "iac-connection"},
 
-	// Rollouts — plans are a distinct sub-resource; check before the bare
-	// /rollouts/:id prefix.
+	// Rollouts — plans are a distinct sub-resource; longest-prefix-wins resolves
+	// /rollouts/plans/... to rollout-plan even though /rollouts also matches.
 	{"/api/v1/rollouts/plans", "rollout-plan"},
-	{"/api/v1/rollouts/", "rollout"},
+	{"/api/v1/rollouts", "rollout"},
 	{"/api/v1/rollout-recipes", "rollout-recipe"},
 
 	{"/api/v1/configs", "config"},
