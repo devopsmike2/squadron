@@ -42,6 +42,10 @@ type fakeStore struct {
 	requests map[string]*types.ActionRequest
 	drafts   map[string]*types.IncidentDraft
 	groups   map[string]*types.Group
+	// ADR 0013 D6-a — capture the tenant resolved from the draft-write
+	// ctx so the isolation test can assert the draft landed in the
+	// owning group's tenant, not `default`.
+	lastCreateTenant string
 }
 
 func newFakeStore() *fakeStore {
@@ -73,7 +77,8 @@ func (s *fakeStore) GetIncidentDraftByActionRequestID(_ context.Context, id stri
 	}
 	return nil, nil
 }
-func (s *fakeStore) CreateIncidentDraft(_ context.Context, d *types.IncidentDraft) error {
+func (s *fakeStore) CreateIncidentDraft(ctx context.Context, d *types.IncidentDraft) error {
+	s.lastCreateTenant = effectiveWriteTenant(ctx)
 	s.drafts[d.ID] = d
 	return nil
 }

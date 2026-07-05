@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/deploy"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -179,6 +180,18 @@ func (w *GHAWalker) walkTarget(ctx context.Context, target *apptypes.DeployTarge
 		return nil
 	}
 
+	// ADR 0013 D6-a: anchor the expected_agents write on the OWNING
+	// deploy target's tenant, not the walker loop's system ctx (which
+	// resolves to `default`). The target was loaded under the (system)
+	// ctx the walker runs under, so target.TenantID is populated
+	// regardless of tenant. Empty anchor → leave ctx unstamped so the
+	// upsert falls back to `default` (the legit fallback). Inert in OSS
+	// (every target is `default`; WithTenant("default") is a no-op).
+	writeCtx := ctx
+	if target.TenantID != "" {
+		writeCtx = identity.WithTenant(ctx, target.TenantID)
+	}
+
 	// Dedup by SHA — multiple workflow runs against the same
 	// commit produce the same inventory snapshot, so we'd fetch
 	// the same file repeatedly otherwise.
@@ -204,7 +217,7 @@ func (w *GHAWalker) walkTarget(ctx context.Context, target *apptypes.DeployTarge
 		for _, host := range hosts {
 			notes := fmt.Sprintf("from %s run #%d (sha %s)",
 				target.Name, r.RunID, shortSHA(r.HeadSHA))
-			_ = w.store.UpsertExpectedAgent(ctx, &apptypes.ExpectedAgent{
+			_ = w.store.UpsertExpectedAgent(writeCtx, &apptypes.ExpectedAgent{
 				Hostname:      host,
 				Source:        source,
 				ExpectedSince: r.CreatedAt,

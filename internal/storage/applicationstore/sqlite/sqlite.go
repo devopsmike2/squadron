@@ -1113,6 +1113,28 @@ func (s *Storage) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_error_rate_observation_tenant ON error_rate_observation(tenant_id)`,
 		`ALTER TABLE discovery_scans ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		`CREATE INDEX IF NOT EXISTS idx_discovery_scans_tenant ON discovery_scans(tenant_id)`,
+		// ADR 0013 D6-a backfill — the GHA walker wrote expected_agents rows
+		// under the loop's system ctx before this slice, so per-tenant deploy
+		// targets' hosts landed in `default`. Walker rows carry
+		// source='gha-history:<target-id>'; recover the owning tenant by
+		// joining back to deploy_targets on that id and stamping the row's
+		// tenant_id. Idempotent: once corrected the SELECT returns the same
+		// value, so re-running is a no-op. Only touches walker rows (the
+		// EXISTS guard) — manually-registered / other-source rows are
+		// untouched. Inert in OSS (every deploy_target is `default`, so the
+		// UPDATE sets `default`→`default`). NB: does NOT backfill
+		// discovery_scans (D6-b — cloud connections have no tenant_id yet) or
+		// group-anchored rollout/draft rows (left `default`, documented).
+		`UPDATE expected_agents
+			SET tenant_id = (
+				SELECT dt.tenant_id FROM deploy_targets dt
+				WHERE dt.id = substr(expected_agents.source, length('gha-history:') + 1)
+			)
+			WHERE source LIKE 'gha-history:%'
+			AND EXISTS (
+				SELECT 1 FROM deploy_targets dt
+				WHERE dt.id = substr(expected_agents.source, length('gha-history:') + 1)
+			)`,
 	}
 
 	for _, migration := range migrations {
@@ -1543,7 +1565,7 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at FROM groups WHERE id = ?`
+	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at, tenant_id FROM groups WHERE id = ?`
 	args := []any{id}
 	if apply {
 		query += ` AND tenant_id = ?`
@@ -1566,6 +1588,7 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 		&learnFromVerdicts,
 		&group.CreatedAt,
 		&group.UpdatedAt,
+		&group.TenantID,
 	)
 
 	if err != nil {
@@ -1587,7 +1610,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at FROM groups`
+	query := `SELECT id, name, labels, require_approval, require_approval_for_rollback, change_windows, learn_from_verdicts, created_at, updated_at, tenant_id FROM groups`
 	var args []any
 	if apply {
 		query += ` WHERE tenant_id = ?`
@@ -1619,6 +1642,7 @@ func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
 			&learnFromVerdicts,
 			&group.CreatedAt,
 			&group.UpdatedAt,
+			&group.TenantID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan group: %w", err)
@@ -4725,7 +4749,7 @@ func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.Deploy
 	stmt := `SELECT
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
-		config_id, inventory_path, created_at, updated_at
+		config_id, inventory_path, created_at, updated_at, tenant_id
 		FROM deploy_targets WHERE id = ?`
 	args := []any{id}
 	if apply {
@@ -4738,7 +4762,7 @@ func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.Deploy
 	var cred []byte
 	if err := row.Scan(&t.ID, &t.Name, &t.Provider, &t.GitHubOwner, &t.GitHubRepo,
 		&t.GitHubWorkflow, &t.GitHubBranch, &cred, &inputsJSON,
-		&t.ConfigID, &t.InventoryPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.ConfigID, &t.InventoryPath, &t.CreatedAt, &t.UpdatedAt, &t.TenantID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -4760,7 +4784,7 @@ func (s *Storage) ListDeployTargets(ctx context.Context) ([]*types.DeployTarget,
 	stmt := `SELECT
 		id, name, provider, github_owner, github_repo, github_workflow,
 		github_branch, encrypted_credential, default_inputs_json,
-		config_id, inventory_path, created_at, updated_at
+		config_id, inventory_path, created_at, updated_at, tenant_id
 		FROM deploy_targets`
 	var args []any
 	if apply {
@@ -4780,7 +4804,7 @@ func (s *Storage) ListDeployTargets(ctx context.Context) ([]*types.DeployTarget,
 		var cred []byte
 		if err := rows.Scan(&t.ID, &t.Name, &t.Provider, &t.GitHubOwner, &t.GitHubRepo,
 			&t.GitHubWorkflow, &t.GitHubBranch, &cred, &inputsJSON,
-			&t.ConfigID, &t.InventoryPath, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.ConfigID, &t.InventoryPath, &t.CreatedAt, &t.UpdatedAt, &t.TenantID); err != nil {
 			return nil, fmt.Errorf("scan deploy target: %w", err)
 		}
 		t.HasCredential = len(cred) > 0

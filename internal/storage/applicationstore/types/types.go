@@ -424,9 +424,15 @@ type DeployTarget struct {
 	// read-only so the operator can verify the deploy scope before
 	// firing. Matches the workflow pattern where inventory.ini is a
 	// checked-in file rather than a workflow_dispatch input.
-	InventoryPath string    `json:"inventory_path,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	InventoryPath string `json:"inventory_path,omitempty"`
+	// TenantID is the owning Squadron tenant of this deploy target
+	// (persisted since 3b). Surfaced on read so background bridges
+	// (e.g. the GHA walker writing expected_agents) can stamp their
+	// per-owner writes with the anchor's tenant rather than defaulting
+	// to `default`. Empty in OSS (every target is `default`).
+	TenantID  string    `json:"tenant_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // DeployRun is one workflow_dispatch firing. Status tracks the
@@ -1116,9 +1122,15 @@ type Group struct {
 	// proposal happened without learning context. Default true at
 	// the storage layer; the migration in schema v4 backfills every
 	// existing row to 1 so post-upgrade behavior matches the design.
-	LearnFromVerdicts bool      `json:"learn_from_verdicts"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	LearnFromVerdicts bool `json:"learn_from_verdicts"`
+	// TenantID is the owning Squadron tenant of this group (persisted
+	// since 3b via CreateGroup). Surfaced on read so background bridges
+	// (proposer→rollouts, incidents→drafts) can stamp their per-owner
+	// writes with the group's tenant rather than defaulting to
+	// `default`. Empty in OSS (every group is `default`).
+	TenantID  string    `json:"tenant_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Config represents an agent configuration

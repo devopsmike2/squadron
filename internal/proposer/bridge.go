@@ -35,6 +35,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/proposer/verdictprompt"
 	"github.com/devopsmike2/squadron/internal/proposer/verdictsel"
@@ -292,6 +293,26 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 	}
 }
 
+// tenantForGroup returns ctx wrapped with the owning group's tenant so
+// the per-owner write (rollout / plan) lands in the group's tenant
+// rather than the bridge loop's system default. ADR 0013 D6-a. The
+// group is loaded under the (system) ctx the bridge runs under, so the
+// read returns the row regardless of tenant. Empty/absent anchor
+// (group deleted, no tenant on disk) → leave ctx unstamped so the
+// write falls back to `default` — the legit fallback. Inert in OSS
+// where every group resolves to `default` and WithTenant("default")
+// is a no-op.
+func (b *Bridge) tenantForGroup(ctx context.Context, groupID string) context.Context {
+	if groupID == "" {
+		return ctx
+	}
+	group, err := b.store.GetGroup(ctx, groupID)
+	if err != nil || group == nil || group.TenantID == "" {
+		return ctx
+	}
+	return identity.WithTenant(ctx, group.TenantID)
+}
+
 // handleRolloutSpike is the v0.58 path — single rollout create.
 // Extracted from handleSpike during the v0.79 refactor so the
 // dispatch branch reads cleanly. verdictIDs flows from
@@ -299,7 +320,13 @@ func (b *Bridge) handleSpike(ctx context.Context, spike *types.CostSpikeEvent) {
 // proposal.created audit payload (v0.89.17 #633).
 func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string, verdictIDsByState map[string][]string) {
 	input := candidateToInput(result, cs.GroupID)
-	rollout, err := b.rollouts.Create(ctx, input)
+	// ADR 0013 D6-a: anchor the write on the OWNING group's tenant, not
+	// the loop's system ctx (which would resolve to `default`). NB anchor
+	// on the GROUP — an AI rollout is itself default-created, so the
+	// rollout's own tenant is meaningless here. Inert in OSS (every group
+	// is `default`; the stamp is a no-op).
+	writeCtx := b.tenantForGroup(ctx, cs.GroupID)
+	rollout, err := b.rollouts.Create(writeCtx, input)
 	if err != nil {
 		b.logger.Warn("AI proposer bridge: rollout create failed; skipping spike",
 			zap.String("spike_id", spike.ID), zap.Error(err))
@@ -328,7 +355,10 @@ func (b *Bridge) handleRolloutSpike(ctx context.Context, spike *types.CostSpikeE
 //     rollout id so the timeline anchors the plan to a concrete row.
 func (b *Bridge) handlePlanSpike(ctx context.Context, spike *types.CostSpikeEvent, result *ai.ProposalResult, cs ai.CostSpikeContext, verdictIDs []string, verdictIDsByState map[string][]string) {
 	steps := candidateToPlanInputs(result, cs.GroupID)
-	createdSteps, planID, err := b.rollouts.CreatePlan(ctx, steps)
+	// ADR 0013 D6-a: anchor the write on the owning group's tenant (see
+	// handleRolloutSpike). Inert in OSS.
+	writeCtx := b.tenantForGroup(ctx, cs.GroupID)
+	createdSteps, planID, err := b.rollouts.CreatePlan(writeCtx, steps)
 	if err != nil {
 		b.logger.Warn("AI proposer bridge: plan create failed; skipping spike",
 			zap.String("spike_id", spike.ID), zap.Error(err))

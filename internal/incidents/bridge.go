@@ -39,6 +39,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -261,7 +262,7 @@ func (b *Bridge) handleOne(ctx context.Context, req *types.ActionRequest) {
 		return
 	}
 
-	in := b.buildDraftInput(ctx, req)
+	in, anchorTenant := b.buildDraftInput(ctx, req)
 
 	res, err := b.drafter.DraftIncidentFromAction(ctx, in)
 	if err != nil {
@@ -299,7 +300,18 @@ func (b *Bridge) handleOne(ctx context.Context, req *types.ActionRequest) {
 		BodyMarkdown:     ai.RenderIncidentMarkdown(res, in),
 		DraftContentJSON: marshalOrEmpty(res),
 	}
-	if err := b.store.CreateIncidentDraft(ctx, draft); err != nil {
+	// ADR 0013 D6-a: anchor the write on the OWNING group's tenant
+	// (resolved via the originating rollout in buildDraftInput), not the
+	// bridge loop's system ctx (which resolves to `default`). When
+	// req.ProposalID == "" there's no originating rollout → no group
+	// anchor → anchorTenant is empty → leave `default` (the legit
+	// fallback). Inert in OSS (every group is `default`; WithTenant is a
+	// no-op).
+	writeCtx := ctx
+	if anchorTenant != "" {
+		writeCtx = identity.WithTenant(ctx, anchorTenant)
+	}
+	if err := b.store.CreateIncidentDraft(writeCtx, draft); err != nil {
 		log.Warn("incidents: persist draft failed", zap.Error(err))
 		return
 	}
@@ -328,7 +340,16 @@ func (b *Bridge) handleOne(ctx context.Context, req *types.ActionRequest) {
 // rollout context into the structured input the drafter consumes.
 // Errors looking up the rollout or group are non-fatal; the input is
 // still useful without them, just less rich.
-func (b *Bridge) buildDraftInput(ctx context.Context, req *types.ActionRequest) ai.IncidentDraftInput {
+//
+// It also returns the anchor tenant — the OWNING group's tenant,
+// reached via the originating rollout (req.ProposalID → rollout →
+// group). ADR 0013 D6-a: the caller stamps the draft write with this
+// so per-owner drafts land in the group's tenant rather than the
+// bridge's system default. Empty when there's no rollout/group anchor
+// (the legit `default` fallback). Empty in OSS (every group is
+// `default`).
+func (b *Bridge) buildDraftInput(ctx context.Context, req *types.ActionRequest) (ai.IncidentDraftInput, string) {
+	anchorTenant := ""
 	in := ai.IncidentDraftInput{
 		ActionRequestID: req.ID,
 		RolloutID:       req.ProposalID,
@@ -356,10 +377,11 @@ func (b *Bridge) buildDraftInput(ctx context.Context, req *types.ActionRequest) 
 			in.AuditReferences["rollout"] = r.ID
 			if g, err := b.store.GetGroup(ctx, r.GroupID); err == nil && g != nil {
 				in.GroupName = g.Name
+				anchorTenant = g.TenantID
 			}
 		}
 	}
-	return in
+	return in, anchorTenant
 }
 
 // summarizeAction renders a single-line description of the action
