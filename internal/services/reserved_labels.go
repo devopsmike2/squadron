@@ -26,6 +26,42 @@ var (
 	reservedTokenLabels   = map[string]struct{}{}
 )
 
+// reservedTokenLabelPrefixes is the process-wide set of label PREFIXES the
+// public token-create API refuses to mint (ADR 0014 D9). Exact whole-string
+// matching (reservedTokenLabels) is not enough for the identity labels: the
+// enterprise OIDC/SCIM mint encodes the subject in the label (`oidc:<sub>`,
+// `scim:<externalId>`), so the reserved SPACE is a prefix, not a single string.
+// Without this, an `auth:write` holder could POST a `oidc:foo` label through
+// the public handler and forge an OIDC identity. EMPTY in OSS (inert); the
+// enterprise wire registers `oidc:` / `scim:`. The internal OIDC/SCIM mint
+// calls AuthService.Issue directly (bypasses the public handler, like the
+// bootstrap label), so it is unaffected.
+var (
+	reservedTokenLabelPrefixesMu sync.RWMutex
+	reservedTokenLabelPrefixes   []string
+)
+
+// SetReservedTokenLabelPrefixes installs the process-wide reserved-label-prefix
+// set the public token-create handler consults. Prefixes are matched
+// case-insensitively against the trimmed caller-supplied label. Called once
+// from the enterprise wire at startup; OSS never calls it, leaving the set
+// empty (inert). Not safe for concurrent use with in-flight requests — call it
+// during startup, before serving traffic. A nil or empty argument clears the
+// set.
+func SetReservedTokenLabelPrefixes(prefixes []string) {
+	reservedTokenLabelPrefixesMu.Lock()
+	defer reservedTokenLabelPrefixesMu.Unlock()
+	next := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		next = append(next, p)
+	}
+	reservedTokenLabelPrefixes = next
+}
+
 // SetReservedTokenLabels installs the process-wide reserved-token-label set the
 // public token-create handler consults. Labels are matched case-insensitively
 // against the trimmed caller-supplied label (so `Bootstrap` can't bypass
@@ -56,7 +92,20 @@ func IsReservedTokenLabel(label string) bool {
 		return false
 	}
 	reservedTokenLabelsMu.RLock()
-	defer reservedTokenLabelsMu.RUnlock()
 	_, ok := reservedTokenLabels[key]
-	return ok
+	reservedTokenLabelsMu.RUnlock()
+	if ok {
+		return true
+	}
+	// ADR 0014 D9 — also reject any label carrying a reserved prefix
+	// (`oidc:`, `scim:` enterprise-side) so the public handler can't be used
+	// to forge an OIDC/SCIM identity label. Inert in OSS (empty prefix set).
+	reservedTokenLabelPrefixesMu.RLock()
+	defer reservedTokenLabelPrefixesMu.RUnlock()
+	for _, p := range reservedTokenLabelPrefixes {
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+	return false
 }
