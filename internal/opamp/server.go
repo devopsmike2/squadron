@@ -12,10 +12,19 @@ import (
 	"github.com/open-telemetry/opamp-go/server/types"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/agentid"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
 )
+
+// tenantHeader is the per-connection tenant header an OpAMP client (or a
+// fronting proxy) stamps to declare which tenant its agent/group store writes
+// land in (ADR 0012 §Decision 2). It mirrors the x-squadron-agent-id header
+// this package already injects into the own-telemetry connection settings
+// offer (see calcConnectionSettings). Empty resolves to identity.DefaultTenant,
+// keeping OSS single-tenant behavior inert.
+const tenantHeader = "x-squadron-tenant"
 
 // DefaultOTelConfig provides the default OpenTelemetry Collector configuration
 const DefaultOTelConfig = `receivers:
@@ -116,11 +125,29 @@ func (s *Server) Start(port int) error {
 					if s.metrics != nil {
 						s.metrics.AgentConnectionsTotal.Inc(1)
 					}
+					// ADR 0012 §Decision 2: resolve the per-connection tenant
+					// from the x-squadron-tenant header at connect time — the
+					// only point the raw *http.Request is in scope. It's
+					// captured in the per-connection callback closures below so
+					// onDisconnect (which runs on context.Background() after the
+					// wire is gone) can still stamp the connection's tenant
+					// without re-deriving it. Empty header resolves to
+					// identity.DefaultTenant, keeping OSS single-tenant behavior
+					// inert.
+					//
+					// ADR 0012 §Decision 2: enterprise strict rejects empty
+					// x-squadron-tenant — layered at the enterprise wire. OSS
+					// does NOT reject here.
+					connTenant := resolveConnTenant(request)
 					return types.ConnectionResponse{
 						Accept: true,
 						ConnectionCallbacks: server.ConnectionCallbacksStruct{
-							OnMessageFunc:         s.onMessage,
-							OnConnectionCloseFunc: s.onDisconnect,
+							OnMessageFunc: func(ctx context.Context, conn types.Connection, msg *protobufs.AgentToServer) *protobufs.ServerToAgent {
+								return s.onMessage(identity.WithTenant(ctx, connTenant), conn, msg)
+							},
+							OnConnectionCloseFunc: func(conn types.Connection) {
+								s.onDisconnect(conn, connTenant)
+							},
 						},
 					}
 				},
@@ -147,7 +174,21 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) onDisconnect(conn types.Connection) {
+// resolveConnTenant reads the x-squadron-tenant header off the raw connect-time
+// request and resolves it to a tenant id. Empty (or a nil request, as in tests)
+// resolves to identity.DefaultTenant, so OSS single-tenant behavior is inert.
+// ADR 0012 §Decision 2.
+func resolveConnTenant(request *http.Request) string {
+	if request == nil {
+		return identity.DefaultTenant
+	}
+	if t := request.Header.Get(tenantHeader); t != "" {
+		return t
+	}
+	return identity.DefaultTenant
+}
+
+func (s *Server) onDisconnect(conn types.Connection, connTenant string) {
 	// Track disconnections
 	if s.metrics != nil {
 		s.metrics.AgentDisconnectsTotal.Inc(1)
@@ -163,7 +204,11 @@ func (s *Server) onDisconnect(conn types.Connection) {
 	// reason. Both happen in the same loop so connection-close
 	// observability stays in sync.
 	if s.agentService != nil {
-		ctx := context.Background()
+		// ADR 0012 §Decision 2: onDisconnect runs on context.Background()
+		// after the wire is gone, so the tenant can't be re-derived from a
+		// request. Stamp the per-connection tenant captured at connect time so
+		// the offline UpdateAgentStatus write lands in the connection's tenant.
+		ctx := identity.WithTenant(context.Background(), connTenant)
 		for agentId := range agentsToMarkOffline {
 			// agentsToMarkOffline is keyed by wire instance_uid; the store row is
 			// keyed by fleet id. Resolve the agent to mark the correct row offline.

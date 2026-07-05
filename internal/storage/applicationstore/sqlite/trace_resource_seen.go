@@ -58,12 +58,13 @@ func (s *Storage) UpsertTraceResources(
 	if len(rows) == 0 {
 		return 0, nil
 	}
-	// ADR 0011 slice 3b — the trace flush runs under WithSystemContext in
-	// production (apply=false → rowTenant=DefaultTenant, no eviction
-	// predicate → fleet-wide LRU). A non-system caller stamps the rows with
-	// its tenant. The upsert's ON CONFLICT target is the slice 3b′ composite
-	// (tenant_id, resource_key) key, so two tenants can hold the same
-	// resource_key without collision.
+	// ADR 0011 slice 3b / ADR 0012 §4 — the production trace flusher is
+	// stamped WithSystemContext at its launch site in cmd/all-in-one/main.go
+	// (traceFlushCtx), so here apply=false → rowTenant=DefaultTenant and no
+	// eviction predicate → fleet-wide LRU. A non-system caller instead stamps
+	// the rows with its tenant. The upsert's ON CONFLICT target is the slice
+	// 3b′ composite (tenant_id, resource_key) key, so two tenants can hold the
+	// same resource_key without collision.
 	//
 	// TODO(ADR 0011 slice 3b′): the LRU cap (count + evict-oldest below) is
 	// deliberately GLOBAL, not per-tenant. The production flush runs under a

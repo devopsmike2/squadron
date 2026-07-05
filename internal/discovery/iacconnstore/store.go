@@ -119,6 +119,20 @@ type IaCConnection struct {
 	// by Create. Callers do not supply this on Create.
 	ConnectionID string `json:"connection_id"`
 
+	// TenantID is the tenant that owns this connection (ADR 0012
+	// §Decision 3). Populated at connect time from the authenticated
+	// actor's tenant via identity.TenantFromContext in the create
+	// handler; defaults to identity.DefaultTenant ("default") in the OSS
+	// single-tenant build. Pre-3d rows backfill to "default" via the
+	// ADD COLUMN default (migration0004).
+	//
+	// This field is the tenant key the GitHub webhook receiver stamps on
+	// its store writes: a matched delivery's audit / check-run / dedupe
+	// rows land in the connection's tenant, since the HMAC-authed
+	// delivery carries no operator identity of its own. The field is
+	// inert in OSS (every row is "default").
+	TenantID string `json:"tenant_id"`
+
 	// Provider names the IaC hosting platform. Slice 1: "github".
 	Provider string `json:"provider"`
 

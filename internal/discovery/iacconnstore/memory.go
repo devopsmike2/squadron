@@ -84,6 +84,13 @@ func (m *memoryStore) Create(_ context.Context, conn *IaCConnection) error {
 	if !conn.LearnFromAcceptedRecommendations {
 		conn.LearnFromAcceptedRecommendations = true
 	}
+	// ADR 0012 §Decision 3: default the tenant to the OSS single-tenant
+	// sentinel when unset, mirroring the SQLite ADD COLUMN default. The
+	// create handler stamps identity.TenantFromContext(ctx) before
+	// Create; an unstamped struct still lands a valid "default" row.
+	if conn.TenantID == "" {
+		conn.TenantID = "default"
+	}
 
 	// Defensive copy so a caller mutating its struct after Create
 	// doesn't mutate the stored row.

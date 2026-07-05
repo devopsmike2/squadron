@@ -29,7 +29,17 @@ type TraceService struct {
 	// qualityIndex is the span-quality slice-1 chunk-1 wire-up,
 	// mirroring HTTPServer.qualityIndex. Nil disables cleanly.
 	qualityIndex QualityObserver
+	// tenant is the ADR 0012 §1 ingest tenant this instance binds all
+	// OTLP-ingested items to. Empty => the worker stamps DefaultTenant.
+	// Set from ingest.otlp.tenant_id via SetTenant (setter style keeps
+	// NewTraceService binary-compatible, matching SetTraceIndex).
+	tenant string
 }
+
+// SetTenant binds this service's submitted WorkItems to the ADR 0012 §1
+// ingest tenant. Empty leaves the worker to stamp DefaultTenant (inert in
+// OSS). Mirrors SetTraceIndex so cmd/all-in-one wires from one call site.
+func (s *TraceService) SetTenant(tenant string) { s.tenant = tenant }
 
 // SetTraceIndex wires the traceindex Observer onto the gRPC trace
 // service. Mirrors HTTPServer.SetTraceIndex so the chunk-2 wiring
@@ -52,7 +62,13 @@ type MetricsService struct {
 	logger     *zap.Logger
 	metrics    *metrics.OTLPMetrics
 	workerPool *worker.Pool
+	// tenant — see TraceService.tenant (ADR 0012 §1). Set via SetTenant.
+	tenant string
 }
+
+// SetTenant binds this service's submitted WorkItems to the ADR 0012 §1
+// ingest tenant. Empty => DefaultTenant (inert in OSS).
+func (s *MetricsService) SetTenant(tenant string) { s.tenant = tenant }
 
 // LogsService implements the OTLP Logs Service gRPC interface
 type LogsService struct {
@@ -60,7 +76,13 @@ type LogsService struct {
 	logger     *zap.Logger
 	metrics    *metrics.OTLPMetrics
 	workerPool *worker.Pool
+	// tenant — see TraceService.tenant (ADR 0012 §1). Set via SetTenant.
+	tenant string
 }
+
+// SetTenant binds this service's submitted WorkItems to the ADR 0012 §1
+// ingest tenant. Empty => DefaultTenant (inert in OSS).
+func (s *LogsService) SetTenant(tenant string) { s.tenant = tenant }
 
 // NewTraceService creates a new TraceService instance
 func NewTraceService(metricsInstance *metrics.OTLPMetrics, workerPool *worker.Pool, logger *zap.Logger) *TraceService {
@@ -147,6 +169,7 @@ func (s *TraceService) Export(ctx context.Context, req *coltracepb.ExportTraceSe
 		Type:      worker.WorkItemTypeTraces,
 		RawData:   data,
 		Timestamp: time.Now(),
+		Tenant:    s.tenant, // ADR 0012 §1 — bind ingest to the configured tenant
 	}
 
 	if err := s.workerPool.Submit(item); err != nil {
@@ -206,6 +229,7 @@ func (s *MetricsService) Export(ctx context.Context, req *colmetricspb.ExportMet
 		Type:      worker.WorkItemTypeMetrics,
 		RawData:   data,
 		Timestamp: time.Now(),
+		Tenant:    s.tenant, // ADR 0012 §1 — bind ingest to the configured tenant
 	}
 
 	if err := s.workerPool.Submit(item); err != nil {
@@ -250,6 +274,7 @@ func (s *LogsService) Export(ctx context.Context, req *collogspb.ExportLogsServi
 		Type:      worker.WorkItemTypeLogs,
 		RawData:   data,
 		Timestamp: time.Now(),
+		Tenant:    s.tenant, // ADR 0012 §1 — bind ingest to the configured tenant
 	}
 
 	if err := s.workerPool.Submit(item); err != nil {

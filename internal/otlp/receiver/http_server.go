@@ -53,7 +53,17 @@ type HTTPServer struct {
 	// nil-guard pattern — SQUADRON_SPANQUALITY_DISABLED leaves this
 	// field zero and the handler skips the quality pass cleanly.
 	qualityIndex QualityObserver
+	// tenant is the ADR 0012 §1 ingest tenant every submitted WorkItem
+	// carries. Empty => the worker stamps DefaultTenant. Set from
+	// ingest.otlp.tenant_id via SetTenant (setter style keeps
+	// NewHTTPServer binary-compatible, matching SetTraceIndex).
+	tenant string
 }
+
+// SetTenant binds this HTTP receiver's submitted WorkItems to the ADR 0012
+// §1 ingest tenant. Empty leaves the worker to stamp DefaultTenant (inert
+// in OSS). Mirrors SetTraceIndex so cmd/all-in-one wires from one call site.
+func (s *HTTPServer) SetTenant(tenant string) { s.tenant = tenant }
 
 // NewHTTPServer creates a new HTTP server instance
 func NewHTTPServer(port int, metricsInstance *metrics.OTLPMetrics, workerPool *worker.Pool, logger *zap.Logger) (*HTTPServer, error) {
@@ -310,6 +320,7 @@ func (s *HTTPServer) handleOTLPTraces(c *gin.Context) {
 		Type:      worker.WorkItemTypeTraces,
 		RawData:   body,
 		Timestamp: time.Now(),
+		Tenant:    s.tenant, // ADR 0012 §1 — bind ingest to the configured tenant
 	}
 
 	if err := s.workerPool.Submit(item); err != nil {
@@ -352,6 +363,7 @@ func (s *HTTPServer) handleOTLPMetrics(c *gin.Context) {
 		Type:      worker.WorkItemTypeMetrics,
 		RawData:   body,
 		Timestamp: time.Now(),
+		Tenant:    s.tenant, // ADR 0012 §1 — bind ingest to the configured tenant
 	}
 
 	if err := s.workerPool.Submit(item); err != nil {
@@ -394,6 +406,7 @@ func (s *HTTPServer) handleOTLPLogs(c *gin.Context) {
 		Type:      worker.WorkItemTypeLogs,
 		RawData:   body,
 		Timestamp: time.Now(),
+		Tenant:    s.tenant, // ADR 0012 §1 — bind ingest to the configured tenant
 	}
 
 	if err := s.workerPool.Submit(item); err != nil {

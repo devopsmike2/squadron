@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -480,11 +481,19 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 	// secret. The lookup result is reused at the audit-emit step
 	// below so we don't double-query the store.
 	var connectionID string
+	// ADR 0012 §Decision 3: the connection this delivery matches is the
+	// tenant key. A GitHub webhook delivery is HMAC-authed, not
+	// operator-authed, so it carries no tenant of its own — we derive the
+	// tenant from the matched connection and stamp it on the request ctx
+	// below, so the audit / check-run / dedupe store writes land in the
+	// connection's tenant. Empty resolves to "default" (OSS-inert).
+	var connTenant string
 	if h.store != nil && repoFullName != "" {
 		conn, err := h.store.GetByRepoFullName(c.Request.Context(), repoFullName)
 		switch {
 		case err == nil && conn != nil:
 			connectionID = conn.ConnectionID
+			connTenant = conn.TenantID
 		case errors.Is(err, iacconnstore.ErrConnectionNotFound):
 			// Honest no-match — log on the audit-emit branch
 			// below, not here, so the audit row gets the same
@@ -496,6 +505,29 @@ func (h *IaCGitHubWebhookHandler) HandleWebhook(c *gin.Context) {
 				zap.String("repo_full_name", repoFullName),
 			)
 		}
+	}
+
+	// ADR 0012 §Decision 3: stamp the tenant onto the request context
+	// BEFORE any of the dedupe / audit / check-run store writes below, so
+	// they scope to the matched connection's tenant.
+	//
+	//   - Matched connection → stamp conn.TenantID (empty → "default").
+	//   - Unmatched repo (connectionID == "") → stamp the SYSTEM context:
+	//     the HMAC-authed delivery still records a dedupe / audit row
+	//     fleet-wide, since there is no owning tenant to attribute it to.
+	//     ADR 0012 §Decision 3.
+	//
+	// Replacing c.Request with the stamped-context clone means every
+	// downstream c.Request.Context() call picks up the tenant without
+	// threading a separate ctx variable through the pipeline.
+	if connectionID != "" {
+		tenant := connTenant
+		if tenant == "" {
+			tenant = identity.DefaultTenant
+		}
+		c.Request = c.Request.WithContext(identity.WithTenant(c.Request.Context(), tenant))
+	} else {
+		c.Request = c.Request.WithContext(identity.WithSystemContext(c.Request.Context()))
 	}
 
 	pickedSecret := h.pickWebhookSecret(c.Request.Context(), connectionID)
