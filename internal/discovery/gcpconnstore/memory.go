@@ -62,6 +62,12 @@ func (m *memoryStore) Create(_ context.Context, conn *GCPConnection) error {
 	if !conn.LearnFromAcceptedRecommendations {
 		conn.LearnFromAcceptedRecommendations = true
 	}
+	// ADR 0013 §D6-b: mirror sqliteStore.Create's owner-tenant
+	// default-guard so a struct built without a tenant lands "default"
+	// rather than an empty string.
+	if conn.TenantID == "" {
+		conn.TenantID = "default"
+	}
 
 	stored := cloneConnection(conn)
 	m.byID[conn.ID] = stored

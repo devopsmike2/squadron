@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/demo"
@@ -68,7 +69,23 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval, drif
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift(emitter, "aws", h.RunScanForAccount),
+			// ADR 0013 §D6-b: re-Get the connection and stamp the owning
+			// tenant onto ctx BEFORE scanAccountWithDrift runs, so BOTH the
+			// scan's SaveDiscoveryScan write AND the drift emit inherit the
+			// tenant (see stampOwnerTenant). The scheduler's top-level
+			// ListAccounts stays system-scoped (sees every tenant's
+			// connections); only this per-connection write ctx is
+			// re-stamped. Inert in OSS — every connection's tenant is
+			// "default".
+			ScanAccount: func(ctx context.Context, id string) error {
+				ctx = stampOwnerTenant(ctx, id, func(ctx context.Context, id string) string {
+					if conn, err := credStore.GetConnection(ctx, id); err == nil && conn != nil {
+						return conn.TenantID
+					}
+					return ""
+				})
+				return s.scanAccountWithDrift(emitter, "aws", h.RunScanForAccount)(ctx, id)
+			},
 		}
 		go sched.Run(ctx)
 	} else if s.logger != nil {
@@ -104,9 +121,21 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval, drif
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift(emitter, "gcp", func(ctx context.Context, id string) error {
-				return invokeScanHandler(ctx, id, h.HandleScanGCPConnection)
-			}),
+			// ADR 0013 §D6-b: stamp the owning tenant onto ctx before
+			// scanAccountWithDrift so both the scan write and the drift
+			// emit land in the connection's tenant (see stampOwnerTenant).
+			// Inert in OSS.
+			ScanAccount: func(ctx context.Context, id string) error {
+				ctx = stampOwnerTenant(ctx, id, func(ctx context.Context, id string) string {
+					if conn, err := store.Get(ctx, id); err == nil && conn != nil {
+						return conn.TenantID
+					}
+					return ""
+				})
+				return s.scanAccountWithDrift(emitter, "gcp", func(ctx context.Context, id string) error {
+					return invokeScanHandler(ctx, id, h.HandleScanGCPConnection)
+				})(ctx, id)
+			},
 		}
 		go sched.Run(ctx)
 	}
@@ -140,9 +169,21 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval, drif
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift(emitter, "azure", func(ctx context.Context, id string) error {
-				return invokeScanHandler(ctx, id, h.HandleScanAzureConnection)
-			}),
+			// ADR 0013 §D6-b: stamp the owning Squadron tenant onto ctx
+			// before scanAccountWithDrift (see stampOwnerTenant). Uses
+			// SquadronTenantID — the Squadron owner tenant, DISTINCT from
+			// the Azure-AD TenantID on the connection. Inert in OSS.
+			ScanAccount: func(ctx context.Context, id string) error {
+				ctx = stampOwnerTenant(ctx, id, func(ctx context.Context, id string) string {
+					if conn, err := store.Get(ctx, id); err == nil && conn != nil {
+						return conn.SquadronTenantID
+					}
+					return ""
+				})
+				return s.scanAccountWithDrift(emitter, "azure", func(ctx context.Context, id string) error {
+					return invokeScanHandler(ctx, id, h.HandleScanAzureConnection)
+				})(ctx, id)
+			},
 		}
 		go sched.Run(ctx)
 	}
@@ -176,12 +217,43 @@ func (s *Server) StartDiscoveryScanScheduler(ctx context.Context, interval, drif
 				}
 				return ids, nil
 			},
-			ScanAccount: s.scanAccountWithDrift(emitter, "oci", func(ctx context.Context, id string) error {
-				return invokeScanHandler(ctx, id, h.HandleScanOCIConnection)
-			}),
+			// ADR 0013 §D6-b: stamp the owning Squadron tenant onto ctx
+			// before scanAccountWithDrift (see stampOwnerTenant). Uses
+			// OwnerTenantID — the Squadron owner tenant, DISTINCT from the
+			// OCI TenancyOCID on the connection. Inert in OSS.
+			ScanAccount: func(ctx context.Context, id string) error {
+				ctx = stampOwnerTenant(ctx, id, func(ctx context.Context, id string) string {
+					if conn, err := store.Get(ctx, id); err == nil && conn != nil {
+						return conn.OwnerTenantID
+					}
+					return ""
+				})
+				return s.scanAccountWithDrift(emitter, "oci", func(ctx context.Context, id string) error {
+					return invokeScanHandler(ctx, id, h.HandleScanOCIConnection)
+				})(ctx, id)
+			},
 		}
 		go sched.Run(ctx)
 	}
+}
+
+// stampOwnerTenant re-Gets a connection's Squadron owner tenant (via the
+// per-cloud ownerOf lookup) and, when non-empty, stamps it onto ctx (ADR
+// 0013 §D6-b). It is called at the ScanAccount-closure boundary — BEFORE
+// scanAccountWithDrift runs — so BOTH the scan's SaveDiscoveryScan write
+// AND the drift emit inherit the tenant'd ctx. Go passes ctx by value, so
+// stamping inside the inner scan fn would leave the drift emit (which uses
+// the ctx that entered scanAccountWithDrift) on the un-stamped ctx; hence
+// this boundary. ownerOf returns "" when the connection is missing or has
+// no owner tenant, in which case ctx is returned unchanged — and the
+// downstream store's tenantScope falls back to DefaultTenant. Inert in
+// OSS: every connection's owner tenant is "default", so the stamp is a
+// no-op relative to today's behavior.
+func stampOwnerTenant(ctx context.Context, id string, ownerOf func(context.Context, string) string) context.Context {
+	if owner := ownerOf(ctx, id); owner != "" {
+		return identity.WithTenant(ctx, owner)
+	}
+	return ctx
 }
 
 // scanAccountWithDrift wraps a scan function so that, after a successful

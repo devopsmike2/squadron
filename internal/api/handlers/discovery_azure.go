@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/discovery/azureconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -433,12 +434,20 @@ func (h *DiscoveryAzureHandlers) HandleCreateAzureConnection(c *gin.Context) {
 	}
 
 	conn := &azureconnstore.AzureConnection{
-		DisplayName:                      strings.TrimSpace(req.DisplayName),
-		TenantID:                         strings.TrimSpace(req.TenantID),
-		SubscriptionID:                   strings.TrimSpace(req.SubscriptionID),
-		ClientID:                         strings.TrimSpace(req.ClientID),
-		SealedSecret:                     sealed,
-		Location:                         strings.TrimSpace(req.Location),
+		DisplayName:    strings.TrimSpace(req.DisplayName),
+		TenantID:       strings.TrimSpace(req.TenantID),
+		SubscriptionID: strings.TrimSpace(req.SubscriptionID),
+		ClientID:       strings.TrimSpace(req.ClientID),
+		SealedSecret:   sealed,
+		Location:       strings.TrimSpace(req.Location),
+		// ADR 0013 §D6-b: stamp the Squadron owner tenant from the
+		// authenticated actor's tenant so the discovery rescan scheduler
+		// can scope its discovery_scans store writes to this connection's
+		// owning tenant later. This is DISTINCT from the Azure-AD TenantID
+		// above. Resolves to identity.DefaultTenant ("default") in the OSS
+		// single-tenant build — inert until the enterprise TenantResolver
+		// derives a real tenant from the identity.
+		SquadronTenantID:                 identity.TenantFromContext(c.Request.Context()),
 		LearnFromAcceptedRecommendations: true,
 	}
 	if err := h.store.Create(c.Request.Context(), conn); err != nil {

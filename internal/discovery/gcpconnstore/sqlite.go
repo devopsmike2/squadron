@@ -175,12 +175,24 @@ func (s *sqliteStore) Create(ctx context.Context, conn *GCPConnection) error {
 		learnInt = 0
 	}
 
+	// ADR 0013 §D6-b: default the owner tenant to the OSS single-tenant
+	// sentinel when the caller left it empty. The create handler stamps
+	// identity.TenantFromContext(ctx) onto the struct before Create; an
+	// unstamped struct (direct test construction, background path) still
+	// lands a valid "default" row rather than an empty tenant.
+	tenantID := conn.TenantID
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	conn.TenantID = tenantID
+
 	const stmt = `
 		INSERT INTO gcp_connections (
 			id, display_name, project_id, sealed_sa, region,
 			learn_from_accepted_recommendations,
+			tenant_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		conn.ID,
@@ -189,6 +201,7 @@ func (s *sqliteStore) Create(ctx context.Context, conn *GCPConnection) error {
 		conn.SealedSA,
 		nullableString(conn.Region),
 		learnInt,
+		tenantID,
 		now.Format(timestampLayout),
 		now.Format(timestampLayout),
 	); err != nil {
@@ -206,6 +219,7 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*GCPConnection, error
 	const stmt = `
 		SELECT id, display_name, project_id, sealed_sa, region,
 		       learn_from_accepted_recommendations,
+		       tenant_id,
 		       created_at, updated_at
 		FROM gcp_connections
 		WHERE id = ?
@@ -226,6 +240,7 @@ func (s *sqliteStore) List(ctx context.Context) ([]*GCPConnection, error) {
 	const stmt = `
 		SELECT id, display_name, project_id, sealed_sa, region,
 		       learn_from_accepted_recommendations,
+		       tenant_id,
 		       created_at, updated_at
 		FROM gcp_connections
 		ORDER BY created_at ASC, id ASC
@@ -358,6 +373,7 @@ func scanConnection(r rowScanner) (*GCPConnection, error) {
 		conn              GCPConnection
 		region            sql.NullString
 		learnFromAccepted int
+		tenantID          string
 		createdAt         string
 		updatedAt         string
 	)
@@ -368,12 +384,20 @@ func scanConnection(r rowScanner) (*GCPConnection, error) {
 		&conn.SealedSA,
 		&region,
 		&learnFromAccepted,
+		&tenantID,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
 		return nil, err
 	}
 	conn.LearnFromAcceptedRecommendations = learnFromAccepted != 0
+	// ADR 0013 §D6-b: NOT NULL DEFAULT 'default' guarantees a non-empty
+	// value on disk, but guard the empty case so a hand-edited row still
+	// reads back the OSS single-tenant sentinel.
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	conn.TenantID = tenantID
 	if region.Valid {
 		conn.Region = region.String
 	}

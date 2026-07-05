@@ -189,13 +189,26 @@ func (s *sqliteStore) Create(ctx context.Context, conn *OCIConnection) error {
 		learnInt = 0
 	}
 
+	// ADR 0013 §D6-b: default the Squadron owner tenant to the OSS
+	// single-tenant sentinel when the caller left it empty. This is the
+	// squadron_tenant_id column — distinct from the OCI tenancy_ocid.
+	// The create handler stamps identity.TenantFromContext(ctx) onto the
+	// struct before Create; an unstamped struct (direct test
+	// construction, background path) still lands a valid "default" row.
+	ownerTenantID := conn.OwnerTenantID
+	if ownerTenantID == "" {
+		ownerTenantID = "default"
+	}
+	conn.OwnerTenantID = ownerTenantID
+
 	const stmt = `
 		INSERT INTO oci_connections (
 			id, display_name, tenancy_ocid, user_ocid, fingerprint,
 			sealed_private_key, region,
 			learn_from_accepted_recommendations,
+			squadron_tenant_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		conn.ID,
@@ -206,6 +219,7 @@ func (s *sqliteStore) Create(ctx context.Context, conn *OCIConnection) error {
 		conn.SealedPrivateKey,
 		conn.Region,
 		learnInt,
+		ownerTenantID,
 		now.Format(timestampLayout),
 		now.Format(timestampLayout),
 	); err != nil {
@@ -224,6 +238,7 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*OCIConnection, error
 		SELECT id, display_name, tenancy_ocid, user_ocid, fingerprint,
 		       sealed_private_key, region,
 		       learn_from_accepted_recommendations,
+		       squadron_tenant_id,
 		       created_at, updated_at
 		FROM oci_connections
 		WHERE id = ?
@@ -245,6 +260,7 @@ func (s *sqliteStore) List(ctx context.Context) ([]*OCIConnection, error) {
 		SELECT id, display_name, tenancy_ocid, user_ocid, fingerprint,
 		       sealed_private_key, region,
 		       learn_from_accepted_recommendations,
+		       squadron_tenant_id,
 		       created_at, updated_at
 		FROM oci_connections
 		ORDER BY created_at ASC, id ASC
@@ -391,6 +407,7 @@ func scanConnection(r rowScanner) (*OCIConnection, error) {
 	var (
 		conn              OCIConnection
 		learnFromAccepted int
+		ownerTenantID     string
 		createdAt         string
 		updatedAt         string
 	)
@@ -403,12 +420,21 @@ func scanConnection(r rowScanner) (*OCIConnection, error) {
 		&conn.SealedPrivateKey,
 		&conn.Region,
 		&learnFromAccepted,
+		&ownerTenantID,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
 		return nil, err
 	}
 	conn.LearnFromAcceptedRecommendations = learnFromAccepted != 0
+	// ADR 0013 §D6-b: NOT NULL DEFAULT 'default' guarantees a non-empty
+	// value on disk, but guard the empty case so a hand-edited row still
+	// reads back the OSS single-tenant sentinel. This is the Squadron
+	// owner tenant, distinct from the OCI conn.TenancyOCID above.
+	if ownerTenantID == "" {
+		ownerTenantID = "default"
+	}
+	conn.OwnerTenantID = ownerTenantID
 	if t, err := time.Parse(timestampLayout, createdAt); err == nil {
 		conn.CreatedAt = t
 	}

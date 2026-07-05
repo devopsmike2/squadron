@@ -182,13 +182,26 @@ func (s *sqliteStore) Create(ctx context.Context, conn *AzureConnection) error {
 		learnInt = 0
 	}
 
+	// ADR 0013 §D6-b: default the Squadron owner tenant to the OSS
+	// single-tenant sentinel when the caller left it empty. This is the
+	// squadron_tenant_id column — distinct from the Azure-AD tenant_id.
+	// The create handler stamps identity.TenantFromContext(ctx) onto the
+	// struct before Create; an unstamped struct (direct test
+	// construction, background path) still lands a valid "default" row.
+	squadronTenantID := conn.SquadronTenantID
+	if squadronTenantID == "" {
+		squadronTenantID = "default"
+	}
+	conn.SquadronTenantID = squadronTenantID
+
 	const stmt = `
 		INSERT INTO azure_connections (
 			id, display_name, tenant_id, subscription_id, client_id,
 			sealed_secret, location,
 			learn_from_accepted_recommendations,
+			squadron_tenant_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		conn.ID,
@@ -199,6 +212,7 @@ func (s *sqliteStore) Create(ctx context.Context, conn *AzureConnection) error {
 		conn.SealedSecret,
 		nullableString(conn.Location),
 		learnInt,
+		squadronTenantID,
 		now.Format(timestampLayout),
 		now.Format(timestampLayout),
 	); err != nil {
@@ -217,6 +231,7 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*AzureConnection, err
 		SELECT id, display_name, tenant_id, subscription_id, client_id,
 		       sealed_secret, location,
 		       learn_from_accepted_recommendations,
+		       squadron_tenant_id,
 		       created_at, updated_at
 		FROM azure_connections
 		WHERE id = ?
@@ -238,6 +253,7 @@ func (s *sqliteStore) List(ctx context.Context) ([]*AzureConnection, error) {
 		SELECT id, display_name, tenant_id, subscription_id, client_id,
 		       sealed_secret, location,
 		       learn_from_accepted_recommendations,
+		       squadron_tenant_id,
 		       created_at, updated_at
 		FROM azure_connections
 		ORDER BY created_at ASC, id ASC
@@ -382,6 +398,7 @@ func scanConnection(r rowScanner) (*AzureConnection, error) {
 		conn              AzureConnection
 		location          sql.NullString
 		learnFromAccepted int
+		squadronTenantID  string
 		createdAt         string
 		updatedAt         string
 	)
@@ -394,12 +411,21 @@ func scanConnection(r rowScanner) (*AzureConnection, error) {
 		&conn.SealedSecret,
 		&location,
 		&learnFromAccepted,
+		&squadronTenantID,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
 		return nil, err
 	}
 	conn.LearnFromAcceptedRecommendations = learnFromAccepted != 0
+	// ADR 0013 §D6-b: NOT NULL DEFAULT 'default' guarantees a non-empty
+	// value on disk, but guard the empty case so a hand-edited row still
+	// reads back the OSS single-tenant sentinel. This is the Squadron
+	// owner tenant, distinct from the Azure-AD conn.TenantID above.
+	if squadronTenantID == "" {
+		squadronTenantID = "default"
+	}
+	conn.SquadronTenantID = squadronTenantID
 	if location.Valid {
 		conn.Location = location.String
 	}

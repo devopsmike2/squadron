@@ -71,6 +71,16 @@ type GCPConnection struct {
 	// prompt. Defaults to true on Create.
 	LearnFromAcceptedRecommendations bool `json:"learn_from_accepted_recommendations"`
 
+	// TenantID is the Squadron tenant that owns this connection (ADR
+	// 0013 §D6-b). Stamped at Create from the authenticated actor's
+	// tenant so the discovery rescan scheduler can scope its
+	// discovery_scans store writes to the owning tenant — a scheduled
+	// rescan runs under WithSystemContext and carries no operator
+	// identity. Resolves to identity.DefaultTenant ("default") in the
+	// OSS single-tenant build — inert until the enterprise
+	// TenantResolver derives a real tenant from the identity.
+	TenantID string `json:"tenant_id"`
+
 	// CreatedAt and UpdatedAt are stamped by the Store. Callers do
 	// not supply these on Create / Update.
 	CreatedAt time.Time `json:"created_at"`

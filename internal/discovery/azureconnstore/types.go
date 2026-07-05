@@ -40,6 +40,18 @@ type AzureConnection struct {
 	// Callers do not supply this on Create.
 	ID string `json:"id"`
 
+	// SquadronTenantID is the Squadron tenant that OWNS this connection
+	// (ADR 0013 §D6-b). This is DISTINCT from the TenantID field below,
+	// which is the Azure AD tenant the Service Principal lives in.
+	// SquadronTenantID is stamped at Create from the authenticated
+	// actor's tenant so the discovery rescan scheduler can scope its
+	// discovery_scans store writes to the owning tenant — a scheduled
+	// rescan runs under WithSystemContext and carries no operator
+	// identity. Resolves to identity.DefaultTenant ("default") in the
+	// OSS single-tenant build — inert until the enterprise
+	// TenantResolver derives a real tenant from the identity.
+	SquadronTenantID string `json:"squadron_tenant_id"`
+
 	// DisplayName is the operator-supplied human-readable label for
 	// the connection. Surfaces in the discovery UI's connection list
 	// and audit timeline.
@@ -47,7 +59,8 @@ type AzureConnection struct {
 
 	// TenantID is the Azure AD tenant the Service Principal lives in
 	// (UUID format). The scanner uses this to build the
-	// ClientSecretCredential.
+	// ClientSecretCredential. NOTE: this is the Azure-side AD tenant,
+	// NOT the Squadron owner tenant (see SquadronTenantID above).
 	TenantID string `json:"tenant_id"`
 
 	// SubscriptionID is the Azure subscription the connection scans

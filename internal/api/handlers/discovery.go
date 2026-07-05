@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/ai"
 	awsorch "github.com/devopsmike2/squadron/internal/discovery/aws"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
@@ -955,6 +956,14 @@ func (h *DiscoveryHandlers) HandleAWSSaveConnection(c *gin.Context) {
 		Regions:          req.Regions,
 		Credentials:      ciphertext,
 		CredentialsNonce: nonce,
+		// ADR 0013 §D6-b: stamp the connection with the authenticated
+		// actor's tenant so the discovery rescan scheduler can scope its
+		// discovery_scans store writes to this connection's tenant later.
+		// The credstore UPSERT preserves this on re-save (ownership is
+		// immutable). Resolves to identity.DefaultTenant ("default") in
+		// the OSS single-tenant build — inert until the enterprise
+		// TenantResolver derives a real tenant from the identity.
+		TenantID: identity.TenantFromContext(c.Request.Context()),
 	}
 	if err := h.credStore.StoreConnection(c.Request.Context(), conn); err != nil {
 		if h.logger != nil {

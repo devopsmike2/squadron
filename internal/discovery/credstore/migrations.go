@@ -21,7 +21,16 @@ package credstore
 //	TABLE) because no deployment has real rows in v1 — the
 //	credential substrate was shipped in Stream 2A but not wired into
 //	any user-facing connector flow.
-const SchemaVersion = 2
+//
+// v3: ADR 0013 §D6-b adds the Squadron owner-tenant column
+//
+//	(tenant_id) to cloud_connections so the discovery rescan
+//	scheduler can scope its discovery_scans store writes to the
+//	tenant that owns the connection. NOT NULL DEFAULT 'default' —
+//	inert in OSS. This is the first ALTER-based migration in this
+//	chain; the migrate runner gained an isDuplicateColumnErr guard
+//	alongside it (see sqlite.go migrate).
+const SchemaVersion = 3
 
 // migration0001AWSConnections is the initial (v1) schema. Retained in
 // the migration chain so a hypothetical v1 database upgrades correctly,
@@ -103,6 +112,26 @@ CREATE INDEX IF NOT EXISTS idx_cloud_connections_provider
 INSERT OR IGNORE INTO schema_version (version) VALUES (2);
 `
 
+// migration0003TenantID — ADR 0013 §D6-b (multi-tenancy slice D6-b).
+// Adds the Squadron owner-tenant column that keys each cloud
+// connection (AWS at runtime) to the tenant that owns it. NOT NULL
+// DEFAULT 'default' so pre-D6-b rows backfill to the OSS single-tenant
+// sentinel — inert in OSS, where every connection is created under
+// identity.DefaultTenant. The discovery rescan scheduler reads this
+// column to scope its discovery_scans store writes to the connection's
+// owning tenant (a scheduled rescan runs under WithSystemContext and
+// carries no operator identity).
+//
+// This is the FIRST ALTER-based migration in the credstore chain.
+// SQLite doesn't support ALTER TABLE ... ADD COLUMN IF NOT EXISTS; the
+// migrate runner gained an isDuplicateColumnErr guard (see sqlite.go
+// migrate) alongside this migration so re-running on an up-to-date
+// database is a no-op — mirroring iacconnstore's migration0004TenantID.
+const migration0003TenantID = `
+ALTER TABLE cloud_connections ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+INSERT OR IGNORE INTO schema_version (version) VALUES (3);
+`
+
 // migrations is the ordered list of schema migrations. Index N is the
 // SQL applied at version N+1. New entries are appended; existing
 // entries are never edited (they ran against historical databases and
@@ -111,4 +140,5 @@ INSERT OR IGNORE INTO schema_version (version) VALUES (2);
 var migrations = []string{
 	migration0001AWSConnections,
 	migration0002CloudConnections,
+	migration0003TenantID,
 }
