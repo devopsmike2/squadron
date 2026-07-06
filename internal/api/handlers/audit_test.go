@@ -4,9 +4,11 @@
 package handlers
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,91 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+// countExported returns how many audit.exported self-audit rows the service
+// holds — used to assert exports are (and list-polls are not) self-audited.
+func countExported(t *testing.T, svc services.AuditService) int {
+	t.Helper()
+	evs, err := svc.List(t.Context(), services.AuditEventFilter{EventType: "audit.exported"})
+	require.NoError(t, err)
+	return len(evs)
+}
+
+// TestHandleListAuditEvents_CSVExport pins ADR 0020's OSS breadth slice: a
+// ?format=csv request downloads a tenant-scoped CSV attachment (header + one row
+// per event, freeform payload as a JSON column) and self-audits the export.
+func TestHandleListAuditEvents_CSVExport(t *testing.T) {
+	h, svc := setupAuditHandlers(t)
+	ctx := t.Context()
+	for i := 0; i < 2; i++ {
+		require.NoError(t, svc.Record(ctx, services.AuditEntry{
+			Actor: services.AuditActorSystem, EventType: "x.y", TargetType: services.AuditTargetAgent,
+			TargetID: "a", Action: "z", Payload: map[string]any{"k": "v"},
+		}))
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/audit/events?format=csv", nil)
+	h.HandleListAuditEvents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/csv")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "attachment")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), ".csv")
+
+	rows, err := csv.NewReader(strings.NewReader(w.Body.String())).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, rows, 3, "header + 2 data rows")
+	assert.Equal(t, auditCSVHeader, rows[0])
+	// payload column is the last one, JSON-encoded.
+	assert.Contains(t, rows[1][len(auditCSVHeader)-1], `"k":"v"`)
+
+	assert.Equal(t, 1, countExported(t, svc), "the CSV export must be self-audited exactly once")
+}
+
+// TestHandleListAuditEvents_JSONExportSelfAudits pins that ?format=json is an
+// export (attachment + self-audit), distinct from the default list poll.
+func TestHandleListAuditEvents_JSONExportSelfAudits(t *testing.T) {
+	h, svc := setupAuditHandlers(t)
+	require.NoError(t, svc.Record(t.Context(), services.AuditEntry{
+		Actor: services.AuditActorSystem, EventType: "x.y", TargetType: services.AuditTargetAgent, TargetID: "a", Action: "z",
+	}))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/audit/events?format=json", nil)
+	h.HandleListAuditEvents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "attachment")
+	assert.Contains(t, w.Body.String(), `"events"`)
+	assert.Equal(t, 1, countExported(t, svc))
+}
+
+// TestHandleListAuditEvents_DefaultNotSelfAudited pins that the plain list
+// (no format) is NOT self-audited — the /audit page polls it and would flood
+// the log otherwise.
+func TestHandleListAuditEvents_DefaultNotSelfAudited(t *testing.T) {
+	h, svc := setupAuditHandlers(t)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/audit/events", nil)
+	h.HandleListAuditEvents(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Empty(t, w.Header().Get("Content-Disposition"))
+	assert.Equal(t, 0, countExported(t, svc), "a plain list poll must not be self-audited")
+}
+
+// TestHandleListAuditEvents_InvalidFormat pins the 400 on an unknown format.
+func TestHandleListAuditEvents_InvalidFormat(t *testing.T) {
+	h, _ := setupAuditHandlers(t)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/audit/events?format=xml", nil)
+	h.HandleListAuditEvents(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
 
 func setupAuditHandlers(t *testing.T) (*AuditHandlers, services.AuditService) {
 	t.Helper()

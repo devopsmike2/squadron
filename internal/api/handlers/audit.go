@@ -4,6 +4,8 @@
 package handlers
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -54,9 +56,28 @@ func NewAuditHandlers(
 //   - target_id=<uuid|string>
 //   - since=<RFC3339 timestamp>
 //   - limit=<int, default 100, max 1000>
+//   - format=csv|json — when set, the response is an evidence EXPORT: it
+//     downloads as an attachment and the export itself is self-audited
+//     (audit.exported). When absent (default), the response is the plain JSON
+//     list the /audit page polls — unchanged, not self-audited.
 //
-// Returns {events: [...]} sorted newest-first.
+// The export is tenant-scoped to the caller's tenant (the audit service's M2
+// predicate already applies it), so a self-hoster can pull their own SOC 2 / ISO
+// evidence with the operational audit:read scope (ADR 0020: single-tenant export
+// is OSS breadth; cross-tenant / tamper-evident export is the enterprise wedge).
+//
+// Returns {events: [...]} sorted newest-first (default), or a CSV/JSON download.
 func (h *AuditHandlers) HandleListAuditEvents(c *gin.Context) {
+	format := strings.ToLower(strings.TrimSpace(c.Query("format")))
+	switch format {
+	case "", "json", "csv":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid `format` — expected csv or json",
+		})
+		return
+	}
+
 	filter := services.AuditEventFilter{
 		EventType:  c.Query("event_type"),
 		TargetType: c.Query("target_type"),
@@ -95,7 +116,100 @@ func (h *AuditHandlers) HandleListAuditEvents(c *gin.Context) {
 	if events == nil {
 		events = []*services.AuditEvent{}
 	}
+
+	// Default (no format): the plain list the /audit page polls. Not an export,
+	// so no attachment and no self-audit (the poll would flood the log).
+	if format == "" {
+		c.JSON(http.StatusOK, gin.H{"events": events})
+		return
+	}
+
+	// Export path: self-audit the export (audit-of-audit; compliance evidence
+	// integrity — ADR 0020 D2 canonical shape), best-effort, then download.
+	h.recordExport(c, format, filter, len(events))
+	if format == "csv" {
+		h.writeAuditCSV(c, events)
+		return
+	}
+	// format == "json": same payload as the list, but as a download.
+	c.Header("Content-Disposition", `attachment; filename="audit-export-`+time.Now().UTC().Format("20060102T150405Z")+`.json"`)
 	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+// auditCSVHeader is the fixed column set for the CSV export. The freeform
+// event-type-specific Payload is emitted as a single JSON-encoded column so the
+// header stays stable regardless of payload shape (no per-event-type schema).
+var auditCSVHeader = []string{"id", "timestamp", "actor", "event_type", "target_type", "target_id", "action", "payload"}
+
+// writeAuditCSV streams the events as a CSV attachment. Rows are written in the
+// service's newest-first order; the payload map is compact-JSON-encoded.
+func (h *AuditHandlers) writeAuditCSV(c *gin.Context, events []*services.AuditEvent) {
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="audit-export-`+time.Now().UTC().Format("20060102T150405Z")+`.csv"`)
+	c.Status(http.StatusOK)
+
+	w := csv.NewWriter(c.Writer)
+	if err := w.Write(auditCSVHeader); err != nil {
+		h.logger.Error("audit csv export: header write failed", zap.Error(err))
+		return
+	}
+	for _, e := range events {
+		payload := ""
+		if len(e.Payload) > 0 {
+			if b, err := json.Marshal(e.Payload); err == nil {
+				payload = string(b)
+			}
+		}
+		rec := []string{
+			e.ID,
+			e.Timestamp.UTC().Format(time.RFC3339),
+			e.Actor,
+			e.EventType,
+			e.TargetType,
+			e.TargetID,
+			e.Action,
+			payload,
+		}
+		if err := w.Write(rec); err != nil {
+			h.logger.Error("audit csv export: row write failed", zap.Error(err))
+			return
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		h.logger.Error("audit csv export: flush failed", zap.Error(err))
+	}
+}
+
+// recordExport self-audits an audit export (best-effort). The actor is
+// auto-attributed from the request context by the audit service, so the trail
+// shows WHO exported WHAT filter and HOW MANY rows — the compliance
+// evidence-integrity requirement (ADR 0020).
+func (h *AuditHandlers) recordExport(c *gin.Context, format string, filter services.AuditEventFilter, count int) {
+	payload := map[string]any{"format": format, "count": count}
+	if filter.EventType != "" {
+		payload["event_type"] = filter.EventType
+	}
+	if filter.TargetType != "" {
+		payload["target_type"] = filter.TargetType
+	}
+	if filter.TargetID != "" {
+		payload["target_id"] = filter.TargetID
+	}
+	if !filter.Since.IsZero() {
+		payload["since"] = filter.Since.UTC().Format(time.RFC3339)
+	}
+	if filter.Limit > 0 {
+		payload["limit"] = filter.Limit
+	}
+	if err := h.auditService.Record(c.Request.Context(), services.AuditEntry{
+		EventType:  "audit.exported",
+		TargetType: "audit_log",
+		Action:     "exported",
+		Payload:    payload,
+	}); err != nil {
+		h.logger.Warn("audit export self-audit failed", zap.Error(err))
+	}
 }
 
 // AuditExplainResponse is the JSON body returned by HandleExplainAuditEvent.
