@@ -72,8 +72,16 @@ const (
 	// self-approval based on the persisted RequestedBy.
 	ScopeRolloutsApprove = "rollouts:approve"
 	ScopeAuditRead       = "audit:read"
-	ScopeAuthRead        = "auth:read"
-	ScopeAuthWrite       = "auth:write"
+	// ADR 0020 — compliance-grade audit export. audit:export gates the
+	// enterprise CSV/NDJSON evidence export of the audit trail (SOC 2 / ISO
+	// evidence). Kept distinct from audit:read so a read-only operator can view
+	// the log without holding the bulk-export capability. Inert in OSS: defining
+	// a scope changes nothing until a route requires it, and OSS mounts no
+	// /api/v1/audit-export route (handler nil → 404). Export is enterprise-
+	// reserved per ADR 0001 ("compliance: SOC 2 evidence, access reviews").
+	ScopeAuditExport = "audit:export"
+	ScopeAuthRead    = "auth:read"
+	ScopeAuthWrite   = "auth:write"
 	// v0.34 deploy integration. Deploy:read shows targets + run
 	// history; deploy:trigger is what's required to actually fire
 	// a workflow on the operator's behalf — guarded narrowly so
@@ -140,7 +148,7 @@ func AllScopes() []string {
 		ScopeTelemetryRead,
 		ScopeAlertsRead, ScopeAlertsWrite,
 		ScopeRolloutsRead, ScopeRolloutsWrite, ScopeRolloutsApprove,
-		ScopeAuditRead,
+		ScopeAuditRead, ScopeAuditExport,
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,
