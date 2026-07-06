@@ -143,6 +143,13 @@ const (
 	// no /api/v1/sso routes (handler nil → 404).
 	ScopeSSORead  = "sso:read"
 	ScopeSSOWrite = "sso:write"
+	// ADR 0016 + the ADR 0020 D3 two-scope pattern — cross-tenant SSO reads.
+	// sso:cross_tenant is the ADDITIONAL scope required (on top of sso:read) to
+	// read ANOTHER tenant's SCIM directory via the operator-scoped
+	// GET /sso/directory/{users,groups}?tenant=X. Defense-in-depth mirroring
+	// audit:cross_tenant: an operator homed to one tenant can't read a sibling
+	// tenant's directory with sso:read alone. Inert in OSS (no /sso routes).
+	ScopeSSOCrossTenant = "sso:cross_tenant"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -163,7 +170,7 @@ func AllScopes() []string {
 		ScopeActionsRead, ScopeActionsWrite,
 		ScopeIncidentsRead, ScopeIncidentsWrite,
 		ScopeSCIMRead, ScopeSCIMWrite,
-		ScopeSSORead, ScopeSSOWrite,
+		ScopeSSORead, ScopeSSOWrite, ScopeSSOCrossTenant,
 	}
 }
 
