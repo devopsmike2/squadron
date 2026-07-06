@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -31,6 +32,8 @@ type Config struct {
 	ServerlessMetricDetection ServerlessMetricDetectionConfig `yaml:"serverless_metric_detection,omitempty"`
 
 	AuditRetention AuditRetentionConfig `yaml:"audit_retention,omitempty"`
+
+	UsageReporting UsageReportingConfig `yaml:"usage_reporting,omitempty"`
 
 	Ingest IngestConfig `yaml:"ingest,omitempty"`
 }
@@ -418,6 +421,7 @@ func LoadConfig(path string) (*Config, error) {
 	// settings page that writes the file.
 	applyAIEnv(&config.AI)
 	applyLoggingEnv(&config.Logging)
+	applyUsageEnv(&config.UsageReporting)
 
 	return &config, nil
 }
@@ -458,6 +462,52 @@ func applyAIEnv(c *AIConfig) {
 	}
 	if c.APIKey == "" {
 		c.APIKey = os.Getenv(c.APIKeyEnv)
+	}
+}
+
+// UsageReportingConfig is the operator-facing switch for ANONYMOUS, aggregate
+// usage reporting (a periodic "phone-home"). OFF by default — Squadron reports
+// nothing unless an operator opts in. When enabled it sends only anonymized
+// aggregate COUNTS (Squadron version + edition; tallies such as the number of
+// agents and rollouts) to Endpoint — no tenant/host/account identifiers, no
+// config or resource content. Distinct from the `telemetry:` block
+// (TelemetryConfig / internal/selftel), which exports THIS instance's own
+// operational metrics to the operator's OWN OTLP backend.
+type UsageReportingConfig struct {
+	// Enabled turns anonymous usage reporting ON. Default false.
+	Enabled bool `yaml:"enabled"`
+	// Endpoint is the HTTPS URL the aggregate report is POSTed to. Empty (the
+	// default) disables reporting even if Enabled — a no-op, never a silent send
+	// to an unintended target.
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// IntervalHours is the reporting cadence; <= 0 defaults to 24h.
+	IntervalHours int `yaml:"interval_hours,omitempty"`
+}
+
+// Target returns the endpoint + cadence and whether usage reporting is active.
+// Active only when Enabled AND Endpoint is set, so an enabled-but-endpointless
+// config safely no-ops instead of reporting nowhere.
+func (c UsageReportingConfig) Target() (string, time.Duration, bool) {
+	endpoint := strings.TrimSpace(c.Endpoint)
+	if !c.Enabled || endpoint == "" {
+		return "", 0, false
+	}
+	interval := time.Duration(c.IntervalHours) * time.Hour
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	return endpoint, interval, true
+}
+
+// applyUsageEnv lets an operator enable + point anonymous usage reporting via env
+// (SQUADRON_USAGE_ENABLED / SQUADRON_USAGE_ENDPOINT) without editing the yaml.
+// Empty/unset leaves the yaml value intact. Pure function over the config.
+func applyUsageEnv(c *UsageReportingConfig) {
+	if v := firstNonEmptyEnv("SQUADRON_USAGE_ENABLED"); v != "" {
+		c.Enabled = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+	}
+	if v := firstNonEmptyEnv("SQUADRON_USAGE_ENDPOINT"); v != "" {
+		c.Endpoint = v
 	}
 }
 
