@@ -70,6 +70,7 @@ type AuditEventFilter struct {
 	TargetID   string
 	Actor      string // exact-match on actor; backs per-actor access-review timelines (ADR 0020)
 	Since      time.Time
+	Until      time.Time // Timestamp < Until; symmetric with Since, backs export cursor pagination (ADR 0020)
 	Limit      int
 }
 

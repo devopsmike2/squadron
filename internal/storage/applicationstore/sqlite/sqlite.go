@@ -2433,6 +2433,10 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		q += " AND timestamp >= ?"
 		args = append(args, filter.Since)
 	}
+	if !filter.Until.IsZero() {
+		q += " AND timestamp < ?"
+		args = append(args, filter.Until)
+	}
 	q += " ORDER BY timestamp DESC LIMIT ?"
 	args = append(args, limit)
 

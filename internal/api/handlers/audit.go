@@ -97,6 +97,18 @@ func (h *AuditHandlers) HandleListAuditEvents(c *gin.Context) {
 		filter.Since = ts
 	}
 
+	if raw := c.Query("until"); raw != "" {
+		ts, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":  "invalid `until` — expected RFC3339",
+				"detail": err.Error(),
+			})
+			return
+		}
+		filter.Until = ts
+	}
+
 	if raw := c.Query("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
