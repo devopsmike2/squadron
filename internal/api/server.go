@@ -361,6 +361,11 @@ type Server struct {
 	// SetEnterpriseAuditExportHandler; OSS leaves it nil so those routes return
 	// 404. Read at request time by the late-bound wildcard in registerRoutes.
 	enterpriseAuditExportHandler EnterpriseAuditExportHandler
+	// enterpriseAuditReviewHandler serves the /api/v1/audit-review/* compliance
+	// cross-tenant access-review API (ADR 0020 slice 6c). Wired by the enterprise
+	// build edition via SetEnterpriseAuditReviewHandler; OSS leaves it nil so
+	// those routes return 404. Read at request time by the late-bound wildcard.
+	enterpriseAuditReviewHandler EnterpriseAuditReviewHandler
 	// enterpriseTenantHandler serves the /api/v1/tenants/* tenant management API
 	// (ADR 0011 slice 3c). Wired by the enterprise build edition via
 	// SetEnterpriseTenantHandler; OSS leaves it nil so those routes return 404.
@@ -665,6 +670,51 @@ func (s *Server) mountEnterpriseAuditExport(rg gin.IRouter) {
 			return
 		}
 		s.enterpriseAuditExportHandler.HandleAuditExport(c)
+	})
+}
+
+// EnterpriseAuditReviewHandler is the seam the enterprise edition implements to
+// serve the compliance-grade cross-tenant access-review query under
+// /api/v1/audit-review (ADR 0020 slice 6c). Like the export seam it receives
+// requests that have already passed RequireBearer + ResolveTenant, with the path
+// suffix in c.Param("path"), and enforces its own authorization: access review
+// is an audit:read operation (plus audit:cross_tenant on the cross-tenant path).
+// OSS never provides one, so the routes 404 — access reviews are enterprise-
+// reserved per ADR 0001 ("compliance: SOC 2 evidence, access reviews"). Distinct
+// path + single-purpose seam (like audit-export), so the /audit/:id httprouter
+// conflict is avoided and authz/scoping stay per-surface.
+type EnterpriseAuditReviewHandler interface {
+	HandleAuditReview(c *gin.Context)
+}
+
+// SetEnterpriseAuditReviewHandler installs the enterprise access-review handler
+// that backs /api/v1/audit-review/* (ADR 0020 slice 6c). The enterprise build's
+// wire layer calls this once after NewServer; OSS never calls it (or passes
+// nil), leaving access review unmounted (404). Not safe for concurrent use with
+// in-flight requests — call it during startup, before the server accepts
+// traffic.
+func (s *Server) SetEnterpriseAuditReviewHandler(h EnterpriseAuditReviewHandler) {
+	s.enterpriseAuditReviewHandler = h
+}
+
+// mountEnterpriseAuditReview registers the late-bound /api/v1/audit-review/*
+// wildcard on the given route group (ADR 0020 slice 6c). Like
+// mountEnterpriseAuditExport, the closure reads s.enterpriseAuditReviewHandler at
+// REQUEST time: OSS (nil handler) returns 404; the enterprise edition serves its
+// cross-tenant access-review query. The group already carries RequireBearer +
+// ResolveTenant; the enterprise handler enforces its own audit:read (+
+// audit:cross_tenant) authorization. Extracted so the seam is unit-testable with
+// a bare *Server.
+func (s *Server) mountEnterpriseAuditReview(rg gin.IRouter) {
+	rg.Any("/audit-review/*path", func(c *gin.Context) {
+		if s.enterpriseAuditReviewHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "access review is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseAuditReviewHandler.HandleAuditReview(c)
 	})
 }
 
@@ -2511,6 +2561,12 @@ func (s *Server) registerRoutes() {
 		// httprouter). Mounted UNDER the bearer group (privileged, audit:export).
 		// OSS leaves the handler nil → 404.
 		s.mountEnterpriseAuditExport(v1)
+
+		// ADR 0020 slice 6c — compliance cross-tenant access-review API seam
+		// under /api/v1/audit-review/*. Distinct single-purpose seam (like
+		// audit-export) so the /audit/:id httprouter conflict is avoided and
+		// authz/scoping stay per-surface. OSS leaves the handler nil → 404.
+		s.mountEnterpriseAuditReview(v1)
 
 		// ADR 0011 slice 3c — tenant management API seam under
 		// /api/v1/tenants/*.
