@@ -366,6 +366,10 @@ type Server struct {
 	// build edition via SetEnterpriseAuditReviewHandler; OSS leaves it nil so
 	// those routes return 404. Read at request time by the late-bound wildcard.
 	enterpriseAuditReviewHandler EnterpriseAuditReviewHandler
+	// enterpriseUsageHandler serves the /api/v1/usage/* per-tenant usage /
+	// billing summary (chargeback/showback). Wired by the enterprise build via
+	// SetEnterpriseUsageHandler; OSS leaves it nil so those routes 404.
+	enterpriseUsageHandler EnterpriseUsageHandler
 	// enterpriseTenantHandler serves the /api/v1/tenants/* tenant management API
 	// (ADR 0011 slice 3c). Wired by the enterprise build edition via
 	// SetEnterpriseTenantHandler; OSS leaves it nil so those routes return 404.
@@ -718,6 +722,42 @@ func (s *Server) mountEnterpriseAuditReview(rg gin.IRouter) {
 	})
 }
 
+// EnterpriseUsageHandler is the seam the enterprise edition implements to serve
+// the per-tenant usage/billing summary under /api/v1/usage (chargeback/showback):
+// read-only aggregate counts (agents, rollouts) scoped per tenant, cross-tenant
+// gated by an extra scope. OSS never provides one, so the routes 404 — per-tenant
+// usage is enterprise-reserved (multi-tenant orgs / billing).
+type EnterpriseUsageHandler interface {
+	HandleUsage(c *gin.Context)
+}
+
+// SetEnterpriseUsageHandler installs the enterprise usage handler backing
+// /api/v1/usage/*. The enterprise wire calls this once after NewServer; OSS never
+// calls it (nil → routes 404). Not safe for concurrent use with in-flight
+// requests — call during startup.
+func (s *Server) SetEnterpriseUsageHandler(h EnterpriseUsageHandler) {
+	s.enterpriseUsageHandler = h
+}
+
+// mountEnterpriseUsage registers the late-bound /api/v1/usage/* wildcard. The
+// closure reads s.enterpriseUsageHandler at REQUEST time: OSS (nil) → 404; the
+// enterprise edition serves its per-tenant usage rollup. The group already
+// carries RequireBearer + ResolveTenant; the handler enforces usage:read (+
+// usage:cross_tenant). Mirrors mountEnterpriseAuditReview; unit-testable with a
+// bare *Server.
+func (s *Server) mountEnterpriseUsage(rg gin.IRouter) {
+	rg.Any("/usage/*path", func(c *gin.Context) {
+		if s.enterpriseUsageHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "per-tenant usage is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseUsageHandler.HandleUsage(c)
+	})
+}
+
 // EnterpriseTenantHandler is the seam the enterprise edition implements to serve
 // the tenant management API under /api/v1/tenants (ADR 0011 slice 3c). It
 // receives requests that have already passed RequireBearer + ResolveTenant; the
@@ -895,6 +935,19 @@ func (s *Server) AuthService() services.AuthService {
 // accessor there. Not safe to call before NewServer sets s.auditService.
 func (s *Server) AuditService() services.AuditService {
 	return s.auditService
+}
+
+// AgentService returns the agent service. Public so enterprise handlers (per-
+// tenant usage / chargeback) can count tenant-scoped agents without importing the
+// OSS internal/api internals. OSS code never calls it — inert accessor.
+func (s *Server) AgentService() services.AgentService {
+	return s.agentService
+}
+
+// RolloutService returns the rollout service. Public for the same reason as
+// AgentService — enterprise per-tenant usage counts tenant-scoped rollouts.
+func (s *Server) RolloutService() services.RolloutService {
+	return s.rolloutService
 }
 
 // mountEnterpriseOIDC registers the late-bound /auth/oidc/* wildcard on the
@@ -2567,6 +2620,9 @@ func (s *Server) registerRoutes() {
 		// audit-export) so the /audit/:id httprouter conflict is avoided and
 		// authz/scoping stay per-surface. OSS leaves the handler nil → 404.
 		s.mountEnterpriseAuditReview(v1)
+
+		// Enterprise per-tenant usage/billing summary seam under /api/v1/usage/*.
+		s.mountEnterpriseUsage(v1)
 
 		// ADR 0011 slice 3c — tenant management API seam under
 		// /api/v1/tenants/*.
