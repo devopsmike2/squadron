@@ -77,6 +77,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { UsagePanel } from "@/components/UsagePanel";
 
 const ROLES_KEY = "rbac-roles";
 const BINDINGS_KEY = "rbac-bindings";
@@ -315,6 +316,7 @@ export default function SettingsIdentityPage() {
             <TabsTrigger value="bindings">Bindings</TabsTrigger>
             <TabsTrigger value="tenants">Tenants</TabsTrigger>
             <TabsTrigger value="directory">Directory</TabsTrigger>
+            <TabsTrigger value="usage">Usage</TabsTrigger>
           </TabsList>
 
           {/* Roles */}
@@ -518,6 +520,11 @@ export default function SettingsIdentityPage() {
                 Select a tenant to view its SCIM-provisioned directory.
               </div>
             )}
+          </TabsContent>
+
+          {/* Usage — per-tenant usage/billing summary (ADR 0023). */}
+          <TabsContent value="usage" className="space-y-4">
+            <UsagePanel />
           </TabsContent>
         </Tabs>
       )}
