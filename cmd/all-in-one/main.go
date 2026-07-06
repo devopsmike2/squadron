@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 
 	"github.com/devopsmike2/squadron/extension/identity"
+	"github.com/devopsmike2/squadron/extension/tracebudget"
 	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/alerting"
@@ -147,6 +148,21 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// preserved by any enterprise decorator — forward them, or scope at the
 	// query layer instead of wrapping. The OSS pass-through keeps them intact.
 	appStore = scopedApplicationStore(appStore)
+
+	// ADR 0024 — plug the edition's per-tenant trace-index budget provider. OSS
+	// returns nil (every tenant keeps the global cap — behavior unchanged); the
+	// enterprise edition returns per-tenant budgets from config.TraceIndex. The
+	// sqlite store applies them in its per-tenant LRU eviction.
+	if tb := traceBudgetProvider(config); tb != nil {
+		if bs, ok := appStore.(interface {
+			SetTraceBudgetProvider(tracebudget.Provider)
+		}); ok {
+			bs.SetTraceBudgetProvider(tb)
+			logger.Info("per-tenant trace-index budgets enabled")
+		} else {
+			logger.Warn("per-tenant trace-index budget provider present but the store does not support SetTraceBudgetProvider; ignoring")
+		}
+	}
 
 	// Ensure application store factory is properly closed on shutdown
 	defer func() {

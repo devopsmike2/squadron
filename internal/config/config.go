@@ -35,6 +35,8 @@ type Config struct {
 
 	UsageReporting UsageReportingConfig `yaml:"usage_reporting,omitempty"`
 
+	TraceIndex TraceIndexConfig `yaml:"trace_index,omitempty"`
+
 	Ingest IngestConfig `yaml:"ingest,omitempty"`
 }
 
@@ -509,6 +511,15 @@ func applyUsageEnv(c *UsageReportingConfig) {
 	if v := firstNonEmptyEnv("SQUADRON_USAGE_ENDPOINT"); v != "" {
 		c.Endpoint = v
 	}
+}
+
+// TraceIndexConfig carries per-tenant trace-index (trace_resource_seen) LRU
+// budgets (ADR 0024). PerTenantMaxRows maps tenant id → max index rows for that
+// tenant; tenants absent from the map use the global SQUADRON_TRACEINDEX_MAX_ROWS
+// cap. Inert in OSS — only the enterprise build wires a provider that reads it;
+// the OSS build ignores it and keeps the global cap for every tenant.
+type TraceIndexConfig struct {
+	PerTenantMaxRows map[string]int `yaml:"per_tenant_max_rows,omitempty"`
 }
 
 // DefaultConfig returns default configuration
