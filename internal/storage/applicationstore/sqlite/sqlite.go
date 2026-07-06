@@ -244,7 +244,14 @@ func (s *Storage) migrate() error {
 		-- request's tenant off the token. 'default' is the OSS single tenant;
 		-- inert here (SingleTenantResolver ignores it). Also added via the
 		-- migrations slice below so pre-3a databases upgrade in place.
-		tenant_id TEXT NOT NULL DEFAULT 'default'
+		tenant_id TEXT NOT NULL DEFAULT 'default',
+		-- The enterprise OIDC connection this token was minted through, when
+		-- any. Enterprise-only: the OIDC mint stamps it (in the assign+bind tx)
+		-- so deleting a connection can revoke every session it minted. NULL for
+		-- manual/bootstrap/OSS tokens (never minted via a connection); inert in
+		-- OSS, which never sets it and never reads it. Added via the migrations
+		-- slice below so existing databases upgrade in place.
+		connection_id TEXT
 	);
 
 	-- ALTER TABLE for upgrades from pre-v0.10 schemas. SQLite ignores
@@ -453,6 +460,13 @@ func (s *Storage) migrate() error {
 		// single tenant 'default'. Idempotent via the duplicate-column
 		// swallow below (fresh DBs already carry it from createTables).
 		`ALTER TABLE api_tokens ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
+		// Enterprise connection-delete revocation: api_tokens gain an optional
+		// connection_id linking a token to the OIDC connection that minted it, so
+		// deleting a connection can revoke every session it minted. Nullable —
+		// existing + manual/bootstrap tokens carry NULL and keep working; only
+		// enterprise OIDC-minted tokens land linked. Idempotent via the
+		// duplicate-column swallow below (fresh DBs carry it from createTables).
+		`ALTER TABLE api_tokens ADD COLUMN connection_id TEXT`,
 		// v0.5: rollouts gain an optional notification_url for the
 		// webhook-notifications feature. Missing here in earlier
 		// releases meant any dev DB created before v0.5 stayed
@@ -1077,6 +1091,9 @@ func (s *Storage) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_rollouts_tenant ON rollouts(tenant_id)`,
 		// api_tokens.tenant_id added in slice 3a — index only.
 		`CREATE INDEX IF NOT EXISTS idx_api_tokens_tenant ON api_tokens(tenant_id)`,
+		// Index the connection link so the enterprise connection-delete
+		// revoke-by-connection fan-out is a cheap lookup, not a table scan.
+		`CREATE INDEX IF NOT EXISTS idx_api_tokens_connection ON api_tokens(connection_id)`,
 		`ALTER TABLE recommendation_dismissals ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		`CREATE INDEX IF NOT EXISTS idx_recommendation_dismissals_tenant ON recommendation_dismissals(tenant_id)`,
 		`ALTER TABLE recommendation_outcomes ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
@@ -4020,6 +4037,66 @@ func (s *Storage) RevokeAPIToken(ctx context.Context, id string, at time.Time) e
 	// distinction by doing a List/Get before the revoke if needed.
 	_ = res
 	return nil
+}
+
+// RevokeAPITokensByConnection soft-revokes every non-revoked token minted
+// through the given enterprise OIDC connection (api_tokens.connection_id), so
+// deleting a connection invalidates the sessions it minted. It returns the
+// tokens it revoked (ONLY ID + Label populated) so the caller can emit one
+// api_token.revoked audit event per token. Idempotent: already-revoked tokens
+// are excluded (WHERE revoked_at IS NULL). Inert in OSS — OSS never sets
+// connection_id, so no row ever matches a real connection id.
+//
+// Tenant scoping follows the same tenantScope(ctx) rule as RevokeAPIToken: a
+// tenant-stamped context restricts to that tenant; a system context (the
+// enterprise connection-delete fan-out runs under WithSystemContext) drops the
+// predicate so tokens are revoked regardless of which tenant they authenticate
+// into.
+func (s *Storage) RevokeAPITokensByConnection(ctx context.Context, connectionID string, at time.Time) ([]types.APIToken, error) {
+	if strings.TrimSpace(connectionID) == "" {
+		return nil, nil
+	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Snapshot the tokens that WILL be revoked (for the per-token audit), then
+	// revoke them. Both statements share the `connection_id = ? AND revoked_at
+	// IS NULL` predicate so the set is consistent under concurrent revokes.
+	sel := `SELECT id, label FROM api_tokens WHERE connection_id = ? AND revoked_at IS NULL`
+	upd := `UPDATE api_tokens SET revoked_at = ? WHERE connection_id = ? AND revoked_at IS NULL`
+	selArgs := []any{connectionID}
+	updArgs := []any{at, connectionID}
+	if apply {
+		sel += ` AND tenant_id = ?`
+		selArgs = append(selArgs, tenant)
+		upd += ` AND tenant_id = ?`
+		updArgs = append(updArgs, tenant)
+	}
+
+	rows, err := s.db.QueryContext(ctx, sel, selArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tokens for connection revoke: %w", err)
+	}
+	var revoked []types.APIToken
+	for rows.Next() {
+		var t types.APIToken
+		if err := rows.Scan(&t.ID, &t.Label); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan token for connection revoke: %w", err)
+		}
+		revoked = append(revoked, t)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("failed iterating tokens for connection revoke: %w", err)
+	}
+	rows.Close()
+
+	if _, err := s.db.ExecContext(ctx, upd, updArgs...); err != nil {
+		return nil, fmt.Errorf("failed to revoke tokens for connection: %w", err)
+	}
+	return revoked, nil
 }
 
 // ----------------------------------------------------------------

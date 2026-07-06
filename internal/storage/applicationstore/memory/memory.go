@@ -1436,6 +1436,29 @@ func (s *Store) RevokeAPIToken(ctx context.Context, id string, at time.Time) err
 	return nil
 }
 
+// RevokeAPITokensByConnection soft-revokes every non-revoked token whose
+// ConnectionID matches, returning the revoked tokens (ID + Label populated) for
+// per-token audit. Mirrors the sqlite impl; tenant-scope-unaware in the memory
+// store (used in tests / OSS single-tenant). See the sqlite doc for the
+// enterprise connection-delete revocation semantics.
+func (s *Store) RevokeAPITokensByConnection(ctx context.Context, connectionID string, at time.Time) ([]types.APIToken, error) {
+	if connectionID == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var revoked []types.APIToken
+	for _, t := range s.apiTokens {
+		if t.ConnectionID != connectionID || t.RevokedAt != nil {
+			continue
+		}
+		atCopy := at
+		t.RevokedAt = &atCopy
+		revoked = append(revoked, types.APIToken{ID: t.ID, Label: t.Label})
+	}
+	return revoked, nil
+}
+
 // purge removes all data from the store (for testing)
 func (s *Store) purge(context.Context) {
 	s.mu.Lock()

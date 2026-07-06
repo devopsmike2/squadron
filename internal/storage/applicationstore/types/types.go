@@ -600,6 +600,12 @@ type APIToken struct {
 	// enterprise TenantResolver can derive a request's tenant off the token.
 	// Defaults to "default" (the OSS single tenant); inert in OSS.
 	TenantID string `json:"tenant_id,omitempty"`
+
+	// ConnectionID is the enterprise OIDC connection this token was minted
+	// through, when any. Set only by the enterprise OIDC mint (in the
+	// assign+bind tx) so deleting a connection can revoke every session it
+	// minted. Empty for manual/bootstrap/OSS tokens; inert in OSS.
+	ConnectionID string `json:"connection_id,omitempty"`
 }
 
 // RolloutState is the lifecycle position of a Rollout.
