@@ -26,8 +26,10 @@ import {
 import {
   type DirectoryGroup,
   type DirectoryUser,
+  clearGroupRole,
   listDirectoryGroups,
   listDirectoryUsers,
+  setGroupRole,
 } from "@/api/sso";
 import {
   type Tenant,
@@ -856,7 +858,7 @@ function DirectoryView({ tenant }: { tenant: string }) {
     () => listDirectoryUsers(tenant),
     { shouldRetryOnError: false },
   );
-  const { data: groups } = useSWR<DirectoryGroup[]>(
+  const { data: groups, mutate: mutateGroups } = useSWR<DirectoryGroup[]>(
     ["directory-groups", tenant],
     () => listDirectoryGroups(tenant),
     { shouldRetryOnError: false },
@@ -923,7 +925,7 @@ function DirectoryView({ tenant }: { tenant: string }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Display name</TableHead>
-                  <TableHead>Role ID</TableHead>
+                  <TableHead>Role mapping</TableHead>
                   <TableHead>External ID</TableHead>
                   <TableHead>Members</TableHead>
                 </TableRow>
@@ -944,8 +946,12 @@ function DirectoryView({ tenant }: { tenant: string }) {
                     <TableCell className="font-medium">
                       {g.display_name}
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {g.role_id}
+                    <TableCell>
+                      <GroupRoleCell
+                        tenant={tenant}
+                        group={g}
+                        onChanged={() => mutateGroups()}
+                      />
                     </TableCell>
                     <TableCell className="font-mono text-xs break-all">
                       {g.external_id}
@@ -958,6 +964,87 @@ function DirectoryView({ tenant }: { tenant: string }) {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+// GroupRoleCell is the inline editor for a SCIM group's explicit RBAC role
+// mapping (ADR 0019 slice 5a). The operator types a role id and Saves — the
+// backend validates the role exists in the tenant before persisting on the
+// group; Clear removes the mapping. The mapping overrides the create-time
+// displayName==role-name convention and is re-read at each login, so a user
+// provisioned into this group lands with these scopes automatically.
+function GroupRoleCell({
+  tenant,
+  group,
+  onChanged,
+}: {
+  tenant: string;
+  group: DirectoryGroup;
+  onChanged: () => void;
+}) {
+  const [value, setValue] = useState(group.role_id);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const dirty = value.trim() !== group.role_id;
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await setGroupRole(tenant, group.external_id, value.trim());
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await clearGroupRole(tenant, group.external_id);
+      setValue("");
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "clear failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1">
+        <Input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="role id (e.g. r-…)"
+          className="h-8 font-mono text-xs w-44"
+          disabled={busy}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8"
+          onClick={save}
+          disabled={busy || !dirty || value.trim() === ""}
+        >
+          Save
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8"
+          onClick={clear}
+          disabled={busy || group.role_id === ""}
+        >
+          Clear
+        </Button>
+      </div>
+      {err && <p className="text-xs text-red-600">{err}</p>}
     </div>
   );
 }
