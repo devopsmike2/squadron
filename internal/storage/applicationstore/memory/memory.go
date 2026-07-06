@@ -768,6 +768,9 @@ func (s *Store) ListAuditEvents(ctx context.Context, filter types.AuditEventFilt
 		if !filter.Since.IsZero() && e.Timestamp.Before(filter.Since) {
 			continue
 		}
+		if !filter.Until.IsZero() && !e.Timestamp.Before(filter.Until) {
+			continue // Timestamp >= Until → excluded (Until is exclusive upper bound)
+		}
 		// Defensive copy on read too.
 		eventCopy := *e
 		if e.Payload != nil {

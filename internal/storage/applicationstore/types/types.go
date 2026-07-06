@@ -902,6 +902,7 @@ type AuditEventFilter struct {
 	TargetID   string
 	Actor      string    // exact-match on actor (e.g. "operator:<email>"); empty disables. Backed by idx_audit_events_actor.
 	Since      time.Time // events with Timestamp >= Since; zero value disables the filter
+	Until      time.Time // events with Timestamp < Until; zero value disables. Symmetric with Since; backs newest→oldest cursor pagination (ADR 0020 export streaming).
 	Limit      int       // default 100 if zero; capped at 1000 by the storage layer
 }
 

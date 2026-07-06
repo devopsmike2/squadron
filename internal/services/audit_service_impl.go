@@ -189,6 +189,7 @@ func (s *AuditServiceImpl) List(ctx context.Context, filter AuditEventFilter) ([
 		TargetID:   filter.TargetID,
 		Actor:      filter.Actor,
 		Since:      filter.Since,
+		Until:      filter.Until,
 		Limit:      filter.Limit,
 	})
 	if err != nil {
