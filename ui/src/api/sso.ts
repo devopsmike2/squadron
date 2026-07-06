@@ -134,3 +134,27 @@ export const listDirectoryGroups = async (
   );
   return resp.groups ?? [];
 };
+
+// setGroupRole binds an IdP group (by externalId, per tenant) to an explicit
+// RBAC role, overriding the create-time displayName==role-name convention
+// (ADR 0019 slice 5a). The mapping persists across SCIM PATCHes and is read at
+// each login. Enterprise-only route (404 in OSS).
+export const setGroupRole = async (
+  tenant: string,
+  externalId: string,
+  roleId: string,
+): Promise<DirectoryGroup> =>
+  apiPut<DirectoryGroup>(
+    `/sso/directory/groups/${encodeURIComponent(externalId)}/role?tenant=${encodeURIComponent(tenant)}`,
+    { role_id: roleId },
+  );
+
+// clearGroupRole removes a group's explicit role mapping (role_id becomes ""),
+// after which the group materializes no roles until re-mapped.
+export const clearGroupRole = async (
+  tenant: string,
+  externalId: string,
+): Promise<DirectoryGroup> =>
+  apiDelete<DirectoryGroup>(
+    `/sso/directory/groups/${encodeURIComponent(externalId)}/role?tenant=${encodeURIComponent(tenant)}`,
+  );
