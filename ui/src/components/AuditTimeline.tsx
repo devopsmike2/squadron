@@ -36,6 +36,10 @@ interface AuditTimelineProps {
   /** Filter to a specific entity, e.g. agent/group/config/rule. */
   targetType?: string;
   targetId?: string;
+  /** Exact-match actor (per-actor access-review view). */
+  actor?: string;
+  /** Exact-match dotted event type. */
+  eventType?: string;
   /** Max events to render (server-side cap is 1000). Default 50. */
   limit?: number;
   /** Heading shown above the list. Hidden when empty. */
@@ -45,18 +49,22 @@ interface AuditTimelineProps {
 export function AuditTimeline({
   targetType,
   targetId,
+  actor,
+  eventType,
   limit = 50,
   heading,
 }: AuditTimelineProps) {
   // Build a stable SWR key so multiple AuditTimeline instances filtered
   // to the same target share the cache, and the global EventSubscriber
   // can revalidate by key prefix if it wants to later.
-  const key = `audit/${targetType ?? "*"}/${targetId ?? "*"}/${limit}`;
+  const key = `audit/${targetType ?? "*"}/${targetId ?? "*"}/${actor ?? "*"}/${eventType ?? "*"}/${limit}`;
 
   const { data, error, isLoading } = useSWR<AuditEvent[]>(key, () =>
     listAuditEvents({
       target_type: targetType,
       target_id: targetId,
+      actor,
+      event_type: eventType,
       limit,
     }),
   );
