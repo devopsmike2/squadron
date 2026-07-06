@@ -1025,21 +1025,26 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 		e.logger.Warn("rollout engine: stage resolved to zero canary agents", fields...)
 		return nil, nil
 	}
-	ids := make([]uuid.UUID, 0, len(canary))
-	for _, agent := range canary {
+	// Delta delivery (rollout follow-up A / brain decision 0021): push only the
+	// agents this rollout hasn't already SUCCESSFULLY delivered the target config
+	// to. Percent-mode stages are prefix-supersets, so pushing the full canary
+	// every stage re-sent every prior agent's config (~50k pushes to deliver 1k
+	// configs across 100 stages); label-mode selector overlaps are de-duped too.
+	toPush := deltaToPush(canary, r.PushedAgentIDs)
+	ids := make([]uuid.UUID, 0, len(toPush))
+	for _, agent := range toPush {
 		ids = append(ids, agent.ID)
 	}
-	// Push concurrently (bounded). The audit payload keeps listing
-	// every ATTEMPTED agent in canary order — identical to the old
-	// serial loop, which also appended before pushing.
-	e.pushConfigToAgents(ctx, r, canary, r.TargetConfigID, target.Content,
+	failed := e.pushConfigToAgents(ctx, r, toPush, r.TargetConfigID, target.Content,
 		"rollout engine: stage push failed for agent")
-	// ADR 0007 — record these agents into the cumulative pushed-set so
-	// rollback and the health-gate cover every agent this rollout has ever
-	// pushed the target config to, not just the current stage's cohort. The
-	// caller persists r right after applyStage (start/advance), so the union
-	// lands durably this tick.
-	r.PushedAgentIDs = unionPushedAgentIDs(r.PushedAgentIDs, ids)
+	// ADR 0007 — record only SUCCESSFUL deliveries into the cumulative pushed-set.
+	// rollback + the health-gate therefore cover agents that actually received
+	// the target config (a never-acked agent has nothing to revert and can't be
+	// health-judged), and because a failed agent stays OUT of the set the next
+	// stage's delta re-includes it — targeted retry, replacing the old implicit
+	// "next superset re-push is the retry path". The caller persists r right after
+	// applyStage (start/advance), so the union lands durably this tick.
+	r.PushedAgentIDs = unionPushedAgentIDs(r.PushedAgentIDs, subtractIDs(ids, failed))
 	return ids, nil
 }
 
@@ -1066,6 +1071,47 @@ func unionPushedAgentIDs(existing []string, ids []uuid.UUID) []string {
 	return out
 }
 
+// deltaToPush returns the canary agents not already in pushed (the cumulative
+// successfully-delivered set), preserving canary order. It is the delta a stage
+// actually pushes under rollout follow-up A (brain decision 0021): the prior
+// full-prefix / full-cohort re-push is replaced by delta-only delivery, and a
+// failed push — absent from pushed — is re-included by the next stage's delta.
+func deltaToPush(canary []*services.Agent, pushed []string) []*services.Agent {
+	if len(pushed) == 0 {
+		return canary
+	}
+	done := make(map[string]struct{}, len(pushed))
+	for _, id := range pushed {
+		done[id] = struct{}{}
+	}
+	out := make([]*services.Agent, 0, len(canary))
+	for _, a := range canary {
+		if _, ok := done[a.ID.String()]; !ok {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// subtractIDs returns the ids not present in remove (order-preserving). Used to
+// keep only the successfully-pushed agents when updating the cumulative set.
+func subtractIDs(ids, remove []uuid.UUID) []uuid.UUID {
+	if len(remove) == 0 {
+		return ids
+	}
+	rm := make(map[uuid.UUID]struct{}, len(remove))
+	for _, id := range remove {
+		rm[id] = struct{}{}
+	}
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := rm[id]; !ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // pushConcurrency bounds the parallel per-agent config pushes within
 // one stage application or rollback. The v0.89 scale pass measured
 // the old serial loop at one FULL ack round-trip per agent
@@ -1081,9 +1127,11 @@ const pushConcurrency = 128
 // one OTel push span per agent (ack/nack recorded), per-agent
 // failures logged-and-tolerated (the stage/rollback proceeds — the
 // next stage's superset push is the retry path).
-func (e *Engine) pushConfigToAgents(ctx context.Context, r *services.Rollout, agents []*services.Agent, configID, content, failureMsg string) {
+func (e *Engine) pushConfigToAgents(ctx context.Context, r *services.Rollout, agents []*services.Agent, configID, content, failureMsg string) []uuid.UUID {
 	sem := make(chan struct{}, pushConcurrency)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var failed []uuid.UUID
 	for _, agent := range agents {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -1102,6 +1150,9 @@ func (e *Engine) pushConfigToAgents(ctx context.Context, r *services.Rollout, ag
 					zap.String("rollout_id", r.ID),
 					zap.String("agent_id", agent.ID.String()),
 					zap.Error(err))
+				mu.Lock()
+				failed = append(failed, agent.ID)
+				mu.Unlock()
 				return
 			}
 			push.RecordAck()
@@ -1109,6 +1160,7 @@ func (e *Engine) pushConfigToAgents(ctx context.Context, r *services.Rollout, ag
 		}(agent)
 	}
 	wg.Wait()
+	return failed
 }
 
 // evaluateAbortCriteria returns a non-empty reason string if the rollout
