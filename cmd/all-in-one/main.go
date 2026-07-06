@@ -63,6 +63,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/telemetrystore"
 	"github.com/devopsmike2/squadron/internal/traceindex"
+	"github.com/devopsmike2/squadron/internal/usage"
 	"github.com/devopsmike2/squadron/internal/utils"
 	"github.com/devopsmike2/squadron/internal/worker"
 )
@@ -283,6 +284,32 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// wire_compliance.go (build tag: compliance) for the boundary.
 	buildEdition := wireExtensions(rolloutService)
 	logger.Info("squadron build edition", zap.String("edition", buildEdition))
+
+	// Opt-in anonymous usage reporting (config.UsageReporting; off by default,
+	// endpoint required). Reports only aggregate COUNTS — Squadron version +
+	// edition, agent + rollout tallies — never identifiers. Best-effort +
+	// background; stopped on shutdown.
+	if usageEndpoint, usageInterval, usageOK := config.UsageReporting.Target(); usageOK {
+		usageReporter := usage.NewReporter(usageEndpoint, usageInterval,
+			func(ctx context.Context) (usage.Snapshot, error) {
+				agentList, aerr := agentService.ListAgents(ctx)
+				if aerr != nil {
+					return usage.Snapshot{}, aerr
+				}
+				rolloutList, rerr := rolloutService.List(ctx, services.RolloutFilter{})
+				if rerr != nil {
+					return usage.Snapshot{}, rerr
+				}
+				return usage.Snapshot{
+					Version:  version,
+					Edition:  buildEdition,
+					Agents:   len(agentList),
+					Rollouts: len(rolloutList),
+				}, nil
+			}, logger)
+		usageReporter.Start()
+		defer usageReporter.Stop()
+	}
 
 	// Surface the build edition on /metrics so operators can confirm
 	// which edition a running instance is (OSS vs enterprise) without
