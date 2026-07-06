@@ -356,6 +356,11 @@ type Server struct {
 	// SetEnterpriseRBACHandler; OSS leaves it nil so those routes return 404.
 	// Read at request time by the late-bound wildcard in registerRoutes.
 	enterpriseRBACHandler EnterpriseRBACHandler
+	// enterpriseAuditExportHandler serves the /api/v1/audit-export/* compliance
+	// audit export API (ADR 0020). Wired by the enterprise build edition via
+	// SetEnterpriseAuditExportHandler; OSS leaves it nil so those routes return
+	// 404. Read at request time by the late-bound wildcard in registerRoutes.
+	enterpriseAuditExportHandler EnterpriseAuditExportHandler
 	// enterpriseTenantHandler serves the /api/v1/tenants/* tenant management API
 	// (ADR 0011 slice 3c). Wired by the enterprise build edition via
 	// SetEnterpriseTenantHandler; OSS leaves it nil so those routes return 404.
@@ -613,6 +618,53 @@ func (s *Server) mountEnterpriseRBAC(rg gin.IRouter) {
 			return
 		}
 		s.enterpriseRBACHandler.HandleRBAC(c)
+	})
+}
+
+// EnterpriseAuditExportHandler is the seam the enterprise edition implements to
+// serve the compliance-grade audit export API under /api/v1/audit-export (ADR
+// 0020). It receives requests that have already passed RequireBearer +
+// ResolveTenant; the path suffix after /api/v1/audit-export is available via
+// c.Param("path"). The handler is responsible for its own authorization — bulk
+// audit export is an audit:export operation (SOC 2 / ISO evidence), gated
+// through the RBAC authorizer. OSS never provides one, so the routes 404: export
+// is enterprise-reserved per ADR 0001 ("compliance: SOC 2 evidence, access
+// reviews"). The OSS single-tenant audit VIEW (/api/v1/audit/events) is
+// unaffected — this is a separate, bulk-export surface with its own scope, on a
+// distinct path (the /audit group already registers a /:id param that forbids a
+// sibling /audit/export in httprouter).
+type EnterpriseAuditExportHandler interface {
+	HandleAuditExport(c *gin.Context)
+}
+
+// SetEnterpriseAuditExportHandler installs the enterprise audit-export handler
+// that backs /api/v1/audit-export/* (ADR 0020). The enterprise build's wire
+// layer calls this once after NewServer; OSS never calls it (or passes nil),
+// leaving audit export unmounted (404). Not safe for concurrent use with
+// in-flight requests — call it during startup, before the server accepts
+// traffic.
+func (s *Server) SetEnterpriseAuditExportHandler(h EnterpriseAuditExportHandler) {
+	s.enterpriseAuditExportHandler = h
+}
+
+// mountEnterpriseAuditExport registers the late-bound /api/v1/audit-export/*
+// wildcard on the given route group (ADR 0020). registerRoutes runs inside
+// NewServer, before the wire layer calls SetEnterpriseAuditExportHandler, so the
+// closure reads s.enterpriseAuditExportHandler at REQUEST time: OSS (nil handler)
+// returns 404; the enterprise edition serves its CSV/NDJSON export handler. The
+// group already carries RequireBearer + ResolveTenant; the enterprise handler
+// enforces its own audit:export authorization. Extracted from registerRoutes so
+// the seam is unit-testable with a bare *Server. Mirrors mountEnterpriseRBAC.
+func (s *Server) mountEnterpriseAuditExport(rg gin.IRouter) {
+	rg.Any("/audit-export/*path", func(c *gin.Context) {
+		if s.enterpriseAuditExportHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "audit export is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseAuditExportHandler.HandleAuditExport(c)
 	})
 }
 
@@ -2443,6 +2495,13 @@ func (s *Server) registerRoutes() {
 	{
 		// ADR 0010 — RBAC management API seam under /api/v1/rbac/*.
 		s.mountEnterpriseRBAC(v1)
+
+		// ADR 0020 — compliance audit export API seam under
+		// /api/v1/audit-export/*. Distinct path from the OSS /audit group
+		// (whose /:id/explain param forbids a sibling /audit/export in
+		// httprouter). Mounted UNDER the bearer group (privileged, audit:export).
+		// OSS leaves the handler nil → 404.
+		s.mountEnterpriseAuditExport(v1)
 
 		// ADR 0011 slice 3c — tenant management API seam under
 		// /api/v1/tenants/*.
