@@ -35,6 +35,7 @@ import QuickstartPage from "./pages/Quickstart";
 import RolloutsPage from "./pages/Rollouts";
 import RunnersPage from "./pages/Runners";
 import SavingsPage from "./pages/Savings";
+import SettingsIdentityPage from "./pages/SettingsIdentity";
 import SettingsSiemPage from "./pages/SettingsSiem";
 import SettingsSSOPage from "./pages/SettingsSSO";
 import SettingsTokensPage from "./pages/SettingsTokens";
@@ -256,6 +257,7 @@ function AuthBoundary() {
           <Route path="/settings/tokens" element={<SettingsTokensPage />} />
           <Route path="/settings/siem" element={<SettingsSiemPage />} />
           <Route path="/settings/sso" element={<SettingsSSOPage />} />
+          <Route path="/settings/identity" element={<SettingsIdentityPage />} />
         </Route>
       </Routes>
       {/* hasToken is referenced so React's lint doesn't strip the

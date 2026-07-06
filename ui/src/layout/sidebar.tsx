@@ -43,6 +43,7 @@ import {
   Cloud,
   Github,
   Fingerprint,
+  ShieldCheck,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -385,9 +386,15 @@ export function AppSidebar() {
         },
         {
           key: "settings-sso",
-          title: "SSO & identity",
+          title: "SSO",
           url: "/settings/sso",
           icon: Fingerprint,
+        },
+        {
+          key: "settings-identity",
+          title: "Identity",
+          url: "/settings/identity",
+          icon: ShieldCheck,
         },
       ],
     },
