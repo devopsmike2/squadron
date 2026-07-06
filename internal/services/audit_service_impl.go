@@ -187,6 +187,7 @@ func (s *AuditServiceImpl) List(ctx context.Context, filter AuditEventFilter) ([
 		EventType:  filter.EventType,
 		TargetType: filter.TargetType,
 		TargetID:   filter.TargetID,
+		Actor:      filter.Actor,
 		Since:      filter.Since,
 		Limit:      filter.Limit,
 	})

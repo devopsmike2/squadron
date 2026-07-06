@@ -80,8 +80,16 @@ const (
 	// /api/v1/audit-export route (handler nil → 404). Export is enterprise-
 	// reserved per ADR 0001 ("compliance: SOC 2 evidence, access reviews").
 	ScopeAuditExport = "audit:export"
-	ScopeAuthRead    = "auth:read"
-	ScopeAuthWrite   = "auth:write"
+	// ADR 0020 — cross-tenant audit access. audit:cross_tenant is the ADDITIONAL
+	// scope required (on top of audit:export / audit:read) to export or review
+	// ANOTHER tenant's audit trail via ?tenant=X — the org-scale access-review
+	// capability SOC 2 auditors need. Defense-in-depth: an operator homed to one
+	// tenant can't dump a sibling tenant's log with audit:export alone. Inert in
+	// OSS: single-tenant, so no route requires it; the enterprise audit-export /
+	// audit-review handlers enforce it on the cross-tenant path.
+	ScopeAuditCrossTenant = "audit:cross_tenant"
+	ScopeAuthRead         = "auth:read"
+	ScopeAuthWrite        = "auth:write"
 	// v0.34 deploy integration. Deploy:read shows targets + run
 	// history; deploy:trigger is what's required to actually fire
 	// a workflow on the operator's behalf — guarded narrowly so
@@ -148,7 +156,7 @@ func AllScopes() []string {
 		ScopeTelemetryRead,
 		ScopeAlertsRead, ScopeAlertsWrite,
 		ScopeRolloutsRead, ScopeRolloutsWrite, ScopeRolloutsApprove,
-		ScopeAuditRead, ScopeAuditExport,
+		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant,
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,

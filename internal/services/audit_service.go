@@ -68,6 +68,7 @@ type AuditEventFilter struct {
 	EventType  string
 	TargetType string
 	TargetID   string
+	Actor      string // exact-match on actor; backs per-actor access-review timelines (ADR 0020)
 	Since      time.Time
 	Limit      int
 }

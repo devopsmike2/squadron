@@ -190,6 +190,12 @@ func (s *Storage) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events(timestamp DESC);
 	CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id, timestamp DESC);
 	CREATE INDEX IF NOT EXISTS idx_audit_events_event_type ON audit_events(event_type);
+	-- ADR 0020: covering index for actor-filtered timelines (access review) and
+	-- actor-scoped exports. Leads with actor so a per-actor "who did what, when"
+	-- query seeks the actor then range-scans timestamp DESC without a table walk.
+	-- Idempotent (IF NOT EXISTS); on an existing large audit_events table this is
+	-- a one-time O(rows) build under a brief write lock at first boot post-upgrade.
+	CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor, timestamp DESC);
 
 	CREATE TABLE IF NOT EXISTS rollouts (
 		id TEXT PRIMARY KEY,
@@ -2418,6 +2424,10 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 	if filter.TargetID != "" {
 		q += " AND target_id = ?"
 		args = append(args, filter.TargetID)
+	}
+	if filter.Actor != "" {
+		q += " AND actor = ?"
+		args = append(args, filter.Actor)
 	}
 	if !filter.Since.IsZero() {
 		q += " AND timestamp >= ?"
