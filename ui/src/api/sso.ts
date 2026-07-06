@@ -95,3 +95,42 @@ export const mintSCIMToken = (
   input: SCIMTokenInput,
 ): Promise<SCIMTokenResult> =>
   apiPost<SCIMTokenResult>("/sso/scim-tokens", input);
+
+// SCIM directory (read-only) — users and groups an IdP has provisioned into a
+// tenant. Enterprise-only, like the rest of the SSO surface: these routes 404
+// in OSS.
+export interface DirectoryUser {
+  id: string;
+  external_id: string;
+  user_name: string;
+  email: string;
+  active: boolean;
+}
+
+export interface DirectoryGroup {
+  id: string;
+  external_id: string;
+  display_name: string;
+  role_id: string;
+  members: string[];
+}
+
+export const listDirectoryUsers = async (
+  tenant: string,
+): Promise<DirectoryUser[]> => {
+  const resp = await apiGet<{ users: DirectoryUser[] }>(
+    "/sso/directory/users",
+    { tenant },
+  );
+  return resp.users ?? [];
+};
+
+export const listDirectoryGroups = async (
+  tenant: string,
+): Promise<DirectoryGroup[]> => {
+  const resp = await apiGet<{ groups: DirectoryGroup[] }>(
+    "/sso/directory/groups",
+    { tenant },
+  );
+  return resp.groups ?? [];
+};
