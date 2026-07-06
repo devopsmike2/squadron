@@ -30,8 +30,11 @@ export interface AuditExplainResponse {
 }
 
 export interface AuditEventFilter {
+  event_type?: string;
   target_type?: string;
   target_id?: string;
-  since?: string; // RFC3339
+  actor?: string; // exact-match actor (e.g. "operator:alice@x.io") — per-actor access review
+  since?: string; // RFC3339, inclusive lower bound
+  until?: string; // RFC3339, exclusive upper bound
   limit?: number;
 }

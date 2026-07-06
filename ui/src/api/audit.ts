@@ -13,6 +13,21 @@ interface AuditListResponse {
   events: AuditEvent[];
 }
 
+// auditFilterParams renders an AuditEventFilter to query params. Shared by the
+// list fetch and the export download so a filtered view and its export always
+// match.
+const auditFilterParams = (filter: AuditEventFilter): URLSearchParams => {
+  const params = new URLSearchParams();
+  if (filter.event_type) params.set("event_type", filter.event_type);
+  if (filter.target_type) params.set("target_type", filter.target_type);
+  if (filter.target_id) params.set("target_id", filter.target_id);
+  if (filter.actor) params.set("actor", filter.actor);
+  if (filter.since) params.set("since", filter.since);
+  if (filter.until) params.set("until", filter.until);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  return params;
+};
+
 // AuditExportFormat is the download format for the audit-log evidence export
 // (ADR 0020). CSV is the compliance default; JSON preserves the full payload
 // shape. The GET /audit/events route serves these as an attachment when
@@ -30,11 +45,7 @@ export const downloadAuditExport = async (
   filter: AuditEventFilter = {},
   format: AuditExportFormat = "csv",
 ): Promise<void> => {
-  const params = new URLSearchParams();
-  if (filter.target_type) params.set("target_type", filter.target_type);
-  if (filter.target_id) params.set("target_id", filter.target_id);
-  if (filter.since) params.set("since", filter.since);
-  if (filter.limit) params.set("limit", String(filter.limit));
+  const params = auditFilterParams(filter);
   params.set("format", format);
 
   const url = `${apiConfig.baseUrl}/audit/events?${params.toString()}`;
@@ -64,12 +75,7 @@ export const downloadAuditExport = async (
 export const listAuditEvents = async (
   filter: AuditEventFilter = {},
 ): Promise<AuditEvent[]> => {
-  const params = new URLSearchParams();
-  if (filter.target_type) params.set("target_type", filter.target_type);
-  if (filter.target_id) params.set("target_id", filter.target_id);
-  if (filter.since) params.set("since", filter.since);
-  if (filter.limit) params.set("limit", String(filter.limit));
-
+  const params = auditFilterParams(filter);
   const query = params.toString();
   const path = query ? `/audit/events?${query}` : "/audit/events";
 
