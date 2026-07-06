@@ -95,6 +95,32 @@ func TestHandleListAuditEvents_DefaultNotSelfAudited(t *testing.T) {
 	assert.Equal(t, 0, countExported(t, svc), "a plain list poll must not be self-audited")
 }
 
+// TestHandleListAuditEvents_ActorFilter pins the ?actor= filter (ADR 0020,
+// backs per-actor access-review timelines): only rows by the named actor return.
+func TestHandleListAuditEvents_ActorFilter(t *testing.T) {
+	h, svc := setupAuditHandlers(t)
+	ctx := t.Context()
+	require.NoError(t, svc.Record(ctx, services.AuditEntry{
+		Actor: "operator:alice@x.io", EventType: "x.y", TargetType: services.AuditTargetAgent, TargetID: "a", Action: "z",
+	}))
+	require.NoError(t, svc.Record(ctx, services.AuditEntry{
+		Actor: "operator:bob@x.io", EventType: "x.y", TargetType: services.AuditTargetAgent, TargetID: "b", Action: "z",
+	}))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/audit/events?actor=operator:alice@x.io", nil)
+	h.HandleListAuditEvents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Events []services.AuditEvent `json:"events"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Events, 1)
+	assert.Equal(t, "operator:alice@x.io", resp.Events[0].Actor)
+}
+
 // TestHandleListAuditEvents_InvalidFormat pins the 400 on an unknown format.
 func TestHandleListAuditEvents_InvalidFormat(t *testing.T) {
 	h, _ := setupAuditHandlers(t)

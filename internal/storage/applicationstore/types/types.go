@@ -900,6 +900,7 @@ type AuditEventFilter struct {
 	EventType  string // exact-match on dotted event_type; empty disables the filter
 	TargetType string
 	TargetID   string
+	Actor      string    // exact-match on actor (e.g. "operator:<email>"); empty disables. Backed by idx_audit_events_actor.
 	Since      time.Time // events with Timestamp >= Since; zero value disables the filter
 	Limit      int       // default 100 if zero; capped at 1000 by the storage layer
 }

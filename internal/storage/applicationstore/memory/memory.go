@@ -762,6 +762,9 @@ func (s *Store) ListAuditEvents(ctx context.Context, filter types.AuditEventFilt
 		if filter.TargetID != "" && e.TargetID != filter.TargetID {
 			continue
 		}
+		if filter.Actor != "" && e.Actor != filter.Actor {
+			continue
+		}
 		if !filter.Since.IsZero() && e.Timestamp.Before(filter.Since) {
 			continue
 		}

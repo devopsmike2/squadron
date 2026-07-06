@@ -82,6 +82,7 @@ func (h *AuditHandlers) HandleListAuditEvents(c *gin.Context) {
 		EventType:  c.Query("event_type"),
 		TargetType: c.Query("target_type"),
 		TargetID:   c.Query("target_id"),
+		Actor:      c.Query("actor"),
 	}
 
 	if raw := c.Query("since"); raw != "" {

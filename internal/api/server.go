@@ -838,6 +838,15 @@ func (s *Server) AuthService() services.AuthService {
 	return s.authService
 }
 
+// AuditService returns the audit log service. Wired at construction; guaranteed
+// non-nil once NewServer completes. Marked public so enterprise handlers (audit
+// export / review, ADR 0020) can query + stream audit events without importing
+// the OSS internal/api internals. OSS code never calls this — it's an inert
+// accessor there. Not safe to call before NewServer sets s.auditService.
+func (s *Server) AuditService() services.AuditService {
+	return s.auditService
+}
+
 // mountEnterpriseOIDC registers the late-bound /auth/oidc/* wildcard on the
 // given router (ADR 0014 Arc C, D0/D4). registerRoutes runs inside NewServer,
 // before the wire layer calls SetEnterpriseOIDCHandler, so the closure reads
