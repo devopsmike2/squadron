@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/extension/identity"
+	"github.com/devopsmike2/squadron/extension/tracebudget"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
@@ -29,6 +30,17 @@ type Storage struct {
 	db               *sql.DB
 	logger           *zap.Logger
 	traceIndexMaxRow int
+	// traceBudget resolves per-tenant trace-index row budgets (ADR 0024). nil =
+	// no per-tenant override → every tenant gets the global traceIndexMaxRow cap.
+	traceBudget tracebudget.Provider
+}
+
+// SetTraceBudgetProvider installs the per-tenant trace-index budget provider
+// (ADR 0024). nil (the default) keeps the global cap for every tenant. Call at
+// startup before the flush loop runs; not safe for concurrent use with in-flight
+// UpsertTraceResources.
+func (s *Storage) SetTraceBudgetProvider(p tracebudget.Provider) {
+	s.traceBudget = p
 }
 
 // NewSQLiteStorage creates a new SQLite storage instance
@@ -832,6 +844,9 @@ func (s *Storage) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_provider_scope ON trace_resource_seen(provider, scope_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_last_seen ON trace_resource_seen(last_seen_at)`,
+		// ADR 0024 — backs the per-tenant LRU eviction's ranged DELETE (evict a
+		// tenant's oldest rows) so the sweep stays a single index range read.
+		`CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_tenant_lastseen ON trace_resource_seen(tenant_id, last_seen_at)`,
 
 		// v0.89.90 (#721 Stream 119, slice 1 chunk 1 of the
 		// Serverless tier arc) — serverless_instance carries one row

@@ -66,14 +66,14 @@ func (s *Storage) UpsertTraceResources(
 	// 3b′ composite (tenant_id, resource_key) key, so two tenants can hold the
 	// same resource_key without collision.
 	//
-	// TODO(ADR 0011 slice 3b′): the LRU cap (count + evict-oldest below) is
-	// deliberately GLOBAL, not per-tenant. The production flush runs under a
-	// system context (no tenant to scope by), and SQUADRON_TRACEINDEX_MAX_ROWS
-	// is a fleet-wide storage budget, so a fleet-wide LRU is the correct
-	// behavior for the flush path. Making the cap per-tenant would need a
-	// per-tenant budget + a tenant to evict within, which the system-context
-	// flush does not carry; deferred until a per-tenant trace budget exists.
-	// Inert in OSS (single tenant ⇒ global == per-tenant).
+	// ADR 0024 — the LRU eviction below is PER-TENANT: it counts rows per
+	// tenant_id and evicts each over-budget tenant's oldest rows, so one tenant
+	// can't evict another's index rows (a multi-tenant-isolation fix — the old
+	// global sweep matched by resource_key alone, which is not unique across the
+	// (tenant_id, resource_key) composite key). Each tenant's budget comes from
+	// budgetFor: a per-tenant override from the TraceBudgetProvider when set,
+	// else the global traceIndexMaxRow — so OSS / single-tenant behavior is
+	// unchanged (one tenant ⇒ global == per-tenant).
 	scopeTenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return 0, err
@@ -143,32 +143,56 @@ func (s *Storage) UpsertTraceResources(
 		}
 	}
 
-	cap := s.traceIndexMaxRow
-	if cap <= 0 {
-		cap = defaultTraceIndexMaxRows
+	// Count rows PER TENANT after the batch, then evict each over-budget tenant's
+	// oldest rows down to its budget. Collect the counts first (close the query)
+	// before issuing DELETEs on the same connection.
+	type tenantCount struct {
+		tenant string
+		count  int
 	}
+	cntRows, err := tx.QueryContext(ctx, `SELECT tenant_id, COUNT(*) FROM trace_resource_seen GROUP BY tenant_id`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count trace_resource_seen per tenant: %w", err)
+	}
+	var counts []tenantCount
+	for cntRows.Next() {
+		var tc tenantCount
+		if err := cntRows.Scan(&tc.tenant, &tc.count); err != nil {
+			_ = cntRows.Close()
+			return 0, fmt.Errorf("failed to scan trace_resource_seen tenant count: %w", err)
+		}
+		counts = append(counts, tc)
+	}
+	if err := cntRows.Err(); err != nil {
+		_ = cntRows.Close()
+		return 0, fmt.Errorf("trace_resource_seen tenant count iteration: %w", err)
+	}
+	_ = cntRows.Close()
 
-	// Count rows after the batch. If over cap, sweep the oldest
-	// last_seen_at rows. The DELETE uses the idx_trace_resource_seen_last_seen
-	// index so the sweep stays a single ranged read.
-	var total int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM trace_resource_seen`).Scan(&total); err != nil {
-		return 0, fmt.Errorf("failed to count trace_resource_seen: %w", err)
-	}
 	evicted := 0
-	if total > cap {
-		over := total - cap
+	for _, tc := range counts {
+		budget := s.budgetFor(tc.tenant)
+		if tc.count <= budget {
+			continue
+		}
+		over := tc.count - budget
+		// Evict this tenant's oldest rows only. tenant_id is in both the outer
+		// WHERE and the subquery so a resource_key shared with another tenant is
+		// never collaterally deleted; idx_trace_resource_seen_tenant_lastseen
+		// keeps it a single ranged read.
 		res, err := tx.ExecContext(ctx, `DELETE FROM trace_resource_seen
-			WHERE resource_key IN (
+			WHERE tenant_id = ?
+			  AND resource_key IN (
 				SELECT resource_key FROM trace_resource_seen
+				WHERE tenant_id = ?
 				ORDER BY last_seen_at ASC
 				LIMIT ?
-			)`, over)
+			)`, tc.tenant, tc.tenant, over)
 		if err != nil {
-			return 0, fmt.Errorf("failed to evict oldest trace_resource_seen rows: %w", err)
+			return 0, fmt.Errorf("failed to evict oldest trace_resource_seen rows for tenant %q: %w", tc.tenant, err)
 		}
 		n, _ := res.RowsAffected()
-		evicted = int(n)
+		evicted += int(n)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -332,4 +356,21 @@ func (s *Storage) CountTraceResourcesByScope(
 		return 0, fmt.Errorf("failed to count trace_resource_seen: %w", err)
 	}
 	return n, nil
+}
+
+// budgetFor returns the row budget for a tenant's slice of the trace-resource
+// index (ADR 0024): a per-tenant override from the TraceBudgetProvider when one
+// is wired and returns a positive value, else the global traceIndexMaxRow cap
+// (default defaultTraceIndexMaxRows). Used by the per-tenant LRU eviction.
+func (s *Storage) budgetFor(tenant string) int {
+	if s.traceBudget != nil {
+		if c := s.traceBudget.CapFor(tenant); c > 0 {
+			return c
+		}
+	}
+	cap := s.traceIndexMaxRow
+	if cap <= 0 {
+		cap = defaultTraceIndexMaxRows
+	}
+	return cap
 }
