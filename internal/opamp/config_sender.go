@@ -77,6 +77,14 @@ func (cs *ConfigSender) SendConfigToAgentWithContext(ctx context.Context, agentI
 		cs.logger.Info("Config successfully applied to agent",
 			zap.String("agentId", agentId.String()))
 		return nil
+	case <-ctx.Done():
+		// The caller's context (the rollout engine's per-tick deadline/cancel)
+		// fired before the agent confirmed. Return promptly rather than holding
+		// this push goroutine for the full 30s cap — so tick latency is bounded
+		// by the caller's ctx, not by a fixed unbounded-per-push wait (rollout
+		// follow-up B). The 30s case remains as the absolute per-push ceiling
+		// for callers that pass a non-cancellable context.
+		return ctx.Err()
 	case <-time.After(30 * time.Second):
 		return fmt.Errorf("timeout waiting for agent to apply config")
 	}
