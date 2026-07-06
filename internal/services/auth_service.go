@@ -150,6 +150,14 @@ const (
 	// audit:cross_tenant: an operator homed to one tenant can't read a sibling
 	// tenant's directory with sso:read alone. Inert in OSS (no /sso routes).
 	ScopeSSOCrossTenant = "sso:cross_tenant"
+
+	// Per-tenant usage/billing (chargeback/showback). usage:read authorizes the
+	// caller's own-tenant usage summary; usage:cross_tenant is the ADDITIONAL
+	// scope for reading ANOTHER tenant's usage via /api/v1/usage/tenants/X
+	// (defense-in-depth mirroring audit:cross_tenant). Inert in OSS (no /usage
+	// routes); the enterprise usage handler enforces them.
+	ScopeUsageRead        = "usage:read"
+	ScopeUsageCrossTenant = "usage:cross_tenant"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -171,6 +179,7 @@ func AllScopes() []string {
 		ScopeIncidentsRead, ScopeIncidentsWrite,
 		ScopeSCIMRead, ScopeSCIMWrite,
 		ScopeSSORead, ScopeSSOWrite, ScopeSSOCrossTenant,
+		ScopeUsageRead, ScopeUsageCrossTenant,
 	}
 }
 
