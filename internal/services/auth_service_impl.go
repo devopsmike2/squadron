@@ -302,6 +302,49 @@ func (s *AuthServiceImpl) Revoke(ctx context.Context, id string) error {
 	return nil
 }
 
+// RevokeByConnection soft-revokes every non-revoked token minted through the
+// given enterprise OIDC connection and emits one api_token.revoked audit event
+// per token (with reason=connection_deleted) so the evidence trail matches the
+// per-token single Revoke. Returns the number revoked.
+//
+// It is NOT on the AuthService interface — the enterprise connection-delete wire
+// reaches it by type assertion (same idiom as IssueTx). Inert in OSS: nothing in
+// OSS mints connection-linked tokens, so no token ever carries a connection_id
+// to match, and OSS mounts no connection-delete route. The caller is responsible
+// for the context (the enterprise fan-out runs under WithSystemContext so the
+// store's tenant predicate is dropped and tokens are revoked regardless of the
+// tenant they authenticate into).
+func (s *AuthServiceImpl) RevokeByConnection(ctx context.Context, connectionID string) (int, error) {
+	byConn, ok := s.appStore.(interface {
+		RevokeAPITokensByConnection(ctx context.Context, connectionID string, at time.Time) ([]applicationstore.APIToken, error)
+	})
+	if !ok {
+		return 0, errors.New("app store does not support revoke-by-connection")
+	}
+	revoked, err := byConn.RevokeAPITokensByConnection(ctx, connectionID, time.Now().UTC())
+	if err != nil {
+		return 0, err
+	}
+	for _, t := range revoked {
+		s.logger.Info("revoked api token (oidc connection deleted)",
+			zap.String("token_id", t.ID), zap.String("connection_id", connectionID))
+		if s.audit != nil {
+			_ = s.audit.Record(ctx, AuditEntry{
+				EventType:  "api_token.revoked",
+				TargetType: "api_token",
+				TargetID:   t.ID,
+				Action:     "revoked",
+				Payload: map[string]any{
+					"label":         t.Label,
+					"reason":        "connection_deleted",
+					"connection_id": connectionID,
+				},
+			})
+		}
+	}
+	return len(revoked), nil
+}
+
 // Validate hashes the plaintext and looks up the matching row.
 // Returns (token, nil) if a non-revoked token matches; (nil, nil) for
 // "unknown or revoked"; (nil, err) for storage failure. The middleware
