@@ -2,10 +2,12 @@ import { X } from "lucide-react";
 import { useState } from "react";
 
 import { AuditExportButton } from "@/components/AuditExportButton";
+import { AuditReviewPanel } from "@/components/AuditReviewPanel";
 import { AuditTimeline } from "@/components/AuditTimeline";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AuditEventFilter } from "@/types/audit";
 
 export default function AuditPage() {
@@ -46,56 +48,84 @@ export default function AuditPage() {
         <AuditExportButton filter={applied} />
       </div>
 
-      <Card>
-        <CardHeader className="gap-3">
-          <CardTitle className="text-base font-semibold">
-            Recent activity
-          </CardTitle>
-          {/* Access-review filters: narrow to one actor's timeline or one
-              event type. Both use exact-match server-side params. */}
-          <form
-            className="flex flex-wrap items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              apply();
-            }}
-          >
-            <Input
-              value={actorDraft}
-              onChange={(e) => setActorDraft(e.target.value)}
-              placeholder="actor (e.g. operator:alice@x.io)"
-              className="h-9 w-64"
-            />
-            <Input
-              value={eventTypeDraft}
-              onChange={(e) => setEventTypeDraft(e.target.value)}
-              placeholder="event type (e.g. config.applied)"
-              className="h-9 w-56"
-            />
-            <Button type="submit" variant="outline" className="h-9">
-              Apply
-            </Button>
-            {hasFilter && (
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-9 gap-1"
-                onClick={clear}
+      <Tabs defaultValue="activity">
+        <TabsList>
+          <TabsTrigger value="activity">Recent activity</TabsTrigger>
+          <TabsTrigger value="review">Access review</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="activity" className="space-y-4">
+          <Card>
+            <CardHeader className="gap-3">
+              <CardTitle className="text-base font-semibold">
+                Recent activity
+              </CardTitle>
+              {/* Access-review filters: narrow to one actor's timeline or one
+                  event type. Both use exact-match server-side params. */}
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  apply();
+                }}
               >
-                <X className="h-4 w-4" />
-                Clear
-              </Button>
-            )}
-          </form>
-        </CardHeader>
-        <CardContent>
-          <AuditTimeline
-            actor={applied.actor}
-            eventType={applied.event_type}
-            limit={200}
-          />
-        </CardContent>
-      </Card>
+                <Input
+                  value={actorDraft}
+                  onChange={(e) => setActorDraft(e.target.value)}
+                  placeholder="actor (e.g. operator:alice@x.io)"
+                  className="h-9 w-64"
+                />
+                <Input
+                  value={eventTypeDraft}
+                  onChange={(e) => setEventTypeDraft(e.target.value)}
+                  placeholder="event type (e.g. config.applied)"
+                  className="h-9 w-56"
+                />
+                <Button type="submit" variant="outline" className="h-9">
+                  Apply
+                </Button>
+                {hasFilter && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-9 gap-1"
+                    onClick={clear}
+                  >
+                    <X className="h-4 w-4" />
+                    Clear
+                  </Button>
+                )}
+              </form>
+            </CardHeader>
+            <CardContent>
+              <AuditTimeline
+                actor={applied.actor}
+                eventType={applied.event_type}
+                limit={200}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="review" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">
+                Access review
+              </CardTitle>
+              <p className="text-muted-foreground text-sm">
+                Compliance access-review queries — per-actor timelines, per-
+                resource access history, and a per-tenant admin-action rollup
+                for a SOC 2 quarterly review. Cross-tenant reviews are
+                themselves recorded to the audit trail.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <AuditReviewPanel />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
