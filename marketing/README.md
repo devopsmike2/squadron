@@ -44,6 +44,29 @@ demo connection exists before capturing.
 9. `09-rollouts` — staged rollout with AI reasoning + approval gate
 10. `10-audit` — audit log (incidents, drift, alerts, rollouts)
 
+### Enterprise / compliance scenes (11–16)
+
+These surfaces are **enterprise-only** and need a dev UI backed by the
+**enterprise binary** (`make build-enterprise`) with `auth.enabled: true`
+**and an authenticated session** (a logged-in browser or a bearer token seeded
+into the capture context). Against an OSS build they render an
+"enterprise feature" gate instead of the real UI. Provision the tenants/roles
+they show first — see `../scripts/demo-seed.sh` (Phase 2) and
+`squadron-enterprise/docs/DEPLOYMENT.md`.
+
+11. `11-settings-tenants` — Settings ▸ Identity, Tenants tab (multi-tenant
+    isolation)
+12. `12-settings-roles` — Settings ▸ Identity, Roles tab (RBAC roles +
+    permissions)
+13. `13-settings-usage` — Settings ▸ Identity, Usage tab (per-tenant usage /
+    chargeback)
+14. `14-settings-budgets` — Settings ▸ Identity, Budgets tab (per-tenant trace
+    budgets)
+15. `15-audit-access-review` — Audit ▸ Access review (per-actor / admin-action
+    reviews, SOC 2)
+16. `16-audit-integrity` — Audit ▸ Integrity (tamper-evidence attestation /
+    verify)
+
 The one-shot ⌘K onboarding toast is suppressed during capture via
 a localStorage flag set in an init script, so it never intrudes on
 a screenshot.
