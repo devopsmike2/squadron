@@ -20,7 +20,9 @@ import (
 )
 
 // traceBudgetProvider returns the edition's per-tenant trace-index budget
-// provider. OSS returns nil (uniform global cap for every tenant).
-func traceBudgetProvider(*config.Config) tracebudget.Provider {
+// provider. OSS returns nil (uniform global cap for every tenant). The store
+// param is the DB-backed budget substrate (ADR 0026) the enterprise wire reads
+// and seeds; OSS ignores it.
+func traceBudgetProvider(*config.Config, tracebudget.BudgetStore) tracebudget.Provider {
 	return nil
 }

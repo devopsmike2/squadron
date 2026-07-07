@@ -370,6 +370,14 @@ type Server struct {
 	// billing summary (chargeback/showback). Wired by the enterprise build via
 	// SetEnterpriseUsageHandler; OSS leaves it nil so those routes 404.
 	enterpriseUsageHandler EnterpriseUsageHandler
+	// enterpriseBudgetsHandler serves the /api/v1/budgets/* per-tenant trace-index
+	// budget admin API (ADR 0026). Wired by the enterprise build via
+	// SetEnterpriseBudgetsHandler; OSS leaves it nil so those routes 404.
+	enterpriseBudgetsHandler EnterpriseBudgetsHandler
+	// traceBudgetStore is the runtime per-tenant trace-budget store the enterprise
+	// budgets handler reads/writes (ADR 0026). Wired by main via
+	// SetTraceBudgetStore when the app store supports it; OSS never reads it.
+	traceBudgetStore TraceBudgetAdminStore
 	// enterpriseTenantHandler serves the /api/v1/tenants/* tenant management API
 	// (ADR 0011 slice 3c). Wired by the enterprise build edition via
 	// SetEnterpriseTenantHandler; OSS leaves it nil so those routes return 404.
@@ -758,6 +766,42 @@ func (s *Server) mountEnterpriseUsage(rg gin.IRouter) {
 	})
 }
 
+// EnterpriseBudgetsHandler is the seam the enterprise edition implements to
+// serve the per-tenant trace-index budget admin API under /api/v1/budgets
+// (ADR 0026): read/list/set/delete a tenant's runtime row budget, cross-tenant
+// gated by an extra scope. OSS never provides one, so the routes 404 — runtime
+// per-tenant trace budgets are enterprise-reserved.
+type EnterpriseBudgetsHandler interface {
+	HandleBudgets(c *gin.Context)
+}
+
+// SetEnterpriseBudgetsHandler installs the enterprise budgets handler backing
+// /api/v1/budgets/*. The enterprise wire calls this once after NewServer; OSS
+// never calls it (nil → routes 404). Not safe for concurrent use with in-flight
+// requests — call during startup.
+func (s *Server) SetEnterpriseBudgetsHandler(h EnterpriseBudgetsHandler) {
+	s.enterpriseBudgetsHandler = h
+}
+
+// mountEnterpriseBudgets registers the late-bound /api/v1/budgets/* wildcard. The
+// closure reads s.enterpriseBudgetsHandler at REQUEST time: OSS (nil) → 404; the
+// enterprise edition serves its per-tenant trace-budget admin API. The group
+// already carries RequireBearer + ResolveTenant; the handler enforces
+// budgets:read/budgets:write (+ budgets:cross_tenant). Mirrors
+// mountEnterpriseUsage; unit-testable with a bare *Server.
+func (s *Server) mountEnterpriseBudgets(rg gin.IRouter) {
+	rg.Any("/budgets/*path", func(c *gin.Context) {
+		if s.enterpriseBudgetsHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "per-tenant trace budgets are an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseBudgetsHandler.HandleBudgets(c)
+	})
+}
+
 // EnterpriseTenantHandler is the seam the enterprise edition implements to serve
 // the tenant management API under /api/v1/tenants (ADR 0011 slice 3c). It
 // receives requests that have already passed RequireBearer + ResolveTenant; the
@@ -948,6 +992,30 @@ func (s *Server) AgentService() services.AgentService {
 // AgentService — enterprise per-tenant usage counts tenant-scoped rollouts.
 func (s *Server) RolloutService() services.RolloutService {
 	return s.rolloutService
+}
+
+// TraceBudgetAdminStore is the runtime per-tenant trace-index budget store
+// surface the enterprise budgets admin handler uses (ADR 0026): read/list/set/
+// delete a tenant's persisted row budget. *sqlite.Storage satisfies it.
+type TraceBudgetAdminStore interface {
+	GetTraceBudget(ctx context.Context, tenant string) (int, bool, error)
+	ListTraceBudgets(ctx context.Context) (map[string]int, error)
+	SetTraceBudget(ctx context.Context, tenant string, maxRows int) error
+	DeleteTraceBudget(ctx context.Context, tenant string) error
+}
+
+// SetTraceBudgetStore installs the runtime trace-budget store backing the
+// enterprise budgets admin API (ADR 0026). main calls this once after NewServer
+// when the app store supports it; OSS never reads it (the budgets routes 404).
+func (s *Server) SetTraceBudgetStore(store TraceBudgetAdminStore) {
+	s.traceBudgetStore = store
+}
+
+// TraceBudgetStore returns the runtime per-tenant trace-budget store. Public so
+// the enterprise budgets handler can read/write budgets without importing the
+// OSS internal/api internals. OSS code never calls it — inert accessor.
+func (s *Server) TraceBudgetStore() TraceBudgetAdminStore {
+	return s.traceBudgetStore
 }
 
 // mountEnterpriseOIDC registers the late-bound /auth/oidc/* wildcard on the
@@ -2623,6 +2691,10 @@ func (s *Server) registerRoutes() {
 
 		// Enterprise per-tenant usage/billing summary seam under /api/v1/usage/*.
 		s.mountEnterpriseUsage(v1)
+
+		// ADR 0026 — enterprise per-tenant trace-index budget admin seam under
+		// /api/v1/budgets/*. OSS leaves the handler nil → 404.
+		s.mountEnterpriseBudgets(v1)
 
 		// ADR 0011 slice 3c — tenant management API seam under
 		// /api/v1/tenants/*.
