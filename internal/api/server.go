@@ -366,6 +366,12 @@ type Server struct {
 	// build edition via SetEnterpriseAuditReviewHandler; OSS leaves it nil so
 	// those routes return 404. Read at request time by the late-bound wildcard.
 	enterpriseAuditReviewHandler EnterpriseAuditReviewHandler
+	// enterpriseAuditVerifyHandler serves the /api/v1/audit-verify/tenants/*
+	// compliance cross-tenant audit hash-chain verification API (ADR 0027, a
+	// later slice). Wired by the enterprise build via
+	// SetEnterpriseAuditVerifyHandler; OSS leaves it nil so those routes 404.
+	// Read at request time by the late-bound wildcard. INERT seam in slice 1.
+	enterpriseAuditVerifyHandler EnterpriseAuditVerifyHandler
 	// enterpriseUsageHandler serves the /api/v1/usage/* per-tenant usage /
 	// billing summary (chargeback/showback). Wired by the enterprise build via
 	// SetEnterpriseUsageHandler; OSS leaves it nil so those routes 404.
@@ -727,6 +733,47 @@ func (s *Server) mountEnterpriseAuditReview(rg gin.IRouter) {
 			return
 		}
 		s.enterpriseAuditReviewHandler.HandleAuditReview(c)
+	})
+}
+
+// EnterpriseAuditVerifyHandler is the seam the enterprise edition implements to
+// serve compliance-grade CROSS-TENANT audit hash-chain verification under
+// /api/v1/audit-verify/tenants/* (ADR 0027, a later slice). Like the export /
+// review seams it receives requests that have already passed RequireBearer +
+// ResolveTenant, with the path suffix in c.Param("path"), and enforces its own
+// authorization (audit:verify + audit:cross_tenant). OSS never provides one, so
+// the routes 404 — cross-tenant verification is enterprise-reserved. The OSS
+// self-tenant verify lives at the distinct exact route GET /api/v1/audit-verify.
+type EnterpriseAuditVerifyHandler interface {
+	HandleAuditVerify(c *gin.Context)
+}
+
+// SetEnterpriseAuditVerifyHandler installs the enterprise cross-tenant audit
+// verification handler backing /api/v1/audit-verify/tenants/* (ADR 0027). The
+// enterprise wire calls this once after NewServer; OSS never calls it (nil ->
+// routes 404). Not safe for concurrent use with in-flight requests — call
+// during startup, before the server accepts traffic.
+func (s *Server) SetEnterpriseAuditVerifyHandler(h EnterpriseAuditVerifyHandler) {
+	s.enterpriseAuditVerifyHandler = h
+}
+
+// mountEnterpriseAuditVerify registers the late-bound
+// /api/v1/audit-verify/tenants/*path wildcard (ADR 0027). The closure reads
+// s.enterpriseAuditVerifyHandler at REQUEST time: OSS (nil) -> 404; the
+// enterprise edition serves its cross-tenant verification. Coexists with the
+// exact OSS route GET /api/v1/audit-verify (step 6) — they diverge at the
+// segment after audit-verify (exact leaf vs the /tenants/* subtree), so gin
+// accepts both. Extracted so the seam is unit-testable with a bare *Server.
+func (s *Server) mountEnterpriseAuditVerify(rg gin.IRouter) {
+	rg.Any("/audit-verify/tenants/*path", func(c *gin.Context) {
+		if s.enterpriseAuditVerifyHandler == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":  "not found",
+				"detail": "cross-tenant audit verification is an enterprise feature",
+			})
+			return
+		}
+		s.enterpriseAuditVerifyHandler.HandleAuditVerify(c)
 	})
 }
 
@@ -2689,6 +2736,11 @@ func (s *Server) registerRoutes() {
 		// authz/scoping stay per-surface. OSS leaves the handler nil → 404.
 		s.mountEnterpriseAuditReview(v1)
 
+		// ADR 0027 slice 1 — INERT enterprise cross-tenant audit hash-chain
+		// verification seam under /api/v1/audit-verify/tenants/*. Distinct from
+		// the exact OSS self route GET /api/v1/audit-verify. OSS handler nil -> 404.
+		s.mountEnterpriseAuditVerify(v1)
+
 		// Enterprise per-tenant usage/billing summary seam under /api/v1/usage/*.
 		s.mountEnterpriseUsage(v1)
 
@@ -2847,6 +2899,16 @@ func (s *Server) registerRoutes() {
 				h.HandleExplainAuditEvent(c)
 			})
 		}
+
+		// ADR 0027 slice 1 — self-tenant audit hash-chain integrity check.
+		// Distinct top-level path (NOT under the /audit group) so it avoids the
+		// /audit/:id httprouter param collision, mirroring the audit-export /
+		// audit-review seams. audit:read gates it: a self-tenant verify is a
+		// strict subset of what audit:read already exposes. Coexists with the
+		// enterprise /audit-verify/tenants/* wildcard seam mounted above.
+		v1.GET("/audit-verify",
+			middleware.RequireScope(services.ScopeAuditRead),
+			auditHandlers.HandleVerifyAuditChain)
 
 		// v0.40.0 Timeline — postmortem view that merges audit,
 		// deploy, and cost-spike events into one chronologically

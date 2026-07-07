@@ -92,3 +92,9 @@ func TestRevokeByConnection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, n3)
 }
+
+// VerifyChain — ADR 0027 slice 1. Test stub: self-tenant audit chain
+// verify. Not exercised by these tests; returns a trivially OK result.
+func (r *recordingAudit) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
+	return &applicationstore.AuditChainVerification{OK: true}, nil
+}

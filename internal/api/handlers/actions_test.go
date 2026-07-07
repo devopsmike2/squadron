@@ -20,6 +20,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -465,4 +466,10 @@ func TestActionsHandlers_NilStore_503NotPanic(t *testing.T) {
 			}
 		})
 	}
+}
+
+// VerifyChain — ADR 0027 slice 1. Test stub: self-tenant audit chain
+// verify. Not exercised by these tests; returns a trivially OK result.
+func (r *recordingAudit) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
+	return &applicationstore.AuditChainVerification{OK: true}, nil
 }

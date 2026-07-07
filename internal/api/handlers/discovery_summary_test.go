@@ -21,6 +21,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
 // --- test stubs ---------------------------------------------------------
@@ -894,4 +895,10 @@ func TestDiscoverySummary_TotalsAggregateEventSourceAcrossProviders(t *testing.T
 	if got := r.Providers["oci"].EventSourceCount; got != 0 {
 		t.Errorf("oci.event_source_count = %d, want 0 (cold-start projection)", got)
 	}
+}
+
+// VerifyChain — ADR 0027 slice 1. Test stub: self-tenant audit chain
+// verify. Not exercised by these tests; returns a trivially OK result.
+func (s *spyAuditService) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
+	return &applicationstore.AuditChainVerification{OK: true}, nil
 }

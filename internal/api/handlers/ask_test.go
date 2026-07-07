@@ -21,6 +21,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/ai"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	storetypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -436,4 +437,10 @@ func (askAuditListOnly) Get(context.Context, string) (*services.AuditEvent, erro
 }
 func (askAuditListOnly) SetExplanation(context.Context, string, string, string, time.Time) error {
 	panic("not used")
+}
+
+// VerifyChain — ADR 0027 slice 1. Test stub: self-tenant audit chain
+// verify. Not exercised by these tests; returns a trivially OK result.
+func (askAuditListOnly) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
+	return &applicationstore.AuditChainVerification{OK: true}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devopsmike2/squadron/extension/identity"
@@ -33,6 +34,11 @@ type Storage struct {
 	// traceBudget resolves per-tenant trace-index row budgets (ADR 0024). nil =
 	// no per-tenant override → every tenant gets the global traceIndexMaxRow cap.
 	traceBudget tracebudget.Provider
+	// auditChainMu serializes the read-head -> insert critical section in
+	// CreateAuditEvent so concurrent audit appends can't fork the per-tenant
+	// hash-chain (ADR 0027 slice 1). It guards ONLY the chain append; every
+	// other write uses the shared *sql.DB handle directly.
+	auditChainMu sync.Mutex
 }
 
 // SetTraceBudgetProvider installs the per-tenant trace-index budget provider
@@ -1108,6 +1114,16 @@ func (s *Storage) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_alert_rules_tenant ON alert_rules(tenant_id)`,
 		`ALTER TABLE audit_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id)`,
+		// ADR 0027 slice 1 — per-tenant tamper-evident hash-chain over
+		// audit_events. seq is the per-tenant monotonic position; prev_hash
+		// links to the prior row's row_hash; row_hash is the SHA-256 chain
+		// hash over the immutable content columns + tenant + seq. Nullable so
+		// pre-0027 rows upgrade cleanly (VerifyAuditChain skips seq IS NULL).
+		// Idempotent via the duplicate-column swallow, like tenant_id above.
+		`ALTER TABLE audit_events ADD COLUMN seq INTEGER`,
+		`ALTER TABLE audit_events ADD COLUMN prev_hash TEXT`,
+		`ALTER TABLE audit_events ADD COLUMN row_hash TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_chain ON audit_events(tenant_id, seq)`,
 		`ALTER TABLE rollouts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		`CREATE INDEX IF NOT EXISTS idx_rollouts_tenant ON rollouts(tenant_id)`,
 		// api_tokens.tenant_id added in slice 3a — index only.
@@ -2387,17 +2403,46 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		// inserts.
 		tenant = identity.DefaultTenant
 	}
-	stmt := `
-		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
 	if e.Timestamp.IsZero() {
 		e.Timestamp = e.CreatedAt
 	}
-	_, err = s.db.ExecContext(ctx, stmt,
+
+	// ADR 0027 slice 1 — extend the per-tenant tamper-evident hash-chain. The
+	// read-head -> insert critical section MUST be serialized: two concurrent
+	// appends that both read the same head would compute the same seq and fork
+	// the chain. auditChainMu makes head-read + insert atomic in-process, and
+	// CreateAuditEvent is the ONE audit writer, so this fully serializes the
+	// chain. payloadStr is computed once and reused for BOTH the stored payload
+	// column and the hash so the two can never drift (ADR 0027 requirement).
+	payloadStr := string(payloadJSON)
+	s.auditChainMu.Lock()
+	defer s.auditChainMu.Unlock()
+
+	var prevSeq int64
+	var prevHash string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT seq, row_hash FROM audit_events WHERE tenant_id = ? AND seq IS NOT NULL ORDER BY seq DESC LIMIT 1`,
+		tenant,
+	).Scan(&prevSeq, &prevHash)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			prevSeq = 0
+			prevHash = "" // genesis: first row in this tenant's chain
+		} else {
+			return fmt.Errorf("failed to read audit chain head: %w", err)
+		}
+	}
+	seq := prevSeq + 1
+	rowHash := auditRowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+
+	stmt := `
+		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	if _, err := s.db.ExecContext(ctx, stmt,
 		e.ID,
 		e.Timestamp,
 		e.Actor,
@@ -2405,11 +2450,13 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		e.TargetType,
 		nullableString(e.TargetID),
 		e.Action,
-		string(payloadJSON),
+		payloadStr,
 		tenant,
 		e.CreatedAt,
-	)
-	if err != nil {
+		seq,
+		prevHash,
+		rowHash,
+	); err != nil {
 		return fmt.Errorf("failed to create audit event: %w", err)
 	}
 	return nil

@@ -15,6 +15,7 @@ import (
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
 // tenantCapturingAudit records the tenant carried by the ctx passed to
@@ -147,4 +148,10 @@ func TestWebhook_UnmatchedRepo_StampsSystemContext(t *testing.T) {
 	if !audit.systemSeen[0] {
 		t.Errorf("audit ctx should be system context for an unmatched delivery; tenant=%q", audit.tenants[0])
 	}
+}
+
+// VerifyChain — ADR 0027 slice 1. Test stub: self-tenant audit chain
+// verify. Not exercised by these tests; returns a trivially OK result.
+func (a *tenantCapturingAudit) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
+	return &applicationstore.AuditChainVerification{OK: true}, nil
 }
