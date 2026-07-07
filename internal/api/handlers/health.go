@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -67,8 +68,16 @@ func (h *HealthHandlers) HandleHealth(c *gin.Context) {
 
 // checkSQLiteHealth checks if SQLite is healthy
 func (h *HealthHandlers) checkSQLiteHealth(c *gin.Context) bool {
-	// Try to get a simple count from agents table
-	_, err := h.agentService.ListAgents(c.Request.Context())
+	// A health probe is a system-wide liveness/readiness check, not a tenant
+	// request: /health is mounted on the root router (outside the /api/v1 group)
+	// so ResolveTenant never stamps a tenant. Under the enterprise build's strict
+	// tenant scoping, any store call on an untenanted context is rejected with
+	// ErrTenantContextRequired — which flipped this check to unhealthy and 503'd
+	// /health, crash-looping otherwise-healthy pods (liveness/readiness/startup
+	// probes all hit /health). Probe under WithSystemContext, the same idiom every
+	// background job uses; tenantScope short-circuits system contexts cleanly.
+	ctx := identity.WithSystemContext(c.Request.Context())
+	_, err := h.agentService.ListAgents(ctx)
 	return err == nil
 }
 
@@ -80,7 +89,8 @@ func (h *HealthHandlers) checkDuckDBHealth(c *gin.Context) bool {
 		EndTime:   time.Now(),
 		Limit:     1,
 	}
-	_, err := h.telemetryService.QueryMetrics(c.Request.Context(), query)
+	ctx := identity.WithSystemContext(c.Request.Context())
+	_, err := h.telemetryService.QueryMetrics(ctx, query)
 	return err == nil
 }
 
