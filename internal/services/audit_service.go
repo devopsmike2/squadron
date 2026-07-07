@@ -6,6 +6,8 @@ package services
 import (
 	"context"
 	"time"
+
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
 // AuditService records and surfaces audit log entries. Every state change in
@@ -29,6 +31,11 @@ type AuditService interface {
 	// rows are otherwise immutable; this is the one mutation the service
 	// allows, and it only touches the three explanation columns.
 	SetExplanation(ctx context.Context, id string, explanation, model string, generatedAt time.Time) error
+
+	// VerifyChain walks the caller's tenant audit hash-chain and reports whether
+	// it is intact (ADR 0027 slice 1). Self-tenant only; delegates straight to
+	// the application store's VerifyAuditChain.
+	VerifyChain(ctx context.Context) (*applicationstore.AuditChainVerification, error)
 }
 
 // AuditEntry is the input shape callers fill in to Record. The service

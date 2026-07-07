@@ -88,8 +88,15 @@ const (
 	// OSS: single-tenant, so no route requires it; the enterprise audit-export /
 	// audit-review handlers enforce it on the cross-tenant path.
 	ScopeAuditCrossTenant = "audit:cross_tenant"
-	ScopeAuthRead         = "auth:read"
-	ScopeAuthWrite        = "auth:write"
+	// ADR 0027 slice 1 — audit hash-chain self-verify. audit:verify gates the
+	// OSS self-tenant integrity check (GET /api/v1/audit-verify). Defined as a
+	// distinct scope so a chain-verify capability can be granted without the
+	// broader audit:read view, though the OSS route currently requires
+	// audit:read (self-tenant verify is a strict subset of what audit:read
+	// already exposes). The enterprise cross-tenant verify seam is a later slice.
+	ScopeAuditVerify = "audit:verify"
+	ScopeAuthRead    = "auth:read"
+	ScopeAuthWrite   = "auth:write"
 	// v0.34 deploy integration. Deploy:read shows targets + run
 	// history; deploy:trigger is what's required to actually fire
 	// a workflow on the operator's behalf — guarded narrowly so
@@ -181,7 +188,7 @@ func AllScopes() []string {
 		ScopeTelemetryRead,
 		ScopeAlertsRead, ScopeAlertsWrite,
 		ScopeRolloutsRead, ScopeRolloutsWrite, ScopeRolloutsApprove,
-		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant,
+		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant, ScopeAuditVerify,
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,

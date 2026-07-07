@@ -5,11 +5,13 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/google/uuid"
@@ -95,6 +97,10 @@ type Store struct {
 	// touch the environment.
 	traceResourceSeen map[string]traceindex.ResourceRow
 	traceMaxRows      int
+	// ADR 0027 slice 1 — per-tenant audit hash-chain mirror so the memory
+	// store returns the same VerifyAuditChain OK the sqlite store does
+	// (test-only parity). Keyed by tenant; each slice is the ordered chain.
+	auditChains map[string][]memAuditChainRow
 }
 
 // memoryCheckRunRecord — v0.89.42 (#662 Stream 60). Mirror of the 5
@@ -149,6 +155,8 @@ func NewStore() *Store {
 		// v0.89.74 (#705 Stream 103).
 		traceResourceSeen: make(map[string]traceindex.ResourceRow),
 		traceMaxRows:      memoryTraceIndexMaxRows,
+		// ADR 0027 slice 1.
+		auditChains: make(map[string][]memAuditChainRow),
 	}
 }
 
@@ -734,6 +742,30 @@ func (s *Store) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) error
 		}
 	}
 	s.auditEvents = append(s.auditEvents, &eventCopy)
+
+	// ADR 0027 slice 1 — extend the per-tenant hash-chain so VerifyAuditChain
+	// returns OK on the memory store too. Tenant resolves the same way the
+	// sqlite append path resolves it (DefaultTenant when unstamped/system).
+	tenant := identity.TenantFromContext(ctx)
+	var payloadStr string
+	if e.Payload != nil {
+		b, _ := json.Marshal(e.Payload)
+		payloadStr = string(b)
+	}
+	chain := s.auditChains[tenant]
+	var prevSeq int64
+	var prevHash string
+	if n := len(chain); n > 0 {
+		prevSeq = chain[n-1].seq
+		prevHash = chain[n-1].rowHash
+	}
+	seq := prevSeq + 1
+	rowHash := memAuditRowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+	s.auditChains[tenant] = append(chain, memAuditChainRow{
+		id: e.ID, actor: e.Actor, eventType: e.EventType, targetType: e.TargetType,
+		targetID: e.TargetID, action: e.Action, payloadStr: payloadStr,
+		seq: seq, prevHash: prevHash, rowHash: rowHash,
+	})
 	return nil
 }
 

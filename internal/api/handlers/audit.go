@@ -48,6 +48,29 @@ func NewAuditHandlers(
 	}
 }
 
+// HandleVerifyAuditChain serves GET /api/v1/audit-verify (ADR 0027 slice 1).
+//
+// It walks the caller's own tenant audit hash-chain and reports whether it is
+// intact. Self-tenant only: the request context already carries the tenant via
+// ResolveTenant, and the store resolves it the same way the audit append path
+// does. Cross-tenant verification is an enterprise feature (a later slice)
+// served by the separate /api/v1/audit-verify/tenants/* seam.
+//
+// Returns the AuditChainVerification result as JSON (HTTP 200 even when the
+// chain is broken — a broken chain is a valid, successfully computed answer;
+// only an internal error 500s).
+func (h *AuditHandlers) HandleVerifyAuditChain(c *gin.Context) {
+	result, err := h.auditService.VerifyChain(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":  "failed to verify audit chain",
+			"detail": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 // HandleListAuditEvents serves GET /api/v1/audit/events.
 //
 // Query parameters (all optional):

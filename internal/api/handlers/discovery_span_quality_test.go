@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/devopsmike2/squadron/internal/traceindex"
 )
 
@@ -652,4 +653,10 @@ func TestSpanQuality_NoSamplingInventoryReader_SamplingPctZero(t *testing.T) {
 	if got.Providers["aws"].OrphanPct != 4.0 {
 		t.Errorf("aws.OrphanPct = %v, want 4.0", got.Providers["aws"].OrphanPct)
 	}
+}
+
+// VerifyChain — ADR 0027 slice 1. Test stub: self-tenant audit chain
+// verify. Not exercised by these tests; returns a trivially OK result.
+func (r *recordingAuditService) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
+	return &applicationstore.AuditChainVerification{OK: true}, nil
 }

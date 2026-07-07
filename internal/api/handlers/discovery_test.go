@@ -23,6 +23,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scanner"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
 func init() {
@@ -3187,4 +3188,10 @@ func TestHandleAWSGenerateRecommendations_Async_ProposerErrorFailsJob(t *testing
 	if resp.Error == nil || resp.Error.Code != "ProposerCallFailed" {
 		t.Errorf("failed job should carry ProposerCallFailed; got %+v", resp.Error)
 	}
+}
+
+// VerifyChain — ADR 0027 slice 1. Test stub: self-tenant audit chain
+// verify. Not exercised by these tests; returns a trivially OK result.
+func (r *discoveryRecordingAudit) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
+	return &applicationstore.AuditChainVerification{OK: true}, nil
 }

@@ -223,6 +223,14 @@ func (s *AuditServiceImpl) SetExplanation(ctx context.Context, id, explanation, 
 	return s.appStore.UpdateAuditEventExplanation(ctx, id, explanation, model, generatedAt)
 }
 
+// VerifyChain delegates to the application store's per-tenant audit
+// hash-chain self-verify (ADR 0027 slice 1). Self-tenant only — the
+// request ctx already carries the tenant via ResolveTenant, and the store
+// resolves it the same way the audit append path does.
+func (s *AuditServiceImpl) VerifyChain(ctx context.Context) (*applicationstore.AuditChainVerification, error) {
+	return s.appStore.VerifyAuditChain(ctx)
+}
+
 func toServiceAuditEvent(e *applicationstore.AuditEvent) *AuditEvent {
 	return &AuditEvent{
 		ID:                       e.ID,

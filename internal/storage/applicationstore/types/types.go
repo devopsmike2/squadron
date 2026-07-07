@@ -87,6 +87,9 @@ type ApplicationStore interface {
 	ListAuditEvents(ctx context.Context, filter AuditEventFilter) ([]*AuditEvent, error)
 	GetAuditEvent(ctx context.Context, id string) (*AuditEvent, error)
 	UpdateAuditEventExplanation(ctx context.Context, id, explanation, model string, generatedAt time.Time) error
+	// VerifyAuditChain walks the caller's tenant audit hash-chain and reports
+	// whether it is intact (ADR 0027 slice 1). Self-tenant only.
+	VerifyAuditChain(ctx context.Context) (*AuditChainVerification, error)
 
 	// Rollouts (safe staged config rollouts)
 	CreateRollout(ctx context.Context, rollout *Rollout) error
@@ -890,6 +893,17 @@ type AuditEvent struct {
 	AIExplanation            string     `json:"ai_explanation,omitempty"`
 	AIExplanationModel       string     `json:"ai_explanation_model,omitempty"`
 	AIExplanationGeneratedAt *time.Time `json:"ai_explanation_generated_at,omitempty"`
+}
+
+// AuditChainVerification is the result of VerifyAuditChain (ADR 0027 slice 1):
+// a self-tenant walk of the per-tenant audit hash-chain reporting whether the
+// chain is intact and, if not, where it first broke.
+type AuditChainVerification struct {
+	OK            bool   `json:"ok"`
+	RowsVerified  int    `json:"rows_verified"`
+	FirstBreakSeq int64  `json:"first_break_seq,omitempty"` // 0 when ok
+	Detail        string `json:"detail,omitempty"`
+	CoversFromSeq int64  `json:"covers_from_seq,omitempty"` // earliest surviving seq (chain-start)
 }
 
 // AuditEventFilter narrows a ListAuditEvents query.
