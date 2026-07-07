@@ -608,21 +608,25 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// SetX accessor so the middleware order in v1.Use() stays
 	// deterministic (auth → access audit → handler).
 	wireAPIServerExtensions(apiServer, auditService, logger)
+	// ADR 0026 / 0027 — install the runtime trace-budget + audit-checkpoint
+	// stores on the server BEFORE enterpriseServerWiring. The enterprise budgets
+	// and audit-attestation handlers capture these stores ONCE at construction
+	// (server.TraceBudgetStore() / server.AuditCheckpointStore()); wiring them
+	// after enterpriseServerWiring left the handlers with nil stores at runtime
+	// -> /api/v1/budgets/* 404 (handler never installed) and
+	// /api/v1/audit-verify/tenants/{t}/attest 503. Caught by the real-world
+	// compliance proof-out, not by unit tests (which set the handlers directly).
+	// OSS never reads these stores.
+	if bs, ok := appStore.(api.TraceBudgetAdminStore); ok {
+		apiServer.SetTraceBudgetStore(bs)
+	}
+	if cs, ok := appStore.(api.AuditCheckpointStore); ok {
+		apiServer.SetAuditCheckpointStore(cs)
+	}
 	// Wire the enterprise RBAC management handler seam (ADR 0010 slice 2b).
 	// OSS is a no-op (RBAC routes stay 404); the enterprise edition installs
 	// its role/binding/permission handler via SetEnterpriseRBACHandler.
 	enterpriseServerWiring(apiServer)
-	// ADR 0026 — hand the runtime trace-budget admin store to the server so the
-	// (enterprise) budgets handler can reach it. OSS never reads it.
-	if bs, ok := appStore.(api.TraceBudgetAdminStore); ok {
-		apiServer.SetTraceBudgetStore(bs)
-	}
-	// ADR 0027 slice 2 — hand the retention/chain checkpoint store to the server
-	// so the (enterprise) audit attestation handler can reach it. OSS never
-	// reads it.
-	if cs, ok := appStore.(api.AuditCheckpointStore); ok {
-		apiServer.SetAuditCheckpointStore(cs)
-	}
 	// v0.53 — wire action runner dependencies. The signer's key
 	// loads from SQUADRON_ACTION_SIGNING_KEY (base64 of 32 raw
 	// bytes); when unset we generate a fresh key at startup so dev
