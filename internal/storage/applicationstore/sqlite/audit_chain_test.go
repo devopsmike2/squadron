@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/extension/identity"
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,7 @@ import (
 // VerifyAuditChain becomes a build error rather than a silent contract break.
 type auditChainContract interface {
 	VerifyAuditChain(ctx context.Context) (*types.AuditChainVerification, error)
+	ListAuditChainRows(ctx context.Context) ([]chain.Row, error)
 }
 
 var _ auditChainContract = (*Storage)(nil)
@@ -252,5 +254,50 @@ func TestAuditCheckpoint_UpsertAndList(t *testing.T) {
 		require.Equal(t, int64(5), cps[0].CheckpointSeq, "newest seq first")
 		require.Equal(t, int64(2), cps[1].CheckpointSeq)
 		require.Equal(t, "h2b", cps[1].CheckpointRowHash, "upsert overwrote the row_hash")
+	})
+}
+
+// TestAuditChainRows_ExportRoundTripByteExact proves the chain-column evidence
+// export (ADR 0027) returns the RAW payload byte-for-byte: an event with a
+// multi-key payload is appended, ListAuditChainRows is re-verified OFFLINE via
+// the pure package (OK proves no re-marshal drift), and the returned payload is
+// asserted identical to the raw stored payload column.
+func TestAuditChainRows_ExportRoundTripByteExact(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		// A multi-key payload — the anti-drift proof: if the export re-marshaled
+		// the map, key-order / number drift would break the recompute.
+		require.NoError(t, store.CreateAuditEvent(ctx, &types.AuditEvent{
+			ID: uuid.NewString(), Actor: "operator:a@x.io", EventType: "config.applied",
+			TargetType: "config", TargetID: "cfg-multi", Action: "applied",
+			Payload: map[string]any{"zeta": 1, "alpha": 2, "note": "multi-key", "nested": map[string]any{"k": "v"}},
+		}))
+		for i := 2; i <= 5; i++ {
+			appendAuditEvent(t, store, ctx, i)
+		}
+
+		rows, err := store.ListAuditChainRows(ctx)
+		require.NoError(t, err)
+		require.Len(t, rows, 5)
+
+		// The exported chain re-verifies OFFLINE through the same pure package
+		// the offline CLI uses.
+		res := chain.Verify(rows)
+		require.True(t, res.OK, "offline recompute must verify: detail=%s", res.Detail)
+		require.Equal(t, 5, res.RowsVerified)
+
+		// Byte-exactness: row 1's payload equals the RAW stored column verbatim.
+		var stored string
+		require.NoError(t, store.db.QueryRowContext(ctx,
+			`SELECT payload FROM audit_events WHERE seq=1`).Scan(&stored))
+		require.Equal(t, stored, rows[0].Payload,
+			"ListAuditChainRows must return the RAW payload byte-for-byte (no re-marshal)")
+
+		// The offline tip matches VerifyAuditChain's head (both share the SELECT).
+		v, err := store.VerifyAuditChain(ctx)
+		require.NoError(t, err)
+		require.Equal(t, v.HeadSeq, res.HeadSeq)
+		require.Equal(t, v.HeadRowHash, res.HeadRowHash)
 	})
 }

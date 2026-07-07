@@ -92,3 +92,34 @@ func (s *Store) ListAuditCheckpoints(_ context.Context, tenant string) ([]types.
 	sort.Slice(out, func(i, j int) bool { return out[i].CheckpointSeq > out[j].CheckpointSeq })
 	return out, nil
 }
+
+// ListAuditChainRows returns the caller's tenant chain rows (seq ASC) with the
+// raw payload string, for evidence export + offline verification (ADR 0027).
+// Mirrors VerifyAuditChain's row build exactly; the tenant resolves the same
+// way. The memory store is test-only but satisfies the same store contract the
+// sqlite store does off the one shared source of truth.
+func (s *Store) ListAuditChainRows(ctx context.Context) ([]chain.Row, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tenant := identity.TenantFromContext(ctx)
+	memChain := s.auditChains[tenant]
+
+	rows := make([]chain.Row, 0, len(memChain))
+	for _, row := range memChain {
+		rows = append(rows, chain.Row{
+			ID:         row.id,
+			Actor:      row.actor,
+			EventType:  row.eventType,
+			TargetType: row.targetType,
+			TargetID:   row.targetID,
+			Action:     row.action,
+			Payload:    row.payloadStr,
+			Tenant:     tenant,
+			Seq:        row.seq,
+			PrevHash:   row.prevHash,
+			RowHash:    row.rowHash,
+		})
+	}
+	return rows, nil
+}

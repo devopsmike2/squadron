@@ -444,3 +444,7 @@ func (askAuditListOnly) SetExplanation(context.Context, string, string, string, 
 func (askAuditListOnly) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
 	return &applicationstore.AuditChainVerification{OK: true}, nil
 }
+
+func (askAuditListOnly) ListChainRows(context.Context) ([]applicationstore.AuditChainRow, error) {
+	return nil, nil
+}

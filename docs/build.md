@@ -91,6 +91,28 @@ wire files have been dropped into `cmd/all-in-one/`, replacing the
 open-core stubs. The private repos own that drop-in step in their own
 release tooling; the open core only guarantees the seam and the stubs.
 
+### Offline attestation verifier
+
+```bash
+make build-audit-verify   # -> bin/squadron-audit-verify
+```
+
+`squadron-audit-verify` is a standalone, dependency-light CLI (ADR 0027) an
+auditor runs with **zero secrets** to independently re-verify a tamper-evidence
+attestation. Feed it the chain-column audit export
+(`GET /api/v1/audit/events?include_chain=1`, CSV or JSON) and the attestation
+JSON, and it recomputes the hash-chain offline and confirms the recomputed head
+matches the attestation's `head_row_hash` / `head_seq`:
+
+```bash
+bin/squadron-audit-verify -export audit-chain.csv -attestation attestation.json [-tenant <id>]
+```
+
+It exits non-zero if the chain is broken or the tip does not match. If
+`SQUADRON_SECRETS_KEY` is set and the attestation carries a `sealed_sig`, it
+additionally opens the seal to confirm the Squadron key vouches for that head —
+but a missing/rotated key never fails the primary zero-secret result.
+
 ## Confirming which edition is running
 
 The build identity is surfaced two ways so operators never have to guess:

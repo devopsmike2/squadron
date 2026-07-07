@@ -902,3 +902,7 @@ func TestDiscoverySummary_TotalsAggregateEventSourceAcrossProviders(t *testing.T
 func (s *spyAuditService) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
 	return &applicationstore.AuditChainVerification{OK: true}, nil
 }
+
+func (s *spyAuditService) ListChainRows(context.Context) ([]applicationstore.AuditChainRow, error) {
+	return nil, nil
+}

@@ -98,3 +98,7 @@ func TestRevokeByConnection(t *testing.T) {
 func (r *recordingAudit) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
 	return &applicationstore.AuditChainVerification{OK: true}, nil
 }
+
+func (r *recordingAudit) ListChainRows(context.Context) ([]applicationstore.AuditChainRow, error) {
+	return nil, nil
+}

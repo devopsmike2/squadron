@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/google/uuid"
 )
@@ -90,6 +91,11 @@ type ApplicationStore interface {
 	// VerifyAuditChain walks the caller's tenant audit hash-chain and reports
 	// whether it is intact (ADR 0027 slice 1). Self-tenant only.
 	VerifyAuditChain(ctx context.Context) (*AuditChainVerification, error)
+	// ListAuditChainRows returns the caller's tenant chain rows (seq ASC) with
+	// the RAW payload column string (byte-identical to what was hashed), for
+	// evidence export + offline attestation verification (ADR 0027). Self-tenant
+	// only; same tenant resolution as VerifyAuditChain.
+	ListAuditChainRows(ctx context.Context) ([]chain.Row, error)
 	// WriteAuditCheckpoint upserts a retention/chain reconciliation checkpoint
 	// (ADR 0027 slice 2), keyed by (tenant, checkpoint_seq).
 	WriteAuditCheckpoint(ctx context.Context, cp AuditCheckpoint) error
