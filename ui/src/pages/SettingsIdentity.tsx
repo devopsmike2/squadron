@@ -38,6 +38,7 @@ import {
   deleteTenant,
   listTenants,
 } from "@/api/tenants";
+import { BudgetsPanel } from "@/components/BudgetsPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -317,6 +318,7 @@ export default function SettingsIdentityPage() {
             <TabsTrigger value="tenants">Tenants</TabsTrigger>
             <TabsTrigger value="directory">Directory</TabsTrigger>
             <TabsTrigger value="usage">Usage</TabsTrigger>
+            <TabsTrigger value="budgets">Budgets</TabsTrigger>
           </TabsList>
 
           {/* Roles */}
@@ -525,6 +527,11 @@ export default function SettingsIdentityPage() {
           {/* Usage — per-tenant usage/billing summary (ADR 0023). */}
           <TabsContent value="usage" className="space-y-4">
             <UsagePanel />
+          </TabsContent>
+
+          {/* Budgets — per-tenant trace-index budget admin. */}
+          <TabsContent value="budgets" className="space-y-4">
+            <BudgetsPanel />
           </TabsContent>
         </Tabs>
       )}
