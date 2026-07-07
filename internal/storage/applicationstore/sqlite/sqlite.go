@@ -12,6 +12,7 @@ import (
 
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/extension/tracebudget"
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
@@ -2454,7 +2455,7 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		}
 	}
 	seq := prevSeq + 1
-	rowHash := auditRowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+	rowHash := chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
 
 	stmt := `
 		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash)
