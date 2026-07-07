@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AuditExportButton } from "@/components/AuditExportButton";
 import { AuditReviewPanel } from "@/components/AuditReviewPanel";
 import { AuditTimeline } from "@/components/AuditTimeline";
+import { AuditVerifyPanel } from "@/components/AuditVerifyPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -52,6 +53,7 @@ export default function AuditPage() {
         <TabsList>
           <TabsTrigger value="activity">Recent activity</TabsTrigger>
           <TabsTrigger value="review">Access review</TabsTrigger>
+          <TabsTrigger value="verify">Integrity</TabsTrigger>
         </TabsList>
 
         <TabsContent value="activity" className="space-y-4">
@@ -122,6 +124,25 @@ export default function AuditPage() {
             </CardHeader>
             <CardContent>
               <AuditReviewPanel />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="verify" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">
+                Audit integrity
+              </CardTitle>
+              <p className="text-muted-foreground text-sm">
+                Tamper-evidence verification — re-verify the audit log's hash
+                chain per tenant or across the whole fleet, and download a
+                sealed attestation as compliance evidence. Verification runs are
+                themselves recorded to the audit trail.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <AuditVerifyPanel />
             </CardContent>
           </Card>
         </TabsContent>
