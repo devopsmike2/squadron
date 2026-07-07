@@ -617,6 +617,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	if bs, ok := appStore.(api.TraceBudgetAdminStore); ok {
 		apiServer.SetTraceBudgetStore(bs)
 	}
+	// ADR 0027 slice 2 — hand the retention/chain checkpoint store to the server
+	// so the (enterprise) audit attestation handler can reach it. OSS never
+	// reads it.
+	if cs, ok := appStore.(api.AuditCheckpointStore); ok {
+		apiServer.SetAuditCheckpointStore(cs)
+	}
 	// v0.53 — wire action runner dependencies. The signer's key
 	// loads from SQUADRON_ACTION_SIGNING_KEY (base64 of 32 raw
 	// bytes); when unset we generate a fresh key at startup so dev

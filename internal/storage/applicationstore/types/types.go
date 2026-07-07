@@ -90,6 +90,11 @@ type ApplicationStore interface {
 	// VerifyAuditChain walks the caller's tenant audit hash-chain and reports
 	// whether it is intact (ADR 0027 slice 1). Self-tenant only.
 	VerifyAuditChain(ctx context.Context) (*AuditChainVerification, error)
+	// WriteAuditCheckpoint upserts a retention/chain reconciliation checkpoint
+	// (ADR 0027 slice 2), keyed by (tenant, checkpoint_seq).
+	WriteAuditCheckpoint(ctx context.Context, cp AuditCheckpoint) error
+	// ListAuditCheckpoints returns a tenant's checkpoints, newest seq first.
+	ListAuditCheckpoints(ctx context.Context, tenant string) ([]AuditCheckpoint, error)
 
 	// Rollouts (safe staged config rollouts)
 	CreateRollout(ctx context.Context, rollout *Rollout) error
@@ -904,6 +909,29 @@ type AuditChainVerification struct {
 	FirstBreakSeq int64  `json:"first_break_seq,omitempty"` // 0 when ok
 	Detail        string `json:"detail,omitempty"`
 	CoversFromSeq int64  `json:"covers_from_seq,omitempty"` // earliest surviving seq (chain-start)
+
+	// ADR 0027 slice 2 — chain tip + checkpoint anchor reporting.
+	HeadSeq     int64  `json:"head_seq,omitempty"`      // seq of the chain tip (last surviving row); set even when OK
+	HeadRowHash string `json:"head_row_hash,omitempty"` // row_hash of the chain tip
+	// AnchoredByCheckpoint is a POSITIVE signal: the first surviving row links
+	// to a recorded retention checkpoint (prev_hash == checkpoint_row_hash AND
+	// firstSeq == checkpoint_seq+1). It never changes pass/fail — an unanchored
+	// start (legacy prune with no checkpoint) stays lenient.
+	AnchoredByCheckpoint bool  `json:"anchored_by_checkpoint,omitempty"`
+	CheckpointSeq        int64 `json:"checkpoint_seq,omitempty"` // seq of the anchoring checkpoint (0 when unanchored)
+}
+
+// AuditCheckpoint is a retention/chain reconciliation checkpoint (ADR 0027
+// slice 2). Every retention prune records the pruned head so VerifyAuditChain
+// can positively anchor the first surviving row to a known-good boundary.
+type AuditCheckpoint struct {
+	Tenant            string    `json:"tenant"`
+	CheckpointSeq     int64     `json:"checkpoint_seq"`
+	CheckpointRowHash string    `json:"checkpoint_row_hash"`
+	RowsPruned        int64     `json:"rows_pruned"`
+	Kind              string    `json:"kind"`
+	CreatedAt         time.Time `json:"created_at"`
+	SealedSig         string    `json:"sealed_sig,omitempty"`
 }
 
 // AuditEventFilter narrows a ListAuditEvents query.

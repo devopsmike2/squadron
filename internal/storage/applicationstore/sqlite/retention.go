@@ -116,25 +116,156 @@ func (s *Storage) DeleteDismissedIncidentDraftsBefore(ctx context.Context, befor
 // delete unconditionally — the enable/window gating lives entirely at the
 // call site.
 func (s *Storage) DeleteAuditEventsBefore(ctx context.Context, before time.Time) (int64, error) {
+	// ADR 0027 slice 2 — retention/chain reconciliation. The chain orders by
+	// per-tenant seq, but this predicate's cutoff is a TIMESTAMP, and seq and
+	// timestamp are independent (callers may backdate Timestamp; capture happens
+	// before the append lock). A naive `timestamp < cutoff` DELETE can therefore
+	// remove a NON-contiguous set of seqs → a mid-chain hole → VerifyAuditChain's
+	// contiguity check false-positives as tamper.
+	//
+	// The fix: per tenant, resolve the highest CHAINED seq whose timestamp is
+	// below the cutoff (cutSeq) and prune the contiguous seq-PREFIX seq<=cutSeq,
+	// recording a checkpoint of the pruned head. Nuances encoded below:
+	//   (a) survivors are always a contiguous seq SUFFIX per tenant → the chain
+	//       stays green and the checkpoint positively anchors the new chain-start.
+	//   (b) bounded, documented deviation: a chained row with seq<=cutSeq but
+	//       timestamp>=cutoff (possible only at the seq/timestamp inversion
+	//       boundary — empty in the pure now()-timestamp case) is pruned along
+	//       with the prefix. Keeping the chain contiguous is worth this small,
+	//       boundary-only over-prune.
+	//   (c) this prune tx deliberately does NOT take auditChainMu: it only touches
+	//       rows at/below the cut, and a concurrent append advancing the LIVE head
+	//       is benign — the checkpoint records the PRUNED head, not the live head.
+	//
 	// ADR 0011 slice 3b — GC runs under WithSystemContext (apply=false → no
-	// predicate → fleet-wide prune). A non-system caller scopes to its own
-	// tenant.
+	// predicate → fleet-wide prune). A non-system caller scopes to its own tenant.
 	tenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return 0, err
 	}
-	stmt := `DELETE FROM audit_events WHERE timestamp < ?`
-	args := []any{before.UTC()}
+	cutoff := before.UTC()
+
+	// Resolve the set of tenants to prune. apply=true → just the caller's tenant;
+	// system/fleet → every tenant that has a prunable row.
+	var tenants []string
 	if apply {
-		stmt += ` AND tenant_id = ?`
-		args = append(args, tenant)
+		tenants = []string{tenant}
+	} else {
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT DISTINCT tenant_id FROM audit_events WHERE timestamp < ?`, cutoff)
+		if err != nil {
+			return 0, fmt.Errorf("list prunable audit tenants: %w", err)
+		}
+		for rows.Next() {
+			var tn string
+			if err := rows.Scan(&tn); err != nil {
+				_ = rows.Close()
+				return 0, fmt.Errorf("scan prunable audit tenant: %w", err)
+			}
+			tenants = append(tenants, tn)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iterate prunable audit tenants: %w", err)
+		}
+		_ = rows.Close()
 	}
-	res, err := s.db.ExecContext(ctx, stmt, args...)
+
+	var total int64
+	for _, tn := range tenants {
+		n, err := s.pruneTenantAuditPrefix(ctx, tn, cutoff)
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// pruneTenantAuditPrefix prunes ONE tenant's audit rows for the retention
+// cutoff in its own transaction (ADR 0027 slice 2). It deletes the contiguous
+// chained seq-prefix (seq<=cutSeq, where cutSeq is the highest chained seq
+// below the cutoff) plus any legacy pre-chain (seq IS NULL) rows below the
+// cutoff, and records a checkpoint of the pruned head. Returns rows deleted.
+func (s *Storage) pruneTenantAuditPrefix(ctx context.Context, tenant string, cutoff time.Time) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("delete audit_events: %w", err)
+		return 0, fmt.Errorf("begin audit prune tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// cutSeq — the highest CHAINED seq whose timestamp is below the cutoff.
+	var cutSeq int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) FROM audit_events WHERE tenant_id = ? AND timestamp < ? AND seq IS NOT NULL`,
+		tenant, cutoff,
+	).Scan(&cutSeq); err != nil {
+		return 0, fmt.Errorf("compute audit cut seq: %w", err)
+	}
+
+	var total int64
+	if cutSeq > 0 {
+		// row_hash of the pruned head — the anchor VerifyAuditChain matches the
+		// first survivor's prev_hash against.
+		var rowHash string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT row_hash FROM audit_events WHERE tenant_id = ? AND seq = ?`,
+			tenant, cutSeq,
+		).Scan(&rowHash); err != nil {
+			return 0, fmt.Errorf("read audit cut row_hash: %w", err)
+		}
+		// Chained rows about to be pruned (contiguous prefix seq<=cutSeq).
+		var pruned int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND seq IS NOT NULL AND seq <= ?`,
+			tenant, cutSeq,
+		).Scan(&pruned); err != nil {
+			return 0, fmt.Errorf("count audit prefix prune: %w", err)
+		}
+		// Record the checkpoint of the pruned head INSIDE this tx so the
+		// checkpoint and the delete commit atomically (upsert: an idempotent
+		// re-prune at the same head overwrites rather than errors).
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO audit_chain_checkpoints
+			    (tenant_id, checkpoint_seq, checkpoint_row_hash, rows_pruned, kind, created_at, sealed_sig)
+			 VALUES (?, ?, ?, ?, 'retention-cut', ?, NULL)
+			 ON CONFLICT(tenant_id, checkpoint_seq) DO UPDATE SET
+			    checkpoint_row_hash = excluded.checkpoint_row_hash,
+			    rows_pruned         = excluded.rows_pruned,
+			    kind                = excluded.kind,
+			    created_at          = excluded.created_at,
+			    sealed_sig          = excluded.sealed_sig`,
+			tenant, cutSeq, rowHash, pruned, time.Now().UTC(),
+		); err != nil {
+			return 0, fmt.Errorf("write audit prune checkpoint: %w", err)
+		}
+		// Prune the contiguous seq-PREFIX (seq<=cutSeq). This — not a timestamp
+		// predicate — is what makes survivors a contiguous seq SUFFIX.
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM audit_events WHERE tenant_id = ? AND seq IS NOT NULL AND seq <= ?`,
+			tenant, cutSeq)
+		if err != nil {
+			return 0, fmt.Errorf("prune audit seq prefix: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+
+	// Legacy pre-chain rows (seq IS NULL) have no chain to keep contiguous —
+	// prune them by timestamp exactly as the pre-0027 predicate did.
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM audit_events WHERE tenant_id = ? AND seq IS NULL AND timestamp < ?`,
+		tenant, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune legacy audit rows: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	return n, nil
+	total += n
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit audit prune: %w", err)
+	}
+	return total, nil
 }
 
 // DeleteIACRecommendationVerdictsBefore removes NON-EXCLUDED verdict rows

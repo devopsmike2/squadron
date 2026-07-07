@@ -101,6 +101,9 @@ type Store struct {
 	// store returns the same VerifyAuditChain OK the sqlite store does
 	// (test-only parity). Keyed by tenant; each slice is the ordered chain.
 	auditChains map[string][]memAuditChainRow
+	// ADR 0027 slice 2 — retention checkpoints, keyed by (tenant, seq).
+	// Test-only mirror of the sqlite audit_chain_checkpoints table.
+	auditCheckpoints map[string]map[int64]types.AuditCheckpoint
 }
 
 // memoryCheckRunRecord — v0.89.42 (#662 Stream 60). Mirror of the 5
@@ -157,6 +160,8 @@ func NewStore() *Store {
 		traceMaxRows:      memoryTraceIndexMaxRows,
 		// ADR 0027 slice 1.
 		auditChains: make(map[string][]memAuditChainRow),
+		// ADR 0027 slice 2.
+		auditCheckpoints: make(map[string]map[int64]types.AuditCheckpoint),
 	}
 }
 

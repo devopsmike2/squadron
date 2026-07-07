@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -88,12 +89,29 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 	}
 	defer rows.Close()
 
+	// ADR 0027 slice 2 — load this tenant's latest retention checkpoint so the
+	// first surviving row can be POSITIVELY anchored to a known-good boundary.
+	// A missing checkpoint is fine (legacy prunes have none) — anchoring only
+	// ever adds a positive signal, it never changes pass/fail.
+	var (
+		cpSeq     sql.NullInt64
+		cpRowHash sql.NullString
+	)
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT checkpoint_seq, checkpoint_row_hash FROM audit_chain_checkpoints WHERE tenant_id = ? ORDER BY checkpoint_seq DESC LIMIT 1`,
+		tenant,
+	).Scan(&cpSeq, &cpRowHash)
+
 	var (
 		count       int
 		first       = true
 		coversFrom  int64
 		prevSeq     int64
 		prevRowHash string
+		headSeq     int64
+		headRowHash string
+		anchored    bool
+		anchorCPSeq int64
 	)
 	for rows.Next() {
 		var (
@@ -118,6 +136,13 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 					Detail:        fmt.Sprintf("row_hash mismatch at chain-start seq %d (row content edited)", seq),
 					CoversFromSeq: coversFrom,
 				}, nil
+			}
+			// Anchor the first surviving row to the latest checkpoint: the
+			// checkpoint records the PRUNED head, so an intact prefix-prune
+			// leaves this row linking straight to it.
+			if cpSeq.Valid && cpRowHash.Valid && ph == cpRowHash.String && seq == cpSeq.Int64+1 {
+				anchored = true
+				anchorCPSeq = cpSeq.Int64
 			}
 			first = false
 		} else {
@@ -153,14 +178,80 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 		count++
 		prevSeq = seq
 		prevRowHash = rowHash.String
+		headSeq = seq
+		headRowHash = rowHash.String
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("audit chain iteration: %w", err)
 	}
 
 	return &types.AuditChainVerification{
-		OK:            true,
-		RowsVerified:  count,
-		CoversFromSeq: coversFrom,
+		OK:                   true,
+		RowsVerified:         count,
+		CoversFromSeq:        coversFrom,
+		HeadSeq:              headSeq,
+		HeadRowHash:          headRowHash,
+		AnchoredByCheckpoint: anchored,
+		CheckpointSeq:        anchorCPSeq,
 	}, nil
+}
+
+// WriteAuditCheckpoint upserts a retention/chain reconciliation checkpoint
+// (ADR 0027 slice 2), keyed by (tenant_id, checkpoint_seq). Re-recording the
+// same pruned head (e.g. an idempotent re-run of a prune that pruned nothing
+// new) overwrites the prior row's mutable columns rather than erroring.
+func (s *Storage) WriteAuditCheckpoint(ctx context.Context, cp types.AuditCheckpoint) error {
+	var sealed any
+	if cp.SealedSig != "" {
+		sealed = cp.SealedSig
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO audit_chain_checkpoints
+		    (tenant_id, checkpoint_seq, checkpoint_row_hash, rows_pruned, kind, created_at, sealed_sig)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(tenant_id, checkpoint_seq) DO UPDATE SET
+		    checkpoint_row_hash = excluded.checkpoint_row_hash,
+		    rows_pruned         = excluded.rows_pruned,
+		    kind                = excluded.kind,
+		    created_at          = excluded.created_at,
+		    sealed_sig          = excluded.sealed_sig`,
+		cp.Tenant, cp.CheckpointSeq, cp.CheckpointRowHash, cp.RowsPruned, cp.Kind, cp.CreatedAt.UTC(), sealed,
+	)
+	if err != nil {
+		return fmt.Errorf("write audit checkpoint: %w", err)
+	}
+	return nil
+}
+
+// ListAuditCheckpoints returns a tenant's retention checkpoints, newest seq
+// first (ADR 0027 slice 2). sealed_sig is nullable (unused in OSS).
+func (s *Storage) ListAuditCheckpoints(ctx context.Context, tenant string) ([]types.AuditCheckpoint, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT tenant_id, checkpoint_seq, checkpoint_row_hash, rows_pruned, kind, created_at, sealed_sig
+		 FROM audit_chain_checkpoints WHERE tenant_id = ? ORDER BY checkpoint_seq DESC`,
+		tenant,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list audit checkpoints: %w", err)
+	}
+	defer rows.Close()
+
+	var out []types.AuditCheckpoint
+	for rows.Next() {
+		var (
+			cp     types.AuditCheckpoint
+			sealed sql.NullString
+			ts     time.Time
+		)
+		if err := rows.Scan(&cp.Tenant, &cp.CheckpointSeq, &cp.CheckpointRowHash, &cp.RowsPruned, &cp.Kind, &ts, &sealed); err != nil {
+			return nil, fmt.Errorf("scan audit checkpoint: %w", err)
+		}
+		cp.CreatedAt = ts
+		cp.SealedSig = sealed.String
+		out = append(out, cp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit checkpoints: %w", err)
+	}
+	return out, nil
 }

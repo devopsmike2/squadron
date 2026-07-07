@@ -1124,6 +1124,24 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE audit_events ADD COLUMN prev_hash TEXT`,
 		`ALTER TABLE audit_events ADD COLUMN row_hash TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_chain ON audit_events(tenant_id, seq)`,
+		// ADR 0027 slice 2 — retention/chain reconciliation checkpoint substrate.
+		// Every retention prune records the pruned head (checkpoint_seq +
+		// checkpoint_row_hash) so VerifyAuditChain can positively anchor the first
+		// surviving row to a known-good boundary instead of merely tolerating a
+		// non-empty prev_hash with no visible predecessor. sealed_sig is nullable +
+		// unused in OSS; enterprise slice 3 fills it (added now to avoid a later
+		// migration). Idempotent CREATE ... IF NOT EXISTS, like the tables above.
+		`CREATE TABLE IF NOT EXISTS audit_chain_checkpoints (
+	    tenant_id           TEXT     NOT NULL,
+	    checkpoint_seq      INTEGER  NOT NULL,
+	    checkpoint_row_hash TEXT     NOT NULL,
+	    rows_pruned         INTEGER  NOT NULL,
+	    kind                TEXT     NOT NULL DEFAULT 'retention-cut',
+	    created_at          DATETIME NOT NULL,
+	    sealed_sig          TEXT,
+	    PRIMARY KEY (tenant_id, checkpoint_seq)
+	)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_chain_checkpoints_tenant ON audit_chain_checkpoints(tenant_id, checkpoint_seq DESC)`,
 		`ALTER TABLE rollouts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		`CREATE INDEX IF NOT EXISTS idx_rollouts_tenant ON rollouts(tenant_id)`,
 		// api_tokens.tenant_id added in slice 3a — index only.
