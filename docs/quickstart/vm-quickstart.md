@@ -137,6 +137,11 @@ extensions:
     server:
       ws:
         endpoint: ws://YOUR_VM_HOST:4320/v1/opamp
+        tls:
+          insecure: true          # OpAMP dials the plaintext port; omit this
+                                    # and the collector crash-loops on a TLS handshake
+    capabilities:
+      reports_effective_config: true   # the only capability key Squadron accepts
 
 receivers:
   hostmetrics:
@@ -158,6 +163,9 @@ service:
       receivers: [hostmetrics]
       exporters: [otlp]
 ```
+
+> The in-product wizard at `/quickstart` generates this exact snippet with the
+> host filled in — copy it from there rather than hand-writing the `opamp` block.
 
 Start the collector. Within a few seconds it appears as **online** on the UI's
 Agents page. Open the agent, click **Edit config**, save, and Squadron pushes
