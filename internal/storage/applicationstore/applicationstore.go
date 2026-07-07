@@ -1,10 +1,17 @@
 package applicationstore
 
 // Re-export types from the types package for convenience
-import "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
+import (
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
+)
 
 // Type aliases for convenience
 type ApplicationStore = types.ApplicationStore
+
+// AuditChainRow re-exports the pure chain row type (ADR 0027) so callers and
+// mocks can name it without importing internal/audit/chain directly.
+type AuditChainRow = chain.Row
 
 // v0.89.17 (#633) — re-export so the proposer bridge can name the
 // method on the storage interface without dragging in the types

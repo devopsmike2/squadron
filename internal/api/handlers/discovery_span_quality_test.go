@@ -660,3 +660,7 @@ func TestSpanQuality_NoSamplingInventoryReader_SamplingPctZero(t *testing.T) {
 func (r *recordingAuditService) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
 	return &applicationstore.AuditChainVerification{OK: true}, nil
 }
+
+func (r *recordingAuditService) ListChainRows(context.Context) ([]applicationstore.AuditChainRow, error) {
+	return nil, nil
+}

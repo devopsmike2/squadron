@@ -121,6 +121,65 @@ func TestHandleListAuditEvents_ActorFilter(t *testing.T) {
 	assert.Equal(t, "operator:alice@x.io", resp.Events[0].Actor)
 }
 
+// TestHandleListAuditEvents_ChainExportCSV pins the ADR 0027 chain-column
+// export: ?include_chain=1 downloads a CSV whose header leads with the chain
+// columns (tenant_id, seq, prev_hash, row_hash) and carries the RAW payload.
+func TestHandleListAuditEvents_ChainExportCSV(t *testing.T) {
+	h, svc := setupAuditHandlers(t)
+	ctx := t.Context()
+	for i := 0; i < 3; i++ {
+		require.NoError(t, svc.Record(ctx, services.AuditEntry{
+			Actor: services.AuditActorSystem, EventType: "x.y", TargetType: services.AuditTargetAgent,
+			TargetID: "a", Action: "z", Payload: map[string]any{"k": "v", "n": i},
+		}))
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/audit/events?include_chain=1&format=csv", nil)
+	h.HandleListAuditEvents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/csv")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "audit-chain-")
+
+	rows, err := csv.NewReader(strings.NewReader(w.Body.String())).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, rows, 4, "header + 3 data rows")
+	assert.Equal(t, []string{"tenant_id", "seq", "prev_hash", "row_hash", "id", "actor", "event_type", "target_type", "target_id", "action", "payload"}, rows[0])
+	// chain columns present + populated on the first data row.
+	assert.Equal(t, "1", rows[1][1], "seq starts at 1")
+	assert.NotEmpty(t, rows[1][3], "row_hash column populated")
+}
+
+// TestHandleListAuditEvents_ChainExportJSON pins ?include_chain=1&format=json
+// returns a JSON array whose objects carry the chain columns and the payload as
+// a RAW string (not a re-parsed object).
+func TestHandleListAuditEvents_ChainExportJSON(t *testing.T) {
+	h, svc := setupAuditHandlers(t)
+	require.NoError(t, svc.Record(t.Context(), services.AuditEntry{
+		Actor: services.AuditActorSystem, EventType: "x.y", TargetType: services.AuditTargetAgent,
+		TargetID: "a", Action: "z", Payload: map[string]any{"k": "v"},
+	}))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/audit/events?include_chain=1&format=json", nil)
+	h.HandleListAuditEvents(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "audit-chain-")
+	var arr []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &arr))
+	require.Len(t, arr, 1)
+	assert.Contains(t, arr[0], "tenant_id")
+	assert.Contains(t, arr[0], "row_hash")
+	assert.Contains(t, arr[0], "prev_hash")
+	// payload is a JSON string (the RAW stored bytes), not a nested object.
+	_, isString := arr[0]["payload"].(string)
+	assert.True(t, isString, "payload must be emitted as a raw string, got %T", arr[0]["payload"])
+}
+
 // TestHandleListAuditEvents_InvalidFormat pins the 400 on an unknown format.
 func TestHandleListAuditEvents_InvalidFormat(t *testing.T) {
 	h, _ := setupAuditHandlers(t)

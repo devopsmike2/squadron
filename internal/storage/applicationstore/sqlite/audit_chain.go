@@ -184,3 +184,64 @@ func (s *Storage) ListAuditCheckpoints(ctx context.Context, tenant string) ([]ty
 	}
 	return out, nil
 }
+
+// ListAuditChainRows returns the caller's tenant chain rows (seq ASC) with the
+// RAW payload column string (byte-identical to what was hashed), for evidence
+// export + offline verification (ADR 0027). Tenant is resolved exactly the way
+// VerifyAuditChain resolves it (tenantScope; DefaultTenant when the context is
+// unstamped or system).
+//
+// The RAW payload string is emitted deliberately: the evidence export MUST NOT
+// re-marshal the payload map (key-order / number drift would break the offline
+// recompute), so this reads the stored payload column verbatim — byte-identical
+// to what chain.RowHash consumed on the append path. This is the same SELECT
+// VerifyAuditChain runs, so the two can never diverge on what a "row" is.
+func (s *Storage) ListAuditChainRows(ctx context.Context) ([]chain.Row, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+
+	dbRows, err := s.db.QueryContext(ctx,
+		`SELECT id, actor, event_type, target_type, target_id, action, payload, seq, prev_hash, row_hash
+		 FROM audit_events WHERE tenant_id = ? AND seq IS NOT NULL ORDER BY seq ASC`,
+		tenant,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read audit chain rows: %w", err)
+	}
+	defer dbRows.Close()
+
+	var rows []chain.Row
+	for dbRows.Next() {
+		var (
+			id, actor, eventType, targetType, action string
+			targetID, payload                        sql.NullString
+			seq                                      int64
+			prevHash, rowHash                        sql.NullString
+		)
+		if err := dbRows.Scan(&id, &actor, &eventType, &targetType, &targetID, &action, &payload, &seq, &prevHash, &rowHash); err != nil {
+			return nil, fmt.Errorf("failed to scan audit chain row: %w", err)
+		}
+		rows = append(rows, chain.Row{
+			ID:         id,
+			Actor:      actor,
+			EventType:  eventType,
+			TargetType: targetType,
+			TargetID:   targetID.String,
+			Action:     action,
+			Payload:    payload.String,
+			Tenant:     tenant,
+			Seq:        seq,
+			PrevHash:   prevHash.String,
+			RowHash:    rowHash.String,
+		})
+	}
+	if err := dbRows.Err(); err != nil {
+		return nil, fmt.Errorf("audit chain rows iteration: %w", err)
+	}
+	return rows, nil
+}

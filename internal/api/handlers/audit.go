@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/ai"
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
@@ -98,6 +99,31 @@ func (h *AuditHandlers) HandleListAuditEvents(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "invalid `format` — expected csv or json",
 		})
+		return
+	}
+
+	// Chain-column evidence export (ADR 0027): an auditor re-verifies the
+	// tamper-evidence attestation OFFLINE, so this export carries the raw chain
+	// columns (tenant_id, seq, prev_hash, row_hash) plus the content columns and
+	// the RAW payload string — byte-identical to what chain.RowHash consumed on
+	// the append path. It is a DISTINCT path from the standard export below: it
+	// MUST NOT re-marshal e.Payload (a map[string]any), or key-order / number
+	// drift would break the offline recompute. Same auth/scope as the standard
+	// export (audit:read; self-tenant via the request ctx). format=json emits a
+	// JSON array; anything else (incl. default) emits CSV.
+	if c.Query("include_chain") == "1" {
+		rows, err := h.auditService.ListChainRows(c.Request.Context())
+		if err != nil {
+			h.logger.Error("failed to list audit chain rows", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list audit chain rows"})
+			return
+		}
+		h.recordChainExport(c, format, len(rows))
+		if format == "json" {
+			h.writeAuditChainJSON(c, rows)
+			return
+		}
+		h.writeAuditChainCSV(c, rows)
 		return
 	}
 
@@ -214,6 +240,108 @@ func (h *AuditHandlers) writeAuditCSV(c *gin.Context, events []*services.AuditEv
 	w.Flush()
 	if err := w.Error(); err != nil {
 		h.logger.Error("audit csv export: flush failed", zap.Error(err))
+	}
+}
+
+// auditChainCSVHeader is the fixed column set for the chain-column evidence
+// export (ADR 0027). It leads with the chain columns (tenant_id, seq, prev_hash,
+// row_hash) an offline verifier walks, then the immutable content columns;
+// payload is the RAW stored string, byte-identical to what was hashed.
+var auditChainCSVHeader = []string{"tenant_id", "seq", "prev_hash", "row_hash", "id", "actor", "event_type", "target_type", "target_id", "action", "payload"}
+
+// auditChainExportRow is one JSON object in the chain export. payload is the RAW
+// stored string emitted AS a JSON string (NOT re-parsed into an object) so the
+// offline verifier recomputes over the exact bytes that were hashed (ADR 0027).
+type auditChainExportRow struct {
+	TenantID   string `json:"tenant_id"`
+	Seq        int64  `json:"seq"`
+	PrevHash   string `json:"prev_hash"`
+	RowHash    string `json:"row_hash"`
+	ID         string `json:"id"`
+	Actor      string `json:"actor"`
+	EventType  string `json:"event_type"`
+	TargetType string `json:"target_type"`
+	TargetID   string `json:"target_id"`
+	Action     string `json:"action"`
+	Payload    string `json:"payload"`
+}
+
+// writeAuditChainCSV streams the chain rows as a CSV attachment (ADR 0027). The
+// payload column is written RAW (r.Payload) — never re-marshaled — so an offline
+// recompute over these bytes matches the stored row_hash.
+func (h *AuditHandlers) writeAuditChainCSV(c *gin.Context, rows []chain.Row) {
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="audit-chain-`+time.Now().UTC().Format("20060102T150405Z")+`.csv"`)
+	c.Status(http.StatusOK)
+
+	w := csv.NewWriter(c.Writer)
+	if err := w.Write(auditChainCSVHeader); err != nil {
+		h.logger.Error("audit chain csv export: header write failed", zap.Error(err))
+		return
+	}
+	for _, r := range rows {
+		rec := []string{
+			r.Tenant,
+			strconv.FormatInt(r.Seq, 10),
+			r.PrevHash,
+			r.RowHash,
+			r.ID,
+			r.Actor,
+			r.EventType,
+			r.TargetType,
+			r.TargetID,
+			r.Action,
+			r.Payload, // RAW payload string — do NOT re-marshal (ADR 0027 byte-exactness)
+		}
+		if err := w.Write(rec); err != nil {
+			h.logger.Error("audit chain csv export: row write failed", zap.Error(err))
+			return
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		h.logger.Error("audit chain csv export: flush failed", zap.Error(err))
+	}
+}
+
+// writeAuditChainJSON emits the chain rows as a JSON array attachment (ADR 0027),
+// each object carrying the raw chain + content columns and the RAW payload
+// string (as a JSON string, never a re-parsed object).
+func (h *AuditHandlers) writeAuditChainJSON(c *gin.Context, rows []chain.Row) {
+	out := make([]auditChainExportRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, auditChainExportRow{
+			TenantID:   r.Tenant,
+			Seq:        r.Seq,
+			PrevHash:   r.PrevHash,
+			RowHash:    r.RowHash,
+			ID:         r.ID,
+			Actor:      r.Actor,
+			EventType:  r.EventType,
+			TargetType: r.TargetType,
+			TargetID:   r.TargetID,
+			Action:     r.Action,
+			Payload:    r.Payload,
+		})
+	}
+	c.Header("Content-Disposition", `attachment; filename="audit-chain-`+time.Now().UTC().Format("20060102T150405Z")+`.json"`)
+	c.JSON(http.StatusOK, out)
+}
+
+// recordChainExport self-audits a chain-column export (best-effort), mirroring
+// recordExport's compliance evidence-integrity posture (ADR 0020 / 0027).
+func (h *AuditHandlers) recordChainExport(c *gin.Context, format string, count int) {
+	f := format
+	if f == "" {
+		f = "csv"
+	}
+	if err := h.auditService.Record(c.Request.Context(), services.AuditEntry{
+		EventType:  "audit.exported",
+		TargetType: "audit_log",
+		Action:     "exported",
+		Payload:    map[string]any{"format": f, "count": count, "include_chain": true},
+	}); err != nil {
+		h.logger.Warn("audit chain export self-audit failed", zap.Error(err))
 	}
 }
 

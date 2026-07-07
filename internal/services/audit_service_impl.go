@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -229,6 +230,13 @@ func (s *AuditServiceImpl) SetExplanation(ctx context.Context, id, explanation, 
 // resolves it the same way the audit append path does.
 func (s *AuditServiceImpl) VerifyChain(ctx context.Context) (*applicationstore.AuditChainVerification, error) {
 	return s.appStore.VerifyAuditChain(ctx)
+}
+
+// ListChainRows delegates to the application store's ListAuditChainRows: the
+// caller's tenant chain rows (seq ASC) with the RAW payload string, for the
+// chain-column evidence export (ADR 0027). Self-tenant only.
+func (s *AuditServiceImpl) ListChainRows(ctx context.Context) ([]chain.Row, error) {
+	return s.appStore.ListAuditChainRows(ctx)
 }
 
 func toServiceAuditEvent(e *applicationstore.AuditEvent) *AuditEvent {

@@ -155,3 +155,7 @@ func TestWebhook_UnmatchedRepo_StampsSystemContext(t *testing.T) {
 func (a *tenantCapturingAudit) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
 	return &applicationstore.AuditChainVerification{OK: true}, nil
 }
+
+func (a *tenantCapturingAudit) ListChainRows(context.Context) ([]applicationstore.AuditChainRow, error) {
+	return nil, nil
+}

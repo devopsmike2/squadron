@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed
+.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed build-audit-verify
 
 # Variables
 BINARY_NAME=squadron
@@ -289,3 +289,14 @@ webhook-echo:
 	@echo "Building webhook-echo..."
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 go build -o $(BUILD_DIR)/webhook-echo ./cmd/webhook-echo
+
+# build-audit-verify: the standalone OFFLINE attestation verifier (ADR 0027).
+# Takes a chain-column audit export (?include_chain=1) + an attestation JSON and
+# recomputes the hash-chain offline to confirm the tip matches — zero secrets.
+# CGO is left at its default (enabled) like the demo-seed target: importing the
+# credstore package for the optional sealed-signature check transitively pulls
+# in the CGO go-sqlite3 driver, so a CGO_ENABLED=0 build cannot link.
+build-audit-verify:
+	@echo "Building squadron-audit-verify..."
+	@mkdir -p $(BUILD_DIR)
+	go build -o $(BUILD_DIR)/squadron-audit-verify ./cmd/squadron-audit-verify

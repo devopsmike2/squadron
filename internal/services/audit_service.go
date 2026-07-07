@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
@@ -36,6 +37,12 @@ type AuditService interface {
 	// it is intact (ADR 0027 slice 1). Self-tenant only; delegates straight to
 	// the application store's VerifyAuditChain.
 	VerifyChain(ctx context.Context) (*applicationstore.AuditChainVerification, error)
+
+	// ListChainRows returns the caller's tenant audit hash-chain rows (seq ASC)
+	// with the RAW payload string, for the chain-column evidence export the
+	// offline attestation verifier re-verifies (ADR 0027). Self-tenant only;
+	// delegates straight to the application store's ListAuditChainRows.
+	ListChainRows(ctx context.Context) ([]chain.Row, error)
 }
 
 // AuditEntry is the input shape callers fill in to Record. The service

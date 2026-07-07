@@ -3195,3 +3195,7 @@ func TestHandleAWSGenerateRecommendations_Async_ProposerErrorFailsJob(t *testing
 func (r *discoveryRecordingAudit) VerifyChain(context.Context) (*applicationstore.AuditChainVerification, error) {
 	return &applicationstore.AuditChainVerification{OK: true}, nil
 }
+
+func (r *discoveryRecordingAudit) ListChainRows(context.Context) ([]applicationstore.AuditChainRow, error) {
+	return nil, nil
+}
