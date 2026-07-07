@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/extension/identity"
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 	"github.com/devopsmike2/squadron/internal/traceindex"
 	"github.com/google/uuid"
@@ -757,16 +758,16 @@ func (s *Store) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) error
 		b, _ := json.Marshal(e.Payload)
 		payloadStr = string(b)
 	}
-	chain := s.auditChains[tenant]
+	tenantChain := s.auditChains[tenant]
 	var prevSeq int64
 	var prevHash string
-	if n := len(chain); n > 0 {
-		prevSeq = chain[n-1].seq
-		prevHash = chain[n-1].rowHash
+	if n := len(tenantChain); n > 0 {
+		prevSeq = tenantChain[n-1].seq
+		prevHash = tenantChain[n-1].rowHash
 	}
 	seq := prevSeq + 1
-	rowHash := memAuditRowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
-	s.auditChains[tenant] = append(chain, memAuditChainRow{
+	rowHash := chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+	s.auditChains[tenant] = append(tenantChain, memAuditChainRow{
 		id: e.ID, actor: e.Actor, eventType: e.EventType, targetType: e.TargetType,
 		targetID: e.TargetID, action: e.Action, payloadStr: payloadStr,
 		seq: seq, prevHash: prevHash, rowHash: rowHash,
