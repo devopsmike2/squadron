@@ -108,8 +108,16 @@ type Outcome struct {
 	RecomputedTip string
 	HeadSeqMatch  bool
 	HeadHashMatch bool
-	// Pass is the overall auditor verdict: the chain recomputes intact AND its
-	// tip (seq + hash) matches the attestation. This is the zero-secret result.
+	// ExtraRows counts export rows with seq > the attestation head — legitimate
+	// post-attestation activity (e.g. the export request's own authz.decision
+	// audit row). They do NOT count against the verdict.
+	ExtraRows int
+	// ContinuationOK reports, when ExtraRows>0, whether the FULL exported chain
+	// (attested prefix + continuation) also recomputes intact. Informational.
+	ContinuationOK bool
+	// Pass is the overall auditor verdict: the attested prefix recomputes intact
+	// AND its tip (seq + hash) matches the attestation. This is the zero-secret
+	// result. Rows appended after the attested head do not affect it.
 	Pass bool
 }
 
@@ -121,7 +129,27 @@ func verifyExport(rows []chain.Row, att Attestation) Outcome {
 	copy(sorted, rows)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Seq < sorted[j].Seq })
 
-	res := chain.Verify(sorted)
+	// The attestation vouches for the chain UP TO att.HeadSeq. An export taken
+	// after the attestation legitimately contains later rows (every authz-checked
+	// API call — including the export request itself — writes an audit row), so
+	// verify exactly the attested prefix and treat rows beyond head_seq as
+	// post-attestation activity, not a tip mismatch. att.HeadSeq==0 (no head)
+	// falls back to verifying all rows.
+	var prefix []chain.Row
+	extra := 0
+	if att.HeadSeq > 0 {
+		for _, r := range sorted {
+			if r.Seq > att.HeadSeq {
+				extra++
+				continue
+			}
+			prefix = append(prefix, r)
+		}
+	} else {
+		prefix = sorted
+	}
+
+	res := chain.Verify(prefix)
 	out := Outcome{
 		RowsVerified:  res.RowsVerified,
 		ChainOK:       res.OK,
@@ -130,10 +158,14 @@ func verifyExport(rows []chain.Row, att Attestation) Outcome {
 		CoversFromSeq: res.CoversFromSeq,
 		RecomputedSeq: res.HeadSeq,
 		RecomputedTip: res.HeadRowHash,
+		ExtraRows:     extra,
 	}
 	out.HeadSeqMatch = res.OK && res.HeadSeq == att.HeadSeq
 	out.HeadHashMatch = res.OK && res.HeadRowHash == att.HeadRowHash
 	out.Pass = res.OK && out.HeadSeqMatch && out.HeadHashMatch
+	if extra > 0 {
+		out.ContinuationOK = chain.Verify(sorted).OK
+	}
 	return out
 }
 
@@ -272,6 +304,13 @@ func main() {
 	fmt.Printf("  export rows:        %d\n", len(rows))
 	fmt.Printf("  attestation tenant: %s\n", att.Tenant)
 	fmt.Printf("  rows verified:      %d\n", out.RowsVerified)
+	if out.ExtraRows > 0 {
+		cont := "intact"
+		if !out.ContinuationOK {
+			cont = "BROKEN beyond the attested head"
+		}
+		fmt.Printf("  post-attestation:   %d row(s) appended after the attested head (continuation %s)\n", out.ExtraRows, cont)
+	}
 	if out.ChainOK {
 		fmt.Printf("  chain:              OK (covers from seq %d)\n", out.CoversFromSeq)
 	} else {

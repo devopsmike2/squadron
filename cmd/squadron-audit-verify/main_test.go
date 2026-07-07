@@ -184,3 +184,62 @@ func TestHeadMismatch_FAIL(t *testing.T) {
 		t.Fatal("head seq should still match (only the hash was corrupted)")
 	}
 }
+
+// TestExtraRowsAfterAttestation_StillPASS proves the auditor UX fix: an export
+// taken AFTER an attestation legitimately has more rows than the attestation
+// covers (every authz-checked API call, including the export request, writes an
+// audit row). The attested prefix must still verify PASS, with the later rows
+// reported as post-attestation activity — no manual trimming required.
+func TestExtraRowsAfterAttestation_StillPASS(t *testing.T) {
+	full := buildValidChain("acme", 8)
+	att := makeAttestation("acme", full[:6]) // attested head = seq 6
+	out := verifyExport(full, att)           // export has all 8 rows
+	if !out.Pass {
+		t.Fatalf("expected PASS on attested prefix, got Pass=false (detail=%q, headSeqMatch=%v, headHashMatch=%v)",
+			out.Detail, out.HeadSeqMatch, out.HeadHashMatch)
+	}
+	if out.ExtraRows != 2 {
+		t.Errorf("ExtraRows = %d, want 2", out.ExtraRows)
+	}
+	if !out.ContinuationOK {
+		t.Errorf("ContinuationOK = false, want true (the 2 later rows are a valid continuation)")
+	}
+	if out.RecomputedSeq != att.HeadSeq || out.RecomputedTip != att.HeadRowHash {
+		t.Errorf("recomputed head seq=%d hash=%s, want seq=%d hash=%s",
+			out.RecomputedSeq, out.RecomputedTip, att.HeadSeq, att.HeadRowHash)
+	}
+}
+
+// TestBrokenContinuation_PrefixStillPASS: tampering a row BEYOND the attested
+// head must not fail the attestation verdict (the attestation doesn't cover it),
+// but the continuation must be reported BROKEN.
+func TestBrokenContinuation_PrefixStillPASS(t *testing.T) {
+	full := buildValidChain("acme", 8)
+	att := makeAttestation("acme", full[:6])
+	full[7].Payload = "tampered-after-attestation" // seq 8, beyond the attested head
+	out := verifyExport(full, att)
+	if !out.Pass {
+		t.Fatalf("attested prefix should still PASS despite post-head tampering; Pass=false detail=%q", out.Detail)
+	}
+	if out.ExtraRows != 2 {
+		t.Errorf("ExtraRows = %d, want 2", out.ExtraRows)
+	}
+	if out.ContinuationOK {
+		t.Errorf("ContinuationOK = true, want false (row 8 was tampered)")
+	}
+}
+
+// TestExportShortOfAttestedHead_FAIL: if the export doesn't even reach the
+// attested head seq, that's a real failure (the export can't prove the tip).
+func TestExportShortOfAttestedHead_FAIL(t *testing.T) {
+	full := buildValidChain("acme", 8)
+	att := makeAttestation("acme", full) // attested head = seq 8
+	short := full[:5]                    // export only has 5 rows
+	out := verifyExport(short, att)
+	if out.Pass {
+		t.Fatalf("expected FAIL: export (max seq 5) does not cover attested head seq 8")
+	}
+	if out.HeadSeqMatch {
+		t.Errorf("HeadSeqMatch = true, want false (recomputed seq 5 != attested 8)")
+	}
+}
