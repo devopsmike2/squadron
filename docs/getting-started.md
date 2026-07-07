@@ -57,8 +57,11 @@ relocate.
 
 ## Connect a collector
 
-Point an OpenTelemetry collector at Squadron's OpAMP endpoint (`:4320`) and
-OTLP receiver (`:4317`). The minimal config looks like:
+Open the in-product quickstart at <http://localhost:8080/quickstart>. It
+generates a ready-to-paste OpenTelemetry collector snippet wired to this
+Squadron's OpAMP endpoint (`:4320`) and OTLP receiver (`:4317`). The generated
+snippet is the source of truth — it includes the two settings a collector
+needs to connect over the plaintext dev ports:
 
 ```yaml
 extensions:
@@ -66,40 +69,23 @@ extensions:
     server:
       ws:
         endpoint: ws://localhost:4320/v1/opamp
-
-receivers:
-  hostmetrics:
-    collection_interval: 30s
-    scrapers:
-      cpu: {}
-      memory: {}
-
-exporters:
-  otlp:
-    endpoint: localhost:4317
-    tls:
-      insecure: true
-
+        tls:
+          insecure: true          # OpAMP dials the plaintext port; omit this
+                                    # and the collector crash-loops on a TLS handshake
+    capabilities:
+      reports_effective_config: true   # the only capability key Squadron accepts;
+                                        # listing others makes the collector reject the config
 service:
   extensions: [opamp]
-  telemetry:
-    metrics:
-      readers:
-        - periodic:
-            exporter:
-              otlp:
-                protocol: grpc
-                endpoint: localhost:4317
-                tls:
-                  insecure: true
-  pipelines:
-    metrics:
-      receivers: [hostmetrics]
-      exporters: [otlp]
 ```
 
-Start the collector. Within a few seconds the Squadron UI's Agents page will
-show it as **online**.
+Add your own receivers/exporters (for example a `hostmetrics` scraper exporting
+OTLP to `localhost:4317` with `tls: {insecure: true}`) and start the collector.
+Within a few seconds the Squadron UI's Agents page shows it as **online**.
+
+> Don't hand-write the `opamp` extension block from memory. A config that omits
+> the `tls` block or lists extra `capabilities` will crash-loop the collector
+> against the plaintext port. Copy what the wizard emits.
 
 ### What just happened
 

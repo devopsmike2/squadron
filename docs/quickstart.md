@@ -77,7 +77,7 @@ The OpAMP URL the wizard generates is built from the request's
 Host header by default, so a Squadron running on `localhost:8080`
 hands out `ws://localhost:4320/v1/opamp` to its own UI. For
 remote agents, pass `?host=squadron.example.com` to the
-quickstart endpoints (the UI exposes a host override in v0.27.x).
+quickstart endpoints (the UI exposes a host override for remote agents).
 
 ## API endpoints
 
@@ -86,11 +86,12 @@ quickstart endpoints (the UI exposes a host override in v0.27.x).
 | `GET /api/v1/quickstart/backends` | The backend catalog the UI's picker renders |
 | `GET /api/v1/quickstart/starter-config?backend=...` | Complete starter collector config for the chosen backend |
 | `GET /api/v1/quickstart/opamp-snippet` | The bare OpAMP extension YAML for pasting into existing configs |
+| `GET /api/v1/quickstart/adoption-snippet` | The OpAMP snippet plus `host.name` and identifying labels, so each adopted host lands as its own fleet card (avoids the one-host-many-cards collision) |
 
 All read-only, all behind `ScopeAgentsRead`. The host
 substitution honors a `?host=` query param when present.
 
-## Supported backends (v0.27.1)
+## Supported backends
 
 | Backend | Exporter type | Required env vars |
 |---|---|---|
@@ -108,29 +109,24 @@ backend's exporter. Production tuning (memory_limiter, sampling,
 resource detection) is left for you to add — the starter is a
 minimum-viable starting point, not a production-ready template.
 
-## What's NOT in v0.27.1
+## Deliberately out of scope
 
-- **Shadow Fleet** — passive discovery of agents already sending
-  OTLP to Squadron's receiver. Useful when Squadron is the OTLP
-  endpoint; not relevant when agents send straight to their
-  backend. Possible v0.27.2 if operators ask.
+By design, the wizard generates commands and configs — it never
+reaches out to your hosts or handles your secrets:
+
 - **Active network discovery** — probing a CIDR for open OTel
-  ports. Sounds cool, full of security/false-positive landmines.
-  No plans.
+  ports. Full of security and false-positive landmines; no plans.
 - **Backend health-check** — verifying that the API key you set
   actually works before the wizard moves on. The wizard relies on
-  the collector itself logging failures; we never see your keys
-  and won't.
-- **Saved wizard state** — refreshing the page mid-flow restarts
-  you on the landing screen. The wizard is short enough that this
-  isn't worth persisting in v0.27.1.
-- **Automated `docker run` / `helm upgrade`** — we generate the
-  commands; you run them. Squadron doesn't try to ssh out to
-  hosts on the operator's behalf.
+  the collector itself logging failures; Squadron never sees your
+  keys and won't.
+- **Automated `docker run` / `helm upgrade`** — Squadron generates
+  the commands; you run them. It won't ssh out to hosts on the
+  operator's behalf.
 
 ## See also
 
 - `docs/operating.md` — broader operational guidance for Squadron
   (OpAMP configuration, agent health, troubleshooting)
-- `docs/savings.md` — the v0.27.0 Savings dashboard the wizard
+- `docs/savings.md` — the Savings dashboard the wizard
   drops you into after your first agent connects

@@ -538,6 +538,8 @@ days, an enterprise grade rollout in weeks.
 
 - [Getting started](./getting-started.md) — the 5 minute path to a
   running instance.
+- [OSS to Enterprise migration](./oss-to-enterprise-migration.md) — the
+  build overlay, the config deltas, and why there is no schema migration.
 - [Operating Squadron](./operating.md) — environment variables,
   upgrades, backup, restore.
 - [Authentication](./auth.md) — tokens, scopes, expiry, rotation.
