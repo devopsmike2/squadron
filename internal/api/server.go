@@ -384,6 +384,11 @@ type Server struct {
 	// budgets handler reads/writes (ADR 0026). Wired by main via
 	// SetTraceBudgetStore when the app store supports it; OSS never reads it.
 	traceBudgetStore TraceBudgetAdminStore
+	// auditCheckpointStore is the retention/chain-reconciliation checkpoint
+	// store the enterprise attestation handler reads (ADR 0027 slice 2). main
+	// installs it via SetAuditCheckpointStore when the app store supports it;
+	// OSS never reads it.
+	auditCheckpointStore AuditCheckpointStore
 	// enterpriseTenantHandler serves the /api/v1/tenants/* tenant management API
 	// (ADR 0011 slice 3c). Wired by the enterprise build edition via
 	// SetEnterpriseTenantHandler; OSS leaves it nil so those routes return 404.
@@ -1063,6 +1068,28 @@ func (s *Server) SetTraceBudgetStore(store TraceBudgetAdminStore) {
 // OSS internal/api internals. OSS code never calls it — inert accessor.
 func (s *Server) TraceBudgetStore() TraceBudgetAdminStore {
 	return s.traceBudgetStore
+}
+
+// AuditCheckpointStore is the retention/chain reconciliation checkpoint store
+// surface the (enterprise) audit attestation handler uses (ADR 0027 slice 2):
+// write/list a tenant's retention checkpoints. *sqlite.Storage satisfies it.
+type AuditCheckpointStore interface {
+	WriteAuditCheckpoint(ctx context.Context, cp applicationstore.AuditCheckpoint) error
+	ListAuditCheckpoints(ctx context.Context, tenant string) ([]applicationstore.AuditCheckpoint, error)
+}
+
+// SetAuditCheckpointStore installs the retention checkpoint store backing the
+// enterprise audit attestation API (ADR 0027 slice 2). main calls this once
+// after NewServer when the app store supports it; OSS never reads it.
+func (s *Server) SetAuditCheckpointStore(store AuditCheckpointStore) {
+	s.auditCheckpointStore = store
+}
+
+// AuditCheckpointStore returns the retention checkpoint store. Public so the
+// enterprise attestation handler can read/write checkpoints without importing
+// the OSS internal/api internals. OSS code never calls it — inert accessor.
+func (s *Server) AuditCheckpointStore() AuditCheckpointStore {
+	return s.auditCheckpointStore
 }
 
 // mountEnterpriseOIDC registers the late-bound /auth/oidc/* wildcard on the

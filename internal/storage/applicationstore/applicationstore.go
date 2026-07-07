@@ -24,6 +24,7 @@ type ThresholdOperator = types.ThresholdOperator
 type AuditEvent = types.AuditEvent
 type AuditEventFilter = types.AuditEventFilter
 type AuditChainVerification = types.AuditChainVerification // ADR 0027 slice 1
+type AuditCheckpoint = types.AuditCheckpoint               // ADR 0027 slice 2
 
 // DiscoveryVerdict — v0.89.36 (#655 Stream 53). Renamed from
 // AcceptedRecommendation (v0.89.28). Widened with State so the

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -23,6 +24,16 @@ type auditChainContract interface {
 }
 
 var _ auditChainContract = (*Storage)(nil)
+
+// auditCheckpointContract pins the ADR 0027 slice 2 checkpoint store methods so
+// a signature drift becomes a build error (the api.AuditCheckpointStore seam
+// and the types.ApplicationStore interface both depend on these shapes).
+type auditCheckpointContract interface {
+	WriteAuditCheckpoint(ctx context.Context, cp types.AuditCheckpoint) error
+	ListAuditCheckpoints(ctx context.Context, tenant string) ([]types.AuditCheckpoint, error)
+}
+
+var _ auditCheckpointContract = (*Storage)(nil)
 
 // appendAuditEvent inserts one event with distinct, verifiable content.
 func appendAuditEvent(t *testing.T, store *Storage, ctx context.Context, n int) {
@@ -196,5 +207,50 @@ func TestAuditChain_PerTenantIsolation(t *testing.T) {
 		require.True(t, resB.OK, "detail=%s", resB.Detail)
 		require.Equal(t, 4, resB.RowsVerified)
 		require.Equal(t, int64(1), resB.CoversFromSeq, "tenant B seqs restart at 1")
+	})
+}
+
+// TestAuditChain_HeadFields — VerifyAuditChain reports the chain tip
+// (HeadSeq/HeadRowHash) even on an OK walk (ADR 0027 slice 2).
+func TestAuditChain_HeadFields(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		for i := 1; i <= 5; i++ {
+			appendAuditEvent(t, store, ctx, i)
+		}
+		var wantHash string
+		require.NoError(t, store.db.QueryRowContext(ctx,
+			`SELECT row_hash FROM audit_events WHERE seq = 5`).Scan(&wantHash))
+
+		res, err := store.VerifyAuditChain(ctx)
+		require.NoError(t, err)
+		require.True(t, res.OK, "detail=%s", res.Detail)
+		require.Equal(t, int64(5), res.HeadSeq)
+		require.Equal(t, wantHash, res.HeadRowHash)
+	})
+}
+
+// TestAuditCheckpoint_UpsertAndList — WriteAuditCheckpoint upserts by
+// (tenant, seq) and ListAuditCheckpoints returns newest-seq-first
+// (ADR 0027 slice 2).
+func TestAuditCheckpoint_UpsertAndList(t *testing.T) {
+	withSQLiteStore(t, func(s types.ApplicationStore) {
+		store := s.(*Storage)
+		ctx := context.Background()
+		require.NoError(t, store.WriteAuditCheckpoint(ctx, types.AuditCheckpoint{
+			Tenant: "t1", CheckpointSeq: 2, CheckpointRowHash: "h2", RowsPruned: 2, Kind: "retention-cut", CreatedAt: time.Now().UTC()}))
+		require.NoError(t, store.WriteAuditCheckpoint(ctx, types.AuditCheckpoint{
+			Tenant: "t1", CheckpointSeq: 5, CheckpointRowHash: "h5", RowsPruned: 5, Kind: "retention-cut", CreatedAt: time.Now().UTC()}))
+		// Upsert the seq=2 row.
+		require.NoError(t, store.WriteAuditCheckpoint(ctx, types.AuditCheckpoint{
+			Tenant: "t1", CheckpointSeq: 2, CheckpointRowHash: "h2b", RowsPruned: 3, Kind: "retention-cut", CreatedAt: time.Now().UTC()}))
+
+		cps, err := store.ListAuditCheckpoints(ctx, "t1")
+		require.NoError(t, err)
+		require.Len(t, cps, 2, "upsert must not create a duplicate (t1,2) row")
+		require.Equal(t, int64(5), cps[0].CheckpointSeq, "newest seq first")
+		require.Equal(t, int64(2), cps[1].CheckpointSeq)
+		require.Equal(t, "h2b", cps[1].CheckpointRowHash, "upsert overwrote the row_hash")
 	})
 }

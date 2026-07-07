@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/devopsmike2/squadron/extension/identity"
@@ -64,6 +65,8 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifica
 		coversFrom  int64
 		prevSeq     int64
 		prevRowHash string
+		headSeq     int64
+		headRowHash string
 	)
 	for i, row := range chain {
 		if i == 0 {
@@ -87,7 +90,37 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifica
 		count++
 		prevSeq = row.seq
 		prevRowHash = row.rowHash
+		headSeq = row.seq
+		headRowHash = row.rowHash
 	}
 
-	return &types.AuditChainVerification{OK: true, RowsVerified: count, CoversFromSeq: coversFrom}, nil
+	return &types.AuditChainVerification{OK: true, RowsVerified: count, CoversFromSeq: coversFrom, HeadSeq: headSeq, HeadRowHash: headRowHash}, nil
+}
+
+// WriteAuditCheckpoint upserts a retention/chain reconciliation checkpoint in
+// the memory store (ADR 0027 slice 2), keyed by (tenant, checkpoint_seq).
+func (s *Store) WriteAuditCheckpoint(_ context.Context, cp types.AuditCheckpoint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byTenant := s.auditCheckpoints[cp.Tenant]
+	if byTenant == nil {
+		byTenant = make(map[int64]types.AuditCheckpoint)
+		s.auditCheckpoints[cp.Tenant] = byTenant
+	}
+	byTenant[cp.CheckpointSeq] = cp
+	return nil
+}
+
+// ListAuditCheckpoints returns a tenant's checkpoints, newest seq first
+// (ADR 0027 slice 2).
+func (s *Store) ListAuditCheckpoints(_ context.Context, tenant string) ([]types.AuditCheckpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	byTenant := s.auditCheckpoints[tenant]
+	out := make([]types.AuditCheckpoint, 0, len(byTenant))
+	for _, cp := range byTenant {
+		out = append(out, cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CheckpointSeq > out[j].CheckpointSeq })
+	return out, nil
 }
