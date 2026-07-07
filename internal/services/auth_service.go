@@ -158,6 +158,16 @@ const (
 	// routes); the enterprise usage handler enforces them.
 	ScopeUsageRead        = "usage:read"
 	ScopeUsageCrossTenant = "usage:cross_tenant"
+
+	// Per-tenant runtime trace-index budgets admin (ADR 0026). budgets:read
+	// authorizes reading the caller's own-tenant budget; budgets:write authorizes
+	// setting/deleting it; budgets:cross_tenant is the ADDITIONAL scope for
+	// reaching ANOTHER tenant's budget via /api/v1/budgets/tenants/X (mirroring
+	// usage:cross_tenant). Inert in OSS (no /budgets routes); the enterprise
+	// budgets handler enforces them.
+	ScopeBudgetsRead        = "budgets:read"
+	ScopeBudgetsWrite       = "budgets:write"
+	ScopeBudgetsCrossTenant = "budgets:cross_tenant"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -180,6 +190,7 @@ func AllScopes() []string {
 		ScopeSCIMRead, ScopeSCIMWrite,
 		ScopeSSORead, ScopeSSOWrite, ScopeSSOCrossTenant,
 		ScopeUsageRead, ScopeUsageCrossTenant,
+		ScopeBudgetsRead, ScopeBudgetsWrite, ScopeBudgetsCrossTenant,
 	}
 }
 

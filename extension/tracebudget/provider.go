@@ -12,6 +12,8 @@
 // seam pattern.
 package tracebudget
 
+import "context"
+
 // Provider resolves a per-tenant row budget for the trace-resource index. A
 // return <= 0 means "no per-tenant override — use the global cap".
 type Provider interface {
@@ -45,4 +47,38 @@ func (p *MapProvider) CapFor(tenant string) int {
 		return 0
 	}
 	return p.budgets[tenant]
+}
+
+// BudgetStore is the minimal store surface the DB-backed StoreProvider reads
+// (ADR 0026). *sqlite.Storage satisfies it. SeedTraceBudgets is here for the
+// enterprise wire (which seeds config budgets into the runtime table at boot);
+// the StoreProvider itself only reads via GetTraceBudget.
+type BudgetStore interface {
+	GetTraceBudget(ctx context.Context, tenant string) (int, bool, error)
+	SeedTraceBudgets(ctx context.Context, budgets map[string]int) error
+}
+
+// StoreProvider is a DB-backed Provider (ADR 0026): CapFor reads the persisted
+// per-tenant budget on each call, so an admin edit takes effect on the next
+// flush (~30s). No cache — the flush cadence makes a straight read cheap and
+// avoids staleness. A read error or missing/non-positive row yields 0 → the
+// caller falls back to the global cap (same contract as MapProvider).
+type StoreProvider struct {
+	store BudgetStore
+}
+
+// NewStoreProvider builds a StoreProvider over the given BudgetStore.
+func NewStoreProvider(store BudgetStore) *StoreProvider {
+	return &StoreProvider{store: store}
+}
+
+// CapFor returns the tenant's persisted budget, or 0 when unset/on error.
+func (p *StoreProvider) CapFor(tenant string) int {
+	if p == nil || p.store == nil {
+		return 0
+	}
+	if maxRows, ok, err := p.store.GetTraceBudget(context.Background(), tenant); err == nil && ok && maxRows > 0 {
+		return maxRows
+	}
+	return 0
 }

@@ -1173,6 +1173,14 @@ func (s *Storage) migrate() error {
 				SELECT 1 FROM deploy_targets dt
 				WHERE dt.id = substr(expected_agents.source, length('gha-history:') + 1)
 			)`,
+		// ADR 0026 — runtime per-tenant trace-index budgets. Idempotent create;
+		// point lookups on the PK. Rows are written by the enterprise budgets
+		// admin API and read live by the DB-backed StoreProvider on the flush path.
+		`CREATE TABLE IF NOT EXISTS trace_budgets (
+			tenant_id  TEXT PRIMARY KEY DEFAULT 'default',
+			max_rows   INTEGER NOT NULL,
+			updated_at TIMESTAMP NOT NULL
+		)`,
 	}
 
 	for _, migration := range migrations {

@@ -26,7 +26,8 @@ import (
 )
 
 // traceBudgetProvider is the open-core stub. Same symbol as the OSS wire and the
-// private enterprise wire so main.go has a single call site.
-func traceBudgetProvider(*config.Config) tracebudget.Provider {
+// private enterprise wire so main.go has a single call site. The store param is
+// the DB-backed budget substrate (ADR 0026) the private wire reads and seeds.
+func traceBudgetProvider(*config.Config, tracebudget.BudgetStore) tracebudget.Provider {
 	panic("enterprise per-tenant trace budgets require the private squadron-enterprise wire files; see docs/build.md")
 }

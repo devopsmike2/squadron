@@ -153,7 +153,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// returns nil (every tenant keeps the global cap — behavior unchanged); the
 	// enterprise edition returns per-tenant budgets from config.TraceIndex. The
 	// sqlite store applies them in its per-tenant LRU eviction.
-	if tb := traceBudgetProvider(config); tb != nil {
+	// ADR 0026 — the DB-backed budget substrate the enterprise wire reads/seeds.
+	// appStore is final (post-scope) here. OSS ignores it.
+	var budgetStore tracebudget.BudgetStore
+	if bs, ok := appStore.(tracebudget.BudgetStore); ok {
+		budgetStore = bs
+	}
+	if tb := traceBudgetProvider(config, budgetStore); tb != nil {
 		if bs, ok := appStore.(interface {
 			SetTraceBudgetProvider(tracebudget.Provider)
 		}); ok {
@@ -606,6 +612,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// OSS is a no-op (RBAC routes stay 404); the enterprise edition installs
 	// its role/binding/permission handler via SetEnterpriseRBACHandler.
 	enterpriseServerWiring(apiServer)
+	// ADR 0026 — hand the runtime trace-budget admin store to the server so the
+	// (enterprise) budgets handler can reach it. OSS never reads it.
+	if bs, ok := appStore.(api.TraceBudgetAdminStore); ok {
+		apiServer.SetTraceBudgetStore(bs)
+	}
 	// v0.53 — wire action runner dependencies. The signer's key
 	// loads from SQUADRON_ACTION_SIGNING_KEY (base64 of 32 raw
 	// bytes); when unset we generate a fresh key at startup so dev
