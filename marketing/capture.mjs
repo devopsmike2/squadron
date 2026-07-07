@@ -132,6 +132,105 @@ const scenes = [
     waitFor: "text=Every state change in Squadron",
     description: "Audit log — incidents, drift transitions, alerts, every action",
   },
+
+  // ---------------------------------------------------------------------------
+  // ENTERPRISE / COMPLIANCE scenes (11+).
+  //
+  // Unlike the OSS scenes above, these surfaces are enterprise-only: the
+  // Identity admin page and the Audit "Access review" / "Integrity" tabs
+  // feature-detect the enterprise API and render an "enterprise feature" gate
+  // (not the real UI) when /api/v1/rbac, /api/v1/tenants, or the audit
+  // review/verify endpoints return 404. To capture them you must point BASE at
+  // a dev UI backed by the ENTERPRISE binary (make build-enterprise) with
+  // auth enabled AND an authenticated session — i.e. a logged-in browser or a
+  // bearer token in context. The OSS scenes need no auth; these do.
+  //
+  // The capture context here injects NO auth (mirroring the OSS scenes). If
+  // your enterprise dev stack requires a bearer, add it once for all scenes,
+  // e.g. via context.addInitScript to seed the session token into
+  // localStorage, or context.setExtraHTTPHeaders({ Authorization: `Bearer ${TOKEN}` }).
+  // Provision the tenants/roles these scenes show first — see
+  // ../scripts/demo-seed.sh (Phase 2) and squadron-enterprise/docs/DEPLOYMENT.md.
+  //
+  // Identity is a Radix Tabs page (defaultValue="roles"); the tab is not in the
+  // URL, so each scene clicks its TabsTrigger by name (same pattern as the
+  // discovery Recommendations tab in scene 08).
+  {
+    name: "11-settings-tenants",
+    url: "/settings/identity",
+    waitFor: "text=Identity",
+    description: "Settings ▸ Identity — Tenants tab (multi-tenant isolation)",
+    afterLoad: async (page) => {
+      try {
+        await page.getByRole("tab", { name: /tenants/i }).first().click({ timeout: 3000 });
+      } catch {}
+      await page.waitForTimeout(1200);
+    },
+  },
+  {
+    name: "12-settings-roles",
+    url: "/settings/identity",
+    waitFor: "text=Identity",
+    description: "Settings ▸ Identity — Roles tab (RBAC roles + permissions)",
+    afterLoad: async (page) => {
+      try {
+        await page.getByRole("tab", { name: /^roles$/i }).first().click({ timeout: 3000 });
+      } catch {}
+      await page.waitForTimeout(1200);
+    },
+  },
+  {
+    name: "13-settings-usage",
+    url: "/settings/identity",
+    waitFor: "text=Identity",
+    description: "Settings ▸ Identity — Usage tab (per-tenant usage / chargeback)",
+    afterLoad: async (page) => {
+      try {
+        await page.getByRole("tab", { name: /usage/i }).first().click({ timeout: 3000 });
+      } catch {}
+      await page.waitForTimeout(1200);
+    },
+  },
+  {
+    name: "14-settings-budgets",
+    url: "/settings/identity",
+    waitFor: "text=Identity",
+    description: "Settings ▸ Identity — Budgets tab (per-tenant trace budgets)",
+    afterLoad: async (page) => {
+      try {
+        await page.getByRole("tab", { name: /budgets/i }).first().click({ timeout: 3000 });
+      } catch {}
+      await page.waitForTimeout(1200);
+    },
+  },
+  {
+    // Audit is a Radix Tabs page (defaultValue="activity"); click the
+    // "Access review" tab. Enterprise-gated (SOC 2 quarterly access review).
+    name: "15-audit-access-review",
+    url: "/audit",
+    waitFor: "text=Every state change in Squadron",
+    description: "Audit ▸ Access review — per-actor / admin-action reviews (SOC 2)",
+    afterLoad: async (page) => {
+      try {
+        await page.getByRole("tab", { name: /access review/i }).first().click({ timeout: 3000 });
+      } catch {}
+      await page.waitForTimeout(1200);
+    },
+  },
+  {
+    // Audit "Integrity" tab — the enterprise tamper-evidence surface
+    // (hash-chain attestation / verify).
+    name: "16-audit-integrity",
+    url: "/audit",
+    waitFor: "text=Every state change in Squadron",
+    description: "Audit ▸ Integrity — tamper-evidence attestation / verify",
+    afterLoad: async (page) => {
+      try {
+        await page.getByRole("tab", { name: /integrity/i }).first().click({ timeout: 3000 });
+      } catch {}
+      await page.waitForTimeout(1200);
+    },
+  },
 ];
 
 async function main() {
