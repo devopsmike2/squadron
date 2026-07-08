@@ -155,7 +155,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubTerraformImportPR(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), iacGitHubHandlerTimeout)
 	defer cancel()
-	client := h.clientFor(creds.Token)
+	client := h.clientForConn(conn, creds.Token)
 	repoInfo, err := client.GetRepo(ctx, owner, repo)
 	if err != nil {
 		he := humanizeGitHubErrorForOpenPR(err, conn.RepoFullName)
