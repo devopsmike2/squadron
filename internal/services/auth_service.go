@@ -95,8 +95,13 @@ const (
 	// audit:read (self-tenant verify is a strict subset of what audit:read
 	// already exposes). The enterprise cross-tenant verify seam is a later slice.
 	ScopeAuditVerify = "audit:verify"
-	ScopeAuthRead    = "auth:read"
-	ScopeAuthWrite   = "auth:write"
+	// ADR 0028 — fleet-wide all-tenants audit. audit:all_tenants is the HIGHER-BAR
+	// escalation above audit:cross_tenant: cross_tenant pulls ONE named sibling
+	// tenant; all_tenants sweeps EVERY tenant in one pass (export/review/verify).
+	// Inert in OSS (no fleet routes); the enterprise fleet handlers require it.
+	ScopeAuditAllTenants = "audit:all_tenants"
+	ScopeAuthRead        = "auth:read"
+	ScopeAuthWrite       = "auth:write"
 	// v0.34 deploy integration. Deploy:read shows targets + run
 	// history; deploy:trigger is what's required to actually fire
 	// a workflow on the operator's behalf — guarded narrowly so
@@ -188,7 +193,7 @@ func AllScopes() []string {
 		ScopeTelemetryRead,
 		ScopeAlertsRead, ScopeAlertsWrite,
 		ScopeRolloutsRead, ScopeRolloutsWrite, ScopeRolloutsApprove,
-		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant, ScopeAuditVerify,
+		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant, ScopeAuditVerify, ScopeAuditAllTenants,
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,
