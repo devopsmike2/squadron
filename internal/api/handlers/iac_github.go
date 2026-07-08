@@ -55,11 +55,17 @@ const iacGitHubHandlerTimeout = 60 * time.Second
 // service are picked up at call time. Mirrors the AWS
 // DiscoveryHandlers shape.
 type IaCGitHubHandlers struct {
-	store        iacconnstore.Store
-	credKey      *credstore.Key
-	clientFor    IaCGitHubClientFactory
-	auditService services.AuditService
-	logger       *zap.Logger
+	store     iacconnstore.Store
+	credKey   *credstore.Key
+	clientFor IaCGitHubClientFactory
+	// gitlabClientFor is the opt-in GitLab sibling of clientFor. It is
+	// a constructor default (defaultIaCGitLabClientFactory); a stored
+	// connection whose Provider is ProviderGitLab routes through it via
+	// clientForConn. A deployment with no GitLab connection never
+	// touches this factory, keeping the GitLab path dormant.
+	gitlabClientFor IaCGitLabClientFactory
+	auditService    services.AuditService
+	logger          *zap.Logger
 
 	// v0.89.43 (#663 Stream 61, slice 1 chunk 2 of the GitHub Checks
 	// API back-signal arc). All four fields are optional: when any
@@ -81,9 +87,10 @@ type IaCGitHubHandlers struct {
 // store). logger must be non-nil.
 func NewIaCGitHubHandlers(store iacconnstore.Store, logger *zap.Logger) *IaCGitHubHandlers {
 	return &IaCGitHubHandlers{
-		store:     store,
-		clientFor: defaultIaCGitHubClientFactory,
-		logger:    logger,
+		store:           store,
+		clientFor:       defaultIaCGitHubClientFactory,
+		gitlabClientFor: defaultIaCGitLabClientFactory,
+		logger:          logger,
 	}
 }
 
@@ -176,6 +183,11 @@ type iacGitHubPlacementEntryReq struct {
 // substrate row needs to be valid, the placement map declared
 // up-front so Validate can preflight each declared file.
 type iacGitHubValidateRequest struct {
+	// Provider is the optional IaC-host discriminator. Empty defaults
+	// to ProviderGitHub (backward-compatible with pre-GitLab wizard
+	// payloads). "gitlab" routes the validation round-trip through the
+	// GitLab client instead of GitHub.
+	Provider      string                       `json:"provider"`
 	Token         string                       `json:"token"`
 	RepoFullName  string                       `json:"repo_full_name"`
 	DefaultBranch string                       `json:"default_branch"` // optional; server fetches if empty
@@ -261,7 +273,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubValidate(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), iacGitHubHandlerTimeout)
 	defer cancel()
-	client := h.clientFor(req.Token)
+	client := h.clientForProvider(req.Provider, req.Token)
 
 	// Step 1: GetRepo. Surfaces both auth failure (typed
 	// ErrAuthFailed → "Bad credentials" humanized) and missing-repo
@@ -390,6 +402,10 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubValidate(c *gin.Context) {
 // substrate row needs: repo_layout (mono|multi), optional
 // branch_prefix and reviewer_team_handle.
 type iacGitHubSaveConnectionRequest struct {
+	// Provider is the optional IaC-host discriminator. Empty defaults
+	// to ProviderGitHub. "gitlab" stamps the connection as a GitLab
+	// connection and validates/reads it through the GitLab client.
+	Provider           string                       `json:"provider"`
 	Token              string                       `json:"token"`
 	RepoFullName       string                       `json:"repo_full_name"`
 	DefaultBranch      string                       `json:"default_branch"`
@@ -446,6 +462,15 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubSaveConnection(c *gin.Context) {
 		}})
 		return
 	}
+	provider := iacconnstore.NormalizeProvider(req.Provider)
+	if !iacconnstore.SupportedProviders[provider] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:          "UnsupportedProvider",
+			Message:       "provider must be one of \"github\" or \"gitlab\".",
+			SuggestedStep: "provider",
+		}})
+		return
+	}
 	if req.RepoLayout == "" {
 		req.RepoLayout = iacconnstore.RepoLayoutMono
 	}
@@ -485,7 +510,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubSaveConnection(c *gin.Context) {
 	// Defense-in-depth Validate. Don't trust that the wizard already
 	// passed Validate — the repo may have been deleted in the window
 	// between Validate and Save.
-	client := h.clientFor(req.Token)
+	client := h.clientForProvider(provider, req.Token)
 	repoInfo, err := client.GetRepo(ctx, owner, repo)
 	if err != nil {
 		he := humanizeGitHubErrorForValidate(err)
@@ -527,7 +552,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubSaveConnection(c *gin.Context) {
 	}
 
 	conn := &iacconnstore.IaCConnection{
-		Provider:           iacconnstore.ProviderGitHub,
+		Provider:           provider,
 		AuthKind:           iacconnstore.AuthKindPAT,
 		RepoFullName:       req.RepoFullName,
 		DefaultBranch:      defaultBranch,
@@ -1300,7 +1325,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubOpenPR(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), iacGitHubHandlerTimeout)
 	defer cancel()
 
-	client := h.clientFor(creds.Token)
+	client := h.clientForConn(conn, creds.Token)
 	owner, repo, ok := splitRepoFullName(conn.RepoFullName)
 	if !ok {
 		// Substrate row's RepoFullName failed the parse — would only
@@ -2261,7 +2286,7 @@ func (h *IaCGitHubHandlers) fetchRepoSummaries(ctx context.Context, conn *iaccon
 	if !ok {
 		return nil, false
 	}
-	lister, ok := h.clientFor(creds.Token).(placementRepoLister)
+	lister, ok := h.clientForConn(conn, creds.Token).(placementRepoLister)
 	if !ok {
 		return nil, false
 	}
@@ -2332,6 +2357,7 @@ func placementSuggestionRows(summaries []hclsummary.FileSummary) []placementSugg
 // the connect wizard has not created a connection yet, so it passes the
 // in-memory token + repo directly.
 type iacGitHubPlacementPreviewRequest struct {
+	Provider      string `json:"provider"`
 	Token         string `json:"token"`
 	RepoFullName  string `json:"repo_full_name"`
 	DefaultBranch string `json:"default_branch"`
@@ -2374,7 +2400,7 @@ func (h *IaCGitHubHandlers) HandleIaCGitHubPlacementPreview(c *gin.Context) {
 		}})
 		return
 	}
-	lister, ok := h.clientFor(req.Token).(placementRepoLister)
+	lister, ok := h.clientForProvider(req.Provider, req.Token).(placementRepoLister)
 	if !ok {
 		c.JSON(http.StatusOK, gin.H{"scanned": false, "suggestions": placementSuggestionRows(nil)})
 		return

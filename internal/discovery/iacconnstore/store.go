@@ -6,19 +6,49 @@ package iacconnstore
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
 // Provider names the IaC hosting platform a connection points at.
-// Slice 1 of #603 ships GitHub only; the field is a string-typed
-// discriminator so adding GitLab / Bitbucket / Azure DevOps later
-// does not require a schema change.
+// The field is a string-typed discriminator so adding Bitbucket /
+// Azure DevOps later does not require a schema change.
 const (
-	// ProviderGitHub is the only supported provider in slice 1.
-	// docs/proposals/603-connect-iac-repo.md §2 names GitLab,
-	// Bitbucket, and Azure DevOps as explicit non-goals for slice 1.
+	// ProviderGitHub is the original GitHub provider (#603 slice 1).
+	// docs/proposals/603-connect-iac-repo.md §2 named GitLab,
+	// Bitbucket, and Azure DevOps as non-goals for slice 1.
 	ProviderGitHub = "github"
+
+	// ProviderGitLab is the opt-in GitLab sibling of ProviderGitHub.
+	// The connection record is provider-agnostic (base_url/host,
+	// owner/repo identifier, sealed PAT ref), so a GitLab connection
+	// reuses the same row shape and the same sealed-token credential
+	// path as GitHub — only the outbound API client differs
+	// (internal/iac/gitlab). A deployment with no GitLab connection
+	// stored keeps the GitLab path fully dormant.
+	ProviderGitLab = "gitlab"
 )
+
+// SupportedProviders is the allowlist the connect handlers validate a
+// requested provider against. Empty / unset defaults to
+// ProviderGitHub for backward compatibility with pre-GitLab wizard
+// payloads that never sent a provider field.
+var SupportedProviders = map[string]bool{
+	ProviderGitHub: true,
+	ProviderGitLab: true,
+}
+
+// NormalizeProvider lowercases and defaults a provider discriminator.
+// An empty string maps to ProviderGitHub (the historical default);
+// any other value is returned lowercased so callers can validate it
+// against SupportedProviders.
+func NormalizeProvider(p string) string {
+	p = strings.ToLower(strings.TrimSpace(p))
+	if p == "" {
+		return ProviderGitHub
+	}
+	return p
+}
 
 // Authentication kinds for a connection. Slice 1 ships PAT only;
 // the design doc §4 calls out a GitHub App path for slice 2, hence

@@ -250,3 +250,49 @@ func TestStoreContract(t *testing.T) {
 		})
 	}
 }
+
+// TestProviderGitLab_round_trips confirms the store is provider-generic:
+// a ProviderGitLab connection persists and reads back identically to a
+// GitHub one, using the same row shape and the same opaque sealed-cred
+// blob. No GitLab-specific column exists — GitLab is a discriminator
+// value, not a schema fork.
+func TestProviderGitLab_round_trips(t *testing.T) {
+	for _, backend := range storeBackends() {
+		backend := backend
+		t.Run(backend.name, func(t *testing.T) {
+			store := backend.factory(t)
+			ctx := context.Background()
+
+			in := sampleConnection("group/subgroup/infra")
+			in.Provider = ProviderGitLab
+			require.NoError(t, store.Create(ctx, in))
+			require.NotEmpty(t, in.ConnectionID)
+
+			out, err := store.Get(ctx, in.ConnectionID)
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, ProviderGitLab, out.Provider)
+			assert.Equal(t, in.RepoFullName, out.RepoFullName)
+			assert.Equal(t, in.CredCiphertext, out.CredCiphertext)
+
+			list, err := store.List(ctx)
+			require.NoError(t, err)
+			require.Len(t, list, 1)
+			assert.Equal(t, ProviderGitLab, list[0].Provider)
+		})
+	}
+}
+
+// TestProviderAllowlist_accepts_github_and_gitlab pins the connect
+// handlers' validation surface: both providers are supported, and the
+// empty/unset value defaults to GitHub for backward compatibility.
+func TestProviderAllowlist_accepts_github_and_gitlab(t *testing.T) {
+	assert.True(t, SupportedProviders[ProviderGitHub])
+	assert.True(t, SupportedProviders[ProviderGitLab])
+	assert.False(t, SupportedProviders["bitbucket"])
+
+	assert.Equal(t, ProviderGitHub, NormalizeProvider(""))
+	assert.Equal(t, ProviderGitHub, NormalizeProvider("GitHub"))
+	assert.Equal(t, ProviderGitLab, NormalizeProvider("  GitLab "))
+	assert.Equal(t, "bitbucket", NormalizeProvider("Bitbucket"))
+}
