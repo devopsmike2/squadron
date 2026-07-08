@@ -133,7 +133,7 @@ func (ts *TestServer) initMemoryStorage() {
 
 	// For telemetry, use a temp file for DuckDB
 	telemetryDBPath := filepath.Join(ts.tempDir, "telemetry-mem.db")
-	telemetryFactory := duckdb.NewFactory(telemetryDBPath)
+	telemetryFactory := duckdb.NewFactory(telemetryDBPath, "")
 	if err := telemetryFactory.Initialize(ts.logger); err != nil {
 		ts.t.Fatalf("Failed to initialize memory telemetry store: %v", err)
 	}
@@ -172,7 +172,7 @@ func (ts *TestServer) initDatabaseStorage() {
 	ts.appStoreFactory = appFactory
 
 	// Telemetry store
-	telemetryFactory := duckdb.NewFactory(telemetryDBPath)
+	telemetryFactory := duckdb.NewFactory(telemetryDBPath, "")
 	if err := telemetryFactory.Initialize(ts.logger); err != nil {
 		ts.t.Fatalf("Failed to initialize DuckDB telemetry store: %v", err)
 	}

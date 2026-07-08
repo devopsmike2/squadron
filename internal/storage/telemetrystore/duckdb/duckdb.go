@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/otlp"
@@ -31,8 +32,8 @@ type Writer struct {
 }
 
 // NewDuckDBReader creates a new DuckDB reader instance
-func NewDuckDBReader(dbPath string, logger *zap.Logger) (types.Reader, error) {
-	storage, err := NewStorage(dbPath, logger)
+func NewDuckDBReader(dbPath, memoryLimit string, logger *zap.Logger) (types.Reader, error) {
+	storage, err := NewStorage(dbPath, memoryLimit, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -40,16 +41,21 @@ func NewDuckDBReader(dbPath string, logger *zap.Logger) (types.Reader, error) {
 }
 
 // NewDuckDBWriter creates a new DuckDB writer instance
-func NewDuckDBWriter(dbPath string, logger *zap.Logger) (types.Writer, error) {
-	storage, err := NewStorage(dbPath, logger)
+func NewDuckDBWriter(dbPath, memoryLimit string, logger *zap.Logger) (types.Writer, error) {
+	storage, err := NewStorage(dbPath, memoryLimit, logger)
 	if err != nil {
 		return nil, err
 	}
 	return &Writer{Storage: storage}, nil
 }
 
-// NewStorage creates a new DuckDB storage instance
-func NewStorage(dbPath string, logger *zap.Logger) (*Storage, error) {
+// NewStorage creates a new DuckDB storage instance.
+//
+// memoryLimit is an optional DuckDB memory_limit (e.g. "4GB" or "75%"). The
+// SQUADRON_DUCKDB_MEMORY_LIMIT environment variable, when set, takes precedence
+// over the memoryLimit argument. When both are empty, DuckDB's default ceiling
+// (~80% of host RAM) is left in place.
+func NewStorage(dbPath, memoryLimit string, logger *zap.Logger) (*Storage, error) {
 	db, err := sql.Open("duckdb", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open DuckDB database: %w", err)
@@ -59,6 +65,20 @@ func NewStorage(dbPath string, logger *zap.Logger) (*Storage, error) {
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(30 * time.Minute)
+
+	// Resolve the effective memory ceiling: env override wins, else the
+	// configured value. Empty leaves DuckDB's default (~80% of RAM) in place.
+	limit := memoryLimit
+	if env := os.Getenv("SQUADRON_DUCKDB_MEMORY_LIMIT"); env != "" {
+		limit = env
+	}
+	if limit != "" {
+		// DuckDB accepts a quoted human-readable size or percentage via SET.
+		if _, err := db.Exec(fmt.Sprintf("SET memory_limit='%s'", limit)); err != nil {
+			return nil, fmt.Errorf("failed to set DuckDB memory_limit=%q: %w", limit, err)
+		}
+		logger.Info("DuckDB memory_limit set", zap.String("memory_limit", limit))
+	}
 
 	storage := &Storage{
 		db:     db,

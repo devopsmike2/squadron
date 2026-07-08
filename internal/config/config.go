@@ -364,6 +364,10 @@ type AppStorageConfig struct {
 type TelemetryStorageConfig struct {
 	Type string `yaml:"type"`
 	Path string `yaml:"path"`
+	// MemoryLimit is an optional DuckDB memory_limit (e.g. "4GB" or "75%").
+	// Empty leaves DuckDB's default in place (~80% of host RAM). Operators
+	// should cap this to bound RSS on shared or memory-constrained hosts.
+	MemoryLimit string `yaml:"memory_limit,omitempty"`
 }
 
 // RetentionConfig contains data retention configuration

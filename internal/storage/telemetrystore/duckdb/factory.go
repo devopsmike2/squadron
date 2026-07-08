@@ -14,22 +14,25 @@ import (
 
 // Factory implements TelemetryStoreFactory and creates storage components backed by DuckDB.
 type Factory struct {
-	dbPath  string
-	logger  *zap.Logger
-	storage *Storage
+	dbPath      string
+	memoryLimit string
+	logger      *zap.Logger
+	storage     *Storage
 }
 
-// NewFactory creates a new Factory with the given database path.
-func NewFactory(dbPath string) *Factory {
+// NewFactory creates a new Factory with the given database path and optional
+// DuckDB memory_limit (empty leaves DuckDB's default in place).
+func NewFactory(dbPath, memoryLimit string) *Factory {
 	return &Factory{
-		dbPath: dbPath,
+		dbPath:      dbPath,
+		memoryLimit: memoryLimit,
 	}
 }
 
 // Initialize implements TelemetryStoreFactory
 func (f *Factory) Initialize(logger *zap.Logger) error {
 	f.logger = logger
-	storage, err := NewStorage(f.dbPath, logger)
+	storage, err := NewStorage(f.dbPath, f.memoryLimit, logger)
 	if err != nil {
 		return err
 	}

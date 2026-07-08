@@ -23,7 +23,7 @@ import (
 
 func newTestStorage(t *testing.T) *Storage {
 	t.Helper()
-	s, err := NewStorage(filepath.Join(t.TempDir(), "telemetry.db"), zap.NewNop())
+	s, err := NewStorage(filepath.Join(t.TempDir(), "telemetry.db"), "", zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}

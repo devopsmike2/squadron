@@ -20,7 +20,7 @@ import (
 // pipeline_health_samples had. If someone removes the table from
 // CleanupOldData's list, this fails.
 func TestCleanupOldData_SweepsOTLPBatches(t *testing.T) {
-	s, err := NewStorage(filepath.Join(t.TempDir(), "telemetry.db"), zap.NewNop())
+	s, err := NewStorage(filepath.Join(t.TempDir(), "telemetry.db"), "", zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}

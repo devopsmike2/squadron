@@ -71,7 +71,7 @@ func NewFactory(config Config) (*Factory, error) {
 func (f *Factory) getFactoryOfType(factoryType string) (TelemetryStoreFactory, error) {
 	switch factoryType {
 	case duckdbStorageType:
-		return duckdb.NewFactory(f.Config.Path), nil
+		return duckdb.NewFactory(f.Config.Path, f.Config.MemoryLimit), nil
 	// Add more storage types as they are implemented
 	// case memoryStorageType:
 	//     return memory.NewFactory(), nil

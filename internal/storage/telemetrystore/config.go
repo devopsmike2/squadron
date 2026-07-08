@@ -8,13 +8,17 @@ import (
 type Config struct {
 	Type string `yaml:"type"`
 	Path string `yaml:"path"`
+	// MemoryLimit is an optional DuckDB memory_limit (e.g. "4GB"); empty
+	// leaves DuckDB's default (~80% of RAM) in place.
+	MemoryLimit string `yaml:"memory_limit,omitempty"`
 }
 
 // ConfigFrom creates a Config from the app storage config
 func ConfigFrom(appConfig *config.Config) Config {
 	return Config{
-		Type: appConfig.Storage.Telemetry.Type,
-		Path: appConfig.Storage.Telemetry.Path,
+		Type:        appConfig.Storage.Telemetry.Type,
+		Path:        appConfig.Storage.Telemetry.Path,
+		MemoryLimit: appConfig.Storage.Telemetry.MemoryLimit,
 	}
 }
 
