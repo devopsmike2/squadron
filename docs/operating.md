@@ -70,6 +70,15 @@ standalone secrets, not config fields:
   hourly). Unset / <=0 means every changed sweep emits.
 - `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
   Bearer token enforcement. Do NOT set this in production.
+- `SQUADRON_DUCKDB_MEMORY_LIMIT` — caps the DuckDB telemetry
+  store's RAM ceiling (e.g. `4GB` or `75%`). Also settable as the
+  `storage.telemetry.memory_limit` config field; the env var wins
+  when both are set. Empty (the default) leaves DuckDB's own
+  default in place, which is ~80% of host RAM — on a large or
+  shared box that lets Squadron's RSS grow well past what the
+  workload needs. Operators should set an explicit cap (e.g.
+  `4GB`) to bound resident memory; a 24h soak saw RSS peak near
+  4.9GB under the unbounded default.
 
 Sections in `squadron.yaml`:
 

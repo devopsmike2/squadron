@@ -111,15 +111,85 @@ scrape  # final sample after otlpsim exits
 
 wait "$OTLP_PID" 2>/dev/null || true
 
-# Summary: otlpsim's own report + first/last metric rows for a quick eyeball.
+# --- Verdict -------------------------------------------------------------
+# Automated PASS/FAIL over results/metrics.csv (pure awk). Columns:
+#   1 ts_unix 2 iso8601 3 worker_queue_bytes 4 trace_dl 5 metric_dl 6 log_dl
+#   7 otlp_http_requests_total 8 otlp_http_request_errors_total
+#   9 otlp_metrics_received_total 10 rollout_slow_ticks_total 11 server_rss_kb
+# Dead-letters, slow-ticks, requests and errors are cumulative counters, so we
+# read each one's FINAL row value. RSS stats use every non-blank sample.
+# PASS requires: dead-letters==0 AND slow-ticks==0 AND no RSS leak AND OTLP
+# error-rate under ERR_RATE_WARN%. Otherwise FAIL, with the reason(s) listed.
+ERR_RATE_WARN="${ERR_RATE_WARN:-1.0}"   # % OTLP errors/requests -> WARN+FAIL above this
+LEAK_GROWTH="${LEAK_GROWTH:-1.5}"       # last-quarter/first-quarter RSS mean ratio -> leak
+LEAK_FLOOR_GB="${LEAK_FLOOR_GB:-2.0}"   # ...only when final RSS also exceeds this floor
+
+verdict() {
+  awk -F, -v ewarn="$ERR_RATE_WARN" -v lgrow="$LEAK_GROWTH" -v lfloor="$LEAK_FLOOR_GB" '
+    NR==1 { next }
+    {
+      # cumulative counters: remember last non-blank value seen
+      if ($4  != "") tdl=$4;  if ($5 != "") mdl=$5; if ($6 != "") ldl=$6
+      if ($7  != "") req=$7;  if ($8 != "") errs=$8; if ($10 != "") st=$10
+      if ($11 != "") { n++; rss[n]=$11+0; if ($11+0>peak) peak=$11+0; final=$11+0 }
+    }
+    END {
+      gb = 1048576   # KiB -> GiB divisor
+      dl = tdl+mdl+ldl
+      # RSS leak heuristic: mean of the first 25% of samples vs the last 25%.
+      q = int(n/4); if (q<1) q=1
+      fs=0; for (i=1;i<=q;i++)       fs+=rss[i]; fq=(q>0?fs/q:0)
+      ls=0; for (i=n-q+1;i<=n;i++)   ls+=rss[i]; lq=(q>0?ls/q:0)
+      ratio   = (fq>0 ? lq/fq : 0)
+      finalgb = final/gb
+      leak    = (ratio > lgrow && finalgb > lfloor) ? 1 : 0
+      erate   = (req>0 ? errs/req*100 : 0)
+
+      printf "== SOAK VERDICT ==\n"
+      printf "samples:            %d\n", n
+      printf "peak RSS:           %.2f GB\n", peak/gb
+      printf "final RSS:          %.2f GB\n", finalgb
+      printf "RSS first-quarter:  %.2f GB\n", fq/gb
+      printf "RSS last-quarter:   %.2f GB  (%.2fx first-quarter)\n", lq/gb, ratio
+      printf "dead-letters:       %d (trace=%d metric=%d log=%d)\n", dl, tdl, mdl, ldl
+      printf "slow ticks:         %d\n", st
+      printf "OTLP requests:      %d\n", req
+      printf "OTLP errors:        %d\n", errs
+      printf "OTLP error rate:    %.4f%% (warn > %.2f%%)\n", erate, ewarn
+
+      fail=0; reasons=""
+      if (dl != 0)       { fail=1; reasons=reasons sprintf("  - dead-letters=%d (must be 0)\n", dl) }
+      if (st != 0)       { fail=1; reasons=reasons sprintf("  - slow-ticks=%d (must be 0)\n", st) }
+      if (leak)          { fail=1; reasons=reasons sprintf("  - possible RSS leak: last-quarter %.2fx first-quarter and final %.2fGB > %.2fGB floor\n", ratio, finalgb, lfloor) }
+      if (erate > ewarn) { fail=1; reasons=reasons sprintf("  - OTLP error rate %.4f%% exceeds %.2f%%\n", erate, ewarn) }
+
+      if (fail) { printf "VERDICT: FAIL\nfailing checks:\n%s", reasons } else { printf "VERDICT: PASS\n" }
+      exit fail
+    }
+  ' "$CSV"
+}
+
+# Summary: otlpsim's final report block only. otlpsim writes progress as one
+# unbounded ~5MB CR-delimited line, so split on CR and keep the tail instead of
+# `tail -n 15` (which would slurp the whole 5MB line). Plus the first/last
+# metric rows for a quick eyeball, then the automated verdict.
 {
   echo "== otlpsim final report =="
-  tail -n 15 "$OUTDIR/otlpsim.log"
+  tr '\r' '\n' < "$OUTDIR/otlpsim.log" | tail -n 15
   echo
   echo "== /metrics trend (header, first sample, last sample) =="
   head -n 1 "$CSV"
   sed -n '2p' "$CSV"
   tail -n 1 "$CSV"
-} | tee "$OUTDIR/summary.txt"
+} >"$OUTDIR/summary.txt"
+
+# Append + print the verdict; capture its pass/fail (pipefail makes the
+# pipeline surface awk's exit code, and || keeps set -e from aborting).
+verdict_rc=0
+verdict | tee -a "$OUTDIR/summary.txt" || verdict_rc=$?
 
 echo "results: $OUTDIR"
+
+# Nonzero exit on FAIL so CI/automation can gate on the soak. The EXIT trap
+# (sim cleanup) still runs on the way out.
+exit "$verdict_rc"

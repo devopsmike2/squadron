@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -1572,7 +1574,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Start API server in a goroutine
 	go func() {
 		if err := apiServer.Start(fmt.Sprintf("%d", config.Server.HTTPPort)); err != nil {
-			logger.Fatal("Failed to start API server", zap.Error(err))
+			// A clean shutdown returns http.ErrServerClosed; that is a normal
+			// stop, not a fatal condition (logging Fatal here would trip
+			// alerting on every graceful shutdown). Real start failures
+			// (e.g. port already in use) still abort loudly.
+			if errors.Is(err, http.ErrServerClosed) {
+				logger.Info("API server stopped gracefully")
+			} else {
+				logger.Fatal("Failed to start API server", zap.Error(err))
+			}
 		}
 	}()
 	defer func() {
