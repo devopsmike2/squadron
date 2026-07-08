@@ -353,3 +353,49 @@ That's my response.`, `{"a":1}`},
 		})
 	}
 }
+
+// TestCapabilities_ReportsProvider is additive coverage for the new
+// provider field: the default (no Provider set) path reports
+// "anthropic"; an explicit openai provider reports "openai". Existing
+// Capabilities asserts above are untouched.
+func TestCapabilities_ReportsProvider(t *testing.T) {
+	anth := NewService(Config{Enabled: true, APIKey: "k"}, zap.NewNop())
+	if got := anth.Capabilities().Provider; got != "anthropic" {
+		t.Errorf("default provider capability: got %q, want anthropic", got)
+	}
+	oai := NewService(Config{Enabled: true, Provider: "openai", APIKey: "k"}, zap.NewNop())
+	if got := oai.Capabilities().Provider; got != "openai" {
+		t.Errorf("openai provider capability: got %q, want openai", got)
+	}
+	// Demo mode reports "demo".
+	demo := NewService(Config{Enabled: false}, zap.NewNop())
+	demo.SetDemoMode(true)
+	if got := demo.Capabilities().Provider; got != "demo" {
+		t.Errorf("demo provider capability: got %q, want demo", got)
+	}
+}
+
+// TestDefaultProviderRoutesToAnthropic is the regression guard for the
+// provider seam: with no Provider configured (the ANTHROPIC_API_KEY
+// path), the request still lands on /v1/messages with the x-api-key
+// header — byte-for-byte the prior behavior, now via the provider.
+func TestDefaultProviderRoutesToAnthropic(t *testing.T) {
+	fake := newFake(t, "ok")
+	srv := fake.start()
+	defer srv.Close()
+	svc := mkService(t, srv.URL) // mkService leaves Provider unset
+
+	_, err := svc.ExplainSnippet(context.Background(), ExplainSnippetRequest{Snippet: "processors: {}"})
+	if err != nil {
+		t.Fatalf("ExplainSnippet: %v", err)
+	}
+	if !strings.HasSuffix(fake.lastRequest.URL.Path, "/v1/messages") {
+		t.Errorf("default provider must POST /v1/messages; got %q", fake.lastRequest.URL.Path)
+	}
+	if got := fake.lastRequest.Header.Get("x-api-key"); got != "test-key-not-real" {
+		t.Errorf("default provider must send x-api-key; got %q", got)
+	}
+	if got := fake.lastRequest.Header.Get("Authorization"); got != "" {
+		t.Errorf("anthropic path must not send Bearer auth; got %q", got)
+	}
+}

@@ -1202,19 +1202,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// configuration path; LoadConfig pulls it from env at startup.
 	aiService := ai.NewService(ai.Config{
 		Enabled:      config.AI.Enabled,
+		Provider:     config.AI.Provider,
 		APIKey:       config.AI.APIKey,
 		BaseURL:      config.AI.BaseURL,
 		ExplainModel: config.AI.ExplainModel,
 		MergeModel:   config.AI.MergeModel,
 		MaxTokens:    config.AI.MaxTokens,
+		Models:       config.AI.Models,
 	}, logger)
 	apiServer.SetAIService(aiService)
 	if aiService.Enabled() {
 		logger.Info("AI assist enabled",
+			zap.String("provider", aiService.Capabilities().Provider),
 			zap.String("explain_model", aiService.Capabilities().ExplainModel),
 			zap.String("merge_model", aiService.Capabilities().MergeModel))
 	} else {
-		logger.Info("AI assist not configured (set ANTHROPIC_API_KEY + ai.enabled=true to enable)")
+		logger.Info("AI assist not configured (set an AI provider API key + ai.enabled=true to enable)")
 	}
 
 	// v0.85 — universal discovery credential substrate. Wires the

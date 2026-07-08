@@ -288,13 +288,22 @@ type PricingRuleConfig struct {
 // migration is one file. BaseURL is overridable for self-hosted
 // gateways or mock servers in CI; defaults to api.anthropic.com.
 type AIConfig struct {
-	Enabled      bool   `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// Provider selects the LLM backend. Empty or "anthropic" (default)
+	// keeps the historical Anthropic Messages path; "openai" uses the
+	// OpenAI-compatible Chat Completions path (also covers Azure
+	// OpenAI, Gemini's OpenAI endpoint, Mistral, and local
+	// Ollama/vLLM/LM Studio via BaseURL).
+	Provider     string `yaml:"provider"`
 	APIKey       string `yaml:"api_key"`
 	APIKeyEnv    string `yaml:"api_key_env"`
 	BaseURL      string `yaml:"base_url"`
 	ExplainModel string `yaml:"explain_model"`
 	MergeModel   string `yaml:"merge_model"`
 	MaxTokens    int    `yaml:"max_tokens"`
+	// Models is an optional per-capability model override map, passed
+	// through to the ai package. Optional; nil is fine.
+	Models map[string]string `yaml:"models,omitempty"`
 }
 
 // TelemetryConfig controls Squadron's self-monitoring: when enabled,
@@ -463,11 +472,47 @@ func firstNonEmptyEnv(names ...string) string {
 // operator didn't override it. Pure function over the AIConfig, so
 // it's safe to call from tests with arbitrary inputs.
 func applyAIEnv(c *AIConfig) {
-	if c.APIKeyEnv == "" {
-		c.APIKeyEnv = "ANTHROPIC_API_KEY"
+	// Provider + endpoint env overrides. Unset leaves the yaml value
+	// intact, so the ANTHROPIC-only default path (no SQUADRON_AI_* vars,
+	// just ANTHROPIC_API_KEY) is untouched.
+	if v := firstNonEmptyEnv("SQUADRON_AI_PROVIDER"); v != "" {
+		c.Provider = v
 	}
-	if c.APIKey == "" {
-		c.APIKey = os.Getenv(c.APIKeyEnv)
+	if v := firstNonEmptyEnv("SQUADRON_AI_BASE_URL"); v != "" {
+		c.BaseURL = v
+	}
+
+	switch strings.ToLower(strings.TrimSpace(c.Provider)) {
+	case "openai":
+		// OpenAI-family key resolution + model defaults. Kept entirely
+		// separate from the Anthropic default so it can never disturb it.
+		if c.APIKeyEnv == "" {
+			c.APIKeyEnv = "OPENAI_API_KEY"
+		}
+		if c.APIKey == "" {
+			c.APIKey = firstNonEmptyEnv("SQUADRON_AI_API_KEY", c.APIKeyEnv, "OPENAI_API_KEY")
+		}
+		if c.ExplainModel == "" {
+			c.ExplainModel = "gpt-4o-mini"
+		}
+		if c.MergeModel == "" {
+			c.MergeModel = "gpt-4o"
+		}
+	default: // "" or "anthropic" — historical behavior, byte-for-byte.
+		if c.APIKeyEnv == "" {
+			c.APIKeyEnv = "ANTHROPIC_API_KEY"
+		}
+		if c.APIKey == "" {
+			c.APIKey = os.Getenv(c.APIKeyEnv)
+		}
+	}
+
+	// SQUADRON_AI_MODEL is a convenience single-model override (handy for
+	// local single-model servers). Explicit opt-in, so it wins when set;
+	// unset leaves the resolved/default models alone.
+	if v := firstNonEmptyEnv("SQUADRON_AI_MODEL"); v != "" {
+		c.ExplainModel = v
+		c.MergeModel = v
 	}
 }
 

@@ -47,7 +47,11 @@ code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "$BASE/health" 2>/dev/null ||
 if [ "$code" = "200" ]; then
   ok "/health = 200 (healthy)"
   ai=$(curl -s -m 5 "$BASE/api/v1/ai/status" 2>/dev/null)
-  case "$ai" in *'"enabled":true'*) ok "AI assist: enabled" ;; *) warn "AI assist: disabled (set ANTHROPIC_API_KEY to enable)" ;; esac
+  prov=$(printf '%s' "$ai" | sed -n 's/.*"provider":[ ]*"\([^"]*\)".*/\1/p')
+  case "$ai" in
+    *'"enabled":true'*) ok "AI assist: enabled${prov:+ (provider: $prov)}" ;;
+    *) warn "AI assist: disabled (set an AI provider API key to enable)" ;;
+  esac
   ag=$(curl -s -m 5 "$BASE/api/v1/agents" 2>/dev/null)
   n=$(printf '%s' "$ag" | sed -n 's/.*"totalCount":[ ]*\([0-9]*\).*/\1/p')
   [ -n "$n" ] && ok "fleet: $n agent(s) registered" || warn "fleet: could not read agent count"

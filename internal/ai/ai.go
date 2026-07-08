@@ -26,12 +26,10 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -97,13 +95,24 @@ const (
 // applied at NewService construction time so the operator can
 // omit anything they don't care about overriding.
 type Config struct {
-	Enabled      bool   `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// Provider selects the LLM backend behind callMessages. Empty or
+	// "anthropic" (the default) uses the Anthropic Messages API and is
+	// byte-for-byte the historical behavior. "openai" uses the
+	// OpenAI-compatible /chat/completions shape, which also covers
+	// Azure OpenAI, Gemini's OpenAI endpoint, Mistral, and local
+	// Ollama/vLLM/LM Studio via the BaseURL override.
+	Provider     string `yaml:"provider"`
 	APIKey       string `yaml:"api_key"`
 	APIKeyEnv    string `yaml:"api_key_env"`
 	BaseURL      string `yaml:"base_url"`
 	ExplainModel string `yaml:"explain_model"`
 	MergeModel   string `yaml:"merge_model"`
 	MaxTokens    int    `yaml:"max_tokens"`
+	// Models is an optional per-capability model override map (reserved
+	// for callers that want to pin specific models by role). Unused by
+	// the default paths; nil is fine.
+	Models map[string]string `yaml:"models,omitempty"`
 }
 
 // Service wraps the Anthropic HTTP client + prompt templates.
@@ -112,6 +121,13 @@ type Service struct {
 	cfg    Config
 	client *http.Client
 	logger *zap.Logger
+	// provider is the LLM backend callMessages delegates to. Selected
+	// once at NewService time from cfg.Provider (anthropic by default,
+	// openai when cfg.Provider=="openai"). The provider seam lives
+	// BELOW callMessages so every public method, handler, bridge, and
+	// prompt keeps funneling through the same callOpts/callResp choke
+	// point regardless of vendor.
+	provider Provider
 	// demoMode, when on AND no real API key is configured, makes the
 	// conversational surfaces (Ask / Explain / Merge) return canned,
 	// grounded answers instead of ErrDisabled, so they work in the
@@ -127,26 +143,56 @@ type Service struct {
 // the UI can render an opt-in nudge instead of a generic error.
 var ErrDisabled = errors.New("ai service disabled (no API key configured)")
 
+// Provider is the LLM backend seam. Every LLM-backed capability in
+// Squadron funnels through Service.callMessages into a single
+// callOpts, and callMessages delegates to the configured Provider.
+// Anthropic and OpenAI-compatible implementations live in
+// provider_anthropic.go and provider_openai.go; adding a new vendor
+// is one file that implements this one method.
+type Provider interface {
+	Complete(ctx context.Context, opts callOpts) (*callResp, error)
+}
+
 // NewService builds the service. Applies defaults to any unset
 // Config fields. Returns a usable Service even when disabled —
 // every method short-circuits with ErrDisabled so callers don't
 // have to nil-check.
 func NewService(cfg Config, logger *zap.Logger) *Service {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = DefaultBaseURL
-	}
-	if cfg.ExplainModel == "" {
-		cfg.ExplainModel = DefaultExplainModel
-	}
-	if cfg.MergeModel == "" {
-		cfg.MergeModel = DefaultMergeModel
+	// Provider-aware defaults. The default/anthropic branch is
+	// byte-for-byte the historical behavior — when cfg.Provider is
+	// empty (the ANTHROPIC_API_KEY path) nothing here changes. The
+	// openai branch only applies OpenAI-family defaults, and only
+	// when the operator left the field unset.
+	switch strings.ToLower(cfg.Provider) {
+	case "openai":
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = DefaultOpenAIBaseURL
+		}
+		if cfg.ExplainModel == "" {
+			cfg.ExplainModel = DefaultOpenAIExplainModel
+		}
+		if cfg.MergeModel == "" {
+			cfg.MergeModel = DefaultOpenAIMergeModel
+		}
+	default: // "" or "anthropic"
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = DefaultBaseURL
+		}
+		if cfg.ExplainModel == "" {
+			cfg.ExplainModel = DefaultExplainModel
+		}
+		if cfg.MergeModel == "" {
+			cfg.MergeModel = DefaultMergeModel
+		}
 	}
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = DefaultMaxTokens
 	}
 	// otelhttp.NewTransport gives us automatic spans on every
-	// Anthropic call. When selftel is disabled the propagator and
-	// tracer are no-ops, so this is free.
+	// upstream LLM call. When selftel is disabled the propagator and
+	// tracer are no-ops, so this is free. The span name still reads
+	// "anthropic <path>" for the default path; provider seam reuses
+	// this exact client so tracing is identical.
 	httpClient := &http.Client{
 		Timeout: requestTimeout,
 		Transport: otelhttp.NewTransport(http.DefaultTransport,
@@ -155,11 +201,20 @@ func NewService(cfg Config, logger *zap.Logger) *Service {
 			}),
 		),
 	}
-	return &Service{
+	svc := &Service{
 		cfg:    cfg,
 		client: httpClient,
 		logger: logger,
 	}
+	// Select the provider behind callMessages. Default is anthropic so
+	// an empty Provider keeps the exact prior behavior.
+	switch strings.ToLower(cfg.Provider) {
+	case "openai":
+		svc.provider = &openaiProvider{cfg: cfg, client: httpClient, logger: logger}
+	default:
+		svc.provider = &anthropicProvider{cfg: cfg, client: httpClient, logger: logger}
+	}
+	return svc
 }
 
 // Enabled reports whether the service has a usable API key. The
@@ -189,7 +244,11 @@ func (s *Service) demoActive() bool {
 // to decide which AI buttons to show — when AI is off the buttons
 // stay hidden rather than appearing and immediately failing.
 type Capabilities struct {
-	Enabled      bool   `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Provider reports which LLM backend is wired: "anthropic",
+	// "openai", or "demo". Additive to the existing UI contract —
+	// explain_model/merge_model are unchanged.
+	Provider     string `json:"provider,omitempty"`
 	ExplainModel string `json:"explain_model,omitempty"`
 	MergeModel   string `json:"merge_model,omitempty"`
 }
@@ -200,6 +259,7 @@ func (s *Service) Capabilities() Capabilities {
 	if s.Enabled() {
 		return Capabilities{
 			Enabled:      true,
+			Provider:     s.providerName(),
 			ExplainModel: s.cfg.ExplainModel,
 			MergeModel:   s.cfg.MergeModel,
 		}
@@ -207,9 +267,19 @@ func (s *Service) Capabilities() Capabilities {
 	// Demo mode reports capable so the UI shows the AI affordances; the
 	// responses come from the canned grounded responder, not a model.
 	if s.demoActive() {
-		return Capabilities{Enabled: true, ExplainModel: "demo", MergeModel: "demo"}
+		return Capabilities{Enabled: true, Provider: "demo", ExplainModel: "demo", MergeModel: "demo"}
 	}
 	return Capabilities{Enabled: false}
+}
+
+// providerName normalizes the configured provider for the public
+// Capabilities view: empty/unset resolves to "anthropic" (the
+// default backend), "openai" reports "openai".
+func (s *Service) providerName() string {
+	if strings.EqualFold(s.cfg.Provider, "openai") {
+		return "openai"
+	}
+	return "anthropic"
 }
 
 // ----------------------------------------------------------------
@@ -726,114 +796,14 @@ type callResp struct {
 	TokensOut int
 }
 
-// anthropicRequest mirrors the Anthropic Messages API request
-// shape. Kept small — we don't use tool use, streaming, or vision
-// in v0.26, and the JSON marshaling can always add fields later.
-type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-}
-
-type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// anthropicResponse is the slice of the Messages API response
-// shape we actually use. Other fields (id, type, role, stop
-// reasons) are ignored on decode.
-type anthropicResponse struct {
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	Model string `json:"model"`
-	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-	Error *struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
+// callMessages is the single HTTP choke point every LLM-backed
+// capability funnels through. It no longer speaks any wire protocol
+// itself: it delegates to the Provider selected at NewService time
+// (anthropic by default, openai when cfg.Provider=="openai"). The
+// callOpts -> callResp contract above is unchanged, so every public
+// method, handler, bridge, and prompt keeps working verbatim.
 func (s *Service) callMessages(ctx context.Context, opts callOpts) (*callResp, error) {
-	// v0.82 — opts.MaxTokens overrides the service-wide cap when set.
-	// Falls back to s.cfg.MaxTokens (DefaultMaxTokens at 1024 unless
-	// configured) for callers that don't need the headroom.
-	maxTokens := s.cfg.MaxTokens
-	if opts.MaxTokens > 0 {
-		maxTokens = opts.MaxTokens
-	}
-	body := anthropicRequest{
-		Model:     opts.Model,
-		MaxTokens: maxTokens,
-		System:    opts.System,
-		Messages: []anthropicMessage{
-			{Role: "user", Content: opts.UserText},
-		},
-	}
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(s.cfg.BaseURL, "/")+"/v1/messages",
-		bytes.NewReader(buf))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", s.cfg.APIKey)
-	req.Header.Set("anthropic-version", apiVersion)
-	req.Header.Set("User-Agent", defaultUserAgent)
-
-	httpResp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic call: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	raw, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if httpResp.StatusCode >= 400 {
-		// Surface the Anthropic error message verbatim — it's
-		// usually descriptive (rate limit, bad api key, model
-		// not available) and an operator can act on it.
-		return nil, fmt.Errorf("anthropic %d: %s", httpResp.StatusCode, string(truncate(raw, 500)))
-	}
-
-	var ar anthropicResponse
-	if err := json.Unmarshal(raw, &ar); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-	if ar.Error != nil {
-		return nil, fmt.Errorf("anthropic error: %s: %s", ar.Error.Type, ar.Error.Message)
-	}
-	if len(ar.Content) == 0 {
-		return nil, errors.New("anthropic returned empty content")
-	}
-
-	// Concatenate text blocks (the API may return multiple but in
-	// practice for our shapes there's one). Ignore non-text
-	// blocks; we don't request tool use.
-	var sb strings.Builder
-	for _, block := range ar.Content {
-		if block.Type == "text" {
-			sb.WriteString(block.Text)
-		}
-	}
-	return &callResp{
-		Text:      sb.String(),
-		Model:     ar.Model,
-		TokensIn:  ar.Usage.InputTokens,
-		TokensOut: ar.Usage.OutputTokens,
-	}, nil
+	return s.provider.Complete(ctx, opts)
 }
 
 // ----------------------------------------------------------------
