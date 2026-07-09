@@ -2647,7 +2647,7 @@ func (s *Server) registerRoutes() {
 	groupHandlers := handlers.NewGroupHandlers(s.agentService, s.commander, s.logger)
 	savedQueryHandlers := handlers.NewSavedQueryHandlers(s.savedQueryService, s.logger)
 	topologyHandlers := handlers.NewTopologyHandlers(s.agentService, s.telemetryService, s.logger)
-	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.logger)
+	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.appStore, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
 	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.aiService, s.appStore, s.logger)
 	rolloutHandlers := handlers.NewRolloutHandlers(s.rolloutService, s.logger)
@@ -2659,6 +2659,14 @@ func (s *Server) registerRoutes() {
 
 	// Health check — public so load balancers can probe.
 	s.router.GET("/health", healthHandlers.HandleHealth)
+
+	// Liveness/readiness split (public, same posture as /health). k8s
+	// livenessProbe hits /livez — a dependency-free 200 so a slow store never
+	// crash-loops a live pod; readinessProbe hits /readyz — a lightweight store
+	// Ping (SELECT 1) that 503s when the DB is unreachable so traffic drains.
+	// /health stays as-is for back-compat (deep check incl. DuckDB).
+	s.router.GET("/livez", healthHandlers.HandleLive)
+	s.router.GET("/readyz", healthHandlers.HandleReady)
 
 	// ADR 0014 Arc C slice 4a — OIDC browser-SSO seam under /auth/oidc/*
 	// (login + callback). Mounted OUTSIDE the /api/v1 bearer group, directly

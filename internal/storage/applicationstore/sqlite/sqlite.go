@@ -1399,6 +1399,18 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 	return &agent, nil
 }
 
+// Ping is the lightweight readiness primitive (backs GET /readyz): a single
+// SELECT 1 round-trip that proves the DB handle is open and answering, without
+// the cost or tenant-scoping of a real query. Deliberately untenanted — the
+// readiness probe runs under a system context and only checks connectivity.
+func (s *Storage) Ping(ctx context.Context) error {
+	var one int
+	if err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&one); err != nil {
+		return fmt.Errorf("sqlite ping failed: %w", err)
+	}
+	return nil
+}
+
 func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 	// v0.51 — exclude tombstoned (soft-deleted) agents by default.
 	// The audit trail for the agent persists indefinitely; the
