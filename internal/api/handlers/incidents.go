@@ -14,7 +14,7 @@
 //
 // Auth posture: read endpoint requires incidents:read; mutating
 // endpoints require incidents:write. The publish endpoint accepts a
-// provider name ("clipboard", "github", "linear", "jira", "generic"),
+// provider name ("clipboard", "github", "linear", "jira", "servicenow", "generic"),
 // but the MVP only implements clipboard (no remote call). Real
 // providers slot in here in the next chunk.
 
@@ -246,7 +246,7 @@ func (h *IncidentsHandlers) HandlePublishDraft(c *gin.Context) {
 		return
 	}
 	switch body.Provider {
-	case "clipboard", "github", "linear", "jira", "generic":
+	case "clipboard", "github", "linear", "jira", "servicenow", "generic":
 		// allowed
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown provider", "provider": body.Provider})

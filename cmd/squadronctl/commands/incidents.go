@@ -177,7 +177,7 @@ func newIncidentsPublishCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&provider, "provider", "clipboard",
-		"Provider: clipboard | github | linear | jira | generic")
+		"Provider: clipboard | github | linear | jira | servicenow | generic")
 	cmd.Flags().StringVar(&externalID, "external-id", "",
 		"External tracker ID (ignored when the provider returns its own)")
 	cmd.Flags().StringVar(&externalURL, "external-url", "",
