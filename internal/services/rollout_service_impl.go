@@ -317,7 +317,31 @@ func (s *RolloutServiceImpl) Get(ctx context.Context, id string) (*Rollout, erro
 	if stored == nil {
 		return nil, nil
 	}
-	return toServiceRollout(stored), nil
+	out := toServiceRollout(stored)
+	s.populateApproverCount(ctx, out)
+	return out, nil
+}
+
+// populateApproverCount fills ApproverCount on the READ path (GET/LIST) so
+// the UI can render k/N on load. ADR 0029 — ApproverCount is derived from
+// the rollout_approvals append-log, not persisted on the rollout row, and
+// before this only the Approve() write path set it (so a rollout fetched
+// via GET/LIST reported 0). Only pending_approval rollouts can accrue
+// distinct approvers, so we query for those alone: this keeps LIST from
+// doing an N+1 COUNT for every terminal/in-flight rollout (pending_approval
+// rollouts are few). A count error is logged and swallowed — surfacing k/N
+// is best-effort and must not fail an otherwise-good read.
+func (s *RolloutServiceImpl) populateApproverCount(ctx context.Context, r *Rollout) {
+	if r == nil || r.State != RolloutStatePendingApproval {
+		return
+	}
+	count, err := s.appStore.CountRolloutApprovers(ctx, r.ID)
+	if err != nil {
+		s.logger.Warn("failed to count rollout approvers on read",
+			zap.String("rollout_id", r.ID), zap.Error(err))
+		return
+	}
+	r.ApproverCount = count
 }
 
 func (s *RolloutServiceImpl) List(ctx context.Context, filter RolloutFilter) ([]*Rollout, error) {
@@ -333,6 +357,10 @@ func (s *RolloutServiceImpl) List(ctx context.Context, filter RolloutFilter) ([]
 	out := make([]*Rollout, len(stored))
 	for i, r := range stored {
 		out[i] = toServiceRollout(r)
+		// ADR 0029 — surface k/N on LIST. Bounded to pending_approval
+		// rollouts inside the helper so this is not an N+1 over the
+		// whole result set.
+		s.populateApproverCount(ctx, out[i])
 	}
 	return out, nil
 }

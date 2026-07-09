@@ -809,3 +809,70 @@ func TestRolloutService_Approve_RequesterCannotSelfApprove(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n, "a rejected self-approval must not be recorded")
 }
+
+// TestRolloutService_ReadPopulatesApproverCount pins ADR 0029's read-path
+// fix: a pending_approval rollout with recorded-but-below-threshold
+// approvers must report k via ApproverCount on BOTH Get and List (the
+// Approve() write path already set it; before this fix a plain GET/LIST
+// reported 0, so the UI couldn't render k/N on load).
+func TestRolloutService_ReadPopulatesApproverCount(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	in := validRolloutInput(t, store)
+	in.RequireApproval = true
+	in.RequestedBy = "alice@example.com"
+	in.RequiredApprovals = 3
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	require.Equal(t, RolloutStatePendingApproval, r.State)
+
+	// One distinct approver — stays pending_approval at 1/3.
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "1")
+	require.NoError(t, err)
+	require.Equal(t, RolloutStatePendingApproval, got.State)
+	require.Equal(t, 1, got.ApproverCount)
+
+	// Get must now report the derived count (was 0 before the fix).
+	fetched, err := svc.Get(ctx, r.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched)
+	assert.Equal(t, 3, fetched.RequiredApprovals, "required_approvals must round-trip on read")
+	assert.Equal(t, 1, fetched.ApproverCount, "Get must derive k from the approvals log")
+
+	// List must populate the count for the pending_approval rollout too.
+	list, err := svc.List(ctx, RolloutFilter{})
+	require.NoError(t, err)
+	var found *Rollout
+	for _, item := range list {
+		if item.ID == r.ID {
+			found = item
+			break
+		}
+	}
+	require.NotNil(t, found, "created rollout must appear in List")
+	assert.Equal(t, 1, found.ApproverCount, "List must derive k from the approvals log")
+	assert.Equal(t, 3, found.RequiredApprovals)
+}
+
+// TestRolloutService_ReadApproverCountZeroForNonPending guards the N+1
+// avoidance decision: rollouts that are not pending_approval are never
+// counted on read (ApproverCount stays 0), so LIST does not fan out a
+// COUNT per terminal/in-flight row.
+func TestRolloutService_ReadApproverCountZeroForNonPending(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	// A plain rollout with no approval gate is created in 'pending'.
+	in := validRolloutInput(t, store)
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	require.NotEqual(t, RolloutStatePendingApproval, r.State)
+
+	fetched, err := svc.Get(ctx, r.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched)
+	assert.Equal(t, 0, fetched.ApproverCount, "non-pending rollouts are not counted on read")
+}
