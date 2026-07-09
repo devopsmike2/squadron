@@ -35,6 +35,16 @@ import "context"
 type Group struct {
 	ID              string
 	RequireApproval bool
+	// RequiredApprovals is the per-group minimum number of DISTINCT
+	// approvers the group's compliance policy mandates (ADR 0029 —
+	// N-of-M approvals). 0 means the group carries no mandate, so the
+	// rollout service's max(input, provider, 1) resolution leaves the
+	// open-core default of a single distinct approver in place. A
+	// Compliance Pack wire layer projects a group's configured minimum
+	// onto this field so its GroupPolicyProvider can surface it from
+	// RequiredApprovals; the OSS build never populates it (NoOpProvider
+	// ignores groups entirely).
+	RequiredApprovals int
 }
 
 // GroupReader is the minimal storage surface a policy provider
