@@ -283,6 +283,12 @@ func (s *Store) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, error
 	return &agentCopy, nil
 }
 
+// Ping is the readiness primitive for the in-memory store (backs GET /readyz).
+// There is no backing connection to probe, so a live process is always ready.
+func (s *Store) Ping(_ context.Context) error {
+	return nil
+}
+
 func (s *Store) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

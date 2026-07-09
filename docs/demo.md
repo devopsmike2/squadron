@@ -45,7 +45,7 @@ Anthropic API for the proposer and drafter).
      application store. The proposer ticks every thirty seconds;
      within a minute a new rollout appears.
 
-  3. Open the UI at http://localhost:8090.
+  3. Open the UI at http://localhost:8080.
 
   4. Navigate to Cost Insights or Savings. The seeded cost spike
      shows under "Recent spikes". The attribution names the demo

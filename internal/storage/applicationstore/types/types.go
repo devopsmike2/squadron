@@ -36,6 +36,13 @@ var ErrRolloutVersionConflict = errors.New("rollout version conflict: row modifi
 
 // ApplicationStore interface for managing application data
 type ApplicationStore interface {
+	// Ping is the lightweight liveness/readiness primitive: a cheap
+	// SELECT 1-class round-trip that proves the backing store is open and
+	// answering, WITHOUT the cost or tenant-scoping of a real query like
+	// ListAgents. It backs GET /readyz, which must probe cheaply on every
+	// k8s readiness tick. Implementations MUST NOT require a tenant on ctx.
+	Ping(ctx context.Context) error
+
 	CreateAgent(ctx context.Context, agent *Agent) error
 	GetAgent(ctx context.Context, id uuid.UUID) (*Agent, error)
 	ListAgents(ctx context.Context) ([]*Agent, error)
