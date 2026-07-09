@@ -1395,7 +1395,7 @@ type IncidentDraft struct {
 	Title            string    `json:"title"`
 	BodyMarkdown     string    `json:"body_markdown"`
 	DraftContentJSON string    `json:"draft_content_json,omitempty"`
-	Provider         string    `json:"provider,omitempty"`     // clipboard | github | linear | jira | generic
+	Provider         string    `json:"provider,omitempty"`     // clipboard | github | linear | jira | servicenow | generic
 	ExternalID       string    `json:"external_id,omitempty"`  // set on publish
 	ExternalURL      string    `json:"external_url,omitempty"` // set on publish
 	CreatedAt        time.Time `json:"created_at"`

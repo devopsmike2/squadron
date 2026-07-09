@@ -1543,6 +1543,33 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 				zap.String("project_key", projectKey))
 		}
 	}
+	// SQ-3.9 (servicenow sibling) — ServiceNow Table API publisher.
+	// Reads SQUADRON_SERVICENOW_INSTANCE (instance subdomain like
+	// "acme" for https://acme.service-now.com),
+	// SQUADRON_SERVICENOW_USERNAME, SQUADRON_SERVICENOW_PASSWORD.
+	// Optional SQUADRON_SERVICENOW_URGENCY and SQUADRON_SERVICENOW_IMPACT
+	// (both default "3") refine the priority mapping. Opt-in / dormant
+	// exactly like Jira: constructed and registered only when all three
+	// required env vars are present; otherwise the servicenow UI option
+	// falls back to stamping the operator supplied external_id / URL.
+	if instance, username, password := os.Getenv("SQUADRON_SERVICENOW_INSTANCE"),
+		os.Getenv("SQUADRON_SERVICENOW_USERNAME"),
+		os.Getenv("SQUADRON_SERVICENOW_PASSWORD"); instance != "" && username != "" && password != "" {
+		snowPub, err := incidents.NewServiceNowPublisher(incidents.ServiceNowConfig{
+			Instance:       instance,
+			Username:       username,
+			Password:       password,
+			DefaultUrgency: os.Getenv("SQUADRON_SERVICENOW_URGENCY"),
+			DefaultImpact:  os.Getenv("SQUADRON_SERVICENOW_IMPACT"),
+		})
+		if err != nil {
+			logger.Warn("servicenow publisher not enabled", zap.Error(err))
+		} else {
+			publishers.Register(snowPub)
+			logger.Info("servicenow publisher registered",
+				zap.String("instance", instance))
+		}
+	}
 	apiServer.SetIncidentsPublishers(publishers)
 
 	// SQ-1.4g — AI proposer bridge (Move 1). Polls open cost spike
