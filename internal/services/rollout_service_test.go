@@ -590,6 +590,9 @@ type stubGroupPolicy struct {
 	// ADR 0029 — per-group N-of-M threshold the stub provider mandates.
 	// Zero value (nil map) returns 0, so the OSS default of 1 stands.
 	required map[string]int
+	// ADR 0030 — per-group required approver-roles the stub mandates.
+	// Nil map returns nil, so the approver-role gate stays inert.
+	roles map[string][]string
 }
 
 func (s stubGroupPolicy) RequiresApproval(_ context.Context, groupID string) bool {
@@ -598,6 +601,10 @@ func (s stubGroupPolicy) RequiresApproval(_ context.Context, groupID string) boo
 
 func (s stubGroupPolicy) RequiredApprovals(_ context.Context, groupID string) int {
 	return s.required[groupID]
+}
+
+func (s stubGroupPolicy) RequiredApproverRoles(_ context.Context, groupID string) []string {
+	return s.roles[groupID]
 }
 
 // TestRolloutService_GroupPolicyForcesApproval verifies the v0.48
@@ -713,7 +720,7 @@ func TestRolloutService_Approve_DefaultThresholdIsTwoPerson(t *testing.T) {
 	require.Equal(t, RolloutStatePendingApproval, r.State)
 	require.Equal(t, 1, r.RequiredApprovals, "unset threshold floors to the two-person default of 1")
 
-	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "lgtm")
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "", "", "lgtm")
 	require.NoError(t, err)
 	assert.Equal(t, RolloutStatePending, got.State, "one distinct approver must flip pending_approval → pending")
 	assert.Equal(t, "bob@example.com", got.ApprovedBy)
@@ -739,17 +746,17 @@ func TestRolloutService_Approve_NofMProgression(t *testing.T) {
 	require.Equal(t, 3, r.RequiredApprovals)
 	require.Equal(t, RolloutStatePendingApproval, r.State)
 
-	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "1")
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "", "", "1")
 	require.NoError(t, err)
 	assert.Equal(t, RolloutStatePendingApproval, got.State, "1/3 must stay pending_approval")
 	assert.Equal(t, 1, got.ApproverCount)
 
-	got, err = svc.Approve(ctx, r.ID, "carol@example.com", "2")
+	got, err = svc.Approve(ctx, r.ID, "carol@example.com", "", "", "2")
 	require.NoError(t, err)
 	assert.Equal(t, RolloutStatePendingApproval, got.State, "2/3 must stay pending_approval")
 	assert.Equal(t, 2, got.ApproverCount)
 
-	got, err = svc.Approve(ctx, r.ID, "dave@example.com", "3")
+	got, err = svc.Approve(ctx, r.ID, "dave@example.com", "", "", "3")
 	require.NoError(t, err)
 	assert.Equal(t, RolloutStatePending, got.State, "3/3 must flip to pending")
 	assert.Equal(t, 3, got.ApproverCount)
@@ -771,12 +778,12 @@ func TestRolloutService_Approve_SameApproverIdempotent(t *testing.T) {
 	r, err := svc.Create(ctx, in)
 	require.NoError(t, err)
 
-	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "first")
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "", "", "first")
 	require.NoError(t, err)
 	assert.Equal(t, RolloutStatePendingApproval, got.State)
 	assert.Equal(t, 1, got.ApproverCount)
 
-	got, err = svc.Approve(ctx, r.ID, "bob@example.com", "again")
+	got, err = svc.Approve(ctx, r.ID, "bob@example.com", "", "", "again")
 	require.NoError(t, err)
 	assert.Equal(t, RolloutStatePendingApproval, got.State, "duplicate approver must not flip the rollout")
 	assert.Equal(t, 1, got.ApproverCount, "duplicate approver must not double-count")
@@ -801,7 +808,7 @@ func TestRolloutService_Approve_RequesterCannotSelfApprove(t *testing.T) {
 	r, err := svc.Create(ctx, in)
 	require.NoError(t, err)
 
-	_, err = svc.Approve(ctx, r.ID, "ALICE@example.com", "self") // case-insensitive match
+	_, err = svc.Approve(ctx, r.ID, "ALICE@example.com", "", "", "self") // case-insensitive match
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "two-person rule")
 
@@ -829,7 +836,7 @@ func TestRolloutService_ReadPopulatesApproverCount(t *testing.T) {
 	require.Equal(t, RolloutStatePendingApproval, r.State)
 
 	// One distinct approver — stays pending_approval at 1/3.
-	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "1")
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "", "", "1")
 	require.NoError(t, err)
 	require.Equal(t, RolloutStatePendingApproval, got.State)
 	require.Equal(t, 1, got.ApproverCount)
@@ -875,4 +882,141 @@ func TestRolloutService_ReadApproverCountZeroForNonPending(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, fetched)
 	assert.Equal(t, 0, fetched.ApproverCount, "non-pending rollouts are not counted on read")
+}
+
+// --- ADR 0030: rule-based approver-role requirements --------------------
+
+// stubRoleChecker implements services.ApproverRoleChecker for tests. It
+// resolves roles by stable token id first, then by label, mirroring the
+// enterprise RBAC-backed checker. A configured err fails closed.
+type stubRoleChecker struct {
+	byToken map[string][]string
+	byLabel map[string][]string
+	err     error
+}
+
+func (s stubRoleChecker) RolesForApprover(_ context.Context, tokenID, tokenLabel string) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if r, ok := s.byToken[tokenID]; ok {
+		return r, nil
+	}
+	return s.byLabel[tokenLabel], nil
+}
+
+// TestRolloutService_ApproverRoles_InertWithoutBothSeams is the ADR 0030
+// non-regression pin: the approver-role gate must stay inert unless BOTH
+// the group mandate (groupPolicy.RequiredApproverRoles) AND the resolver
+// (ApproverRoleChecker) are wired. With only one — or neither — a single
+// distinct approver flips pending_approval -> pending exactly as the
+// count-only workflow does, and MissingApproverRoles is empty.
+func TestRolloutService_ApproverRoles_InertWithoutBothSeams(t *testing.T) {
+	cases := []struct {
+		name        string
+		wireGroup   bool
+		wireChecker bool
+	}{
+		{"neither seam (OSS default)", false, false},
+		{"group mandate but no checker (compliance-only)", true, false},
+		{"checker but no group mandate", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := memory.NewStore()
+			svc := NewRolloutService(store, nil, nil, zap.NewNop())
+			impl := svc.(*RolloutServiceImpl)
+			if tc.wireGroup {
+				impl.SetGroupPolicyProvider(stubGroupPolicy{
+					roles: map[string][]string{"group-a": {"security"}},
+				})
+			}
+			if tc.wireChecker {
+				impl.SetApproverRoleChecker(stubRoleChecker{
+					byToken: map[string][]string{"tok-sec": {"security"}},
+				})
+			}
+
+			in := validRolloutInput(t, store)
+			in.RequireApproval = true
+			in.RequestedBy = "alice@example.com"
+			r, err := svc.Create(ctx, in)
+			require.NoError(t, err)
+			require.Equal(t, RolloutStatePendingApproval, r.State)
+
+			// A single NON-security approver must still flip: the gate is inert.
+			got, err := svc.Approve(ctx, r.ID, "operator:ops", "tok-ops", "ops", "lgtm")
+			require.NoError(t, err)
+			assert.Equal(t, RolloutStatePending, got.State, "gate must be inert; single approver flips")
+			assert.Empty(t, got.MissingApproverRoles)
+		})
+	}
+}
+
+// TestRolloutService_ApproverRoles_BlocksUntilRoleCovered is the core ADR
+// 0030 behavior in the composed configuration (BOTH seams wired): a group
+// that requires a "security" approver stays pending_approval when the count
+// is met by a non-security approver, surfacing the unmet role via
+// MissingApproverRoles, and only flips once a security-role holder approves.
+func TestRolloutService_ApproverRoles_BlocksUntilRoleCovered(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	impl := svc.(*RolloutServiceImpl)
+	impl.SetGroupPolicyProvider(stubGroupPolicy{
+		roles: map[string][]string{"group-a": {"security"}},
+	})
+	impl.SetApproverRoleChecker(stubRoleChecker{
+		byToken: map[string][]string{"tok-sec": {"security"}},
+	})
+
+	in := validRolloutInput(t, store)
+	in.RequireApproval = true
+	in.RequestedBy = "alice@example.com"
+	// RequiredApprovals unset -> 1. Count is met by the first approver, so
+	// this proves the ROLE gate (not the count) holds the rollout.
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	require.Equal(t, RolloutStatePendingApproval, r.State)
+
+	// Non-security approver: COUNT is met (1/1) but the "security" role is
+	// uncovered -> stay pending_approval, surface the missing role.
+	got, err := svc.Approve(ctx, r.ID, "operator:ops", "tok-ops", "ops", "first")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePendingApproval, got.State, "count met but missing role must NOT flip")
+	assert.Equal(t, 1, got.ApproverCount)
+	assert.Equal(t, []string{"security"}, got.MissingApproverRoles, "the unmet role must surface for the UI")
+
+	// Security-role approver: role now covered -> flip to pending.
+	got, err = svc.Approve(ctx, r.ID, "operator:sec", "tok-sec", "sec", "second")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePending, got.State, "role covered -> flip")
+	assert.Empty(t, got.MissingApproverRoles)
+	assert.Equal(t, "operator:sec", got.ApprovedBy, "the role-covering approver crosses the gate")
+}
+
+// TestRolloutService_ApproverRoles_NilRolesStaysInert confirms that a wired
+// provider returning NO required roles (an unconfigured group) leaves the
+// gate inert even with a checker present — byte-identical to count-only.
+func TestRolloutService_ApproverRoles_NilRolesStaysInert(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+	impl := svc.(*RolloutServiceImpl)
+	impl.SetGroupPolicyProvider(stubGroupPolicy{}) // roles map nil -> returns nil
+	impl.SetApproverRoleChecker(stubRoleChecker{
+		byToken: map[string][]string{"tok-sec": {"security"}},
+	})
+
+	in := validRolloutInput(t, store)
+	in.RequireApproval = true
+	in.RequestedBy = "alice@example.com"
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+
+	got, err := svc.Approve(ctx, r.ID, "operator:ops", "tok-ops", "ops", "lgtm")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePending, got.State, "no required roles -> gate inert -> flip")
+	assert.Empty(t, got.MissingApproverRoles)
 }

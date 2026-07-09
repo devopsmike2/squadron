@@ -43,14 +43,14 @@ func TestRolloutApprovals_SQLite(t *testing.T) {
 		require.Equal(t, 0, n)
 
 		// Two distinct approvers → count 2.
-		require.NoError(t, store.RecordRolloutApproval(ctx, "ro-3", "bob", "1", now))
-		require.NoError(t, store.RecordRolloutApproval(ctx, "ro-3", "carol", "2", now.Add(time.Second)))
+		require.NoError(t, store.RecordRolloutApproval(ctx, "ro-3", "bob", "tok-bob", "1", now))
+		require.NoError(t, store.RecordRolloutApproval(ctx, "ro-3", "carol", "", "2", now.Add(time.Second)))
 		n, err = store.CountRolloutApprovers(ctx, "ro-3")
 		require.NoError(t, err)
 		require.Equal(t, 2, n)
 
 		// Same approver again is idempotent — count stays 2.
-		require.NoError(t, store.RecordRolloutApproval(ctx, "ro-3", "bob", "dup", now.Add(2*time.Second)))
+		require.NoError(t, store.RecordRolloutApproval(ctx, "ro-3", "bob", "tok-bob", "dup", now.Add(2*time.Second)))
 		n, err = store.CountRolloutApprovers(ctx, "ro-3")
 		require.NoError(t, err)
 		require.Equal(t, 2, n, "duplicate approver must not double-count")
@@ -61,6 +61,7 @@ func TestRolloutApprovals_SQLite(t *testing.T) {
 		require.Len(t, list, 2)
 		require.Equal(t, "bob", list[0].Approver)
 		require.Equal(t, "1", list[0].Notes, "idempotent insert keeps the first approval's notes")
+		require.Equal(t, "tok-bob", list[0].ApproverTokenID, "approver_token_id round-trips (ADR 0030)")
 		require.Equal(t, "carol", list[1].Approver)
 	})
 }

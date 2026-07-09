@@ -28,14 +28,14 @@ func TestRolloutApprovals_Memory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 
-	require.NoError(t, store.RecordRolloutApproval(ctx, "ro-1", "bob", "1", now))
-	require.NoError(t, store.RecordRolloutApproval(ctx, "ro-1", "carol", "2", now.Add(time.Second)))
+	require.NoError(t, store.RecordRolloutApproval(ctx, "ro-1", "bob", "", "1", now))
+	require.NoError(t, store.RecordRolloutApproval(ctx, "ro-1", "carol", "", "2", now.Add(time.Second)))
 	n, err = store.CountRolloutApprovers(ctx, "ro-1")
 	require.NoError(t, err)
 	require.Equal(t, 2, n)
 
 	// Idempotent duplicate.
-	require.NoError(t, store.RecordRolloutApproval(ctx, "ro-1", "bob", "dup", now.Add(2*time.Second)))
+	require.NoError(t, store.RecordRolloutApproval(ctx, "ro-1", "bob", "", "dup", now.Add(2*time.Second)))
 	n, err = store.CountRolloutApprovers(ctx, "ro-1")
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "duplicate approver must not double-count")

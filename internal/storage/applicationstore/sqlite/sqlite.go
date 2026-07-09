@@ -268,10 +268,11 @@ func (s *Storage) migrate() error {
 	-- COUNT(*) is the distinct-approver count. Idempotent create;
 	-- mirrored in the migrations slice below for existing databases.
 	CREATE TABLE IF NOT EXISTS rollout_approvals (
-		rollout_id  TEXT NOT NULL,
-		approver    TEXT NOT NULL,
-		notes       TEXT,
-		approved_at DATETIME NOT NULL,
+		rollout_id         TEXT NOT NULL,
+		approver           TEXT NOT NULL,
+		approver_token_id  TEXT,
+		notes              TEXT,
+		approved_at        DATETIME NOT NULL,
 		PRIMARY KEY (rollout_id, approver)
 	);
 
@@ -1252,6 +1253,12 @@ func (s *Storage) migrate() error {
 			approved_at DATETIME NOT NULL,
 			PRIMARY KEY (rollout_id, approver)
 		)`,
+		// ADR 0030 — approver-role requirements. Carry the approving
+		// actor's stable token identity so the rollout service can
+		// resolve each approver's RBAC roles. Idempotent ALTER for
+		// existing databases; the duplicate-column error is swallowed
+		// below like the other additive ALTERs.
+		`ALTER TABLE rollout_approvals ADD COLUMN approver_token_id TEXT`,
 	}
 
 	for _, migration := range migrations {
@@ -3830,10 +3837,10 @@ type scanner interface {
 // PK so the same approver approving twice does not double-count. The
 // rollout_approvals log is not tenant-scoped — a rollout_id is already unique
 // and the service resolves the rollout (which IS tenant-scoped) before calling.
-func (s *Storage) RecordRolloutApproval(ctx context.Context, rolloutID, approver, notes string, at time.Time) error {
+func (s *Storage) RecordRolloutApproval(ctx context.Context, rolloutID, approver, tokenID, notes string, at time.Time) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO rollout_approvals(rollout_id, approver, notes, approved_at) VALUES(?, ?, ?, ?)`,
-		rolloutID, approver, nullableString(notes), at,
+		`INSERT OR IGNORE INTO rollout_approvals(rollout_id, approver, approver_token_id, notes, approved_at) VALUES(?, ?, ?, ?, ?)`,
+		rolloutID, approver, nullableString(tokenID), nullableString(notes), at,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to record rollout approval: %w", err)
@@ -3859,7 +3866,7 @@ func (s *Storage) CountRolloutApprovers(ctx context.Context, rolloutID string) (
 // approval first, for audit / UI (ADR 0029).
 func (s *Storage) ListRolloutApprovers(ctx context.Context, rolloutID string) ([]types.RolloutApproval, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT approver, notes, approved_at FROM rollout_approvals WHERE rollout_id = ? ORDER BY approved_at ASC`,
+		`SELECT approver, approver_token_id, notes, approved_at FROM rollout_approvals WHERE rollout_id = ? ORDER BY approved_at ASC`,
 		rolloutID,
 	)
 	if err != nil {
@@ -3869,9 +3876,12 @@ func (s *Storage) ListRolloutApprovers(ctx context.Context, rolloutID string) ([
 	var out []types.RolloutApproval
 	for rows.Next() {
 		var a types.RolloutApproval
-		var notes sql.NullString
-		if err := rows.Scan(&a.Approver, &notes, &a.ApprovedAt); err != nil {
+		var tokenID, notes sql.NullString
+		if err := rows.Scan(&a.Approver, &tokenID, &notes, &a.ApprovedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan rollout approver: %w", err)
+		}
+		if tokenID.Valid {
+			a.ApproverTokenID = tokenID.String
 		}
 		if notes.Valid {
 			a.Notes = notes.String

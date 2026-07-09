@@ -41,7 +41,7 @@ type RolloutService interface {
 	// Approve transitions a rollout from pending_approval to
 	// pending (which the engine then advances). approver must not
 	// equal the rollout's RequestedBy; ErrSelfApproval otherwise.
-	Approve(ctx context.Context, id, approver, notes string) (*Rollout, error)
+	Approve(ctx context.Context, id, approver, approverTokenID, approverTokenLabel, notes string) (*Rollout, error)
 	// Reject is a terminal transition — the requester has to clone
 	// the rollout to retry.
 	Reject(ctx context.Context, id, rejecter, notes string) (*Rollout, error)
@@ -356,6 +356,16 @@ type Rollout struct {
 	// rollout_approvals log).
 	RequiredApprovals int `json:"required_approvals,omitempty"`
 	ApproverCount     int `json:"approver_count,omitempty"`
+
+	// MissingApproverRoles (ADR 0030) is the set of RBAC approver-role
+	// names the group's compliance policy requires but that the current
+	// distinct approvers do NOT yet collectively hold. Empty in the OSS
+	// build and whenever the group mandates no approver-roles, so the
+	// count-only workflow is unchanged. When non-empty, the rollout stays
+	// pending_approval even though the approver COUNT is met, and the UI
+	// can render exactly which role is still needed. Service-derived; not
+	// persisted on the rollout row.
+	MissingApproverRoles []string `json:"missing_approver_roles,omitempty"`
 
 	// v0.49 — change-window enforcement. Set by the rollout engine
 	// when a tick skips advancement because the target group has

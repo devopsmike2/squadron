@@ -44,7 +44,31 @@ type RolloutServiceImpl struct {
 	// in its own implementation without changing the OSS constructor
 	// signature.
 	groupPolicy policy.GroupPolicyProvider
-	logger      *zap.Logger
+	// approverRoleChecker resolves the RBAC roles held by a given
+	// approver (ADR 0030). nil (the OSS default) disables the
+	// approver-role gate entirely, so the count-only workflow is
+	// byte-identical. The enterprise build wires a real checker via
+	// SetApproverRoleChecker; the gate additionally requires a
+	// groupPolicy that mandates roles, so the feature is inert unless
+	// BOTH are present (the composed enterprise+compliance build).
+	approverRoleChecker ApproverRoleChecker
+	logger              *zap.Logger
+}
+
+// ApproverRoleChecker resolves the set of RBAC role names held by a
+// rollout approver, keyed by the approver's stable token identity
+// (ADR 0030). It is the boundary between the open-core rollout service
+// (which enforces the approver-role gate) and the enterprise RBAC
+// store (which knows the role bindings). The OSS build leaves it nil,
+// which makes the gate inert. The enterprise build wires an
+// implementation backed by its RBAC store via SetApproverRoleChecker.
+//
+// Implementations resolve by tokenID primarily and may also consult
+// tokenLabel; either may be empty. Implementations must be safe for
+// concurrent use. A non-nil error is treated as "no roles" (fail
+// closed for that approver — the required role stays uncovered).
+type ApproverRoleChecker interface {
+	RolesForApprover(ctx context.Context, tokenID, tokenLabel string) ([]string, error)
 }
 
 // SetGroupPolicyProvider wires the Compliance Pack's group policy
@@ -53,6 +77,17 @@ type RolloutServiceImpl struct {
 // and disables enforcement (the OSS default).
 func (s *RolloutServiceImpl) SetGroupPolicyProvider(p policy.GroupPolicyProvider) {
 	s.groupPolicy = p
+}
+
+// SetApproverRoleChecker wires the enterprise RBAC-backed approver-role
+// resolver (ADR 0030). Called after the service is constructed by the
+// enterprise wire layer. nil is a valid value and disables the
+// approver-role gate (the OSS default): the gate is skipped whenever the
+// checker is nil OR the group mandates no approver-roles, so OSS and
+// compliance-only builds behave byte-identically to the count-only
+// workflow.
+func (s *RolloutServiceImpl) SetApproverRoleChecker(c ApproverRoleChecker) {
+	s.approverRoleChecker = c
 }
 
 // ApplicationStore returns the underlying application store. Exposed
@@ -1359,7 +1394,7 @@ func (s *RolloutServiceImpl) Persist(ctx context.Context, rollout *Rollout) erro
 // the approver must not equal the rollout's RequestedBy. We compare
 // case-insensitively because tokens / SSO can emit the same actor in
 // either case depending on the issuer.
-func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes string) (*Rollout, error) {
+func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, approverTokenID, approverTokenLabel, notes string) (*Rollout, error) {
 	stored, err := s.appStore.GetRollout(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1383,8 +1418,10 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 	// distinct approvers leave it in pending_approval. RequiredApprovals
 	// defaults to 1, so with the default a single distinct approver
 	// crosses the threshold immediately — byte-for-byte the v0.47
-	// two-person behavior.
-	if err := s.appStore.RecordRolloutApproval(ctx, id, approver, notes, now); err != nil {
+	// two-person behavior. ADR 0030 — the approver's stable token
+	// identity (approverTokenID) is recorded alongside so the
+	// approver-role gate below can resolve each approver's RBAC roles.
+	if err := s.appStore.RecordRolloutApproval(ctx, id, approver, approverTokenID, notes, now); err != nil {
 		return nil, fmt.Errorf("failed to record approval: %w", err)
 	}
 	count, err := s.appStore.CountRolloutApprovers(ctx, id)
@@ -1396,12 +1433,102 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 		required = 1
 	}
 
-	if count < required {
-		// Below threshold — do NOT flip. Leave the rollout in
-		// pending_approval and record a distinct audit event so the
-		// k-of-N progression is auditable. Return the still-pending
-		// rollout with a nil error so the handler returns 200 with the
-		// k-of-N state (ApproverCount surfaces k for the UI).
+	// ADR 0030 — approver-role requirements. When the group's compliance
+	// policy mandates that specific RBAC roles be represented among the
+	// distinct approvers AND an approver-role checker is wired, compute
+	// which required roles are not yet covered. BOTH the mandate
+	// (groupPolicy) and the resolver (approverRoleChecker) must be
+	// present, so OSS and compliance-only builds skip this block entirely,
+	// requiredRoles/missingRoles stay nil, and the flip decision reduces
+	// to the count-only ADR 0029 behavior byte-for-byte.
+	var requiredRoles []string
+	var missingRoles []string
+	if s.groupPolicy != nil && s.approverRoleChecker != nil {
+		requiredRoles = s.groupPolicy.RequiredApproverRoles(ctx, stored.GroupID)
+		if len(requiredRoles) > 0 {
+			approvers, lerr := s.appStore.ListRolloutApprovers(ctx, id)
+			if lerr != nil {
+				return nil, fmt.Errorf("failed to list approvers for role check: %w", lerr)
+			}
+			covered := map[string]bool{}
+			for _, a := range approvers {
+				roles, rerr := s.approverRoleChecker.RolesForApprover(ctx, a.ApproverTokenID, deriveApproverLabel(a.Approver))
+				if rerr != nil {
+					// Fail closed for this approver: treat as holding no
+					// roles so a resolver error can never spuriously
+					// satisfy a required role. Logged for ops review.
+					s.logger.Warn("approver role resolution failed; treating approver as holding no roles",
+						zap.String("rollout_id", id),
+						zap.String("approver", a.Approver),
+						zap.Error(rerr))
+					continue
+				}
+				for _, rn := range roles {
+					covered[strings.ToLower(strings.TrimSpace(rn))] = true
+				}
+			}
+			for _, want := range requiredRoles {
+				key := strings.ToLower(strings.TrimSpace(want))
+				if key != "" && !covered[key] {
+					missingRoles = append(missingRoles, want)
+				}
+			}
+		}
+	}
+
+	// The flip requires BOTH the distinct-approver count AND full
+	// approver-role coverage. With no role mandate, len(missingRoles)==0
+	// always, so this is exactly the ADR 0029 count check.
+	flip := count >= required && len(missingRoles) == 0
+
+	if !flip {
+		out := toServiceRollout(stored)
+		out.ApproverCount = count
+		out.MissingApproverRoles = missingRoles
+
+		if count >= required && len(missingRoles) > 0 {
+			// ADR 0030 — the distinct-approver COUNT is met but a required
+			// approver-role is still uncovered. Distinct log + audit so the
+			// "missing role" reason is auditable and the UI can surface
+			// which role is needed. Reachable only in the composed
+			// enterprise+compliance build (OSS/compliance-only leave
+			// missingRoles nil, so this never fires).
+			reason := fmt.Sprintf("count met (%d/%d) but missing approver role(s): %s",
+				count, required, strings.Join(missingRoles, ", "))
+			s.logger.Info("rollout approval recorded (missing approver role)",
+				zap.String("rollout_id", id),
+				zap.String("approver", approver),
+				zap.Int("count", count),
+				zap.Int("required", required),
+				zap.Strings("missing_roles", missingRoles))
+			if s.auditService != nil {
+				_ = s.auditService.Record(ctx, AuditEntry{
+					Actor:      approver,
+					EventType:  "rollout.approval_recorded",
+					TargetType: "rollout",
+					TargetID:   id,
+					Action:     "approval_recorded",
+					Payload: map[string]any{
+						"approver":       approver,
+						"count":          count,
+						"required":       required,
+						"notes":          notes,
+						"required_roles": requiredRoles,
+						"missing_roles":  missingRoles,
+						"reason":         reason,
+					},
+				})
+			}
+			if s.tracer != nil {
+				s.tracer.RecordEvent(id, "approval_recorded", approver)
+			}
+			return out, nil
+		}
+
+		// Below the distinct-approver threshold — need more approvers
+		// (k/N). Byte-for-byte the ADR 0029 below-threshold behavior; the
+		// audit payload is unchanged so existing OSS consumers see no
+		// drift.
 		s.logger.Info("rollout approval recorded (below threshold)",
 			zap.String("rollout_id", id),
 			zap.String("approver", approver),
@@ -1425,14 +1552,13 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 		if s.tracer != nil {
 			s.tracer.RecordEvent(id, "approval_recorded", approver)
 		}
-		out := toServiceRollout(stored)
-		out.ApproverCount = count
 		return out, nil
 	}
 
-	// Threshold reached — perform the v0.47 flip. The scalar approval
-	// fields record the approver who crossed the threshold (the Nth
-	// distinct approver) so the UI / audit trail keep working unchanged.
+	// Threshold reached AND (ADR 0030) any required approver-roles are
+	// fully covered — perform the v0.47 flip. The scalar approval fields
+	// record the approver who crossed the threshold (the Nth distinct
+	// approver) so the UI / audit trail keep working unchanged.
 	stored.State = applicationstore.RolloutStatePending
 	stored.ApprovedBy = approver
 	stored.ApprovedAt = &now
@@ -1446,13 +1572,21 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 		zap.Int("count", count),
 		zap.Int("required", required))
 	if s.auditService != nil {
+		// Keep the OSS payload byte-identical when no approver-roles were
+		// mandated; only the composed build (requiredRoles non-empty) adds
+		// the role-coverage evidence fields.
+		payload := map[string]any{"notes": notes, "count": count, "required": required}
+		if len(requiredRoles) > 0 {
+			payload["required_roles"] = requiredRoles
+			payload["roles_ok"] = true
+		}
 		_ = s.auditService.Record(ctx, AuditEntry{
 			Actor:      approver,
 			EventType:  "rollout.approved",
 			TargetType: "rollout",
 			TargetID:   id,
 			Action:     "approved",
-			Payload:    map[string]any{"notes": notes, "count": count, "required": required},
+			Payload:    payload,
 		})
 	}
 	if s.tracer != nil {
@@ -1461,6 +1595,16 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 	out := toServiceRollout(stored)
 	out.ApproverCount = count
 	return out, nil
+}
+
+// deriveApproverLabel best-effort recovers the operator label from a
+// stored display approver string (ADR 0030). Approvals persist the
+// display identity as "operator:<label>" (AuthActor.String); the
+// approver-role checker resolves by stable token id primarily but can
+// also match on label, so we strip the "operator:" prefix to hand it a
+// clean label. A string without the prefix is returned unchanged.
+func deriveApproverLabel(approver string) string {
+	return strings.TrimPrefix(approver, "operator:")
 }
 
 // Reject terminates a rollout that was waiting for approval. Same
