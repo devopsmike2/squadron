@@ -347,6 +347,16 @@ type Rollout struct {
 	RejectedAt      *time.Time `json:"rejected_at,omitempty"`
 	ApprovalNotes   string     `json:"approval_notes,omitempty"`
 
+	// ADR 0029 — N-of-M approvals. RequiredApprovals is the number of
+	// DISTINCT approvers needed to flip pending_approval → pending
+	// (default 1 = the v0.47 two-person behavior). ApproverCount is
+	// how many distinct approvers have recorded so far, so the UI can
+	// render "k/N". Both are engine/service-managed; ApproverCount is
+	// not persisted on the rollout row (it is derived from the
+	// rollout_approvals log).
+	RequiredApprovals int `json:"required_approvals,omitempty"`
+	ApproverCount     int `json:"approver_count,omitempty"`
+
 	// v0.49 — change-window enforcement. Set by the rollout engine
 	// when a tick skips advancement because the target group has
 	// an active blackout (peak demand hours, storm response, etc).
@@ -493,6 +503,12 @@ type RolloutInput struct {
 	// second person must approve (the requester can't approve
 	// their own rollout — enforced in ApproveRollout).
 	RequireApproval bool `json:"require_approval,omitempty"`
+	// ADR 0029 — N-of-M approvals. Number of DISTINCT approvers the
+	// requester wants to require. 0 (the zero value) means "unset" and
+	// the service floors it to 1 (the two-person default). At Create
+	// the effective threshold is max(RequiredApprovals, group policy,
+	// 1). Ignored unless the rollout is in the approval workflow.
+	RequiredApprovals int `json:"required_approvals,omitempty"`
 	// v0.47 — auth actor of the request, populated by the handler
 	// from the gin.Context. Stored as RequestedBy on the rollout
 	// so the two-person rule can compare against it at approval

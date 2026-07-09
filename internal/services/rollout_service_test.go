@@ -585,10 +585,19 @@ func TestRolloutService_AbortMissing(t *testing.T) {
 // the Compliance Pack's real provider so the open core test can
 // exercise the enforcement code path without depending on the
 // private repo.
-type stubGroupPolicy struct{ enforced map[string]bool }
+type stubGroupPolicy struct {
+	enforced map[string]bool
+	// ADR 0029 — per-group N-of-M threshold the stub provider mandates.
+	// Zero value (nil map) returns 0, so the OSS default of 1 stands.
+	required map[string]int
+}
 
 func (s stubGroupPolicy) RequiresApproval(_ context.Context, groupID string) bool {
 	return s.enforced[groupID]
+}
+
+func (s stubGroupPolicy) RequiredApprovals(_ context.Context, groupID string) int {
+	return s.required[groupID]
 }
 
 // TestRolloutService_GroupPolicyForcesApproval verifies the v0.48
@@ -681,4 +690,122 @@ func TestRolloutService_GroupPolicyOffPreservesInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, r.RequireApproval)
 	assert.Equal(t, RolloutStatePending, r.State)
+}
+
+// --- ADR 0029: N-of-M rollout approvals ---------------------------------
+
+// TestRolloutService_Approve_DefaultThresholdIsTwoPerson is the REGRESSION
+// pin: a rollout that leaves RequiredApprovals unset (→ floored to 1) must
+// behave byte-for-byte like the v0.47 two-person workflow — a single distinct
+// approver flips pending_approval → pending, writing the scalar approval
+// fields.
+func TestRolloutService_Approve_DefaultThresholdIsTwoPerson(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	in := validRolloutInput(t, store)
+	in.RequireApproval = true
+	in.RequestedBy = "alice@example.com"
+	// RequiredApprovals intentionally unset (0) → floored to 1.
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	require.Equal(t, RolloutStatePendingApproval, r.State)
+	require.Equal(t, 1, r.RequiredApprovals, "unset threshold floors to the two-person default of 1")
+
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "lgtm")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePending, got.State, "one distinct approver must flip pending_approval → pending")
+	assert.Equal(t, "bob@example.com", got.ApprovedBy)
+	require.NotNil(t, got.ApprovedAt)
+	assert.Equal(t, "lgtm", got.ApprovalNotes)
+	assert.Equal(t, 1, got.ApproverCount)
+}
+
+// TestRolloutService_Approve_NofMProgression exercises required=3: the first
+// two distinct approvers leave the rollout in pending_approval (count climbs),
+// and the third distinct approver flips it to pending.
+func TestRolloutService_Approve_NofMProgression(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	in := validRolloutInput(t, store)
+	in.RequireApproval = true
+	in.RequestedBy = "alice@example.com"
+	in.RequiredApprovals = 3
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+	require.Equal(t, 3, r.RequiredApprovals)
+	require.Equal(t, RolloutStatePendingApproval, r.State)
+
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "1")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePendingApproval, got.State, "1/3 must stay pending_approval")
+	assert.Equal(t, 1, got.ApproverCount)
+
+	got, err = svc.Approve(ctx, r.ID, "carol@example.com", "2")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePendingApproval, got.State, "2/3 must stay pending_approval")
+	assert.Equal(t, 2, got.ApproverCount)
+
+	got, err = svc.Approve(ctx, r.ID, "dave@example.com", "3")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePending, got.State, "3/3 must flip to pending")
+	assert.Equal(t, 3, got.ApproverCount)
+	assert.Equal(t, "dave@example.com", got.ApprovedBy, "the threshold-crossing approver is recorded")
+}
+
+// TestRolloutService_Approve_SameApproverIdempotent confirms a single approver
+// approving twice does not advance the distinct-approver count and leaves the
+// rollout pending_approval when the threshold is above 1.
+func TestRolloutService_Approve_SameApproverIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	in := validRolloutInput(t, store)
+	in.RequireApproval = true
+	in.RequestedBy = "alice@example.com"
+	in.RequiredApprovals = 3
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+
+	got, err := svc.Approve(ctx, r.ID, "bob@example.com", "first")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePendingApproval, got.State)
+	assert.Equal(t, 1, got.ApproverCount)
+
+	got, err = svc.Approve(ctx, r.ID, "bob@example.com", "again")
+	require.NoError(t, err)
+	assert.Equal(t, RolloutStatePendingApproval, got.State, "duplicate approver must not flip the rollout")
+	assert.Equal(t, 1, got.ApproverCount, "duplicate approver must not double-count")
+
+	n, err := store.CountRolloutApprovers(ctx, r.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+}
+
+// TestRolloutService_Approve_RequesterCannotSelfApprove confirms the
+// two-person guard still holds under N-of-M: the requester cannot be counted
+// as an approver, and no approval is recorded on a rejected self-approval.
+func TestRolloutService_Approve_RequesterCannotSelfApprove(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewRolloutService(store, nil, nil, zap.NewNop())
+
+	in := validRolloutInput(t, store)
+	in.RequireApproval = true
+	in.RequestedBy = "alice@example.com"
+	in.RequiredApprovals = 3
+	r, err := svc.Create(ctx, in)
+	require.NoError(t, err)
+
+	_, err = svc.Approve(ctx, r.ID, "ALICE@example.com", "self") // case-insensitive match
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "two-person rule")
+
+	n, err := store.CountRolloutApprovers(ctx, r.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "a rejected self-approval must not be recorded")
 }

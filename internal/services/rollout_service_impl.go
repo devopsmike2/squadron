@@ -156,6 +156,20 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 			zap.String("requested_by", input.RequestedBy))
 	}
 
+	// ADR 0029 — resolve the N-of-M approval threshold. The effective
+	// requirement is max(what the requester asked for, what the group
+	// policy mandates, 1). The floor of 1 preserves the v0.47 two-person
+	// behavior exactly: an unset requester value (0) and the OSS
+	// NoOpProvider (which returns 0) leave the requirement at 1, so a
+	// single distinct approver still flips pending_approval → pending.
+	// An enterprise GroupPolicyProvider can raise this to enforce N-of-M
+	// at the group level.
+	groupPolicyRequired := 0
+	if s.groupPolicy != nil {
+		groupPolicyRequired = s.groupPolicy.RequiredApprovals(ctx, input.GroupID)
+	}
+	requiredApprovals := max(input.RequiredApprovals, groupPolicyRequired, 1)
+
 	now := time.Now().UTC()
 	// v0.47 — RequireApproval gates the initial state. With
 	// approval required, the engine refuses to advance the
@@ -206,6 +220,7 @@ func (s *RolloutServiceImpl) Create(ctx context.Context, input RolloutInput) (*R
 		State:             initialState,
 		CurrentStage:      0,
 		RequireApproval:   input.RequireApproval,
+		RequiredApprovals: requiredApprovals,
 		RequestedBy:       input.RequestedBy,
 		ProposedBy:        proposedBy,
 		ProposalReasoning: input.ProposalReasoning,
@@ -1332,6 +1347,64 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 	}
 
 	now := time.Now().UTC()
+
+	// ADR 0029 — N-of-M approvals. Record this distinct approver in the
+	// append-log first (idempotent: the same approver approving twice
+	// does not double-count), then count the distinct approvers and
+	// decide. Only the Nth distinct approver flips the rollout; earlier
+	// distinct approvers leave it in pending_approval. RequiredApprovals
+	// defaults to 1, so with the default a single distinct approver
+	// crosses the threshold immediately — byte-for-byte the v0.47
+	// two-person behavior.
+	if err := s.appStore.RecordRolloutApproval(ctx, id, approver, notes, now); err != nil {
+		return nil, fmt.Errorf("failed to record approval: %w", err)
+	}
+	count, err := s.appStore.CountRolloutApprovers(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count approvers: %w", err)
+	}
+	required := stored.RequiredApprovals
+	if required < 1 {
+		required = 1
+	}
+
+	if count < required {
+		// Below threshold — do NOT flip. Leave the rollout in
+		// pending_approval and record a distinct audit event so the
+		// k-of-N progression is auditable. Return the still-pending
+		// rollout with a nil error so the handler returns 200 with the
+		// k-of-N state (ApproverCount surfaces k for the UI).
+		s.logger.Info("rollout approval recorded (below threshold)",
+			zap.String("rollout_id", id),
+			zap.String("approver", approver),
+			zap.Int("count", count),
+			zap.Int("required", required))
+		if s.auditService != nil {
+			_ = s.auditService.Record(ctx, AuditEntry{
+				Actor:      approver,
+				EventType:  "rollout.approval_recorded",
+				TargetType: "rollout",
+				TargetID:   id,
+				Action:     "approval_recorded",
+				Payload: map[string]any{
+					"approver": approver,
+					"count":    count,
+					"required": required,
+					"notes":    notes,
+				},
+			})
+		}
+		if s.tracer != nil {
+			s.tracer.RecordEvent(id, "approval_recorded", approver)
+		}
+		out := toServiceRollout(stored)
+		out.ApproverCount = count
+		return out, nil
+	}
+
+	// Threshold reached — perform the v0.47 flip. The scalar approval
+	// fields record the approver who crossed the threshold (the Nth
+	// distinct approver) so the UI / audit trail keep working unchanged.
 	stored.State = applicationstore.RolloutStatePending
 	stored.ApprovedBy = approver
 	stored.ApprovedAt = &now
@@ -1341,7 +1414,9 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 	}
 	s.logger.Info("rollout approved",
 		zap.String("rollout_id", id),
-		zap.String("approver", approver))
+		zap.String("approver", approver),
+		zap.Int("count", count),
+		zap.Int("required", required))
 	if s.auditService != nil {
 		_ = s.auditService.Record(ctx, AuditEntry{
 			Actor:      approver,
@@ -1349,13 +1424,15 @@ func (s *RolloutServiceImpl) Approve(ctx context.Context, id, approver, notes st
 			TargetType: "rollout",
 			TargetID:   id,
 			Action:     "approved",
-			Payload:    map[string]any{"notes": notes},
+			Payload:    map[string]any{"notes": notes, "count": count, "required": required},
 		})
 	}
 	if s.tracer != nil {
 		s.tracer.RecordEvent(id, "approved", approver)
 	}
-	return toServiceRollout(stored), nil
+	out := toServiceRollout(stored)
+	out.ApproverCount = count
+	return out, nil
 }
 
 // Reject terminates a rollout that was waiting for approval. Same
@@ -1763,6 +1840,8 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 		RejectedBy:      r.RejectedBy,
 		RejectedAt:      r.RejectedAt,
 		ApprovalNotes:   r.ApprovalNotes,
+		// ADR 0029 — N-of-M approvals threshold.
+		RequiredApprovals: r.RequiredApprovals,
 		// v0.49 blackout fields.
 		LastBlackoutReason: r.LastBlackoutReason,
 		LastBlackoutAt:     r.LastBlackoutAt,
@@ -1866,6 +1945,8 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 		RejectedBy:      r.RejectedBy,
 		RejectedAt:      r.RejectedAt,
 		ApprovalNotes:   r.ApprovalNotes,
+		// ADR 0029 — N-of-M approvals threshold.
+		RequiredApprovals: r.RequiredApprovals,
 		// v0.49 blackout fields.
 		LastBlackoutReason: r.LastBlackoutReason,
 		LastBlackoutAt:     r.LastBlackoutAt,

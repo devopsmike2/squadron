@@ -242,6 +242,14 @@ func (s *Storage) migrate() error {
 		-- databases; this column is in the CREATE TABLE so fresh
 		-- deployments (which skip the ALTER) still get the column.
 		exclude_from_learning INTEGER NOT NULL DEFAULT 0,
+		-- ADR 0029 — N-of-M approvals. Number of DISTINCT approvers
+		-- required to flip pending_approval → pending. DEFAULT 1
+		-- reproduces the v0.47 two-person behavior exactly (a single
+		-- distinct approver flips it). The ALTER TABLE in the
+		-- migrations slice below covers existing databases; this
+		-- column is in the CREATE TABLE so fresh deployments (which
+		-- skip the ALTER) still get it.
+		required_approvals INTEGER NOT NULL DEFAULT 1,
 		-- Optimistic-concurrency counter. Bumped on every UpdateRollout;
 		-- a CAS-guarded update rejects a write whose loaded version no
 		-- longer matches, catching the engine-vs-operator lost-update
@@ -254,6 +262,18 @@ func (s *Storage) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_rollouts_state ON rollouts(state);
 	CREATE INDEX IF NOT EXISTS idx_rollouts_group ON rollouts(group_id, created_at DESC);
+
+	-- ADR 0029 — N-of-M rollout approvals append-log. One row per
+	-- distinct approver; the composite PK enforces distinctness so a
+	-- COUNT(*) is the distinct-approver count. Idempotent create;
+	-- mirrored in the migrations slice below for existing databases.
+	CREATE TABLE IF NOT EXISTS rollout_approvals (
+		rollout_id  TEXT NOT NULL,
+		approver    TEXT NOT NULL,
+		notes       TEXT,
+		approved_at DATETIME NOT NULL,
+		PRIMARY KEY (rollout_id, approver)
+	);
 
 	CREATE TABLE IF NOT EXISTS api_tokens (
 		id TEXT PRIMARY KEY,
@@ -524,6 +544,11 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE rollouts ADD COLUMN rejected_by TEXT`,
 		`ALTER TABLE rollouts ADD COLUMN rejected_at DATETIME`,
 		`ALTER TABLE rollouts ADD COLUMN approval_notes TEXT`,
+		// ADR 0029: N-of-M approvals. DEFAULT 1 reproduces the v0.47
+		// two-person behavior for existing rollouts exactly — a single
+		// distinct approver flips pending_approval → pending. Idempotent-
+		// swallowed like the approval columns above on re-run.
+		`ALTER TABLE rollouts ADD COLUMN required_approvals INTEGER NOT NULL DEFAULT 1`,
 		// v0.49.0: rollouts get last_blackout_reason / at columns so
 		// the engine can record why advancement was skipped (active
 		// change window) and the UI can render a badge. Both
@@ -1215,6 +1240,17 @@ func (s *Storage) migrate() error {
 			tenant_id  TEXT PRIMARY KEY DEFAULT 'default',
 			max_rows   INTEGER NOT NULL,
 			updated_at TIMESTAMP NOT NULL
+		)`,
+		// ADR 0029 — N-of-M rollout approvals append-log. Idempotent
+		// create; one row per distinct approver, composite PK enforces
+		// distinctness. Mirrors the inline CREATE TABLE above so both
+		// fresh and upgraded databases get the table.
+		`CREATE TABLE IF NOT EXISTS rollout_approvals (
+			rollout_id  TEXT NOT NULL,
+			approver    TEXT NOT NULL,
+			notes       TEXT,
+			approved_at DATETIME NOT NULL,
+			PRIMARY KEY (rollout_id, approver)
 		)`,
 	}
 
@@ -2700,9 +2736,13 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		// system-context inserts.
 		tenant = identity.DefaultTenant
 	}
+	requiredApprovals := r.RequiredApprovals
+	if requiredApprovals < 1 {
+		requiredApprovals = 1
+	}
 	stmt := `
-		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, tenant_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO rollouts (id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, required_approvals, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = s.db.ExecContext(ctx, stmt,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID,
@@ -2720,6 +2760,10 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(r.RejectedBy),
 		r.RejectedAt,
 		nullableString(r.ApprovalNotes),
+		// ADR 0029 — N-of-M approvals. Floor to 1 so a caller that
+		// leaves it 0 stores the two-person default (matches the
+		// column DEFAULT 1 and scanRollout's read-side floor).
+		requiredApprovals,
 		// v0.49 blackout columns. Empty at create — the engine
 		// only ever sets them later.
 		nullableString(r.LastBlackoutReason),
@@ -2760,7 +2804,7 @@ func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, er
 	if err != nil {
 		return nil, err
 	}
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE id = ?`
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, required_approvals, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE id = ?`
 	args := []any{id}
 	if apply {
 		stmt += ` AND tenant_id = ?`
@@ -2786,7 +2830,7 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 	if err != nil {
 		return nil, err
 	}
-	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE 1=1"
+	q := "SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, required_approvals, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids FROM rollouts WHERE 1=1"
 	var args []any
 	if apply {
 		q += " AND tenant_id = ?"
@@ -2855,7 +2899,7 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 	if err != nil {
 		return nil, err
 	}
-	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids
+	stmt := `SELECT id, name, group_id, target_config_id, previous_config_id, stages, abort_criteria, notification_url, state, current_stage, stage_started_at, abort_reason, created_at, updated_at, completed_at, require_approval, requested_by, approved_by, approved_at, rejected_by, rejected_at, approval_notes, required_approvals, last_blackout_reason, last_blackout_at, proposed_by, proposal_reasoning, evidence_refs, rolled_back_from_id, plan_id, plan_step_index, step_kind, action_request_id, exclude_from_learning, version, pushed_agent_ids
 		FROM rollouts
 		WHERE group_id = ?
 		  AND proposed_by = 'ai'
@@ -3654,6 +3698,7 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		    stage_started_at = ?, abort_reason = ?, updated_at = ?, completed_at = ?,
 		    require_approval = ?, requested_by = ?, approved_by = ?, approved_at = ?,
 		    rejected_by = ?, rejected_at = ?, approval_notes = ?,
+		    required_approvals = ?,
 		    last_blackout_reason = ?, last_blackout_at = ?,
 		    proposed_by = ?, proposal_reasoning = ?, evidence_refs = ?,
 		    rolled_back_from_id = ?, plan_id = ?, plan_step_index = ?,
@@ -3674,6 +3719,14 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 		nullableString(r.RejectedBy),
 		r.RejectedAt,
 		nullableString(r.ApprovalNotes),
+		// ADR 0029 — N-of-M approvals threshold. Floor to 1 to match
+		// the read-side and the column DEFAULT.
+		func() int {
+			if r.RequiredApprovals < 1 {
+				return 1
+			}
+			return r.RequiredApprovals
+		}(),
 		nullableString(r.LastBlackoutReason),
 		r.LastBlackoutAt,
 		proposedBy,
@@ -3760,6 +3813,62 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
+// RecordRolloutApproval records one distinct approver's approval of a rollout
+// (ADR 0029). Idempotent: INSERT OR IGNORE keys off the (rollout_id, approver)
+// PK so the same approver approving twice does not double-count. The
+// rollout_approvals log is not tenant-scoped — a rollout_id is already unique
+// and the service resolves the rollout (which IS tenant-scoped) before calling.
+func (s *Storage) RecordRolloutApproval(ctx context.Context, rolloutID, approver, notes string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO rollout_approvals(rollout_id, approver, notes, approved_at) VALUES(?, ?, ?, ?)`,
+		rolloutID, approver, nullableString(notes), at,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record rollout approval: %w", err)
+	}
+	return nil
+}
+
+// CountRolloutApprovers returns the number of DISTINCT approvers recorded for a
+// rollout (ADR 0029). The composite PK guarantees distinctness, so a plain
+// COUNT(*) is the distinct-approver count.
+func (s *Storage) CountRolloutApprovers(ctx context.Context, rolloutID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM rollout_approvals WHERE rollout_id = ?`, rolloutID,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count rollout approvers: %w", err)
+	}
+	return n, nil
+}
+
+// ListRolloutApprovers returns the recorded approvers for a rollout, oldest
+// approval first, for audit / UI (ADR 0029).
+func (s *Storage) ListRolloutApprovers(ctx context.Context, rolloutID string) ([]types.RolloutApproval, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT approver, notes, approved_at FROM rollout_approvals WHERE rollout_id = ? ORDER BY approved_at ASC`,
+		rolloutID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list rollout approvers: %w", err)
+	}
+	defer rows.Close()
+	var out []types.RolloutApproval
+	for rows.Next() {
+		var a types.RolloutApproval
+		var notes sql.NullString
+		if err := rows.Scan(&a.Approver, &notes, &a.ApprovedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan rollout approver: %w", err)
+		}
+		if notes.Valid {
+			a.Notes = notes.String
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 	r := &types.Rollout{}
 	var (
@@ -3804,6 +3913,10 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		// v0.90 (ADR 0007) — cumulative pushed-agent set. NULL on every
 		// pre-v0.90 / in-flight row; decoded to an empty slice below.
 		pushedAgentIDsJSON sql.NullString
+		// ADR 0029 — N-of-M approvals threshold. INTEGER NOT NULL
+		// DEFAULT 1 so every row has a value; floored to 1 below as
+		// belt-and-suspenders for any 0 written by an older path.
+		requiredApprovalsInt int
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name, &r.GroupID, &r.TargetConfigID,
@@ -3813,6 +3926,7 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		&r.CreatedAt, &r.UpdatedAt, &completedAt,
 		&requireApprovalInt, &requestedBy, &approvedBy, &approvedAt,
 		&rejectedBy, &rejectedAt, &approvalNotes,
+		&requiredApprovalsInt,
 		&lastBlackoutReason, &lastBlackoutAt,
 		&proposedBy, &proposalReasoning, &evidenceRefsJSON,
 		&rolledBackFromID,
@@ -3825,6 +3939,12 @@ func (s *Storage) scanRollout(sc scanner) (*types.Rollout, error) {
 		return nil, err
 	}
 	r.ExcludeFromLearning = excludeFromLearningInt != 0
+	// ADR 0029 — floor the threshold to 1 on read so pre-ADR-0029 rows
+	// (and any row that stored 0) behave as the two-person default.
+	if requiredApprovalsInt < 1 {
+		requiredApprovalsInt = 1
+	}
+	r.RequiredApprovals = requiredApprovalsInt
 	// v0.90 (ADR 0007) — decode the cumulative pushed-agent set. NULL/empty
 	// yields a nil slice, which the engine treats as "no cumulative record"
 	// and falls back to the current-stage cohort.
