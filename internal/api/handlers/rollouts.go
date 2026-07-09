@@ -311,9 +311,15 @@ func (h *RolloutHandlers) HandleApproveRollout(c *gin.Context) {
 		Notes string `json:"notes"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	approver := actorFromContext(c)
+	// approver is the display "operator:<label>" string used by the
+	// two-person rule + ApprovedBy. actor carries the stable token
+	// identity (ADR 0030) so the service can resolve the approver's RBAC
+	// roles for the approver-role gate. Both come from the authenticated
+	// gin context, never from the body.
+	actor := middleware.ActorFromGin(c)
+	approver := actor.String()
 
-	r, err := h.rolloutService.Approve(c.Request.Context(), id, approver, body.Notes)
+	r, err := h.rolloutService.Approve(c.Request.Context(), id, approver, actor.TokenID, actor.TokenLabel, body.Notes)
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "not found") {

@@ -45,6 +45,17 @@ type Group struct {
 	// RequiredApprovals; the OSS build never populates it (NoOpProvider
 	// ignores groups entirely).
 	RequiredApprovals int
+
+	// RequiredApproverRoles is the set of RBAC role names (ADR 0030)
+	// the group's compliance policy requires the DISTINCT approvers of a
+	// rollout to collectively hold. Empty (the OSS default / an
+	// unconfigured group) means "no approver-role mandate", so the
+	// rollout service's approver-role gate is inert and behavior is
+	// byte-identical to the count-only workflow. A Compliance Pack wire
+	// layer projects a group's configured roles (a group label) onto this
+	// field so its GroupPolicyProvider can surface them from
+	// RequiredApproverRoles; the OSS build never populates it.
+	RequiredApproverRoles []string
 }
 
 // GroupReader is the minimal storage surface a policy provider
@@ -99,6 +110,19 @@ type GroupPolicyProvider interface {
 	// The OSS implementation always returns 0 (no enforcement).
 	// Implementations must be safe for concurrent use.
 	RequiredApprovals(ctx context.Context, groupID string) int
+
+	// RequiredApproverRoles returns the RBAC role names (ADR 0030) that
+	// the DISTINCT approvers of a rollout into the group must
+	// collectively hold before the rollout service flips
+	// pending_approval -> pending. The service treats an empty/nil
+	// result as "no approver-role mandate" and skips the role gate
+	// entirely, so the count-only workflow is unchanged. A Compliance
+	// Pack provider returns e.g. []string{"security"} to require that a
+	// security-role holder be among the approvers.
+	//
+	// The OSS implementation always returns nil (no enforcement).
+	// Implementations must be safe for concurrent use.
+	RequiredApproverRoles(ctx context.Context, groupID string) []string
 }
 
 // NoOpProvider is the open-core default. It returns false for every
@@ -119,3 +143,9 @@ func (NoOpProvider) RequiresApproval(_ context.Context, _ string) bool { return 
 // which the rollout service floors to the OSS default of 1 distinct
 // approver. See package doc and the interface method doc for why.
 func (NoOpProvider) RequiredApprovals(_ context.Context, _ string) int { return 0 }
+
+// RequiredApproverRoles implements GroupPolicyProvider and always returns
+// nil (no approver-role mandate), which keeps the rollout service's
+// approver-role gate inert in the OSS build. See package doc and the
+// interface method doc for why.
+func (NoOpProvider) RequiredApproverRoles(_ context.Context, _ string) []string { return nil }

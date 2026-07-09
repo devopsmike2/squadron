@@ -388,7 +388,7 @@ func (askRolloutListOnly) Pause(context.Context, string) (*services.Rollout, err
 func (askRolloutListOnly) Resume(context.Context, string) (*services.Rollout, error) {
 	panic("not used")
 }
-func (askRolloutListOnly) Approve(context.Context, string, string, string) (*services.Rollout, error) {
+func (askRolloutListOnly) Approve(context.Context, string, string, string, string, string) (*services.Rollout, error) {
 	panic("not used")
 }
 func (askRolloutListOnly) Reject(context.Context, string, string, string) (*services.Rollout, error) {

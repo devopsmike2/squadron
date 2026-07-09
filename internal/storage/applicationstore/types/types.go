@@ -123,7 +123,7 @@ type ApplicationStore interface {
 	// recorded so far; the PK (rollout_id, approver) guarantees
 	// distinctness. ListRolloutApprovers returns the approvers for
 	// audit / UI, oldest first.
-	RecordRolloutApproval(ctx context.Context, rolloutID, approver, notes string, at time.Time) error
+	RecordRolloutApproval(ctx context.Context, rolloutID, approver, tokenID, notes string, at time.Time) error
 	CountRolloutApprovers(ctx context.Context, rolloutID string) (int, error)
 	ListRolloutApprovers(ctx context.Context, rolloutID string) ([]RolloutApproval, error)
 
@@ -723,9 +723,15 @@ type RolloutAbortCriteria struct {
 // per (rollout_id, approver); this projection is what the store returns for
 // audit / UI. ApprovedAt is when that approver's Approve call landed.
 type RolloutApproval struct {
-	Approver   string    `json:"approver"`
-	Notes      string    `json:"notes,omitempty"`
-	ApprovedAt time.Time `json:"approved_at"`
+	Approver string `json:"approver"`
+	// ApproverTokenID is the approving actor's stable token identity
+	// (ADR 0030). Nullable/empty for approvals recorded without an
+	// authenticated token (CLI, legacy rows). The rollout service's
+	// approver-role gate resolves each approver's RBAC roles by this
+	// stable id; distinctness of approvers still keys on Approver.
+	ApproverTokenID string    `json:"approver_token_id,omitempty"`
+	Notes           string    `json:"notes,omitempty"`
+	ApprovedAt      time.Time `json:"approved_at"`
 }
 
 // Rollout is one safe staged config rollout against a group.

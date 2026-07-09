@@ -883,7 +883,7 @@ func (s *Store) UpdateAuditEventExplanation(ctx context.Context, id, explanation
 // (ADR 0029). Idempotent: a second call with the same (rolloutID, approver)
 // leaves the inner map size unchanged, so the distinct-approver count does not
 // double.
-func (s *Store) RecordRolloutApproval(ctx context.Context, rolloutID, approver, notes string, at time.Time) error {
+func (s *Store) RecordRolloutApproval(ctx context.Context, rolloutID, approver, tokenID, notes string, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	inner, ok := s.rolloutApprovals[rolloutID]
@@ -895,7 +895,7 @@ func (s *Store) RecordRolloutApproval(ctx context.Context, rolloutID, approver, 
 		// Idempotent — keep the first recorded approval.
 		return nil
 	}
-	inner[approver] = types.RolloutApproval{Approver: approver, Notes: notes, ApprovedAt: at}
+	inner[approver] = types.RolloutApproval{Approver: approver, ApproverTokenID: tokenID, Notes: notes, ApprovedAt: at}
 	return nil
 }
 
