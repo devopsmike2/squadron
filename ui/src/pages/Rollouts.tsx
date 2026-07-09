@@ -1407,7 +1407,7 @@ interface RolloutCardProps {
   onRollBack: (r: Rollout) => void;
 }
 
-function RolloutCard({
+export function RolloutCard({
   rollout: r,
   groupName,
   configLabel,
@@ -1668,12 +1668,53 @@ function RolloutCard({
                 <span className="font-mono">{r.requested_by}</span>
               </div>
             )}
-            {r.state === "pending_approval" && (
-              <div className="text-orange-700">
-                Waiting on a second approver. The requester cannot approve their
-                own rollout.
-              </div>
-            )}
+            {r.state === "pending_approval" &&
+              ((r.required_approvals ?? 1) > 1 ? (
+                // ADR 0029 — N-of-M progress. Only rendered when more than
+                // one distinct approver is required, so the single-approver
+                // (v0.47) UX below is left untouched.
+                <div className="space-y-1" data-testid="approval-progress">
+                  <div className="text-orange-700">
+                    Approvals: {r.approver_count ?? 0} of {r.required_approvals}
+                    {" · "}
+                    {Math.max(
+                      0,
+                      (r.required_approvals ?? 0) - (r.approver_count ?? 0),
+                    )}{" "}
+                    more distinct{" "}
+                    {(r.required_approvals ?? 0) - (r.approver_count ?? 0) === 1
+                      ? "approver"
+                      : "approvers"}{" "}
+                    needed. The requester cannot approve their own rollout.
+                  </div>
+                  <div
+                    className="h-1.5 w-full overflow-hidden rounded bg-orange-500/15"
+                    role="progressbar"
+                    aria-valuenow={r.approver_count ?? 0}
+                    aria-valuemin={0}
+                    aria-valuemax={r.required_approvals}
+                  >
+                    <div
+                      className="h-full rounded bg-orange-500 transition-all"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.round(
+                            ((r.approver_count ?? 0) /
+                              (r.required_approvals || 1)) *
+                              100,
+                          ),
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="text-orange-700">
+                  Waiting on a second approver. The requester cannot approve
+                  their own rollout.
+                </div>
+              ))}
             {r.approved_by && (
               <div className="text-emerald-700">
                 Approved by <span className="font-mono">{r.approved_by}</span>

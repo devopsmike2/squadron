@@ -52,6 +52,15 @@ export interface Rollout {
   rejected_by?: string;
   rejected_at?: string;
   approval_notes?: string;
+  // ADR 0029 — N-of-M approvals. required_approvals is the number of
+  // DISTINCT approvers needed to flip pending_approval → pending (default
+  // 1 = the v0.47 two-person behavior). approver_count is how many
+  // distinct approvers have recorded so far, so the card can render k/N.
+  // Both are server-derived; approver_count is populated on read for
+  // pending_approval rollouts and omitted (→ undefined, treat as 0)
+  // otherwise. Optional on the wire for pre-ADR-0029 servers.
+  required_approvals?: number;
+  approver_count?: number;
   // v0.49 — change-window enforcement. Set by the engine when a
   // tick skips advancement because the target group has an active
   // blackout window. Cleared on the next successful advancement.
