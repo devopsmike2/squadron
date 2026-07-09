@@ -35,7 +35,11 @@ type Store struct {
 	// sorted newest-first on read.
 	discoveryScans []*types.ScanRecord
 	rollouts       map[string]*types.Rollout
-	apiTokens      map[string]*types.APIToken // keyed by ID; secondary index built on the fly for hash lookup
+	// ADR 0029 — N-of-M rollout approvals append-log. Outer key is
+	// rollout_id, inner key is approver, so len(inner) is the
+	// distinct-approver count. Guarded by the same mutex as rollouts.
+	rolloutApprovals map[string]map[string]types.RolloutApproval
+	apiTokens        map[string]*types.APIToken // keyed by ID; secondary index built on the fly for hash lookup
 	// v0.25: recommendation dismissals — keyed by the engine's
 	// deterministic recommendation_id hash.
 	recDismissals map[string]*types.RecommendationDismissal
@@ -138,6 +142,7 @@ func NewStore() *Store {
 		alertRules:       make(map[string]*types.AlertRule),
 		auditEvents:      make([]*types.AuditEvent, 0, 64),
 		rollouts:         make(map[string]*types.Rollout),
+		rolloutApprovals: make(map[string]map[string]types.RolloutApproval),
 		apiTokens:        make(map[string]*types.APIToken),
 		recDismissals:    make(map[string]*types.RecommendationDismissal),
 		recOutcomes:      make(map[string]*types.RecommendationOutcome),
@@ -867,6 +872,53 @@ func (s *Store) UpdateAuditEventExplanation(ctx context.Context, id, explanation
 }
 
 // Rollout management
+
+// RecordRolloutApproval records one distinct approver's approval of a rollout
+// (ADR 0029). Idempotent: a second call with the same (rolloutID, approver)
+// leaves the inner map size unchanged, so the distinct-approver count does not
+// double.
+func (s *Store) RecordRolloutApproval(ctx context.Context, rolloutID, approver, notes string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inner, ok := s.rolloutApprovals[rolloutID]
+	if !ok {
+		inner = make(map[string]types.RolloutApproval)
+		s.rolloutApprovals[rolloutID] = inner
+	}
+	if _, exists := inner[approver]; exists {
+		// Idempotent — keep the first recorded approval.
+		return nil
+	}
+	inner[approver] = types.RolloutApproval{Approver: approver, Notes: notes, ApprovedAt: at}
+	return nil
+}
+
+// CountRolloutApprovers returns the number of DISTINCT approvers recorded for a
+// rollout (ADR 0029) — the size of the inner map.
+func (s *Store) CountRolloutApprovers(ctx context.Context, rolloutID string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.rolloutApprovals[rolloutID]), nil
+}
+
+// ListRolloutApprovers returns the recorded approvers for a rollout, oldest
+// approval first, for audit / UI (ADR 0029).
+func (s *Store) ListRolloutApprovers(ctx context.Context, rolloutID string) ([]types.RolloutApproval, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	inner := s.rolloutApprovals[rolloutID]
+	if len(inner) == 0 {
+		return nil, nil
+	}
+	out := make([]types.RolloutApproval, 0, len(inner))
+	for _, a := range inner {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ApprovedAt.Before(out[j].ApprovedAt)
+	})
+	return out, nil
+}
 
 func (s *Store) CreateRollout(ctx context.Context, r *types.Rollout) error {
 	s.mu.Lock()

@@ -72,6 +72,23 @@ type GroupPolicyProvider interface {
 	// Implementations must be safe for concurrent use. The rollout
 	// service calls this on every Create.
 	RequiresApproval(ctx context.Context, groupID string) bool
+
+	// RequiredApprovals returns the number of DISTINCT approvers the
+	// group's compliance policy mandates for every rollout into the
+	// group (ADR 0029 — N-of-M approvals). The rollout service floors
+	// the returned value into its Create-time resolution:
+	//
+	//     required = max(input.RequiredApprovals, provider.RequiredApprovals(...), 1)
+	//
+	// so a provider that doesn't care returns 0 and the OSS default of
+	// a single distinct approver stands. A Compliance Pack provider
+	// returns e.g. 2 or 3 to enforce N-of-M at the group level,
+	// removing operator discretion the same way RequiresApproval does
+	// for the on/off gate.
+	//
+	// The OSS implementation always returns 0 (no enforcement).
+	// Implementations must be safe for concurrent use.
+	RequiredApprovals(ctx context.Context, groupID string) int
 }
 
 // NoOpProvider is the open-core default. It returns false for every
@@ -87,3 +104,8 @@ type NoOpProvider struct{}
 // RequiresApproval implements GroupPolicyProvider and always returns
 // false. See package doc for why.
 func (NoOpProvider) RequiresApproval(_ context.Context, _ string) bool { return false }
+
+// RequiredApprovals implements GroupPolicyProvider and always returns 0,
+// which the rollout service floors to the OSS default of 1 distinct
+// approver. See package doc and the interface method doc for why.
+func (NoOpProvider) RequiredApprovals(_ context.Context, _ string) int { return 0 }

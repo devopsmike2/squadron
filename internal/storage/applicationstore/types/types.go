@@ -108,6 +108,18 @@ type ApplicationStore interface {
 	ListRollouts(ctx context.Context, filter RolloutFilter) ([]*Rollout, error)
 	UpdateRollout(ctx context.Context, rollout *Rollout) error
 
+	// ADR 0029 — N-of-M rollout approvals. The rollout_approvals
+	// append-log holds one row per distinct approver.
+	// RecordRolloutApproval is an idempotent INSERT OR IGNORE: the
+	// same approver approving twice does not double-count.
+	// CountRolloutApprovers returns the number of DISTINCT approvers
+	// recorded so far; the PK (rollout_id, approver) guarantees
+	// distinctness. ListRolloutApprovers returns the approvers for
+	// audit / UI, oldest first.
+	RecordRolloutApproval(ctx context.Context, rolloutID, approver, notes string, at time.Time) error
+	CountRolloutApprovers(ctx context.Context, rolloutID string) (int, error)
+	ListRolloutApprovers(ctx context.Context, rolloutID string) ([]RolloutApproval, error)
+
 	// v0.89.17 (#633) — proposer learns from accepted/rejected verdicts.
 	// ListAIVerdictsForGroup returns AI-originated rollouts on the
 	// supplied group that have a terminal approval verdict (approved
@@ -699,6 +711,16 @@ type RolloutAbortCriteria struct {
 	ErrorRateWindowSeconds int `json:"error_rate_window_seconds,omitempty"`
 }
 
+// RolloutApproval is a single distinct approver's recorded approval of a
+// rollout (ADR 0029). The append-log table rollout_approvals holds one row
+// per (rollout_id, approver); this projection is what the store returns for
+// audit / UI. ApprovedAt is when that approver's Approve call landed.
+type RolloutApproval struct {
+	Approver   string    `json:"approver"`
+	Notes      string    `json:"notes,omitempty"`
+	ApprovedAt time.Time `json:"approved_at"`
+}
+
 // Rollout is one safe staged config rollout against a group.
 type Rollout struct {
 	ID               string               `json:"id"`
@@ -736,6 +758,14 @@ type Rollout struct {
 	RejectedBy      string     `json:"rejected_by,omitempty"`
 	RejectedAt      *time.Time `json:"rejected_at,omitempty"`
 	ApprovalNotes   string     `json:"approval_notes,omitempty"`
+
+	// ADR 0029 — N-of-M rollout approvals. RequiredApprovals is the
+	// number of DISTINCT approvers that must call Approve before the
+	// rollout flips pending_approval → pending. Default 1 preserves
+	// the v0.47 two-person behavior exactly (a single distinct
+	// approver flips it). Old rows / callers that leave this 0 are
+	// treated as 1 on read and at the service boundary.
+	RequiredApprovals int `json:"required_approvals,omitempty"`
 
 	// v0.49 — last blackout the engine hit on this rollout. Set
 	// transiently when a tick refuses to advance because the
