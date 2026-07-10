@@ -1,7 +1,14 @@
+<div align="center">
+
+<img src="docs/assets/squadron-mark.svg" alt="Squadron" width="96" />
+
 # Squadron
 
-**The open-source OpenTelemetry control plane for coverage, cost,
-and safe rollouts.**
+**The open-source OpenTelemetry control plane for coverage, cost, and safe rollouts.**
+
+[Documentation](https://devopsmike2.github.io/squadron/) &middot; [Getting started](https://devopsmike2.github.io/squadron/getting-started/) &middot; [How it works](https://devopsmike2.github.io/squadron/how-it-works/) &middot; [Enterprise](https://devopsmike2.github.io/squadron/enterprise/overview/)
+
+</div>
 
 Squadron continuously discovers what's running across AWS, GCP,
 Azure, and OCI, finds the resources with missing or broken

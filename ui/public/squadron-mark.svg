@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Squadron">
+  <path d="M3.5 18.5L12 5L20.5 18.5L17 18.5L12 10.5L7 18.5L3.5 18.5Z" fill="#00BFD5"/>
+  <path d="M7 21L12 13L17 21L14 21L12 17.5L10 21L7 21Z" fill="#00BFD5" opacity="0.65"/>
+  <path d="M10 22.5L12 19L14 22.5L12.7 22.5L12 21L11.3 22.5L10 22.5Z" fill="#00BFD5" opacity="0.35"/>
+</svg>
