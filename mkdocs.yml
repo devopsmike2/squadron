@@ -8,16 +8,14 @@ site_dir: site
 
 theme:
   name: material
+  logo: assets/squadron-mark-white.svg
+  favicon: assets/squadron-mark.svg
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: teal
-      accent: teal
       toggle: { icon: material/weather-sunny, name: Light mode }
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: teal
-      accent: teal
       toggle: { icon: material/weather-night, name: Dark mode }
   features:
     - navigation.tabs
@@ -30,6 +28,9 @@ theme:
     - search.highlight
     - content.code.copy
     - content.tabs.link
+
+extra_css:
+  - assets/brand.css
 
 markdown_extensions:
   - admonition
