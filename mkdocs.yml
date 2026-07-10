@@ -8,6 +8,7 @@ site_dir: site
 
 theme:
   name: material
+  custom_dir: overrides
   logo: assets/squadron-mark-white.svg
   favicon: assets/squadron-mark.svg
   palette:
