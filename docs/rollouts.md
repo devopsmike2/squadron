@@ -397,3 +397,25 @@ What plans don't include yet: action-runner calls. Verification,
 notification, paging, integrity checks — all require an action
 runner integration that's queued as a separate v0.80+ arc. See the
 design doc for the roadmap.
+
+## Diagram: rollout lifecycle
+
+The state diagram below shows the full lifecycle — including the
+`pending_approval` gate for approval-required groups, the per-stage dwell with
+its abort check, and the auto-rollback path when an abort criterion fires.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: create
+    pending --> pending_approval: group requires approval
+    pending_approval --> pending: N-of-M approvers cleared
+    pending --> in_progress: engine picks up
+    in_progress --> in_progress: stage dwell + abort-check<br/>promote next stage
+    in_progress --> paused: operator Pause
+    paused --> in_progress: Resume (dwell restarts)
+    in_progress --> aborted: abort criterion fires<br/>(drift / error rate) or manual Abort
+    aborted --> rolled_back: engine pushes previous config
+    in_progress --> succeeded: final stage cleared dwell
+    succeeded --> [*]
+    rolled_back --> [*]
+```
