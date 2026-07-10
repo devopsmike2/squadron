@@ -93,6 +93,13 @@ nav:
       - How the loop works: concepts/the-loop.md
       - AI features: ai-features.md
       - AI assist: ai-assist.md
+  - How it works:
+      - How Squadron works: how-it-works/index.md
+      - Discovery: how-it-works/discovery.md
+      - Safe rollouts: how-it-works/rollouts.md
+      - Where your data lives: how-it-works/data-and-retention.md
+      - AI proposals: how-it-works/ai-proposals.md
+      - Security & the audit trail: how-it-works/security-and-audit.md
   - Discovery & Inventory:
       - Discovery paths: discovery.md
       - Inventory reconciliation: inventory.md
