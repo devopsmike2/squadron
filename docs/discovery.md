@@ -164,3 +164,22 @@ call in `cmd/all-in-one/main.go`.
 - **v0.36.3** — One-click "convert to managed" affordance that
   fires the deploy pipeline with an OpAMP-enabled config for a
   specific telemetry-only host.
+
+## Diagram: multi-cloud discovery fan-out
+
+Squadron fans a single discovery pass out across every connected cloud, then
+folds the per-cloud results back into one unified inventory that the
+recommendations engine reads.
+
+```mermaid
+flowchart LR
+    SQ[Squadron<br/>discovery] --> AWS[AWS scanner]
+    SQ --> GCP[GCP scanner]
+    SQ --> AZ[Azure scanner]
+    SQ --> OCI[OCI scanner]
+    AWS --> INV[(Unified inventory)]
+    GCP --> INV
+    AZ --> INV
+    OCI --> INV
+    INV --> REC[Instrumentation-gap<br/>recommendations]
+```

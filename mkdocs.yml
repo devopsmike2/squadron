@@ -1,0 +1,155 @@
+site_name: Squadron
+site_description: The open-source OpenTelemetry control plane for coverage, cost, and safe rollouts.
+site_url: https://devopsmike2.github.io/squadron/
+repo_url: https://github.com/devopsmike2/squadron
+repo_name: devopsmike2/squadron
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle: { icon: material/weather-sunny, name: Light mode }
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle: { icon: material/weather-night, name: Dark mode }
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc: { permalink: true }
+  - pymdownx.details
+  - pymdownx.tabbed: { alternate_style: true }
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+exclude_docs: |
+  README.md
+  design/
+  proposals/
+  investigations/
+  stress-tests/
+  audit/
+  architecture/
+  linkedin-posts/
+  *-design.md
+  thesis.md
+  positioning.md
+  state-of-the-product.md
+  roadmap-post-v0.52.md
+  oss-working-features-audit.md
+  oss-ga-and-enterprise-boundary.md
+  proposer-bench.md
+  scale-testing.md
+  demo-script.md
+  demo-video-script.md
+  demo-walkthrough.md
+  linkedin-rollout.md
+  board.html
+  k8s-deploy-test-*.md
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Overview: getting-started.md
+      - Quickstart wizard: quickstart.md
+      - Quickstart paths: quickstart/README.md
+      - On a single VM: quickstart/vm-quickstart.md
+      - On Kubernetes: quickstart/kubernetes-quickstart.md
+      - Try it locally: testing.md
+      - Guided demo: demo.md
+  - Core Concepts:
+      - Concepts: concepts.md
+      - Architecture: concepts/architecture.md
+      - How the loop works: concepts/the-loop.md
+      - AI features: ai-features.md
+      - AI assist: ai-assist.md
+  - Discovery & Inventory:
+      - Discovery paths: discovery.md
+      - Inventory reconciliation: inventory.md
+      - Connect AWS: discovery-aws-first-time-setup.md
+      - Connect GCP: discovery-gcp-first-time-setup.md
+      - Connect Azure: discovery-azure-first-time-setup.md
+      - Connect OCI: discovery-oci-first-time-setup.md
+      - Connect a Terraform repo: discovery-iac-first-time-setup.md
+      - Adopt resources (Environment to Terraform): environment-to-terraform.md
+  - Recommendations & Proposals:
+      - Cost recommendations: recommendations.md
+      - Proposer learning loop: proposer-learning-loop.md
+      - Discovery proposer learning: discovery-proposer-learning.md
+      - Action steps in plans: action-runner-steps-in-plans.md
+      - GitHub webhook listener: webhook-listener.md
+      - GitHub Checks API back-signal: checks-api.md
+  - Rollouts & Safety:
+      - Staged rollouts: rollouts.md
+      - Deploy via GitHub Actions: deploy.md
+  - Cost & Savings:
+      - Savings dashboard: savings.md
+      - Cost-spike alerting: cost-spikes.md
+  - Coverage & Detection:
+      - Detection coverage: detection-coverage.md
+      - Pipeline health: pipeline-health.md
+      - Trace coverage: trace-coverage-operator-guide.md
+      - Span quality: span-quality-operator-guide.md
+      - Sampling rate: sampling-rate-operator-guide.md
+      - Cold-start latency: cold-start-latency-operator-guide.md
+      - Error-rate correlation: error-rate-correlation-operator-guide.md
+      - Event-source tier: event-source-tier-operator-guide.md
+      - Orchestration tier: orchestration-tier-operator-guide.md
+      - Serverless tier: serverless-tier-operator-guide.md
+      - Workload Health panel: workload-health-panel-operator-guide.md
+  - Alerts & Incidents:
+      - Alerts: alerts.md
+      - Silent-agent alerts: silent-agents.md
+      - Incident publishers: publishers.md
+  - CLI & API Reference:
+      - squadronctl: squadronctl.md
+      - REST API: api-reference.md
+      - Authentication: auth.md
+  - Operations:
+      - Operating Squadron: operating.md
+      - Deployment guide: deployment.md
+      - OpenShift: openshift.md
+      - Security & self-hosting: security-self-hosting.md
+      - Self-monitoring: self-monitoring.md
+      - Usage reporting: usage-reporting.md
+  - Editions & Enterprise:
+      - OSS vs Enterprise: oss-vs-enterprise.md
+      - Build & edition model: build.md
+      - Migrate OSS to Enterprise: oss-to-enterprise-migration.md
+      - Enterprise overview: enterprise/overview.md
+      - Enterprise deployment: enterprise/deployment.md
+      - RBAC & roles: enterprise/rbac.md
+      - Multi-tenancy: enterprise/multi-tenancy.md
+      - SSO (OIDC) & SCIM: enterprise/sso-scim.md
+      - Approvals & change windows: enterprise/approvals.md
+      - Compliance audit & attestation: enterprise/compliance-audit.md

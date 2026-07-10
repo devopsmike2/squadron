@@ -121,3 +121,26 @@ acknowledged → closed) that doesn't map cleanly to the
 - `docs/alerts.md` — the existing rules-based alert system.
 - `docs/recommendations.md` — what to actually do about a spike
   once you see one.
+
+## Diagram: cost-spike detection
+
+Every minute the detector projects the fleet's $/month spend, compares it
+against the rolling baseline, and — when the projection breaks past the warn or
+critical threshold — opens an attributed event that surfaces on the Dashboard
+banner.
+
+```mermaid
+flowchart TD
+    T[Per-minute tick] --> P[Current $/month projection]
+    P --> B[Push into 60-sample<br/>rolling ring buffer]
+    B --> BASE[Baseline = trimmed mean<br/>of last 59 samples]
+    BASE --> MIN{Baseline &ge;<br/>min_baseline_usd?}
+    MIN -- no --> SKIP[Skip — too small to matter]
+    MIN -- yes --> CMP{Projection vs baseline}
+    CMP -- ">= +50% critical" --> CRIT[Critical spike]
+    CMP -- ">= +25% warn" --> WARN[Warn spike]
+    CMP -- below --> CLOSE[Close any open spike]
+    CRIT --> EV[Open event + attribution<br/>top agents / top attributes]
+    WARN --> EV
+    EV --> BAN[Dashboard + Savings banner]
+```
