@@ -754,7 +754,7 @@ export default function DashboardPage() {
       )}
 
       {/* Hero metrics */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {heroStats.map((s) => (
           <HeroMetric key={s.label} stat={s} />
         ))}
