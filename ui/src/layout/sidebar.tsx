@@ -141,9 +141,21 @@ export function AppSidebar() {
 
   const groups: MenuGroup[] = [
     {
-      label: "Fleet",
+      label: "Start here",
       items: [
         ...(askEnabled ? [askItem] : []),
+        {
+          key: "dashboard",
+          title: "Fleet Status",
+          url: "/",
+          icon: LayoutDashboard,
+        },
+        {
+          key: "fleet-map",
+          title: "Fleet Map",
+          url: "/fleet-map",
+          icon: GitBranch,
+        },
         {
           key: "quickstart",
           title: "Quickstart",
@@ -156,12 +168,12 @@ export function AppSidebar() {
           url: "/use-cases",
           icon: PlayCircle,
         },
-        {
-          key: "dashboard",
-          title: "Fleet Status",
-          url: "/",
-          icon: LayoutDashboard,
-        },
+      ],
+    },
+    {
+      label: "See your coverage",
+      url: "/discovery",
+      items: [
         {
           key: "agents",
           title: "Agents",
@@ -178,38 +190,48 @@ export function AppSidebar() {
             ) : null,
         },
         {
-          key: "fleet-map",
-          title: "Fleet Map",
-          url: "/fleet-map",
-          icon: GitBranch,
+          key: "telemetry",
+          title: "Telemetry",
+          url: "/telemetry",
+          icon: BarChart3,
         },
         {
-          key: "groups",
-          title: "Groups",
-          url: "/groups",
-          icon: Users,
+          key: "discovery-aws",
+          title: "AWS",
+          url: "/discovery/aws",
+          icon: Cloud,
+        },
+        {
+          key: "discovery-gcp",
+          title: "GCP",
+          url: "/discovery/gcp",
+          icon: Cloud,
+        },
+        {
+          key: "discovery-azure",
+          title: "Azure",
+          url: "/discovery/azure",
+          icon: Cloud,
+        },
+        {
+          key: "discovery-oci",
+          title: "OCI",
+          url: "/discovery/oci",
+          icon: Cloud,
+        },
+        {
+          key: "discovery-iac-github",
+          title: "IaC (GitHub)",
+          url: "/discovery/iac/github",
+          icon: Github,
         },
       ],
     },
     {
-      label: "Operations",
+      label: "Change config safely",
       items: [
-        {
-          key: "configs",
-          title: "Configs",
-          url: "/configs",
-          icon: FileText,
-        },
-        {
-          key: "rollouts",
-          title: "Rollouts",
-          url: "/rollouts",
-          icon: Rocket,
-        },
-        // v0.84 — proposer playground. Sits next to Rollouts because
-        // it lets the operator dogfood what the proposer would
-        // create as a rollout / plan without actually creating one.
-        // Gated by AI capabilities like Ask Squadron.
+        { key: "configs", title: "Configs", url: "/configs", icon: FileText },
+        { key: "rollouts", title: "Rollouts", url: "/rollouts", icon: Rocket },
         ...(askEnabled
           ? [
               {
@@ -226,51 +248,12 @@ export function AppSidebar() {
           url: "/deploy",
           icon: UploadCloudIcon,
         },
-        {
-          // v0.54 Move 3 — incident drafter inbox. Sits in
-          // Operations next to Rollouts and Deploy: that's where
-          // the operator is already living during an incident
-          // response.
-          key: "incidents",
-          title: "Incidents",
-          url: "/incidents",
-          icon: Inbox,
-        },
-        {
-          // v0.55 SQ-2.8 / N4 — every signed request Squadron
-          // dispatched to a runner. Operators land here when they
-          // need to confirm a restart actually ran or hunt down a
-          // failure.
-          key: "actions",
-          title: "Actions",
-          url: "/actions",
-          icon: PlayCircle,
-        },
-        {
-          // v0.55 N5 — registered action runner daemons. Companion
-          // to /actions; this is the "who is alive" view, /actions
-          // is the "what did they do" view.
-          key: "runners",
-          title: "Runners",
-          url: "/runners",
-          icon: Cpu,
-        },
-        {
-          key: "alerts",
-          title: "Alerts",
-          url: "/alerts",
-          icon: Bell,
-          status:
-            activeAlerts > 0 ? (
-              <NavCount value={activeAlerts} tone="info" />
-            ) : null,
-        },
-        {
-          key: "telemetry",
-          title: "Telemetry",
-          url: "/telemetry",
-          icon: BarChart3,
-        },
+        { key: "groups", title: "Groups", url: "/groups", icon: Users },
+      ],
+    },
+    {
+      label: "Control cost",
+      items: [
         {
           key: "savings",
           title: "Savings",
@@ -286,103 +269,37 @@ export function AppSidebar() {
       ],
     },
     {
-      // v0.85 Stream 2E — Discovery group lands between Operations
-      // and Admin. Slice 1 ships one entry (AWS); slice 4-6 add GCP,
-      // Azure, on-prem under the same group label so the operator's
-      // muscle memory carries across providers.
-      //
-      // v0.89.62 #689 Stream 87 — group label becomes a Link to the
-      // unified Discovery dashboard at /discovery so the four-cloud
-      // aggregate view is the default Discovery landing surface.
-      // Per-provider entries below stay as-is so the operator can
-      // still jump straight to a specific cloud's wizard.
-      label: "Discovery",
-      url: "/discovery",
+      label: "Respond to incidents",
       items: [
         {
-          key: "discovery-aws",
-          title: "AWS",
-          url: "/discovery/aws",
-          icon: Cloud,
+          key: "alerts",
+          title: "Alerts",
+          url: "/alerts",
+          icon: Bell,
+          status:
+            activeAlerts > 0 ? (
+              <NavCount value={activeAlerts} tone="info" />
+            ) : null,
         },
         {
-          // v0.89.48 #670 Stream 68 (slice-1 chunk 4) — GCP discovery
-          // page. Sits next to AWS under Discovery so the operator's
-          // muscle memory for "where I wire up cloud providers" stays
-          // in one place. Reuses the Cloud icon — slice 1 doesn't
-          // ship per-provider iconography to keep the sidebar visual
-          // weight even.
-          key: "discovery-gcp",
-          title: "GCP",
-          url: "/discovery/gcp",
-          icon: Cloud,
+          key: "incidents",
+          title: "Incidents",
+          url: "/incidents",
+          icon: Inbox,
         },
-        {
-          // v0.89.53 #677 Stream 75 (slice-1 chunk 4) — Azure discovery
-          // page. Sits next to GCP under Discovery so all three
-          // provider entries (AWS / GCP / Azure) cluster together
-          // before the IaC GitHub entry. Same Cloud icon as AWS / GCP
-          // per the slice-1 "no per-provider iconography" decision.
-          key: "discovery-azure",
-          title: "Azure",
-          url: "/discovery/azure",
-          icon: Cloud,
-        },
-        {
-          // v0.89.58 #684 Stream 82 (slice-1 chunk 4) — OCI discovery
-          // page. Sits next to Azure under Discovery so all four
-          // provider entries (AWS / GCP / Azure / OCI) cluster
-          // together before the IaC GitHub entry. Same Cloud icon as
-          // AWS / GCP / Azure per the slice-1 "no per-provider
-          // iconography" decision.
-          key: "discovery-oci",
-          title: "OCI",
-          url: "/discovery/oci",
-          icon: Cloud,
-        },
-        {
-          // v0.89.3 Stream 19 — #603 Connect-IaC-repo. Sits next to
-          // AWS under Discovery so the operator's muscle memory for
-          // "where I wire things up" stays in one place. Slice 1
-          // ships GitHub; slice 2 adds GitLab / Bitbucket under the
-          // same /discovery/iac/<provider> namespace.
-          key: "discovery-iac-github",
-          title: "IaC (GitHub)",
-          url: "/discovery/iac/github",
-          icon: Github,
-        },
+        { key: "actions", title: "Actions", url: "/actions", icon: PlayCircle },
+        { key: "runners", title: "Runners", url: "/runners", icon: Cpu },
       ],
     },
     {
-      label: "Admin",
+      label: "Prove & govern",
       items: [
+        { key: "audit", title: "Audit", url: "/audit", icon: ScrollText },
         {
           key: "timeline",
-          // v0.40 — postmortem timeline. Sits in Admin next to
-          // Audit because they're cousins: both are about
-          // "what happened, in time order," but Timeline pulls
-          // from multiple sources at once.
           title: "Timeline",
           url: "/timeline",
           icon: ClockIcon,
-        },
-        {
-          key: "audit",
-          title: "Audit",
-          url: "/audit",
-          icon: ScrollText,
-        },
-        {
-          key: "settings-tokens",
-          title: "API tokens",
-          url: "/settings/tokens",
-          icon: KeyRound,
-        },
-        {
-          key: "settings-siem",
-          title: "SIEM export",
-          url: "/settings/siem",
-          icon: ServerCog,
         },
         {
           key: "settings-sso",
@@ -395,6 +312,18 @@ export function AppSidebar() {
           title: "Identity",
           url: "/settings/identity",
           icon: ShieldCheck,
+        },
+        {
+          key: "settings-tokens",
+          title: "API tokens",
+          url: "/settings/tokens",
+          icon: KeyRound,
+        },
+        {
+          key: "settings-siem",
+          title: "SIEM export",
+          url: "/settings/siem",
+          icon: ServerCog,
         },
       ],
     },
