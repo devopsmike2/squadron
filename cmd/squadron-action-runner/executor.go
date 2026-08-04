@@ -76,6 +76,8 @@ func (e *SystemdExecutor) ExecuteRequest(ctx context.Context, req *actions.Reque
 		return e.executeRestartDocker(ctx, req, started)
 	case actions.RunShellAllowlistType:
 		return e.executeRunShellAllowlist(ctx, req, started)
+	case actions.RestartK8sWorkloadType:
+		return e.executeRestartK8s(ctx, req, started)
 	default:
 		return &actions.Result{
 			Status:      actions.StatusFailure,
@@ -197,6 +199,79 @@ func (e *SystemdExecutor) executeRunShellAllowlist(ctx context.Context, req *act
 	stdout, stderr, code, err := e.commandRunner.Run(ctx, fields[0], fields[1:]...)
 	out := map[string]any{
 		"ran_command": params.Command,
+		"exit_code":   code,
+	}
+	status := actions.StatusSuccess
+	if err != nil || code != 0 {
+		status = actions.StatusFailure
+	}
+	res := &actions.Result{
+		Status:      status,
+		Stdout:      truncate(stdout, 4000),
+		Stderr:      truncate(stderr, 2000),
+		ExitCode:    code,
+		ResultData:  out,
+		StartedAt:   started,
+		CompletedAt: time.Now().UTC(),
+	}
+	if err != nil && status == actions.StatusFailure {
+		res.Stderr = strings.TrimSpace(res.Stderr + "\n" + err.Error())
+	}
+	return res
+}
+
+// executeRestartK8s restarts a Kubernetes/OpenShift workload via
+// `kubectl rollout restart <kind>/<name> -n <namespace>`. Parameters are
+// validated (DNS-1123 names, allowlisted kind) at both Squadron and the runner,
+// and the runner's ServiceAccount RBAC is the real authority on what it can
+// touch. Dry-run inspects the workload and reports the command it would run.
+func (e *SystemdExecutor) executeRestartK8s(ctx context.Context, req *actions.Request, started time.Time) *actions.Result {
+	var params actions.RestartK8sWorkloadParameters
+	if err := json.Unmarshal(req.Action.Parameters, &params); err != nil {
+		return &actions.Result{
+			Status:      actions.StatusFailure,
+			Stderr:      "decode parameters: " + err.Error(),
+			StartedAt:   started,
+			CompletedAt: time.Now().UTC(),
+		}
+	}
+	kind := strings.ToLower(strings.TrimSpace(params.Kind))
+	if kind == "" {
+		kind = "deployment"
+	}
+	target := kind + "/" + params.Name
+
+	if req.Phase == actions.PhaseDryRun {
+		// Inspect: confirm the workload exists and report what execute would run.
+		stdout, stderr, code, err := e.commandRunner.Run(ctx, "kubectl",
+			"get", target, "-n", params.Namespace,
+			"-o", "jsonpath={.metadata.name} generation={.metadata.generation}")
+		out := map[string]any{
+			"planned_command": fmt.Sprintf("kubectl rollout restart %s -n %s", target, params.Namespace),
+			"target":          target,
+			"namespace":       params.Namespace,
+			"current":         strings.TrimSpace(stdout),
+		}
+		if err != nil {
+			out["inspect_error"] = err.Error()
+		}
+		return &actions.Result{
+			Status:      actions.StatusSuccess,
+			Stdout:      truncate(stdout, 4000),
+			Stderr:      truncate(stderr, 2000),
+			ExitCode:    code,
+			ResultData:  out,
+			StartedAt:   started,
+			CompletedAt: time.Now().UTC(),
+		}
+	}
+
+	stdout, stderr, code, err := e.commandRunner.Run(ctx, "kubectl",
+		"rollout", "restart", target, "-n", params.Namespace)
+	out := map[string]any{
+		"ran_command": fmt.Sprintf("kubectl rollout restart %s -n %s", target, params.Namespace),
+		"target":      target,
+		"namespace":   params.Namespace,
 		"exit_code":   code,
 	}
 	status := actions.StatusSuccess
