@@ -9,6 +9,7 @@ import {
   type TenantVerification,
 } from "@/api/auditVerify";
 import { listTenants } from "@/api/tenants";
+import { EnterpriseUpgradePrompt } from "@/components/EnterpriseUpgradePrompt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -77,20 +78,12 @@ export function AuditVerifyPanel() {
 
   if (!isEnterprise) {
     return (
-      <div
-        className="text-muted-foreground rounded-md border border-dashed p-6 text-sm"
-        data-testid="audit-verify-enterprise-gate"
+      <EnterpriseUpgradePrompt
+        testId="audit-verify-enterprise-gate"
+        title="Audit integrity verification is an enterprise feature."
       >
-        <p className="text-foreground font-medium">
-          Audit integrity verification is an enterprise feature.
-        </p>
-        <p className="mt-1">
-          Hash-chain re-verification (per-tenant and fleet-wide) and sealed
-          tamper-evidence attestations are available in the enterprise edition.
-          The single-tenant audit log and CSV/JSON export on the “Recent
-          activity” tab remain available here.
-        </p>
-      </div>
+        Hash-chain re-verification (per-tenant and fleet-wide) and sealed tamper-evidence attestations are available in the enterprise edition. The single-tenant audit log and CSV/JSON export on the “Recent activity” tab remain available here.
+      </EnterpriseUpgradePrompt>
     );
   }
 
