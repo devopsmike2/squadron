@@ -363,10 +363,21 @@ type StorageConfig struct {
 	Telemetry TelemetryStorageConfig `yaml:"telemetry"`
 }
 
-// AppStorageConfig contains app storage configuration
+// AppStorageConfig contains app storage configuration.
+//
+// Type selects the control-plane backend:
+//   - "sqlite" (default): embedded, zero-dependency. Uses Path.
+//   - "postgres": an external Postgres / Aurora RDS, for HA and org-scale.
+//     Uses DSN. See decisions/0033-postgres-app-store-backend.md.
+//
+// Path is the sqlite database file. DSN is the Postgres connection string
+// (e.g. "postgres://user:pass@host:5432/squadron?sslmode=require") and is
+// ignored for sqlite. The telemetry store stays DuckDB regardless (an
+// analytical workload; Postgres is the wrong fit there).
 type AppStorageConfig struct {
 	Type string `yaml:"type"`
 	Path string `yaml:"path"`
+	DSN  string `yaml:"dsn,omitempty"`
 }
 
 // TelemetryStorageConfig contains telemetry storage configuration
