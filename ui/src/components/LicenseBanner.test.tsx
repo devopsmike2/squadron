@@ -27,7 +27,10 @@ describe("LicenseBanner (ADR 0032 S1)", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("is silent for the OSS edition", async () => {
-    mockGet.mockResolvedValue({ edition: "oss", state: "n/a" } as LicenseStatus);
+    mockGet.mockResolvedValue({
+      edition: "oss",
+      state: "n/a",
+    } as LicenseStatus);
     renderBanner();
     await tick();
     expect(screen.queryByTestId("license-banner")).toBeNull();

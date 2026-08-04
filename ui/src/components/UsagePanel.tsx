@@ -64,7 +64,8 @@ export function UsagePanel() {
         testId="usage-enterprise-gate"
         title="Per-tenant usage is an enterprise feature"
       >
-        Per-tenant usage summaries (agents, rollouts), a chargeback/showback view across your tenants, are available in the enterprise edition.
+        Per-tenant usage summaries (agents, rollouts), a chargeback/showback
+        view across your tenants, are available in the enterprise edition.
       </EnterpriseUpgradePrompt>
     );
   }
