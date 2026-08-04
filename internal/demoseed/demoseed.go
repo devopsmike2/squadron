@@ -155,9 +155,17 @@ func Remove(ctx context.Context, store types.ApplicationStore) error {
 		}
 	}
 
-	// Delete the demo group last (agents referenced it).
-	if derr := store.DeleteGroup(ctx, GroupID); derr != nil {
-		return derr
+	// Delete the demo group last (agents referenced it). Idempotent: if the
+	// group is already gone (a prior teardown, a retried DELETE, or the demo
+	// simulator having removed it), DeleteGroup returns "group not found",
+	// which is NOT an error for a best-effort teardown (see this function's
+	// contract). Guard on existence instead of failing the whole teardown.
+	if existing, gerr := store.GetGroup(ctx, GroupID); gerr != nil {
+		return gerr
+	} else if existing != nil {
+		if derr := store.DeleteGroup(ctx, GroupID); derr != nil {
+			return derr
+		}
 	}
 	return nil
 }
