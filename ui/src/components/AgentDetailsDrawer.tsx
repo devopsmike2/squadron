@@ -128,7 +128,7 @@ export function AgentDetailsDrawer({
                 <Button
                   variant="outline"
                   size="sm"
-                  title="Hard-delete this agent record. Used when the host has been physically retired from the fleet — without this, offline agents linger forever in the inventory view."
+                  title="Hard-delete this agent record. Used when the host has been physically retired from the fleet. Without this, offline agents linger forever in the inventory view."
                   onClick={async () => {
                     if (
                       !confirm(

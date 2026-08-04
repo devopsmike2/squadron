@@ -417,7 +417,7 @@ export default function SettingsSiemPage() {
               />
               <p className="mt-1 text-[11px] text-muted-foreground">
                 Encrypted at rest with the SQUADRON_SIEM_KEY master key.
-                Squadron never returns the plaintext after save — to rotate,
+                Squadron never returns the plaintext after save. To rotate,
                 re-enter here.
               </p>
             </div>

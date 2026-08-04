@@ -134,7 +134,7 @@ export function RecommendationsPanel({
                 Recommendations
               </div>
               <div className="text-sm text-muted-foreground">
-                Heuristic advice from the v0.25 engine — estimates are sampled.
+                Heuristic advice from the v0.25 engine. Estimates are sampled.
               </div>
             </div>
             <div className="font-tabular text-[11px] text-muted-foreground">

@@ -93,8 +93,8 @@ export function AdoptDrawer({
             Paste this snippet into the agent's existing collector config to
             bring it under Squadron management. Your receivers, processors,
             exporters, and pipelines are{" "}
-            <span className="font-medium text-foreground">not touched</span> —
-            only the OpAMP extension is added.
+            <span className="font-medium text-foreground">not touched</span>.
+            Only the OpAMP extension is added.
           </SheetDescription>
         </SheetHeader>
         <div className="flex-1 space-y-3 overflow-y-auto p-4">

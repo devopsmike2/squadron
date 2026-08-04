@@ -607,7 +607,7 @@ export default function RolloutsPage() {
                   return (
                     <p className="text-xs text-muted-foreground">
                       Pick a template to prefill name, stages, and abort
-                      criteria — you'll still need to pick a group and target
+                      criteria. You'll still need to pick a group and target
                       config below.
                     </p>
                   );
@@ -805,7 +805,7 @@ export default function RolloutsPage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Percent-mode stages are cumulative and must reach 100. Label
-                mode stages must all use the label selector — mixed modes aren't
+                mode stages must all use the label selector. Mixed modes aren't
                 supported.
               </p>
               {mixedModes && (
@@ -817,7 +817,7 @@ export default function RolloutsPage() {
               {stageZeroMatchesZero && (
                 <p className="text-xs text-amber-600">
                   Stage 1's label selector matches 0 agents in this group. The
-                  rollout can still be started — Squadron will record an
+                  rollout can still be started. Squadron will record an
                   empty-canary audit event and the rollout will sit at stage 1
                   until matching agents appear.
                 </p>
@@ -1023,7 +1023,7 @@ export default function RolloutsPage() {
                         The rollout will enter <code>pending_approval</code> and
                         won't advance until a different operator approves it
                         (two-person rule). Use this for production-impacting or
-                        NERC CIP–regulated changes that require change-control
+                        NERC CIP-regulated changes that require change-control
                         sign-off.
                       </>
                     )}
@@ -1119,7 +1119,7 @@ export default function RolloutsPage() {
                         {pendingDecision.rollout.name ||
                           pendingDecision.rollout.id.slice(0, 8)}
                       </span>
-                      . This is terminal — the requester will have to clone the
+                      . This is terminal. The requester will have to clone the
                       rollout to retry.
                     </>
                   )}

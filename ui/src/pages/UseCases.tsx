@@ -82,7 +82,7 @@ export default function UseCasesPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold">Use cases</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          See how Squadron handles each job — walked through step by step on the
+          See how Squadron handles each job, walked through step by step on the
           real pages, running on built-in sample data. No cloud account, agent,
           or config required.
         </p>

@@ -279,7 +279,7 @@ export function validateErrorRemediation(
 ): string {
   switch (kind) {
     case "permission_denied":
-      return `Verify the service account has roles/compute.viewer in project ${args.connectionProjectID}. The role binding from step 2 may not have applied yet — IAM changes can take up to 60 seconds to propagate.`;
+      return `Verify the service account has roles/compute.viewer in project ${args.connectionProjectID}. The role binding from step 2 may not have applied yet. IAM changes can take up to 60 seconds to propagate.`;
     case "project_not_found":
       return `Verify ${args.connectionProjectID} is correct. The project may not exist, or the service account may not have visibility into it.`;
     case "credentials_invalid":

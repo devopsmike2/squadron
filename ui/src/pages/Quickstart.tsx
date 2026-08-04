@@ -161,7 +161,7 @@ function Landing({ onPick }: { onPick: (m: Mode) => void }) {
           <strong className="text-foreground">Not sure?</strong> Path A is
           quicker if you have a backend account but no collector setup yet. Path
           B preserves your existing pipelines and just adds Squadron's
-          management — pick this if your collectors are already shipping
+          management. Pick this if your collectors are already shipping
           telemetry you care about.
         </CardContent>
       </Card>
@@ -181,7 +181,7 @@ function FreshInstallFlow({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      <WizardHeader title="Start fresh — your first agent" onBack={onBack} />
+      <WizardHeader title="Start fresh: your first agent" onBack={onBack} />
       <Stepper
         steps={[
           { id: "backend", title: "Pick your backend" },
@@ -387,7 +387,7 @@ sudo tar -xzf /tmp/otelcol-contrib.tar.gz -C /usr/local/bin/
 # 3. Create a systemd unit and start:
 sudo systemctl daemon-reload && sudo systemctl enable --now otelcol`;
 
-  const helmCmd = `# values.yaml — paste the starter config YAML under \`config:\`,
+  const helmCmd = `# values.yaml: paste the starter config YAML under \`config:\`,
 # set your env vars under \`extraEnvs\`, then:
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
 helm upgrade --install otelcol \\
@@ -463,7 +463,7 @@ function AdoptExistingFlow({ onBack }: { onBack: () => void }) {
       </Card>
 
       <YamlBlock
-        title="OpAMP extension — paste into your existing config"
+        title="OpAMP extension: paste into your existing config"
         yaml={snippet.yaml}
       />
 
@@ -503,7 +503,7 @@ function AdoptExistingFlow({ onBack }: { onBack: () => void }) {
       <Card>
         <CardContent className="p-4">
           <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-            Bulk mode — generate per-host ssh commands
+            Bulk mode: generate per-host ssh commands
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Paste a list of hostnames (one per line or comma-separated). We'll
@@ -522,8 +522,8 @@ function AdoptExistingFlow({ onBack }: { onBack: () => void }) {
           {hostnames.length > 0 && (
             <div className="mt-3 space-y-1.5">
               <div className="text-xs text-muted-foreground">
-                {hostnames.length} host{hostnames.length === 1 ? "" : "s"} —
-                one-liners that append the snippet and restart:
+                {hostnames.length} host{hostnames.length === 1 ? "" : "s"}.
+                One-liners that append the snippet and restart:
               </div>
               {hostnames.map((host) => (
                 <CommandBlock

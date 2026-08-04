@@ -115,7 +115,7 @@ export function BulkAdoptModal({
             that host's identity baked in) and fires the adoption pipeline with
             the batch payload. The pipeline applies each snippet to the matching
             host's <span className="font-medium">existing</span> collector
-            config — receivers, processors, exporters, and pipelines are
+            config. Receivers, processors, exporters, and pipelines are
             preserved.
           </DialogDescription>
         </DialogHeader>

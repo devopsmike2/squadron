@@ -104,7 +104,7 @@ export function TerraformAdoptCard({
       if (conns.length > 1 && selectedIacConn === "") {
         setSelectedIacConn(conns[0].connection_id);
         setPrError(
-          "Multiple repos connected — choose one below, then click Open import PR.",
+          "Multiple repos connected. Choose one below, then click Open import PR.",
         );
         return;
       }
@@ -124,7 +124,7 @@ export function TerraformAdoptCard({
         <p className="text-xs text-muted-foreground">
           Adopt un-managed resources into Terraform: generate{" "}
           <code>import</code> blocks, then run{" "}
-          <code>terraform plan -generate-config-out</code> — or open a PR that
+          <code>terraform plan -generate-config-out</code>, or open a PR that
           adds them to a connected repo.
         </p>
         <div className="flex shrink-0 gap-2">

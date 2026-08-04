@@ -737,7 +737,7 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <div className="text-sm font-medium">
-                    No agents yet — let's get your first one connected
+                    No agents yet. Let's get your first one connected
                   </div>
                   <div className="text-xs text-muted-foreground">
                     The Quickstart wizard takes a few minutes whether you're

@@ -97,7 +97,7 @@ export function CommandPaletteHint() {
             to jump anywhere
           </p>
           <p className="text-[11px] text-muted-foreground">
-            Navigate, search agents, run common actions — all from the keyboard.
+            Navigate, search agents, run common actions, all from the keyboard.
           </p>
         </div>
         <button

@@ -36,8 +36,8 @@ export default function AuditPage() {
         <div>
           <h1 className="text-2xl font-semibold">Audit log</h1>
           <p className="text-muted-foreground text-sm">
-            Every state change in Squadron — config pushes, drift transitions,
-            rule edits, alert firings — flows through this log. Newest first.
+            Every state change in Squadron (config pushes, drift transitions,
+            rule edits, alert firings) flows through this log. Newest first.
           </p>
           <p className="text-muted-foreground mt-1 text-xs">
             Exports are themselves recorded here (format, row count, filters),
@@ -116,7 +116,7 @@ export default function AuditPage() {
                 Access review
               </CardTitle>
               <p className="text-muted-foreground text-sm">
-                Compliance access-review queries — per-actor timelines, per-
+                Compliance access-review queries: per-actor timelines, per-
                 resource access history, and a per-tenant admin-action rollup
                 for a SOC 2 quarterly review. Cross-tenant reviews are
                 themselves recorded to the audit trail.
@@ -135,7 +135,7 @@ export default function AuditPage() {
                 Audit integrity
               </CardTitle>
               <p className="text-muted-foreground text-sm">
-                Tamper-evidence verification — re-verify the audit log's hash
+                Tamper-evidence verification. Re-verify the audit log's hash
                 chain per tenant or across the whole fleet, and download a
                 sealed attestation as compliance evidence. Verification runs are
                 themselves recorded to the audit trail.

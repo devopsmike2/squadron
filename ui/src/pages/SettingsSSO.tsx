@@ -541,7 +541,7 @@ export default function SettingsSSOPage() {
             <DialogTitle>Mint SCIM service token</DialogTitle>
             <DialogDescription>
               Issues a tenant-bound token your IdP uses to provision users and
-              groups. The plaintext is shown once — copy it now.
+              groups. The plaintext is shown once. Copy it now.
             </DialogDescription>
           </DialogHeader>
           {!scimToken ? (

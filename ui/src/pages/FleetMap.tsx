@@ -428,7 +428,7 @@ export default function FleetMapPage() {
                   </p>
                   <p className="mt-2 text-xs text-muted-foreground">
                     Already deployed one? Give it a few seconds to connect, then
-                    reload — if it still doesn&apos;t show, check the agent logs
+                    reload. If it still doesn&apos;t show, check the agent logs
                     and that its OpAMP endpoint points at this server.
                   </p>
                 </div>

@@ -186,7 +186,7 @@ export default function DiscoveryIaCGitHubPage() {
     const found = connections.some((c) => c.connection_id === connID);
     if (!found) {
       setStaleNotice(
-        "That IaC connection no longer exists. The link may be stale — pick a connection from the list below or run the wizard again.",
+        "That IaC connection no longer exists. The link may be stale. Pick a connection from the list below or run the wizard again.",
       );
     } else {
       setStaleNotice(null);
@@ -600,7 +600,7 @@ function EmptyState() {
             className="mr-1 inline-block h-3 w-3 text-violet-500"
             aria-hidden
           />
-          Squadron opens pull requests against your repo&apos;s branches — never
+          Squadron opens pull requests against your repo&apos;s branches, never
           your default branch. Your branch protection and CI stay in charge of
           merges and applies.
         </div>

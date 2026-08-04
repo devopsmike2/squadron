@@ -171,7 +171,7 @@ export default function ProposerPlaygroundPage() {
         </div>
         <p className="text-muted-foreground text-sm">
           Hand-craft a cost spike context and see what the proposer would
-          create. No side effects — nothing is persisted, no rollouts or plans
+          create. No side effects: nothing is persisted, no rollouts or plans
           are created.
         </p>
       </div>
