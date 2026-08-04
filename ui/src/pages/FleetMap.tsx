@@ -208,11 +208,13 @@ export default function FleetMapPage() {
   );
 
   const rpsByAgent = new Map<string, number>();
-  if (topologyData) {
-    for (const n of topologyData.nodes) {
-      if (n.type === "agent" && n.metrics) {
-        rpsByAgent.set(n.id, n.metrics.throughput_rps);
-      }
+  // Guard against a null/absent nodes array. An empty fleet used to make
+  // /topology return {"nodes": null}, and `for...of null` threw here on
+  // every render — blanking the whole page until data arrived. The backend
+  // now returns [] too; this stays as defense-in-depth. (OpenShift pilot, 2026-08.)
+  for (const n of topologyData?.nodes ?? []) {
+    if (n.type === "agent" && n.metrics) {
+      rpsByAgent.set(n.id, n.metrics.throughput_rps);
     }
   }
 
