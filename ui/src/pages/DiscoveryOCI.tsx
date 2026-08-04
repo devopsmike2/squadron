@@ -309,7 +309,7 @@ function ConnectionSelectorBar({
     return (
       <div className="flex flex-col gap-3 rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
         <span>
-          No OCI tenancies connected yet. Use the Wizard tab to connect one — or
+          No OCI tenancies connected yet. Use the Wizard tab to connect one, or
           explore a sample inventory and recommendations with no cloud account:
         </span>
         <div className="flex items-center gap-3">
@@ -343,7 +343,7 @@ function ConnectionSelectorBar({
           <SelectContent>
             {connections.map((c) => (
               <SelectItem key={c.id} value={c.id}>
-                {c.display_name} — {c.region}
+                {c.display_name} ({c.region})
               </SelectItem>
             ))}
           </SelectContent>
@@ -658,7 +658,7 @@ function OCIRegionCombobox({
       >
         <span className={selected ? "" : "text-muted-foreground"}>
           {selected
-            ? `${selected.id} — ${selected.label}`
+            ? `${selected.id}: ${selected.label}`
             : "Select an OCI region"}
         </span>
         <ChevronDown className="h-4 w-4 opacity-50" />
@@ -691,7 +691,7 @@ function OCIRegionCombobox({
                     }}
                     className="cursor-pointer rounded px-2 py-1.5 text-sm data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
                   >
-                    {r.id} — {r.label}
+                    {r.id}: {r.label}
                   </Command.Item>
                 ))}
               </Command.List>
@@ -738,7 +738,7 @@ function TenancyStep({
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Tell Squadron which Oracle Cloud tenancy to scan. We&apos;ll never write
-        to it — read-only IAM permissions on compute instances are the most the
+        to it. Read-only IAM permissions on compute instances are the most the
         API Signing Key will be asked to carry.
       </p>
 
@@ -815,7 +815,7 @@ function TenancyStep({
           invalid={region !== "" && !regionValid}
         />
         <p className="text-xs text-muted-foreground">
-          Unlike AWS / GCP / Azure, OCI requires a region — OCI&apos;s API
+          Unlike AWS / GCP / Azure, OCI requires a region. OCI&apos;s API
           endpoints are regional, so the scanner has to know where to query.
           Slice 1 ships single-region per connection.
         </p>
@@ -834,7 +834,7 @@ function TenancyStep({
             Squadron walks your OCI Compute Instances inventory and flags
             instances that lack the OpenTelemetry tag heuristic the proposer
             reads. The connection here is the credential + scope tuple Squadron
-            uses to call the OCI ListInstances API — nothing else. You can
+            uses to call the OCI ListInstances API, nothing else. You can
             disconnect at any time; the sealed API Signing Key private key is
             removed from the credstore on delete.
           </p>
@@ -879,7 +879,7 @@ function GenerateKeyStep({ onCopy }: { onCopy: (v: string) => void }) {
 
       <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
         <p>
-          The last command outputs the key fingerprint — note it for Step 4. It
+          The last command outputs the key fingerprint. Note it for Step 4. It
           looks like a colon-separated 16-hex-pair string, e.g.
           <code> aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99</code>.
         </p>
@@ -981,7 +981,7 @@ function UploadKeyStep() {
 
       <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
         <p>
-          OCI Console also displays a config file snippet after the upload — you
+          OCI Console also displays a config file snippet after the upload. You
           can ignore that snippet for Squadron; Squadron only needs the tenancy
           OCID, user OCID, region, fingerprint, and private key (entered
           separately in this wizard).
@@ -1062,7 +1062,7 @@ function CredentialsStep({
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden />
           <p className="text-xs">
             The API Signing Key private key is full asymmetric authentication
-            material — the strongest credential type Squadron handles. Squadron
+            material, the strongest credential type Squadron handles. Squadron
             seals it at rest with AES-GCM; the bytes never appear in audit
             payloads or logs. Never paste this key into Slack, email, or any
             other transient surface.
@@ -1091,12 +1091,12 @@ function CredentialsStep({
             The paste should include the{" "}
             <code>-----BEGIN PRIVATE KEY-----</code> and{" "}
             <code>-----END PRIVATE KEY-----</code> markers (or the matching
-            RSA-PRIVATE-KEY variant). Re-copy the file contents — most terminals
+            RSA-PRIVATE-KEY variant). Re-copy the file contents. Most terminals
             truncate when copying via select-all.
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          The key stays in browser memory until the wizard completes — it is
+          The key stays in browser memory until the wizard completes. It is
           base64-encoded over the wire and sealed at rest by Squadron under the{" "}
           <code>squadron.oci_signing_key.v1</code> AAD.
         </p>
@@ -1199,7 +1199,7 @@ function ValidateScanStep({
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" aria-hidden />
             <span className="font-medium">
-              Connected — {validateResult.instance_count ?? 0} compute instances
+              Connected: {validateResult.instance_count ?? 0} compute instances
               visible.
             </span>
           </div>
@@ -1886,7 +1886,7 @@ function PropagationCell({
       type="button"
       onClick={() => onOpen(row, notes)}
       className="text-amber-500 hover:text-amber-600"
-      aria-label="propagation broken — click for details"
+      aria-label="propagation broken, click for details"
       title={notes[0] ?? "Propagation broken"}
       data-testid="propagation-cell"
       data-value="no"
@@ -2008,7 +2008,7 @@ function RecommendationsTab({
   if (!scan) {
     return (
       <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        Run a scan from the Inventory tab first — recommendations are drafted
+        Run a scan from the Inventory tab first. Recommendations are drafted
         from the latest OCI scan result.
       </div>
     );
@@ -2121,7 +2121,7 @@ function ErrorRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Error rate ${pct.toFixed(2)}% — exceeds 2x baseline + minimums`
+          ? `Error rate ${pct.toFixed(2)}%: exceeds 2x baseline + minimums`
           : `Error rate ${pct.toFixed(2)}%`
       }
       data-testid="error-rate-cell"
@@ -2155,7 +2155,7 @@ function SamplingRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Sampling ratio ${pct.toFixed(1)}% — below 5% floor with >= 1000 invocations`
+          ? `Sampling ratio ${pct.toFixed(1)}%: below 5% floor with >= 1000 invocations`
           : `Sampling ratio ${pct.toFixed(1)}%`
       }
       data-testid="sampling-rate-cell"

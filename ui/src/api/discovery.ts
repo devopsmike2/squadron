@@ -773,7 +773,7 @@ export async function pollRecommendationJob(
     }
     if (Date.now() > deadline) {
       throw new Error(
-        "Recommendation generation is taking longer than expected — try again.",
+        "Recommendation generation is taking longer than expected. Try again.",
       );
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));

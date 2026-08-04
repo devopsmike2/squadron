@@ -302,7 +302,7 @@ function ConnectionSelectorBar({
     return (
       <div className="flex flex-col gap-3 rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
         <span>
-          No GCP projects connected yet. Use the Wizard tab to connect one — or
+          No GCP projects connected yet. Use the Wizard tab to connect one, or
           explore a sample inventory and recommendations with no cloud account:
         </span>
         <div className="flex items-center gap-3">
@@ -336,7 +336,7 @@ function ConnectionSelectorBar({
           <SelectContent>
             {connections.map((c) => (
               <SelectItem key={c.id} value={c.id}>
-                {c.display_name} — {c.project_id}
+                {c.display_name} ({c.project_id})
               </SelectItem>
             ))}
           </SelectContent>
@@ -634,7 +634,7 @@ function ProjectStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Tell Squadron which GCP project to scan. We&apos;ll never write to it —
+        Tell Squadron which GCP project to scan. We&apos;ll never write to it:
         compute.viewer is the only role we&apos;ll ask the service account to
         carry.
       </p>
@@ -713,9 +713,8 @@ function ProjectStep({
             Squadron walks your Compute Engine inventory and flags instances
             that lack the OpenTelemetry label heuristic the proposer reads. The
             connection here is the credential + scope tuple Squadron uses to
-            call compute.instances.list — nothing else. You can disconnect at
-            any time; the sealed SA JSON is removed from the credstore on
-            delete.
+            call compute.instances.list, nothing else. You can disconnect at any
+            time; the sealed SA JSON is removed from the credstore on delete.
           </p>
           <p className="mt-2">
             <a
@@ -864,7 +863,7 @@ function KeyPasteStep({
           id="gcp-sa-json"
           value={saText}
           onChange={(e) => onSATextChange(e.target.value)}
-          placeholder='{ "type": "service_account" | "external_account" | "authorized_user", ... }  — a SA key, a Workload Identity Federation config, or gcloud ADC'
+          placeholder='{ "type": "service_account" | "external_account" | "authorized_user", ... } (a SA key, a Workload Identity Federation config, or gcloud ADC)'
           rows={10}
           className="font-mono text-xs"
           aria-invalid={saText !== "" && !saValid}
@@ -924,7 +923,7 @@ function ValidateStep({
       <p className="text-sm text-muted-foreground">
         Squadron will dry-run a compute.instances.list against your project to
         confirm the service account has the right scopes. No data is persisted
-        from this call — it&apos;s a confidence check.
+        from this call. It&apos;s a confidence check.
       </p>
       <Button type="button" onClick={onValidate} disabled={submitting}>
         {submitting ? (
@@ -954,7 +953,7 @@ function ValidateStep({
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" aria-hidden />
             <span className="font-medium">
-              Connected — {result.instance_count ?? 0} instances visible.
+              Connected: {result.instance_count ?? 0} instances visible.
             </span>
           </div>
           <p className="mt-1 text-xs">Click Next to run a full scan.</p>
@@ -1003,7 +1002,7 @@ function ScanStep({
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Walk Compute Engine across the configured region and inventory every
-        instance. Single-region per slice-1 — this can take a minute or two on
+        instance. Single-region per slice-1. This can take a minute or two on
         large projects.
       </p>
       <Button type="button" onClick={onScan} disabled={submitting}>
@@ -1660,7 +1659,7 @@ function PropagationCell({
       type="button"
       onClick={() => onOpen(row, notes)}
       className="text-amber-500 hover:text-amber-600"
-      aria-label="propagation broken — click for details"
+      aria-label="propagation broken, click for details"
       title={notes[0] ?? "Propagation broken"}
       data-testid="propagation-cell"
       data-value="no"
@@ -1786,7 +1785,7 @@ function RecommendationsTab({
   if (!scan) {
     return (
       <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        Run a scan from the Inventory tab first — recommendations are drafted
+        Run a scan from the Inventory tab first. Recommendations are drafted
         from the latest GCP scan result.
       </div>
     );
@@ -1916,7 +1915,7 @@ function SamplingRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Sampling ratio ${pct.toFixed(1)}% — below 5% floor with >= 1000 invocations`
+          ? `Sampling ratio ${pct.toFixed(1)}%: below 5% floor with >= 1000 invocations`
           : `Sampling ratio ${pct.toFixed(1)}%`
       }
       data-testid="sampling-rate-cell"
@@ -1950,7 +1949,7 @@ function ErrorRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Error rate ${pct.toFixed(2)}% — exceeds 2x baseline + minimums`
+          ? `Error rate ${pct.toFixed(2)}%: exceeds 2x baseline + minimums`
           : `Error rate ${pct.toFixed(2)}%`
       }
       data-testid="error-rate-cell"

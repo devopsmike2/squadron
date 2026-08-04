@@ -296,7 +296,7 @@ function ConnectionSelectorBar({
       <div className="flex flex-col gap-3 rounded-md border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
         <span>
           No Azure subscriptions connected yet. Use the Wizard tab to connect
-          one — or explore a sample inventory and recommendations with no cloud
+          one, or explore a sample inventory and recommendations with no cloud
           account:
         </span>
         <div className="flex items-center gap-3">
@@ -330,7 +330,7 @@ function ConnectionSelectorBar({
           <SelectContent>
             {connections.map((c) => (
               <SelectItem key={c.id} value={c.id}>
-                {c.display_name} — {c.subscription_id}
+                {c.display_name} ({c.subscription_id})
               </SelectItem>
             ))}
           </SelectContent>
@@ -649,7 +649,7 @@ function SubscriptionStep({
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Tell Squadron which Azure subscription to scan. We&apos;ll never write
-        to it — the Reader role is the only RBAC role we&apos;ll ask the Service
+        to it. The Reader role is the only RBAC role we&apos;ll ask the Service
         Principal to carry.
       </p>
 
@@ -750,7 +750,7 @@ function SubscriptionStep({
             Squadron walks your Azure Virtual Machines inventory and flags
             instances that lack the OpenTelemetry tag heuristic the proposer
             reads. The connection here is the credential + scope tuple Squadron
-            uses to call the Azure Resource Manager API — nothing else. You can
+            uses to call the Azure Resource Manager API, nothing else. You can
             disconnect at any time; the sealed Service Principal secret is
             removed from the credstore on delete.
           </p>
@@ -941,7 +941,7 @@ function CredentialsStep({
           data-1p-ignore
         />
         <p className="text-xs text-muted-foreground">
-          The secret stays in browser memory until the wizard completes — it is
+          The secret stays in browser memory until the wizard completes. It is
           base64-encoded over the wire and sealed at rest by Squadron.
         </p>
       </div>
@@ -987,7 +987,7 @@ function ValidateStep({
       <p className="text-sm text-muted-foreground">
         Squadron will dry-run a VirtualMachines list against your subscription
         to confirm the Service Principal has the right scope. No data is
-        persisted from this call — it&apos;s a confidence check.
+        persisted from this call. It&apos;s a confidence check.
       </p>
       <Button type="button" onClick={onValidate} disabled={submitting}>
         {submitting ? (
@@ -1017,7 +1017,7 @@ function ValidateStep({
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" aria-hidden />
             <span className="font-medium">
-              Connected — {result.instance_count ?? 0} virtual machines visible.
+              Connected: {result.instance_count ?? 0} virtual machines visible.
             </span>
           </div>
           <p className="mt-1 text-xs">Click Next to run a full scan.</p>
@@ -1066,7 +1066,7 @@ function ScanStep({
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Walk Virtual Machines across the configured location and inventory every
-        VM. Single-location per slice-1 — this can take a minute or two on large
+        VM. Single-location per slice-1. This can take a minute or two on large
         subscriptions.
       </p>
       <Button type="button" onClick={onScan} disabled={submitting}>
@@ -1719,7 +1719,7 @@ function PropagationCell({
       type="button"
       onClick={() => onOpen(row, notes)}
       className="text-amber-500 hover:text-amber-600"
-      aria-label="propagation broken — click for details"
+      aria-label="propagation broken, click for details"
       title={notes[0] ?? "Propagation broken"}
       data-testid="propagation-cell"
       data-value="no"
@@ -1841,7 +1841,7 @@ function RecommendationsTab({
   if (!scan) {
     return (
       <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        Run a scan from the Inventory tab first — recommendations are drafted
+        Run a scan from the Inventory tab first. Recommendations are drafted
         from the latest Azure scan result.
       </div>
     );
@@ -1955,7 +1955,7 @@ function ErrorRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Error rate ${pct.toFixed(2)}% — exceeds 2x baseline + minimums`
+          ? `Error rate ${pct.toFixed(2)}%: exceeds 2x baseline + minimums`
           : `Error rate ${pct.toFixed(2)}%`
       }
       data-testid="error-rate-cell"
@@ -1989,7 +1989,7 @@ function SamplingRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Sampling ratio ${pct.toFixed(1)}% — below 5% floor with >= 1000 invocations`
+          ? `Sampling ratio ${pct.toFixed(1)}%: below 5% floor with >= 1000 invocations`
           : `Sampling ratio ${pct.toFixed(1)}%`
       }
       data-testid="sampling-rate-cell"

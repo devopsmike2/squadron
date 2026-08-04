@@ -223,7 +223,7 @@ export default function SettingsTokensPage() {
                   <span className="font-mono">rollouts:write</span>, not full
                   access. For NERC CIP-style separation of duties, grant{" "}
                   <span className="font-mono">rollouts:approve</span> to a
-                  distinct change-management group — operators with
+                  distinct change-management group. Operators with
                   rollouts:write can fire rollouts but can't approve them.
                 </p>
               </div>
@@ -319,7 +319,7 @@ export default function SettingsTokensPage() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Copy this now. Squadron stores only a hash — there's no way to
+              Copy this now. Squadron stores only a hash. There's no way to
               retrieve the plaintext later. If you lose it, revoke and issue a
               new one.
             </p>

@@ -349,7 +349,7 @@ function BillingStrip() {
         <div className="text-[11px] text-muted-foreground">
           Compares against the estimated ingest above. If the destination number
           is materially lower, your dedup / filtering rules are eating the
-          difference — usually a good thing.
+          difference, usually a good thing.
         </div>
       </CardContent>
     </Card>
@@ -727,7 +727,7 @@ function QuickWinRow({
           onClick={handleApply}
           disabled={busy}
           className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-60"
-          title="No copy-paste snippet for this recommendation — clicking still records the apply for savings tracking."
+          title="No copy-paste snippet for this recommendation. Clicking still records the apply for savings tracking."
         >
           <SparklesIcon className="h-3 w-3" />
           {busy ? "Recording…" : "Mark applied"}
@@ -790,7 +790,7 @@ function RealizedOutcomesPanel({
                   </span>{" "}
                   by{" "}
                   <span className="font-mono text-[11px]">{o.applied_by}</span>
-                  {" — "}
+                  {", "}
                   baseline{" "}
                   <span className="font-tabular">
                     {humanBytes(o.baseline_bytes_per_hour)}/h

@@ -144,7 +144,7 @@ export function RolloutPreviewPane({
             <div className="px-3 py-3 text-xs text-amber-700">
               Target config is identical to the group's current effective
               config. A rollout would not change anything. (You can still start
-              it — for example, to re-push after manual edits — but double-check
+              it (for example, to re-push after manual edits), but double-check
               this is what you meant.)
             </div>
           ) : (
@@ -183,7 +183,7 @@ export function RolloutPreviewPane({
           )}
           {!current && (
             <div className="border-t px-3 py-2 text-[11px] text-muted-foreground">
-              This group has no current effective config — Squadron will treat
+              This group has no current effective config. Squadron will treat
               the rollout as the first push and the rollback target will be
               empty.
             </div>

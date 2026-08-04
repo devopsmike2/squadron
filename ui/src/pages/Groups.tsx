@@ -258,8 +258,8 @@ export default function GroupsPage() {
                   }`}
                   title={
                     group.require_approval
-                      ? "Approval required — click to disable"
-                      : "Approval optional — click to require for all rollouts"
+                      ? "Approval required. Click to disable"
+                      : "Approval optional. Click to require for all rollouts"
                   }
                 >
                   <ShieldCheck className="h-3 w-3" />
@@ -299,8 +299,8 @@ export default function GroupsPage() {
                   }`}
                   title={
                     (group.learn_from_verdicts ?? true)
-                      ? "Proposer learns from prior verdicts on this group — click to disable"
-                      : "Verdict learning disabled — click to enable"
+                      ? "Proposer learns from prior verdicts on this group. Click to disable"
+                      : "Verdict learning disabled. Click to enable"
                   }
                 >
                   <Brain className="h-3 w-3" />

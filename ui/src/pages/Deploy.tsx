@@ -192,7 +192,7 @@ export default function DeployPage() {
                   and fill in owner / repo / workflow file / branch + paste the
                   PAT. If your workflow uses an Ansible-style{" "}
                   <code className="font-mono">inventory.ini</code>, set its path
-                  too — Squadron reads it at trigger time.
+                  too. Squadron reads it at trigger time.
                 </li>
                 <li>
                   Click{" "}
@@ -748,7 +748,7 @@ function NewTargetSheet({
               placeholder={labels.patPlaceholder}
             />
           </Field>
-          <Field label="Inventory path (optional — Ansible inventory.ini inside the repo)">
+          <Field label="Inventory path (optional, Ansible inventory.ini inside the repo)">
             <Input
               value={inventoryPath}
               onChange={(e) => setInventoryPath(e.target.value)}
@@ -761,7 +761,7 @@ function NewTargetSheet({
               workflow's <code>-i</code> path.
             </div>
           </Field>
-          <Field label="Pinned config ID (optional — lint-checks before deploy)">
+          <Field label="Pinned config ID (optional, lint-checks before deploy)">
             <Input
               value={configID}
               onChange={(e) => setConfigID(e.target.value)}
@@ -913,7 +913,7 @@ function TriggerSheet({
                           style={{ background: hostStatusColor(h.status) }}
                           title={
                             h.status === "healthy"
-                              ? `Healthy — last seen ${
+                              ? `Healthy, last seen ${
                                   h.last_seen
                                     ? new Date(h.last_seen).toLocaleString()
                                     : "?"
@@ -982,7 +982,7 @@ function TriggerSheet({
           {lintFindings && (
             <div className="space-y-1 rounded border border-destructive/40 bg-destructive/10 p-3 text-xs">
               <div className="font-medium text-destructive">
-                Config lint blocked deploy — fix these first:
+                Config lint blocked deploy. Fix these first:
               </div>
               <ul className="space-y-1">
                 {lintFindings.map((f, i) => (

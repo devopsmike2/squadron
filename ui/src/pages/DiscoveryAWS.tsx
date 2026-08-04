@@ -413,7 +413,7 @@ function AccountSelectorBar({
                   // distinct labels mean test queries can target one
                   // or the other unambiguously.
                   <SelectItem key={c.account_id} value={c.account_id}>
-                    {c.display_name} — …{shortenAccountID(c.account_id)}
+                    {c.display_name} (…{shortenAccountID(c.account_id)})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1014,7 +1014,7 @@ function AccountEmptyState({
             className="mr-1 inline-block h-3 w-3 text-violet-500"
             aria-hidden
           />
-          Squadron never holds your AWS write credentials — recommendations land
+          Squadron never holds your AWS write credentials. Recommendations land
           as Terraform snippets for your existing pipeline.
         </div>
       </CardContent>
@@ -1295,7 +1295,7 @@ function ScanResultPanel({
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <p className="text-xs text-muted-foreground">
               Ask the AI proposer to draft Terraform that instruments the
-              uninstrumented resources. Snippets are for your IaC pipeline —
+              uninstrumented resources. Snippets are for your IaC pipeline;
               Squadron does not apply them.
             </p>
             <Button
@@ -1316,8 +1316,8 @@ function ScanResultPanel({
           </div>
           {generating && (
             <p className="text-xs text-muted-foreground">
-              The proposer is drafting your plan — for large inventories this
-              can take up to a couple of minutes. You can leave this tab open.
+              The proposer is drafting your plan. For large inventories this can
+              take up to a couple of minutes. You can leave this tab open.
             </p>
           )}
           {genError && (
@@ -1356,7 +1356,7 @@ function ScanResultPanel({
                   <span className="font-medium">Scan was partial</span>
                   {tiers.length > 0 && (
                     <>
-                      {" — degraded: "}
+                      {", degraded: "}
                       <span className="font-mono">{tiers.join(", ")}</span>
                     </>
                   )}
@@ -1365,7 +1365,7 @@ function ScanResultPanel({
                 <div className="text-muted-foreground">{reason}</div>
                 <div>
                   {looksDenied
-                    ? "This is a permissions gap, not missing resources — confirm the SquadronDiscovery role grants the required read-only actions (see the AWS setup guide), then re-scan."
+                    ? "This is a permissions gap, not missing resources. Confirm the SquadronDiscovery role grants the required read-only actions (see the AWS setup guide), then re-scan."
                     : "Re-run to capture missed resources."}
                 </div>
               </CardContent>
@@ -2147,7 +2147,7 @@ export function SamplingRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Sampling ratio ${pct.toFixed(1)}% — below 5% floor with >= 1000 invocations`
+          ? `Sampling ratio ${pct.toFixed(1)}%, below the 5% floor with >= 1000 invocations`
           : `Sampling ratio ${pct.toFixed(1)}%`
       }
       data-testid="sampling-rate-cell"
@@ -2194,7 +2194,7 @@ export function ErrorRateCell({ row }: { row: ServerlessRow }) {
       className={isAmber ? "text-amber-600" : "text-foreground"}
       title={
         isAmber
-          ? `Error rate ${pct.toFixed(2)}% — exceeds 2x baseline + minimums`
+          ? `Error rate ${pct.toFixed(2)}%, exceeds 2x baseline + minimums`
           : `Error rate ${pct.toFixed(2)}%`
       }
       data-testid="error-rate-cell"
@@ -2463,7 +2463,7 @@ function PropagationCell({
       type="button"
       onClick={() => onOpen(row, notes)}
       className="text-amber-500 hover:text-amber-600"
-      aria-label="propagation broken — click for details"
+      aria-label="propagation broken, click for details"
       title={notes[0] ?? "Propagation broken"}
       data-testid="propagation-cell"
       data-value="no"
@@ -2773,8 +2773,8 @@ export function RecommendationsTab({
         showToast(
           "success",
           nextExcluded
-            ? "Excluded — Squadron won't propose this on future scans. Click Restore to undo."
-            : "Restored — Squadron will propose this again on future scans.",
+            ? "Excluded. Squadron won't propose this on future scans. Click Restore to undo."
+            : "Restored. Squadron will propose this again on future scans.",
         );
       } catch (e) {
         // Rollback the optimistic Set change.
@@ -2809,8 +2809,8 @@ export function RecommendationsTab({
               Inventory tab.
             </p>
             <p className="mt-3 max-w-md text-xs text-muted-foreground">
-              Recommendations arrive as Terraform snippets for your IaC pipeline
-              — Squadron never mutates your cloud.
+              Recommendations arrive as Terraform snippets for your IaC
+              pipeline. Squadron never mutates your cloud.
             </p>
           </div>
         </CardContent>
@@ -3258,7 +3258,7 @@ export function DiscoveryRecommendationCard({
                   "patch_existing_hcl_merged" && (
                   <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
                     <Check className="mr-1 inline h-3 w-3" aria-hidden />
-                    HCL-merged — Squadron parsed the placement file and applied
+                    HCL-merged. Squadron parsed the placement file and applied
                     the patch in place. terraform plan accepts the result; no
                     manual integration needed.
                   </p>
@@ -3270,8 +3270,8 @@ export function DiscoveryRecommendationCard({
                       aria-hidden
                     />
                     lifecycle.ignore_changes covers one of the patched
-                    attributes — terraform apply will no-op that attribute until
-                    you edit the ignore_changes entry.
+                    attributes, so terraform apply will no-op that attribute
+                    until you edit the ignore_changes entry.
                   </p>
                 )}
                 {openPRResult.manual_merge_required && (
@@ -3280,8 +3280,8 @@ export function DiscoveryRecommendationCard({
                       className="mr-1 inline h-3 w-3"
                       aria-hidden
                     />
-                    Manual merge required — Squadron appended the snippet to
-                    your placement file. Hand-integrate before merging.
+                    Manual merge required. Squadron appended the snippet to your
+                    placement file. Hand-integrate before merging.
                     {openPRResult.hcl_patch_failure_reason ? (
                       <>
                         {" "}
@@ -3387,7 +3387,7 @@ export function DiscoveryRecommendationCard({
                       <Badge
                         variant="outline"
                         title="Squadron will parse the placement file and apply the proposer's structured patch in place. terraform plan accepts the result; no manual integration needed."
-                        aria-label="HCL-merged — clean apply"
+                        aria-label="HCL-merged, clean apply"
                         className="border-emerald-500/40 text-xs text-emerald-700 dark:text-emerald-300"
                       >
                         <Check className="mr-1 h-3 w-3" aria-hidden />
@@ -3400,7 +3400,7 @@ export function DiscoveryRecommendationCard({
                       <Badge
                         variant="outline"
                         title="Squadron appends the snippet to the placement file. terraform plan will fail with a duplicate-resource error until you hand-integrate the change. The proposer didn't emit a structured patch for this recommendation; the slice-2 HCL-aware merge could not run."
-                        aria-label="Needs manual merge — patch_existing disposition"
+                        aria-label="Needs manual merge, patch_existing disposition"
                         className="border-amber-500/40 text-xs text-amber-700 dark:text-amber-300"
                       >
                         <AlertTriangle className="mr-1 h-3 w-3" aria-hidden />
@@ -3612,7 +3612,7 @@ function openPRErrorRecoveryHint(
     case "DefaultBranchWriteRefused":
       return (
         <>
-          This is a Squadron bug. Check the audit timeline and report it —
+          This is a Squadron bug. Check the audit timeline and report it.
           Squadron should never attempt to push to the default branch.
         </>
       );

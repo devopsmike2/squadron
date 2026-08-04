@@ -58,7 +58,7 @@ export function InventorySummary() {
               Reconciliation between your declared inventory (e.g. an Ansible{" "}
               <code>inventory.ini</code> file) and the agents that actually
               checked in. <b>Missing</b> means a host was declared but hasn't
-              checked in for ~10 minutes — often expected during a deploy, but
+              checked in for ~10 minutes. Often expected during a deploy, but
               worth checking afterward. <b>Unexpected</b> means an agent showed
               up that isn't in your declared inventory.
             </InfoTooltip>

@@ -128,7 +128,7 @@ export function ChangeWindowsModal({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            Change windows — {group?.name ?? "(loading…)"}
+            Change windows: {group?.name ?? "(loading…)"}
           </DialogTitle>
           <DialogDescription>
             Rollouts to this group won't advance while a window is active. Use

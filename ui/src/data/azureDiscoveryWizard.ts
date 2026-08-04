@@ -130,7 +130,7 @@ export function validateErrorRemediation(
 ): string {
   switch (kind) {
     case "permission_denied":
-      return `Verify the Service Principal has the Reader role on subscription ${args.connectionSubscriptionID}. Re-run the az ad sp create-for-rbac command from Step 2 if needed — RBAC changes can take up to 60 seconds to propagate.`;
+      return `Verify the Service Principal has the Reader role on subscription ${args.connectionSubscriptionID}. Re-run the az ad sp create-for-rbac command from Step 2 if needed. RBAC changes can take up to 60 seconds to propagate.`;
     case "subscription_not_found":
       return `Verify ${args.connectionSubscriptionID} is correct and the Service Principal has access. The subscription may not exist, or the SP's scope may not include it.`;
     case "tenant_invalid":

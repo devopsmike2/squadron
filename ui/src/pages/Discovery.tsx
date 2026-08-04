@@ -632,7 +632,7 @@ function TraceCoveragePanel({
               <AlertTriangle className="h-4 w-4" aria-hidden />
               <span>
                 {totalPendingTraceEmission} resources have the primitive enabled
-                but no recent emission —{" "}
+                but no recent emission:{" "}
                 <Link to="/discovery/aws#recommendations" className="underline">
                   see Recommendations on each provider
                 </Link>{" "}
@@ -979,7 +979,7 @@ function WorkloadHealthColumn({
       className="block rounded-md border border-transparent p-3 text-center transition hover:border-amber-400/40 hover:bg-amber-500/5"
       data-testid={`workload-health-${testIdSuffix}`}
       data-kind={kind}
-      aria-label={`${label} — ${pct.toFixed(1)}%, ${count} ${resourceWord}`}
+      aria-label={`${label}: ${pct.toFixed(1)}%, ${count} ${resourceWord}`}
     >
       <div className="text-xs uppercase tracking-wide text-muted-foreground">
         {label}
@@ -1155,7 +1155,7 @@ function SpanQualityColumn({
       className="block rounded-md border border-transparent p-3 text-center transition hover:border-amber-400/40 hover:bg-amber-500/5"
       data-testid={`span-quality-column-${testIdSuffix}`}
       data-kind={kind}
-      aria-label={`${label} — ${pct.toFixed(1)}%, ${count} ${resourceWord}`}
+      aria-label={`${label}: ${pct.toFixed(1)}%, ${count} ${resourceWord}`}
     >
       <div className="text-xs uppercase tracking-wide text-muted-foreground">
         {label}

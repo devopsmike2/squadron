@@ -247,7 +247,7 @@ function MergeSnippetDialog({
           <DialogDescription>
             {model ? `${model}` : "Claude"} will merge your snippet into the
             current YAML and replace the editor contents. Review the result, run
-            lint, and roll out as usual — nothing changes server-side until you
+            lint, and roll out as usual. Nothing changes server-side until you
             save.
           </DialogDescription>
         </DialogHeader>

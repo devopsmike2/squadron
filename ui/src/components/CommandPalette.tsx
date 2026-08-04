@@ -100,7 +100,7 @@ export function CommandPalette() {
               <Search className="h-4 w-4 text-muted-foreground shrink-0" />
               <Command.Input
                 autoFocus
-                placeholder="Jump to a page, agent, rule — or run a command..."
+                placeholder="Jump to a page, agent, or rule. Or run a command..."
                 className="flex-1 h-11 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
               <kbd className="text-[10px] font-mono text-muted-foreground border rounded px-1.5 py-0.5 hidden sm:inline">

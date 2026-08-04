@@ -84,7 +84,10 @@ export function AuditReviewPanel() {
         testId="audit-review-enterprise-gate"
         title="Access review is an enterprise feature"
       >
-        Per-actor timelines, per-resource access history, and per-tenant admin-action reviews (SOC 2 quarterly access review) are available in the enterprise edition. The single-tenant audit log and CSV/JSON export on the “Recent activity” tab remain available here.
+        Per-actor timelines, per-resource access history, and per-tenant
+        admin-action reviews (SOC 2 quarterly access review) are available in
+        the enterprise edition. The single-tenant audit log and CSV/JSON export
+        on the “Recent activity” tab remain available here.
       </EnterpriseUpgradePrompt>
     );
   }
@@ -352,7 +355,7 @@ function ReviewResultView({ data }: { data: ReviewResult }) {
         )}
         {data.truncated && (
           <span className="text-xs text-amber-600">
-            truncated — narrow the window for the full set
+            truncated: narrow the window for the full set
           </span>
         )}
       </div>
@@ -375,7 +378,7 @@ function AdminResultView({ data }: { data: AdminActionsResult }) {
         {data.cross_tenant && <Badge variant="outline">cross-tenant</Badge>}
         {data.truncated && (
           <span className="text-xs text-amber-600">
-            truncated — counts are a floor
+            truncated: counts are a floor
           </span>
         )}
       </div>

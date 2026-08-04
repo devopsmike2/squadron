@@ -102,7 +102,7 @@ export function PipelineHealthAgentPanel({ agentID }: { agentID: string }) {
       <Card>
         <CardContent className="p-4 text-sm text-muted-foreground">
           Pipeline health unavailable. (The collector may not be reporting its
-          self-metrics yet — they take one scrape interval to land.)
+          self-metrics yet; they take one scrape interval to land.)
         </CardContent>
       </Card>
     );
@@ -291,7 +291,7 @@ export function FleetHealthSummary() {
             <InfoTooltip label="About pipeline health" maxWidth={320}>
               Each agent's verdict comes from its OTel collector self-metrics
               (queue depth, send failures, processor drops). <b>Unknown</b> just
-              means we haven't received self-metrics from that agent yet — it's
+              means we haven't received self-metrics from that agent yet. It's
               normal on fresh installs and not an alarm. <b>Degraded</b> and{" "}
               <b>Broken</b> mean we observed a real threshold breach and the
               agent should be investigated.

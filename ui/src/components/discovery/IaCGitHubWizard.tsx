@@ -544,7 +544,7 @@ function IaCGitHubWizardCreate({
       setCreateAutoFillNote(
         res.scanned
           ? `Filled ${noun} from a scan of ${repoFullName}. Review before continuing.`
-          : `Couldn't read the repo (check the token) — filled ${noun} with conventional defaults.`,
+          : `Couldn't read the repo (check the token). Filled ${noun} with conventional defaults.`,
       );
     } catch (e) {
       setCreateAutoFillNote(e instanceof Error ? e.message : String(e));
@@ -920,7 +920,7 @@ function PATStep({
           </li>
           <li>Confirm the scope, click Generate, copy the token.</li>
           <li>
-            Paste it in the field below — it never leaves your browser before
+            Paste it in the field below. It never leaves your browser before
             save.
           </li>
         </ol>
@@ -965,7 +965,7 @@ function PATStep({
         />
         <p className="text-xs text-muted-foreground">
           The token stays in this browser tab until you click Save. Squadron
-          will only create branches and open pull requests — Squadron will never
+          will only create branches and open pull requests. Squadron will never
           push to your default branch.
         </p>
       </div>
@@ -1488,8 +1488,8 @@ function PlacementMapStep({
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Tell Squadron which file to append each kind&apos;s Terraform snippet
-        to. Skip the kinds you don&apos;t manage in this repo — you can
-        configure them later from the connection&apos;s settings.
+        to. Skip the kinds you don&apos;t manage in this repo. You can configure
+        them later from the connection&apos;s settings.
       </p>
 
       {onAutoFill && (
@@ -1567,7 +1567,7 @@ function PlacementMapStep({
             className="h-auto p-0 text-xs"
             onClick={onSkipAll}
           >
-            Skip all for now — configure per-kind later
+            Skip all for now, configure per-kind later
           </Button>
         )}
       </div>
@@ -2002,8 +2002,8 @@ function PreflightPanel({
         ))}
         {result.preflight_results.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            No placement-map rows to check — all were skipped. You can still
-            save the connection and configure paths later.
+            No placement-map rows to check; all were skipped. You can still save
+            the connection and configure paths later.
           </p>
         )}
       </div>
@@ -2371,7 +2371,7 @@ function PlacementOnlyEditor({
       setAutoFillNote(
         res.scanned
           ? `Filled ${noun} from a scan of ${editMode.repoFullName}. Review before saving.`
-          : `Couldn't read the repo (check the connection's token) — filled ${noun} with conventional defaults. Review before saving.`,
+          : `Couldn't read the repo (check the connection's token). Filled ${noun} with conventional defaults. Review before saving.`,
       );
     } catch (e) {
       setAutoFillNote(e instanceof Error ? e.message : String(e));
