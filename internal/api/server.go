@@ -2652,7 +2652,11 @@ func (s *Server) registerRoutes() {
 	groupHandlers := handlers.NewGroupHandlers(s.agentService, s.commander, s.logger)
 	savedQueryHandlers := handlers.NewSavedQueryHandlers(s.savedQueryService, s.logger)
 	topologyHandlers := handlers.NewTopologyHandlers(s.agentService, s.telemetryService, s.logger)
-	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, s.appStore, s.logger)
+	// /readyz reads s.appStore LAZILY via this provider: appStore is still nil
+	// here in registerRoutes and is only wired later by SetActionStoreAndSigner
+	// (see the WIRING-ORDER GOTCHA above). Passing s.appStore directly pinned the
+	// nil and made /readyz 503 forever (OpenShift pilot, 2026-08).
+	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, func() handlers.StorePinger { return s.appStore }, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
 	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.aiService, s.appStore, s.logger)
 	rolloutHandlers := handlers.NewRolloutHandlers(s.rolloutService, s.logger)

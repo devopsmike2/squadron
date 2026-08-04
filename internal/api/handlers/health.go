@@ -12,10 +12,10 @@ import (
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
-// storePinger is the lightweight liveness/readiness primitive backing
-// GET /readyz: a cheap SELECT 1-class round-trip, distinct from the deep
-// ListAgents scan HandleHealth performs. The application store satisfies it.
-type storePinger interface {
+// StorePinger is the lightweight readiness primitive backing GET /readyz: a
+// cheap SELECT 1-class round-trip, distinct from the deep ListAgents scan
+// HandleHealth performs. The application store satisfies it.
+type StorePinger interface {
 	Ping(ctx context.Context) error
 }
 
@@ -23,18 +23,27 @@ type storePinger interface {
 type HealthHandlers struct {
 	agentService     services.AgentService
 	telemetryService services.TelemetryQueryService
-	store            storePinger
-	logger           *zap.Logger
+	// readyStore resolves the readiness-probe store LAZILY, at request time.
+	// It must NOT capture a store eagerly: registerRoutes builds this handler
+	// inside NewServer(), BEFORE main.go wires the post-construction appStore
+	// via SetActionStoreAndSigner. Pinning the nil that appStore held at
+	// construction is exactly what made /readyz return 503 forever — the k8s
+	// readiness probe never passed (first hit in the OpenShift pilot,
+	// 2026-08). See the WIRING-ORDER GOTCHA in server.go.
+	readyStore func() StorePinger
+	logger     *zap.Logger
 }
 
-// NewHealthHandlers creates a new health handlers instance. store is the
-// lightweight readiness probe target (GET /readyz); it may be nil, in which
-// case /readyz reports unready rather than panicking.
-func NewHealthHandlers(agentService services.AgentService, telemetryService services.TelemetryQueryService, store storePinger, logger *zap.Logger) *HealthHandlers {
+// NewHealthHandlers creates a new health handlers instance. readyStore is a
+// provider for the lightweight readiness-probe store (GET /readyz). It is
+// invoked per request so a store wired AFTER construction is seen; both the
+// provider and the store it returns may be nil, in which case /readyz reports
+// unready rather than panicking.
+func NewHealthHandlers(agentService services.AgentService, telemetryService services.TelemetryQueryService, readyStore func() StorePinger, logger *zap.Logger) *HealthHandlers {
 	return &HealthHandlers{
 		agentService:     agentService,
 		telemetryService: telemetryService,
-		store:            store,
+		readyStore:       readyStore,
 		logger:           logger,
 	}
 }
@@ -100,13 +109,22 @@ func (h *HealthHandlers) HandleLive(c *gin.Context) {
 // ErrTenantContextRequired (see checkSQLiteHealth). Returns 200 when the store
 // answers, 503 when the Ping fails so k8s stops routing to a pod that cannot
 // reach its DB.
+//
+// The readiness store is resolved LAZILY via h.readyStore() on every request —
+// never captured at construction — because registerRoutes builds this handler
+// before appStore is wired (see the WIRING-ORDER GOTCHA in server.go). A nil
+// provider or a nil store both report unready.
 func (h *HealthHandlers) HandleReady(c *gin.Context) {
-	if h.store == nil {
+	var store StorePinger
+	if h.readyStore != nil {
+		store = h.readyStore()
+	}
+	if store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unready", "reason": "store not wired"})
 		return
 	}
 	ctx := identity.WithSystemContext(c.Request.Context())
-	if err := h.store.Ping(ctx); err != nil {
+	if err := store.Ping(ctx); err != nil {
 		if h.logger != nil {
 			h.logger.Warn("readiness probe: store ping failed", zap.Error(err))
 		}
