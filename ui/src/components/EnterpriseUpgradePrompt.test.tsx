@@ -13,7 +13,9 @@ describe("EnterpriseUpgradePrompt (ADR 0032 S1c)", () => {
     expect(screen.getByTestId("x-gate")).toBeTruthy();
     expect(screen.getByText("Feature X is enterprise")).toBeTruthy();
     expect(screen.getByText("Body copy.")).toBeTruthy();
-    const cta = screen.getByTestId("enterprise-upgrade-cta") as HTMLAnchorElement;
+    const cta = screen.getByTestId(
+      "enterprise-upgrade-cta",
+    ) as HTMLAnchorElement;
     expect(cta.getAttribute("href")).toBeTruthy();
     expect(cta.textContent).toMatch(/upgrade to enterprise/i);
   });

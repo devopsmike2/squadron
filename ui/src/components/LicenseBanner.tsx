@@ -5,7 +5,11 @@
 
 import useSWR from "swr";
 
-import { getLicenseStatus, UPGRADE_URL, type LicenseStatus } from "@/api/license";
+import {
+  getLicenseStatus,
+  UPGRADE_URL,
+  type LicenseStatus,
+} from "@/api/license";
 
 const WARN_WITHIN_DAYS = 14;
 

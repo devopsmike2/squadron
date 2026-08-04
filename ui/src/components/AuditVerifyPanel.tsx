@@ -82,7 +82,10 @@ export function AuditVerifyPanel() {
         testId="audit-verify-enterprise-gate"
         title="Audit integrity verification is an enterprise feature."
       >
-        Hash-chain re-verification (per-tenant and fleet-wide) and sealed tamper-evidence attestations are available in the enterprise edition. The single-tenant audit log and CSV/JSON export on the “Recent activity” tab remain available here.
+        Hash-chain re-verification (per-tenant and fleet-wide) and sealed
+        tamper-evidence attestations are available in the enterprise edition.
+        The single-tenant audit log and CSV/JSON export on the “Recent activity”
+        tab remain available here.
       </EnterpriseUpgradePrompt>
     );
   }

@@ -59,7 +59,8 @@ export function BudgetsPanel() {
         testId="budgets-enterprise-gate"
         title="Per-tenant budgets are an enterprise feature"
       >
-        Per-tenant trace-index budgets cap how many trace-index rows each tenant retains, and are available in the enterprise edition.
+        Per-tenant trace-index budgets cap how many trace-index rows each tenant
+        retains, and are available in the enterprise edition.
       </EnterpriseUpgradePrompt>
     );
   }
