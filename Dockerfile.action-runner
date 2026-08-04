@@ -1,0 +1,44 @@
+# Squadron action runner image.
+#
+# A small static Go binary plus kubectl, so a runner deployed inside a
+# Kubernetes / OpenShift cluster can execute the restart-k8s-workload action
+# (via `kubectl rollout restart`). The runner registers with Squadron, polls
+# for signed action requests, and executes only those within its declared
+# capabilities.
+#
+# restricted-v2 friendly: runs as an arbitrary non-root UID with group 0, and
+# owns /app + /etc/squadron-runner via group 0 so an assigned UID can write.
+
+# =============================================================================
+# Stage 1: build the static runner binary (no cgo — no sqlite/duckdb).
+# =============================================================================
+FROM golang:1.25-bookworm AS build
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o /out/squadron-action-runner ./cmd/squadron-action-runner
+
+# =============================================================================
+# Stage 2: minimal runtime with kubectl bundled.
+# =============================================================================
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+ARG KUBECTL_VERSION=v1.30.5
+RUN microdnf install -y ca-certificates tar gzip >/dev/null \
+    && microdnf clean all \
+    && curl -sSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && chmod 0755 /usr/local/bin/kubectl
+
+COPY --from=build /out/squadron-action-runner /usr/local/bin/squadron-action-runner
+
+# Config is mounted at /etc/squadron-runner (ConfigMap); the runner persists its
+# keypair under /app/data. Group 0 ownership lets the SCC-assigned UID write.
+RUN mkdir -p /app/data /etc/squadron-runner \
+    && chgrp -R 0 /app /etc/squadron-runner \
+    && chmod -R g=u /app /etc/squadron-runner
+
+WORKDIR /app
+USER 1001
+
+ENTRYPOINT ["/usr/local/bin/squadron-action-runner"]
