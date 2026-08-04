@@ -7,6 +7,7 @@ import {
   deleteTenantBudget,
   type Budget,
 } from "@/api/budgets";
+import { EnterpriseUpgradePrompt } from "@/components/EnterpriseUpgradePrompt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,19 +55,12 @@ export function BudgetsPanel() {
 
   if (!isEnterprise) {
     return (
-      <div
-        className="text-muted-foreground rounded-md border border-dashed p-6 text-sm"
-        data-testid="budgets-enterprise-gate"
+      <EnterpriseUpgradePrompt
+        testId="budgets-enterprise-gate"
+        title="Per-tenant budgets are an enterprise feature"
       >
-        <p className="text-foreground font-medium">
-          Per-tenant budgets are an enterprise feature
-        </p>
-        <p className="mt-1">
-          Per-tenant trace-index budgets are an enterprise feature. Cap how many
-          trace-index rows each tenant retains — available in the enterprise
-          edition.
-        </p>
-      </div>
+        Per-tenant trace-index budgets cap how many trace-index rows each tenant retains, and are available in the enterprise edition.
+      </EnterpriseUpgradePrompt>
     );
   }
 

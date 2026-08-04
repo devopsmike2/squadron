@@ -12,6 +12,7 @@ import {
   type ReviewResult,
 } from "@/api/auditReview";
 import { listTenants } from "@/api/tenants";
+import { EnterpriseUpgradePrompt } from "@/components/EnterpriseUpgradePrompt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,20 +80,12 @@ export function AuditReviewPanel() {
 
   if (!isEnterprise) {
     return (
-      <div
-        className="text-muted-foreground rounded-md border border-dashed p-6 text-sm"
-        data-testid="audit-review-enterprise-gate"
+      <EnterpriseUpgradePrompt
+        testId="audit-review-enterprise-gate"
+        title="Access review is an enterprise feature"
       >
-        <p className="text-foreground font-medium">
-          Access review is an enterprise feature
-        </p>
-        <p className="mt-1">
-          Per-actor timelines, per-resource access history, and per-tenant
-          admin-action reviews (SOC 2 quarterly access review) are available in
-          the enterprise edition. The single-tenant audit log and CSV/JSON
-          export on the “Recent activity” tab remain available here.
-        </p>
-      </div>
+        Per-actor timelines, per-resource access history, and per-tenant admin-action reviews (SOC 2 quarterly access review) are available in the enterprise edition. The single-tenant audit log and CSV/JSON export on the “Recent activity” tab remain available here.
+      </EnterpriseUpgradePrompt>
     );
   }
 

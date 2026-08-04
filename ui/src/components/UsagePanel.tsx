@@ -3,6 +3,7 @@ import useSWR from "swr";
 
 import { listTenants } from "@/api/tenants";
 import { getOwnUsage, getTenantUsage, type UsageSummary } from "@/api/usage";
+import { EnterpriseUpgradePrompt } from "@/components/EnterpriseUpgradePrompt";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -59,18 +60,12 @@ export function UsagePanel() {
 
   if (!isEnterprise) {
     return (
-      <div
-        className="text-muted-foreground rounded-md border border-dashed p-6 text-sm"
-        data-testid="usage-enterprise-gate"
+      <EnterpriseUpgradePrompt
+        testId="usage-enterprise-gate"
+        title="Per-tenant usage is an enterprise feature"
       >
-        <p className="text-foreground font-medium">
-          Per-tenant usage is an enterprise feature
-        </p>
-        <p className="mt-1">
-          Per-tenant usage summaries (agents, rollouts) — a chargeback/showback
-          view across your tenants — are available in the enterprise edition.
-        </p>
-      </div>
+        Per-tenant usage summaries (agents, rollouts), a chargeback/showback view across your tenants, are available in the enterprise edition.
+      </EnterpriseUpgradePrompt>
     );
   }
 
