@@ -372,6 +372,11 @@ type Server struct {
 	// SetEnterpriseAuditVerifyHandler; OSS leaves it nil so those routes 404.
 	// Read at request time by the late-bound wildcard. INERT seam in slice 1.
 	enterpriseAuditVerifyHandler EnterpriseAuditVerifyHandler
+	// licenseStatus reports the enterprise license state to GET
+	// /api/v1/license/status (ADR 0032). Wired by the enterprise build via
+	// SetLicenseStatusProvider; OSS leaves it nil so the endpoint reports
+	// edition "oss".
+	licenseStatus LicenseStatusProvider
 	// enterpriseUsageHandler serves the /api/v1/usage/* per-tenant usage /
 	// billing summary (chargeback/showback). Wired by the enterprise build via
 	// SetEnterpriseUsageHandler; OSS leaves it nil so those routes 404.
@@ -2779,6 +2784,10 @@ func (s *Server) registerRoutes() {
 		// Enterprise per-tenant usage/billing summary seam under /api/v1/usage/*.
 		s.mountEnterpriseUsage(v1)
 
+		// License status (ADR 0032) — always served: OSS reports edition
+		// "oss", the enterprise edition reports the guard-backed state.
+		s.mountLicenseStatus(v1)
+
 		// ADR 0026 — enterprise per-tenant trace-index budget admin seam under
 		// /api/v1/budgets/*. OSS leaves the handler nil → 404.
 		s.mountEnterpriseBudgets(v1)
@@ -4275,4 +4284,58 @@ func (s *Server) metricsMiddleware() gin.HandlerFunc {
 			s.metrics.TopologyQueryDuration.Record(duration)
 		}
 	}
+}
+
+// --- License status seam (ADR 0032 S1) -------------------------------------
+
+// LicenseLimits reports the licensed caps (0 = unlimited).
+type LicenseLimits struct {
+	MaxAgents     int `json:"max_agents"`
+	MaxAdminSeats int `json:"max_admin_seats"`
+	MaxTenants    int `json:"max_tenants"`
+}
+
+// LicenseStatusView is the JSON returned by GET /api/v1/license/status. OSS owns
+// the shape so the frontend reads it uniformly; the enterprise edition fills it
+// from the license guard, OSS returns {edition:"oss"}.
+type LicenseStatusView struct {
+	Edition       string         `json:"edition"`               // "oss" | "enterprise"
+	State         string         `json:"state"`                 // valid|grace|expired|not_yet_valid|invalid|n/a
+	Development   bool           `json:"development,omitempty"` // enterprise build with no vendor key
+	Customer      string         `json:"customer,omitempty"`
+	Plan          string         `json:"plan,omitempty"`
+	Trial         bool           `json:"trial,omitempty"`
+	ExpiresAt     string         `json:"expires_at,omitempty"`
+	DaysRemaining int            `json:"days_remaining,omitempty"`
+	InGrace       bool           `json:"in_grace,omitempty"`
+	Features      []string       `json:"features,omitempty"`
+	Limits        *LicenseLimits `json:"limits,omitempty"`
+	Message       string         `json:"message,omitempty"`
+}
+
+// LicenseStatusProvider is the seam the enterprise edition implements to report
+// the current license state. OSS never sets one, so the endpoint reports "oss".
+type LicenseStatusProvider interface {
+	LicenseStatus() LicenseStatusView
+}
+
+// SetLicenseStatusProvider installs the enterprise license-status provider
+// (ADR 0032). Called once at startup by the enterprise wiring; OSS never calls
+// it. Not safe for concurrent use with in-flight requests.
+func (s *Server) SetLicenseStatusProvider(p LicenseStatusProvider) {
+	s.licenseStatus = p
+}
+
+// mountLicenseStatus registers GET /license/status. Unlike the enterprise-only
+// seams this ALWAYS serves: OSS (no provider) returns edition "oss"; the
+// enterprise edition returns the guard-backed view. Extracted so the seam is
+// unit-testable with a bare *Server.
+func (s *Server) mountLicenseStatus(rg gin.IRouter) {
+	rg.GET("/license/status", func(c *gin.Context) {
+		if s.licenseStatus == nil {
+			c.JSON(http.StatusOK, LicenseStatusView{Edition: "oss", State: "n/a"})
+			return
+		}
+		c.JSON(http.StatusOK, s.licenseStatus.LicenseStatus())
+	})
 }
