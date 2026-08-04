@@ -62,6 +62,7 @@ func main() {
 	startCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error).")
 
 	root.AddCommand(startCmd)
+	root.AddCommand(newKeygenCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
