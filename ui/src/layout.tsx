@@ -2,6 +2,7 @@ import { Outlet } from "react-router-dom";
 
 import { AppSidebar } from "./layout/sidebar";
 
+import { LicenseBanner } from "@/components/LicenseBanner";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { getCookie } from "@/lib/utils";
 
@@ -18,6 +19,7 @@ export default function Layout() {
       <AppSidebar />
       <SidebarInset className="flex-1">
         <div className="flex flex-1 flex-col gap-4 p-4 w-full h-screen min-h-0 overflow-auto">
+          <LicenseBanner />
           <Outlet />
         </div>
       </SidebarInset>
