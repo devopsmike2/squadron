@@ -187,15 +187,31 @@ func (s *Simulator) Disable(ctx context.Context) error {
 	}
 	s.running = false
 
-	// Remove agents, then groups.
-	for _, a := range s.agents {
-		if err := s.store.DeleteAgent(ctx, a.id); err != nil {
-			s.logger.Warn("demosim: delete agent failed", zap.String("agent", a.name), zap.Error(err))
+	// Tear the fleet down by querying the store for this simulator's agents,
+	// NOT the in-memory s.agents list. s.agents is process-local and is wiped on
+	// a pod restart, while the seeded rows persist on the data volume — trusting
+	// memory orphaned the whole fleet after any restart (Remove found nothing to
+	// delete, so the UI kept showing a stale fleet that could never be cleared).
+	// We match on the demosim ownership label so only simulator-owned rows are
+	// ever touched; demoseed rows and real agents are left alone.
+	if agents, err := s.store.ListAgents(ctx); err != nil {
+		s.logger.Warn("demosim: list agents for teardown failed", zap.Error(err))
+	} else {
+		for _, a := range agents {
+			if a.Labels["fleet"] != demosimLabel {
+				continue
+			}
+			if derr := s.store.DeleteAgent(ctx, a.ID); derr != nil {
+				s.logger.Warn("demosim: delete agent failed", zap.String("agent", a.Name), zap.Error(derr))
+			}
 		}
 	}
+	// Delete the demo fleet groups. Their ids are static (simGroupDefs), so this
+	// is already restart-safe. A missing group is expected on a re-run, so it's
+	// Debug, not Warn.
 	for _, g := range simGroupDefs {
 		if err := s.store.DeleteGroup(ctx, g.id); err != nil {
-			s.logger.Warn("demosim: delete group failed", zap.String("group", g.id), zap.Error(err))
+			s.logger.Debug("demosim: delete group skipped", zap.String("group", g.id), zap.Error(err))
 		}
 	}
 	s.agents = nil
