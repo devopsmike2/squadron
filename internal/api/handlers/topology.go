@@ -122,10 +122,16 @@ func (h *TopologyHandlers) HandleGetTopology(c *gin.Context) {
 		return
 	}
 
-	// Build topology
-	var nodes []TopologyNode
-	var edges []TopologyEdge
-	var groupSummaries []GroupSummary
+	// Build topology.
+	//
+	// Initialize to empty (non-nil) slices so an empty fleet marshals as
+	// [] rather than null. The /topology JSON contract types these as
+	// non-optional arrays; a nil slice serialized to `null` crashed the
+	// Fleet Map on first load with no data (`for...of null` in the ui
+	// FleetMap rpsByAgent loop blanked the whole page). OpenShift pilot, 2026-08.
+	nodes := []TopologyNode{}
+	edges := []TopologyEdge{}
+	groupSummaries := []GroupSummary{}
 
 	// Create group nodes and summaries
 	groupAgentCount := make(map[string]int)
@@ -207,7 +213,8 @@ func (h *TopologyHandlers) HandleGetTopology(c *gin.Context) {
 		WHERE service_name IS NOT NULL AND service_name != ''
 		ORDER BY service_name
 	`
-	var services []string
+	// Non-nil so an empty result marshals as [] not null (see Build topology).
+	services := []string{}
 	if rows, err := h.telemetryService.QueryRaw(ctx, servicesQuery); err == nil {
 		for _, row := range rows {
 			if svc, ok := row["service_name"].(string); ok && svc != "" {
