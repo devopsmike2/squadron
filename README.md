@@ -4,22 +4,30 @@
 
 # Squadron
 
-**The open-source OpenTelemetry control plane for coverage, cost, and safe rollouts.**
+**The open-source control plane for your OpenTelemetry collector fleet.**
 
 [Documentation](https://devopsmike2.github.io/squadron/) &middot; [Getting started](https://devopsmike2.github.io/squadron/getting-started/) &middot; [How it works](https://devopsmike2.github.io/squadron/how-it-works/) &middot; [Enterprise](https://devopsmike2.github.io/squadron/enterprise/overview/)
 
 </div>
 
-Squadron continuously discovers what's running across AWS, GCP,
-Azure, and OCI, finds the resources with missing or broken
-OpenTelemetry instrumentation, and opens a merge-ready Terraform
-pull request that fixes the gap — HCL-aware merged into your
-existing config and gated on `terraform validate` before it
-reaches you. It also shows where your telemetry bytes are going
-and what they cost — in dollars, not megabytes — and ships config
-changes through safe, staged rollouts with approvals, drift
-detection, and a tamper-evident audit trail. AI explains every
-recommendation in plain English; you review and merge.
+Squadron is one place to see every collector in your fleet, change
+its config safely, catch drift before it pages you, and keep the
+whole fleet healthy — with a governed change loop and a
+tamper-evident audit trail behind every move.
+
+**Squadron sits between your agents and your observability
+backend — it is not another place your telemetry lands.** Your
+data keeps flowing to Grafana, Prometheus, Mimir, Loki, Tempo, or
+Datadog exactly as it does today. Squadron manages the fleet that
+feeds them: the collectors, their config, their drift, their
+health. It's a **control plane, not a data plane.**
+
+That's the gap it fills. Observability tools own the *data*. IaC
+tools own *provisioning*. Nobody owns the question in between — *is
+my collector fleet configured safely, is it drifting, is it
+actually healthy?* That's Squadron.
+
+<!-- LinkedIn narrated videos: embed via GitHub user-attachments URLs (BlindSpots, ProveIt) -->
 
 Self-hosted. Free. One Docker command to start — no clone, no build:
 
@@ -29,9 +37,20 @@ docker run -d -p 8080:8080 -p 4320:4320 -p 4317:4317 -p 4318:4318 \
 open http://localhost:8080/quickstart
 ```
 
+## See it in action
+
+**Fleet Status** — the control plane's home view: every collector,
+its health, drift, alerts, and recent activity, updating live.
+
+![Fleet Status](./marketing/gifs/sqd_fleet_populated.gif)
+
+More screens — the Fleet Map, per-agent drift, and groups — appear
+next to the capabilities they belong to below.
+
 ## The core loop
 
-Squadron is built around one governed change loop — every config
+A control plane is only as trustworthy as the way it changes
+things. Squadron's is one governed change loop — every config
 change to your OTel fleet moves through the same stages, and
 nothing skips them:
 
@@ -60,7 +79,10 @@ Every step above ships in OSS. AI is opt-in (bring your own
 `ANTHROPIC_API_KEY`); with no key, the AI-authored steps are
 simply off and the deterministic loop still runs.
 
-## See it in action
+## More screens
+
+A wider tour of the control plane — cost, config, discovery,
+rollouts, and audit:
 
 | | |
 |---|---|
@@ -68,12 +90,12 @@ simply off and the deterministic loop still runs.
 | ![Quickstart](./marketing/scenes/01-quickstart-landing.png) | ![Savings dashboard](./marketing/scenes/02-savings-hero.png) |
 | **Cost Insights** — where your bytes are going, by signal, by agent, by attribute. | **Recommendations** — actionable fixes with copy-snippet + apply-via-rollout. |
 | ![Cost Insights](./marketing/scenes/03-cost-insights.png) | ![Recommendations](./marketing/scenes/04-recommendations.png) |
-| **Fleet Status** — live overview of agents, drift, alerts, and recent activity. | **Config Editor** — Monaco-powered with AI Assist + Squadron Lint + live pipeline view. |
-| ![Fleet Status](./marketing/scenes/05-fleet-status.png) | ![Config Editor](./marketing/scenes/06-config-editor.png) |
-| **Discovery** — scan AWS · GCP · Azure · OCI for what's running and what's missing OpenTelemetry (compute, functions, databases). | **AI recommendations** — a merge-ready Terraform fix per gap; review it, then open a PR (or copy the snippet). |
-| ![Discovery inventory](./marketing/scenes/07-discovery-inventory.png) | ![AI recommendations](./marketing/scenes/08-discovery-recommendations.png) |
-| **Staged rollouts** — deploy config changes in stages with AI reasoning and approval gates; drift is caught and reversible. | **Audit log** — every state change: incidents, drift transitions, alerts, rollouts, approvals — hash-chained and verifiable. |
-| ![Staged rollouts](./marketing/scenes/09-rollouts.png) | ![Audit log](./marketing/scenes/10-audit.png) |
+| **Config Editor** — Monaco-powered with AI Assist + Squadron Lint + live pipeline view. | **Discovery** — scan AWS · GCP · Azure · OCI for what's running and what's missing OpenTelemetry (compute, functions, databases). |
+| ![Config Editor](./marketing/scenes/06-config-editor.png) | ![Discovery inventory](./marketing/scenes/07-discovery-inventory.png) |
+| **AI recommendations** — a merge-ready Terraform fix per gap; review it, then open a PR (or copy the snippet). | **Staged rollouts** — deploy config changes in stages with AI reasoning and approval gates; drift is caught and reversible. |
+| ![AI recommendations](./marketing/scenes/08-discovery-recommendations.png) | ![Staged rollouts](./marketing/scenes/09-rollouts.png) |
+| **Audit log** — every state change: incidents, drift transitions, alerts, rollouts, approvals — hash-chained and verifiable. | |
+| ![Audit log](./marketing/scenes/10-audit.png) | |
 
 > Squadron is a fork of and derivative work based on
 > [Lawrence OSS](https://github.com/getlawrence/lawrence-oss),
@@ -81,6 +103,10 @@ simply off and the deterministic loop still runs.
 > upstream attribution.
 
 ## What you get
+
+Everything below is a capability of the control plane — ways to
+see the fleet, change it safely, and prove what happened. None of
+it moves your telemetry off its existing path to your backend.
 
 **Multi-cloud discovery → AI PR.** Connect a cloud read-only
 (AWS, GCP, Azure, or OCI) and Squadron inventories compute,
@@ -108,6 +134,8 @@ topology views. Passive OTLP discovery means any standard
 collector pointed at Squadron registers itself — even without a
 UUID `service.instance.id`.
 
+![Fleet Map / topology](./marketing/gifs/sqd_fleetmap.gif)
+
 **Pipeline Health from collector self-metrics.** Squadron reads
 the collector's built-in `otelcol_*` self-metrics — no extra
 agents, no sidecars, no scraping infra — and gives every agent a
@@ -116,6 +144,11 @@ plain-English signal list (queue 92% full, `send_failed > 0`,
 processor dropping points), plus a fleet-level stacked-bar summary
 and top offenders. This answers the first question an SRE asks:
 "are my collectors actually delivering data?"
+
+The per-agent view surfaces each collector's effective config,
+health signals, and drift from its intended config:
+
+![Agents and drift](./marketing/gifs/sqd_agents.gif)
 
 **AI-assisted config editing.** Click "Explain" on any
 recommendation to get a 2–3 sentence summary of what a YAML
@@ -134,6 +167,12 @@ rate, error logs, exporter errors), pause/resume, webhook
 notifications, trace-instrumented engine — plus **N-of-M
 approvals** with rule-based approver roles and per-group rollback
 policy. The grown-up deployment story, shipped as OSS.
+
+Groups are how you slice the fleet — by environment, team, or
+label — so config and approval policy apply to the right
+collectors:
+
+![Groups](./marketing/gifs/sqd_groups.gif)
 
 **Tamper-evident audit + offline verifier.** The audit log is a
 per-tenant **hash chain**: every state change (incidents, drift
@@ -222,6 +261,8 @@ The Quickstart wizard takes it from there: pick your backend
 (or paste the OpAMP snippet into an existing collector config),
 follow the install command, watch the dashboard light up when
 your first agent connects.
+
+![Quickstart](./marketing/gifs/sqd_quickstart.gif)
 
 Want to enable the AI features? Add your Anthropic API key:
 
