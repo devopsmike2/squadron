@@ -313,7 +313,7 @@ describe("DiscoveryGCP", () => {
     // Success banner with the instance count.
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 3 instances visible/i),
+        screen.getByText(/Connected: 3 instances visible/i),
       ).toBeInTheDocument();
     });
 
@@ -394,7 +394,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
 
@@ -443,7 +443,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -537,7 +537,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -595,7 +595,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -668,7 +668,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -728,7 +728,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -805,7 +805,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -851,7 +851,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -919,7 +919,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -982,7 +982,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1049,7 +1049,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1108,7 +1108,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1173,7 +1173,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1232,7 +1232,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1351,7 +1351,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1398,7 +1398,7 @@ describe("DiscoveryGCP", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 instances visible/i),
+        screen.getByText(/Connected: 5 instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));

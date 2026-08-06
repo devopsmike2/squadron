@@ -1474,7 +1474,7 @@ describe("DiscoveryAWSPage", () => {
       screen.getByRole("combobox", { name: /Account selector/i }),
     );
     const option = await screen.findByRole("option", {
-      name: /Prod AWS — …9012/,
+      name: /Prod AWS \(…9012\)/,
     });
     await user.click(option);
     await waitFor(() => {
@@ -1867,7 +1867,7 @@ describe("DiscoveryAWSPage", () => {
     });
     // Success toast names the persistence behavior.
     expect(screen.getByTestId("exclusion-toast")).toHaveTextContent(
-      /Excluded — Squadron won't propose this/i,
+      /Excluded\. Squadron won't propose this/i,
     );
     // The first card switches its button label to Restore; the
     // second still reads "Don't propose this again".
@@ -1934,7 +1934,7 @@ describe("DiscoveryAWSPage", () => {
     });
     // Success toast on restore names the inverse behavior.
     expect(screen.getByTestId("exclusion-toast")).toHaveTextContent(
-      /Restored — Squadron will propose this again/i,
+      /Restored\. Squadron will propose this again/i,
     );
   });
 
@@ -2856,7 +2856,7 @@ describe("DiscoveryAWSPage", () => {
     expect(cell.className).toMatch(/text-amber-600/);
     expect(cell.textContent).toMatch(/4.1%/);
     const tip = cell.getAttribute("title") ?? "";
-    expect(tip).toMatch(/below 5% floor/);
+    expect(tip).toMatch(/below the 5% floor/);
     expect(tip).toMatch(/1000 invocations/);
   });
 
