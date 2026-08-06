@@ -19,6 +19,7 @@ import { PipelineHealthAgentPanel } from "@/components/pipeline-health/PipelineH
 import { RecommendationsPanel } from "@/components/recommendations/RecommendationsPanel";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   Sheet,
@@ -167,68 +168,92 @@ export function AgentDetailsDrawer({
             <LoadingSpinner />
           </div>
         ) : agent ? (
-          <Tabs defaultValue="overview" className="mt-6">
-            <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="config">Config</TabsTrigger>
-              <TabsTrigger value="metrics">Metrics</TabsTrigger>
-              <TabsTrigger value="logs">Logs</TabsTrigger>
-            </TabsList>
+          <ErrorBoundary
+            fallback={
+              <div
+                role="alert"
+                className="mt-6 rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm text-muted-foreground"
+              >
+                Failed to render agent details.
+              </div>
+            }
+          >
+            <Tabs defaultValue="overview" className="mt-6">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="config">Config</TabsTrigger>
+                <TabsTrigger value="metrics">Metrics</TabsTrigger>
+                <TabsTrigger value="logs">Logs</TabsTrigger>
+              </TabsList>
 
-            <TabsContent value="overview" className="space-y-4 py-4">
-              {/* v0.24 Volume panel sits at the top of Overview so
+              <TabsContent value="overview" className="space-y-4 py-4">
+                {/* v0.24 Volume panel sits at the top of Overview so
                   the cost/byte story is the first thing the
                   operator sees when they open the drawer. The
                   legacy AgentOverview keeps the inventory fields
                   below it. */}
-              {agentId && (
-                <VolumePanel
-                  mode="agent"
-                  agentId={agentId}
-                  window="24h"
-                  compact
-                />
-              )}
-              {/* v0.31 pipeline health for this agent. Sits between the
+                {agentId && (
+                  <VolumePanel
+                    mode="agent"
+                    agentId={agentId}
+                    window="24h"
+                    compact
+                  />
+                )}
+                {/* v0.31 pipeline health for this agent. Sits between the
                   volume panel and the recommendations so an operator
                   triaging "where's my data?" first sees throughput
                   ($ + bytes), then sees whether the pipeline is
                   healthy, then sees what to do about either. */}
-              {agentId && <PipelineHealthAgentPanel agentID={agentId} />}
-              {/* v0.25 recommendations scoped to this agent. Sits
+                {agentId && (
+                  <ErrorBoundary
+                    fallback={
+                      <div
+                        role="alert"
+                        className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-muted-foreground"
+                      >
+                        Failed to render self-metrics for this agent.
+                      </div>
+                    }
+                  >
+                    <PipelineHealthAgentPanel agentID={agentId} />
+                  </ErrorBoundary>
+                )}
+                {/* v0.25 recommendations scoped to this agent. Sits
                   right under the byte panel so the "here's what to do
                   about it" story follows directly from the "here's
                   what you're spending" one. */}
-              {agentId && (
-                <RecommendationsPanel
-                  mode="agent"
-                  agentId={agentId}
-                  compact
-                  limit={4}
-                />
-              )}
-              <AgentOverview agent={agent} metrics={metrics} />
-            </TabsContent>
+                {agentId && (
+                  <RecommendationsPanel
+                    mode="agent"
+                    agentId={agentId}
+                    compact
+                    limit={4}
+                  />
+                )}
+                <AgentOverview agent={agent} metrics={metrics} />
+              </TabsContent>
 
-            <TabsContent value="config" className="space-y-4 py-4">
-              {agentId && (
-                <AgentConfigPipeline
-                  agentId={agentId}
-                  effectiveConfig={agent?.effective_config}
-                  agent={agent}
-                  agentName={agent?.name}
-                />
-              )}
-            </TabsContent>
+              <TabsContent value="config" className="space-y-4 py-4">
+                {agentId && (
+                  <AgentConfigPipeline
+                    agentId={agentId}
+                    effectiveConfig={agent?.effective_config}
+                    agent={agent}
+                    agentName={agent?.name}
+                  />
+                )}
+              </TabsContent>
 
-            <TabsContent value="metrics" className="space-y-4 py-4">
-              {agentId && <AgentMetrics agentId={agentId} />}
-            </TabsContent>
+              <TabsContent value="metrics" className="space-y-4 py-4">
+                {agentId && <AgentMetrics agentId={agentId} />}
+              </TabsContent>
 
-            <TabsContent value="logs" className="space-y-4 py-4">
-              {agentId && <AgentLogs agentId={agentId} />}
-            </TabsContent>
-          </Tabs>
+              <TabsContent value="logs" className="space-y-4 py-4">
+                {agentId && <AgentLogs agentId={agentId} />}
+              </TabsContent>
+            </Tabs>
+          </ErrorBoundary>
         ) : null}
       </SheetContent>
     </Sheet>

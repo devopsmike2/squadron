@@ -486,8 +486,14 @@ func parseLabels(v any) map[string]string {
 }
 
 func sortedKV(labels map[string]string) []KV {
+	// Return a non-nil empty slice rather than nil so JSON marshals the
+	// field as `[]` instead of `null`. Label-less self-metrics (e.g.
+	// otelcol_process_*, emitted when collector self-telemetry is enabled)
+	// hit this path; the UI iterates MetricRow.labels directly, and a null
+	// there previously crashed the agent-detail drawer. Mirrors the
+	// empty-slice serialization fix already applied in topology.go.
 	if len(labels) == 0 {
-		return nil
+		return []KV{}
 	}
 	keys := make([]string, 0, len(labels))
 	for k := range labels {

@@ -241,7 +241,11 @@ function groupMetrics(
       if (!b.prefixes.some((p) => name.startsWith(p))) continue;
       const short = name.replace("otelcol_", "");
       for (const row of items) {
-        const labelTag = row.labels
+        // Label-less self-metrics (e.g. otelcol_process_*) can arrive with
+        // labels === null when collector self-telemetry is enabled — the
+        // backend serializes an empty label set as null. Guard with `?? []`
+        // so we never call array methods on null and crash the whole drawer.
+        const labelTag = (row.labels ?? [])
           .filter((l) => ["exporter", "receiver", "processor"].includes(l.key))
           .map((l) => l.value)
           .join("/");
