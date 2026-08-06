@@ -421,7 +421,7 @@ describe("DiscoveryOCI", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
 
@@ -460,7 +460,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     expect(mockedCreateOCIConnection).toHaveBeenCalledTimes(1);
@@ -617,7 +617,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
 
@@ -659,7 +659,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -706,7 +706,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -770,7 +770,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -856,7 +856,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -901,7 +901,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -966,7 +966,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1009,7 +1009,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1065,7 +1065,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1101,7 +1101,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1162,7 +1162,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1216,7 +1216,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1275,7 +1275,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1326,7 +1326,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1381,7 +1381,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1429,7 +1429,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1474,7 +1474,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1534,7 +1534,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1682,7 +1682,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));
@@ -1718,7 +1718,7 @@ describe("DiscoveryOCI", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 compute instances visible/i),
+        screen.getByText(/Connected: 5 compute instances visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /Run scan/i }));

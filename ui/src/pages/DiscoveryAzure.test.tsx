@@ -323,7 +323,7 @@ describe("DiscoveryAzure", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 3 virtual machines visible/i),
+        screen.getByText(/Connected: 3 virtual machines visible/i),
       ).toBeInTheDocument();
     });
 
@@ -440,7 +440,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 2 virtual machines visible/i),
+        screen.getByText(/Connected: 2 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     expect(mockedCreateAzureConnection).toHaveBeenCalledTimes(2);
@@ -470,7 +470,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
 
@@ -529,7 +529,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 0 virtual machines visible/i),
+        screen.getByText(/Connected: 0 virtual machines visible/i),
       ).toBeInTheDocument();
     });
 
@@ -572,7 +572,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -660,7 +660,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -709,7 +709,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -779,7 +779,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -828,7 +828,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -891,7 +891,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -933,7 +933,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1001,7 +1001,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1062,7 +1062,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1128,7 +1128,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1186,7 +1186,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1248,7 +1248,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1303,7 +1303,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1422,7 +1422,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
@@ -1464,7 +1464,7 @@ describe("DiscoveryAzure", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText(/Connected — 5 virtual machines visible/i),
+        screen.getByText(/Connected: 5 virtual machines visible/i),
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: /^Next$/i }));
