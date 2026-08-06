@@ -23,7 +23,10 @@ export interface PipelineHealthSignal {
 /** One (label set, value) row inside Latest. The labels are sorted
  * server-side so the UI doesn't need to stabilize them. */
 export interface PipelineHealthMetricRow {
-  labels: { key: string; value: string }[];
+  // Can be null in the wire payload: when collector self-telemetry is
+  // enabled the label-less otelcol_process_* samples serialize their
+  // empty label set as `null`. Renderers must guard before iterating.
+  labels: { key: string; value: string }[] | null;
   value: number;
   unit?: string;
 }
