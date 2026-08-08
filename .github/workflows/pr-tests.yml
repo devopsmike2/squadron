@@ -11,8 +11,11 @@ jobs:
     name: Go Backend Tests
     runs-on: ubuntu-latest
 
-    # Postgres service for the ADR 0033 application-store backend integration
-    # tests. The postgres package reads TEST_POSTGRES_DSN and skips when unset.
+    # Service containers for integration tests. Each package reads its own
+    # env var and skips when unset, so local `go test ./...` stays green
+    # without these services:
+    #   - postgres -> TEST_POSTGRES_DSN (ADR 0033 application-store backend)
+    #   - loki     -> TEST_LOKI_URL     (ADR 0034 S2 federated Loki connector)
     services:
       postgres:
         image: postgres:16-alpine
@@ -27,9 +30,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 15
+      loki:
+        image: grafana/loki:2.9.8
+        ports:
+          - 3100:3100
+        # No official healthcheck binary (curl/wget) ships in the Loki
+        # image, so we cannot use a container --health-cmd here. The loki
+        # connector's own HealthCheck (/ready) gates the integration test at
+        # runtime; the test tolerates an empty backend.
 
     env:
       TEST_POSTGRES_DSN: postgres://squadron:squadron@localhost:5432/squadron_test?sslmode=disable
+      TEST_LOKI_URL: http://localhost:3100
     
     steps:
     - name: Checkout code
