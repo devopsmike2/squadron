@@ -716,6 +716,83 @@ type RolloutAbortCriteria struct {
 	// earlier clean minutes. 0 (the zero value, and the value for pre-v0.90
 	// rows) preserves the legacy whole-stage-average behavior. See ADR 0008.
 	ErrorRateWindowSeconds int `json:"error_rate_window_seconds,omitempty"`
+
+	// SLOBurn (ADR 0034) is the connector-backed SLO-burn auto-abort
+	// criterion. When set, the engine runs a READ-ONLY query against the
+	// referenced telemetry connector during the stage dwell and aborts when
+	// the returned SLO / error-budget scalar shows the budget is burning.
+	// nil (the zero value, and the value for rows written before ADR 0034)
+	// disables the criterion — the rollout is unaffected. See
+	// RolloutSLOBurnCriterion.
+	SLOBurn *RolloutSLOBurnCriterion `json:"slo_burn,omitempty"`
+}
+
+// RolloutSLOBurnCriterion configures the SLO-burn auto-abort criterion
+// (ADR 0034 — SLO decision-context consumer). During a stage's dwell the
+// engine resolves the referenced telemetry connector, runs a single
+// read-only query expected to yield a scalar SLO / error-budget-burn
+// value, and aborts the rollout when that value indicates the budget is
+// burning.
+//
+// The query is expressed here in a connector-framework-agnostic shape
+// (plain fields, no internal/connectors types) on purpose: the storage
+// and service layers must not depend on internal/connectors, which would
+// create an import cycle through the connector credential store. The
+// rollout engine (internal/rollouts) translates this into a
+// connectors.NormalizedQuery at evaluation time — that package is the
+// single point that consumes the connector framework.
+type RolloutSLOBurnCriterion struct {
+	// ConnectorID is the stored connector instance to query — the id the
+	// connector Registry and credential store are keyed under.
+	ConnectorID string `json:"connector_id"`
+
+	// Signal is the telemetry class to query ("metrics" or "logs").
+	Signal string `json:"signal"`
+
+	// Selector is the primary query target: a metric/measurement name or a
+	// base stream/index selector. Interpretation is connector-specific.
+	Selector string `json:"selector"`
+
+	// Matchers are the label/field filters, ANDed together.
+	Matchers []RolloutSLOMatcher `json:"matchers,omitempty"`
+
+	// Aggregation is the optional push-down reduction ("", "rate", "avg",
+	// ...). Empty requests no aggregation.
+	Aggregation string `json:"aggregation,omitempty"`
+
+	// Raw is an optional backend-native query fragment passed through
+	// untranslated (the connectors.NormalizedQuery.Raw escape hatch).
+	Raw string `json:"raw,omitempty"`
+
+	// WindowSeconds is the trailing evaluation window, in seconds, ending
+	// at evaluation time. When > 0 the engine sets the query's time range
+	// to [now-WindowSeconds, now]; 0 leaves the connector to pick its own
+	// window (an instant/default query).
+	WindowSeconds int `json:"window_seconds,omitempty"`
+
+	// Threshold is the value the returned scalar must cross for the engine
+	// to abort. 0 means "no operator threshold configured — rely solely on
+	// the connector-computed Breached verdict".
+	Threshold float64 `json:"threshold,omitempty"`
+
+	// FailOpen governs behavior when the criterion cannot be evaluated (the
+	// connector is unresolvable, the query errors, or the result is not a
+	// scalar). nil or true is the default FAIL-OPEN posture: an evaluation
+	// error does NOT abort the rollout — a transient backend blip is not
+	// evidence the new config is bad, so aborting on it would make rollouts
+	// flaky. The engine logs a warning instead. Set FailOpen to false to
+	// invert to fail-closed (abort on any evaluation error) for
+	// environments that would rather halt than roll forward blind.
+	FailOpen *bool `json:"fail_open,omitempty"`
+}
+
+// RolloutSLOMatcher is one label/field filter for the SLO-burn query,
+// mirroring connectors.LabelMatcher in a framework-agnostic form. Op is
+// one of "=", "!=", "=~", "!~".
+type RolloutSLOMatcher struct {
+	Label string `json:"label"`
+	Op    string `json:"op"`
+	Value string `json:"value"`
 }
 
 // RolloutApproval is a single distinct approver's recorded approval of a

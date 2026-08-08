@@ -311,6 +311,38 @@ type RolloutAbortCriteria struct {
 	// > 0 evaluates errors/min over the last N seconds (a late burst is
 	// not diluted); 0 keeps the legacy whole-stage average. See ADR 0008.
 	ErrorRateWindowSeconds int `json:"error_rate_window_seconds,omitempty"`
+
+	// SLOBurn — connector-backed SLO-burn auto-abort criterion (ADR 0034).
+	// nil disables it. See applicationstore.RolloutSLOBurnCriterion.
+	SLOBurn *RolloutSLOBurnCriterion `json:"slo_burn,omitempty"`
+}
+
+// RolloutSLOBurnCriterion — see applicationstore.RolloutSLOBurnCriterion.
+// Duplicated at the service layer (like RolloutEvidenceRef) so handlers and
+// the rollout engine never see a storage type. The rollout engine
+// translates this into a connectors.NormalizedQuery at evaluation time;
+// neither this package nor the storage layer may import internal/connectors
+// (it would import-cycle through the connector credential store).
+type RolloutSLOBurnCriterion struct {
+	ConnectorID   string              `json:"connector_id"`
+	Signal        string              `json:"signal"`
+	Selector      string              `json:"selector"`
+	Matchers      []RolloutSLOMatcher `json:"matchers,omitempty"`
+	Aggregation   string              `json:"aggregation,omitempty"`
+	Raw           string              `json:"raw,omitempty"`
+	WindowSeconds int                 `json:"window_seconds,omitempty"`
+	Threshold     float64             `json:"threshold,omitempty"`
+	// FailOpen governs evaluation-error behavior; nil/true = fail-open
+	// (default: an evaluation error does not abort). See the storage-layer
+	// doc comment for the full rationale.
+	FailOpen *bool `json:"fail_open,omitempty"`
+}
+
+// RolloutSLOMatcher — see applicationstore.RolloutSLOMatcher.
+type RolloutSLOMatcher struct {
+	Label string `json:"label"`
+	Op    string `json:"op"`
+	Value string `json:"value"`
 }
 
 // Rollout is the service-layer view of an applicationstore.Rollout.

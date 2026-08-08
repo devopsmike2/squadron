@@ -30,6 +30,7 @@ import (
 	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/configs"
+	"github.com/devopsmike2/squadron/internal/connectors"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -104,10 +105,29 @@ type Engine struct {
 	// construction so the OSS NewEngine signature stays stable
 	// (mirrors the changeWindowProvider pattern).
 	actionDispatcher services.ActionDispatcher
-	logger           *zap.Logger
+	// connectorResolver is the boundary to the telemetry connector
+	// framework (internal/connectors) for the ADR 0034 SLO-burn auto-abort
+	// criterion. nil disables that criterion — the OSS default, since no
+	// connector is registered in a running deployment until a later ADR
+	// 0034 slice wires connector persistence + UI. Wired post-construction
+	// via SetConnectorResolver, mirroring the changeWindowProvider /
+	// actionDispatcher pattern so the NewEngine signature stays stable.
+	// Read-only: the engine only ever calls Query on a resolved connector.
+	connectorResolver ConnectorResolver
+	logger            *zap.Logger
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
+}
+
+// SetConnectorResolver wires the telemetry-connector boundary the SLO-burn
+// abort criterion (ADR 0034) uses to query an operator's backend. nil is a
+// valid value and disables the criterion (the OSS default). Setter (not a
+// NewEngine parameter) for the same back-compat reason as
+// SetActionDispatcher — existing constructors and test mocks stay
+// untouched.
+func (e *Engine) SetConnectorResolver(r ConnectorResolver) {
+	e.connectorResolver = r
 }
 
 // SetActionDispatcher wires the plan-engine boundary to the action
@@ -1222,8 +1242,120 @@ func (e *Engine) evaluateAbortCriteria(ctx context.Context, r *services.Rollout,
 		}
 	}
 
+	// SLO-burn abort (ADR 0034): consume the telemetry connector framework
+	// to read an SLO / error-budget-burn scalar from the operator's backend
+	// and abort when the budget is burning. Active only when a guard is
+	// configured AND a connector resolver is wired — connectorResolver == nil
+	// keeps the OSS build inert (mirrors telemetry == nil disabling the
+	// error-rate check above). Read-only: it only queries the backend.
+	if guard := r.AbortCriteria.SLOBurn; guard != nil && e.connectorResolver != nil {
+		if reason := e.evaluateSLOBurn(ctx, r, guard); reason != "" {
+			return reason
+		}
+	}
+
 	_ = stage // additional criteria can plug in here
 	return ""
+}
+
+// evaluateSLOBurn runs the configured SLO-burn criterion (ADR 0034):
+// resolve the referenced connector, run a single READ-ONLY scalar query,
+// and return a non-empty abort reason when the returned SLO / error-budget
+// scalar shows the budget is burning. It never writes to the backend.
+//
+// Verdict: the engine aborts when the connector's own computed Breached is
+// true (the connector already compared Value against the scalar's own
+// threshold, so every consumer agrees on the verdict — see
+// connectors.ScalarResult), OR when the operator configured a Threshold on
+// the guard and Value has crossed it. A configured Threshold of 0 means
+// "rely on Breached only".
+//
+// Evaluation errors (connector unresolvable, query failed, non-scalar
+// result) are routed through sloFailOpen, which FAILS OPEN by default: a
+// transient backend blip must not roll a good config back.
+func (e *Engine) evaluateSLOBurn(ctx context.Context, r *services.Rollout, guard *services.RolloutSLOBurnCriterion) string {
+	conn, err := e.connectorResolver.ResolveConnector(ctx, guard.ConnectorID)
+	if err != nil {
+		return e.sloFailOpen(r, guard, "resolve connector", err)
+	}
+
+	res, err := conn.Query(ctx, sloQueryFromCriterion(guard))
+	if err != nil {
+		return e.sloFailOpen(r, guard, "query connector", err)
+	}
+	if res.Kind != connectors.ResultScalar || res.Scalar == nil {
+		return e.sloFailOpen(r, guard, "connector returned a non-scalar result", nil)
+	}
+
+	s := res.Scalar
+	// Trust the connector-computed verdict first.
+	if s.Breached {
+		return fmt.Sprintf("SLO burn: objective %q breached (value %.4g %s, threshold %.4g)",
+			s.Objective, s.Value, s.Unit, s.Threshold)
+	}
+	// Otherwise apply the operator's configured threshold, if any.
+	if guard.Threshold > 0 && s.Value >= guard.Threshold {
+		return fmt.Sprintf("SLO burn: value %.4g %s crossed configured threshold %.4g",
+			s.Value, s.Unit, guard.Threshold)
+	}
+	return ""
+}
+
+// sloFailOpen implements the SLO-burn guard's evaluation-error policy. The
+// direction is EXPLICIT and defaults to FAIL-OPEN: when the criterion
+// cannot be evaluated (connector unresolvable, query error, non-scalar
+// result), the engine does NOT abort — a transient connector/query failure
+// is not evidence the new config is bad, and aborting on it would make
+// rollouts flaky. It logs a warning and surfaces the condition instead,
+// returning "" (continue). An operator can invert this per-guard by
+// setting FailOpen=false (fail-closed: abort on any evaluation error).
+func (e *Engine) sloFailOpen(r *services.Rollout, guard *services.RolloutSLOBurnCriterion, phase string, err error) string {
+	failOpen := guard.FailOpen == nil || *guard.FailOpen
+	e.logger.Warn("rollout SLO-burn guard could not be evaluated",
+		zap.String("rollout_id", r.ID),
+		zap.String("connector_id", guard.ConnectorID),
+		zap.String("phase", phase),
+		zap.Bool("fail_open", failOpen),
+		zap.Error(err))
+	if failOpen {
+		return "" // default: do not abort on an evaluation error
+	}
+	return fmt.Sprintf("SLO burn guard could not be evaluated (%s) and is configured fail-closed", phase)
+}
+
+// sloQueryFromCriterion translates the framework-agnostic, persisted
+// RolloutSLOBurnCriterion into a connectors.NormalizedQuery. This is the
+// single point where the rollout engine crosses into the connector
+// framework's type vocabulary (the storage/service layers stay
+// connectors-free to avoid an import cycle). When WindowSeconds > 0 the
+// query gets a trailing time range ending now, mirroring the error-rate
+// trailing window; WindowSeconds == 0 leaves the range unset for an
+// instant/backend-default query.
+func sloQueryFromCriterion(guard *services.RolloutSLOBurnCriterion) connectors.NormalizedQuery {
+	q := connectors.NormalizedQuery{
+		Signal:      connectors.Signal(guard.Signal),
+		Selector:    guard.Selector,
+		Aggregation: connectors.Aggregation(guard.Aggregation),
+		Raw:         guard.Raw,
+	}
+	if len(guard.Matchers) > 0 {
+		q.Matchers = make([]connectors.LabelMatcher, len(guard.Matchers))
+		for i, m := range guard.Matchers {
+			q.Matchers[i] = connectors.LabelMatcher{
+				Label: m.Label,
+				Op:    connectors.MatchOp(m.Op),
+				Value: m.Value,
+			}
+		}
+	}
+	if guard.WindowSeconds > 0 {
+		now := time.Now()
+		q.TimeRange = connectors.TimeRange{
+			Start: now.Add(-time.Duration(guard.WindowSeconds) * time.Second),
+			End:   now,
+		}
+	}
+	return q
 }
 
 // canaryAgents returns the canary set for the rollout's CURRENT stage —
