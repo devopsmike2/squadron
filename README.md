@@ -217,14 +217,19 @@ You're probably a fit if:
 
 You're probably **not** the target operator if:
 
-- You're running multi-thousand-agent fleets with multi-region
-  HA + SOC 2 + mandatory SSO requirements. Look at Bindplane Cloud
-  or Grafana Fleet Management.
 - You don't use OpenTelemetry. (We don't translate from Fluentd,
   Logstash, or vendor-specific agents.)
 - You want a single tool to be both your control plane AND your
   telemetry backend. Squadron does the first job; the second is
   better handled by Honeycomb / Datadog / Tempo / Loki / Mimir.
+
+Need SSO/RBAC, multi-tenancy, and tamper-evident audit — or are
+you heading toward multi-region HA and SOC 2? That's **Squadron
+Enterprise**. SSO/OIDC + SCIM provisioning, resource-aware RBAC,
+real per-tenant isolation, and cross-tenant tamper-evident audit
+ship today; multi-region HA and formal SOC 2 support are on the
+Enterprise roadmap. See
+[what's OSS vs Enterprise](#whats-oss-vs-enterprise).
 
 ## Quick start
 
@@ -327,14 +332,22 @@ multi-step plans, drift detection, Pipeline Health, Cost Insights
 hash-chain audit log + offline verifier, single-tenant audit
 CSV/JSON export, Bearer-token auth + scopes, the action runner.
 
-**Reserved for the commercial tier** (inert 404 / no-op seams in
-this tree): SSO (SAML/OIDC) + SCIM + full RBAC, multi-team /
-multi-tenancy isolation, cross-tenant compliance audit export +
-access reviews, long-term tamper-evident audit **retention** SLAs,
-per-tenant usage/billing (chargeback/showback) and differentiated
-budgets, add-on-backed detectors (AWS Lambda Insights / Azure
-Application Insights), clustered/HA control plane at 10k+ agents,
-air-gapped / BYO-LLM deployment, and support SLAs.
+**In Squadron Enterprise** (no-op seams in this OSS tree; the
+enterprise edition supplies the real providers):
+
+- *Available today:* SSO/OIDC with PKCE + SCIM 2.0 provisioning;
+  store-backed, deny-by-default, resource-aware RBAC; real
+  per-tenant multi-tenancy isolation; tamper-evident audit with
+  cross-tenant export/review and sealed-attestation verify.
+- *On the Enterprise roadmap (in development):* multi-region HA and
+  the managed-store / Postgres backend (Enterprise runs single-node
+  SQLite today), validated scale beyond ~1,000 agents, and formal
+  SOC 2 support (SOC 2-supporting audit controls exist today;
+  certification and retention-SLA enforcement are not yet shipped).
+  Also planned: per-tenant usage/billing (chargeback/showback) and
+  differentiated budgets, add-on-backed detectors (AWS Lambda
+  Insights / Azure Application Insights), air-gapped / BYO-LLM
+  deployment, and support SLAs.
 
 Full detail: [what's OSS vs Enterprise](./docs/oss-vs-enterprise.md).
 
@@ -394,26 +407,28 @@ Honest, audience-specific notes — see
 [`docs/positioning.md`](./docs/positioning.md) for the longer
 version.
 
-**vs Bindplane.** Bindplane is the mature enterprise option —
-better at 10k+ agent scale, formal compliance, larger curated
-processor library. Squadron is the OSS-first SMB option —
-AI-assisted, cost-first, modern UX, minutes to set up. Small
-team with a painful telemetry bill → probably Squadron. Enterprise
-RFP → probably Bindplane.
+**vs Bindplane.** Squadron is the OSS-first, OTel-native option —
+AI-assisted, cost-first, modern UX, minutes to set up, and free
+for any fleet size. Bindplane leans on a larger curated processor
+library and a longer enterprise track record. When you need
+org-scale readiness — SSO/RBAC, multi-tenancy, and tamper-evident
+audit today, multi-region HA and SOC 2 on the roadmap — that's
+**Squadron Enterprise**, not a third-party tool. Small team with a
+painful telemetry bill → Squadron OSS. Org-scale governance and
+compliance → Squadron Enterprise.
 
-**vs Grafana Fleet Management.** Grafana Fleet is great if you're
-already deep in Grafana Cloud / Loki / Tempo / Mimir and use
-Alloy. Squadron is standalone, OTel-first, and doesn't pull you
-into a broader ecosystem. We complement Grafana on the
-control-plane side rather than competing on telemetry storage.
+**vs Grafana Fleet Management.** Grafana Fleet lives inside the
+Grafana Cloud / Loki / Tempo / Mimir ecosystem and Alloy. Squadron
+is standalone, OTel-first, and doesn't pull you into a broader
+ecosystem — it complements Grafana on the control-plane side
+rather than competing on telemetry storage.
 
 **vs Datadog Observability Pipelines / Cribl.** Those are
-Vector/Cribl-based and shine on data transformation and routing.
-Squadron is OTel-native and shines on cost analysis + AI-assisted
-config editing for OpenTelemetry collectors specifically. Use
-Cribl/DD-Pipelines if your needs are "complex routing across many
-non-OTel sources". Use Squadron if you're standardized on OTel
-and want the OTel-specific cost story.
+Vector/Cribl-based and center on data transformation and routing
+across many non-OTel sources. Squadron is OTel-native and centers
+on cost analysis + AI-assisted config editing for OpenTelemetry
+collectors specifically. If you're standardized on OTel and want
+the OTel-specific cost story, that's Squadron's lane.
 
 ## Known limitations
 

@@ -18,10 +18,14 @@ observability team to fix it.**
 - Bill is painful enough that the CFO has noticed
 - No formal procurement process; downloads and tries OSS tools
 
-**Who we are NOT for (today):**
-- Multi-thousand-agent enterprise fleets that need HA, multi-region,
-  SOC 2, mandatory SSO. (Bindplane Cloud or Grafana Cloud are
-  better choices for that buyer.)
+**Who the OSS core is NOT for (today):**
+- Teams that need SSO/RBAC, multi-tenancy, or tamper-evident
+  cross-tenant audit — or that are heading toward multi-region HA
+  and SOC 2. That buyer is served by **Squadron Enterprise**:
+  SSO/OIDC + SCIM, resource-aware RBAC, per-tenant isolation, and
+  tamper-evident audit ship today; multi-region HA and formal
+  SOC 2 support are on the Enterprise roadmap. (Route them to
+  Enterprise, not a third-party tool.)
 - Teams that don't use OpenTelemetry. (We don't translate from
   Fluentd, Logstash, or vendor-specific agents.)
 - Operators who want Squadron to also be their telemetry backend.
@@ -76,15 +80,20 @@ When operators are still reading:
 
 - "Replaces your observability backend" — false. We're the
   control plane, not the telemetry warehouse.
-- "Zero-trust multi-tenant enterprise platform" — we don't have
-  multi-tenancy or SOC 2. Don't oversell.
+- "Zero-trust multi-tenant enterprise platform (in OSS)" — the OSS
+  core is single-tenant; multi-tenancy ships in Squadron Enterprise.
+  SOC 2 support is on the roadmap. Don't oversell the OSS tier as
+  the enterprise one.
 - "AI that automatically optimizes your fleet" — every AI action
   is user-initiated. We never apply changes without an operator
   clicking through the rollout flow.
-- "Drop-in Bindplane replacement" — we don't match Bindplane on
-  enterprise features (HA, scale validation beyond 1k agents,
-  large processor library curation). Operators evaluating
-  Squadron at the 5k-agent scale should know.
+- "Drop-in enterprise replacement (from OSS alone)" — the OSS core
+  isn't the enterprise tier. Org-scale readiness — SSO/RBAC,
+  multi-tenancy, and tamper-evident audit today; multi-region HA,
+  validated scale beyond ~1,000 agents, and SOC 2 on the roadmap —
+  is **Squadron Enterprise**. Operators evaluating at 5k-agent
+  scale should know that's the Enterprise path, and that scale
+  past ~1,000 agents is still being validated.
 
 ## Tone
 
@@ -119,13 +128,15 @@ The questions to expect when operators evaluate Squadron, and the
 honest answers we use.
 
 **Q: How is this different from Bindplane?**
-A: Bindplane is the mature enterprise option — better at 10k+
-agent fleets, formal compliance, larger processor library. Squadron
-is the OSS-first SMB option — AI-assisted, cost-first dashboards,
-modern UX, minutes to set up. If you're a small team with a
-painful telemetry bill, Squadron will probably feel more like
-"the tool I wanted" than Bindplane will. If you're at enterprise
-scale, Bindplane is the safer pick.
+A: Squadron is the OSS-first, OTel-native option — AI-assisted,
+cost-first dashboards, modern UX, minutes to set up, and free for
+any fleet size. Bindplane leans on a larger curated processor
+library and a longer enterprise track record. If you're a small
+team with a painful telemetry bill, Squadron will probably feel
+more like "the tool I wanted." When you need org-scale governance —
+SSO/RBAC, multi-tenancy, and tamper-evident audit today,
+multi-region HA and SOC 2 on the roadmap — that's Squadron
+Enterprise, not a third-party tool.
 
 **Q: Do you store my telemetry?**
 A: Yes — Squadron has a built-in OTLP receiver + DuckDB store,
@@ -164,17 +175,22 @@ Datadog / Honeycomb / Loki / Tempo are still your telemetry
 warehouse and query UI. The two roles complement each other.
 
 **Q: What's the commercial story?**
-A: The OSS core is Apache 2.0 and stays free. The future commercial
-tier targets enterprise features (multi-tenancy, HA, SSO/RBAC
-depth, audit retention SLAs, priority support) — i.e., what
-enterprise buyers ask for but SMB operators don't need. The SMB
-buyer is well-served by the free OSS forever.
+A: The OSS core is Apache 2.0 and stays free. Squadron Enterprise
+is the commercial tier for org-scale readiness: SSO/OIDC + SCIM,
+resource-aware RBAC, per-tenant multi-tenancy, and tamper-evident
+cross-tenant audit ship today; multi-region HA, a managed Postgres
+store, validated scale beyond ~1,000 agents, and formal SOC 2
+support are on the roadmap. That's what enterprise buyers ask for
+and SMB operators don't need — the SMB buyer is well-served by the
+free OSS forever.
 
 **Q: How big a fleet has Squadron been tested at?**
 A: We've validated 1,000 agents on a single Squadron instance —
 documented numbers in `docs/scale-testing.md`. Beyond that we
-don't have published data. For 5k+ agent fleets, Bindplane is
-better-validated.
+don't have published data yet; validated scale past ~1,000 agents
+is on the Squadron Enterprise roadmap. If you're evaluating at
+5k+ agents, that's the Enterprise conversation, not a third-party
+tool.
 
 ## Don't say
 
@@ -183,7 +199,8 @@ copy. They're either inaccurate, buzzword-filled, or condescending.
 
 - "Revolutionary"
 - "Best-in-class" (let operators decide)
-- "Enterprise-grade" (we're not enterprise)
+- "Enterprise-grade" (in OSS copy — don't brand the free OSS tier
+  as enterprise; org-scale features live in Squadron Enterprise)
 - "Harness the power of AI"
 - "Next-generation"
 - "Magical / magic / 🪄"
