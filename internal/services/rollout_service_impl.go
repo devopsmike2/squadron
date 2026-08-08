@@ -1997,6 +1997,7 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 			MaxErrorLogsPerMinute:      r.AbortCriteria.MaxErrorLogsPerMinute,
 			MinDwellSecondsBeforeAbort: r.AbortCriteria.MinDwellSecondsBeforeAbort,
 			ErrorRateWindowSeconds:     r.AbortCriteria.ErrorRateWindowSeconds,
+			SLOBurn:                    toStorageSLOBurn(r.AbortCriteria.SLOBurn),
 		},
 		NotificationURL: r.NotificationURL,
 		State:           applicationstore.RolloutState(r.State),
@@ -2063,6 +2064,58 @@ func toStorageEvidenceRefs(in []EvidenceRef) []applicationstore.RolloutEvidenceR
 	return out
 }
 
+// toStorageSLOBurn lifts the service-layer SLO-burn criterion into its
+// applicationstore counterpart (ADR 0034). Shape is identical; the manual
+// copy keeps the storage type from leaking into the service API, mirroring
+// toStorageEvidenceRefs. nil round-trips to nil so an unset criterion
+// persists as an absent field.
+func toStorageSLOBurn(in *RolloutSLOBurnCriterion) *applicationstore.RolloutSLOBurnCriterion {
+	if in == nil {
+		return nil
+	}
+	out := &applicationstore.RolloutSLOBurnCriterion{
+		ConnectorID:   in.ConnectorID,
+		Signal:        in.Signal,
+		Selector:      in.Selector,
+		Aggregation:   in.Aggregation,
+		Raw:           in.Raw,
+		WindowSeconds: in.WindowSeconds,
+		Threshold:     in.Threshold,
+		FailOpen:      in.FailOpen,
+	}
+	if len(in.Matchers) > 0 {
+		out.Matchers = make([]applicationstore.RolloutSLOMatcher, len(in.Matchers))
+		for i, m := range in.Matchers {
+			out.Matchers[i] = applicationstore.RolloutSLOMatcher{Label: m.Label, Op: m.Op, Value: m.Value}
+		}
+	}
+	return out
+}
+
+// toServiceSLOBurn is the inverse of toStorageSLOBurn.
+func toServiceSLOBurn(in *applicationstore.RolloutSLOBurnCriterion) *RolloutSLOBurnCriterion {
+	if in == nil {
+		return nil
+	}
+	out := &RolloutSLOBurnCriterion{
+		ConnectorID:   in.ConnectorID,
+		Signal:        in.Signal,
+		Selector:      in.Selector,
+		Aggregation:   in.Aggregation,
+		Raw:           in.Raw,
+		WindowSeconds: in.WindowSeconds,
+		Threshold:     in.Threshold,
+		FailOpen:      in.FailOpen,
+	}
+	if len(in.Matchers) > 0 {
+		out.Matchers = make([]RolloutSLOMatcher, len(in.Matchers))
+		for i, m := range in.Matchers {
+			out.Matchers[i] = RolloutSLOMatcher{Label: m.Label, Op: m.Op, Value: m.Value}
+		}
+	}
+	return out
+}
+
 // toServiceEvidenceRefs is the inverse of toStorageEvidenceRefs.
 func toServiceEvidenceRefs(in []applicationstore.RolloutEvidenceRef) []EvidenceRef {
 	if len(in) == 0 {
@@ -2102,6 +2155,7 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 			MaxErrorLogsPerMinute:      r.AbortCriteria.MaxErrorLogsPerMinute,
 			MinDwellSecondsBeforeAbort: r.AbortCriteria.MinDwellSecondsBeforeAbort,
 			ErrorRateWindowSeconds:     r.AbortCriteria.ErrorRateWindowSeconds,
+			SLOBurn:                    toServiceSLOBurn(r.AbortCriteria.SLOBurn),
 		},
 		NotificationURL: r.NotificationURL,
 		State:           RolloutState(r.State),
