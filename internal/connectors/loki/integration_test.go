@@ -31,7 +31,32 @@ func testConnector(t *testing.T) connectors.Connector {
 	if err != nil {
 		t.Fatalf("new connector: %v", err)
 	}
+	waitReady(t, conn)
 	return conn
+}
+
+// waitReady polls the connector's HealthCheck until Loki reports ready or the
+// deadline elapses. Loki 2.9.8's /ready endpoint returns 503 for a short
+// window after container start (the ingester has to join the ring and clear
+// the default min-ready-duration) — so a single one-shot check races the
+// `services: loki` container's startup in CI and flakes with a 503. This is
+// the runtime gate the workflow comment refers to: block on readiness here
+// rather than assuming the backend is up the instant the job starts.
+func waitReady(t *testing.T, conn connectors.Connector) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := conn.HealthCheck(ctx)
+		cancel()
+		if err == nil {
+			return
+		}
+		lastErr = err
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("Loki did not become ready within 90s: %v", lastErr)
 }
 
 func TestIntegration_HealthCheck(t *testing.T) {
