@@ -24,7 +24,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Run DCO check
-        uses: tim-actions/dco@2fd0504dc0d27b33f542867c300c84840c2da97e
+      # tim-actions/dco needs the actual list of PR commit objects. The old
+      # workflow fed it `github.event.pull_request.commits`, which is the
+      # integer commit *count*, not an array -- so the action errored with
+      # "commits is not iterable". get-pr-commits fetches the commit objects
+      # and exposes them as its `commits` output (the canonical pairing).
+      - name: Get PR commits
+        id: get_pr_commits
+        uses: tim-actions/get-pr-commits@198af03565609bb4ed924d1260247b4881f09e7d
         with:
-          commits: ${{ github.event.pull_request.commits }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run DCO check
+        # Pinned to the latest tim-actions/dco master commit. The previous pin
+        # (2fd0504dc0d27b33f542867c300c84840c2da97e) is not a real commit in
+        # the upstream repo, so every dco run failed at "Getting action
+        # download info" with "unable to find version" -- unrelated to whether
+        # commits were signed off. This SHA exists on master and resolves.
+        uses: tim-actions/dco@f2279e6e62d5a7d9115b0cb8e837b777b1b02e21
+        with:
+          commits: ${{ steps.get_pr_commits.outputs.commits }}
