@@ -41,6 +41,7 @@ type MockAgentService struct {
 	GetLatestConfigForGroupErr    error
 	ListConfigsErr                error
 	StoreConfigForAgentErr        error
+	DeleteConfigsForAgentErr      error
 }
 
 // NewMockAgentService creates a new mock agent service
@@ -410,6 +411,24 @@ func (m *MockAgentService) ListConfigs(ctx context.Context, filter services.Conf
 	}
 
 	return configs, nil
+}
+
+// DeleteConfigsForAgent implements services.AgentService. Removes all
+// agent-scoped config rows for the agent; idempotent (no-op when none match).
+func (m *MockAgentService) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.DeleteConfigsForAgentErr != nil {
+		return m.DeleteConfigsForAgentErr
+	}
+
+	for id, config := range m.configs {
+		if config.AgentID != nil && *config.AgentID == agentID {
+			delete(m.configs, id)
+		}
+	}
+	return nil
 }
 
 // StoreConfigForAgent implements services.AgentService

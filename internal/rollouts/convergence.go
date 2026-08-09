@@ -93,6 +93,119 @@ func (e *Engine) writeDesiredStateForAgents(ctx context.Context, r *services.Rol
 	return assigned
 }
 
+// finalizeCanaryAssignments cleans up the per-agent desired-state config rows
+// S3d wrote for a rollout's canary set once the rollout reaches a TERMINAL state,
+// closing the "stuck canary" lifecycle gap: an agent-scoped configs row takes
+// precedence over group config in determineConfigIntent, and configs are
+// append-only, so without this an ex-canary agent stays pinned to its rollout
+// assignment forever and never tracks future GROUP-config changes.
+//
+// RECON (load-bearing): a successful rollout's finish() does NOT promote the
+// target to the group config, and the rollout never mutates the group config at
+// any point. So naively deleting the agent-scoped rows would drop every ex-canary
+// agent back to the OLD (pre-rollout) group config — the WRONG config. The
+// correct final state therefore depends on the outcome:
+//
+//   - promoteTarget == true (SUCCESS): first PROMOTE the target to the group
+//     config (a new group-scoped configs row = the target content), then delete
+//     the agent-scoped rows. Each ex-canary agent falls back to group == target
+//     (the config it converged to) AND resumes tracking future group changes; the
+//     rest of the group converges to the same target — the definition of a
+//     completed rollout. If promotion fails, the agent-scoped rows are LEFT in
+//     place (pre-fix behavior) rather than risk dropping an agent to a stale
+//     config.
+//
+//   - promoteTarget == false (ROLLBACK): the group config was never changed, so
+//     it still equals the pre-rollout config (the PreviousConfigID snapshot). The
+//     rollback push already delivered the previous content; deleting the
+//     agent-scoped rows returns each agent to group-config tracking, whose value
+//     IS the pre-rollout state — the correct revert.
+//
+// Gated by writeDesiredState (the S3d desired-state model): legacy
+// direct-push-only struct-literal tests wrote no agent-scoped rows, so cleanup is
+// skipped and their behavior is unchanged. Runs only on the elected leader
+// (finish/rollback do). Best-effort + idempotent: deleting an already-gone row is
+// a no-op and any failure is logged, never failing the terminal transition.
+func (e *Engine) finalizeCanaryAssignments(ctx context.Context, r *services.Rollout, promoteTarget bool) {
+	if !e.writeDesiredState || e.agentService == nil {
+		return
+	}
+	if promoteTarget && !e.promoteTargetToGroupConfig(ctx, r) {
+		// Promotion failed: deleting the agent-scoped rows now would drop
+		// ex-canary agents to a stale group config. Leave them assigned; a later
+		// pass (or operator) can retry. Correctness beats un-sticking here.
+		return
+	}
+	for _, idStr := range r.PushedAgentIDs {
+		agentID, err := uuid.Parse(idStr)
+		if err != nil {
+			continue
+		}
+		if err := e.agentService.DeleteConfigsForAgent(ctx, agentID); err != nil {
+			e.logger.Warn("rollout engine: failed to clean up per-agent desired state",
+				zap.String("rollout_id", r.ID),
+				zap.String("agent_id", idStr),
+				zap.Error(err))
+		}
+	}
+}
+
+// promoteTargetToGroupConfig makes a successful rollout's target the group's
+// config of record: it writes a new group-scoped configs row carrying the target
+// content at version = latest-group-version + 1. This is what makes removing the
+// agent-scoped canary rows safe on SUCCESS — the group config the ex-canary
+// agents fall back to now IS the target. Returns true when the group config is
+// (now, or already was) the target — i.e. it is safe to delete the agent-scoped
+// rows; false on a read/write failure so the caller preserves them.
+//
+// Idempotent: if the group's latest config already hashes to the target (a
+// re-run, or an operator who set it directly) it does nothing and returns true.
+func (e *Engine) promoteTargetToGroupConfig(ctx context.Context, r *services.Rollout) bool {
+	if r.GroupID == "" {
+		// No group to promote into (shouldn't happen for a group rollout). Nothing
+		// to fall back to, so treat as safe — deletion just clears the pin.
+		return true
+	}
+	target, err := e.configStore.GetConfig(ctx, r.TargetConfigID)
+	if err != nil || target == nil {
+		e.logger.Warn("rollout engine: cannot promote target to group config (target unreadable)",
+			zap.String("rollout_id", r.ID),
+			zap.String("target_config_id", r.TargetConfigID),
+			zap.Error(err))
+		return false
+	}
+	targetHash := confignorm.Hash(target.Content)
+	version := 1
+	if latest, err := e.agentService.GetLatestConfigForGroup(ctx, r.GroupID); err == nil && latest != nil {
+		if confignorm.Hash(latest.Content) == targetHash {
+			return true // already promoted — idempotent no-op
+		}
+		version = latest.Version + 1
+	}
+	groupID := r.GroupID
+	cfg := &services.Config{
+		ID:         uuid.NewString(),
+		GroupID:    &groupID,
+		ConfigHash: targetHash,
+		Content:    target.Content,
+		Version:    version,
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := e.agentService.CreateConfig(ctx, cfg); err != nil {
+		e.logger.Warn("rollout engine: failed to promote target to group config",
+			zap.String("rollout_id", r.ID),
+			zap.String("group_id", groupID),
+			zap.Error(err))
+		return false
+	}
+	e.logger.Info("rollout engine: promoted target to group config on success",
+		zap.String("rollout_id", r.ID),
+		zap.String("group_id", groupID),
+		zap.String("config_id", cfg.ID),
+		zap.Int("version", version))
+	return true
+}
+
 // stageConverged reports whether the current stage's canary set has reached its
 // convergence threshold — i.e. enough of the canary agents have REPORTED the
 // rollout target as their effective config (the ADR 0035 "answered by reported

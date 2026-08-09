@@ -997,6 +997,28 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 	return out, rows.Err()
 }
 
+// DeleteConfig removes a single config row by id. NO-OP on a missing id (see the
+// ApplicationStore interface doc): cleanup at a rollout terminal state must be
+// idempotent, so a zero-row delete returns nil rather than a not-found error. As
+// with the other config methods, OSS tenant scoping is omitted (configs carries
+// no tenant column).
+func (s *Storage) DeleteConfig(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM configs WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("delete config: %w", err)
+	}
+	return nil
+}
+
+// DeleteConfigsForAgent removes ALL agent-scoped config rows for an agent so the
+// agent resumes tracking group config (HA S3d rollout cleanup). Idempotent — a
+// zero-row delete is a no-op.
+func (s *Storage) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM configs WHERE agent_id = $1`, agentID.String()); err != nil {
+		return fmt.Errorf("delete configs for agent: %w", err)
+	}
+	return nil
+}
+
 func scanConfig(sc scanner) (*types.Config, error) {
 	var (
 		c       types.Config

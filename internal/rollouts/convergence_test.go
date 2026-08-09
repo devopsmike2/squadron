@@ -39,13 +39,19 @@ func (f *convRolloutSvc) Persist(_ context.Context, r *services.Rollout) error {
 // agent's EffectiveConfig.
 type convAgentSvc struct {
 	services.AgentService
-	agents  []*services.Agent
-	latest  map[uuid.UUID]*services.Config
-	created []*services.Config
+	agents      []*services.Agent
+	latest      map[uuid.UUID]*services.Config // current resolvable agent-scoped config
+	groupLatest map[string]*services.Config    // current resolvable group-scoped config
+	created     []*services.Config             // full CreateConfig history (never pruned)
+	deleted     []uuid.UUID                    // agents whose scoped configs were cleaned up
 }
 
 func newConvAgentSvc(agents []*services.Agent) *convAgentSvc {
-	return &convAgentSvc{agents: agents, latest: map[uuid.UUID]*services.Config{}}
+	return &convAgentSvc{
+		agents:      agents,
+		latest:      map[uuid.UUID]*services.Config{},
+		groupLatest: map[string]*services.Config{},
+	}
 }
 
 func (s *convAgentSvc) ListAgents(context.Context) ([]*services.Agent, error) {
@@ -56,13 +62,41 @@ func (s *convAgentSvc) GetLatestConfigForAgent(_ context.Context, id uuid.UUID) 
 	return s.latest[id], nil
 }
 
+func (s *convAgentSvc) GetLatestConfigForGroup(_ context.Context, id string) (*services.Config, error) {
+	return s.groupLatest[id], nil
+}
+
 func (s *convAgentSvc) CreateConfig(_ context.Context, c *services.Config) error {
 	s.created = append(s.created, c)
 	if c.AgentID != nil {
 		s.latest[*c.AgentID] = c
 	}
+	if c.GroupID != nil {
+		s.groupLatest[*c.GroupID] = c
+	}
 	return nil
 }
+
+// DeleteConfigsForAgent mirrors the store primitive: it clears the agent's
+// resolvable agent-scoped config (so it falls back to group config) but leaves
+// the CreateConfig history intact so tests can still inspect what was written.
+func (s *convAgentSvc) DeleteConfigsForAgent(_ context.Context, id uuid.UUID) error {
+	delete(s.latest, id)
+	s.deleted = append(s.deleted, id)
+	return nil
+}
+
+// resolve models determineConfigIntent: an agent-scoped config wins, else the
+// group config. Used to assert an ex-canary agent resumes tracking group config.
+func (s *convAgentSvc) resolve(agentID uuid.UUID, groupID string) *services.Config {
+	if c := s.latest[agentID]; c != nil {
+		return c
+	}
+	return s.groupLatest[groupID]
+}
+
+// sp is a string-pointer helper for building group-scoped test configs.
+func sp(s string) *string { return &s }
 
 // createdForAgent returns the agent-scoped configs the engine wrote for id.
 func (s *convAgentSvc) createdForAgent(id uuid.UUID) []*services.Config {
@@ -337,6 +371,10 @@ func TestRollbackRevertsViaDesiredState(t *testing.T) {
 	}
 	e, as, _ := convEngine(t, agents, cfgs)
 
+	// The group's config was never changed by the rollout, so it still holds the
+	// pre-rollout config (PREV) — the state a rolled-back agent must return to.
+	as.groupLatest["group-a"] = &services.Config{ID: "cfg-prev-grp", GroupID: sp("group-a"), Content: "PREV", ConfigHash: confignorm.Hash("PREV"), Version: 2}
+
 	// Simulate the rollout having assigned TARGET during its stages.
 	for _, a := range agents {
 		agentID := a.ID
@@ -359,12 +397,135 @@ func TestRollbackRevertsViaDesiredState(t *testing.T) {
 
 	require.Equal(t, services.RolloutStateRolledBack, r.State)
 	for _, a := range agents {
-		// The agent's newest desired-state assignment must now be PREV.
-		latest := as.latest[a.ID]
-		require.NotNil(t, latest)
-		assert.Equal(t, "PREV", latest.Content, "rollback supersedes the target assignment with the previous config")
-		assert.Equal(t, 2, latest.Version, "revert is a new version superseding the target assignment")
+		// Rollback delivered the PREVIOUS config as desired state (supersede)...
+		wrotePrev := false
+		for _, c := range as.createdForAgent(a.ID) {
+			if c.Content == "PREV" {
+				wrotePrev = true
+			}
+		}
+		assert.True(t, wrotePrev, "rollback writes the previous config as desired state before cleanup")
+		// ...then lifecycle cleanup removed the agent-scoped pin, so the agent
+		// resumes tracking the group config — whose value IS the pre-rollout
+		// state (PREV). This is the "stuck canary" fix on the rollback path.
+		assert.Nil(t, as.latest[a.ID], "rollback clears the agent-scoped pin so the agent tracks group config again")
+		resolved := as.resolve(a.ID, "group-a")
+		require.NotNil(t, resolved)
+		assert.Equal(t, "PREV", resolved.Content, "ex-canary reverts to the pre-rollout group config")
 	}
+}
+
+// --- S3d config-assignment lifecycle cleanup (the "stuck canary" fix) --------
+
+// TestSuccessPromotesGroupConfigAndClearsCanaryPins is the headline lifecycle
+// proof: on a SUCCESSFUL rollout the engine (a) PROMOTES the target to the group
+// config — because finish() does not otherwise, so a naive delete would revert
+// agents to the OLD group config — and (b) removes every canary agent's
+// agent-scoped pin, so each ex-canary agent resolves to group == target AND
+// tracks a SUBSEQUENT group-config change.
+func TestSuccessPromotesGroupConfigAndClearsCanaryPins(t *testing.T) {
+	agents := makeAgents(2, "group-a")
+	cfgs := map[string]*applicationstore.Config{"cfg-target": {ID: "cfg-target", Content: "TARGET"}}
+	e, as, _ := convEngine(t, agents, cfgs)
+
+	// Seed the pre-rollout group config — the WRONG config a naive delete would
+	// drop the ex-canary agents back to.
+	as.groupLatest["group-a"] = &services.Config{ID: "cfg-old", GroupID: sp("group-a"), Content: "OLD", ConfigHash: confignorm.Hash("OLD"), Version: 3}
+
+	r := &services.Rollout{
+		ID: "ro-succ", GroupID: "group-a", TargetConfigID: "cfg-target",
+		State: services.RolloutStateInProgress, CurrentStage: 0,
+		StageStartedAt: pastStart(time.Second),
+		Stages:         []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 100, DwellSeconds: 0}},
+	}
+
+	// Apply the stage (writes the agent-scoped canary assignments) ...
+	_, err := e.applyStage(context.Background(), r, 0)
+	require.NoError(t, err)
+	require.Len(t, r.PushedAgentIDs, 2)
+	// ... agents report the target as effective → converge → finish.
+	for _, a := range agents {
+		a.EffectiveConfig = "TARGET"
+	}
+	e.advanceOrCheck(context.Background(), r)
+	require.Equal(t, services.RolloutStateSucceeded, r.State)
+
+	// (a) The target was promoted to the group config (version latest+1), NOT
+	// left at the old group config.
+	grp, _ := as.GetLatestConfigForGroup(context.Background(), "group-a")
+	require.NotNil(t, grp)
+	assert.Equal(t, confignorm.Hash("TARGET"), confignorm.Hash(grp.Content), "target promoted to group config")
+	assert.Equal(t, 4, grp.Version, "promotion writes latest-group-version + 1")
+
+	// (b) Each ex-canary pin is cleared and the agent resolves to group == target.
+	for _, a := range agents {
+		assert.Nil(t, as.latest[a.ID], "agent-scoped canary pin removed on success")
+		resolved := as.resolve(a.ID, "group-a")
+		require.NotNil(t, resolved)
+		assert.Equal(t, confignorm.Hash("TARGET"), confignorm.Hash(resolved.Content),
+			"ex-canary resolves to the promoted group config (= target), not the OLD group config")
+	}
+
+	// (c) The ex-canary now TRACKS a subsequent group-config change (the whole
+	// point of un-pinning): a new group config resolves for every ex-canary.
+	as.groupLatest["group-a"] = &services.Config{ID: "cfg-newer", GroupID: sp("group-a"), Content: "NEWER", ConfigHash: confignorm.Hash("NEWER"), Version: 5}
+	for _, a := range agents {
+		resolved := as.resolve(a.ID, "group-a")
+		require.NotNil(t, resolved)
+		assert.Equal(t, "NEWER", resolved.Content, "ex-canary picks up a later group-config change")
+	}
+}
+
+// TestFinalizeCanaryAssignmentsIdempotent proves the cleanup is safe to run more
+// than once: promotion is a no-op when the group config already equals the target
+// (no version churn) and the per-agent deletes are no-ops when the pins are gone.
+func TestFinalizeCanaryAssignmentsIdempotent(t *testing.T) {
+	agents := makeAgents(2, "group-a")
+	cfgs := map[string]*applicationstore.Config{"cfg-target": {ID: "cfg-target", Content: "TARGET"}}
+	e, as, _ := convEngine(t, agents, cfgs)
+	as.groupLatest["group-a"] = &services.Config{ID: "cfg-old", GroupID: sp("group-a"), Content: "OLD", ConfigHash: confignorm.Hash("OLD"), Version: 1}
+	for _, a := range agents {
+		id := a.ID
+		as.latest[id] = &services.Config{ID: "pin-" + id.String(), AgentID: &id, Content: "TARGET", ConfigHash: confignorm.Hash("TARGET"), Version: 1}
+	}
+	r := &services.Rollout{
+		ID: "ro-idem", GroupID: "group-a", TargetConfigID: "cfg-target",
+		PushedAgentIDs: []string{agents[0].ID.String(), agents[1].ID.String()},
+	}
+
+	e.finalizeCanaryAssignments(context.Background(), r, true)
+	grp1, _ := as.GetLatestConfigForGroup(context.Background(), "group-a")
+	require.NotNil(t, grp1)
+	assert.Equal(t, confignorm.Hash("TARGET"), confignorm.Hash(grp1.Content))
+	v1 := grp1.Version
+
+	// Second call must be a clean no-op: no re-promotion, no error, pins stay gone.
+	e.finalizeCanaryAssignments(context.Background(), r, true)
+	grp2, _ := as.GetLatestConfigForGroup(context.Background(), "group-a")
+	require.NotNil(t, grp2)
+	assert.Equal(t, v1, grp2.Version, "no second promotion — idempotent")
+	for _, a := range agents {
+		assert.Nil(t, as.latest[a.ID])
+	}
+}
+
+// TestFinalizeSkippedWhenDesiredStateOff pins that the legacy direct-push model
+// (writeDesiredState=false) does NO cleanup — preserving pre-S3d behavior and
+// keeping the cleanup off struct-literal test engines.
+func TestFinalizeSkippedWhenDesiredStateOff(t *testing.T) {
+	agents := makeAgents(1, "group-a")
+	cfgs := map[string]*applicationstore.Config{"cfg-target": {ID: "cfg-target", Content: "TARGET"}}
+	e, as, _ := convEngine(t, agents, cfgs)
+	e.writeDesiredState = false
+	as.groupLatest["group-a"] = &services.Config{ID: "cfg-old", GroupID: sp("group-a"), Content: "OLD", Version: 1}
+	r := &services.Rollout{ID: "ro-off", GroupID: "group-a", TargetConfigID: "cfg-target",
+		PushedAgentIDs: []string{agents[0].ID.String()}}
+
+	e.finalizeCanaryAssignments(context.Background(), r, true)
+	grp, _ := as.GetLatestConfigForGroup(context.Background(), "group-a")
+	require.NotNil(t, grp)
+	assert.Equal(t, "OLD", grp.Content, "no promotion when desired-state writes are off")
+	assert.Empty(t, as.deleted, "no per-agent cleanup when desired-state writes are off")
 }
 
 // TestWriteDesiredStateIdempotentAndSupersedes pins the lifecycle primitive: a

@@ -354,6 +354,58 @@ func TestStoreGetLatestConfigForGroup(t *testing.T) {
 	})
 }
 
+func TestStoreDeleteConfig(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		agentID := testAgentID
+		config := makeTestConfig(&agentID, nil)
+		require.NoError(t, store.CreateConfig(context.Background(), config))
+
+		// Round-trip: delete then it's gone.
+		require.NoError(t, store.DeleteConfig(context.Background(), config.ID))
+		got, err := store.GetConfig(context.Background(), config.ID)
+		require.NoError(t, err)
+		assert.Nil(t, got)
+
+		// Missing id is a no-op (per convention), not an error.
+		require.NoError(t, store.DeleteConfig(context.Background(), "does-not-exist"))
+	})
+}
+
+func TestStoreDeleteConfigsForAgent(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		agentID := testAgentID
+		groupID := testGroupID
+
+		// Two agent-scoped rows (rollout assignments) + one group-scoped row.
+		a1 := makeTestConfig(&agentID, nil)
+		a1.ID = "a1"
+		a1.Version = 1
+		a2 := makeTestConfig(&agentID, nil)
+		a2.ID = "a2"
+		a2.Version = 2
+		g1 := makeTestConfig(nil, &groupID)
+		g1.ID = "g1"
+		require.NoError(t, store.CreateConfig(context.Background(), a1))
+		require.NoError(t, store.CreateConfig(context.Background(), a2))
+		require.NoError(t, store.CreateConfig(context.Background(), g1))
+
+		require.NoError(t, store.DeleteConfigsForAgent(context.Background(), agentID))
+
+		// All agent-scoped rows gone → the agent now resolves to group config.
+		latestAgent, err := store.GetLatestConfigForAgent(context.Background(), agentID)
+		require.NoError(t, err)
+		assert.Nil(t, latestAgent)
+		// Group-scoped row untouched.
+		latestGroup, err := store.GetLatestConfigForGroup(context.Background(), groupID)
+		require.NoError(t, err)
+		require.NotNil(t, latestGroup)
+		assert.Equal(t, "g1", latestGroup.ID)
+
+		// Idempotent: a second call is a no-op.
+		require.NoError(t, store.DeleteConfigsForAgent(context.Background(), agentID))
+	})
+}
+
 func TestStoreListConfigsWithFilter(t *testing.T) {
 	withMemoryStore(func(store *Store) {
 		agentID1 := testAgentID

@@ -77,6 +77,24 @@ type ApplicationStore interface {
 	GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID) (*Config, error)
 	GetLatestConfigForGroup(ctx context.Context, groupID string) (*Config, error)
 	ListConfigs(ctx context.Context, filter ConfigFilter) ([]*Config, error)
+	// DeleteConfig removes a single config row by id. Config history is
+	// otherwise append-only; this primitive exists for the HA S3d (ADR 0035)
+	// rollout config-assignment LIFECYCLE — see DeleteConfigsForAgent. It is a
+	// NO-OP on a missing id (returns nil, not an error): cleanup at a rollout
+	// terminal state must be idempotent, so this deliberately follows the
+	// no-op-on-missing convention (deploy targets / expected agents) rather than
+	// the error-on-missing convention (agents / groups).
+	DeleteConfig(ctx context.Context, id string) error
+	// DeleteConfigsForAgent removes ALL agent-scoped config rows for the given
+	// agent (WHERE agent_id = agentID). It un-shadows the agent's group config so
+	// determineConfigIntent falls back from GetLatestConfigForAgent to
+	// GetLatestConfigForGroup — i.e. the agent resumes tracking group config.
+	// Used by the rollout engine to clean up the per-agent canary assignments S3d
+	// writes, at SUCCESS and ROLLBACK terminal states, so an ex-canary agent is
+	// not left permanently pinned to a stale agent-scoped row (the "stuck canary"
+	// lifecycle gap). Idempotent: deleting when there are no matching rows is a
+	// no-op (returns nil). Never touches group-scoped rows.
+	DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error
 	ListSavedQueries(ctx context.Context) ([]*SavedQuery, error)
 	GetSavedQuery(ctx context.Context, id string) (*SavedQuery, error)
 	CreateSavedQuery(ctx context.Context, query *SavedQuery) error

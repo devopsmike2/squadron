@@ -827,6 +827,13 @@ func (e *Engine) finish(ctx context.Context, r *services.Rollout) {
 	e.tracer.EndRollout(r.ID, services.RolloutStateSucceeded, "")
 	e.logger.Info("rollout succeeded", zap.String("rollout_id", r.ID))
 
+	// HA S3d lifecycle cleanup (ADR 0035). Promote the target to the group config
+	// and remove the per-agent canary assignments so ex-canary agents end on the
+	// target AND resume tracking future group-config changes (no "stuck canary").
+	// Best-effort + idempotent; gated on the desired-state model so legacy
+	// direct-push tests are unaffected. See finalizeCanaryAssignments.
+	e.finalizeCanaryAssignments(ctx, r, true)
+
 	// v0.70 — multi step plan advancement. When the succeeded
 	// rollout belongs to a plan, promote the next step out of
 	// Queued so the next tick picks it up. When there is no next
@@ -1045,6 +1052,15 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		})
 		e.recordAudit(ctx, r, "rollout.rolled_back", "rolled_back", nil)
 		e.publishStateChange(r, "rolled_back")
+		// HA S3d lifecycle cleanup (ADR 0035). Remove the per-agent canary
+		// assignments so each agent resumes tracking the group config — which was
+		// never changed by the rollout and so still equals the pre-rollout state
+		// (the PreviousConfigID snapshot the rollback push already delivered). No
+		// promotion: the group config is already the correct revert target.
+		// Best-effort + idempotent; runs on every terminal path (incl. the
+		// no-previous-config early returns, so an aborted canary is never left
+		// permanently pinned to the target).
+		e.finalizeCanaryAssignments(ctx, r, false)
 		// End the rollout span with rolled_back status. The Error
 		// status on the parent span surfaces the reason recorded at
 		// abort time so trace UIs render the failed rollout red.
