@@ -8,22 +8,27 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore/postgres"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/sqlite"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
 const (
-	sqliteStorageType = "sqlite"
-	memoryStorageType = "memory"
-	// Add more storage types as needed
-	// postgresStorageType = "postgres"
+	sqliteStorageType   = "sqlite"
+	memoryStorageType   = "memory"
+	postgresStorageType = "postgres"
 )
 
-// AllStorageTypes defines all available application storage backends
+// AllStorageTypes defines all available application storage backends.
+//
+// Both sqlite (the zero-dependency default) and postgres (the opt-in HA /
+// org-scale backend, ADR 0033) are OSS-selectable. The open-core boundary
+// (ADR 0033 / ADR 0001) keeps the backend + DSN seam in OSS; only the
+// HA/multi-replica operability layer is reserved for Enterprise.
 var AllStorageTypes = []string{
 	sqliteStorageType,
 	memoryStorageType,
-	// Add more storage types as they are implemented
+	postgresStorageType,
 }
 
 // Factory implements ApplicationStoreFactory interface as a meta-factory for application storage components.
@@ -76,9 +81,15 @@ func (f *Factory) getFactoryOfType(factoryType string) (ApplicationStoreFactory,
 		return sqlite.NewFactory(f.Config.Path), nil
 	case memoryStorageType:
 		return memory.NewFactory(), nil
-	// Add more storage types as they are implemented
-	// case postgresStorageType:
-	//     return postgres.NewFactory(f.Config.Path), nil
+	case postgresStorageType:
+		// Postgres requires a DSN. Fail fast with a specific error rather
+		// than falling back to another backend — a deployment that asked
+		// for Postgres must get Postgres or a clear error, never a silent
+		// SQLite store on a different (or empty) dataset.
+		if f.Config.DSN == "" {
+			return nil, fmt.Errorf("storage type %q requires storage.app.dsn to be set (the Postgres connection string, e.g. postgres://user:pass@host:5432/squadron?sslmode=require)", postgresStorageType)
+		}
+		return postgres.NewFactory(f.Config.DSN), nil
 	default:
 		return nil, fmt.Errorf("unknown application storage type %s. Valid types are %v", factoryType, AllStorageTypes)
 	}
