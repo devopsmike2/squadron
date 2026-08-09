@@ -523,27 +523,18 @@ func (s *Server) extractGroupInfo(desc *protobufs.AgentDescription) (groupID str
 
 // getConfigForAgent returns the configuration for an agent
 // Priority: Agent-specific config > Group config > Default config
+//
+// The agent > group store precedence lives in the shared resolveStoredConfig
+// resolver so the connect path here and the per-instance reconcile loop
+// (internal/opamp/reconciler.go) cannot drift on what "desired config" means.
+// This path layers the synthesized DefaultOTelConfig on when no stored config
+// exists; the reconcile loop deliberately does not (it never synthesizes).
 func (s *Server) getConfigForAgent(ctx context.Context, agent *Agent) string {
-	// 1. Try to get agent-specific config
-	if agentConfig, err := s.agentService.GetLatestConfigForAgent(ctx, agent.storeID()); err == nil && agentConfig != nil {
-		s.logger.Info("Using agent-specific config",
-			zap.String("agentId", agent.InstanceIdStr),
-			zap.String("configId", agentConfig.ID))
-		return agentConfig.Content
+	if content, found := resolveStoredConfig(ctx, s.agentService, agent); found {
+		return content
 	}
 
-	// 2. Try to get group config if agent belongs to a group
-	if agent.GroupID != nil && *agent.GroupID != "" {
-		if groupConfig, err := s.agentService.GetLatestConfigForGroup(ctx, *agent.GroupID); err == nil && groupConfig != nil {
-			s.logger.Info("Using group config",
-				zap.String("agentId", agent.InstanceIdStr),
-				zap.String("groupId", *agent.GroupID),
-				zap.String("configId", groupConfig.ID))
-			return groupConfig.Content
-		}
-	}
-
-	// 3. Fall back to default config
+	// Fall back to default config when the agent has no stored agent/group config.
 	s.logger.Debug("Using default config for agent",
 		zap.String("agentId", agent.InstanceIdStr))
 	return DefaultOTelConfig

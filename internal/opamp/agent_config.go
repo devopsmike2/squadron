@@ -86,34 +86,43 @@ func (agent *Agent) setCustomConfigWithTraceparent(
 // the calculated new config is different from the existing config stored in
 // Agent.remoteConfig.
 func (agent *Agent) calcRemoteConfig() bool {
-	hash := sha256.New()
-
 	cfg := protobufs.AgentRemoteConfig{
 		Config: &protobufs.AgentConfigMap{
-			ConfigMap: map[string]*protobufs.AgentConfigFile{},
+			// Add the custom config for this particular Agent instance. Use empty
+			// string as the config file name.
+			ConfigMap: map[string]*protobufs.AgentConfigFile{
+				"": {Body: []byte(agent.CustomInstanceConfig)},
+			},
 		},
 	}
 
-	// Add the custom config for this particular Agent instance. Use empty
-	// string as the config file name.
-	cfg.Config.ConfigMap[""] = &protobufs.AgentConfigFile{
-		Body: []byte(agent.CustomInstanceConfig),
-	}
-
-	// Calculate the hash.
-	for k, v := range cfg.Config.ConfigMap {
-		hash.Write([]byte(k))
-		hash.Write(v.Body)
-		hash.Write([]byte(v.ContentType))
-	}
-
-	cfg.ConfigHash = hash.Sum(nil)
+	// Calculate the hash via the shared routine so the DELIVERED hash the
+	// reconcile loop computes for the same content is byte-identical to what we
+	// stamp on the wire here (they must never drift — see wireConfigHash).
+	cfg.ConfigHash = wireConfigHash(agent.CustomInstanceConfig)
 
 	configChanged := !isEqualRemoteConfig(agent.remoteConfig, &cfg)
 
 	agent.remoteConfig = &cfg
 
 	return configChanged
+}
+
+// wireConfigHash computes the OpAMP remote-config hash for a single-file
+// (empty-string key, no content type) config body. It is the exact hash
+// calcRemoteConfig stamps on AgentRemoteConfig.ConfigHash and that the agent
+// echoes back as RemoteConfigStatus.LastRemoteConfigHash once delivered.
+//
+// Factored out so the per-instance reconcile loop can compute the desired
+// DELIVERED hash from stored config content and compare it against the agent's
+// LastRemoteConfigHash without duplicating — and drifting from — the hashing in
+// calcRemoteConfig.
+func wireConfigHash(body string) []byte {
+	hash := sha256.New()
+	hash.Write([]byte("")) // config file key (empty string, per the map above)
+	hash.Write([]byte(body))
+	hash.Write([]byte("")) // content type (unset)
+	return hash.Sum(nil)
 }
 
 // Configuration comparison helper functions
