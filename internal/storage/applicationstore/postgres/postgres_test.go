@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Storage {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, audit_events, audit_chain_checkpoints"); err != nil {
+	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, audit_events, audit_chain_checkpoints, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return s
@@ -876,6 +876,461 @@ func TestPostgres_AuditCheckpoint(t *testing.T) {
 	}
 	if !res.AnchoredByCheckpoint || res.CheckpointSeq != 1 {
 		t.Fatalf("chain-start should be anchored to checkpoint seq 1: %+v", res)
+	}
+}
+
+// ============================================================================
+// ADR 0033 slice 5 — OPERATIONS cluster.
+// ============================================================================
+
+func TestPostgres_ActionRunnerRegistrationCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	r := &types.ActionRunnerRegistration{
+		RunnerID:         "runner-1",
+		Hostname:         "node-a",
+		PublicKeyPEM:     "-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----",
+		CapabilitiesJSON: `{"exec":["restart"],"fs":["read"]}`,
+		RegisteredAt:     now,
+		LastSeenAt:       now,
+	}
+	if err := s.CreateActionRunnerRegistration(ctx, r); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetActionRunnerRegistration(ctx, "runner-1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	// public_key_pem / capabilities_json must round-trip VERBATIM (TEXT, not JSONB).
+	if got.Hostname != "node-a" || got.PublicKeyPEM != r.PublicKeyPEM ||
+		got.CapabilitiesJSON != r.CapabilitiesJSON || got.RevokedAt != nil {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+	if !got.RegisteredAt.Equal(now) || !got.LastSeenAt.Equal(now) {
+		t.Fatalf("timestamps did not round-trip: %+v", got)
+	}
+
+	// CreateActionRunnerRegistration defaults RegisteredAt=now, LastSeenAt=RegisteredAt.
+	r0 := &types.ActionRunnerRegistration{RunnerID: "runner-0", Hostname: "node-0", PublicKeyPEM: "k", CapabilitiesJSON: "{}"}
+	if err := s.CreateActionRunnerRegistration(ctx, r0); err != nil {
+		t.Fatalf("create r0: %v", err)
+	}
+	if g0, _ := s.GetActionRunnerRegistration(ctx, "runner-0"); g0 == nil || g0.RegisteredAt.IsZero() || !g0.LastSeenAt.Equal(g0.RegisteredAt) {
+		t.Fatalf("defaults not applied: %+v", g0)
+	}
+
+	// Missing get must be (nil, nil).
+	if miss, err := s.GetActionRunnerRegistration(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// Update persists (capabilities re-declared, last-seen advanced).
+	r.CapabilitiesJSON = `{"exec":["restart","reload"]}`
+	r.LastSeenAt = now.Add(time.Hour)
+	if err := s.UpdateActionRunnerRegistration(ctx, r); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ = s.GetActionRunnerRegistration(ctx, "runner-1"); got.CapabilitiesJSON != r.CapabilitiesJSON || !got.LastSeenAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("update didn't persist: %+v", got)
+	}
+
+	// Update on a missing runner is "not found".
+	if err := s.UpdateActionRunnerRegistration(ctx, &types.ActionRunnerRegistration{RunnerID: "ghost"}); err == nil {
+		t.Fatal("update on missing runner should error")
+	}
+
+	// Revoke stamps revoked_at; the row stays (still gettable + listed).
+	if err := s.RevokeActionRunnerRegistration(ctx, "runner-1", now.Add(2*time.Hour)); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if got, _ = s.GetActionRunnerRegistration(ctx, "runner-1"); got == nil || got.RevokedAt == nil || !got.RevokedAt.Equal(now.Add(2*time.Hour)) {
+		t.Fatalf("revoke didn't persist: %+v", got)
+	}
+	// Revoke on a missing runner is "not found".
+	if err := s.RevokeActionRunnerRegistration(ctx, "ghost", now); err == nil {
+		t.Fatal("revoke on missing runner should error")
+	}
+
+	// List ordering is registered_at DESC and INCLUDES revoked runners. r0 was
+	// registered a hair after r (default now()), so it sorts first.
+	list, err := s.ListActionRunnerRegistrations(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: err=%v len=%d", err, len(list))
+	}
+	if list[0].RegisteredAt.Before(list[1].RegisteredAt) {
+		t.Fatalf("list order should be registered_at DESC: %v,%v", list[0].RegisteredAt, list[1].RegisteredAt)
+	}
+}
+
+func TestPostgres_ActionRequestCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// CreateActionRequest defaults empty Status to "pending".
+	r := &types.ActionRequest{
+		ID:             "ar-1",
+		ProposalID:     "prop-1",
+		RunnerID:       "runner-1",
+		ActionType:     "service.restart",
+		ParametersJSON: `{"unit":"otelcol","force":true}`,
+		Signature:      "ed25519:deadbeef",
+		Phase:          "dry_run",
+		IssuedAt:       now,
+		ExpiresAt:      now.Add(5 * time.Minute),
+	}
+	if err := s.CreateActionRequest(ctx, r); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetActionRequest(ctx, "ar-1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	// parameters_json + signature persist VERBATIM; status defaulted to pending.
+	if got.Status != "pending" || got.ParametersJSON != r.ParametersJSON || got.Signature != r.Signature ||
+		got.Phase != "dry_run" || got.ProposalID != "prop-1" || got.StartedAt != nil || got.CompletedAt != nil {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+
+	// Missing get must be (nil, nil).
+	if miss, err := s.GetActionRequest(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// Update writes the runner's result (status + output + timestamps); the signed
+	// immutable fields stay put.
+	started := now.Add(time.Second)
+	completed := now.Add(2 * time.Second)
+	r.Status = "success"
+	r.DryRunOutputJSON = `{"diff":"none"}`
+	r.StartedAt = &started
+	r.CompletedAt = &completed
+	if err := s.UpdateActionRequest(ctx, r); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ = s.GetActionRequest(ctx, "ar-1"); got.Status != "success" || got.DryRunOutputJSON != `{"diff":"none"}` ||
+		got.StartedAt == nil || !got.StartedAt.Equal(started) || got.CompletedAt == nil ||
+		got.Signature != r.Signature || got.ParametersJSON != r.ParametersJSON {
+		t.Fatalf("update didn't persist / clobbered immutable fields: %+v", got)
+	}
+
+	// Update on a missing id is "not found".
+	if err := s.UpdateActionRequest(ctx, &types.ActionRequest{ID: "ghost"}); err == nil {
+		t.Fatal("update on missing action request should error")
+	}
+
+	// A second (execute-phase) request, newer, for the same proposal + runner.
+	r2 := &types.ActionRequest{
+		ID: "ar-2", ProposalID: "prop-1", RunnerID: "runner-1", ActionType: "service.restart",
+		ParametersJSON: "{}", Signature: "sig2", Phase: "execute", Status: "denied", DeniedFor: "policy",
+		IssuedAt: now.Add(time.Minute), ExpiresAt: now.Add(6 * time.Minute),
+	}
+	if err := s.CreateActionRequest(ctx, r2); err != nil {
+		t.Fatalf("create r2: %v", err)
+	}
+
+	// List ordering is issued_at DESC (r2 newer than ar-1).
+	all, err := s.ListActionRequests(ctx, types.ActionRequestFilter{})
+	if err != nil || len(all) != 2 || all[0].ID != "ar-2" || all[1].ID != "ar-1" {
+		t.Fatalf("list order should be issued_at DESC: err=%v %+v", err, all)
+	}
+	// Filter by proposal.
+	if byProp, err := s.ListActionRequests(ctx, types.ActionRequestFilter{ProposalID: "prop-1"}); err != nil || len(byProp) != 2 {
+		t.Fatalf("list by proposal: err=%v len=%d", err, len(byProp))
+	}
+	// Filter by runner.
+	if byRunner, err := s.ListActionRequests(ctx, types.ActionRequestFilter{RunnerID: "runner-1"}); err != nil || len(byRunner) != 2 {
+		t.Fatalf("list by runner: err=%v len=%d", err, len(byRunner))
+	}
+	// Filter by status.
+	if byStatus, err := s.ListActionRequests(ctx, types.ActionRequestFilter{Status: "denied"}); err != nil || len(byStatus) != 1 || byStatus[0].ID != "ar-2" {
+		t.Fatalf("list by status: err=%v got=%v", err, byStatus)
+	}
+	// Limit is honored.
+	if limited, err := s.ListActionRequests(ctx, types.ActionRequestFilter{Limit: 1}); err != nil || len(limited) != 1 || limited[0].ID != "ar-2" {
+		t.Fatalf("list limit=1: err=%v got=%v", err, limited)
+	}
+}
+
+func TestPostgres_DeployTargetCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Missing ID is rejected.
+	if err := s.CreateDeployTarget(ctx, &types.DeployTarget{}); err == nil {
+		t.Fatal("create with empty id should error")
+	}
+
+	cred := []byte{0x01, 0x02, 0x03, 0x04}
+	tgt := &types.DeployTarget{
+		ID:                  "dt-1",
+		Name:                "winOtel prod",
+		GitHubOwner:         "acme",
+		GitHubRepo:          "infra",
+		GitHubWorkflow:      "deploy-otel.yml",
+		EncryptedCredential: cred,
+		DefaultInputs:       map[string]string{"env": "prod", "version": "1.2.3"},
+		InventoryPath:       "winOtel/ansible/inventory.ini",
+	}
+	if err := s.CreateDeployTarget(ctx, tgt); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetDeployTarget(ctx, "dt-1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	// Defaults applied; credential + inputs round-trip; tenant defaults to "default".
+	if got.Provider != "github" || got.GitHubBranch != "main" || !got.HasCredential ||
+		len(got.EncryptedCredential) != 4 || got.EncryptedCredential[0] != 0x01 ||
+		got.DefaultInputs["env"] != "prod" || got.InventoryPath != "winOtel/ansible/inventory.ini" ||
+		got.TenantID != "default" {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+
+	// Missing get must be (nil, nil).
+	if miss, err := s.GetDeployTarget(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// Update WITHOUT a credential must leave the stored credential intact.
+	tgt.EncryptedCredential = nil
+	tgt.Name = "winOtel prod v2"
+	tgt.DefaultInputs = map[string]string{"env": "prod"}
+	if err := s.UpdateDeployTarget(ctx, tgt); err != nil {
+		t.Fatalf("update no-cred: %v", err)
+	}
+	if got, _ = s.GetDeployTarget(ctx, "dt-1"); got.Name != "winOtel prod v2" || !got.HasCredential ||
+		len(got.EncryptedCredential) != 4 || len(got.DefaultInputs) != 1 {
+		t.Fatalf("no-cred update should preserve credential: %+v", got)
+	}
+
+	// Update WITH a credential replaces it.
+	tgt.EncryptedCredential = []byte{0x09, 0x09}
+	if err := s.UpdateDeployTarget(ctx, tgt); err != nil {
+		t.Fatalf("update with-cred: %v", err)
+	}
+	if got, _ = s.GetDeployTarget(ctx, "dt-1"); len(got.EncryptedCredential) != 2 || got.EncryptedCredential[0] != 0x09 {
+		t.Fatalf("with-cred update should replace credential: %+v", got)
+	}
+
+	// A second target to exercise list ordering (name ASC) + credential stripping.
+	tgt2 := &types.DeployTarget{ID: "dt-2", Name: "alpha deploy", EncryptedCredential: []byte{0xAA}}
+	if err := s.CreateDeployTarget(ctx, tgt2); err != nil {
+		t.Fatalf("create dt-2: %v", err)
+	}
+	list, err := s.ListDeployTargets(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: err=%v len=%d", err, len(list))
+	}
+	if list[0].Name != "alpha deploy" || list[1].Name != "winOtel prod v2" {
+		t.Fatalf("list order should be name ASC: %s,%s", list[0].Name, list[1].Name)
+	}
+	// List strips the credential bytes but keeps HasCredential.
+	if list[0].EncryptedCredential != nil || !list[0].HasCredential {
+		t.Fatalf("list should strip credential bytes but keep HasCredential: %+v", list[0])
+	}
+
+	// Update / Delete on a missing id are NO-OPS (mirrors sqlite — no not-found).
+	if err := s.UpdateDeployTarget(ctx, &types.DeployTarget{ID: "ghost"}); err != nil {
+		t.Fatalf("update on missing target should be a no-op, got %v", err)
+	}
+	if err := s.DeleteDeployTarget(ctx, "ghost"); err != nil {
+		t.Fatalf("delete on missing target should be a no-op, got %v", err)
+	}
+
+	if err := s.DeleteDeployTarget(ctx, "dt-1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if got, _ = s.GetDeployTarget(ctx, "dt-1"); got != nil {
+		t.Fatalf("deleted target should be gone: %+v", got)
+	}
+}
+
+func TestPostgres_DeployRunCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// A target the runs reference (relationship: deploy run → deploy target).
+	if err := s.CreateDeployTarget(ctx, &types.DeployTarget{ID: "dt-1", Name: "t"}); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	// Missing ID is rejected.
+	if err := s.CreateDeployRun(ctx, &types.DeployRun{}); err == nil {
+		t.Fatal("create with empty id should error")
+	}
+
+	r := &types.DeployRun{
+		ID:            "run-1",
+		TargetID:      "dt-1",
+		RequestedBy:   "alice",
+		RequestedAt:   now,
+		Inputs:        map[string]string{"env": "prod"},
+		ExpectedHosts: []string{"h1", "h2"},
+	}
+	if err := s.CreateDeployRun(ctx, r); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetDeployRun(ctx, "run-1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	// Status defaults to "queued"; inputs + expected hosts round-trip; times nil.
+	if got.Status != "queued" || got.TargetID != "dt-1" || got.RequestedBy != "alice" ||
+		got.Inputs["env"] != "prod" || len(got.ExpectedHosts) != 2 || got.ExpectedHosts[0] != "h1" ||
+		got.CompletedAt != nil || got.VerifiedAt != nil || got.GitHubRunID != 0 {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+
+	// Missing get must be (nil, nil).
+	if miss, err := s.GetDeployRun(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// Update the GHA lifecycle → completed/verified (int64 run id + nullable times).
+	completed := now.Add(time.Minute)
+	verified := now.Add(2 * time.Minute)
+	r.Status = "completed"
+	r.Conclusion = "success"
+	r.GitHubRunID = 987654321
+	r.GitHubRunURL = "https://github.com/acme/infra/actions/runs/987654321"
+	r.CompletedAt = &completed
+	r.VerificationState = "verified"
+	r.VerifiedAt = &verified
+	if err := s.UpdateDeployRun(ctx, r); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ = s.GetDeployRun(ctx, "run-1"); got.Status != "completed" || got.Conclusion != "success" ||
+		got.GitHubRunID != 987654321 || got.CompletedAt == nil || !got.CompletedAt.Equal(completed) ||
+		got.VerificationState != "verified" || got.VerifiedAt == nil {
+		t.Fatalf("update didn't persist: %+v", got)
+	}
+
+	// Update on a missing id is a NO-OP (mirrors sqlite — no not-found).
+	if err := s.UpdateDeployRun(ctx, &types.DeployRun{ID: "ghost"}); err != nil {
+		t.Fatalf("update on missing run should be a no-op, got %v", err)
+	}
+
+	// A second run (different target + newer) to exercise ordering + filters.
+	r2 := &types.DeployRun{ID: "run-2", TargetID: "dt-2", RequestedAt: now.Add(time.Hour), Status: "queued"}
+	if err := s.CreateDeployRun(ctx, r2); err != nil {
+		t.Fatalf("create run-2: %v", err)
+	}
+	// List ordering is requested_at DESC (run-2 newer).
+	all, err := s.ListDeployRuns(ctx, types.DeployRunFilter{})
+	if err != nil || len(all) != 2 || all[0].ID != "run-2" || all[1].ID != "run-1" {
+		t.Fatalf("list order should be requested_at DESC: err=%v %+v", err, all)
+	}
+	// Filter by target (relationship).
+	if byTarget, err := s.ListDeployRuns(ctx, types.DeployRunFilter{TargetID: "dt-1"}); err != nil || len(byTarget) != 1 || byTarget[0].ID != "run-1" {
+		t.Fatalf("list by target: err=%v got=%v", err, byTarget)
+	}
+	// Filter by status.
+	if byStatus, err := s.ListDeployRuns(ctx, types.DeployRunFilter{Status: "completed"}); err != nil || len(byStatus) != 1 || byStatus[0].ID != "run-1" {
+		t.Fatalf("list by status: err=%v got=%v", err, byStatus)
+	}
+	// Limit is honored.
+	if limited, err := s.ListDeployRuns(ctx, types.DeployRunFilter{Limit: 1}); err != nil || len(limited) != 1 || limited[0].ID != "run-2" {
+		t.Fatalf("list limit=1: err=%v got=%v", err, limited)
+	}
+}
+
+func TestPostgres_ExpectedAgentCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Hostname is required.
+	if err := s.UpsertExpectedAgent(ctx, &types.ExpectedAgent{}); err == nil {
+		t.Fatal("upsert with empty hostname should error")
+	}
+
+	e := &types.ExpectedAgent{
+		Hostname:      "host-b",
+		Labels:        map[string]string{"env": "prod"},
+		Source:        "gha-history:dt-1",
+		ExpectedSince: now,
+		Notes:         "from job#1234",
+	}
+	if err := s.UpsertExpectedAgent(ctx, e); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Second host, different source, to exercise ordering (hostname ASC) + filter.
+	if err := s.UpsertExpectedAgent(ctx, &types.ExpectedAgent{Hostname: "host-a", Source: "manual"}); err != nil {
+		t.Fatalf("upsert host-a: %v", err)
+	}
+
+	list, err := s.ListExpectedAgents(ctx, "")
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list all: err=%v len=%d", err, len(list))
+	}
+	if list[0].Hostname != "host-a" || list[1].Hostname != "host-b" {
+		t.Fatalf("list order should be hostname ASC: %s,%s", list[0].Hostname, list[1].Hostname)
+	}
+	if list[1].Labels["env"] != "prod" || list[1].Notes != "from job#1234" || !list[1].ExpectedSince.Equal(now) {
+		t.Fatalf("host-b roundtrip mismatch: %+v", list[1])
+	}
+
+	// Filter by source.
+	if bySrc, err := s.ListExpectedAgents(ctx, "manual"); err != nil || len(bySrc) != 1 || bySrc[0].Hostname != "host-a" {
+		t.Fatalf("list by source: err=%v got=%v", err, bySrc)
+	}
+
+	// Re-upsert host-b updates mutable fields but PRESERVES expected_since.
+	e2 := &types.ExpectedAgent{Hostname: "host-b", Labels: map[string]string{"env": "staging"}, Source: "gha-history:dt-2", Notes: "moved"}
+	if err := s.UpsertExpectedAgent(ctx, e2); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	after, err := s.ListExpectedAgents(ctx, "gha-history:dt-2")
+	if err != nil || len(after) != 1 {
+		t.Fatalf("list after re-upsert: err=%v len=%d", err, len(after))
+	}
+	if after[0].Labels["env"] != "staging" || after[0].Notes != "moved" || !after[0].ExpectedSince.Equal(now) {
+		t.Fatalf("re-upsert should update fields but preserve expected_since: %+v", after[0])
+	}
+
+	// Bulk-rotate: replace everything under one source atomically.
+	rotate := []*types.ExpectedAgent{
+		{Hostname: "host-c", Source: "ignored-set-by-replace"},
+		{Hostname: "host-d", Notes: "d"},
+		nil,                           // nil entries are skipped, not fatal
+		{Hostname: "", Notes: "skip"}, // empty hostname skipped
+	}
+	if err := s.ReplaceExpectedAgentsForSource(ctx, "rotor", rotate); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	rotated, err := s.ListExpectedAgents(ctx, "rotor")
+	if err != nil || len(rotated) != 2 || rotated[0].Hostname != "host-c" || rotated[1].Hostname != "host-d" {
+		t.Fatalf("replace should insert 2 rows tagged 'rotor': err=%v %+v", err, rotated)
+	}
+	// Re-rotate the same source with a smaller set drops the missing hosts.
+	if err := s.ReplaceExpectedAgentsForSource(ctx, "rotor", []*types.ExpectedAgent{{Hostname: "host-c"}}); err != nil {
+		t.Fatalf("re-replace: %v", err)
+	}
+	if rotated, _ = s.ListExpectedAgents(ctx, "rotor"); len(rotated) != 1 || rotated[0].Hostname != "host-c" {
+		t.Fatalf("re-replace should leave only host-c: %+v", rotated)
+	}
+	// Empty source is rejected.
+	if err := s.ReplaceExpectedAgentsForSource(ctx, "", nil); err == nil {
+		t.Fatal("replace with empty source should error")
+	}
+
+	// Delete removes the host; deleting a missing host is a NO-OP (mirrors sqlite).
+	if err := s.DeleteExpectedAgent(ctx, "host-a"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := s.DeleteExpectedAgent(ctx, "host-a"); err != nil {
+		t.Fatalf("delete on missing host should be a no-op, got %v", err)
+	}
+	if err := s.DeleteExpectedAgent(ctx, ""); err == nil {
+		t.Fatal("delete with empty hostname should error")
 	}
 }
 
