@@ -125,6 +125,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		zap.String("version", version),
 		zap.String("config", configPath))
 
+	// HA S1 (HA architecture, ADR ~0035) — resolve the leader-election seam.
+	// The OSS build wires the always-leader elector: this single instance is
+	// the leader for every named singleton, so every background loop below
+	// runs unconditionally, exactly as it did before the seam existed. The
+	// enterprise edition injects a Postgres advisory-lock elector so that,
+	// across a multi-instance deployment sharing a Postgres backend, each
+	// singleton (rollout engine, cost-spike detector, AI proposer bridge,
+	// alert evaluator, silent-agent watcher, discovery scan scheduler, deploy
+	// poller, usage reporter) runs on exactly one instance with failover.
+	// Every singleton below is dispatched through elector.RunSingleton rather
+	// than started unconditionally. See extension/leaderelection and
+	// cmd/all-in-one/wire_leaderelection_*.go. Shutdown is called explicitly
+	// in the shutdown path (below), before the deferred teardown, so managed
+	// singletons drain gracefully before servers and stores close.
+	elector := leaderElector(config, logger)
+
 	// Create application store using meta factory
 	appStoreFactory, err := applicationstore.NewFactoryFromAppConfig(config)
 	if err != nil {
@@ -331,8 +347,14 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 					Rollouts: len(rolloutList),
 				}, nil
 			}, logger)
-		usageReporter.Start()
-		defer usageReporter.Stop()
+		// HA S1: run the usage reporter under the elector so exactly one
+		// instance reports. OSS always-leader runs it here (unchanged); its
+		// Stop drains when the elector relinquishes leadership on shutdown.
+		elector.RunSingleton("usage-reporter", func(ctx context.Context) {
+			usageReporter.Start()
+			<-ctx.Done()
+			usageReporter.Stop()
+		})
 	}
 
 	// Surface the build edition on /metrics so operators can confirm
@@ -862,16 +884,24 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// ADR 0011: stamp system (all-tenant) — the detector sweeps every
 		// tenant's cost spikes. Inert in OSS (the pass-through store ignores
 		// the tenant); the enterprise scoped store reads it as "no predicate".
-		detectorCtx := identity.WithSystemContext(context.Background())
-		go func() {
+		// HA S1: run under the elector so exactly one instance detects.
+		// OSS always-leader runs it here; the loop exits when leadership is
+		// relinquished (elector cancels ctx on shutdown).
+		elector.RunSingleton("cost-spike-detector", func(ctx context.Context) {
+			detectorCtx := identity.WithSystemContext(ctx)
 			t := time.NewTicker(60 * time.Second)
 			defer t.Stop()
-			for range t.C {
-				if err := detector.Tick(detectorCtx); err != nil {
-					logger.Warn("cost-spike detector tick failed", zap.Error(err))
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := detector.Tick(detectorCtx); err != nil {
+						logger.Warn("cost-spike detector tick failed", zap.Error(err))
+					}
 				}
 			}
-		}()
+		})
 		logger.Info("Cost-spike alerting enabled (detector running every 60s)")
 	} else {
 		// Wire the read paths only — the routes still need a store
@@ -1103,14 +1133,21 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		// a webhook receiver so this drops to a sync fallback.
 		// ADR 0011: system (all-tenant) context — the deploy poller
 		// advances every tenant's open runs. Inert in OSS.
-		deploySyncCtx := identity.WithSystemContext(context.Background())
-		go func() {
+		// HA S1: run the deploy poller under the elector (exactly one instance
+		// advances open runs; another instance takes over on failover).
+		elector.RunSingleton("deploy-poller", func(ctx context.Context) {
+			deploySyncCtx := identity.WithSystemContext(ctx)
 			t := time.NewTicker(60 * time.Second)
 			defer t.Stop()
-			for range t.C {
-				_ = deploySvc.SyncOpenRuns(deploySyncCtx)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					_ = deploySvc.SyncOpenRuns(deploySyncCtx)
+				}
 			}
-		}()
+		})
 		logger.Info("Deploy integration enabled (GitHub Actions, polling every 60s)")
 
 		// v0.36.1 GHA history walker. Periodically replays the deploy
@@ -1189,7 +1226,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		}, appStore, logger)
 		// ADR 0011: system (all-tenant) context — the watcher polls every
 		// tenant's agent table for healthy<->silent transitions. Inert in OSS.
-		go watcher.Run(identity.WithSystemContext(context.Background()))
+		// HA S1: run the silent-agent watcher under the elector.
+		elector.RunSingleton("silent-agent-watcher", func(ctx context.Context) {
+			watcher.Run(identity.WithSystemContext(ctx))
+		})
 	} else {
 		logger.Info("Silent-agent watcher disabled (set silent_agents.enabled=true to enable)")
 	}
@@ -1274,9 +1314,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 				// persisted scan / drift row belongs to the owning connection's
 				// tenant. Slice 3a stamps the loop system (inert in OSS).
 				// TODO(ADR 0011 slice 3b): per-write tenant derivation from the owning row.
-				scanSchedCtx, scanSchedCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
-				apiServer.StartDiscoveryScanScheduler(scanSchedCtx, d, driftCooldown)
-				defer scanSchedCancel()
+				// HA S1: run the discovery scan scheduler under the elector.
+				elector.RunSingleton("discovery-scan-scheduler", func(ctx context.Context) {
+					apiServer.StartDiscoveryScanScheduler(identity.WithSystemContext(ctx), d, driftCooldown)
+					<-ctx.Done()
+				})
 				logger.Info("discovery scan scheduler enabled",
 					zap.Duration("interval", d), zap.Duration("drift_cooldown", driftCooldown))
 			} else {
@@ -1592,12 +1634,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// belongs to the owning event's tenant. Slice 3a stamps the loop system
 	// (inert in OSS; correct-enough in enterprise until per-write lands).
 	// TODO(ADR 0011 slice 3b): per-write tenant derivation from the owning row.
-	proposerCtx, proposerCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
-	proposerBridge.Start(proposerCtx)
-	defer func() {
-		proposerCancel()
+	// HA S1: run the AI proposer bridge under the elector.
+	elector.RunSingleton("ai-proposer-bridge", func(ctx context.Context) {
+		proposerBridge.Start(identity.WithSystemContext(ctx))
+		<-ctx.Done()
 		_ = proposerBridge.Stop(5 * time.Second)
-	}()
+	})
 	logger.Info("AI proposer bridge started",
 		zap.Bool("ai_enabled", aiService.Enabled()))
 
@@ -1630,12 +1672,14 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// selftelPub is disabled.
 	alertsTracer := alerts.NewTracer(selftelPub.Tracer("squadron/alerts"))
 	alertEvaluator := alerting.NewEvaluatorWithTracer(alertService, telemetryService, alertMetrics, eventBroker, auditService, alertsTracer, logger)
-	alertEvaluator.Start()
-	defer func() {
+	// HA S1: run the alert evaluator under the elector.
+	elector.RunSingleton("alert-evaluator", func(ctx context.Context) {
+		alertEvaluator.Start()
+		<-ctx.Done()
 		if err := alertEvaluator.Stop(10 * time.Second); err != nil {
 			logger.Error("Failed to stop alert evaluator", zap.Error(err))
 		}
-	}()
+	})
 
 	// Start the rollout engine. Walks active rollouts, advances stages,
 	// and triggers automatic rollback when abort criteria fire. Uses the
@@ -1673,12 +1717,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Info("plan engine action dispatcher wired",
 			zap.String("signer_fingerprint", actionSigner.Fingerprint()))
 	}
-	rolloutEngine.Start()
-	defer func() {
+	// HA S1: run the rollout engine under the elector (exactly one instance
+	// advances rollouts; another instance takes over on failover).
+	elector.RunSingleton("rollout-engine", func(ctx context.Context) {
+		rolloutEngine.Start()
+		<-ctx.Done()
 		if err := rolloutEngine.Stop(10 * time.Second); err != nil {
 			logger.Error("Failed to stop rollout engine", zap.Error(err))
 		}
-	}()
+	})
 
 	// Start background services
 	go startRollupGenerator(telemetryService, config, logger)
@@ -1714,6 +1761,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	<-sigChan
 
 	logger.Info("Shutting down Squadron...")
+	// HA S1: relinquish leadership and drain every elector-managed singleton
+	// (running their graceful Stop calls) BEFORE the deferred teardown closes
+	// servers and stores. Bounded so a wedged singleton cannot hang shutdown.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	elector.Shutdown(shutdownCtx)
+	shutdownCancel()
 	return nil
 }
 
