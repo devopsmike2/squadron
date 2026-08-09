@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Storage {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, audit_events, audit_chain_checkpoints, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents"); err != nil {
+	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, audit_events, audit_chain_checkpoints, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents, api_tokens, recommendation_dismissals, recommendation_outcomes, cost_spike_events, webhook_delivery_dedupe, iac_recommendation_verdicts, incident_drafts, discovery_scans, trace_resource_seen, siem_destinations"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return s
