@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 15
+const SchemaVersion = 16
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -722,6 +722,40 @@ CREATE INDEX IF NOT EXISTS idx_errorrate_observed ON error_rate_observation(obse
 INSERT OR IGNORE INTO schema_version (version) VALUES (15);
 `
 
+// ConnectionRegistrySchema bumps the database to schema v16.
+// HA S3b (ADR 0035, per the S3 design) — adds the connection_registry
+// table that records which Squadron instance currently owns each agent's
+// OpAMP WebSocket.
+//
+//   - agent_id (TEXT PRIMARY KEY) is the Squadron fleet id (agentid.Derive),
+//     the same key store rows + config pushes use. PRIMARY KEY ⇒ exactly one
+//     owner per agent, last-writer-wins on reconnect: an agent whose socket
+//     lands on a new instance overwrites the prior owner's row.
+//   - instance_id (TEXT NOT NULL) is the owning process's stable boot-time id.
+//   - connected_at / last_heartbeat_at (DATETIME NOT NULL) track when the
+//     current owner acquired the socket and last refreshed the row. The
+//     reconcile loop (HA S3a) heartbeats last_heartbeat_at every tick; rows
+//     older than the grace period are reclaimable (an owner that died without
+//     a clean disconnect stops heartbeating).
+//
+// SYSTEM-SCOPED: instance identity is orthogonal to tenant, so this table
+// carries NO tenant_id column (unlike every per-tenant table) and the store
+// methods apply no tenant predicate — callers pass identity.WithSystemContext.
+//
+// idx_connection_registry_heartbeat backs the ReclaimStaleConnectionOwners
+// `last_heartbeat_at < ?` sweep. The chunk is idempotent (CREATE TABLE IF NOT
+// EXISTS + CREATE INDEX IF NOT EXISTS); running it twice is a no-op.
+const ConnectionRegistrySchema = `
+CREATE TABLE IF NOT EXISTS connection_registry (
+    agent_id TEXT PRIMARY KEY,
+    instance_id TEXT NOT NULL,
+    connected_at DATETIME NOT NULL,
+    last_heartbeat_at DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_connection_registry_heartbeat ON connection_registry(last_heartbeat_at);
+INSERT OR IGNORE INTO schema_version (version) VALUES (16);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -739,4 +773,5 @@ var Migrations = []string{
 	EventSourceInstanceSchema,
 	ColdStartObservationSchema,
 	ErrorRateObservationSchema,
+	ConnectionRegistrySchema,
 }

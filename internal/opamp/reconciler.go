@@ -11,6 +11,7 @@ import (
 	"github.com/open-telemetry/opamp-go/protobufs"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -63,20 +64,35 @@ type Reconciler struct {
 	sender   configPusher
 	interval time.Duration
 	logger   *zap.Logger
+
+	// HA S3b (ADR 0035) — connection registry heartbeat seam. Each reconcile
+	// tick, the loop refreshes last_heartbeat_at (upsert) for every agent
+	// connected to THIS instance, so an owning instance that stays alive keeps
+	// its rows fresh and a dead instance's rows go stale (reclaimable). Both
+	// are optional: a nil registry (the default, and every struct-literal test)
+	// skips the heartbeat, so the reconcile loop's delivery behavior is
+	// unchanged. instanceID is this process's stable boot-time id, written as
+	// the owner.
+	registry   connectionRegistry
+	instanceID string
 }
 
 // NewReconciler builds the production reconcile loop, wiring the desired-config
 // resolver to the shared resolveStoredConfig over agentService so the loop and
-// the connect path resolve identically.
-func NewReconciler(agents *Agents, agentService services.AgentService, sender *ConfigSender, interval time.Duration, logger *zap.Logger) *Reconciler {
+// the connect path resolve identically. registry + instanceID wire the HA S3b
+// connection-registry heartbeat (ADR 0035): a nil registry disables the
+// heartbeat, leaving delivery behavior unchanged.
+func NewReconciler(agents *Agents, agentService services.AgentService, sender *ConfigSender, interval time.Duration, registry connectionRegistry, instanceID string, logger *zap.Logger) *Reconciler {
 	return &Reconciler{
 		agents: agents,
 		resolve: func(ctx context.Context, agent *Agent) (string, bool) {
 			return resolveStoredConfig(ctx, agentService, agent)
 		},
-		sender:   sender,
-		interval: interval,
-		logger:   logger,
+		sender:     sender,
+		interval:   interval,
+		registry:   registry,
+		instanceID: instanceID,
+		logger:     logger,
 	}
 }
 
@@ -147,10 +163,37 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) {
 				case <-time.After(jitter):
 				}
 			}
+			// HA S3b (ADR 0035): heartbeat the connection registry for this
+			// agent — this instance owns its socket, so refresh last_heartbeat_at.
+			// Independent of the delivery decision below (ownership is about the
+			// socket, not remote-config capability), so it runs for every
+			// connected agent, not just reconcilable ones.
+			r.heartbeatOwner(ctx, agent)
 			r.reconcileAgent(ctx, agent)
 		}(agent)
 	}
 	wg.Wait()
+}
+
+// heartbeatOwner refreshes this instance's ownership row for the agent in the
+// HA S3b connection registry (ADR 0035), advancing last_heartbeat_at. A nil
+// registry (the default, and every reconciler struct-literal test) is a no-op.
+// SYSTEM-SCOPED: the reconcile loop's context is already system-stamped in
+// main.go, but the write is re-wrapped WithSystemContext defensively so the
+// registry contract holds regardless of the caller's context. Best-effort: a
+// failure is logged, never fatal — the registry is coverage visibility, not on
+// the delivery correctness path.
+func (r *Reconciler) heartbeatOwner(ctx context.Context, agent *Agent) {
+	if r.registry == nil || agent == nil {
+		return
+	}
+	fleetID := agent.storeID()
+	sysCtx := identity.WithSystemContext(ctx)
+	if err := r.registry.UpsertConnectionOwner(sysCtx, fleetID, r.instanceID, time.Now()); err != nil {
+		r.logger.Debug("connection registry heartbeat failed",
+			zap.String("agentId", fleetID.String()),
+			zap.Error(err))
+	}
 }
 
 // reconcileAgent delivers the desired config to a single connected agent when it

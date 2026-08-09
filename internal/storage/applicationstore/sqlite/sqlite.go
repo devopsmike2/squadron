@@ -478,6 +478,22 @@ func (s *Storage) migrate() error {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
+
+		-- Connection registry (HA S3b, ADR 0035). One row per agent recording
+		-- which Squadron instance currently owns that agent's OpAMP WebSocket.
+		-- SYSTEM-SCOPED: instance identity is orthogonal to tenant, so there is
+		-- deliberately NO tenant_id column here (unlike every per-tenant table
+		-- above). agent_id is the Squadron fleet id and the PRIMARY KEY — one
+		-- owner per agent, last-writer-wins on reconnect.
+		-- idx_connection_registry_heartbeat keeps the ReclaimStale
+		-- "last_heartbeat_at < ?" sweep off a full-table scan.
+		CREATE TABLE IF NOT EXISTS connection_registry (
+			agent_id TEXT PRIMARY KEY,
+			instance_id TEXT NOT NULL,
+			connected_at DATETIME NOT NULL,
+			last_heartbeat_at DATETIME NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_connection_registry_heartbeat ON connection_registry(last_heartbeat_at);
 	`
 
 	if _, err := s.db.Exec(createTables); err != nil {
