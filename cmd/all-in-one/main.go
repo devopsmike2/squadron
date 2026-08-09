@@ -493,6 +493,30 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		_ = opampServer.Stop(ctx)
 	}()
 
+	// HA S3a (ADR 0035) — per-instance OpAMP reconcile loop. Started alongside
+	// the OpAMP server and, unlike the singletons above, run on EVERY instance
+	// (NOT under the elector): it reconciles ONLY the agents whose WebSocket
+	// landed on THIS instance toward their durable desired config, so whichever
+	// instance owns an agent's socket delivers its config. That closes the HA
+	// config-push gap where a leader-driven push returns "agent not found" for an
+	// agent connected to a different instance. Delivery-scoped: it pushes on the
+	// DELIVERED signal (LastRemoteConfigHash), never on effective-config drift —
+	// drift is surfaced, not auto-healed. Single-instance/SQLite: a steady-state
+	// no-op (connect + rollout already deliver; calcRemoteConfig idempotency
+	// yields zero wire sends for already-delivered agents). Its context is
+	// system-stamped (all-tenant; inert in OSS) and cancelled on shutdown BEFORE
+	// the deferred opampServer.Stop above (LIFO) so the loop drains first.
+	if reconcileEnabled, reconcileInterval := config.HA.ReconcileSettings(); reconcileEnabled {
+		reconciler := opamp.NewReconciler(agents, agentService, configSender, reconcileInterval, logger)
+		reconcileCtx, reconcileCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
+		defer reconcileCancel()
+		go reconciler.Start(reconcileCtx)
+		logger.Info("OpAMP reconcile loop enabled (per-instance desired-config delivery)",
+			zap.Duration("interval", reconcileInterval))
+	} else {
+		logger.Info("OpAMP reconcile loop disabled (ha.reconcile_enabled=false)")
+	}
+
 	// Initialize OTLP receivers. Ports come from the OTLP config so
 	// operators can shift them when 4317/4318 conflict with a Docker
 	// host port mapping or another collector on the box.

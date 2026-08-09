@@ -38,6 +38,47 @@ type Config struct {
 	TraceIndex TraceIndexConfig `yaml:"trace_index,omitempty"`
 
 	Ingest IngestConfig `yaml:"ingest,omitempty"`
+
+	HA HAConfig `yaml:"ha,omitempty"`
+}
+
+// HAConfig groups the high-availability tuning knobs (ADR 0035). Today it
+// carries the per-instance OpAMP reconcile loop's settings (HA S3a); it is the
+// natural home for future HA knobs.
+type HAConfig struct {
+	// ReconcileEnabled toggles the per-instance OpAMP reconcile loop, which
+	// reconciles the agents connected to THIS instance toward their durable
+	// desired config so whichever instance owns an agent's socket delivers its
+	// config. A pointer so an unset field means "use the default" (ENABLED); an
+	// operator opts out with `reconcile_enabled: false`. Enabled by default
+	// because in a single-instance/SQLite deployment the loop is a steady-state
+	// no-op (the connect path and rollout push already deliver desired config,
+	// and calcRemoteConfig idempotency makes already-delivered agents produce
+	// zero wire sends), while in a multi-instance deployment it is the delivery
+	// backstop that makes a non-leader-owned agent get its config.
+	ReconcileEnabled *bool `yaml:"reconcile_enabled,omitempty"`
+
+	// ReconcileInterval is the reconcile tick period. Empty or unparseable =>
+	// defaultReconcileInterval (30s).
+	ReconcileInterval string `yaml:"reconcile_interval,omitempty"`
+}
+
+// defaultReconcileInterval is the reconcile-loop tick period when unset.
+const defaultReconcileInterval = 30 * time.Second
+
+// ReconcileSettings resolves the effective reconcile-loop settings, applying
+// defaults for unset fields: enabled unless the operator explicitly set
+// reconcile_enabled: false, and a 30s interval when reconcile_interval is unset
+// or does not parse to a positive duration. Pure over HAConfig for testability.
+func (h HAConfig) ReconcileSettings() (enabled bool, interval time.Duration) {
+	enabled = h.ReconcileEnabled == nil || *h.ReconcileEnabled
+	interval = defaultReconcileInterval
+	if h.ReconcileInterval != "" {
+		if d, err := time.ParseDuration(h.ReconcileInterval); err == nil && d > 0 {
+			interval = d
+		}
+	}
+	return enabled, interval
 }
 
 // IngestConfig groups the operator-facing tuning for the ingest paths.
