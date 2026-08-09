@@ -178,6 +178,105 @@ CREATE TABLE IF NOT EXISTS rollout_approvals (
     approved_at       TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (rollout_id, approver)
 );
+
+-- ADR 0033, slice 4 — saved queries. CRUD-only entity mirroring the sqlite
+-- backend. tags is JSONB (structured, never hashed). As with agents/rollouts,
+-- OSS tenant scoping is intentionally omitted (types.SavedQuery carries no
+-- tenant field); OSS is single-tenant. description NOT NULL DEFAULT '' so an
+-- empty Go string round-trips to "" (not NULL), matching the sqlite roundtrip.
+CREATE TABLE IF NOT EXISTS saved_queries (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    query       TEXT NOT NULL,
+    tags        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_saved_queries_updated_at ON saved_queries(updated_at);
+
+-- ADR 0033, slice 4 — alert rules. CRUD-only entity mirroring the sqlite
+-- backend. enabled is a native BOOLEAN (sqlite stored 0/1); threshold_value is
+-- DOUBLE PRECISION (float64). The sqlite backend enforces a per-tenant
+-- UNIQUE(tenant_id, name); the OSS single-tenant port keeps the equivalent
+-- UNIQUE(name). As with saved queries, OSS tenant scoping is omitted
+-- (types.AlertRule carries no tenant field). description / webhook_url are
+-- NOT NULL DEFAULT '' so empty Go strings round-trip to "".
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id                 TEXT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    description        TEXT NOT NULL DEFAULT '',
+    query              TEXT NOT NULL,
+    threshold_operator TEXT NOT NULL,
+    threshold_value    DOUBLE PRECISION NOT NULL,
+    interval_seconds   INTEGER NOT NULL,
+    severity           TEXT NOT NULL,
+    enabled            BOOLEAN NOT NULL DEFAULT TRUE,
+    webhook_url        TEXT NOT NULL DEFAULT '',
+    created_at         TIMESTAMPTZ NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL,
+    UNIQUE (name)
+);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+
+-- ADR 0027 / ADR 0033 slice 4 — per-tenant tamper-evident audit hash-chain.
+-- HIGH-STAKES: the chain hash (internal/audit/chain) covers the immutable
+-- content columns + tenant_id + seq, chained via prev_hash. This port MUST
+-- persist/return exactly what that shared package consumes so append + verify
+-- behave BYTE-IDENTICALLY to the sqlite backend.
+--
+--   * seq        — per-tenant monotonic ordering key the chain walk relies on
+--                  (BIGINT = int64). Nullable to mirror sqlite's post-hoc
+--                  ALTER (pre-chain rows carry NULL; the walk skips seq NULL).
+--   * prev_hash  — links to the prior row's row_hash.
+--   * row_hash   — the stored SHA-256 chain hash, re-derived on verify.
+--   * payload    — stored as TEXT, NOT JSONB, ON PURPOSE: the chain hashes the
+--                  RAW payload string byte-for-byte. JSONB would re-serialize
+--                  it (key reorder / whitespace normalization) and the read-back
+--                  would no longer match what was hashed, silently breaking the
+--                  chain. TEXT preserves the exact bytes the append path hashed.
+CREATE TABLE IF NOT EXISTS audit_events (
+    id                          TEXT PRIMARY KEY,
+    timestamp                   TIMESTAMPTZ NOT NULL,
+    actor                       TEXT NOT NULL,
+    event_type                  TEXT NOT NULL,
+    target_type                 TEXT NOT NULL,
+    target_id                   TEXT,
+    payload                     TEXT,
+    tenant_id                   TEXT NOT NULL DEFAULT 'default',
+    created_at                  TIMESTAMPTZ NOT NULL,
+    action                      TEXT NOT NULL,
+    seq                         BIGINT,
+    prev_hash                   TEXT,
+    row_hash                    TEXT,
+    ai_explanation              TEXT,
+    ai_explanation_model        TEXT,
+    ai_explanation_generated_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_event_type ON audit_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
+-- The ordering key the chain walk seeks: (tenant_id, seq).
+CREATE INDEX IF NOT EXISTS idx_audit_events_chain ON audit_events(tenant_id, seq);
+
+-- ADR 0027 slice 2 — retention/chain reconciliation checkpoints. Each prune
+-- records the pruned head (checkpoint_seq + checkpoint_row_hash) so
+-- VerifyAuditChain can positively anchor the first surviving row. sealed_sig is
+-- nullable + unused in OSS (enterprise fills it later). Keyed by
+-- (tenant_id, checkpoint_seq), mirroring sqlite exactly.
+CREATE TABLE IF NOT EXISTS audit_chain_checkpoints (
+    tenant_id           TEXT        NOT NULL,
+    checkpoint_seq      BIGINT      NOT NULL,
+    checkpoint_row_hash TEXT        NOT NULL,
+    rows_pruned         BIGINT      NOT NULL,
+    kind                TEXT        NOT NULL DEFAULT 'retention-cut',
+    created_at          TIMESTAMPTZ NOT NULL,
+    sealed_sig          TEXT,
+    PRIMARY KEY (tenant_id, checkpoint_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_checkpoints_tenant ON audit_chain_checkpoints(tenant_id, checkpoint_seq DESC);
 `
 
 func (s *Storage) initSchema(ctx context.Context) error {
