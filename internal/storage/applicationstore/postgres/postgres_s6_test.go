@@ -437,7 +437,7 @@ func TestPostgres_DiscoveryScans(t *testing.T) {
 
 	rec := &types.ScanRecord{
 		ScanID: "scan-1", Provider: "aws", ScopeID: "acct-1",
-		Regions: []string{"us-east-1", "us-west-2"},
+		Regions:   []string{"us-east-1", "us-west-2"},
 		StartedAt: now, CompletedAt: now.Add(time.Minute),
 		Partial: true, PartialReason: "throttled",
 		Summary:    map[string]int{"ec2": 5, "rds": 2},
