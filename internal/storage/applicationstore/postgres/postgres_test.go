@@ -5,6 +5,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func testStore(t *testing.T) *Storage {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.db.Exec("TRUNCATE groups, agents, configs"); err != nil {
+	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return s
@@ -301,6 +302,233 @@ func TestPostgres_ConfigCRUD(t *testing.T) {
 	limited, err := s.ListConfigs(ctx, types.ConfigFilter{Limit: 1})
 	if err != nil || len(limited) != 1 || limited[0].ID != "cg" {
 		t.Fatalf("list limit=1: err=%v got=%v", err, limited)
+	}
+}
+
+func TestPostgres_RolloutCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	failOpen := false
+	// AbortCriteria carries an ADR 0034 SLOBurn criterion to prove the whole
+	// nested struct round-trips through JSONB.
+	r := &types.Rollout{
+		ID:               "r1",
+		Name:             "prod-canary",
+		GroupID:          "g1",
+		TargetConfigID:   "cfg-target",
+		PreviousConfigID: "cfg-prev",
+		Stages: []types.RolloutStage{
+			{Mode: types.RolloutStageModePercent, Percentage: 10, DwellSeconds: 300},
+			{Mode: types.RolloutStageModePercent, Percentage: 100, DwellSeconds: 600},
+		},
+		AbortCriteria: types.RolloutAbortCriteria{
+			MaxDriftedAgents:      2,
+			MaxErrorLogsPerMinute: 50,
+			SLOBurn: &types.RolloutSLOBurnCriterion{
+				ConnectorID: "prom-1",
+				Signal:      "metrics",
+				Selector:    "http_request_errors",
+				Matchers: []types.RolloutSLOMatcher{
+					{Label: "service", Op: "=", Value: "checkout"},
+				},
+				Aggregation:   "rate",
+				WindowSeconds: 300,
+				Threshold:     0.05,
+				FailOpen:      &failOpen,
+			},
+		},
+		NotificationURL:   "https://hooks.example/notify",
+		State:             types.RolloutStatePendingApproval,
+		CurrentStage:      0,
+		RequireApproval:   true,
+		RequestedBy:       "alice",
+		RequiredApprovals: 2,
+		ProposedBy:        types.RolloutProposedByAI,
+		ProposalReasoning: "error budget trending down",
+		EvidenceRefs:      []types.RolloutEvidenceRef{{Kind: "alert", ID: "a-42"}},
+		PlanID:            "plan-1",
+		PlanStepIndex:     0,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := s.CreateRollout(ctx, r); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetRollout(ctx, "r1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	if got.Name != "prod-canary" || got.GroupID != "g1" || got.TargetConfigID != "cfg-target" ||
+		got.PreviousConfigID != "cfg-prev" || got.State != types.RolloutStatePendingApproval ||
+		got.RequiredApprovals != 2 || !got.RequireApproval || got.RequestedBy != "alice" ||
+		got.ProposedBy != types.RolloutProposedByAI || got.NotificationURL != "https://hooks.example/notify" ||
+		len(got.Stages) != 2 || got.Stages[0].Percentage != 10 || len(got.EvidenceRefs) != 1 ||
+		got.PlanID != "plan-1" {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+	// StepKind defaults to the "rollout" sentinel on an empty/NULL column.
+	if got.StepKind != types.StepKindRollout {
+		t.Fatalf("step_kind should default to %q, got %q", types.StepKindRollout, got.StepKind)
+	}
+	// SLOBurn criterion must survive the JSONB round-trip in full.
+	sb := got.AbortCriteria.SLOBurn
+	if sb == nil {
+		t.Fatalf("SLOBurn criterion did not round-trip: %+v", got.AbortCriteria)
+	}
+	if sb.ConnectorID != "prom-1" || sb.Signal != "metrics" || sb.Selector != "http_request_errors" ||
+		sb.Aggregation != "rate" || sb.WindowSeconds != 300 || sb.Threshold != 0.05 ||
+		len(sb.Matchers) != 1 || sb.Matchers[0].Label != "service" || sb.Matchers[0].Value != "checkout" ||
+		sb.FailOpen == nil || *sb.FailOpen != false {
+		t.Fatalf("SLOBurn round-trip mismatch: %+v", sb)
+	}
+	if got.AbortCriteria.MaxDriftedAgents != 2 || got.AbortCriteria.MaxErrorLogsPerMinute != 50 {
+		t.Fatalf("abort criteria scalars mismatch: %+v", got.AbortCriteria)
+	}
+
+	// Missing row must be (nil, nil), matching the sqlite backend.
+	if miss, err := s.GetRollout(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// A second rollout, newer, to exercise list ordering + filters.
+	r2 := &types.Rollout{
+		ID:             "r2",
+		Name:           "prod-canary-2",
+		GroupID:        "g2",
+		TargetConfigID: "cfg-target-2",
+		Stages:         []types.RolloutStage{{Mode: types.RolloutStageModePercent, Percentage: 100, DwellSeconds: 60}},
+		AbortCriteria:  types.RolloutAbortCriteria{MaxDriftedAgents: 1},
+		State:          types.RolloutStateInProgress,
+		PlanID:         "plan-2",
+		CreatedAt:      now.Add(time.Second),
+		UpdatedAt:      now.Add(time.Second),
+	}
+	if err := s.CreateRollout(ctx, r2); err != nil {
+		t.Fatalf("create r2: %v", err)
+	}
+	// Empty SLOBurn / evidence must round-trip to nil, not an empty struct.
+	if g2, _ := s.GetRollout(ctx, "r2"); g2 == nil || g2.AbortCriteria.SLOBurn != nil || len(g2.EvidenceRefs) != 0 {
+		t.Fatalf("empty optionals should round-trip to nil: %+v", g2)
+	}
+
+	// Update persists (blind path: Version==0).
+	r.State = types.RolloutStateInProgress
+	r.CurrentStage = 1
+	stageStarted := now.Add(2 * time.Second)
+	r.StageStartedAt = &stageStarted
+	r.PushedAgentIDs = []string{"agent-a", "agent-b"}
+	if err := s.UpdateRollout(ctx, r); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got, _ = s.GetRollout(ctx, "r1")
+	if got.State != types.RolloutStateInProgress || got.CurrentStage != 1 ||
+		got.StageStartedAt == nil || len(got.PushedAgentIDs) != 2 {
+		t.Fatalf("update didn't persist: %+v", got)
+	}
+	// The blind path still advances the version counter (1 → 2).
+	if got.Version != 2 {
+		t.Fatalf("version should advance to 2 after blind update, got %d", got.Version)
+	}
+
+	// CAS update with the loaded version succeeds and bumps version.
+	got.AbortReason = "manual"
+	if err := s.UpdateRollout(ctx, got); err != nil {
+		t.Fatalf("CAS update: %v", err)
+	}
+	if got.Version != 3 {
+		t.Fatalf("CAS update should bump version to 3, got %d", got.Version)
+	}
+	// A stale-version CAS update must return ErrRolloutVersionConflict.
+	stale := *got
+	stale.Version = 2
+	if err := s.UpdateRollout(ctx, &stale); !errors.Is(err, types.ErrRolloutVersionConflict) {
+		t.Fatalf("stale CAS should return ErrRolloutVersionConflict, got %v", err)
+	}
+
+	// Update / delete-missing semantics: a missing id is "not found" on both the
+	// blind and CAS paths.
+	missing := &types.Rollout{ID: "ghost", GroupID: "g", TargetConfigID: "c", State: types.RolloutStatePending}
+	if err := s.UpdateRollout(ctx, missing); err == nil {
+		t.Fatal("update on missing rollout should error (blind path)")
+	}
+	missing.Version = 5
+	if err := s.UpdateRollout(ctx, missing); err == nil || errors.Is(err, types.ErrRolloutVersionConflict) {
+		t.Fatalf("update on missing rollout (CAS path) should be not-found, got %v", err)
+	}
+
+	// List ordering is created_at DESC (r2 newer than r1).
+	all, err := s.ListRollouts(ctx, types.RolloutFilter{})
+	if err != nil || len(all) != 2 {
+		t.Fatalf("list all: err=%v len=%d", err, len(all))
+	}
+	if all[0].ID != "r2" || all[1].ID != "r1" {
+		t.Fatalf("list order should be created_at DESC: %s,%s", all[0].ID, all[1].ID)
+	}
+	// Filter by group.
+	byGroup, err := s.ListRollouts(ctx, types.RolloutFilter{GroupID: "g1"})
+	if err != nil || len(byGroup) != 1 || byGroup[0].ID != "r1" {
+		t.Fatalf("list by group: err=%v got=%v", err, byGroup)
+	}
+	// Filter by state.
+	byState, err := s.ListRollouts(ctx, types.RolloutFilter{State: types.RolloutStateInProgress})
+	if err != nil || len(byState) != 2 {
+		t.Fatalf("list by state: err=%v len=%d", err, len(byState))
+	}
+	// Filter by plan id.
+	byPlan, err := s.ListRollouts(ctx, types.RolloutFilter{PlanID: "plan-2"})
+	if err != nil || len(byPlan) != 1 || byPlan[0].ID != "r2" {
+		t.Fatalf("list by plan: err=%v got=%v", err, byPlan)
+	}
+	// Limit is honored.
+	limited, err := s.ListRollouts(ctx, types.RolloutFilter{Limit: 1})
+	if err != nil || len(limited) != 1 || limited[0].ID != "r2" {
+		t.Fatalf("list limit=1: err=%v got=%v", err, limited)
+	}
+}
+
+func TestPostgres_RolloutApprovals(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	rid := "r-appr"
+	// No approvers yet.
+	if n, err := s.CountRolloutApprovers(ctx, rid); err != nil || n != 0 {
+		t.Fatalf("count on empty should be 0: n=%d err=%v", n, err)
+	}
+	if list, err := s.ListRolloutApprovers(ctx, rid); err != nil || len(list) != 0 {
+		t.Fatalf("list on empty should be []: len=%d err=%v", len(list), err)
+	}
+
+	if err := s.RecordRolloutApproval(ctx, rid, "alice", "tok-a", "lgtm", now); err != nil {
+		t.Fatalf("record alice: %v", err)
+	}
+	if err := s.RecordRolloutApproval(ctx, rid, "bob", "tok-b", "", now.Add(time.Second)); err != nil {
+		t.Fatalf("record bob: %v", err)
+	}
+	// Idempotent: alice approving again does not double-count (ON CONFLICT).
+	if err := s.RecordRolloutApproval(ctx, rid, "alice", "tok-a", "again", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("record alice again: %v", err)
+	}
+
+	n, err := s.CountRolloutApprovers(ctx, rid)
+	if err != nil || n != 2 {
+		t.Fatalf("distinct count should be 2: n=%d err=%v", n, err)
+	}
+
+	// List is oldest-first with token/notes round-tripped.
+	list, err := s.ListRolloutApprovers(ctx, rid)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: err=%v len=%d", err, len(list))
+	}
+	if list[0].Approver != "alice" || list[0].ApproverTokenID != "tok-a" || list[0].Notes != "lgtm" {
+		t.Fatalf("first approver mismatch: %+v", list[0])
+	}
+	if list[1].Approver != "bob" || list[1].Notes != "" {
+		t.Fatalf("second approver mismatch: %+v", list[1])
 	}
 }
 
