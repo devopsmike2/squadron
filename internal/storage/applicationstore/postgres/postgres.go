@@ -35,6 +35,13 @@ type Storage struct {
 	db *sql.DB
 }
 
+// Compile-time proof that the Postgres backend satisfies the FULL
+// types.ApplicationStore interface (ADR 0033 slice 6). This assertion is the
+// completeness gate: if any interface method is unimplemented the package fails
+// to build. It does NOT wire the backend into the store factory / AllStorageTypes
+// — that (plus the SQLite→Postgres migration guide) is a separate next slice.
+var _ types.ApplicationStore = (*Storage)(nil)
+
 // Open connects to Postgres via the pgx stdlib driver, verifies the connection,
 // and applies the schema. dsn is a standard Postgres connection string, e.g.
 // "postgres://user:pass@host:5432/squadron?sslmode=require".
@@ -385,6 +392,210 @@ CREATE TABLE IF NOT EXISTS expected_agents (
     notes          TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_expected_agents_source ON expected_agents(source);
+
+-- ============================================================================
+-- ADR 0033, slice 6 — remaining entity ports. Semantics mirror the sqlite
+-- backend EXACTLY; see the per-entity Go files for the method-level contracts.
+-- OSS is single-tenant: as with the earlier ports, tenant scoping is omitted for
+-- entities whose types carry no tenant field (a later consolidated pass adds the
+-- columns). api_tokens is the one exception — types.APIToken carries TenantID,
+-- read back by Get/List — so it persists tenant_id (default 'default') without a
+-- scoping predicate, mirroring the deploy_targets port. The discovery-verdict
+-- reads run against the already-tenant-scoped audit_events table.
+-- ============================================================================
+
+-- API tokens (bearer auth). hash is the sha256 hex digest (UNIQUE). scopes is a
+-- JSON-array string persisted VERBATIM as TEXT ('[]' = legacy full-access) so the
+-- empty-array sentinel round-trips exactly as the sqlite backend stores it; the
+-- service layer parses it. connection_id is omitted (enterprise-only; never read
+-- or written by any ApplicationStore method in OSS).
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           TEXT PRIMARY KEY,
+    label        TEXT NOT NULL,
+    hash         TEXT NOT NULL UNIQUE,
+    scopes       TEXT NOT NULL DEFAULT '[]',
+    created_at   TIMESTAMPTZ NOT NULL,
+    last_used_at TIMESTAMPTZ,
+    revoked_at   TIMESTAMPTZ,
+    expires_at   TIMESTAMPTZ,
+    tenant_id    TEXT NOT NULL DEFAULT 'default'
+);
+
+-- Recommendation dismissals (v0.25). recommendation_id is the engine's
+-- deterministic hash; DismissRecommendation upserts on it, RestoreRecommendation
+-- is a plain DELETE. reason is stored as TEXT (empty string, not NULL, matching
+-- the sqlite insert of d.Reason); the list COALESCEs it defensively.
+CREATE TABLE IF NOT EXISTS recommendation_dismissals (
+    recommendation_id TEXT PRIMARY KEY,
+    dismissed_at      TIMESTAMPTZ NOT NULL,
+    dismissed_by      TEXT NOT NULL DEFAULT 'system',
+    reason            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rec_dismissals_dismissed_at ON recommendation_dismissals(dismissed_at);
+
+-- Recommendation outcomes (v0.28 retrospective savings). Frozen snapshot columns
+-- + running observation columns; only the observation columns mutate on update.
+-- byte-rate columns are BIGINT (int64); USD columns are DOUBLE PRECISION.
+CREATE TABLE IF NOT EXISTS recommendation_outcomes (
+    id                                 TEXT PRIMARY KEY,
+    recommendation_id                  TEXT NOT NULL,
+    applied_at                         TIMESTAMPTZ NOT NULL,
+    applied_by                         TEXT NOT NULL DEFAULT 'system',
+    title                              TEXT NOT NULL,
+    category                           TEXT NOT NULL,
+    signal                             TEXT NOT NULL DEFAULT '',
+    attribute_key                      TEXT NOT NULL DEFAULT '',
+    baseline_bytes_per_hour            BIGINT NOT NULL DEFAULT 0,
+    est_savings_per_month_usd_at_apply DOUBLE PRECISION NOT NULL DEFAULT 0,
+    last_observed_bytes_per_hour       BIGINT NOT NULL DEFAULT 0,
+    last_observed_at                   TIMESTAMPTZ,
+    realized_savings_per_month_usd     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    status                             TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE INDEX IF NOT EXISTS idx_rec_outcomes_applied_at ON recommendation_outcomes(applied_at);
+CREATE INDEX IF NOT EXISTS idx_rec_outcomes_status ON recommendation_outcomes(status);
+
+-- Cost-spike events (v0.29). One row per detected anomaly; open spikes have
+-- ended_at IS NULL. attribution_json is a freeform TEXT blob captured at fire
+-- time. USD/pct columns are DOUBLE PRECISION.
+CREATE TABLE IF NOT EXISTS cost_spike_events (
+    id                      TEXT PRIMARY KEY,
+    started_at              TIMESTAMPTZ NOT NULL,
+    ended_at                TIMESTAMPTZ,
+    severity                TEXT NOT NULL DEFAULT 'warn',
+    signal                  TEXT NOT NULL DEFAULT '',
+    baseline_monthly_usd    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    peak_monthly_usd        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    peak_pct_above_baseline DOUBLE PRECISION NOT NULL DEFAULT 0,
+    attribution_json        TEXT NOT NULL DEFAULT '',
+    acknowledged_at         TIMESTAMPTZ,
+    acknowledged_by         TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_cost_spikes_started_at ON cost_spike_events(started_at);
+CREATE INDEX IF NOT EXISTS idx_cost_spikes_open ON cost_spike_events(ended_at) WHERE ended_at IS NULL;
+
+-- Webhook delivery dedupe (v0.89.30, #649). delivery_id is the X-GitHub-Delivery
+-- UUID (PK); received_at defaults to now() so the DB stamps the first-seen time,
+-- which RecordWebhookDelivery reads back on both the fresh and replay paths. This
+-- table is GLOBAL (no tenant column) — mirrors the sqlite schema.
+CREATE TABLE IF NOT EXISTS webhook_delivery_dedupe (
+    delivery_id TEXT PRIMARY KEY,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_delivery_dedupe_received_at ON webhook_delivery_dedupe(received_at);
+
+-- IaC recommendation verdicts (v0.89.37 chunk 4 + v0.89.42 chunk 1). Carries the
+-- operator-set exclusion flag AND the durable GitHub Checks-API check-run state
+-- on ONE row keyed by recommendation_id. exclude_from_learning is a native
+-- BOOLEAN (sqlite stored 0/1); resource_id + the check_run_* columns are nullable
+-- (NULL = "no check run on this row yet", distinct from an empty-string write).
+-- check_run_id is BIGINT (the int64 GitHub assigns).
+CREATE TABLE IF NOT EXISTS iac_recommendation_verdicts (
+    recommendation_id     TEXT PRIMARY KEY,
+    connection_id         TEXT NOT NULL,
+    account_id            TEXT NOT NULL,
+    region                TEXT NOT NULL,
+    recommendation_kind   TEXT NOT NULL,
+    resource_id           TEXT,
+    exclude_from_learning BOOLEAN NOT NULL DEFAULT FALSE,
+    excluded_at           TIMESTAMPTZ,
+    excluded_by           TEXT,
+    check_run_owner       TEXT,
+    check_run_repo        TEXT,
+    check_run_id          BIGINT,
+    check_run_head_sha    TEXT,
+    check_run_status      TEXT,
+    check_run_conclusion  TEXT,
+    check_run_updated_at  TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL,
+    updated_at            TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_iac_rec_verdicts_scope
+    ON iac_recommendation_verdicts(connection_id, account_id, region, exclude_from_learning);
+
+-- Incident drafts (SQ-3). One draft per action by default; the bridge dedups on
+-- action_request_id. Optional string fields are nullable so they round-trip to ""
+-- via nullString on write + COALESCE-free NullString scan on read.
+CREATE TABLE IF NOT EXISTS incident_drafts (
+    id                 TEXT PRIMARY KEY,
+    action_request_id  TEXT,
+    rollout_id         TEXT,
+    status             TEXT NOT NULL,
+    title              TEXT NOT NULL,
+    body_markdown      TEXT NOT NULL,
+    draft_content_json TEXT,
+    provider           TEXT,
+    external_id        TEXT,
+    external_url       TEXT,
+    created_at         TIMESTAMPTZ NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_incident_drafts_action ON incident_drafts(action_request_id);
+CREATE INDEX IF NOT EXISTS idx_incident_drafts_rollout ON incident_drafts(rollout_id);
+CREATE INDEX IF NOT EXISTS idx_incident_drafts_status ON incident_drafts(status);
+
+-- Discovery scans (v0.89.250). One row per completed scan. regions + summary are
+-- structured → JSONB; result_json is the full marshaled inventory, an opaque
+-- string returned VERBATIM (TEXT), omitted from list responses. partial is a
+-- native BOOLEAN.
+CREATE TABLE IF NOT EXISTS discovery_scans (
+    scan_id        TEXT PRIMARY KEY,
+    provider       TEXT NOT NULL,
+    scope_id       TEXT NOT NULL,
+    regions        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    started_at     TIMESTAMPTZ NOT NULL,
+    completed_at   TIMESTAMPTZ NOT NULL,
+    partial        BOOLEAN NOT NULL DEFAULT FALSE,
+    partial_reason TEXT,
+    summary        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    result_json    TEXT,
+    created_at     TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_discovery_scans_scope ON discovery_scans(provider, scope_id, started_at DESC);
+
+-- Trace resource index (v0.89.74). One row per resource the OTLP receiver has
+-- seen emit spans recently, keyed by the fallback-chain resource_key. span_count
+-- columns are BIGINT rolling counters accumulated across the flush cadence via the
+-- upsert; attributes_json carries RESOURCE attributes only (per the design doc's
+-- no-span-content guarantee), stored VERBATIM as TEXT. Nullable optionals
+-- (scope_id, resource_id_hint, service_name, attributes_json) round-trip via
+-- COALESCE on read.
+CREATE TABLE IF NOT EXISTS trace_resource_seen (
+    resource_key        TEXT PRIMARY KEY,
+    provider            TEXT NOT NULL,
+    scope_id            TEXT,
+    resource_id_hint    TEXT,
+    service_name        TEXT,
+    first_seen_at       TIMESTAMPTZ NOT NULL,
+    last_seen_at        TIMESTAMPTZ NOT NULL,
+    span_count_24h      BIGINT NOT NULL,
+    root_span_count_24h BIGINT NOT NULL,
+    attributes_json     TEXT,
+    match_confidence    TEXT NOT NULL,
+    updated_at          TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_provider_scope ON trace_resource_seen(provider, scope_id);
+CREATE INDEX IF NOT EXISTS idx_trace_resource_seen_last_seen ON trace_resource_seen(last_seen_at);
+
+-- SIEM destinations (v0.50 audit export). secret is the encrypted-at-rest
+-- credential (BYTEA), never returned in plaintext to the API layer. enabled is a
+-- native BOOLEAN. Operational status columns (last_event_sent_at / last_error /
+-- last_error_at) are written by the narrow UpdateSiemDestinationStatus path.
+CREATE TABLE IF NOT EXISTS siem_destinations (
+    id                       TEXT PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    type                     TEXT NOT NULL,
+    url                      TEXT NOT NULL,
+    secret                   BYTEA,
+    enabled                  BOOLEAN NOT NULL DEFAULT TRUE,
+    event_type_prefixes_json TEXT NOT NULL DEFAULT '[]',
+    last_event_sent_at       TIMESTAMPTZ,
+    last_error               TEXT,
+    last_error_at            TIMESTAMPTZ,
+    created_at               TIMESTAMPTZ NOT NULL,
+    updated_at               TIMESTAMPTZ NOT NULL
+);
 `
 
 func (s *Storage) initSchema(ctx context.Context) error {
