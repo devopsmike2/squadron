@@ -596,6 +596,22 @@ CREATE TABLE IF NOT EXISTS siem_destinations (
     created_at               TIMESTAMPTZ NOT NULL,
     updated_at               TIMESTAMPTZ NOT NULL
 );
+
+-- Connection registry (HA S3b, ADR 0035). One row per agent recording which
+-- Squadron instance currently owns that agent's OpAMP WebSocket. Semantics
+-- mirror the sqlite backend EXACTLY. This table is SYSTEM-SCOPED: instance
+-- identity is orthogonal to tenant, so it carries NO tenant_id column (unlike
+-- the per-tenant tables) and the store methods apply no tenant predicate.
+-- agent_id is the Squadron fleet id and the PRIMARY KEY — one owner per agent,
+-- last-writer-wins on reconnect. idx_connection_registry_heartbeat backs the
+-- ReclaimStale "last_heartbeat_at < $1" sweep.
+CREATE TABLE IF NOT EXISTS connection_registry (
+    agent_id          TEXT PRIMARY KEY,
+    instance_id       TEXT NOT NULL,
+    connected_at      TIMESTAMPTZ NOT NULL,
+    last_heartbeat_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_connection_registry_heartbeat ON connection_registry(last_heartbeat_at);
 `
 
 func (s *Storage) initSchema(ctx context.Context) error {
