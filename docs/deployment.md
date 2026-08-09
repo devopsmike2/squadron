@@ -409,17 +409,24 @@ separately via a LoadBalancer service.
 ### Postgres for HA
 
 For high availability and fleets past 500 collectors, swap SQLite for
-Postgres in the config:
+Postgres in the config (ADR 0033 — an OSS-selectable backend):
 
 ```yaml
 storage:
-  postgres_dsn: postgres://squadron:secret@postgres:5432/squadron
+  app:
+    type: postgres
+    dsn: postgres://squadron:secret@postgres:5432/squadron?sslmode=require
 ```
 
 With Postgres backing storage, you can run two or more Squadron
 replicas behind the Service for active/active load balancing. The OpAMP
 connections stick to whichever replica accepted them; everything else
 is stateless.
+
+Migrating an existing SQLite instance? See
+[SQLite → Postgres migration](./sqlite-to-postgres-migration.md) for the
+ordered cutover steps, RDS sizing, the audit-chain-preservation rule, and
+rollback.
 
 ## OpenShift
 

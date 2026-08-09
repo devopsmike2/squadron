@@ -30,7 +30,8 @@ on top.
 - Alerts, audit log, incident drafting, demo mode.
 
 **Operate**
-- Single instance, embedded store, Bearer-token auth + scopes.
+- Single instance; embedded SQLite store (or opt-in external Postgres / Aurora,
+  `storage.app.type: postgres`, ADR 0033); Bearer-token auth + scopes.
 
 ## Planned for the commercial tier (depth, scale, governance, support)
 
@@ -40,8 +41,11 @@ on top.
   what AI may propose.
 - **Compliance**: long-term + tamper-evident audit retention, SOC 2 evidence
   exports, access reviews.
-- **Scale & HA**: clustered control plane, Postgres / managed store backends,
-  10k+ agent fleets, multi-region.
+- **Scale & HA**: the org-scale *operability* layer — clustered / multi-replica
+  control plane (leader election, failover routing, connection-pool tuning),
+  10k+ agent fleets, multi-region. (The Postgres / Aurora store **backend
+  itself is OSS** — `storage.app.type: postgres`, ADR 0033; Enterprise adds the
+  HA operability around it, per the ADR 0001 open-core boundary.)
 - **Advanced detection**: signals that require paid telemetry layers (AWS Lambda
   Insights, Azure Application Insights) plus anomaly / ML detection. The
   add-on-backed cold-start + error-rate regression detectors ship in the
