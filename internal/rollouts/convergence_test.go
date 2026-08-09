@@ -476,6 +476,66 @@ func TestSuccessPromotesGroupConfigAndClearsCanaryPins(t *testing.T) {
 	}
 }
 
+// TestPartialSuccessLeavesCanaryPinsAndGroupConfig is the coverage-gate proof:
+// a rollout that SUCCEEDS with a final stage below the whole group (here a single
+// 50% stage over a 4-agent group) must NOT promote the target to the group config
+// and must NOT delete the canary pins. The canary agents stay on the target (their
+// intended partial state); the group config is left untouched, so the non-canary
+// members keep resolving to the OLD group config they were never meant to leave.
+func TestPartialSuccessLeavesCanaryPinsAndGroupConfig(t *testing.T) {
+	agents := makeAgents(4, "group-a") // sorted by id: [0],[1] are the 50% canary
+	cfgs := map[string]*applicationstore.Config{"cfg-target": {ID: "cfg-target", Content: "TARGET"}}
+	e, as, _ := convEngine(t, agents, cfgs)
+
+	// Pre-rollout group config the non-canary members must remain on.
+	as.groupLatest["group-a"] = &services.Config{ID: "cfg-old", GroupID: sp("group-a"), Content: "OLD", ConfigHash: confignorm.Hash("OLD"), Version: 3}
+
+	r := &services.Rollout{
+		ID: "ro-partial", GroupID: "group-a", TargetConfigID: "cfg-target",
+		State: services.RolloutStateInProgress, CurrentStage: 0,
+		StageStartedAt: pastStart(time.Second),
+		// Single, final stage at 50% — a legitimately partial rollout.
+		Stages: []services.RolloutStage{{Mode: services.RolloutStageModePercent, Percentage: 50, DwellSeconds: 0}},
+	}
+
+	// Apply the (only) stage: writes canary pins for the first two agents only.
+	_, err := e.applyStage(context.Background(), r, 0)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{agents[0].ID.String(), agents[1].ID.String()}, r.PushedAgentIDs,
+		"only the 50% canary is pushed")
+
+	// The two canary agents report the target → the (final) stage converges → succeed.
+	agents[0].EffectiveConfig = "TARGET"
+	agents[1].EffectiveConfig = "TARGET"
+	e.advanceOrCheck(context.Background(), r)
+	require.Equal(t, services.RolloutStateSucceeded, r.State, "partial rollout still succeeds")
+
+	// (a) The group config was NOT promoted — it still holds OLD (no over-apply
+	// onto the non-canary members).
+	grp, _ := as.GetLatestConfigForGroup(context.Background(), "group-a")
+	require.NotNil(t, grp)
+	assert.Equal(t, "OLD", grp.Content, "partial success must not promote the target to the group config")
+	assert.Empty(t, as.deleted, "partial success must not delete any canary pins")
+
+	// (b) The canary agents stay PINNED to the target (their intended partial state).
+	for _, a := range agents[:2] {
+		require.NotNil(t, as.latest[a.ID], "canary pin must remain on partial success")
+		resolved := as.resolve(a.ID, "group-a")
+		require.NotNil(t, resolved)
+		assert.Equal(t, confignorm.Hash("TARGET"), confignorm.Hash(resolved.Content),
+			"canary agent still resolves to the target it holds")
+	}
+
+	// (c) The non-canary members were never pinned and keep resolving to the OLD
+	// group config — they never received the target.
+	for _, a := range agents[2:] {
+		assert.Nil(t, as.latest[a.ID], "non-canary member has no pin")
+		resolved := as.resolve(a.ID, "group-a")
+		require.NotNil(t, resolved)
+		assert.Equal(t, "OLD", resolved.Content, "non-canary member stays on the old group config")
+	}
+}
+
 // TestFinalizeCanaryAssignmentsIdempotent proves the cleanup is safe to run more
 // than once: promotion is a no-op when the group config already equals the target
 // (no version churn) and the per-agent deletes are no-ops when the pins are gone.
@@ -552,6 +612,48 @@ func TestWriteDesiredStateIdempotentAndSupersedes(t *testing.T) {
 	require.Len(t, as.created, 2)
 	assert.Equal(t, 2, as.created[1].Version)
 	assert.Equal(t, "V2", as.created[1].Content)
+}
+
+// TestRolloutReachedFullCoverage exercises the full-coverage gate directly: the
+// whole group pushed → full; any group member missing from the pushed-set →
+// partial; an empty group / read failure → fails closed (false, never promote).
+func TestRolloutReachedFullCoverage(t *testing.T) {
+	agents := makeAgents(4, "group-a")
+	cfgs := map[string]*applicationstore.Config{}
+
+	t.Run("every group member pushed → full", func(t *testing.T) {
+		e, _, _ := convEngine(t, agents, cfgs)
+		r := &services.Rollout{GroupID: "group-a", PushedAgentIDs: []string{
+			agents[0].ID.String(), agents[1].ID.String(), agents[2].ID.String(), agents[3].ID.String(),
+		}}
+		assert.True(t, e.rolloutReachedFullCoverage(context.Background(), r))
+	})
+
+	t.Run("a group member missing from pushed → partial", func(t *testing.T) {
+		e, _, _ := convEngine(t, agents, cfgs)
+		r := &services.Rollout{GroupID: "group-a", PushedAgentIDs: []string{
+			agents[0].ID.String(), agents[1].ID.String(), // only 2 of 4
+		}}
+		assert.False(t, e.rolloutReachedFullCoverage(context.Background(), r))
+	})
+
+	t.Run("empty group fails closed", func(t *testing.T) {
+		e, _, _ := convEngine(t, []*services.Agent{}, cfgs)
+		r := &services.Rollout{GroupID: "group-a", PushedAgentIDs: nil}
+		assert.False(t, e.rolloutReachedFullCoverage(context.Background(), r))
+	})
+
+	t.Run("pushed-set scoped to the target group only", func(t *testing.T) {
+		// An agent in a DIFFERENT group does not affect this group's coverage.
+		mixed := append([]*services.Agent{}, agents...)
+		mixed = append(mixed, makeAgents(1, "group-b")...)
+		e, _, _ := convEngine(t, mixed, cfgs)
+		r := &services.Rollout{GroupID: "group-a", PushedAgentIDs: []string{
+			agents[0].ID.String(), agents[1].ID.String(), agents[2].ID.String(), agents[3].ID.String(),
+		}}
+		assert.True(t, e.rolloutReachedFullCoverage(context.Background(), r),
+			"other-group agents are ignored; group-a is fully covered")
+	})
 }
 
 // --- coverage --------------------------------------------------------------

@@ -106,14 +106,25 @@ func (e *Engine) writeDesiredStateForAgents(ctx context.Context, r *services.Rol
 // agent back to the OLD (pre-rollout) group config — the WRONG config. The
 // correct final state therefore depends on the outcome:
 //
-//   - promoteTarget == true (SUCCESS): first PROMOTE the target to the group
-//     config (a new group-scoped configs row = the target content), then delete
-//     the agent-scoped rows. Each ex-canary agent falls back to group == target
-//     (the config it converged to) AND resumes tracking future group changes; the
-//     rest of the group converges to the same target — the definition of a
-//     completed rollout. If promotion fails, the agent-scoped rows are LEFT in
-//     place (pre-fix behavior) rather than risk dropping an agent to a stale
-//     config.
+//   - promoteTarget == true (SUCCESS) AND the rollout reached FULL coverage
+//     (every group member received the target — see rolloutReachedFullCoverage):
+//     first PROMOTE the target to the group config (a new group-scoped configs
+//     row = the target content), then delete the agent-scoped rows. Each
+//     ex-canary agent falls back to group == target (the config it converged to)
+//     AND resumes tracking future group changes; the rest of the group converges
+//     to the same target — the definition of a completed rollout. If promotion
+//     fails, the agent-scoped rows are LEFT in place (pre-fix behavior) rather
+//     than risk dropping an agent to a stale config.
+//
+//   - promoteTarget == true (SUCCESS) but the rollout reached only PARTIAL
+//     coverage (it succeeded with a final stage below the whole group — e.g. a
+//     rollout whose last stage is 50%): do NOT promote and do NOT delete the
+//     agent-scoped rows. Promoting would push the target onto NON-canary group
+//     members that were never meant to receive it (the over-apply this gate
+//     closes); deleting the pins would drop the canary agents off the target they
+//     intentionally hold. So both are skipped: the canary agents stay pinned to
+//     the target (their intended partial state), the group config is untouched,
+//     and non-canary members keep tracking the old group config.
 //
 //   - promoteTarget == false (ROLLBACK): the group config was never changed, so
 //     it still equals the pre-rollout config (the PreviousConfigID snapshot). The
@@ -130,11 +141,26 @@ func (e *Engine) finalizeCanaryAssignments(ctx context.Context, r *services.Roll
 	if !e.writeDesiredState || e.agentService == nil {
 		return
 	}
-	if promoteTarget && !e.promoteTargetToGroupConfig(ctx, r) {
-		// Promotion failed: deleting the agent-scoped rows now would drop
-		// ex-canary agents to a stale group config. Leave them assigned; a later
-		// pass (or operator) can retry. Correctness beats un-sticking here.
-		return
+	if promoteTarget {
+		// Gate promotion + pin-cleanup on FULL coverage. A rollout can reach
+		// SUCCESS with a final stage below the whole group (a partial rollout);
+		// promoting the target to the group config then would over-apply it to
+		// non-canary members that never received it, and deleting the pins would
+		// pull the canary agents off the target they intentionally hold. On
+		// partial success we do neither — leave the group config and the canary
+		// pins exactly as the rollout left them.
+		if !e.rolloutReachedFullCoverage(ctx, r) {
+			e.logger.Info("rollout engine: partial success — leaving canary pins and group config untouched (no full-coverage promotion)",
+				zap.String("rollout_id", r.ID),
+				zap.String("group_id", r.GroupID))
+			return
+		}
+		if !e.promoteTargetToGroupConfig(ctx, r) {
+			// Promotion failed: deleting the agent-scoped rows now would drop
+			// ex-canary agents to a stale group config. Leave them assigned; a
+			// later pass (or operator) can retry. Correctness beats un-sticking.
+			return
+		}
 	}
 	for _, idStr := range r.PushedAgentIDs {
 		agentID, err := uuid.Parse(idStr)
@@ -204,6 +230,55 @@ func (e *Engine) promoteTargetToGroupConfig(ctx context.Context, r *services.Rol
 		zap.String("config_id", cfg.ID),
 		zap.Int("version", version))
 	return true
+}
+
+// rolloutReachedFullCoverage reports whether a SUCCEEDED rollout brought its
+// ENTIRE target group to the target — the precondition for promoting the target
+// to the group config and clearing the canary pins. A rollout that succeeded
+// with a final stage below the whole group (e.g. a last stage of 50%, or a
+// label stage matching only a subset) is a PARTIAL rollout: its non-canary
+// members were never meant to receive the target, so it must not promote.
+//
+// Signal (verified against the engine): finish() is reached the moment the LAST
+// stage converges (engine.go advanceOrCheck: r.CurrentStage == len(Stages)-1 →
+// finish). "Full coverage" is therefore "every current group member is in the
+// rollout's cumulative pushed-set". r.PushedAgentIDs is the engine-managed union
+// of every stage's canary set (ADR 0007; rollout_service.go Rollout.PushedAgentIDs)
+// and canaryAgentsForStage only ever selects agents already in the target group,
+// so pushed ⊆ group and the check reduces to "no group member is missing from
+// pushed". This is mode-agnostic — for percent mode it is exactly the final stage
+// reaching 100% (canaryAgentsForStage takes the first Percentage% of the group),
+// and for label mode it is "the selector matched every member" — and it reflects
+// the real coverage rather than re-deriving it from stage config.
+//
+// Fails CLOSED: an empty group or a ListAgents error returns false, so an
+// indeterminate coverage read never triggers an unintended whole-group promotion
+// (the conservative bias this package documents — leaving pins is always safe).
+func (e *Engine) rolloutReachedFullCoverage(ctx context.Context, r *services.Rollout) bool {
+	if e.agentService == nil {
+		return false
+	}
+	all, err := e.agentService.ListAgents(ctx)
+	if err != nil {
+		return false
+	}
+	pushed := make(map[string]struct{}, len(r.PushedAgentIDs))
+	for _, id := range r.PushedAgentIDs {
+		pushed[id] = struct{}{}
+	}
+	groupCount := 0
+	for _, a := range all {
+		if a == nil || a.GroupID == nil || *a.GroupID != r.GroupID {
+			continue
+		}
+		groupCount++
+		if _, ok := pushed[a.ID.String()]; !ok {
+			// A group member never received the target → partial coverage.
+			return false
+		}
+	}
+	// Full coverage iff the group is non-empty and every member was pushed.
+	return groupCount > 0
 }
 
 // stageConverged reports whether the current stage's canary set has reached its
