@@ -1979,10 +1979,11 @@ func toStorageRollout(r *Rollout) *applicationstore.Rollout {
 	stages := make([]applicationstore.RolloutStage, len(r.Stages))
 	for i, st := range r.Stages {
 		stages[i] = applicationstore.RolloutStage{
-			Mode:          applicationstore.RolloutStageMode(st.Mode),
-			Percentage:    st.Percentage,
-			LabelSelector: copyStringMap(st.LabelSelector),
-			DwellSeconds:  st.DwellSeconds,
+			Mode:               applicationstore.RolloutStageMode(st.Mode),
+			Percentage:         st.Percentage,
+			LabelSelector:      copyStringMap(st.LabelSelector),
+			DwellSeconds:       st.DwellSeconds,
+			ConvergencePercent: st.ConvergencePercent,
 		}
 	}
 	return &applicationstore.Rollout{
@@ -2137,10 +2138,11 @@ func toServiceRollout(r *applicationstore.Rollout) *Rollout {
 	stages := make([]RolloutStage, len(r.Stages))
 	for i, st := range r.Stages {
 		stages[i] = RolloutStage{
-			Mode:          RolloutStageMode(st.Mode),
-			Percentage:    st.Percentage,
-			LabelSelector: copyStringMap(st.LabelSelector),
-			DwellSeconds:  st.DwellSeconds,
+			Mode:               RolloutStageMode(st.Mode),
+			Percentage:         st.Percentage,
+			LabelSelector:      copyStringMap(st.LabelSelector),
+			DwellSeconds:       st.DwellSeconds,
+			ConvergencePercent: st.ConvergencePercent,
 		}
 	}
 	return &Rollout{

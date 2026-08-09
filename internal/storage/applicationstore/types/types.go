@@ -751,6 +751,14 @@ type RolloutStage struct {
 	Percentage    int               `json:"percentage,omitempty"`     // for percent mode; 1-100
 	LabelSelector map[string]string `json:"label_selector,omitempty"` // for label mode
 	DwellSeconds  int               `json:"dwell_seconds"`            // pause at this stage before auto-advancing
+	// ConvergencePercent (HA S3d, ADR 0035): the percentage of this stage's
+	// canary set whose reported/effective config must MATCH the rollout target
+	// before the engine advances past the stage — observed-convergence gating,
+	// replacing the old "advance on dwell + push-ack" behavior. 0 (unset,
+	// pre-S3d rollouts) is treated as 100 (all covered canary agents must
+	// converge). 1-100 tolerates slow/absent stragglers. Stored inline in the
+	// stages JSON/JSONB blob, so it round-trips without a schema migration.
+	ConvergencePercent int `json:"convergence_percent,omitempty"`
 }
 
 // RolloutAbortCriteria are the conditions under which the engine auto-aborts

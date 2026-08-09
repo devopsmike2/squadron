@@ -300,6 +300,12 @@ type RolloutStage struct {
 	Percentage    int               `json:"percentage,omitempty"`
 	LabelSelector map[string]string `json:"label_selector,omitempty"`
 	DwellSeconds  int               `json:"dwell_seconds"`
+	// ConvergencePercent (HA S3d, ADR 0035) — see
+	// applicationstore.RolloutStage.ConvergencePercent. Percentage of the
+	// stage's canary set that must report the target config as its effective
+	// config before the engine advances (observed-convergence gate). 0 = 100
+	// (all covered canary agents).
+	ConvergencePercent int `json:"convergence_percent,omitempty"`
 }
 
 // RolloutAbortCriteria — see applicationstore.RolloutAbortCriteria.
