@@ -6,12 +6,14 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -29,7 +31,7 @@ func testStore(t *testing.T) *Storage {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals"); err != nil {
+	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, audit_events, audit_chain_checkpoints"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return s
@@ -529,6 +531,351 @@ func TestPostgres_RolloutApprovals(t *testing.T) {
 	}
 	if list[1].Approver != "bob" || list[1].Notes != "" {
 		t.Fatalf("second approver mismatch: %+v", list[1])
+	}
+}
+
+func TestPostgres_SavedQueryCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	q1 := &types.SavedQuery{
+		ID:          "sq1",
+		Name:        "drifted agents",
+		Description: "agents currently drifted",
+		Query:       "fleet_drift_status_drifted",
+		Tags:        []string{"drift", "fleet"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.CreateSavedQuery(ctx, q1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetSavedQuery(ctx, "sq1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	if got.Name != "drifted agents" || got.Query != "fleet_drift_status_drifted" ||
+		got.Description != "agents currently drifted" || len(got.Tags) != 2 || got.Tags[0] != "drift" {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+
+	// Missing row must be (nil, nil), matching the sqlite backend.
+	if miss, err := s.GetSavedQuery(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// Update persists.
+	q1.Name = "drifted agents v2"
+	q1.Tags = []string{"drift"}
+	q1.UpdatedAt = now.Add(time.Second)
+	if err := s.UpdateSavedQuery(ctx, q1); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ = s.GetSavedQuery(ctx, "sq1"); got.Name != "drifted agents v2" || len(got.Tags) != 1 {
+		t.Fatalf("update didn't persist: %+v", got)
+	}
+
+	// A second, newer query to exercise list ordering (updated_at DESC).
+	q2 := &types.SavedQuery{ID: "sq2", Name: "errors", Query: "error_rate", CreatedAt: now.Add(2 * time.Second), UpdatedAt: now.Add(2 * time.Second)}
+	if err := s.CreateSavedQuery(ctx, q2); err != nil {
+		t.Fatalf("create sq2: %v", err)
+	}
+	list, err := s.ListSavedQueries(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: err=%v len=%d", err, len(list))
+	}
+	if list[0].ID != "sq2" || list[1].ID != "sq1" {
+		t.Fatalf("list order should be updated_at DESC: %s,%s", list[0].ID, list[1].ID)
+	}
+
+	// Update / delete on a missing id are "not found".
+	if err := s.UpdateSavedQuery(ctx, &types.SavedQuery{ID: "ghost"}); err == nil {
+		t.Fatal("update on missing saved query should error")
+	}
+	if err := s.DeleteSavedQuery(ctx, "ghost"); err == nil {
+		t.Fatal("delete on missing saved query should error")
+	}
+
+	if err := s.DeleteSavedQuery(ctx, "sq1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := s.DeleteSavedQuery(ctx, "sq1"); err == nil {
+		t.Fatal("second delete should error (saved query not found)")
+	}
+}
+
+func TestPostgres_AlertRuleCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	r1 := &types.AlertRule{
+		ID:                "ar1",
+		Name:              "high drift rate",
+		Description:       "too many drifted agents",
+		Query:             "fleet_drift_status_drifted",
+		ThresholdOperator: types.ThresholdGreater,
+		ThresholdValue:    5,
+		IntervalSeconds:   60,
+		Severity:          types.AlertSeverityWarning,
+		Enabled:           true,
+		WebhookURL:        "https://hooks.example/squadron",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := s.CreateAlertRule(ctx, r1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetAlertRule(ctx, "ar1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	if got.Name != "high drift rate" || got.ThresholdOperator != types.ThresholdGreater ||
+		got.ThresholdValue != 5 || got.IntervalSeconds != 60 || got.Severity != types.AlertSeverityWarning ||
+		!got.Enabled || got.WebhookURL != "https://hooks.example/squadron" {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+
+	// Missing row must be (nil, nil).
+	if miss, err := s.GetAlertRule(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// Update persists (including the enabled flag flipping).
+	r1.ThresholdValue = 10
+	r1.Enabled = false
+	r1.Severity = types.AlertSeverityCritical
+	r1.UpdatedAt = now.Add(time.Second)
+	if err := s.UpdateAlertRule(ctx, r1); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ = s.GetAlertRule(ctx, "ar1"); got.ThresholdValue != 10 || got.Enabled || got.Severity != types.AlertSeverityCritical {
+		t.Fatalf("update didn't persist: %+v", got)
+	}
+
+	// A second rule to exercise list ordering (name ASC): "abc" sorts before
+	// "high drift rate".
+	r2 := &types.AlertRule{ID: "ar2", Name: "abc rule", Query: "q", ThresholdOperator: types.ThresholdLess, ThresholdValue: 1, IntervalSeconds: 30, Severity: types.AlertSeverityInfo, Enabled: true, CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateAlertRule(ctx, r2); err != nil {
+		t.Fatalf("create ar2: %v", err)
+	}
+	list, err := s.ListAlertRules(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: err=%v len=%d", err, len(list))
+	}
+	if list[0].Name != "abc rule" || list[1].Name != "high drift rate" {
+		t.Fatalf("list order should be name ASC: %s,%s", list[0].Name, list[1].Name)
+	}
+
+	// Update / delete on a missing id are "not found".
+	if err := s.UpdateAlertRule(ctx, &types.AlertRule{ID: "ghost"}); err == nil {
+		t.Fatal("update on missing alert rule should error")
+	}
+	if err := s.DeleteAlertRule(ctx, "ghost"); err == nil {
+		t.Fatal("delete on missing alert rule should error")
+	}
+
+	if err := s.DeleteAlertRule(ctx, "ar1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := s.DeleteAlertRule(ctx, "ar1"); err == nil {
+		t.Fatal("second delete should error (alert rule not found)")
+	}
+}
+
+// appendPGAuditEvent inserts one event with distinct, verifiable content,
+// mirroring the sqlite audit_chain_test helper so the two backends exercise the
+// chain the same way.
+func appendPGAuditEvent(t *testing.T, s *Storage, ctx context.Context, n int) {
+	t.Helper()
+	if err := s.CreateAuditEvent(ctx, &types.AuditEvent{
+		ID:         uuid.NewString(),
+		Actor:      fmt.Sprintf("operator:user%d@example.com", n),
+		EventType:  "config.applied",
+		TargetType: "config",
+		TargetID:   fmt.Sprintf("cfg-%d", n),
+		Action:     "applied",
+		Payload:    map[string]any{"n": n, "note": fmt.Sprintf("event-%d", n)},
+	}); err != nil {
+		t.Fatalf("append audit event %d: %v", n, err)
+	}
+}
+
+// TestPostgres_AuditChain_SelfVerify is the KEY audit evidence: append a
+// sequence of events to real Postgres, then run the SHARED pure chain package's
+// verify over the Postgres-stored chain and assert it passes — proving the
+// hash-chain holds on Postgres exactly as on SQLite. It also proves the raw
+// payload round-trips byte-for-byte (offline recompute would break otherwise).
+func TestPostgres_AuditChain_SelfVerify(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	for i := 1; i <= 5; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("chain should verify OK: detail=%s", res.Detail)
+	}
+	if res.RowsVerified != 5 || res.CoversFromSeq != 1 || res.FirstBreakSeq != 0 || res.HeadSeq != 5 {
+		t.Fatalf("verify summary mismatch: %+v", res)
+	}
+
+	// Offline recompute through the SAME pure package the CLI uses.
+	rows, err := s.ListAuditChainRows(ctx)
+	if err != nil || len(rows) != 5 {
+		t.Fatalf("list chain rows: err=%v len=%d", err, len(rows))
+	}
+	if off := chain.Verify(rows); !off.OK || off.RowsVerified != 5 {
+		t.Fatalf("offline recompute must verify: %+v", off)
+	}
+
+	// Byte-exactness: row 1's returned payload equals the RAW stored column
+	// verbatim (no re-marshal), which is what makes the hash recompute valid.
+	var stored string
+	if err := s.db.QueryRowContext(ctx, `SELECT payload FROM audit_events WHERE seq = 1`).Scan(&stored); err != nil {
+		t.Fatalf("read stored payload: %v", err)
+	}
+	if rows[0].Payload != stored {
+		t.Fatalf("ListAuditChainRows must return the RAW payload byte-for-byte: got %q want %q", rows[0].Payload, stored)
+	}
+
+	// Get/List surface the same rows.
+	if list, err := s.ListAuditEvents(ctx, types.AuditEventFilter{}); err != nil || len(list) != 5 {
+		t.Fatalf("list audit events: err=%v len=%d", err, len(list))
+	}
+	if one, err := s.GetAuditEvent(ctx, rows[2].ID); err != nil || one == nil || one.ID != rows[2].ID {
+		t.Fatalf("get audit event: err=%v got=%v", err, one)
+	}
+	if miss, err := s.GetAuditEvent(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+}
+
+// TestPostgres_AuditChain_TamperDetected mutates a stored row's PAYLOAD directly
+// (the classic content-edit attack) and asserts verification now FAILS at that
+// seq — the hash-chain catches on Postgres exactly as on SQLite.
+func TestPostgres_AuditChain_TamperDetected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `UPDATE audit_events SET payload='{"tampered":true}' WHERE seq=3`); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if res.OK {
+		t.Fatal("payload tamper must break the chain")
+	}
+	if res.FirstBreakSeq != 3 {
+		t.Fatalf("break should be at seq 3, got %d (detail=%s)", res.FirstBreakSeq, res.Detail)
+	}
+	// Offline recompute agrees.
+	rows, _ := s.ListAuditChainRows(ctx)
+	if off := chain.Verify(rows); off.OK {
+		t.Fatal("offline recompute must also detect the tamper")
+	}
+}
+
+// TestPostgres_AuditChain_HashTamperDetected mutates a stored ROW_HASH directly
+// (an attacker rewriting the stored digest) and asserts verification fails at
+// that seq.
+func TestPostgres_AuditChain_HashTamperDetected(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `UPDATE audit_events SET row_hash='deadbeef' WHERE seq=2`); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if res.OK {
+		t.Fatal("row_hash tamper must break the chain")
+	}
+	if res.FirstBreakSeq != 2 {
+		t.Fatalf("break should be at seq 2, got %d (detail=%s)", res.FirstBreakSeq, res.Detail)
+	}
+}
+
+// TestPostgres_AuditCheckpoint covers the ADR 0027 slice 2 checkpoint substrate:
+// the (tenant, seq) upsert + newest-first list, AND the positive anchoring of a
+// prefix-pruned chain-start to a recorded checkpoint.
+func TestPostgres_AuditCheckpoint(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Upsert semantics, keyed by (tenant, checkpoint_seq).
+	if err := s.WriteAuditCheckpoint(ctx, types.AuditCheckpoint{Tenant: "t1", CheckpointSeq: 2, CheckpointRowHash: "h2", RowsPruned: 2, Kind: "retention-cut", CreatedAt: now}); err != nil {
+		t.Fatalf("write cp seq2: %v", err)
+	}
+	if err := s.WriteAuditCheckpoint(ctx, types.AuditCheckpoint{Tenant: "t1", CheckpointSeq: 5, CheckpointRowHash: "h5", RowsPruned: 5, Kind: "retention-cut", CreatedAt: now}); err != nil {
+		t.Fatalf("write cp seq5: %v", err)
+	}
+	// Re-record seq=2 with a new row_hash: upsert, not a duplicate.
+	if err := s.WriteAuditCheckpoint(ctx, types.AuditCheckpoint{Tenant: "t1", CheckpointSeq: 2, CheckpointRowHash: "h2b", RowsPruned: 3, Kind: "retention-cut", CreatedAt: now}); err != nil {
+		t.Fatalf("upsert cp seq2: %v", err)
+	}
+	cps, err := s.ListAuditCheckpoints(ctx, "t1")
+	if err != nil || len(cps) != 2 {
+		t.Fatalf("list checkpoints: err=%v len=%d", err, len(cps))
+	}
+	if cps[0].CheckpointSeq != 5 || cps[1].CheckpointSeq != 2 {
+		t.Fatalf("checkpoints should be newest seq first: %d,%d", cps[0].CheckpointSeq, cps[1].CheckpointSeq)
+	}
+	if cps[1].CheckpointRowHash != "h2b" {
+		t.Fatalf("upsert should have overwritten the row_hash: %s", cps[1].CheckpointRowHash)
+	}
+
+	// Anchoring: append a chain, capture seq 1's row_hash, prune it (legitimate
+	// prefix GC), record a checkpoint for the pruned head, then verify the
+	// surviving chain-start is POSITIVELY anchored to that checkpoint.
+	for i := 1; i <= 4; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+	var seq1Hash string
+	if err := s.db.QueryRowContext(ctx, `SELECT row_hash FROM audit_events WHERE seq=1`).Scan(&seq1Hash); err != nil {
+		t.Fatalf("read seq1 hash: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM audit_events WHERE seq=1`); err != nil {
+		t.Fatalf("prune seq1: %v", err)
+	}
+	// The default tenant is what the unstamped context resolves to on append.
+	if err := s.WriteAuditCheckpoint(ctx, types.AuditCheckpoint{Tenant: "default", CheckpointSeq: 1, CheckpointRowHash: seq1Hash, RowsPruned: 1, Kind: "retention-cut", CreatedAt: now}); err != nil {
+		t.Fatalf("write anchoring checkpoint: %v", err)
+	}
+
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify after prune: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("prefix GC must not be a false positive: detail=%s", res.Detail)
+	}
+	if res.CoversFromSeq != 2 || res.RowsVerified != 3 {
+		t.Fatalf("post-prune summary mismatch: %+v", res)
+	}
+	if !res.AnchoredByCheckpoint || res.CheckpointSeq != 1 {
+		t.Fatalf("chain-start should be anchored to checkpoint seq 1: %+v", res)
 	}
 }
 
