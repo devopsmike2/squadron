@@ -277,6 +277,114 @@ CREATE TABLE IF NOT EXISTS audit_chain_checkpoints (
     PRIMARY KEY (tenant_id, checkpoint_seq)
 );
 CREATE INDEX IF NOT EXISTS idx_audit_chain_checkpoints_tenant ON audit_chain_checkpoints(tenant_id, checkpoint_seq DESC);
+
+-- ADR 0033, slice 5 (OPERATIONS cluster) — action runner registrations
+-- (v0.53 Move 2). CRUD + revoke, semantics mirror the sqlite backend.
+-- public_key_pem / capabilities_json are persisted VERBATIM as TEXT: they are
+-- opaque blobs the crypto/capability logic in internal/actions parses at use
+-- time; the store never reserializes them. OSS is single-tenant so runner_id
+-- alone is the PK (the sqlite composite (tenant_id, runner_id) collapses to this
+-- when every row is DefaultTenant). revoked_at is nullable — a revoked runner
+-- stays for audit history but is excluded from dispatch.
+CREATE TABLE IF NOT EXISTS action_runner_registrations (
+    runner_id         TEXT PRIMARY KEY,
+    hostname          TEXT NOT NULL,
+    public_key_pem    TEXT NOT NULL,
+    capabilities_json TEXT NOT NULL,
+    registered_at     TIMESTAMPTZ NOT NULL,
+    last_seen_at      TIMESTAMPTZ NOT NULL,
+    revoked_at        TIMESTAMPTZ
+);
+
+-- ADR 0033, slice 5 — signed action requests (v0.53 Move 2). parameters_json and
+-- signature are persisted VERBATIM as TEXT: the runner-side crypto verifies the
+-- exact bytes, so (like the audit payload) JSONB is WRONG here — it would reorder
+-- keys / normalize whitespace and break signature verification. Two rows exist
+-- per approved action (phase=dry_run + phase=execute). Nullable optionals mirror
+-- the sqlite NULL columns.
+CREATE TABLE IF NOT EXISTS action_requests (
+    id                    TEXT PRIMARY KEY,
+    proposal_id           TEXT,
+    runner_id             TEXT NOT NULL,
+    action_type           TEXT NOT NULL,
+    parameters_json       TEXT NOT NULL,
+    signature             TEXT NOT NULL,
+    phase                 TEXT NOT NULL,
+    status                TEXT NOT NULL,
+    denied_for            TEXT,
+    dry_run_output_json   TEXT,
+    execution_output_json TEXT,
+    issued_at             TIMESTAMPTZ NOT NULL,
+    expires_at            TIMESTAMPTZ NOT NULL,
+    started_at            TIMESTAMPTZ,
+    completed_at          TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_action_requests_proposal ON action_requests(proposal_id);
+CREATE INDEX IF NOT EXISTS idx_action_requests_runner ON action_requests(runner_id);
+CREATE INDEX IF NOT EXISTS idx_action_requests_status ON action_requests(status);
+
+-- ADR 0033, slice 5 — deploy targets (v0.34 GitHub Actions integration).
+-- encrypted_credential is nonce(24)||ciphertext stored as BYTEA (the deploy
+-- package never persists plaintext); default_inputs is JSONB (structured
+-- map[string]string, never hashed). tenant_id IS persisted + surfaced here
+-- because types.DeployTarget carries a TenantID field that background bridges
+-- read (e.g. the GHA walker stamping expected_agents); OSS single-tenant defaults
+-- it to 'default', mirroring the sqlite system-context insert.
+CREATE TABLE IF NOT EXISTS deploy_targets (
+    id                   TEXT PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    provider             TEXT NOT NULL DEFAULT 'github',
+    github_owner         TEXT NOT NULL DEFAULT '',
+    github_repo          TEXT NOT NULL DEFAULT '',
+    github_workflow      TEXT NOT NULL DEFAULT '',
+    github_branch        TEXT NOT NULL DEFAULT 'main',
+    encrypted_credential BYTEA,
+    default_inputs       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    config_id            TEXT NOT NULL DEFAULT '',
+    inventory_path       TEXT NOT NULL DEFAULT '',
+    tenant_id            TEXT NOT NULL DEFAULT 'default',
+    created_at           TIMESTAMPTZ NOT NULL,
+    updated_at           TIMESTAMPTZ NOT NULL
+);
+
+-- ADR 0033, slice 5 — deploy runs (one workflow_dispatch firing). inputs and
+-- expected_hosts are JSONB (structured). github_run_id is BIGINT (int64), starts
+-- at 0 until resolved after the first poll (workflow_dispatch returns 204 with no
+-- id). expected_hosts is the set registered into expected_agents on success,
+-- closing the v0.32 inventory loop. No tenant_id column: types.DeployRun carries
+-- no tenant field (matches the agents/configs ports).
+CREATE TABLE IF NOT EXISTS deploy_runs (
+    id                 TEXT PRIMARY KEY,
+    target_id          TEXT NOT NULL,
+    requested_by       TEXT NOT NULL DEFAULT '',
+    requested_at       TIMESTAMPTZ NOT NULL,
+    inputs             JSONB NOT NULL DEFAULT '{}'::jsonb,
+    github_run_id      BIGINT NOT NULL DEFAULT 0,
+    github_run_url     TEXT NOT NULL DEFAULT '',
+    status             TEXT NOT NULL DEFAULT 'queued',
+    conclusion         TEXT NOT NULL DEFAULT '',
+    completed_at       TIMESTAMPTZ,
+    expected_hosts     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    verification_state TEXT NOT NULL DEFAULT '',
+    verified_at        TIMESTAMPTZ,
+    notes              TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_deploy_runs_target_time ON deploy_runs(target_id, requested_at);
+CREATE INDEX IF NOT EXISTS idx_deploy_runs_status ON deploy_runs(status);
+
+-- ADR 0033, slice 5 — expected agents (v0.32 inventory reconciliation). hostname
+-- is the natural key. labels is JSONB. No tenant_id column: types.ExpectedAgent
+-- carries no tenant field; the sqlite composite (tenant_id, hostname) PK collapses
+-- to hostname alone in OSS single-tenant.
+CREATE TABLE IF NOT EXISTS expected_agents (
+    hostname       TEXT PRIMARY KEY,
+    labels         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source         TEXT NOT NULL DEFAULT '',
+    expected_since TIMESTAMPTZ NOT NULL,
+    updated_at     TIMESTAMPTZ NOT NULL,
+    notes          TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_expected_agents_source ON expected_agents(source);
 `
 
 func (s *Storage) initSchema(ctx context.Context) error {
