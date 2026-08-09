@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed build-audit-verify
+.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed build-audit-verify fmt fmt-check install-hooks lint
 
 # Variables
 BINARY_NAME=squadron
@@ -149,6 +149,27 @@ test-coverage:
 # Format code
 fmt:
 	go fmt ./...
+
+# fmt-check reproduces CI's "Format check" step EXACTLY (see
+# .github/workflows/pr-tests.yml: `make fmt && git diff --exit-code`). Run it
+# before pushing so a local-vs-CI gofmt divergence is caught here, not in CI —
+# `make fmt-check` is the local pre-push gate matching CI. Non-zero exit means
+# gofmt reformatted tracked files; commit the result.
+#
+# NOTE: gofmt output can differ across Go MINOR versions. CI pins Go 1.25
+# (actions/setup-go). If fmt-check is clean locally but CI's Format check fails,
+# reconcile your local Go toolchain version with CI's.
+fmt-check: fmt
+	git diff --exit-code
+
+# install-hooks installs a git pre-push hook that runs `make fmt-check` so the
+# CI Format gate is enforced before every push. Optional convenience on top of
+# `make fmt-check`; safe to re-run.
+install-hooks:
+	@mkdir -p .git/hooks
+	@cp scripts/pre-push .git/hooks/pre-push
+	@chmod +x .git/hooks/pre-push
+	@echo "Installed git pre-push hook (runs 'make fmt-check')."
 
 # Lint code
 lint:

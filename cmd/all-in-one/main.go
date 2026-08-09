@@ -440,6 +440,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Fatal("Failed to create OpAMP server", zap.Error(err))
 	}
 
+	// HA S3b (ADR 0035) — stable per-process instance identity. Squadron has no
+	// pre-existing boot-time instance id (the serverless_instance /
+	// event_source_instance / orchestration_instance tables are cloud discovery
+	// inventory, NOT process identity), so generate a fresh UUID at boot and
+	// thread it into the connection registry as the owner written on every
+	// connect + heartbeat. With a single instance this trivially owns every
+	// agent (the registry just reflects that); in a multi-instance deployment it
+	// distinguishes owners so the leader can see per-instance coverage (S3c/S3d).
+	instanceID := uuid.NewString()
+	logger.Info("HA instance identity", zap.String("instanceId", instanceID))
+
+	// Wire the HA S3b connection-registry seam: this instance upserts ownership
+	// on OpAMP connect and deletes on clean disconnect. appStore satisfies the
+	// registry write surface; all writes are system-scoped (ADR 0035).
+	opampServer.SetConnectionRegistry(appStore, instanceID)
+
 	// Create telemetry query service
 	telemetryService := services.NewTelemetryQueryService(telemetryReader, agentService, logger)
 
@@ -507,7 +523,10 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// system-stamped (all-tenant; inert in OSS) and cancelled on shutdown BEFORE
 	// the deferred opampServer.Stop above (LIFO) so the loop drains first.
 	if reconcileEnabled, reconcileInterval := config.HA.ReconcileSettings(); reconcileEnabled {
-		reconciler := opamp.NewReconciler(agents, agentService, configSender, reconcileInterval, logger)
+		// HA S3b (ADR 0035): pass the connection registry + this instance's id so
+		// each reconcile tick heartbeats last_heartbeat_at for the agents whose
+		// sockets landed on THIS instance. The reconcileCtx below is system-stamped.
+		reconciler := opamp.NewReconciler(agents, agentService, configSender, reconcileInterval, appStore, instanceID, logger)
 		reconcileCtx, reconcileCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
 		defer reconcileCancel()
 		go reconciler.Start(reconcileCtx)

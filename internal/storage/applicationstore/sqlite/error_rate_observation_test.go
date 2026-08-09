@@ -269,9 +269,13 @@ func TestMigration_v14_to_v15_AddsErrorRateObservationTable(t *testing.T) {
 		require.NoError(t, row.Scan(&n))
 		assert.Equal(t, 2, n, "both error_rate_observation indexes must exist post-migration")
 
-		// SchemaVersion + Migrations slice both reflect the v15 bump.
-		assert.Equal(t, 15, SchemaVersion, "SchemaVersion must bump to 15")
-		assert.Len(t, Migrations, 15, "Migrations slice must contain 15 entries")
+		// SchemaVersion + Migrations slice both reflect AT LEAST the v15
+		// bump. Relaxed from an exact ==15 to >=15 when connection_registry
+		// (HA S3b) bumped the schema to v16: the error_rate slice is no
+		// longer the latest migration, matching the cold_start (v14) test's
+		// GreaterOrEqual convention.
+		assert.GreaterOrEqual(t, SchemaVersion, 15, "SchemaVersion must be >= 15 (error_rate_observation landed at v15)")
+		assert.GreaterOrEqual(t, len(Migrations), 15, "Migrations slice must contain >= 15 entries")
 	})
 }
 

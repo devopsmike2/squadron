@@ -109,6 +109,12 @@ type Store struct {
 	// ADR 0027 slice 2 — retention checkpoints, keyed by (tenant, seq).
 	// Test-only mirror of the sqlite audit_chain_checkpoints table.
 	auditCheckpoints map[string]map[int64]types.AuditCheckpoint
+
+	// HA S3b (ADR 0035) — connection registry mirror. Keyed by the Squadron
+	// fleet id (agent_id), one owner per agent. SYSTEM-SCOPED: no tenant
+	// dimension, mirroring the sqlite/postgres connection_registry table
+	// (which carries no tenant_id column). Guarded by the store-wide mu.
+	connectionOwners map[uuid.UUID]types.ConnectionOwner
 }
 
 // memoryCheckRunRecord — v0.89.42 (#662 Stream 60). Mirror of the 5
@@ -168,6 +174,8 @@ func NewStore() *Store {
 		auditChains: make(map[string][]memAuditChainRow),
 		// ADR 0027 slice 2.
 		auditCheckpoints: make(map[string]map[int64]types.AuditCheckpoint),
+		// HA S3b (ADR 0035).
+		connectionOwners: make(map[uuid.UUID]types.ConnectionOwner),
 	}
 }
 

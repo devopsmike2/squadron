@@ -440,6 +440,71 @@ type ApplicationStore interface {
 	// without touching the rest of the row (avoids racing with an
 	// operator's concurrent edit).
 	UpdateSiemDestinationStatus(ctx context.Context, id string, sentAt *time.Time, errMsg string, errAt *time.Time) error
+
+	// Connection registry (HA S3b, ADR 0035). One row per agent recording
+	// WHICH Squadron instance currently owns that agent's OpAMP WebSocket.
+	// The registry is SYSTEM-SCOPED: instance identity is orthogonal to
+	// tenant, so the table carries NO tenant_id column and these methods take
+	// no tenant predicate — callers pass identity.WithSystemContext(ctx). It
+	// is ownership/coverage visibility for the leader (consumed in S3c/S3d),
+	// NOT on the correctness path for S3a delivery: every instance reconciles
+	// its own in-memory connections regardless of the registry. With a single
+	// instance the registry trivially reflects that one instance owns every
+	// agent.
+	//
+	// agent_id is the Squadron fleet id (agentid.Derive), the same key store
+	// rows and config pushes use — NOT the wire instance_uid. It is the
+	// PRIMARY KEY: exactly one owner per agent, last-writer-wins on reconnect
+	// (an agent whose socket lands on a new instance overwrites the prior
+	// owner's row).
+	//
+	// UpsertConnectionOwner records (or refreshes) this instance's ownership
+	// of agentID. It is called on OpAMP connect (this instance now owns the
+	// socket) AND from the S3a reconcile loop each tick as a heartbeat that
+	// advances last_heartbeat_at. On a fresh row connected_at = now; on a
+	// heartbeat from the SAME instance connected_at is preserved; on a
+	// takeover by a DIFFERENT instance connected_at is reset to now (a new
+	// connection).
+	UpsertConnectionOwner(ctx context.Context, agentID uuid.UUID, instanceID string, now time.Time) error
+
+	// DeleteConnectionOwner removes agentID's ownership row. Called on a clean
+	// OpAMP disconnect (the owning instance relinquishes the agent). Deleting
+	// a row that does not exist is a clean no-op.
+	DeleteConnectionOwner(ctx context.Context, agentID uuid.UUID) error
+
+	// GetConnectionOwner returns the ownership row for agentID, or (nil, nil)
+	// when no row exists (mirrors the GetGroup missing-row convention).
+	GetConnectionOwner(ctx context.Context, agentID uuid.UUID) (*ConnectionOwner, error)
+
+	// ListConnectionOwners returns every ownership row, ordered by agent_id.
+	// Coverage/observability read for the leader.
+	ListConnectionOwners(ctx context.Context) ([]*ConnectionOwner, error)
+
+	// ReclaimStaleConnectionOwners deletes ownership rows whose
+	// last_heartbeat_at is strictly older than olderThan and returns the count
+	// removed. A row goes stale when its owning instance dies without a clean
+	// disconnect (hard kill / network partition) and therefore stops
+	// heartbeating; reclaiming it lets whichever instance the agent's
+	// WebSocket reconnects to adopt it cleanly. Re-running with a stale cutoff
+	// is a clean no-op (deleted=0).
+	ReclaimStaleConnectionOwners(ctx context.Context, olderThan time.Time) (int, error)
+}
+
+// ConnectionOwner is one row of the HA S3b connection registry (ADR 0035):
+// which Squadron instance currently owns an agent's OpAMP WebSocket. See the
+// ApplicationStore connection-registry methods for the ownership semantics.
+type ConnectionOwner struct {
+	// AgentID is the Squadron fleet id (agentid.Derive) of the owned agent —
+	// the registry's PRIMARY KEY.
+	AgentID uuid.UUID `json:"agent_id"`
+	// InstanceID is the stable per-process id of the owning Squadron instance
+	// (generated at boot).
+	InstanceID string `json:"instance_id"`
+	// ConnectedAt is when the current owner acquired the connection.
+	ConnectedAt time.Time `json:"connected_at"`
+	// LastHeartbeatAt is the last time the owner refreshed the row (connect or
+	// reconcile-loop heartbeat). The staleness signal for ReclaimStale.
+	LastHeartbeatAt time.Time `json:"last_heartbeat_at"`
 }
 
 // DeployTarget describes one GitHub Actions workflow Squadron is

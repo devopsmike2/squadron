@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Git pre-push hook — enforce CI's Format gate locally.
+#
+# Reproduces .github/workflows/pr-tests.yml "Format check"
+# (`make fmt && git diff --exit-code`) via `make fmt-check`, so a
+# gofmt-dirty tree is caught before it reaches CI. Install with
+# `make install-hooks`.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "pre-push: running make fmt-check (CI Format gate)..."
+if ! make fmt-check; then
+	echo "pre-push: gofmt reformatted files — commit the changes, then push again." >&2
+	exit 1
+fi

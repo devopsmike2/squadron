@@ -86,6 +86,28 @@ type Server struct {
 	tracer           *Tracer // optional; nil disables OTel connection spans
 	otlpGRPCEndpoint string  // OTLP gRPC endpoint to offer to agents
 	otlpHTTPEndpoint string  // OTLP HTTP endpoint to offer to agents
+
+	// HA S3b (ADR 0035) — connection registry seam. registry records which
+	// instance owns each agent's WebSocket (upsert on connect, delete on clean
+	// disconnect); instanceID is this process's stable boot-time id, written as
+	// the owner. Both are optional: nil registry (the default, and every test
+	// harness) makes the connect/disconnect registry writes no-ops, so
+	// single-instance behavior is unchanged. Wired at startup via
+	// SetConnectionRegistry.
+	registry   connectionRegistry
+	instanceID string
+}
+
+// SetConnectionRegistry wires the HA S3b connection-registry seam (ADR 0035):
+// on connect this instance upserts ownership of the agent, on clean disconnect
+// it deletes the row. instanceID is this process's stable boot-time id, written
+// as the owner. Called once at startup (main.go) with the application store,
+// which satisfies connectionRegistry. Until called, the registry writes are
+// no-ops — preserving the pre-S3b single-instance behavior exactly. Not safe
+// for concurrent use with a running server; call before Start.
+func (s *Server) SetConnectionRegistry(reg connectionRegistry, instanceID string) {
+	s.registry = reg
+	s.instanceID = instanceID
 }
 
 // zapToOpAmpLogger adapts zap.Logger to opamp's logger interface
@@ -263,6 +285,10 @@ func (s *Server) onDisconnect(conn types.Connection, connTenant string) {
 					zap.String("agentId", fleetId.String()),
 					zap.Error(err))
 			}
+			// HA S3b (ADR 0035): clean disconnect — this instance relinquishes
+			// ownership of the agent, so drop its registry row. Whichever
+			// instance the agent's socket reconnects to re-owns it via upsert.
+			s.removeConnectionOwner(fleetId)
 			s.tracer.EndAgentConnection(agentId, "client_disconnected")
 		}
 	} else {
@@ -278,6 +304,40 @@ func (s *Server) onDisconnect(conn types.Connection, connTenant string) {
 	// Update current connections gauge
 	if s.metrics != nil {
 		s.metrics.AgentConnections.Update(int64(len(s.agents.GetAllAgentsReadonlyClone())))
+	}
+}
+
+// recordConnectionOwner records (upserts) this instance's ownership of the
+// agent identified by fleetID in the HA S3b connection registry (ADR 0035). A
+// nil registry (unwired, and every test harness) is a no-op, so single-instance
+// behavior is unchanged. SYSTEM-SCOPED: the registry is instance-identity,
+// orthogonal to tenant, so the write is stamped WithSystemContext regardless of
+// the message's per-connection tenant. Best-effort: a registry write failure is
+// logged, never fatal — the registry is ownership/coverage visibility, NOT on
+// the S3a delivery correctness path.
+func (s *Server) recordConnectionOwner(ctx context.Context, fleetID uuid.UUID) {
+	if s.registry == nil {
+		return
+	}
+	sysCtx := identity.WithSystemContext(ctx)
+	if err := s.registry.UpsertConnectionOwner(sysCtx, fleetID, s.instanceID, time.Now()); err != nil {
+		s.logger.Debug("connection registry upsert failed",
+			zap.String("agentId", fleetID.String()),
+			zap.Error(err))
+	}
+}
+
+// removeConnectionOwner deletes the agent's ownership row on a clean disconnect
+// (HA S3b, ADR 0035). Nil registry is a no-op; SYSTEM-SCOPED; best-effort.
+func (s *Server) removeConnectionOwner(fleetID uuid.UUID) {
+	if s.registry == nil {
+		return
+	}
+	sysCtx := identity.WithSystemContext(context.Background())
+	if err := s.registry.DeleteConnectionOwner(sysCtx, fleetID); err != nil {
+		s.logger.Debug("connection registry delete failed",
+			zap.String("agentId", fleetID.String()),
+			zap.Error(err))
 	}
 }
 
@@ -308,6 +368,12 @@ func (s *Server) onMessage(ctx context.Context, conn types.Connection, msg *prot
 	// reports no usable identity (no regression vs. prior behavior).
 	if msg.AgentDescription != nil {
 		s.agents.SetFleetId(agent, s.deriveFleetId(instanceId, msg.AgentDescription))
+		// HA S3b (ADR 0035): this instance owns the agent's WebSocket. Record
+		// ownership keyed by the resolved fleet id. Gated on AgentDescription
+		// (present on the OpAMP connect message and on description changes, not
+		// on plain heartbeats) so the write stays off the per-message hot path;
+		// the reconcile loop's heartbeat refreshes last_heartbeat_at thereafter.
+		s.recordConnectionOwner(ctx, agent.storeID())
 	}
 	// Open the per-agent connection span on the first message we
 	// see from this instance. Idempotent on subsequent messages so
