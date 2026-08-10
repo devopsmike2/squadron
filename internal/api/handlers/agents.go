@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -667,6 +668,174 @@ func (h *AgentHandlers) HandleDecommissionAgent(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "agent_id": agentID})
+}
+
+// AdoptConfigRequest is the (optional) body for POST
+// /api/v1/agents/:id/adopt-config. Name overrides the default
+// "<agent>-adopted" template name; everything else is derived from the
+// agent's reported effective config.
+type AdoptConfigRequest struct {
+	Name string `json:"name,omitempty"`
+}
+
+// AdoptConfigResponse is returned by HandleAdoptConfig. Config is the
+// newly created managed template. Redacted flags that the reported
+// effective config still contained literal redaction markers (OpAMP
+// redacts secret values); Note carries the operator-facing explanation
+// when that happens. Warnings surfaces the same non-fatal structural
+// hints (missing recommended sections, etc.) the /configs/validate
+// endpoint returns, so the operator sees them before assigning.
+type AdoptConfigResponse struct {
+	Config   *services.Config `json:"config"`
+	Redacted bool             `json:"redacted"`
+	Note     string           `json:"note,omitempty"`
+	Warnings []string         `json:"warnings,omitempty"`
+}
+
+// HandleAdoptConfig handles POST /api/v1/agents/:id/adopt-config.
+//
+// "Adopt an agent's effective config as a managed template": a
+// brownfield agent that registers report-only already streams its
+// effective config to Squadron over OpAMP (agent.EffectiveConfig, shown
+// in the Config tab). This endpoint captures that reported config as a
+// standalone managed Config entity so an operator can then assign and
+// manage it going forward — the clean bridge from report-only to managed
+// without re-authoring the config by hand.
+//
+// Semantics (first slice — verbatim adopt):
+//   - The effective config is adopted VERBATIM. Any ${ENV} references it
+//     contains are preserved as-is (they round-trip through the config
+//     text untouched) so no redacted secret literal is ever baked in.
+//   - The config is VALIDATED structurally before creation (same YAML
+//     check the update/validate paths use); an unparseable config is
+//     rejected rather than stored, so Squadron never captures a template
+//     it could later push to brick an agent.
+//   - If the reported config still contains literal redaction markers
+//     (e.g. "<redacted>"), creation still succeeds but the response flags
+//     Redacted + a Note telling the operator to swap the marker for the
+//     appropriate ${ENV} reference before assigning.
+//   - The new Config is created UNASSIGNED (no agent_id, no group_id) and
+//     is NOT pushed anywhere. Assignment happens later via the normal
+//     flow. The source agent is not modified.
+//
+// Per-host parameterization (filelog paths, service.instance.id,
+// hostnames) and apply-to-a-group are deliberately out of scope for this
+// slice — see the backlog follow-ups.
+func (h *AgentHandlers) HandleAdoptConfig(c *gin.Context) {
+	agentID := c.Param("id")
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID format"})
+		return
+	}
+
+	// Body is optional — an absent/empty body just means "use defaults".
+	var req AdoptConfigRequest
+	if c.Request.Body != nil {
+		// Ignore bind errors on an empty body; only a malformed non-empty
+		// JSON body is a client error worth surfacing.
+		if bindErr := c.ShouldBindJSON(&req); bindErr != nil && bindErr.Error() != "EOF" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": bindErr.Error()})
+			return
+		}
+	}
+
+	agent, err := h.agentService.GetAgent(c.Request.Context(), agentUUID)
+	if err != nil {
+		h.logger.Error("Failed to get agent for adopt-config",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agent"})
+		return
+	}
+	if agent == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+		return
+	}
+
+	content := agent.EffectiveConfig
+	if strings.TrimSpace(content) == "" {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error": "Agent has not reported an effective config yet. Ensure the agent is registered report-only over OpAMP (reports_effective_config) and has checked in, then try again.",
+		})
+		return
+	}
+
+	// Validate structurally before we store anything. Reuse the same YAML
+	// check the config update/validate endpoints use so an unparseable
+	// effective config is rejected here rather than captured as a template
+	// that could later be pushed to an agent.
+	if err := validateYAMLConfig(content); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Reported effective config is not valid YAML and cannot be adopted",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Non-fatal structural hints (missing recommended sections, no
+	// pipelines) — surfaced, not blocking. validateOTelConfig only errors
+	// on a YAML parse failure, which we already ruled out above.
+	warnings, _ := validateOTelConfig(content)
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		base := strings.TrimSpace(agent.Name)
+		if base == "" {
+			base = agentUUID.String()
+		}
+		name = base + "-adopted"
+	}
+
+	config := &services.Config{
+		ID:         uuid.New().String(),
+		Name:       name,
+		AgentID:    nil, // unassigned managed template
+		GroupID:    nil,
+		ConfigHash: hashConfig(content),
+		Content:    content,
+		Version:    1,
+		CreatedAt:  time.Now(),
+	}
+
+	if err := h.agentService.CreateConfig(c.Request.Context(), config); err != nil {
+		h.logger.Error("Failed to create adopted config",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create config"})
+		return
+	}
+
+	resp := AdoptConfigResponse{
+		Config:   config,
+		Warnings: warnings,
+	}
+	if configLooksRedacted(content) {
+		resp.Redacted = true
+		resp.Note = "The reported effective config appears to contain redacted secret values. It was adopted verbatim and any ${ENV} references were preserved, but replace any literal redaction markers with the appropriate ${ENV} reference before assigning this config to an agent."
+	}
+
+	h.logger.Info("Adopted agent effective config as managed template",
+		zap.String("agent_id", agentID),
+		zap.String("config_id", config.ID),
+		zap.String("config_name", name),
+		zap.Bool("redacted", resp.Redacted))
+
+	c.JSON(http.StatusCreated, resp)
+}
+
+// configLooksRedacted reports whether the config text carries a literal
+// redaction marker of the kind OpAMP inserts when it strips a secret
+// value from the effective config. It is intentionally conservative — a
+// false positive only adds an advisory note, it never blocks adoption.
+// ${ENV} references are NOT redaction markers (they are the desired,
+// preserved form) so they are not matched here.
+func configLooksRedacted(content string) bool {
+	lower := strings.ToLower(content)
+	for _, marker := range []string{"<redacted>", "[redacted]", "${redacted}", "\"redacted\"", "'redacted'"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // RestartAgentResponse represents the response after restarting an agent

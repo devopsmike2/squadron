@@ -2836,6 +2836,10 @@ func (s *Server) registerRoutes() {
 			agents.PATCH("/:id/group", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleUpdateAgentGroup)
 			agents.POST("/:id/config", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleSendConfigToAgent)
 			agents.POST("/:id/restart", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleRestartAgent)
+			// Adopt an agent's reported effective config as a standalone
+			// managed Config template. Creates a config (validated,
+			// unassigned, not pushed); scoped as a config write.
+			agents.POST("/:id/adopt-config", middleware.RequireScope(services.ScopeConfigsWrite), agentHandlers.HandleAdoptConfig)
 			// v0.35: hard-delete the agent record for hosts that
 			// have been retired from the fleet. Audit-logged via
 			// the agent service's existing event publish.
