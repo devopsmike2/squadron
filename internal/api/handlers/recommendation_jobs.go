@@ -35,7 +35,16 @@ const recommendationJobTTL = time.Hour
 // recommendationJobMaxRuntime caps a single proposer run. It is applied to a
 // context.Background()-derived context — deliberately detached from the HTTP
 // request, so returning the 202 to the client does not cancel the proposer.
-const recommendationJobMaxRuntime = 5 * time.Minute
+//
+// Kept comfortably under the UI's client-side poll ceiling (RECS_POLL_CEILING_MS
+// = 180s in ui/src/api/discovery.ts) so that a job which genuinely can't meet
+// the deadline transitions to a clean status=failed — with a humanized error the
+// UI renders — BEFORE the browser gives up with a generic "taking longer than
+// expected" message. The proposer's per-tier calls now run concurrently, each
+// with its own 60s per-chunk timeout, so a realistic multi-tier estate finishes
+// in well under this bound; the cap is the backstop that guarantees the job can
+// never sit in "running" indefinitely.
+const recommendationJobMaxRuntime = 2 * time.Minute
 
 // RecommendationJob is one async proposer run.
 type RecommendationJob struct {

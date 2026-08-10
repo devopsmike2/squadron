@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -22,6 +24,24 @@ import (
 const (
 	discoveryChunkTierThreshold     = 3
 	discoveryChunkResourceThreshold = 12
+
+	// perDiscoveryChunkTimeout bounds a SINGLE tier's proposer call. It is
+	// derived from the parent (already overall-capped) job context, so one
+	// stalled upstream request fails that chunk fast instead of eating the
+	// 180s HTTP client timeout and dragging the whole job toward the overall
+	// deadline. This is the per-LLM-call timeout the async-recommendations
+	// hang fix was missing: before it, a single slow model call could hold a
+	// chunk open for up to 180s, and six serial chunks pushed the job past
+	// the operator's patience (and the UI's poll ceiling).
+	perDiscoveryChunkTimeout = 60 * time.Second
+
+	// discoveryChunkConcurrency bounds how many per-tier proposer calls run
+	// at once. Tier chunks are independent, so fanning them out turns the
+	// job's wall-clock from the SUM of the per-tier calls into ~the slowest
+	// single call. Capped low enough to stay well under provider rate limits
+	// on a realistic (<=9-tier) estate while still collapsing the serial
+	// latency that made the job look hung.
+	discoveryChunkConcurrency = 4
 )
 
 func discoveryInventorySize(in *DiscoveryScanContext) (tiers, resources int) {
@@ -107,28 +127,70 @@ func splitDiscoveryByTier(in *DiscoveryScanContext) []*DiscoveryScanContext {
 func (s *Service) runDiscoveryChunks(ctx context.Context, in *DiscoveryScanContext) (*ProposalResult, error) {
 	tiers, resources := discoveryInventorySize(in)
 	if tiers < discoveryChunkTierThreshold && resources <= discoveryChunkResourceThreshold {
-		return s.proposeDiscoveryChunk(ctx, in)
+		return s.proposeDiscoveryChunkTimed(ctx, in)
 	}
 	chunks := splitDiscoveryByTier(in)
 	if len(chunks) <= 1 {
-		return s.proposeDiscoveryChunk(ctx, in)
+		return s.proposeDiscoveryChunkTimed(ctx, in)
 	}
-	results := make([]*ProposalResult, 0, len(chunks))
+
+	// Fan the independent per-tier calls out with bounded concurrency. Before
+	// this, the tiers ran serially, so a six-tier estate paid the SUM of six
+	// model calls (each up to the 180s HTTP timeout) — minutes of wall-clock
+	// that looked like a hang to the operator. Running them concurrently
+	// collapses that to ~the slowest single call, and the per-chunk timeout
+	// (proposeDiscoveryChunkTimed) guarantees no single tier stalls the job.
+	// Results/errs are indexed by chunk so each goroutine writes its own slot
+	// (no shared-append race) and tier order is preserved on merge.
+	results := make([]*ProposalResult, len(chunks))
+	errs := make([]error, len(chunks))
+	sem := make(chan struct{}, discoveryChunkConcurrency)
+	var wg sync.WaitGroup
+	for i, c := range chunks {
+		wg.Add(1)
+		go func(i int, c *DiscoveryScanContext) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			r, err := s.proposeDiscoveryChunkTimed(ctx, c)
+			if err != nil {
+				errs[i] = err
+				s.logger.Warn("discovery proposer: tier chunk failed, continuing with the rest",
+					zap.String("scan_id", in.ScanID), zap.Error(err))
+				return
+			}
+			results[i] = r
+		}(i, c)
+	}
+	wg.Wait()
+
+	ok := make([]*ProposalResult, 0, len(chunks))
 	var lastErr error
-	for _, c := range chunks {
-		r, err := s.proposeDiscoveryChunk(ctx, c)
-		if err != nil {
-			lastErr = err
-			s.logger.Warn("discovery proposer: tier chunk failed, continuing with the rest",
-				zap.String("scan_id", in.ScanID), zap.Error(err))
+	for i := range chunks {
+		if results[i] != nil {
+			ok = append(ok, results[i])
 			continue
 		}
-		results = append(results, r)
+		if errs[i] != nil {
+			lastErr = errs[i]
+		}
 	}
-	if len(results) == 0 {
+	if len(ok) == 0 {
 		return nil, fmt.Errorf("propose from discovery scan: all %d tier chunks failed; last error: %w", len(chunks), lastErr)
 	}
-	return mergeDiscoveryResults(results), nil
+	return mergeDiscoveryResults(ok), nil
+}
+
+// proposeDiscoveryChunkTimed wraps proposeDiscoveryChunk with a per-chunk
+// deadline derived from ctx. A single stalled tier call fails on this
+// deadline (returning a clear error the job surfaces as status=failed)
+// rather than hanging until the HTTP client's 180s timeout. The derived
+// context is the min of the parent's remaining budget and
+// perDiscoveryChunkTimeout, so it never outlives the overall job deadline.
+func (s *Service) proposeDiscoveryChunkTimed(ctx context.Context, in *DiscoveryScanContext) (*ProposalResult, error) {
+	cctx, cancel := context.WithTimeout(ctx, perDiscoveryChunkTimeout)
+	defer cancel()
+	return s.proposeDiscoveryChunk(cctx, in)
 }
 
 func mergeDiscoveryResults(results []*ProposalResult) *ProposalResult {
