@@ -32,6 +32,7 @@ import {
   Play,
   RotateCcw,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -53,6 +54,7 @@ import {
   listAWSConnections,
   listExcludedRecommendations,
   runAWSScan,
+  clearAWSInventory,
   saveAWSConnection,
   scanAllAWS,
   setRecommendationExclusion,
@@ -1077,6 +1079,12 @@ function InventoryTab({
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
 
+  // Clear-inventory state. clearConfirm gates the destructive action behind a
+  // light two-step confirm (no modal) so an errant click can't wipe a scan.
+  const [clearConfirm, setClearConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
+
   const onRun = useCallback(async () => {
     if (!selected || scanning) return;
     setScanning(true);
@@ -1085,6 +1093,9 @@ function InventoryTab({
     // Clear any stale generate state from a previous scan — a new scan
     // invalidates the prior recommendations panel.
     setGenError(null);
+    // Reset any pending clear-confirm / clear-error from a prior view.
+    setClearConfirm(false);
+    setClearError(null);
     try {
       const r = await runAWSScan(selected);
       setResult(r);
@@ -1113,6 +1124,25 @@ function InventoryTab({
       setGenerating(false);
     }
   }, [result, generating, onRecommendations]);
+
+  // onClear clears the saved account's stored inventory, then empties the panel
+  // so the operator sees a clean slate they can re-scan. The saved connection
+  // and its credentials are untouched server-side, so "Run scan" immediately
+  // repopulates against the same connection with no form re-entry.
+  const onClear = useCallback(async () => {
+    if (!result || clearing) return;
+    setClearing(true);
+    setClearError(null);
+    try {
+      await clearAWSInventory(result.account_id);
+      setResult(null);
+      setClearConfirm(false);
+    } catch (e) {
+      setClearError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClearing(false);
+    }
+  }, [result, clearing]);
 
   // --- Demo auto-populate ---------------------------------------------------
   // The built-in demo account exists purely to SHOW features working on sample
@@ -1221,12 +1251,83 @@ function InventoryTab({
       {!scanning && !result && !error && <InventoryEmptyState />}
 
       {result && (
-        <ScanResultPanel
-          result={result}
-          generating={generating}
-          genError={genError}
-          onGenerate={onGenerate}
-        />
+        <>
+          {/* Re-scan + clear actions for the established connection. Both reuse
+              the saved account — no form re-entry. Clear is gated behind a
+              light inline confirm. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRun}
+              disabled={scanning || clearing}
+              className="gap-1"
+              aria-label="Scan again"
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden />
+              {scanning ? "Scanning…" : "Scan again"}
+            </Button>
+            {!clearConfirm ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setClearError(null);
+                  setClearConfirm(true);
+                }}
+                disabled={scanning || clearing}
+                className="gap-1 text-destructive hover:text-destructive"
+                aria-label="Clear inventory"
+              >
+                <Trash2 className="h-4 w-4" aria-hidden />
+                Clear inventory
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">
+                  Clear this account&apos;s inventory?
+                </span>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={onClear}
+                  disabled={clearing}
+                  className="gap-1"
+                  aria-label="Confirm clear inventory"
+                >
+                  {clearing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Trash2 className="h-4 w-4" aria-hidden />
+                  )}
+                  {clearing ? "Clearing…" : "Clear"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setClearConfirm(false)}
+                  disabled={clearing}
+                  aria-label="Cancel clear inventory"
+                >
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </div>
+          {clearError && (
+            <Card>
+              <CardContent className="p-4 text-sm text-destructive">
+                Clear failed: {clearError}
+              </CardContent>
+            </Card>
+          )}
+          <ScanResultPanel
+            result={result}
+            generating={generating}
+            genError={genError}
+            onGenerate={onGenerate}
+          />
+        </>
       )}
     </div>
   );

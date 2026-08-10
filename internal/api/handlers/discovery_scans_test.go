@@ -6,6 +6,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -21,13 +22,17 @@ import (
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
+// errFakeClear is the injected store failure for the clear-inventory 500 path.
+var errFakeClear = errors.New("clear failed")
+
 // fakeScanStore is the test-side DiscoveryScanStore.
 type fakeScanStore struct {
-	mu      sync.Mutex
-	saved   []*types.ScanRecord
-	byID    map[string]*types.ScanRecord
-	listErr error
-	getErr  error
+	mu        sync.Mutex
+	saved     []*types.ScanRecord
+	byID      map[string]*types.ScanRecord
+	listErr   error
+	getErr    error
+	deleteErr error
 }
 
 func newFakeScanStore() *fakeScanStore {
@@ -74,11 +79,32 @@ func (f *fakeScanStore) GetDiscoveryScan(_ context.Context, scanID string) (*typ
 	return nil, nil
 }
 
+func (f *fakeScanStore) DeleteDiscoveryScans(_ context.Context, provider, scopeID string) (int64, error) {
+	if f.deleteErr != nil {
+		return 0, f.deleteErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := make([]*types.ScanRecord, 0, len(f.saved))
+	var deleted int64
+	for _, r := range f.saved {
+		if r.Provider == provider && r.ScopeID == scopeID {
+			deleted++
+			delete(f.byID, r.ScanID)
+			continue
+		}
+		kept = append(kept, r)
+	}
+	f.saved = kept
+	return deleted, nil
+}
+
 func scanRouter(h *DiscoveryHandlers) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/discovery/aws/connections/:id/scans", h.HandleAWSListScans)
 	r.GET("/discovery/aws/connections/:id/scans/:scanID", h.HandleAWSGetScan)
+	r.DELETE("/discovery/aws/connections/:id/scans", h.HandleAWSClearScans)
 	return r
 }
 
@@ -282,5 +308,98 @@ func TestHandleAWSScanDrift_UnwiredStore503(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/discovery/aws/connections/111/drift", nil))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("want 503, got %d", w.Code)
+	}
+}
+
+// TestHandleAWSClearScans_ClearsOnlyTargetScope is the core "Clear inventory"
+// contract: clearing account 111 empties its history and its history alone —
+// account 222's scans survive untouched. It also asserts the cleared count is
+// reported back to the operator.
+func TestHandleAWSClearScans_ClearsOnlyTargetScope(t *testing.T) {
+	store := newFakeScanStore()
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "a1", Provider: "aws", ScopeID: "111", ResultJSON: `{"scan_id":"a1"}`,
+	})
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "a2", Provider: "aws", ScopeID: "111", ResultJSON: `{"scan_id":"a2"}`,
+	})
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "b1", Provider: "aws", ScopeID: "222", ResultJSON: `{"scan_id":"b1"}`,
+	})
+	h := NewDiscoveryHandlers(nil, zap.NewNop()).WithScanStore(store)
+
+	w := httptest.NewRecorder()
+	scanRouter(h).ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/discovery/aws/connections/111/scans", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Cleared int `json:"cleared"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Cleared != 2 {
+		t.Errorf("cleared = %d, want 2", resp.Cleared)
+	}
+
+	// Target scope now lists empty.
+	got111, _ := store.ListDiscoveryScans(context.Background(), "aws", "111", 50)
+	if len(got111) != 0 {
+		t.Errorf("account 111 still has %d scans after clear", len(got111))
+	}
+	// Other connector's inventory is untouched.
+	got222, _ := store.ListDiscoveryScans(context.Background(), "aws", "222", 50)
+	if len(got222) != 1 || got222[0].ScanID != "b1" {
+		t.Errorf("account 222 inventory disturbed: %+v", got222)
+	}
+}
+
+// TestHandleAWSClearScans_ThenRescanRepopulates dogfeeds the demo loop: after a
+// clear empties the history, a fresh scan (SaveDiscoveryScan, as runAWSScan
+// persists) repopulates the same connector.
+func TestHandleAWSClearScans_ThenRescanRepopulates(t *testing.T) {
+	store := newFakeScanStore()
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "first", Provider: "aws", ScopeID: "111", ResultJSON: `{"scan_id":"first"}`,
+	})
+	h := NewDiscoveryHandlers(nil, zap.NewNop()).WithScanStore(store)
+
+	w := httptest.NewRecorder()
+	scanRouter(h).ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/discovery/aws/connections/111/scans", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("clear: want 200, got %d", w.Code)
+	}
+	if got, _ := store.ListDiscoveryScans(context.Background(), "aws", "111", 50); len(got) != 0 {
+		t.Fatalf("history not empty after clear: %d", len(got))
+	}
+
+	// Re-scan against the same saved connector repopulates.
+	_ = store.SaveDiscoveryScan(context.Background(), &types.ScanRecord{
+		ScanID: "second", Provider: "aws", ScopeID: "111", ResultJSON: `{"scan_id":"second"}`,
+	})
+	got, _ := store.ListDiscoveryScans(context.Background(), "aws", "111", 50)
+	if len(got) != 1 || got[0].ScanID != "second" {
+		t.Fatalf("rescan did not repopulate: %+v", got)
+	}
+}
+
+func TestHandleAWSClearScans_UnwiredStore503(t *testing.T) {
+	h := NewDiscoveryHandlers(nil, zap.NewNop())
+	w := httptest.NewRecorder()
+	scanRouter(h).ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/discovery/aws/connections/111/scans", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("want 503, got %d", w.Code)
+	}
+}
+
+func TestHandleAWSClearScans_StoreErr500(t *testing.T) {
+	store := newFakeScanStore()
+	store.deleteErr = errFakeClear
+	h := NewDiscoveryHandlers(nil, zap.NewNop()).WithScanStore(store)
+	w := httptest.NewRecorder()
+	scanRouter(h).ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/discovery/aws/connections/111/scans", nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("want 500, got %d", w.Code)
 	}
 }

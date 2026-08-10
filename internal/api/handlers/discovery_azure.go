@@ -249,6 +249,12 @@ func (h *DiscoveryAzureHandlers) HandleAzureScanDrift(c *gin.Context) {
 	writeDrift(c, h.scanStore, h.logger, "azure", strings.TrimSpace(c.Param("id")))
 }
 
+// HandleAzureClearScans — DELETE /api/v1/discovery/azure/connections/:id/scans.
+// Clears the saved connection's stored inventory; the connection stays intact.
+func (h *DiscoveryAzureHandlers) HandleAzureClearScans(c *gin.Context) {
+	writeScanClear(c, h.scanStore, h.logger, "azure", strings.TrimSpace(c.Param("id")))
+}
+
 func (h *DiscoveryAzureHandlers) WithAzureScannerFactory(f AzureScannerFactory) *DiscoveryAzureHandlers {
 	h.scannerFactory = f
 	return h

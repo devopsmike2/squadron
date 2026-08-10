@@ -194,6 +194,17 @@ type ApplicationStore interface {
 	ListDiscoveryScans(ctx context.Context, provider, scopeID string, limit int) ([]*ScanRecord, error)
 	GetDiscoveryScan(ctx context.Context, scanID string) (*ScanRecord, error)
 
+	// DeleteDiscoveryScans clears the persisted scan history (the stored
+	// inventory) for one connector scope — every scan row matching
+	// (provider, scopeID). It is the store side of the discovery UI's
+	// "Clear inventory" action: it removes only that scope's scans and
+	// leaves other scopes' history and the connector's own credentials
+	// (kept in a separate store) untouched, so the operator can re-scan
+	// the same saved connection immediately. A blank provider or scopeID
+	// is refused so an empty scope can't wipe unrelated history. Returns
+	// the number of scan rows deleted.
+	DeleteDiscoveryScans(ctx context.Context, provider, scopeID string) (int64, error)
+
 	// v0.89.37 (#656 Stream 54, #531 slice 2 chunk 4) — operator-set
 	// exclusion infrastructure for discovery recommendations. The
 	// "Don't propose this again" affordance on the Recommendations tab

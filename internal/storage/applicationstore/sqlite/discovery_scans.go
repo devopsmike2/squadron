@@ -116,6 +116,38 @@ func (s *Storage) DeleteDiscoveryScansBefore(
 	return n, nil
 }
 
+// DeleteDiscoveryScans clears the persisted scan history for one connector
+// scope (provider + scope_id) — the store side of the discovery UI's "Clear
+// inventory" action. It deletes only the scan rows for that scope; the
+// connector's credentials live in a separate store (credstore) and are never
+// touched here, so the operator can immediately re-scan the same saved
+// connection. A blank provider or scopeID is refused so an empty scope can't
+// wipe unrelated history. Returns the number of rows deleted.
+func (s *Storage) DeleteDiscoveryScans(ctx context.Context, provider, scopeID string) (int64, error) {
+	if provider == "" || scopeID == "" {
+		return 0, fmt.Errorf("sqlite: DeleteDiscoveryScans requires a non-empty provider and scopeID")
+	}
+	// Mirrors ListDiscoveryScans' scoping: a non-system caller (the HTTP
+	// clear-inventory handler runs under the operator's tenant) deletes only
+	// its own tenant's rows for the scope.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stmt := `DELETE FROM discovery_scans WHERE provider = ? AND scope_id = ?`
+	args := []any{provider, scopeID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: delete discovery_scans by scope: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // ListDiscoveryScans returns newest-first scan history for a scope. result_json
 // is omitted to keep list responses small. A blank scopeID lists every scan for
 // the provider.

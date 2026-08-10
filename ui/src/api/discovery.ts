@@ -17,7 +17,7 @@
 // the very first frame of the connect flow and removes one moving
 // piece — the wizard is small (5 steps) and rarely changes.
 
-import { apiGet, apiPost } from "./base";
+import { apiDelete, apiGet, apiPost } from "./base";
 import type { Recommendation } from "./recommendations";
 
 // --- Validation endpoint shapes -------------------------------------
@@ -579,6 +579,25 @@ export function runAWSScan(
   return apiPost<ScanResult>(
     `/discovery/aws/connections/${encodeURIComponent(accountID)}/scan`,
     { regions: regions ?? [] },
+  );
+}
+
+// ClearInventoryResult mirrors the clear-inventory endpoint's wire shape:
+// the count of persisted scans dropped for the connector.
+export interface ClearInventoryResult {
+  cleared: number;
+}
+
+// clearAWSInventory clears the stored inventory (persisted scan history) for a
+// saved account, so the operator can re-scan the same connection from a clean
+// slate. The connection and its credentials are left intact server-side — only
+// the scan results are removed. Pairs with runAWSScan for the
+// scan -> clear -> scan-again loop.
+export function clearAWSInventory(
+  accountID: string,
+): Promise<ClearInventoryResult> {
+  return apiDelete<ClearInventoryResult>(
+    `/discovery/aws/connections/${encodeURIComponent(accountID)}/scans`,
   );
 }
 
