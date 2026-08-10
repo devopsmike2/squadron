@@ -2844,6 +2844,10 @@ func (s *Server) registerRoutes() {
 			// have been retired from the fleet. Audit-logged via
 			// the agent service's existing event publish.
 			agents.DELETE("/:id", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleDecommissionAgent)
+			// Backlog #5 — operator confirms a suspected-duplicate
+			// telemetry-only agent is a legitimate separate agent and
+			// clears the flag. Scoped like the sibling agent mutations.
+			agents.POST("/:id/dismiss-duplicate", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleDismissDuplicate)
 		}
 
 		// Config routes. validate/lint/templates are read-shaped (they

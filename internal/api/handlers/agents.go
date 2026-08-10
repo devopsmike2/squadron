@@ -670,6 +670,86 @@ func (h *AgentHandlers) HandleDecommissionAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "agent_id": agentID})
 }
 
+// HandleDismissDuplicate is POST /api/v1/agents/:id/dismiss-duplicate.
+//
+// Backlog #5 (Southern log-fan-out incident). When Squadron flags a
+// telemetry-only agent as a suspected duplicate of an OpAMP-managed agent on
+// the same host, the operator has two outs: Decommission (the phantom is real
+// junk — reuse DELETE /agents/:id) or Dismiss (this is a legitimate separate
+// agent that just happens to share the host.name — stop flagging it). This is
+// the Dismiss path: it records the decision as a reserved agent label the
+// detector honors (services.LabelDuplicateDismissed), so the badge clears and
+// stays cleared across restarts. It does NOT delete, merge, or move any
+// telemetry — it is purely "I looked, it's fine".
+//
+// The label rides on the agent's existing registration fields, persisted via
+// UpdateAgentRegistration. That is safe precisely because telemetry-only agents
+// never re-report an AgentDescription over OpAMP, so nothing overwrites their
+// labels after this write.
+func (h *AgentHandlers) HandleDismissDuplicate(c *gin.Context) {
+	agentID := c.Param("id")
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID format"})
+		return
+	}
+
+	agent, err := h.agentService.GetAgent(c.Request.Context(), agentUUID)
+	if err != nil {
+		h.logger.Error("Failed to get agent for dismiss-duplicate",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agent"})
+		return
+	}
+	if agent == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+		return
+	}
+
+	// Idempotent: set the reserved dismiss label and persist. Re-dismissing an
+	// already-dismissed agent is a harmless no-op write.
+	if agent.Labels == nil {
+		agent.Labels = map[string]string{}
+	}
+	agent.Labels[services.LabelDuplicateDismissed] = "true"
+
+	if err := h.agentService.UpdateAgentRegistration(c.Request.Context(), agent); err != nil {
+		h.logger.Error("Failed to persist duplicate dismissal",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to dismiss duplicate"})
+		return
+	}
+
+	// Operator-action audit (best-effort; a nil recorder or Record error never
+	// fails the request).
+	if h.auditService != nil {
+		actor := middleware.ActorFromGin(c).String()
+		if actor == "" {
+			actor = services.AuditActorSystem
+		}
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      actor,
+			EventType:  services.AuditEventAgentDuplicateDismissed,
+			TargetType: services.AuditTargetAgent,
+			TargetID:   agentID,
+			Action:     "duplicate_dismissed",
+			Payload: map[string]any{
+				"agent_id":  agentID,
+				"host_name": agent.Labels["host.name"],
+			},
+		})
+	}
+
+	// Re-read so the response reflects the cleared flag (the detector now skips
+	// this agent, so SuspectedDuplicateOf comes back nil).
+	updated, err := h.agentService.GetAgent(c.Request.Context(), agentUUID)
+	if err != nil || updated == nil {
+		c.JSON(http.StatusOK, agent)
+		return
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
 // AdoptConfigRequest is the (optional) body for POST
 // /api/v1/agents/:id/adopt-config. Name overrides the default
 // "<agent>-adopted" template name; everything else is derived from the

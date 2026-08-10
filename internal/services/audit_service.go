@@ -125,13 +125,22 @@ const (
 	// agent_id, from_group_id, from_group_name, to_group_id, to_group_name
 	// (the from_*/to_* pairs are empty strings when clearing/unassigned).
 	AuditEventAgentGroupReassigned = "agent.group_reassigned"
-	AuditEventConfigStored         = "config.stored"
-	AuditEventConfigApplied        = "config.applied"
-	AuditEventAlertRuleCreated     = "alert_rule.created"
-	AuditEventAlertRuleUpdated     = "alert_rule.updated"
-	AuditEventAlertRuleDeleted     = "alert_rule.deleted"
-	AuditEventAlertFired           = "alert.fired"
-	AuditEventAlertResolved        = "alert.resolved"
+
+	// Backlog #5 (Southern log-fan-out incident) — operator dismisses the
+	// suspected-duplicate flag on a telemetry-only agent, confirming it is a
+	// legitimate separate agent and not a phantom of an OpAMP-managed host.
+	// Emitted by POST /api/v1/agents/:id/dismiss-duplicate. Payload: agent_id,
+	// host_name. Decommission (the phantom-removal action) keeps emitting the
+	// existing agent.decommissioned event.
+	AuditEventAgentDuplicateDismissed = "agent.duplicate_dismissed"
+
+	AuditEventConfigStored     = "config.stored"
+	AuditEventConfigApplied    = "config.applied"
+	AuditEventAlertRuleCreated = "alert_rule.created"
+	AuditEventAlertRuleUpdated = "alert_rule.updated"
+	AuditEventAlertRuleDeleted = "alert_rule.deleted"
+	AuditEventAlertFired       = "alert.fired"
+	AuditEventAlertResolved    = "alert.resolved"
 
 	// Action runner lifecycle. action.dispatched fires when Squadron
 	// signs a request and writes it as pending. action.executed and

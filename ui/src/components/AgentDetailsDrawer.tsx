@@ -8,7 +8,11 @@ import {
 import { useState } from "react";
 import useSWR from "swr";
 
-import { decommissionAgent, restartAgent } from "@/api/agents";
+import {
+  decommissionAgent,
+  dismissDuplicate,
+  restartAgent,
+} from "@/api/agents";
 import { getAgentTopology } from "@/api/topology";
 import { AgentConfigPipeline } from "@/components/agent-details/AgentConfigPipeline";
 import { AgentLogs } from "@/components/agent-details/AgentLogs";
@@ -46,14 +50,33 @@ export function AgentDetailsDrawer({
     type: "success" | "error";
     text: string;
   } | null>(null);
+  const [isDismissing, setIsDismissing] = useState(false);
 
-  const { data: agentTopology, isLoading } = useSWR(
-    agentId && open ? `agent-topology-${agentId}` : null,
-    () => (agentId ? getAgentTopology(agentId) : null),
+  const {
+    data: agentTopology,
+    isLoading,
+    mutate: mutateAgent,
+  } = useSWR(agentId && open ? `agent-topology-${agentId}` : null, () =>
+    agentId ? getAgentTopology(agentId) : null,
   );
 
   const agent = agentTopology?.agent;
   const metrics = agentTopology?.metrics;
+  const duplicate = agent?.suspected_duplicate_of;
+
+  const handleDismissDuplicate = async () => {
+    if (!agentId) return;
+    setIsDismissing(true);
+    try {
+      await dismissDuplicate(agentId);
+      // Re-fetch so the banner clears (the detector now skips this agent).
+      await mutateAgent();
+    } catch (e) {
+      alert(String((e as Error).message ?? e));
+    } finally {
+      setIsDismissing(false);
+    }
+  };
 
   // Check if agent supports restart command
   const supportsRestart =
@@ -160,6 +183,37 @@ export function AgentDetailsDrawer({
             className="mt-4"
           >
             <AlertDescription>{restartMessage.text}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Backlog #5 — suspected duplicate-identity warning. Shown only when
+            this telemetry-only agent looks like a phantom of an OpAMP-managed
+            agent on the same host. Two outs: Decommission (the button in the
+            header, for a real phantom) or Dismiss (below, for a legitimate
+            separate agent). */}
+        {duplicate && (
+          <Alert variant="destructive" className="mt-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <div className="font-medium">
+                Likely duplicate of {duplicate.of_agent_name}
+              </div>
+              <div className="mt-1 text-xs opacity-90">
+                {duplicate.reason}. If this is the same host, Decommission it
+                (top right). If it is a legitimate separate agent, Dismiss to
+                stop flagging it.
+              </div>
+              <div className="mt-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDismissDuplicate}
+                  disabled={isDismissing}
+                >
+                  {isDismissing ? "Dismissing..." : "Dismiss"}
+                </Button>
+              </div>
+            </AlertDescription>
           </Alert>
         )}
 
