@@ -620,6 +620,88 @@ describe("DiscoveryAWSPage", () => {
     expect(mockedRunAWSScan).toHaveBeenCalledWith("123456789012");
   });
 
+  // --- Null-array-field regression (blank-page crash) --------------
+  //
+  // Repro for the demo-blocking blank-page bug: a per-account scan
+  // whose array fields arrive as `null` (a stale/degraded backend that
+  // emitted `control_plane_logging: null` and `compute: null` /
+  // `functions: null` rather than `[]`). Before the fix, rendering the
+  // result panel threw `TypeError: Cannot read properties of null
+  // (reading 'length')` inside the section `.map`/`.length` calls,
+  // and — with no error boundary — the exception unmounted the whole
+  // SPA to a blank page. The fix guards every outer array + inner
+  // field with `?? []` and wraps the section list in an ErrorBoundary.
+  // This test asserts the panel renders without throwing.
+  it("renders the result panel without crashing when array fields are null", async () => {
+    // A scan whose category slices (and one cluster's inner arrays)
+    // came back null instead of []. Cast through unknown because the
+    // ScanResult type marks these non-optional — the whole point is
+    // that a real backend regression can still put null on the wire.
+    const nullFieldScan = {
+      ...sampleScan,
+      compute: null,
+      functions: null,
+      databases: null,
+      object_stores: null,
+      load_balancers: null,
+      serverless: null,
+      orchestrations: null,
+      event_sources: null,
+      clusters: [
+        {
+          resource_id: "arn:aws:eks:us-east-1:123:cluster/null-axes",
+          name: "null-axes-cluster",
+          kubernetes_version: "1.29",
+          status: "ACTIVE",
+          // The exact inner-field null the trace pointed at: the
+          // `.map` callback read `.length` on this null element.
+          control_plane_logging: null,
+          addons: null,
+          nodegroup_count: 0,
+          fargate_profile_count: 0,
+          region: "us-east-1",
+          tags: {},
+        },
+      ],
+    } as unknown as ScanResult;
+
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue(nullFieldScan);
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", { name: /Connected account/i });
+    await user.click(select);
+    await user.click(
+      await screen.findByRole("option", { name: /Prod AWS \(123456789012\)/ }),
+    );
+    await user.click(await screen.findByRole("button", { name: /Run scan/i }));
+
+    // The summary header renders (it always did) AND the section list
+    // renders without throwing — the page did not blank out.
+    await waitFor(() => {
+      expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+    });
+    // The cluster with null inner axes still renders its row (guarded
+    // to the "none" badge state rather than throwing on `.length`).
+    expect(screen.getByText("null-axes-cluster")).toBeInTheDocument();
+    // Empty category sections still render their headers (guarded
+    // outer arrays → `.length === 0` empty-state branch).
+    expect(
+      within(document.body).getAllByText(/Compute instances/i).length,
+    ).toBeGreaterThan(0);
+    // The graceful-degrade boundary fallback did NOT fire — the panel
+    // rendered normally rather than showing the error message.
+    expect(
+      screen.queryByText(/inventory detail failed to render/i),
+    ).not.toBeInTheDocument();
+  });
+
   // --- Clear-inventory + re-scan flow ------------------------------
   //
   // scanToResult drives the shared prelude these tests need: land on the

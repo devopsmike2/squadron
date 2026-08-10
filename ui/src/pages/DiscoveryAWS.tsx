@@ -95,6 +95,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import {
   Select,
   SelectContent,
@@ -1474,34 +1475,59 @@ function ScanResultPanel({
           );
         })()}
 
-      {/* Compute section */}
-      <ComputeSection compute={result.compute} />
+      {/* The per-category resource sections sit behind an ErrorBoundary so
+          a null array field (or any future render bug) degrades to an inline
+          message instead of blanking the whole SPA — the same pattern the
+          agent-detail / FleetMap null-render fixes established. The summary
+          header + Generate-recommendations CTA above render outside the
+          boundary because they don't touch the category slices. Every array
+          below is guarded with `?? []` (outer array) so a `null` slice from a
+          stale/degraded backend can't throw on `.length` / `.map()`. */}
+      <ErrorBoundary
+        fallback={
+          <Card className="border-destructive/40 bg-destructive/5">
+            <CardContent
+              role="alert"
+              className="p-4 text-sm text-muted-foreground"
+            >
+              The inventory detail failed to render. The scan still succeeded —
+              re-run the scan or switch accounts. (This section degraded instead
+              of blanking the page.)
+            </CardContent>
+          </Card>
+        }
+      >
+        <div className="space-y-4">
+          {/* Compute section */}
+          <ComputeSection compute={result.compute ?? []} />
 
-      {/* Functions section */}
-      <FunctionsSection functions={result.functions} />
+          {/* Functions section */}
+          <FunctionsSection functions={result.functions ?? []} />
 
-      {/* Databases section (slice 2 — v0.87) */}
-      <DatabasesSection databases={result.databases ?? []} />
+          {/* Databases section (slice 2 — v0.87) */}
+          <DatabasesSection databases={result.databases ?? []} />
 
-      {/* Object stores + Load balancers sections (slice 3a — v0.88.0) */}
-      <ObjectStoresSection objectStores={result.object_stores ?? []} />
-      <LoadBalancersSection loadBalancers={result.load_balancers ?? []} />
+          {/* Object stores + Load balancers sections (slice 3a — v0.88.0) */}
+          <ObjectStoresSection objectStores={result.object_stores ?? []} />
+          <LoadBalancersSection loadBalancers={result.load_balancers ?? []} />
 
-      {/* Clusters section (slice 3b — v0.89.0) */}
-      <ClustersSection clusters={result.clusters ?? []} />
+          {/* Clusters section (slice 3b — v0.89.0) */}
+          <ClustersSection clusters={result.clusters ?? []} />
 
-      {/* Serverless section (serverless tier slice 1 chunk 5 —
-          v0.89.92, #725 Stream 123). */}
-      <ServerlessSection serverless={result.serverless ?? []} />
+          {/* Serverless section (serverless tier slice 1 chunk 5 —
+            v0.89.92, #725 Stream 123). */}
+          <ServerlessSection serverless={result.serverless ?? []} />
 
-      {/* Orchestration section (orchestration tier slice 1 chunk 4
-          — v0.89.97, #731 Stream 129). */}
-      <OrchestrationSection orchestrations={result.orchestrations ?? []} />
+          {/* Orchestration section (orchestration tier slice 1 chunk 4
+            — v0.89.97, #731 Stream 129). */}
+          <OrchestrationSection orchestrations={result.orchestrations ?? []} />
 
-      {/* Event sources section (event source tier slice 1 chunk 5
-          — v0.89.102, #738 Stream 136). All 4 providers render this
-          tab (including OCI, unlike Orchestration which hid OCI). */}
-      <EventSourcesSection eventSources={result.event_sources ?? []} />
+          {/* Event sources section (event source tier slice 1 chunk 5
+            — v0.89.102, #738 Stream 136). All 4 providers render this
+            tab (including OCI, unlike Orchestration which hid OCI). */}
+          <EventSourcesSection eventSources={result.event_sources ?? []} />
+        </div>
+      </ErrorBoundary>
     </div>
   );
 }
@@ -1933,7 +1959,7 @@ function ClustersSection({ clusters }: { clusters: ScanResult["clusters"] }) {
                       <span className="text-[10px] uppercase text-muted-foreground">
                         Control Plane Logging:
                       </span>
-                      {c.control_plane_logging.length === 0 ? (
+                      {(c.control_plane_logging ?? []).length === 0 ? (
                         <Badge
                           variant="outline"
                           className="text-muted-foreground"
@@ -1941,7 +1967,7 @@ function ClustersSection({ clusters }: { clusters: ScanResult["clusters"] }) {
                           none
                         </Badge>
                       ) : (
-                        c.control_plane_logging.map((t) => {
+                        (c.control_plane_logging ?? []).map((t) => {
                           const required = t === "api" || t === "audit";
                           return (
                             <Badge
@@ -1963,7 +1989,7 @@ function ClustersSection({ clusters }: { clusters: ScanResult["clusters"] }) {
                       <span className="text-[10px] uppercase text-muted-foreground">
                         Add-ons:
                       </span>
-                      {c.addons.length === 0 ? (
+                      {(c.addons ?? []).length === 0 ? (
                         <Badge
                           variant="outline"
                           className="text-muted-foreground"
@@ -1971,7 +1997,7 @@ function ClustersSection({ clusters }: { clusters: ScanResult["clusters"] }) {
                           none
                         </Badge>
                       ) : (
-                        c.addons.map((a) => {
+                        (c.addons ?? []).map((a) => {
                           const isObs =
                             a.name === "adot" ||
                             a.name === "amazon-cloudwatch-observability";
