@@ -1,0 +1,39 @@
+# otelcol-contrib agent; OpAMP client connects to the NON-LEADER Squadron
+# instance (instance A, host 14320). ENTERPRISE build requires the
+# x-squadron-tenant header (strict tenant scoping, ADR 0012). accepts_remote_config
+# is REQUIRED for Squadron to deliver config (the reconcile loop skips agents
+# that don't advertise it).
+receivers:
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+processors:
+  batch: { timeout: 1s }
+exporters:
+  debug: {}
+extensions:
+  health_check: { endpoint: 0.0.0.0:13133 }
+  opamp:
+    server:
+      ws:
+        endpoint: ws://host.docker.internal:14320/v1/opamp
+        headers:
+          x-squadron-tenant: default
+    agent_description:
+      include_resource_attributes: true
+    capabilities:
+      accepts_remote_config: true
+      reports_effective_config: true
+      reports_health: true
+service:
+  extensions: [opamp, health_check]
+  pipelines:
+    metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }
+    logs:    { receivers: [otlp], processors: [batch], exporters: [debug] }
+    traces:  { receivers: [otlp], processors: [batch], exporters: [debug] }
+  telemetry:
+    resource:
+      agent.group_name: ha-proof-group
+      service.name: ha-proof-agent
+      deployment.environment: ha-proof

@@ -1,0 +1,13 @@
+server: { http_port: 18080, opamp_port: 14320 }
+otlp:
+  grpc_endpoint: "0.0.0.0:14317"
+  http_endpoint: "0.0.0.0:14318"
+storage:
+  app: { type: postgres, path: /tmp/ha-proof/a/app.db, dsn: "postgres://squadron:squadron@localhost:5432/squadron?sslmode=disable" }
+  telemetry: { type: duckdb, path: /tmp/ha-proof/a/telemetry.db }
+logging: { level: info, format: json }
+auth: { enabled: false }
+pricing: { enabled: true }
+silent_agents: { enabled: true, silence_threshold: 10m, poll_interval: 60s }
+ha: { reconcile_enabled: true, reconcile_interval: "5s" }
+ingest: { otlp: { tenant_id: default } }

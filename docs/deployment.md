@@ -423,6 +423,13 @@ replicas behind the Service for active/active load balancing. The OpAMP
 connections stick to whichever replica accepted them; everything else
 is stateless.
 
+Running **more than one instance** is the Enterprise HA path: it needs
+the Enterprise build (Postgres advisory-lock leader election) plus this
+Postgres store. See [High availability (multi-instance)](./high-availability.md)
+for load-balancer routing, `/readyz` health checks, leader election and
+failover, rolling upgrades, the Aurora Multi-AZ requirement, and how to
+validate an HA cluster with the `deploy/ha-proof/` harness.
+
 Migrating an existing SQLite instance? See
 [SQLite → Postgres migration](./sqlite-to-postgres-migration.md) for the
 ordered cutover steps, RDS sizing, the audit-chain-preservation rule, and
