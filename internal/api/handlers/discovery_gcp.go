@@ -245,6 +245,12 @@ func (h *DiscoveryGCPHandlers) HandleGCPScanDrift(c *gin.Context) {
 	writeDrift(c, h.scanStore, h.logger, "gcp", strings.TrimSpace(c.Param("id")))
 }
 
+// HandleGCPClearScans — DELETE /api/v1/discovery/gcp/connections/:id/scans.
+// Clears the saved connection's stored inventory; the connection stays intact.
+func (h *DiscoveryGCPHandlers) HandleGCPClearScans(c *gin.Context) {
+	writeScanClear(c, h.scanStore, h.logger, "gcp", strings.TrimSpace(c.Param("id")))
+}
+
 func (h *DiscoveryGCPHandlers) WithGCPScannerFactory(f GCPScannerFactory) *DiscoveryGCPHandlers {
 	h.scannerFactory = f
 	return h

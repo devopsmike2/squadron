@@ -34,6 +34,10 @@ type DiscoveryScanStore interface {
 	SaveDiscoveryScan(ctx context.Context, rec *types.ScanRecord) error
 	ListDiscoveryScans(ctx context.Context, provider, scopeID string, limit int) ([]*types.ScanRecord, error)
 	GetDiscoveryScan(ctx context.Context, scanID string) (*types.ScanRecord, error)
+	// DeleteDiscoveryScans clears the stored inventory (scan history) for one
+	// connector scope. Backs the "Clear inventory" affordance; leaves the saved
+	// connection + its credentials intact so the operator can re-scan.
+	DeleteDiscoveryScans(ctx context.Context, provider, scopeID string) (int64, error)
 }
 
 // scanHistoryListLimit caps a history listing. Generous for now (no retention
@@ -117,6 +121,42 @@ func writeScanList(c *gin.Context, store DiscoveryScanStore, logger *zap.Logger,
 		recs = []*types.ScanRecord{}
 	}
 	c.JSON(http.StatusOK, gin.H{"scans": recs})
+}
+
+// writeScanClear clears the persisted scan history (the stored inventory) for
+// (provider, scopeID) — the server side of the discovery UI's "Clear inventory"
+// action. It removes only this connector scope's scans; the saved connection
+// and its credentials live in a separate store and are left intact, so the
+// operator can re-scan the same connection right after. Responds 200 with the
+// number of scans cleared. Shared by all four cloud clear handlers.
+func writeScanClear(c *gin.Context, store DiscoveryScanStore, logger *zap.Logger, provider, scopeID string) {
+	if scopeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": &scanner.HumanizedError{
+			Code:    "MissingConnectionID",
+			Message: "Connection ID path parameter is required.",
+		}})
+		return
+	}
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ScanHistoryNotConfigured",
+			Message: "Scan history isn't enabled on this deployment.",
+		}})
+		return
+	}
+	cleared, err := store.DeleteDiscoveryScans(c.Request.Context(), provider, scopeID)
+	if err != nil {
+		if logger != nil {
+			logger.Error("clear scans failed", zap.Error(err),
+				zap.String("provider", provider), zap.String("scope_id", scopeID))
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": &scanner.HumanizedError{
+			Code:    "ScanHistoryClearFailed",
+			Message: "Squadron could not clear the inventory. The error has been logged; retry in a moment.",
+		}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": cleared})
 }
 
 // writeScanDetail serves one scan including the full inventory. 404s when the
@@ -293,4 +333,10 @@ func (h *DiscoveryHandlers) HandleAWSGetScan(c *gin.Context) {
 // HandleAWSScanDrift — GET /api/v1/discovery/aws/connections/:id/drift.
 func (h *DiscoveryHandlers) HandleAWSScanDrift(c *gin.Context) {
 	writeDrift(c, h.scanStore, h.logger, "aws", strings.TrimSpace(c.Param("id")))
+}
+
+// HandleAWSClearScans — DELETE /api/v1/discovery/aws/connections/:id/scans.
+// Clears the saved account's stored inventory; the connection stays intact.
+func (h *DiscoveryHandlers) HandleAWSClearScans(c *gin.Context) {
+	writeScanClear(c, h.scanStore, h.logger, "aws", strings.TrimSpace(c.Param("id")))
 }

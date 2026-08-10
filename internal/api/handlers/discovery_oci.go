@@ -253,6 +253,12 @@ func (h *DiscoveryOCIHandlers) HandleOCIScanDrift(c *gin.Context) {
 	writeDrift(c, h.scanStore, h.logger, "oci", strings.TrimSpace(c.Param("id")))
 }
 
+// HandleOCIClearScans — DELETE /api/v1/discovery/oci/connections/:id/scans.
+// Clears the saved connection's stored inventory; the connection stays intact.
+func (h *DiscoveryOCIHandlers) HandleOCIClearScans(c *gin.Context) {
+	writeScanClear(c, h.scanStore, h.logger, "oci", strings.TrimSpace(c.Param("id")))
+}
+
 func (h *DiscoveryOCIHandlers) WithOCIScannerFactory(f OCIScannerFactory) *DiscoveryOCIHandlers {
 	h.scannerFactory = f
 	return h

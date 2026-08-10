@@ -95,3 +95,71 @@ func TestDiscoveryScans_SaveListGet(t *testing.T) {
 		t.Errorf("upsert did not update summary: %v", g.Summary)
 	}
 }
+
+// TestDiscoveryScans_DeleteScoped covers the "Clear inventory" store contract:
+// deleting one connector scope removes exactly that scope's scans (both rows),
+// reports the count, and leaves every other scope and provider untouched — the
+// blast radius must never exceed the targeted connector.
+func TestDiscoveryScans_DeleteScoped(t *testing.T) {
+	s := NewStore()
+	ctx := context.Background()
+	base := time.Now().UTC()
+	mk := func(id, provider, scope string) *types.ScanRecord {
+		return &types.ScanRecord{
+			ScanID: id, Provider: provider, ScopeID: scope,
+			StartedAt: base, CompletedAt: base.Add(time.Minute),
+			ResultJSON: `{"scan_id":"` + id + `"}`,
+		}
+	}
+	for _, r := range []*types.ScanRecord{
+		mk("a1", "aws", "111111111111"),
+		mk("a2", "aws", "111111111111"),
+		mk("b1", "aws", "222222222222"),
+		mk("g1", "gcp", "111111111111"), // same scope string, different provider
+	} {
+		if err := s.SaveDiscoveryScan(ctx, r); err != nil {
+			t.Fatalf("save %s: %v", r.ScanID, err)
+		}
+	}
+
+	n, err := s.DeleteDiscoveryScans(ctx, "aws", "111111111111")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deleted = %d, want 2", n)
+	}
+
+	// Target scope is empty.
+	if got, _ := s.ListDiscoveryScans(ctx, "aws", "111111111111", 10); len(got) != 0 {
+		t.Errorf("target scope not cleared: %d remain", len(got))
+	}
+	// Sibling AWS scope untouched.
+	if got, _ := s.ListDiscoveryScans(ctx, "aws", "222222222222", 10); len(got) != 1 {
+		t.Errorf("sibling aws scope disturbed: %d", len(got))
+	}
+	// Same scope string under a different provider untouched.
+	if got, _ := s.ListDiscoveryScans(ctx, "gcp", "111111111111", 10); len(got) != 1 {
+		t.Errorf("gcp scope disturbed by aws clear: %d", len(got))
+	}
+	// Get on a cleared id → (nil, nil).
+	if g, _ := s.GetDiscoveryScan(ctx, "a1"); g != nil {
+		t.Errorf("cleared scan still retrievable by id: %+v", g)
+	}
+
+	// Re-scan (Save) after clear repopulates the same connector.
+	if err := s.SaveDiscoveryScan(ctx, mk("a3", "aws", "111111111111")); err != nil {
+		t.Fatalf("rescan save: %v", err)
+	}
+	if got, _ := s.ListDiscoveryScans(ctx, "aws", "111111111111", 10); len(got) != 1 || got[0].ScanID != "a3" {
+		t.Errorf("rescan did not repopulate: %+v", got)
+	}
+
+	// Blank provider/scope is refused so it can't wipe unrelated history.
+	if _, err := s.DeleteDiscoveryScans(ctx, "", "111111111111"); err == nil {
+		t.Error("expected error on blank provider")
+	}
+	if _, err := s.DeleteDiscoveryScans(ctx, "aws", ""); err == nil {
+		t.Error("expected error on blank scope")
+	}
+}

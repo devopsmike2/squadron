@@ -3245,6 +3245,12 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/aws/connections/:id/scans",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSListScans(c) }))
+		// Clear the saved account's stored inventory (scan history) so the
+		// operator can re-scan the same connection. agents:write — a mutation,
+		// matching the Save-connection scope reasoning above.
+		v1.DELETE("/discovery/aws/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSClearScans(c) }))
 		v1.GET("/discovery/aws/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryTrampoline(func(h *handlers.DiscoveryHandlers, c *gin.Context) { h.HandleAWSGetScan(c) }))
@@ -3417,6 +3423,9 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/gcp/connections/:id/scans",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPListScans(c) }))
+		v1.DELETE("/discovery/gcp/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPClearScans(c) }))
 		v1.GET("/discovery/gcp/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryGCPTrampoline(func(h *handlers.DiscoveryGCPHandlers, c *gin.Context) { h.HandleGCPGetScan(c) }))
@@ -3478,6 +3487,9 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/azure/connections/:id/scans",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureListScans(c) }))
+		v1.DELETE("/discovery/azure/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureClearScans(c) }))
 		v1.GET("/discovery/azure/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryAzureTrampoline(func(h *handlers.DiscoveryAzureHandlers, c *gin.Context) { h.HandleAzureGetScan(c) }))
@@ -3540,6 +3552,9 @@ func (s *Server) registerRoutes() {
 		v1.GET("/discovery/oci/connections/:id/scans",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIListScans(c) }))
+		v1.DELETE("/discovery/oci/connections/:id/scans",
+			middleware.RequireScope(services.ScopeAgentsWrite),
+			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIClearScans(c) }))
 		v1.GET("/discovery/oci/connections/:id/scans/:scanID",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.discoveryOCITrampoline(func(h *handlers.DiscoveryOCIHandlers, c *gin.Context) { h.HandleOCIGetScan(c) }))
