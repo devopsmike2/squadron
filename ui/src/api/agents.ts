@@ -108,6 +108,49 @@ export const restartAgent = (
   return apiPost<RestartAgentResponse>(`/agents/${agentId}/restart`, {});
 };
 
+// Adopt an agent's reported effective config as a managed template.
+export interface AdoptConfigRequest {
+  /** Optional name override; defaults to "<agent>-adopted" server-side. */
+  name?: string;
+}
+
+export interface AdoptedConfig {
+  id: string;
+  name: string;
+  agent_id?: string;
+  group_id?: string;
+  config_hash: string;
+  content: string;
+  version: number;
+  created_at: string;
+}
+
+export interface AdoptConfigResponse {
+  config: AdoptedConfig;
+  /** true when the reported effective config still carried literal
+   * redaction markers; the config was created verbatim but the operator
+   * should swap markers for ${ENV} references before assigning. */
+  redacted: boolean;
+  note?: string;
+  warnings?: string[];
+}
+
+/**
+ * Adopt the agent's reported effective config as a standalone managed
+ * Config template. The new config is created unassigned and is not
+ * pushed anywhere — the operator assigns it afterward via the normal
+ * flow. Returns the created config plus a redaction advisory.
+ */
+export const adoptAgentConfig = (
+  agentId: string,
+  body?: AdoptConfigRequest,
+): Promise<AdoptConfigResponse> => {
+  return apiPost<AdoptConfigResponse>(
+    `/agents/${agentId}/adopt-config`,
+    body ?? {},
+  );
+};
+
 /** v0.35: hard-delete an agent record. Used for retiring physically
  * decommissioned hosts so they don't pollute the inventory view
  * forever. Telemetry already written for that agent stays in DuckDB. */

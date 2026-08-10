@@ -704,3 +704,201 @@ func TestHandleUpdateAgentGroup_NoOpReassignEmitsNoAudit(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Len(t, audit.recorded, 0, "no-op reassignment to the same group must not audit")
 }
+
+// A minimal but structurally-valid otelcol config used across the
+// adopt-config tests. Contains a ${ENV} reference so we can pin that env
+// references round-trip through adoption verbatim (never baked in).
+const adoptSampleConfig = `receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:OTLP_ENDPOINT}
+processors:
+  batch:
+exporters:
+  otlp:
+    endpoint: http://localhost:4318
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+`
+
+// adoptReq drives HandleAdoptConfig with the :id path param set and an
+// optional JSON body, returning the recorder.
+func adoptReq(t *testing.T, h *AgentHandlers, agentID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: agentID}}
+	var reader *bytes.Reader
+	if body == "" {
+		reader = bytes.NewReader(nil)
+	} else {
+		reader = bytes.NewReader([]byte(body))
+	}
+	c.Request = httptest.NewRequest("POST", "/api/v1/agents/"+agentID+"/adopt-config", reader)
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.HandleAdoptConfig(c)
+	return w
+}
+
+// TestHandleAdoptConfig_Success: adopting an agent's reported effective
+// config creates one validated, unassigned managed Config seeded verbatim
+// from that config (env references preserved) — and does NOT modify or
+// assign the source agent.
+func TestHandleAdoptConfig_Success(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.Name = "web-collector"
+	agent.EffectiveConfig = adoptSampleConfig
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	w := adoptReq(t, handlers, agentID.String(), "")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp AdoptConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Config)
+	assert.Equal(t, adoptSampleConfig, resp.Config.Content, "config adopted verbatim")
+	assert.Contains(t, resp.Config.Content, "${env:OTLP_ENDPOINT}", "env references preserved, not baked in")
+	assert.Equal(t, "web-collector-adopted", resp.Config.Name)
+	assert.Equal(t, 1, resp.Config.Version)
+	assert.Nil(t, resp.Config.AgentID, "adopted template is unassigned (no agent_id)")
+	assert.Nil(t, resp.Config.GroupID, "adopted template is unassigned (no group_id)")
+	assert.False(t, resp.Redacted)
+
+	// A config row was actually created.
+	configs, err := mock.ListConfigs(ctx, services.ConfigFilter{})
+	require.NoError(t, err)
+	require.Len(t, configs, 1)
+	assert.Equal(t, resp.Config.ID, configs[0].ID)
+
+	// The agent was not assigned the new config and its reported
+	// effective config is unchanged — creation only, no auto-push.
+	assigned, err := mock.GetLatestConfigForAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, assigned, "adopt must not assign the config to the source agent")
+	got, err := mock.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Equal(t, adoptSampleConfig, got.EffectiveConfig, "source agent's effective config unchanged")
+}
+
+// TestHandleAdoptConfig_CustomName: a name in the request body overrides
+// the default "<agent>-adopted".
+func TestHandleAdoptConfig_CustomName(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.EffectiveConfig = adoptSampleConfig
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	w := adoptReq(t, handlers, agentID.String(), `{"name":"southern-baseline"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp AdoptConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "southern-baseline", resp.Config.Name)
+}
+
+// TestHandleAdoptConfig_NoEffectiveConfig: an agent that has not reported
+// an effective config yet cannot be adopted — 422 with an actionable
+// message, and no config is created.
+func TestHandleAdoptConfig_NoEffectiveConfig(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.EffectiveConfig = "" // report-only not received yet
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	w := adoptReq(t, handlers, agentID.String(), "")
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+
+	var errResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp["error"], "has not reported an effective config")
+
+	configs, err := mock.ListConfigs(ctx, services.ConfigFilter{})
+	require.NoError(t, err)
+	assert.Empty(t, configs, "no config should be created when there is nothing to adopt")
+}
+
+// TestHandleAdoptConfig_InvalidYAML: an unparseable reported effective
+// config is rejected (400) rather than captured as a template.
+func TestHandleAdoptConfig_InvalidYAML(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.EffectiveConfig = "receivers: [unterminated"
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	w := adoptReq(t, handlers, agentID.String(), "")
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	var errResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp["error"], "not valid YAML")
+
+	configs, err := mock.ListConfigs(ctx, services.ConfigFilter{})
+	require.NoError(t, err)
+	assert.Empty(t, configs, "an invalid config must not be stored")
+}
+
+// TestHandleAdoptConfig_Redacted: when the reported config still carries a
+// literal redaction marker the config is still created, but the response
+// flags redacted + carries an operator note.
+func TestHandleAdoptConfig_Redacted(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.EffectiveConfig = `exporters:
+  otlphttp:
+    endpoint: https://ingest.example.com
+    headers:
+      authorization: <redacted>
+service:
+  pipelines:
+    metrics:
+      exporters: [otlphttp]
+`
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	w := adoptReq(t, handlers, agentID.String(), "")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp AdoptConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Redacted, "a <redacted> marker must set the redacted flag")
+	assert.NotEmpty(t, resp.Note)
+
+	configs, err := mock.ListConfigs(ctx, services.ConfigFilter{})
+	require.NoError(t, err)
+	assert.Len(t, configs, 1, "a redacted config is still adopted (operator decides)")
+}
+
+// TestHandleAdoptConfig_NotFound: 404 for an unknown agent.
+func TestHandleAdoptConfig_NotFound(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := adoptReq(t, handlers, uuid.New().String(), "")
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandleAdoptConfig_BadID: 400 on a non-UUID agent id.
+func TestHandleAdoptConfig_BadID(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := adoptReq(t, handlers, "not-a-uuid", "")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
