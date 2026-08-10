@@ -598,6 +598,12 @@ func (s *AgentServiceImpl) ListConfigs(ctx context.Context, filter ConfigFilter)
 	return result, nil
 }
 
+// DeleteConfigsForAgent removes all agent-scoped config rows for an agent so it
+// resumes tracking group config. Delegates to the store; idempotent there.
+func (s *AgentServiceImpl) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
+	return s.appStore.DeleteConfigsForAgent(ctx, agentID)
+}
+
 // StoreConfigForAgent validates and stores configuration for an agent (storage only, no delivery)
 func (s *AgentServiceImpl) StoreConfigForAgent(ctx context.Context, agentID uuid.UUID, content string) (*Config, error) {
 	// 1. Validate agent exists and has remote config capability

@@ -147,6 +147,12 @@ func (m *MockAgentService) StoreConfigForAgent(ctx context.Context, agentID uuid
 	return args.Get(0).(*services.Config), args.Error(1)
 }
 
+// DeleteConfigsForAgent satisfies services.AgentService. The opamp tests never
+// exercise it, so it's a plain no-op (no mock expectation required).
+func (m *MockAgentService) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
+	return nil
+}
+
 // Tests
 
 func TestSendConfigToAgent_AgentNotFound(t *testing.T) {

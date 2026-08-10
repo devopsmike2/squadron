@@ -45,6 +45,14 @@ type AgentService interface {
 	GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID) (*Config, error)
 	GetLatestConfigForGroup(ctx context.Context, groupID string) (*Config, error)
 	ListConfigs(ctx context.Context, filter ConfigFilter) ([]*Config, error)
+	// DeleteConfigsForAgent removes ALL agent-scoped config rows for an agent so
+	// the agent resumes tracking group config (determineConfigIntent falls back
+	// from GetLatestConfigForAgent to GetLatestConfigForGroup). The rollout engine
+	// uses this to clean up the per-agent canary assignments HA S3d writes, at a
+	// rollout's SUCCESS/ROLLBACK terminal states, so an ex-canary agent is not
+	// left permanently pinned to a stale agent-scoped row. Idempotent (no-op when
+	// there are no matching rows).
+	DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error
 
 	// StoreConfigForAgent validates and stores configuration for an agent
 	// Returns the stored config or error if agent doesn't exist or doesn't support remote config

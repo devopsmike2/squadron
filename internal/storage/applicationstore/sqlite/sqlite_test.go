@@ -317,6 +317,57 @@ func TestSQLiteGetLatestConfigForGroup(t *testing.T) {
 	})
 }
 
+func TestSQLiteDeleteConfig(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		config := makeTestConfig("config-1", &agentID, nil)
+		require.NoError(t, store.CreateConfig(context.Background(), config))
+
+		// Round-trip: delete then it's gone.
+		require.NoError(t, store.DeleteConfig(context.Background(), config.ID))
+		got, err := store.GetConfig(context.Background(), config.ID)
+		require.NoError(t, err)
+		assert.Nil(t, got)
+
+		// Missing id is a no-op (per convention), not an error.
+		require.NoError(t, store.DeleteConfig(context.Background(), "does-not-exist"))
+	})
+}
+
+func TestSQLiteDeleteConfigsForAgent(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		groupID := "test-group"
+		require.NoError(t, store.CreateGroup(context.Background(), makeTestGroup(groupID)))
+
+		// Two agent-scoped rows (rollout assignments) + one group-scoped row.
+		a1 := makeTestConfig("a1", &agentID, nil)
+		a1.Version = 1
+		a1.CreatedAt = time.Now().Add(-time.Hour).UTC()
+		a2 := makeTestConfig("a2", &agentID, nil)
+		a2.Version = 2
+		a2.CreatedAt = time.Now().UTC()
+		g1 := makeTestConfig("g1", nil, &groupID)
+		g1.Version = 5
+		require.NoError(t, store.CreateConfig(context.Background(), a1))
+		require.NoError(t, store.CreateConfig(context.Background(), a2))
+		require.NoError(t, store.CreateConfig(context.Background(), g1))
+
+		require.NoError(t, store.DeleteConfigsForAgent(context.Background(), agentID))
+
+		// All agent-scoped rows gone → the agent now resolves to group config.
+		latestAgent, err := store.GetLatestConfigForAgent(context.Background(), agentID)
+		require.NoError(t, err)
+		assert.Nil(t, latestAgent)
+		// Group-scoped row untouched.
+		latestGroup, err := store.GetLatestConfigForGroup(context.Background(), groupID)
+		require.NoError(t, err)
+		require.NotNil(t, latestGroup)
+		assert.Equal(t, "g1", latestGroup.ID)
+
+		// Idempotent: a second call is a no-op.
+		require.NoError(t, store.DeleteConfigsForAgent(context.Background(), agentID))
+	})
+}
+
 func TestSQLiteListConfigsWithFilter(t *testing.T) {
 	withSQLiteStore(t, func(store types.ApplicationStore) {
 		agentID1 := uuid.New()

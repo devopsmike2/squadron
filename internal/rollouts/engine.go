@@ -114,10 +114,57 @@ type Engine struct {
 	// actionDispatcher pattern so the NewEngine signature stays stable.
 	// Read-only: the engine only ever calls Query on a resolved connector.
 	connectorResolver ConnectorResolver
-	logger            *zap.Logger
+
+	// HA S3d (ADR 0035) — observed-convergence gating + desired-state delivery.
+	//
+	// connRegistry is the connection-registry coverage seam: the leader reads
+	// which stage agents are currently owned by a LIVE instance so a stall
+	// diagnostic can name the agents whose owning instance is dead/absent. nil
+	// (a struct-literal test, or a deployment without the registry wired) is a
+	// no-op — coverage is treated as unknown/fail-open and never blocks the
+	// numerator. Wired via SetConnectionRegistry.
+	connRegistry ConnectionRegistry
+	// coverageGrace is how long a connection-registry ownership row may go
+	// unrefreshed (last_heartbeat_at) before its agent is treated as having no
+	// live owner. Mirrors the S3b reconcile-heartbeat grace (2× reconcile
+	// interval). Zero falls back to defaultCoverageGrace.
+	coverageGrace time.Duration
+	// convergenceTimeout is the extra budget (beyond a stage's dwell) the engine
+	// allows a stage to reach its convergence threshold before aborting. An
+	// agent whose owning instance is dead — or that never applies the target —
+	// cannot hold a rollout open forever; the engine's conservative bias is to
+	// abort (recoverable) rather than hang. Zero falls back to
+	// defaultConvergenceTimeout. Measured from StageStartedAt.
+	convergenceTimeout time.Duration
+	// writeDesiredState enables the ADR 0035 delivery model: applyStage and
+	// rollback write a per-agent desired-state config assignment (an agent-
+	// scoped configs row pointing at the target/previous content), and the S3a
+	// reconcile loop on whichever instance OWNS each agent delivers it — the
+	// leader need not own the agent's socket. The direct commander push is
+	// retained alongside as a single-instance latency optimization; the
+	// convergence gate is the advancement authority either way. NewEngine sets
+	// this true; struct-literal tests that don't wire a config writer leave it
+	// false (direct-push-only, pre-S3d behavior).
+	writeDesiredState bool
+
+	logger *zap.Logger
 
 	shutdown chan struct{}
 	wg       sync.WaitGroup
+}
+
+// SetConnectionRegistry wires the HA S3d convergence-coverage seam (ADR 0035):
+// the leader reads the connection registry to report which stage agents lack a
+// live owning instance when a stage stalls short of convergence. coverageGrace
+// bounds ownership-row staleness; <= 0 keeps the current/default grace. A nil
+// registry disables the coverage diagnostic (single-instance / unwired), leaving
+// convergence gating driven purely by reported effective config. Setter (not a
+// NewEngine parameter) for the same back-compat reason as SetActionDispatcher.
+func (e *Engine) SetConnectionRegistry(reg ConnectionRegistry, coverageGrace time.Duration) {
+	e.connRegistry = reg
+	if coverageGrace > 0 {
+		e.coverageGrace = coverageGrace
+	}
 }
 
 // SetConnectorResolver wires the telemetry-connector boundary the SLO-burn
@@ -313,6 +360,13 @@ func NewEngine(
 		configsTracer:  configsTracer,
 		logger:         logger,
 		shutdown:       make(chan struct{}),
+		// HA S3d (ADR 0035) defaults. Desired-state writes are ON in a real
+		// deployment (the AgentService always exposes CreateConfig /
+		// GetLatestConfigForAgent); the convergence gate + coverage grace fall
+		// back to package defaults unless overridden.
+		writeDesiredState:  true,
+		coverageGrace:      defaultCoverageGrace,
+		convergenceTimeout: defaultConvergenceTimeout,
 	}
 }
 
@@ -679,9 +733,30 @@ func (e *Engine) advanceOrCheck(ctx context.Context, r *services.Rollout) {
 		return
 	}
 
-	// Dwell elapsed and criteria fine — promote.
+	// HA S3d (ADR 0035) — OBSERVED-CONVERGENCE GATE. Dwell is the MINIMUM wait;
+	// convergence is an ADDITIONAL gate that replaces the old "advance on dwell +
+	// push-ack" behavior. The engine advances only when the stage's canary set
+	// has actually reported the target as its effective config (reported/applied
+	// state read from the store each tick — the ADR 0035 "did it apply is
+	// answered by reported state, not a push ack" contract). This is what makes
+	// leader-decides / instances-deliver correct: the leader observes convergence
+	// from the shared store without owning any agent's socket.
+	if converged, detail := e.stageConverged(ctx, r, stage); !converged {
+		// Not converged yet. Bounded wait: an agent whose owning instance is
+		// dead/absent (or that never applies the config) must not hold the
+		// rollout open forever, so past the convergence deadline the engine
+		// aborts (which rolls back — the conservative bias in this package's doc).
+		if e.convergenceDeadlineExceeded(r, stage) {
+			e.triggerAbort(ctx, r, "convergence timeout: "+detail)
+			return
+		}
+		e.tracer.RecordEvent(r.ID, "awaiting_convergence", detail)
+		return
+	}
+
+	// Dwell elapsed, criteria fine, AND the stage converged — promote.
 	if r.CurrentStage == len(r.Stages)-1 {
-		// Last stage cleared its dwell window — done.
+		// Last stage cleared dwell + converged — done.
 		e.finish(ctx, r)
 		return
 	}
@@ -751,6 +826,13 @@ func (e *Engine) finish(ctx context.Context, r *services.Rollout) {
 	e.publishStateChange(r, "succeeded")
 	e.tracer.EndRollout(r.ID, services.RolloutStateSucceeded, "")
 	e.logger.Info("rollout succeeded", zap.String("rollout_id", r.ID))
+
+	// HA S3d lifecycle cleanup (ADR 0035). Promote the target to the group config
+	// and remove the per-agent canary assignments so ex-canary agents end on the
+	// target AND resume tracking future group-config changes (no "stuck canary").
+	// Best-effort + idempotent; gated on the desired-state model so legacy
+	// direct-push tests are unaffected. See finalizeCanaryAssignments.
+	e.finalizeCanaryAssignments(ctx, r, true)
 
 	// v0.70 — multi step plan advancement. When the succeeded
 	// rollout belongs to a plan, promote the next step out of
@@ -970,6 +1052,15 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		})
 		e.recordAudit(ctx, r, "rollout.rolled_back", "rolled_back", nil)
 		e.publishStateChange(r, "rolled_back")
+		// HA S3d lifecycle cleanup (ADR 0035). Remove the per-agent canary
+		// assignments so each agent resumes tracking the group config — which was
+		// never changed by the rollout and so still equals the pre-rollout state
+		// (the PreviousConfigID snapshot the rollback push already delivered). No
+		// promotion: the group config is already the correct revert target.
+		// Best-effort + idempotent; runs on every terminal path (incl. the
+		// no-previous-config early returns, so an aborted canary is never left
+		// permanently pinned to the target).
+		e.finalizeCanaryAssignments(ctx, r, false)
 		// End the rollout span with rolled_back status. The Error
 		// status on the parent span surfaces the reason recorded at
 		// abort time so trace UIs render the failed rollout red.
@@ -998,10 +1089,22 @@ func (e *Engine) rollback(ctx context.Context, r *services.Rollout) {
 		return
 	}
 
+	// HA S3d (ADR 0035) — REVERT VIA DESIRED STATE. Write the previous config as
+	// the per-agent desired state for the pushed set (supersedes the target
+	// assignment each canary agent was given during the rollout), so the S3a
+	// reconcile loop on whichever instance owns each agent delivers the revert —
+	// exactly the delivery model applyStage uses, in reverse. This is the durable
+	// revert path in a multi-instance fleet where the leader may own none of the
+	// canary sockets.
+	if e.writeDesiredState {
+		e.writeDesiredStateForAgents(ctx, r, canary, previous.Content)
+	}
+
 	// Same bounded-concurrency fan-out as applyStage — a rollback is
 	// the moment the operator most needs the old config back on every
 	// canary agent quickly, so it must not serialize ack round-trips
-	// either.
+	// either. Best-effort in the desired-state model (owned agents get it
+	// immediately; the rest converge via their owning instance's reconcile).
 	e.pushConfigToAgents(ctx, r, canary, r.PreviousConfigID, previous.Content,
 		"rollout engine: rollback push failed for agent")
 }
@@ -1055,15 +1158,40 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 	for _, agent := range toPush {
 		ids = append(ids, agent.ID)
 	}
+
+	// HA S3d (ADR 0035) — WRITE DESIRED STATE. For each agent in the stage's
+	// delta, persist a per-agent config assignment (an agent-scoped configs row
+	// carrying the target content, already validated at config-create time).
+	// determineConfigIntent / resolveStoredConfig prefer an agent-specific
+	// config over the group config, so this makes the target the desired state
+	// for exactly the canary agents while the rest of the group stays on group
+	// config. The S3a reconcile loop on whichever instance OWNS each agent then
+	// delivers it — the leader never needs a WebSocket to an agent it doesn't
+	// own. Idempotent (skips an agent already assigned this content). Returns the
+	// agents durably assigned; those are the rollout's real pushed-set now, so
+	// rollback + the health-gate cover every agent whose DESIRED state points at
+	// the target regardless of whether the best-effort direct push below acked.
+	if e.writeDesiredState {
+		assigned := e.writeDesiredStateForAgents(ctx, r, toPush, target.Content)
+		// Best-effort direct push retained as a single-instance latency
+		// optimization: for an agent this instance owns it delivers immediately
+		// (so single-instance rollouts converge within a tick or two); for an
+		// agent owned by another instance it fails "agent not found" and is
+		// tolerated — the desired-state write + that instance's reconcile loop
+		// are the durable delivery path.
+		e.pushConfigToAgents(ctx, r, toPush, r.TargetConfigID, target.Content,
+			"rollout engine: stage direct-push failed (desired state written; reconcile will deliver)")
+		r.PushedAgentIDs = unionPushedAgentIDs(r.PushedAgentIDs, assigned)
+		return ids, nil
+	}
+
+	// Legacy direct-push-only path (writeDesiredState off — struct-literal
+	// tests). ADR 0007 — record only SUCCESSFUL deliveries into the cumulative
+	// pushed-set. A failed agent stays OUT of the set so the next stage's delta
+	// re-includes it (targeted retry). The caller persists r right after
+	// applyStage (start/advance), so the union lands durably this tick.
 	failed := e.pushConfigToAgents(ctx, r, toPush, r.TargetConfigID, target.Content,
 		"rollout engine: stage push failed for agent")
-	// ADR 0007 — record only SUCCESSFUL deliveries into the cumulative pushed-set.
-	// rollback + the health-gate therefore cover agents that actually received
-	// the target config (a never-acked agent has nothing to revert and can't be
-	// health-judged), and because a failed agent stays OUT of the set the next
-	// stage's delta re-includes it — targeted retry, replacing the old implicit
-	// "next superset re-push is the retry path". The caller persists r right after
-	// applyStage (start/advance), so the union lands durably this tick.
 	r.PushedAgentIDs = unionPushedAgentIDs(r.PushedAgentIDs, subtractIDs(ids, failed))
 	return ids, nil
 }

@@ -307,6 +307,55 @@ func TestPostgres_ConfigCRUD(t *testing.T) {
 	}
 }
 
+// TestPostgres_DeleteConfig covers the HA S3d lifecycle primitives: single-row
+// DeleteConfig (round-trip; missing = no-op per convention) and the bulk
+// DeleteConfigsForAgent (removes agent-scoped rows only, leaves group config;
+// idempotent).
+func TestPostgres_DeleteConfig(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	agentID := uuid.New()
+	groupID := "g1"
+	a1 := &types.Config{ID: "a1", AgentID: &agentID, ConfigHash: "h1", Content: "x1", Version: 1, CreatedAt: now}
+	a2 := &types.Config{ID: "a2", AgentID: &agentID, ConfigHash: "h2", Content: "x2", Version: 2, CreatedAt: now.Add(time.Second)}
+	cg := &types.Config{ID: "cg", GroupID: &groupID, ConfigHash: "hg", Content: "g", Version: 1, CreatedAt: now}
+	for _, c := range []*types.Config{a1, a2, cg} {
+		if err := s.CreateConfig(ctx, c); err != nil {
+			t.Fatalf("create %s: %v", c.ID, err)
+		}
+	}
+
+	// Single-row delete round-trip.
+	if err := s.DeleteConfig(ctx, "a1"); err != nil {
+		t.Fatalf("delete a1: %v", err)
+	}
+	if got, err := s.GetConfig(ctx, "a1"); err != nil || got != nil {
+		t.Fatalf("a1 should be gone, got=%v err=%v", got, err)
+	}
+	// Missing id is a no-op (not an error), per the interface convention.
+	if err := s.DeleteConfig(ctx, "does-not-exist"); err != nil {
+		t.Fatalf("delete missing should be a no-op, got %v", err)
+	}
+
+	// Bulk agent-scope delete removes the remaining agent-scoped row (a2) and
+	// leaves the group config intact.
+	if err := s.DeleteConfigsForAgent(ctx, agentID); err != nil {
+		t.Fatalf("delete configs for agent: %v", err)
+	}
+	if got, err := s.GetLatestConfigForAgent(ctx, agentID); err != nil || got != nil {
+		t.Fatalf("agent should have no agent-scoped config, got=%v err=%v", got, err)
+	}
+	if got, err := s.GetLatestConfigForGroup(ctx, groupID); err != nil || got == nil || got.ID != "cg" {
+		t.Fatalf("group config must survive, got=%v err=%v", got, err)
+	}
+	// Idempotent: deleting again is a no-op.
+	if err := s.DeleteConfigsForAgent(ctx, agentID); err != nil {
+		t.Fatalf("second delete-for-agent should be a no-op, got %v", err)
+	}
+}
+
 func TestPostgres_RolloutCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

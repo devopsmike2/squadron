@@ -64,6 +64,12 @@ type RolloutEvidenceRef = types.RolloutEvidenceRef
 type APIToken = types.APIToken
 type SiemDestination = types.SiemDestination
 
+// ConnectionOwner is the HA S3b connection-registry row (ADR 0035): which
+// Squadron instance currently owns an agent's OpAMP WebSocket. Re-exported so
+// callers (e.g. the rollout engine's convergence-coverage read in HA S3d) can
+// name it without reaching into the types subpackage.
+type ConnectionOwner = types.ConnectionOwner
+
 // Execer is the minimal write surface (ExecContext) satisfied by both *sql.DB
 // and *sql.Tx. Re-exported so callers can name it without reaching into the
 // types subpackage. See ADR 0015 — the transactional-mint seam.

@@ -614,6 +614,30 @@ func (s *Store) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([]*
 	return configs, nil
 }
 
+// DeleteConfig removes a single config row by id. NO-OP on a missing id (see the
+// ApplicationStore interface doc): cleanup at a rollout terminal state must be
+// idempotent, so deleting an absent id returns nil rather than a not-found error.
+func (s *Store) DeleteConfig(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.configs, id)
+	return nil
+}
+
+// DeleteConfigsForAgent removes ALL agent-scoped config rows for an agent so the
+// agent resumes tracking group config (HA S3d rollout cleanup). Idempotent — a
+// no matching rows delete is a no-op. Group-scoped rows are never touched.
+func (s *Store) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, config := range s.configs {
+		if config.AgentID != nil && *config.AgentID == agentID {
+			delete(s.configs, id)
+		}
+	}
+	return nil
+}
+
 // Saved query management
 func (s *Store) CreateSavedQuery(ctx context.Context, query *types.SavedQuery) error {
 	s.mu.Lock()
