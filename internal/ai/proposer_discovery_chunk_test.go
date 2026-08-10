@@ -1,6 +1,132 @@
 package ai
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestRunDiscoveryChunks_RespectsDeadline pins the async-recommendations
+// hang fix (fix/discovery-recommendations-job-timeout). Before it, a
+// stalled upstream model call held a tier chunk open until the HTTP
+// client's 180s timeout, and six serial tiers pushed the job past the
+// operator's patience — the job sat in "running" for minutes. Now each
+// chunk runs under a per-call deadline derived from the job context, so a
+// stalled call must fail the job PROMPTLY instead of hanging. A blocking
+// fake server holds every /v1/messages request open until its request
+// context is cancelled; a short-deadline parent context must drive
+// runDiscoveryChunks to a prompt error, not a hang.
+func TestRunDiscoveryChunks_RespectsDeadline(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		// Stall this request so the caller's per-chunk deadline is what
+		// ends the call. The handler returns as soon as the client
+		// cancels (r.Context() fires) OR after a bounded 3s backstop, so
+		// httptest.Server.Close never blocks on a wedged handler even if
+		// the client-side cancellation doesn't propagate to the server's
+		// request context promptly. If the product lacked a per-chunk
+		// deadline, client.Do would instead block for the full 180s HTTP
+		// client timeout — which the sub-second assertion below rejects.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	svc := proposerServiceForTest(srv.URL)
+
+	// A 3-tier inventory trips the chunking / fan-out path (tiers >= 3).
+	in := &DiscoveryScanContext{
+		ScanID:    "scan-slow",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+		ComputeInstances: []ComputeResourceCandidate{
+			{ResourceID: "i-aaa", InstanceType: "t3.micro", Region: "us-east-1"},
+		},
+		Functions: []FunctionResourceCandidate{
+			{ResourceID: "arn:aws:lambda:us-east-1:123:function:hello", Name: "hello", Runtime: "python3.11", Region: "us-east-1"},
+		},
+		Databases: []DatabaseResourceCandidate{
+			{ResourceID: "db-1", Engine: "postgres", Region: "us-east-1"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := svc.runDiscoveryChunks(ctx, in)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "a stalled model call must fail the job, not hang")
+	assert.Less(t, elapsed, 30*time.Second,
+		"the deadline must fail the job promptly, well under the 180s HTTP client timeout")
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&hits), int32(1),
+		"the proposer should have attempted at least one upstream call")
+}
+
+// TestRunDiscoveryChunks_FansOutTiersConcurrently guards the concurrent
+// fan-out: every tier chunk must be dispatched and its plan step merged
+// back (run under -race, this also guards the per-slot result writes
+// against a data race). A fast fake server returns one plan step per
+// call; a 3-tier inventory must yield 3 upstream calls and 3 merged steps.
+func TestRunDiscoveryChunks_FansOutTiersConcurrently(t *testing.T) {
+	var hits int32
+	reply := anthropicReply(`{
+  "kind": "plan",
+  "declined": false,
+  "plan": {
+    "steps": [
+      {
+        "name": "instrument tier",
+        "group_id": "123456789012",
+        "inline_config_snippet": "resource \"aws_x\" \"y\" {}\n",
+        "require_approval": true,
+        "stages": [{"mode":"percent","percentage":100,"dwell_seconds":0}],
+        "abort_criteria": {"max_drifted_agents":5,"max_error_logs_per_minute":50,"min_dwell_seconds_before_abort":120}
+      }
+    ]
+  }
+}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, reply)
+	}))
+	defer srv.Close()
+
+	svc := proposerServiceForTest(srv.URL)
+	in := &DiscoveryScanContext{
+		ScanID:    "scan-fan",
+		AccountID: "123456789012",
+		Regions:   []string{"us-east-1"},
+		ComputeInstances: []ComputeResourceCandidate{
+			{ResourceID: "i-aaa", InstanceType: "t3.micro", Region: "us-east-1"},
+		},
+		Functions: []FunctionResourceCandidate{
+			{ResourceID: "arn:aws:lambda:us-east-1:123:function:hello", Name: "hello", Runtime: "python3.11", Region: "us-east-1"},
+		},
+		Databases: []DatabaseResourceCandidate{
+			{ResourceID: "db-1", Engine: "postgres", Region: "us-east-1"},
+		},
+	}
+
+	res, err := svc.runDiscoveryChunks(context.Background(), in)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&hits), "every tier chunk should hit the proposer")
+	assert.Len(t, res.Plan.Steps, 3, "one merged plan step per tier")
+	assert.False(t, res.Declined)
+}
 
 func TestDiscoveryInventorySize(t *testing.T) {
 	in := &DiscoveryScanContext{
