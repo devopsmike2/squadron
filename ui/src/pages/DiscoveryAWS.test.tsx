@@ -37,6 +37,7 @@ import {
   enableDemoConnection,
   listExcludedRecommendations,
   runAWSScan,
+  clearAWSInventory,
   setRecommendationExclusion,
   type CloudConnection,
   type ExcludedRecommendation,
@@ -83,6 +84,9 @@ vi.mock("@/api/discovery", async () => {
     listAWSConnections: vi.fn(),
     enableDemoConnection: vi.fn(),
     runAWSScan: vi.fn(),
+    // Clear-inventory affordance — DELETEs the saved account's stored scans.
+    // Default stub resolves; per-test overrides drive happy + failure paths.
+    clearAWSInventory: vi.fn(),
     saveAWSConnection: vi.fn(),
     validateAWSConnection: vi.fn(),
     generateAWSRecommendations: vi.fn(),
@@ -126,6 +130,7 @@ vi.mock("@/api/iacGithub", async () => {
 const mockedListAWSConnections = vi.mocked(listAWSConnections);
 const mockedEnableDemoConnection = vi.mocked(enableDemoConnection);
 const mockedRunAWSScan = vi.mocked(runAWSScan);
+const mockedClearAWSInventory = vi.mocked(clearAWSInventory);
 const mockedGenerateAWSRecommendations = vi.mocked(generateAWSRecommendations);
 const mockedGenerateAWSTerraformImport = vi.mocked(generateAWSTerraformImport);
 const mockedListIaCConnections = vi.mocked(listIaCGitHubConnections);
@@ -613,6 +618,95 @@ describe("DiscoveryAWSPage", () => {
     // Scanner was called exactly once with the chosen account ID.
     expect(mockedRunAWSScan).toHaveBeenCalledTimes(1);
     expect(mockedRunAWSScan).toHaveBeenCalledWith("123456789012");
+  });
+
+  // --- Clear-inventory + re-scan flow ------------------------------
+  //
+  // scanToResult drives the shared prelude these tests need: land on the
+  // Inventory tab, pick the saved account, run a scan, and wait for the result
+  // panel. Returns the userEvent instance so the test can keep interacting.
+  async function scanToResult() {
+    mockedListAWSConnections.mockResolvedValue({
+      connections: sampleConnections,
+    });
+    mockedRunAWSScan.mockResolvedValue(sampleScan);
+    const user = userEvent.setup();
+    renderPageInSingleAccountView();
+    await waitFor(() => {
+      expect(screen.getByText("Prod AWS")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /Inventory/i }));
+    const select = screen.getByRole("combobox", { name: /Connected account/i });
+    await user.click(select);
+    await user.click(
+      await screen.findByRole("option", { name: /Prod AWS \(123456789012\)/ }),
+    );
+    await user.click(await screen.findByRole("button", { name: /Run scan/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+    });
+    return user;
+  }
+
+  it("Inventory: Clear inventory confirms, calls the endpoint, and empties the panel", async () => {
+    mockedClearAWSInventory.mockResolvedValue({ cleared: 1 });
+    const user = await scanToResult();
+
+    // First click reveals the inline confirm rather than firing the DELETE.
+    await user.click(
+      screen.getByRole("button", { name: /^Clear inventory$/i }),
+    );
+    expect(mockedClearAWSInventory).not.toHaveBeenCalled();
+    const confirmBtn = await screen.findByRole("button", {
+      name: /Confirm clear inventory/i,
+    });
+
+    // Confirm fires the DELETE against the saved account and empties the panel.
+    await user.click(confirmBtn);
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Scan result for account/i),
+      ).not.toBeInTheDocument();
+    });
+    expect(mockedClearAWSInventory).toHaveBeenCalledTimes(1);
+    expect(mockedClearAWSInventory).toHaveBeenCalledWith("123456789012");
+    // Back to the empty state; the saved connection is untouched so a re-scan
+    // is one click away.
+    expect(
+      screen.getByText(/Run a scan to see current inventory/i),
+    ).toBeInTheDocument();
+  });
+
+  it("Inventory: Cancel dismisses the clear confirm without calling the endpoint", async () => {
+    mockedClearAWSInventory.mockResolvedValue({ cleared: 1 });
+    const user = await scanToResult();
+
+    await user.click(
+      screen.getByRole("button", { name: /^Clear inventory$/i }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Cancel clear inventory/i }),
+    );
+    // Confirm gone, no DELETE fired, result still on screen.
+    expect(
+      screen.queryByRole("button", { name: /Confirm clear inventory/i }),
+    ).not.toBeInTheDocument();
+    expect(mockedClearAWSInventory).not.toHaveBeenCalled();
+    expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
+  });
+
+  it("Inventory: Scan again re-runs the scan against the saved account", async () => {
+    const user = await scanToResult();
+    expect(mockedRunAWSScan).toHaveBeenCalledTimes(1);
+
+    // Re-scan reuses the saved account — no form, no re-select.
+    await user.click(screen.getByRole("button", { name: /Scan again/i }));
+    await waitFor(() => {
+      expect(mockedRunAWSScan).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedRunAWSScan).toHaveBeenLastCalledWith("123456789012");
+    // The result panel repopulates.
+    expect(screen.getByText(/Scan result for account/i)).toBeInTheDocument();
   });
 
   // --- Stream 2F: Generate recommendations flow --------------------
