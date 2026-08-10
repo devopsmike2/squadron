@@ -29,6 +29,7 @@ import (
 
 	"github.com/devopsmike2/squadron/extension/changewindow"
 	"github.com/devopsmike2/squadron/extension/identity"
+	"github.com/devopsmike2/squadron/extension/reconcilecoord"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/connectors"
 	"github.com/devopsmike2/squadron/internal/events"
@@ -147,6 +148,19 @@ type Engine struct {
 	// false (direct-push-only, pre-S3d behavior).
 	writeDesiredState bool
 
+	// HA S3c (ADR 0035) — reconcile-coordination seam. After applyStage writes
+	// an agent's desired state (S3d), the leader POKES the agent's owning
+	// instance to reconcile it immediately instead of waiting for that
+	// instance's next ~30s S3a tick — a pure latency optimization. nil (the
+	// default, and every struct-literal test) disables poking, and the OSS wire
+	// installs the no-op coordinator, so single-instance behavior is unchanged
+	// (S3d's retained direct push already delivers immediately on the one
+	// instance that owns every socket). Under enterprise it becomes a Postgres
+	// NOTIFY. The poke is a HINT only — the S3a reconcile tick is the durability
+	// backstop and the convergence gate remains the advancement authority.
+	// Wired via SetReconcileCoordinator, mirroring the other optional seams.
+	reconcileCoord reconcilecoord.Coordinator
+
 	logger *zap.Logger
 
 	shutdown chan struct{}
@@ -164,6 +178,32 @@ func (e *Engine) SetConnectionRegistry(reg ConnectionRegistry, coverageGrace tim
 	e.connRegistry = reg
 	if coverageGrace > 0 {
 		e.coverageGrace = coverageGrace
+	}
+}
+
+// SetReconcileCoordinator wires the HA S3c reconcile-coordination seam (ADR
+// 0035): after applyStage writes an agent's desired state, the engine pokes the
+// coordinator so the agent's owning instance reconciles it immediately rather
+// than on its next S3a tick. nil disables poking (the single-instance default —
+// S3d's retained direct push already delivers at once); the OSS wire installs
+// the no-op coordinator, so behavior is unchanged. Setter (not a NewEngine
+// parameter) for the same back-compat reason as SetActionDispatcher — existing
+// constructors and struct-literal test engines stay untouched.
+func (e *Engine) SetReconcileCoordinator(c reconcilecoord.Coordinator) {
+	e.reconcileCoord = c
+}
+
+// pokeReconcile fires an HA S3c reconcile poke for each agent whose desired
+// state was just written, hinting the owning instance to deliver now. nil-safe:
+// no coordinator (struct-literal tests, single-instance) is a clean no-op, as
+// is the OSS no-op coordinator. Fire-and-forget — PokeReconcile must not block,
+// and a lost poke costs only latency (the S3a tick is the backstop).
+func (e *Engine) pokeReconcile(ctx context.Context, ids []uuid.UUID) {
+	if e.reconcileCoord == nil {
+		return
+	}
+	for _, id := range ids {
+		e.reconcileCoord.PokeReconcile(ctx, id)
 	}
 }
 
@@ -1173,6 +1213,14 @@ func (e *Engine) applyStage(ctx context.Context, r *services.Rollout, stageIdx i
 	// the target regardless of whether the best-effort direct push below acked.
 	if e.writeDesiredState {
 		assigned := e.writeDesiredStateForAgents(ctx, r, toPush, target.Content)
+		// HA S3c (ADR 0035) — POKE the owning instance of each agent whose
+		// desired state we just wrote so it reconciles immediately instead of
+		// waiting for its next ~30s S3a tick. A latency optimization only: in
+		// OSS the no-op coordinator makes this inert (single-instance already
+		// delivers via the retained direct push below); under enterprise it is a
+		// Postgres NOTIFY. Poke the durably-assigned set — exactly the agents
+		// whose desired state now points at the target.
+		e.pokeReconcile(ctx, assigned)
 		// Best-effort direct push retained as a single-instance latency
 		// optimization: for an agent this instance owns it delivers immediately
 		// (so single-instance rollouts converge within a tick or two); for an
