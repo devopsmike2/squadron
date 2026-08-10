@@ -6,6 +6,7 @@ import useSWR from "swr";
 import { sendConfigToAgent } from "@/api/agents";
 import { fetchAgentComponentMetrics } from "@/api/collector-metrics";
 import { getConfigs } from "@/api/configs";
+import { AdoptConfigButton } from "@/components/agent-details/AdoptConfigButton";
 import { CollectorPipelineView } from "@/components/collector-pipeline/CollectorPipelineView";
 import { ConfigYamlEditorWithMetrics } from "@/components/configs/ConfigYamlEditorWithMetrics";
 import { useTheme } from "@/components/ThemeProvider";
@@ -214,6 +215,12 @@ export function AgentConfigPipeline({
           />
         </div>
       )}
+
+      {/* Adopt the agent's reported effective config as a managed
+        template. Keyed off effectiveConfig specifically (not the
+        assigned-config fallback) so it stays disabled when there is no
+        reported config to capture. */}
+      <AdoptConfigButton agentId={agentId} effectiveConfig={effectiveConfig} />
 
       <Tabs
         value={viewMode}
