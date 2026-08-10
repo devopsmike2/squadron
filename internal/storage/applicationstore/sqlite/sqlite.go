@@ -2146,6 +2146,48 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 	return configs, rows.Err()
 }
 
+// DeleteConfig removes a single config row by id. NO-OP on a missing id (see the
+// ApplicationStore interface doc): cleanup at a rollout terminal state must be
+// idempotent, so a zero-row delete returns nil rather than a not-found error.
+// Tenant-scoped consistently with the other config methods (predicate applied
+// only when the context carries a tenant).
+func (s *Storage) DeleteConfig(ctx context.Context, id string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `DELETE FROM configs WHERE id = ?`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("failed to delete config: %w", err)
+	}
+	return nil
+}
+
+// DeleteConfigsForAgent removes ALL agent-scoped config rows for an agent so the
+// agent resumes tracking group config (HA S3d rollout cleanup). Idempotent —
+// deleting when no rows match is a no-op. Tenant-scoped like GetLatestConfigForAgent.
+func (s *Storage) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `DELETE FROM configs WHERE agent_id = ?`
+	args := []any{agentID.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("failed to delete configs for agent: %w", err)
+	}
+	return nil
+}
+
 // Saved query management
 func (s *Storage) CreateSavedQuery(ctx context.Context, query *types.SavedQuery) error {
 	tagsJSON, _ := json.Marshal(query.Tags)

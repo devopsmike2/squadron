@@ -1740,6 +1740,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// active rollouts, so tick time against the 5s budget is the
 	// engine's primary health signal.
 	rolloutEngine.SetMetrics(metrics.NewRolloutMetrics(metricsFactory))
+	// HA S3d (ADR 0035) — wire the connection-registry coverage seam so the
+	// convergence gate can report which stage agents have no live owning
+	// instance when a stage stalls short of convergence. The coverage grace
+	// tracks the S3b reconcile-heartbeat cadence (2× reconcile interval) so a
+	// live owner never lets its own rows look stale. appStore satisfies the
+	// ConnectionRegistry read seam. Single-instance: the one instance heartbeats
+	// every socket, so coverage is trivially satisfied and rollouts converge as
+	// before.
+	if _, reconcileInterval := config.HA.ReconcileSettings(); reconcileInterval > 0 {
+		rolloutEngine.SetConnectionRegistry(appStore, 2*reconcileInterval)
+	} else {
+		rolloutEngine.SetConnectionRegistry(appStore, 0)
+	}
 	// v0.52 — wire engine-level Compliance Pack extension points
 	// (currently the change-window provider). OSS installs NoOp;
 	// Compliance Pack installs a store-backed provider.
