@@ -1683,11 +1683,19 @@ func marshalScanResult(r *scanner.Result) awsScanResponse {
 	}
 	for _, c := range r.Clusters {
 		row := awsClusterRow{
-			ResourceID:          c.ResourceID,
-			Name:                c.Name,
-			KubernetesVersion:   c.KubernetesVersion,
-			Status:              c.Status,
-			ControlPlaneLogging: append([]string(nil), c.ControlPlaneLogging...),
+			ResourceID:        c.ResourceID,
+			Name:              c.Name,
+			KubernetesVersion: c.KubernetesVersion,
+			Status:            c.Status,
+			// Seed from a non-nil empty slice (NOT []string(nil)) so a
+			// cluster with no control-plane logging enabled serializes as
+			// `[]`, never `null`. The json tag has no omitempty, so a nil
+			// slice would emit `control_plane_logging: null` and crash the
+			// Inventory result panel's `.length`/`.map` in the browser
+			// (blank-page bug). Mirrors the Regions / FailedServices seeds
+			// above and the "empty slices stay empty (never null)" contract
+			// this marshaller documents.
+			ControlPlaneLogging: append([]string{}, c.ControlPlaneLogging...),
 			Addons:              make([]awsClusterAddonRow, 0, len(c.Addons)),
 			NodegroupCount:      c.NodegroupCount,
 			FargateProfileCount: c.FargateProfileCount,

@@ -1408,6 +1408,76 @@ func TestHandleAWSRunScan_AuditEmitsClusterCount(t *testing.T) {
 	}
 }
 
+// TestMarshalScanResult_ClusterEmptyLoggingSerializesEmptyArray pins the
+// backend half of the discovery blank-page fix: a cluster whose
+// ControlPlaneLogging (and Addons) came back nil/empty must serialize as
+// `[]`, NEVER `null`. The awsClusterRow json tag has no omitempty, so a nil
+// slice would emit `"control_plane_logging":null`; the browser's Inventory
+// result panel then reads `.length`/`.map` on null inside the clusters map
+// and crashes the whole SPA to a blank page. The marshaller's own contract
+// ("Empty slices stay empty (never null)") must hold for THIS field too —
+// it previously seeded from []string(nil) and regressed it.
+func TestMarshalScanResult_ClusterEmptyLoggingSerializesEmptyArray(t *testing.T) {
+	now := time.Now().UTC()
+	// A cluster with no control-plane logging and no addons — the exact
+	// shape that produced control_plane_logging: null on the wire.
+	r := &scanner.Result{
+		ScanID:          "test-scan-empty-cluster-axes",
+		ScanStartedAt:   now,
+		ScanCompletedAt: now.Add(time.Second),
+		Provider:        credstore.ProviderAWS,
+		AccountID:       "123456789012",
+		Regions:         []string{"us-east-1"},
+		Clusters: []scanner.ClusterSnapshot{
+			{
+				ResourceID:        "arn:aws:eks:us-east-1:123:cluster/bare",
+				Name:              "bare",
+				KubernetesVersion: "1.29",
+				Status:            "ACTIVE",
+				// ControlPlaneLogging + Addons left nil on purpose.
+				Region: "us-east-1",
+			},
+		},
+	}
+
+	b, err := json.Marshal(marshalScanResult(r))
+	if err != nil {
+		t.Fatalf("json.Marshal(marshalScanResult) error: %v", err)
+	}
+	got := string(b)
+
+	// The bug signature: a literal null array on either cluster axis.
+	if strings.Contains(got, `"control_plane_logging":null`) {
+		t.Errorf("control_plane_logging serialized as null (blank-page bug); want []. json=%s", got)
+	}
+	if strings.Contains(got, `"addons":null`) {
+		t.Errorf("addons serialized as null; want []. json=%s", got)
+	}
+	// Positive assertion: both axes present as empty arrays.
+	if !strings.Contains(got, `"control_plane_logging":[]`) {
+		t.Errorf("control_plane_logging not serialized as []; json=%s", got)
+	}
+	if !strings.Contains(got, `"addons":[]`) {
+		t.Errorf("addons not serialized as []; json=%s", got)
+	}
+
+	// Belt-and-braces: round-trip and confirm the decoded fields are
+	// non-nil empty slices (a consumer that key-checks length is safe).
+	var decoded awsScanResponse
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal error: %v", err)
+	}
+	if len(decoded.Clusters) != 1 {
+		t.Fatalf("clusters len = %d, want 1", len(decoded.Clusters))
+	}
+	if decoded.Clusters[0].ControlPlaneLogging == nil {
+		t.Errorf("decoded ControlPlaneLogging is nil; want non-nil empty slice")
+	}
+	if decoded.Clusters[0].Addons == nil {
+		t.Errorf("decoded Addons is nil; want non-nil empty slice")
+	}
+}
+
 // TestHandleAWSRunScan_AuditEmitsDynamoDBCounts pins the slice 4
 // (v0.89.6) audit-shape extension — the scan_completed event
 // payload now carries dynamodb_count AND
