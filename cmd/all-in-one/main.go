@@ -25,6 +25,7 @@ import (
 	"encoding/base64"
 
 	"github.com/devopsmike2/squadron/extension/identity"
+	"github.com/devopsmike2/squadron/extension/reconcilecoord"
 	"github.com/devopsmike2/squadron/extension/tracebudget"
 	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/ai"
@@ -522,11 +523,18 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// yields zero wire sends for already-delivered agents). Its context is
 	// system-stamped (all-tenant; inert in OSS) and cancelled on shutdown BEFORE
 	// the deferred opampServer.Stop above (LIFO) so the loop drains first.
+	// HA S3c (ADR 0035) — reconcile-now handle for the reconcile-coordination
+	// seam. When the reconcile loop is enabled, this is the S3a reconciler's
+	// ReconcileAgentNow: the enterprise coordinator's Postgres LISTEN handler
+	// calls it on a poke to deliver a just-written desired state immediately.
+	// Stays nil when the loop is disabled (nothing to reconcile out of band).
+	var reconcileNow reconcilecoord.ReconcileFunc
 	if reconcileEnabled, reconcileInterval := config.HA.ReconcileSettings(); reconcileEnabled {
 		// HA S3b (ADR 0035): pass the connection registry + this instance's id so
 		// each reconcile tick heartbeats last_heartbeat_at for the agents whose
 		// sockets landed on THIS instance. The reconcileCtx below is system-stamped.
 		reconciler := opamp.NewReconciler(agents, agentService, configSender, reconcileInterval, appStore, instanceID, logger)
+		reconcileNow = reconciler.ReconcileAgentNow
 		reconcileCtx, reconcileCancel := context.WithCancel(identity.WithSystemContext(context.Background()))
 		defer reconcileCancel()
 		go reconciler.Start(reconcileCtx)
@@ -535,6 +543,15 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	} else {
 		logger.Info("OpAMP reconcile loop disabled (ha.reconcile_enabled=false)")
 	}
+
+	// HA S3c (ADR 0035) — resolve the reconcile-coordination seam. OSS wires the
+	// no-op coordinator (PokeReconcile does nothing; single-instance delivers
+	// immediately via S3d's retained direct push), so behavior is unchanged. The
+	// enterprise wire returns a Postgres LISTEN/NOTIFY coordinator that carries
+	// reconcileNow so a poked instance reconciles the agent it owns at once. The
+	// rollout engine (leader-only) pokes it after each desired-state write; see
+	// SetReconcileCoordinator below. See extension/reconcilecoord + docs/build.md.
+	reconcileCoord := reconcileCoordinator(config, logger, reconcileNow)
 
 	// Initialize OTLP receivers. Ports come from the OTLP config so
 	// operators can shift them when 4317/4318 conflict with a Docker
@@ -1753,6 +1770,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	} else {
 		rolloutEngine.SetConnectionRegistry(appStore, 0)
 	}
+	// HA S3c (ADR 0035) — wire the reconcile-coordination seam so the engine
+	// pokes an agent's owning instance to reconcile immediately after writing its
+	// desired state (a latency optimization). OSS's no-op coordinator makes this
+	// inert; enterprise turns it into a Postgres NOTIFY. Resolved above via the
+	// reconcileCoordinator edition wire.
+	rolloutEngine.SetReconcileCoordinator(reconcileCoord)
 	// v0.52 — wire engine-level Compliance Pack extension points
 	// (currently the change-window provider). OSS installs NoOp;
 	// Compliance Pack installs a store-backed provider.

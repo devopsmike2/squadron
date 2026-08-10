@@ -196,6 +196,41 @@ func (r *Reconciler) heartbeatOwner(ctx context.Context, agent *Agent) {
 	}
 }
 
+// ReconcileAgentNow reconciles a SINGLE agent immediately, out of band from the
+// periodic tick, IF this instance owns the agent's OpAMP socket — otherwise it
+// is a no-op. It is the delivery half of the HA S3c reconcile-coordination seam
+// (ADR 0035): the enterprise Postgres LISTEN handler calls it on a poke so a
+// just-written desired state (S3d) is delivered at once rather than on the next
+// ~30s tick. It reuses the exact per-agent reconcile logic (reconcileAgent), so
+// it inherits the same delivery-scoped, idempotent semantics: it delivers only
+// when the desired config has NOT already been delivered (LastRemoteConfigHash),
+// and calcRemoteConfig idempotency means a redundant call produces zero wire
+// sends.
+//
+// agentID is the durable fleet id (as written by the leader). Ownership is
+// resolved through this instance's in-memory registry: GetAgentReadonlyClone
+// returns nil when the agent's socket is NOT on this instance, in which case
+// there is nothing to deliver here and the call is a clean no-op (the instance
+// that DOES own the socket handles its own poke). A nil registry (struct-literal
+// tests, or a reconciler built without one) is likewise a no-op.
+//
+// Fire-and-forget by contract: it never blocks the caller beyond the single
+// synchronous push and never returns an error — a failed delivery is logged and
+// the periodic tick remains the durability backstop.
+func (r *Reconciler) ReconcileAgentNow(ctx context.Context, agentID uuid.UUID) {
+	if r.agents == nil {
+		return
+	}
+	// GetAgentReadonlyClone resolves by fleet id first (the leader-held id),
+	// falling back to the wire instance id, and returns nil if the agent is not
+	// connected to THIS instance — exactly the ownership check the poke needs.
+	agent := r.agents.GetAgentReadonlyClone(agentID)
+	if agent == nil {
+		return
+	}
+	r.reconcileAgent(ctx, agent)
+}
+
 // reconcileAgent delivers the desired config to a single connected agent when it
 // has not already been delivered. It is the delivery-scoped decision point.
 func (r *Reconciler) reconcileAgent(ctx context.Context, agent *Agent) {
