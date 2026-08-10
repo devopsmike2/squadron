@@ -171,6 +171,95 @@ func TestReconcileAgent_SkipsWithoutRemoteConfigCapability(t *testing.T) {
 	assert.Equal(t, 0, pusher.count(), "agent without remote-config capability must not be pushed")
 }
 
+// TestReconcileAgentNow_DeliversWhenLocallyOwnedAndNotDelivered: an agent
+// connected to THIS instance whose desired config has not been delivered is
+// pushed immediately by the out-of-band poke path (HA S3c). This is the
+// delivery half of the reconcile-coordination seam the enterprise LISTEN
+// handler drives.
+func TestReconcileAgentNow_DeliversWhenLocallyOwnedAndNotDelivered(t *testing.T) {
+	logger := zap.NewNop()
+	agents := NewAgents(logger)
+	agentID := uuid.New()
+	agents.agentsById[agentID] = newReconcileAgent(agentID, []byte("stale-hash"))
+
+	pusher := &fakePusher{}
+	r := &Reconciler{
+		agents:  agents,
+		resolve: staticResolver("desired-config", true),
+		sender:  pusher,
+		logger:  logger,
+	}
+
+	r.ReconcileAgentNow(context.Background(), agentID)
+
+	assert.Equal(t, 1, pusher.count(), "a locally-owned, undelivered agent must be delivered on the poke")
+	got, ok := pusher.contentFor(agentID)
+	assert.True(t, ok, "push should target the agent")
+	assert.Equal(t, "desired-config", got)
+}
+
+// TestReconcileAgentNow_NoOpWhenAlreadyDelivered: poking an agent that already
+// has the desired config delivered (LastRemoteConfigHash matches) produces no
+// push — it inherits reconcileAgent's idempotent, delivery-scoped semantics.
+func TestReconcileAgentNow_NoOpWhenAlreadyDelivered(t *testing.T) {
+	logger := zap.NewNop()
+	agents := NewAgents(logger)
+	const desired = "desired-config"
+	agentID := uuid.New()
+	agents.agentsById[agentID] = newReconcileAgent(agentID, wireConfigHash(desired))
+
+	pusher := &fakePusher{}
+	r := &Reconciler{
+		agents:  agents,
+		resolve: staticResolver(desired, true),
+		sender:  pusher,
+		logger:  logger,
+	}
+
+	r.ReconcileAgentNow(context.Background(), agentID)
+
+	assert.Equal(t, 0, pusher.count(), "already-delivered agent must not be re-pushed on a poke")
+}
+
+// TestReconcileAgentNow_NoOpWhenNotConnectedHere: a poke for an agent whose
+// socket is NOT on this instance (absent from the registry) is a clean no-op —
+// the instance that owns the socket handles its own poke.
+func TestReconcileAgentNow_NoOpWhenNotConnectedHere(t *testing.T) {
+	logger := zap.NewNop()
+	agents := NewAgents(logger)
+	// One agent connected here, but we poke a DIFFERENT id that isn't in the map.
+	connectedID := uuid.New()
+	agents.agentsById[connectedID] = newReconcileAgent(connectedID, []byte("stale-hash"))
+	phantomID := uuid.New()
+
+	pusher := &fakePusher{}
+	r := &Reconciler{
+		agents:  agents,
+		resolve: staticResolver("desired-config", true),
+		sender:  pusher,
+		logger:  logger,
+	}
+
+	r.ReconcileAgentNow(context.Background(), phantomID)
+
+	assert.Equal(t, 0, pusher.count(), "an agent not connected to this instance must never be delivered to")
+}
+
+// TestReconcileAgentNow_NoOpWithNilRegistry: a reconciler built without an
+// agents registry (struct-literal) safely no-ops rather than panicking.
+func TestReconcileAgentNow_NoOpWithNilRegistry(t *testing.T) {
+	pusher := &fakePusher{}
+	r := &Reconciler{
+		resolve: staticResolver("desired-config", true),
+		sender:  pusher,
+		logger:  zap.NewNop(),
+	}
+
+	r.ReconcileAgentNow(context.Background(), uuid.New())
+
+	assert.Equal(t, 0, pusher.count(), "nil registry poke must be a clean no-op")
+}
+
 // TestReconcileOnce_OnlyThisInstancesConnectedAgents: reconcileOnce enumerates
 // GetAllAgentsReadonlyClone — the in-memory registry of agents connected to THIS
 // instance — so an agent that is not connected here is never touched, even if it
