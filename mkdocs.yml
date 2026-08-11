@@ -147,6 +147,7 @@ nav:
   - Operations:
       - Operating Squadron: operating.md
       - Deployment guide: deployment.md
+      - Supervisor integration (closed-loop): supervisor-integration.md
       - High availability: high-availability.md
       - OpenShift: openshift.md
       - Security & self-hosting: security-self-hosting.md

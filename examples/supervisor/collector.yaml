@@ -1,0 +1,73 @@
+# Base collector config for the OpAMP supervisor (closed-loop model).
+#
+# IMPORTANT: do NOT put an `opamp` extension in this file. In the supervisor model
+# the supervisor injects its OWN opamp extension into the merged/effective config it
+# writes and passes to the collector via --config. A second, hand-written opamp
+# extension pointing straight at Squadron would open a competing control channel (the
+# report-only model) and can produce duplicate identity. Keep only pipelines +
+# self-telemetry here; the supervisor overlays Squadron's remote config on top of
+# this base.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  # Debug exporter for testing.
+  debug:
+  # Example of consuming a credential the exec-shim injected into the environment.
+  # The secret lives only in env (never written to disk); the collector expands it at
+  # startup. Uncomment and wire into a pipeline to use:
+  # otlphttp/backend:
+  #   endpoint: https://backend.example:4318
+  #   headers:
+  #     authorization: "Bearer ${env:SQUADRON_SECRET}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+
+  # Internal (self) telemetry — carries the collector's own OpAMP identity, so it
+  # lands on the managed agent's Metrics/Logs tabs. This is independent of the opamp
+  # extension and does NOT require one.
+  telemetry:
+    resource:
+      agent.group_name: demo-group
+      service.name: demo-collector
+      deployment.environment: development
+    metrics:
+      readers:
+        - periodic:
+            interval: 30
+            exporter:
+              otlp:
+                protocol: grpc
+                endpoint: http://squadron:4317
+    logs:
+      level: info
+      processors:
+        - batch:
+            exporter:
+              otlp:
+                protocol: grpc
+                endpoint: http://squadron:4317

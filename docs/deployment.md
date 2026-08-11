@@ -87,7 +87,10 @@ run rollouts, see audit events, and use the UI.
    zero collectors, Squadron has nothing to control. The Quickstart
    endpoint generates the OpAMP extension snippet your collectors need;
    the [adoption snippet](./inventory.md) covers the case where you're
-   adopting an existing fleet without reconfiguring everything.
+   adopting an existing fleet without reconfiguring everything. To push
+   config (closed-loop) rather than only observe, run the OpAMP
+   supervisor — including alongside a credential-injecting launcher — per
+   [Supervisor integration](./supervisor-integration.md).
 
 ### Strongly recommended for real use
 

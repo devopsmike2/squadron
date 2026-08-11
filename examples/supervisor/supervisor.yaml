@@ -1,4 +1,21 @@
+# OpAMP supervisor configuration for Squadron (closed-loop, Squadron-managed config).
+#
+# Process tree this produces:
+#   systemd -> opampsupervisor -> [otel-cred-exec shim; exec ->] otelcol-contrib
+#
+# systemd runs the SUPERVISOR (not the collector, and not a credential wrapper).
+# The supervisor writes the merged effective config into storage.directory and
+# launches `agent.executable` with `--config <that file>`. Point agent.executable at
+# the credential exec-shim (otel-cred-exec.sh) so secrets are injected before the
+# collector starts; the shim exec's the collector so the supervisor tracks the
+# collector process directly.
+
 server:
+  # Squadron's OpAMP endpoint. `accepts_remote_config: true` (below) is what makes
+  # the supervisor advertise the AcceptsRemoteConfig capability. Squadron only pushes
+  # config to agents that advertise it — the reconciler and config sender both gate on
+  # it (internal/opamp/reconciler.go, internal/opamp/config_sender.go) — so this single
+  # flag turns report-only into closed-loop.
   endpoint: ws://squadron:4320/v1/opamp
   tls:
     insecure_skip_verify: true
@@ -22,18 +39,34 @@ capabilities:
   reports_own_metrics: true
   reports_own_logs: true
   reports_health: true
-  accepts_remote_config: true
+  accepts_remote_config: true        # <-- flips Squadron from report-only to push
   reports_remote_config: true
   accepts_restart_command: true
 
 agent:
-  executable: /otelcol-contrib
+  # Point at the credential exec-shim instead of the collector binary. The shim
+  # injects secrets into the environment, then exec's the collector with the
+  # supervisor's args (notably --config) forwarded verbatim. See otel-cred-exec.sh.
+  executable: /otel-cred-exec.sh
   passthrough_logs: true
   description:
     identifying_attributes:
       agent.group_name: demo-group
+  # Base (non-managed) config the supervisor merges UNDER the remote config it
+  # receives from Squadron. Keep pipelines + self-telemetry here; do NOT include an
+  # `opamp` extension — the supervisor injects its own opamp extension into the
+  # merged effective config.
   config_files:
     - /collector.yaml
+  # Optional static env passed to the collector. The shim also inherits the
+  # supervisor's own environment (os.Environ), so vault address / role credentials
+  # can be supplied via the systemd unit's Environment= / EnvironmentFile=.
+  # env:
+  #   VAULT_ADDR: https://vault.example:8200
 
 storage:
+  # Persistent. Holds the merged effective config the collector is started with AND
+  # persistent_state.yaml, which carries a STABLE instance_uid (UUIDv7) across
+  # restarts. Stable identity means the collector keeps ONE card in Squadron instead
+  # of spawning a new one on every restart (the pilot's duplicate-card problem).
   directory: /var/lib/opamp
