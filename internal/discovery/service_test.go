@@ -84,6 +84,12 @@ func TestRegisterIfUnknown_CreatesNewAgent(t *testing.T) {
 	if got.Status != apptypes.AgentStatusOnline {
 		t.Errorf("Status = %q, want online", got.Status)
 	}
+	// host.name is stamped as an explicit label so the duplicate-identity
+	// detector (backlog #5) has an authoritative host identity for this
+	// telemetry-only agent.
+	if got.Labels["host.name"] != "GAXGPAP158UA" {
+		t.Errorf("Labels[host.name] = %q, want GAXGPAP158UA", got.Labels["host.name"])
+	}
 }
 
 func TestRegisterIfUnknown_DedupesWithinWindow(t *testing.T) {
