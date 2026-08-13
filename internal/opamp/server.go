@@ -96,6 +96,14 @@ type Server struct {
 	// SetConnectionRegistry.
 	registry   connectionRegistry
 	instanceID string
+
+	// audit is the optional audit seam for adopt-on-first-supervise (ADR 0039):
+	// when the connect path seeds an agent's initial config from its reported
+	// effective config, it records an agent.config_adopted_on_supervise event
+	// here. nil (the default, and every test harness that doesn't set it) makes
+	// the audit write a no-op, so pre-0039 behavior is unchanged. Wired at
+	// startup via SetAuditRecorder.
+	audit auditRecorder
 }
 
 // SetConnectionRegistry wires the HA S3b connection-registry seam (ADR 0035):
@@ -597,6 +605,18 @@ func (s *Server) extractGroupInfo(desc *protobufs.AgentDescription) (groupID str
 // exists; the reconcile loop deliberately does not (it never synthesizes).
 func (s *Server) getConfigForAgent(ctx context.Context, agent *Agent) string {
 	if content, found := resolveStoredConfig(ctx, s.agentService, agent); found {
+		return content
+	}
+
+	// No stored agent/group config. Before falling back to the synthesized
+	// skeleton, try adopt-on-first-supervise (ADR 0039): if this is a supervised
+	// brownfield agent already reporting an effective config, seed + assign its
+	// initial managed config FROM that reported effective config (opamp extension
+	// stripped, ${ENV} preserved) and push that instead of the skeleton — which
+	// would otherwise clobber the agent's wired pipelines. Returns false for a
+	// fresh agent with no usable reported config (or on any validation/store
+	// error), leaving the skeleton fallback below intact.
+	if content, ok := s.tryAdoptEffectiveConfig(ctx, agent); ok {
 		return content
 	}
 
