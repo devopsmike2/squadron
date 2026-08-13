@@ -1,7 +1,19 @@
+import { useState } from "react";
+import useSWR from "swr";
+
+import { updateAgentGroup } from "@/api/agents";
+import { getGroups } from "@/api/groups";
 import { AuditTimeline } from "@/components/AuditTimeline";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InfoCard } from "@/components/ui/info-card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { Agent } from "@/types/agent";
 
 interface Metrics {
@@ -14,9 +26,107 @@ interface Metrics {
 interface AgentOverviewProps {
   agent: Agent;
   metrics?: Metrics;
+  // Called after a successful group change so the parent can refetch
+  // the agent (its new group + any resulting config resolution).
+  onAgentChanged?: () => void | Promise<unknown>;
 }
 
-export function AgentOverview({ agent, metrics }: AgentOverviewProps) {
+// Sentinel for "no group" — Radix Select reserves the empty string, so
+// the ungrouped option needs a real, non-empty value.
+const NO_GROUP = "__none__";
+
+// GroupSelector turns the read-only Group field into an editable
+// dropdown of existing groups (plus a "No group" option). On change it
+// PATCHes /agents/:id/group and asks the parent to refetch. Membership
+// is explicit: this is the only UI path that moves an agent between
+// groups.
+function GroupSelector({
+  agent,
+  onAgentChanged,
+}: {
+  agent: Agent;
+  onAgentChanged?: () => void | Promise<unknown>;
+}) {
+  const { data: groupsData, isLoading: groupsLoading } = useSWR(
+    "groups",
+    getGroups,
+  );
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  const groups = groupsData?.groups ?? [];
+  const current = agent.group_id ?? NO_GROUP;
+
+  const handleChange = async (value: string) => {
+    const nextGroupId = value === NO_GROUP ? null : value;
+    if ((agent.group_id ?? null) === nextGroupId) return;
+
+    setSaving(true);
+    setMessage(null);
+    try {
+      await updateAgentGroup(agent.id, nextGroupId);
+      await onAgentChanged?.();
+      const name = nextGroupId
+        ? (groups.find((g) => g.id === nextGroupId)?.name ?? "the group")
+        : null;
+      setMessage({
+        type: "success",
+        text: nextGroupId ? `Moved to ${name}` : "Removed from group",
+      });
+      setTimeout(() => setMessage(null), 4000);
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to update group",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Select
+        value={current}
+        onValueChange={handleChange}
+        disabled={saving || groupsLoading}
+      >
+        <SelectTrigger className="h-8 w-48 text-xs" aria-label="Group">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_GROUP}>No group</SelectItem>
+          {groups.map((g) => (
+            <SelectItem key={g.id} value={g.id}>
+              {g.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {message && (
+        <span
+          role={message.type === "error" ? "alert" : undefined}
+          className={
+            message.type === "error"
+              ? "text-xs text-destructive"
+              : "text-xs text-muted-foreground"
+          }
+        >
+          {message.text}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function AgentOverview({
+  agent,
+  metrics,
+  onAgentChanged,
+}: AgentOverviewProps) {
   const renderConfigStatus = () => {
     const intent = agent.config_intent;
     const status = agent.drift_status ?? "unknown";
@@ -99,7 +209,12 @@ export function AgentOverview({ agent, metrics }: AgentOverviewProps) {
             label: "Config",
             value: renderConfigStatus(),
           },
-          { label: "Group", value: agent.group_name || "No Group" },
+          {
+            label: "Group",
+            value: (
+              <GroupSelector agent={agent} onAgentChanged={onAgentChanged} />
+            ),
+          },
           {
             label: "Last Seen",
             value: new Date(agent.last_seen).toLocaleString(),
