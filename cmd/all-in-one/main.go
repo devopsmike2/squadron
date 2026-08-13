@@ -457,6 +457,13 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// registry write surface; all writes are system-scoped (ADR 0035).
 	opampServer.SetConnectionRegistry(appStore, instanceID)
 
+	// Wire the optional audit seam so adopt-on-first-supervise (ADR 0039) records
+	// an agent.config_adopted_on_supervise event when the connect path seeds a
+	// newly-supervised agent's initial config from its reported effective config.
+	// Unwired (nil) leaves the seed silent; wired here it lands on the audit
+	// timeline alongside config.stored.
+	opampServer.SetAuditRecorder(auditService)
+
 	// Create telemetry query service
 	telemetryService := services.NewTelemetryQueryService(telemetryReader, agentService, logger)
 
