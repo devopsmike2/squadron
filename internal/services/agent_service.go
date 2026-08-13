@@ -74,8 +74,33 @@ type Agent struct {
 	ConfigIntent    *ConfigIntent       `json:"config_intent,omitempty"`
 	DriftStatus     ConfigDriftStatus   `json:"drift_status"`
 	DriftDetails    *ConfigDriftDetails `json:"drift_details,omitempty"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
+	// DiscoverySource records how Squadron first learned about this agent:
+	// "opamp" (a control connection opened) or "otlp" (passive-OTLP discovery
+	// — telemetry seen but no OpAMP socket). Surfaced on the service Agent so
+	// the duplicate-identity detector (see agent_duplicate.go) and the UI can
+	// tell a telemetry-only agent from an OpAMP-managed one.
+	DiscoverySource string `json:"discovery_source,omitempty"`
+	// SuspectedDuplicateOf is computed on read (never persisted): set when this
+	// agent is a telemetry-only passive-OTLP registration that shares a host.name
+	// with an OpAMP-managed agent — the duplicate-identity resilience surface
+	// (backlog #5, Southern log-fan-out incident). nil for every agent that is
+	// not a suspected duplicate, so the field is omitted from the wire in the
+	// common case. See detectDuplicates.
+	SuspectedDuplicateOf *SuspectedDuplicate `json:"suspected_duplicate_of,omitempty"`
+	CreatedAt            time.Time           `json:"created_at"`
+	UpdatedAt            time.Time           `json:"updated_at"`
+}
+
+// SuspectedDuplicate is the computed-on-read verdict that an agent is a likely
+// duplicate of another. It names the OpAMP-managed agent this telemetry-only
+// agent appears to shadow (same host.name) plus a short human-readable reason.
+// Purely advisory: Squadron never auto-merges or auto-deletes on it — the
+// operator decides (Dismiss if it is a legitimate separate agent, or
+// Decommission the phantom). See agent_duplicate.go.
+type SuspectedDuplicate struct {
+	OfAgentID   string `json:"of_agent_id"`
+	OfAgentName string `json:"of_agent_name"`
+	Reason      string `json:"reason"`
 }
 
 // ConfigIntentSource represents where a config intent originated
