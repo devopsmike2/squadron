@@ -66,10 +66,14 @@ export const getAgentStats = (): Promise<AgentStats> => {
   return apiGet<AgentStats>("/agents/stats");
 };
 
-// Update agent group
+// Update agent group. Pass a group id to (re)assign membership, or
+// null to clear it (the backend normalizes null and "" identically to
+// "no group"). This is the explicit-membership counterpart to config
+// resolution: attaching a config to a group creates zero membership,
+// so operators move agents in and out of groups through this call.
 export const updateAgentGroup = (
   id: string,
-  groupId: string,
+  groupId: string | null,
 ): Promise<void> => {
   return apiPatch<void>(`/agents/${id}/group`, { group_id: groupId });
 };
