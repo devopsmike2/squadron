@@ -55,6 +55,14 @@ func (m *MockAgentService) UpdateAgentEffectiveConfig(ctx context.Context, id uu
 	return args.Error(0)
 }
 
+// UpdateAgentDeliveredConfigHash is a no-op stub: persistAgent may call it when
+// an agent acks the staged config, and unit tests here don't assert on it, so it
+// deliberately does NOT go through testify's m.Called (which would panic on an
+// unexpected call). ADR 0040.
+func (m *MockAgentService) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error {
+	return nil
+}
+
 func (m *MockAgentService) UpdateAgentRegistration(ctx context.Context, agent *services.Agent) error {
 	args := m.Called(ctx, agent)
 	return args.Error(0)

@@ -168,6 +168,20 @@ func TestPostgres_AgentCRUD(t *testing.T) {
 		t.Fatalf("effective config didn't persist: %+v", got)
 	}
 
+	// ADR 0040: delivered-config-hash defaults empty and round-trips on update.
+	if got, _ = s.GetAgent(ctx, a.ID); got.DeliveredConfigHash != "" {
+		t.Fatalf("delivered config hash should default empty: %+v", got)
+	}
+	if err := s.UpdateAgentDeliveredConfigHash(ctx, a.ID, "deadbeefcafe"); err != nil {
+		t.Fatalf("update delivered config hash: %v", err)
+	}
+	if got, _ = s.GetAgent(ctx, a.ID); got.DeliveredConfigHash != "deadbeefcafe" {
+		t.Fatalf("delivered config hash didn't persist: %+v", got)
+	}
+	if err := s.UpdateAgentDeliveredConfigHash(ctx, uuid.New(), "x"); err == nil {
+		t.Fatal("update delivered config hash on missing agent should error")
+	}
+
 	// Updates on a missing agent return "agent not found".
 	if err := s.UpdateAgentStatus(ctx, uuid.New(), types.AgentStatusOnline); err == nil {
 		t.Fatal("update status on missing agent should error")

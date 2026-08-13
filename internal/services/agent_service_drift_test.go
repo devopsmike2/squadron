@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/confignorm"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/memory"
 	"github.com/google/uuid"
@@ -13,6 +14,194 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+// compactIntent is a supervised collector's compact stored config: ${ENV}
+// unresolved, no collector defaults enumerated, no opamp extension.
+const compactIntent = `receivers:
+  otlp:
+    protocols:
+      grpc:
+exporters:
+  otlphttp:
+    endpoint: ${ENDPOINT_URL}
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp]`
+
+// expandedEffective is what the same supervised agent reports as its effective
+// config: ${ENV} resolved, collector defaults enumerated, and the supervisor-
+// injected local opamp extension present. The meaningful surface
+// (service.pipelines/receivers/exporters) is identical to compactIntent, but the
+// content — and therefore the content hash — differs, so it never hash-matches
+// the compact intent. This is the Southern 300vd false-positive shape.
+const expandedEffective = `receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+exporters:
+  otlphttp:
+    endpoint: https://otel-cs.example:4318
+    compression: gzip
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ws://127.0.0.1:4320/v1/opamp
+service:
+  extensions: [opamp]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp]`
+
+// TestSupervisedAgentDeliveredHashSynced is the core regression this fixes (the
+// Southern 300vd case). A supervised agent has applied exactly the config
+// Squadron assigned, but its reported effective config is env-/default-expanded
+// and carries the supervisor-injected opamp extension, so it does NOT hash-match
+// the compact stored intent. Before the fix the agent showed permanent drift;
+// with the DELIVERED signal set (delivered hash == intent hash) it is Synced.
+func TestSupervisedAgentDeliveredHashSynced(t *testing.T) {
+	store := memory.NewStore()
+	service := NewAgentService(store, nil, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	now := time.Now()
+	require.NoError(t, service.CreateAgent(ctx, &Agent{
+		ID: agentID, Name: "supervised-300vd", Status: AgentStatusOnline,
+		Capabilities: []string{"accepts_remote_config"},
+		LastSeen:     now, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	cfg, err := service.StoreConfigForAgent(ctx, agentID, compactIntent)
+	require.NoError(t, err)
+	require.NoError(t, service.UpdateAgentEffectiveConfig(ctx, agentID, expandedEffective))
+
+	// Before the delivered signal is known, the expansion diff reads as drift
+	// (this is exactly the false positive being fixed).
+	pre, err := service.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Equal(t, ConfigDriftStatusDrifted, pre.DriftStatus)
+
+	// The OpAMP server confirms the agent applied the assigned config.
+	require.NoError(t, service.UpdateAgentDeliveredConfigHash(ctx, agentID, cfg.ConfigHash))
+
+	got, err := service.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, got.DriftDetails)
+	assert.Equal(t, ConfigDriftStatusSynced, got.DriftStatus, "supervised agent that applied the assigned config must be synced despite expansion")
+	// Synced via the delivered path, NOT a content match: effective still differs.
+	assert.NotEqual(t, got.DriftDetails.IntentHash, got.DriftDetails.EffectiveHash)
+	assert.Equal(t, got.DriftDetails.IntentHash, got.DriftDetails.DeliveredHash)
+}
+
+// TestSupervisedAgentGenuineDivergenceDrifted verifies real divergence still
+// surfaces for supervised agents: an agent that never applied the pushed config
+// (empty delivered hash) and one whose delivered hash is stale (it applied a
+// different/older config than the current intent) both read as Drifted.
+func TestSupervisedAgentGenuineDivergenceDrifted(t *testing.T) {
+	store := memory.NewStore()
+	service := NewAgentService(store, nil, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	now := time.Now()
+	require.NoError(t, service.CreateAgent(ctx, &Agent{
+		ID: agentID, Name: "supervised-diverged", Status: AgentStatusOnline,
+		Capabilities: []string{"accepts_remote_config"},
+		LastSeen:     now, CreatedAt: now, UpdatedAt: now,
+	}))
+	_, err := service.StoreConfigForAgent(ctx, agentID, compactIntent)
+	require.NoError(t, err)
+	require.NoError(t, service.UpdateAgentEffectiveConfig(ctx, agentID, expandedEffective))
+
+	// Never applied the pushed config: delivered hash empty -> drifted.
+	got, err := service.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Equal(t, ConfigDriftStatusDrifted, got.DriftStatus)
+
+	// Applied an OLDER/different config than the current intent: stale delivered
+	// hash -> still drifted (it did not apply what Squadron currently assigns).
+	require.NoError(t, service.UpdateAgentDeliveredConfigHash(ctx, agentID, confignorm.Hash("some other config content")))
+	got, err = service.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Equal(t, ConfigDriftStatusDrifted, got.DriftStatus)
+}
+
+// TestReportOnlyAgentDriftUnchanged verifies report-only agents (no
+// accepts_remote_config) keep the effective-vs-intent content comparison — the
+// DELIVERED path is gated on the supervised capability. Even a delivered hash
+// that equals the intent must NOT flip a report-only agent to synced when its
+// effective config differs from intent.
+func TestReportOnlyAgentDriftUnchanged(t *testing.T) {
+	store := memory.NewStore()
+	service := NewAgentService(store, nil, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	now := time.Now()
+	require.NoError(t, service.CreateAgent(ctx, &Agent{
+		ID: agentID, Name: "report-only", Status: AgentStatusOnline,
+		Capabilities: []string{"reports_remote_config"}, // NOT accepts_remote_config
+		LastSeen:     now, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	// A report-only agent can't StoreConfigForAgent (no accepts capability), so
+	// seed the intent directly in the store.
+	intentHash := confignorm.Hash(compactIntent)
+	require.NoError(t, service.CreateConfig(ctx, &Config{
+		ID: uuid.New().String(), AgentID: &agentID,
+		ConfigHash: intentHash, Content: compactIntent, Version: 1, CreatedAt: now,
+	}))
+
+	// Exact content match -> synced (unchanged behavior).
+	require.NoError(t, service.UpdateAgentEffectiveConfig(ctx, agentID, compactIntent))
+	got, err := service.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Equal(t, ConfigDriftStatusSynced, got.DriftStatus)
+
+	// Effective differs -> drifted, even with a (spurious) delivered hash equal
+	// to the intent: the delivered path must stay gated to supervised agents.
+	require.NoError(t, service.UpdateAgentEffectiveConfig(ctx, agentID, expandedEffective))
+	require.NoError(t, service.UpdateAgentDeliveredConfigHash(ctx, agentID, intentHash))
+	got, err = service.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Equal(t, ConfigDriftStatusDrifted, got.DriftStatus)
+	// DeliveredHash is not surfaced for report-only agents.
+	require.NotNil(t, got.DriftDetails)
+	assert.Empty(t, got.DriftDetails.DeliveredHash)
+}
+
+// TestSupervisedDeliveredHashTransitionCounters verifies UpdateAgentDeliveredConfigHash
+// fires the drift transition when a supervised agent reconciles (drifted ->
+// synced) purely via the delivered signal — the effective config never changes.
+func TestSupervisedDeliveredHashTransitionCounters(t *testing.T) {
+	store := memory.NewStore()
+	driftMetrics := newRecordingDriftMetrics()
+	service := NewAgentService(store, driftMetrics, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	now := time.Now()
+	require.NoError(t, service.CreateAgent(ctx, &Agent{
+		ID: agentID, Name: "supervised", Status: AgentStatusOnline,
+		Capabilities: []string{"accepts_remote_config"},
+		LastSeen:     now, CreatedAt: now, UpdatedAt: now,
+	}))
+	cfg, err := service.StoreConfigForAgent(ctx, agentID, compactIntent)
+	require.NoError(t, err)
+	require.NoError(t, service.UpdateAgentEffectiveConfig(ctx, agentID, expandedEffective)) // drifted (expansion, no delivered hash)
+
+	toSynced := driftMetrics.TransitionsToSynced.(*recordingCounter)
+	before := toSynced.Value()
+
+	// Apply the assigned config -> drifted -> synced, effective unchanged.
+	require.NoError(t, service.UpdateAgentDeliveredConfigHash(ctx, agentID, cfg.ConfigHash))
+	assert.Equal(t, before+1, toSynced.Value(), "reconcile via delivered signal should record a to-synced transition")
+}
 
 // recordingCounter is a metrics.Counter that simply counts increments — used
 // to assert that a transition counter was fired.

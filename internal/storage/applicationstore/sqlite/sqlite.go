@@ -102,6 +102,10 @@ func (s *Storage) migrate() error {
 			version TEXT,
 			capabilities TEXT,
 			effective_config TEXT,
+			-- ADR 0040: the confignorm hash of the config the agent has
+			-- confirmed applied (DELIVERED/APPLIED signal). Also added via the
+			-- migrations slice below so pre-0040 databases upgrade in place.
+			delivered_config_hash TEXT,
 			discovery_source TEXT NOT NULL DEFAULT 'opamp',
 			-- ADR 0011 slice 3b (M2 query-layer scoping): the tenant this
 			-- row belongs to. 'default' is the OSS single tenant; inert in
@@ -548,6 +552,13 @@ func (s *Storage) migrate() error {
 		// agents discovered via the OTLP receiver. "opamp" is the
 		// back-compat default — every pre-v0.36 agent was OpAMP.
 		`ALTER TABLE agents ADD COLUMN discovery_source TEXT NOT NULL DEFAULT 'opamp'`,
+		// ADR 0040: agents gain a delivered_config_hash column — the confignorm
+		// hash of the config the agent has confirmed applied (the DELIVERED
+		// signal supervised-agent drift detection keys on). NULL is the
+		// back-compat default (no config confirmed applied yet). Idempotent via
+		// the duplicate-column swallow (fresh DBs already carry it from
+		// createTables).
+		`ALTER TABLE agents ADD COLUMN delivered_config_hash TEXT`,
 		// v0.47.0: rollouts gain approval-workflow columns. When
 		// require_approval = 1 the engine refuses to advance until
 		// approved_by is set (which the two-person rule enforces
@@ -1371,7 +1382,7 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 		return nil, err
 	}
 	query := `
-		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
+		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, delivered_config_hash, discovery_source, created_at, updated_at
 		FROM agents WHERE id = ? AND deleted_at IS NULL
 	`
 	args := []any{id.String()}
@@ -1384,6 +1395,7 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 	var labelsJSON, capabilitiesJSON string
 	var agentIDStr string
 	var effectiveConfig sql.NullString
+	var deliveredConfigHash sql.NullString
 	var discoverySource sql.NullString
 
 	err = s.db.QueryRowContext(ctx, query, args...).Scan(
@@ -1397,6 +1409,7 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 		&agent.Version,
 		&capabilitiesJSON,
 		&effectiveConfig,
+		&deliveredConfigHash,
 		&discoverySource,
 		&agent.CreatedAt,
 		&agent.UpdatedAt,
@@ -1414,6 +1427,9 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 	_ = json.Unmarshal([]byte(capabilitiesJSON), &agent.Capabilities)
 	if effectiveConfig.Valid {
 		agent.EffectiveConfig = effectiveConfig.String
+	}
+	if deliveredConfigHash.Valid {
+		agent.DeliveredConfigHash = deliveredConfigHash.String
 	}
 	if discoverySource.Valid {
 		agent.DiscoverySource = discoverySource.String
@@ -1443,7 +1459,7 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 		return nil, err
 	}
 	query := `
-		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at
+		SELECT id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, delivered_config_hash, discovery_source, created_at, updated_at
 		FROM agents WHERE deleted_at IS NULL`
 	var args []any
 	if apply {
@@ -1464,6 +1480,7 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 		var labelsJSON, capabilitiesJSON string
 		var agentIDStr string
 		var effectiveConfig sql.NullString
+		var deliveredConfigHash sql.NullString
 		var discoverySource sql.NullString
 
 		err := rows.Scan(
@@ -1477,6 +1494,7 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 			&agent.Version,
 			&capabilitiesJSON,
 			&effectiveConfig,
+			&deliveredConfigHash,
 			&discoverySource,
 			&agent.CreatedAt,
 			&agent.UpdatedAt,
@@ -1490,6 +1508,9 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 		_ = json.Unmarshal([]byte(capabilitiesJSON), &agent.Capabilities)
 		if effectiveConfig.Valid {
 			agent.EffectiveConfig = effectiveConfig.String
+		}
+		if deliveredConfigHash.Valid {
+			agent.DeliveredConfigHash = deliveredConfigHash.String
 		}
 		if discoverySource.Valid {
 			agent.DiscoverySource = discoverySource.String
@@ -1575,6 +1596,35 @@ func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, 
 	}
 
 	s.logger.Debug("Updated agent effective config", zap.String("agent_id", id.String()))
+	return nil
+}
+
+// UpdateAgentDeliveredConfigHash persists the confignorm hash of the config the
+// agent has confirmed applied (the DELIVERED/APPLIED signal, ADR 0040). Mirrors
+// UpdateAgentEffectiveConfig's tenant scoping and not-found semantics.
+func (s *Storage) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE agents SET delivered_config_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+	args := []any{hash, id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update agent delivered config hash: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("agent not found: %s", id.String())
+	}
+
+	s.logger.Debug("Updated agent delivered config hash", zap.String("agent_id", id.String()))
 	return nil
 }
 

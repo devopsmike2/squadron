@@ -101,20 +101,21 @@ func (s *AgentServiceImpl) GetAgent(ctx context.Context, id uuid.UUID) (*Agent, 
 	}
 
 	result := &Agent{
-		ID:              agent.ID,
-		Name:            agent.Name,
-		Labels:          agent.Labels,
-		Status:          AgentStatus(agent.Status),
-		LastSeen:        agent.LastSeen,
-		GroupID:         agent.GroupID,
-		GroupName:       agent.GroupName,
-		Version:         agent.Version,
-		Capabilities:    agent.Capabilities,
-		EffectiveConfig: agent.EffectiveConfig,
-		DiscoverySource: agent.DiscoverySource,
-		DriftStatus:     ConfigDriftStatusUnknown,
-		CreatedAt:       agent.CreatedAt,
-		UpdatedAt:       agent.UpdatedAt,
+		ID:                  agent.ID,
+		Name:                agent.Name,
+		Labels:              agent.Labels,
+		Status:              AgentStatus(agent.Status),
+		LastSeen:            agent.LastSeen,
+		GroupID:             agent.GroupID,
+		GroupName:           agent.GroupName,
+		Version:             agent.Version,
+		Capabilities:        agent.Capabilities,
+		EffectiveConfig:     agent.EffectiveConfig,
+		DeliveredConfigHash: agent.DeliveredConfigHash,
+		DiscoverySource:     agent.DiscoverySource,
+		DriftStatus:         ConfigDriftStatusUnknown,
+		CreatedAt:           agent.CreatedAt,
+		UpdatedAt:           agent.UpdatedAt,
 	}
 
 	if err := s.populateAgentConfigState(ctx, result, true); err != nil {
@@ -178,20 +179,21 @@ func (s *AgentServiceImpl) ListAgents(ctx context.Context) ([]*Agent, error) {
 	result := make([]*Agent, len(agents))
 	for i, agent := range agents {
 		current := &Agent{
-			ID:              agent.ID,
-			Name:            agent.Name,
-			Labels:          agent.Labels,
-			Status:          AgentStatus(agent.Status),
-			LastSeen:        agent.LastSeen,
-			GroupID:         agent.GroupID,
-			GroupName:       agent.GroupName,
-			Version:         agent.Version,
-			Capabilities:    agent.Capabilities,
-			EffectiveConfig: agent.EffectiveConfig,
-			DiscoverySource: agent.DiscoverySource,
-			DriftStatus:     ConfigDriftStatusUnknown,
-			CreatedAt:       agent.CreatedAt,
-			UpdatedAt:       agent.UpdatedAt,
+			ID:                  agent.ID,
+			Name:                agent.Name,
+			Labels:              agent.Labels,
+			Status:              AgentStatus(agent.Status),
+			LastSeen:            agent.LastSeen,
+			GroupID:             agent.GroupID,
+			GroupName:           agent.GroupName,
+			Version:             agent.Version,
+			Capabilities:        agent.Capabilities,
+			EffectiveConfig:     agent.EffectiveConfig,
+			DeliveredConfigHash: agent.DeliveredConfigHash,
+			DiscoverySource:     agent.DiscoverySource,
+			DriftStatus:         ConfigDriftStatusUnknown,
+			CreatedAt:           agent.CreatedAt,
+			UpdatedAt:           agent.UpdatedAt,
 		}
 
 		if err := s.populateAgentConfigState(ctx, current, false); err != nil {
@@ -265,6 +267,29 @@ func (s *AgentServiceImpl) UpdateAgentEffectiveConfig(ctx context.Context, id uu
 	prevStatus := s.snapshotDriftStatus(ctx, id)
 
 	if err := s.appStore.UpdateAgentEffectiveConfig(ctx, id, effectiveConfig); err != nil {
+		return err
+	}
+
+	currStatus := s.snapshotDriftStatus(ctx, id)
+	if currStatus != prevStatus {
+		s.recordDriftTransition(id, prevStatus, currStatus)
+	}
+	return nil
+}
+
+// UpdateAgentDeliveredConfigHash persists the confignorm hash of the config the
+// agent has confirmed applied (the DELIVERED/APPLIED signal, ADR 0040).
+//
+// Side effect: like UpdateAgentEffectiveConfig, drift status is re-evaluated
+// before and after the write, and a transition (e.g. a supervised agent moving
+// drifted -> synced because it just applied the assigned config) fires the
+// corresponding transition counter, audit event, and broker event. This is the
+// path a supervised agent reconciles on, so the transition must be observable
+// here even when the (expanded) effective config never changes hash.
+func (s *AgentServiceImpl) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error {
+	prevStatus := s.snapshotDriftStatus(ctx, id)
+
+	if err := s.appStore.UpdateAgentDeliveredConfigHash(ctx, id, hash); err != nil {
 		return err
 	}
 
@@ -733,10 +758,28 @@ func (s *AgentServiceImpl) populateAgentConfigState(ctx context.Context, agent *
 	}
 
 	agent.ConfigIntent = intent
-	status, details := computeConfigDrift(intent, agent.EffectiveConfig, includeContent)
+	status, details := computeConfigDrift(intent, agent.EffectiveConfig, agent.DeliveredConfigHash, agentAcceptsRemoteConfig(agent), includeContent)
 	agent.DriftStatus = status
 	agent.DriftDetails = details
 	return nil
+}
+
+// agentAcceptsRemoteConfig reports whether the agent advertises the OpAMP
+// AcceptsRemoteConfig capability — i.e. it is supervised/managed (Squadron can
+// push it config), not a report-only collector. Drift detection uses this to
+// decide whether the DELIVERED signal (DeliveredConfigHash) is meaningful for
+// the agent; report-only agents never accept a pushed config, so they keep the
+// effective-vs-intent content comparison unchanged.
+func agentAcceptsRemoteConfig(agent *Agent) bool {
+	if agent == nil {
+		return false
+	}
+	for _, c := range agent.Capabilities {
+		if c == "accepts_remote_config" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *AgentServiceImpl) determineConfigIntent(ctx context.Context, agent *Agent, includeContent bool) (*ConfigIntent, error) {
@@ -792,7 +835,32 @@ func buildConfigIntent(cfg *applicationstore.Config, source ConfigIntentSource, 
 	return intent
 }
 
-func computeConfigDrift(intent *ConfigIntent, effectiveConfig string, includeDiff bool) (ConfigDriftStatus, *ConfigDriftDetails) {
+// computeConfigDrift evaluates an agent's drift status.
+//
+// For every agent, an exact content match between the reported effective config
+// and the stored intent is Synced — this is the report-only path and it is
+// unchanged from earlier releases.
+//
+// Supervised/managed agents (supervised == true, i.e. they advertise
+// accepts_remote_config) get an additional Synced path keyed on the DELIVERED
+// signal (ADR 0040). A supervised collector — notably one running under the
+// opampsupervisor — reports an effective config that is env-expanded,
+// collector-default-expanded, and carries the supervisor-injected local `opamp`
+// extension (ws://127.0.0.1:<port>, ppid) that is intentionally NOT in the
+// stored intent. That effective config therefore NEVER hash-matches the compact
+// stored intent even when the agent is running exactly what Squadron assigned,
+// which made every supervised agent show permanent benign "drift" (the Southern
+// 300vd pilot finding). Instead of a full-content effective-vs-intent compare,
+// we ask "did the agent apply what Squadron sent?": if the hash of the config
+// the agent has confirmed applied (deliveredHash — set by the OpAMP server when
+// the agent echoes back the staged remote-config hash) equals the intent hash,
+// the agent is reconciled and reports Synced. A supervised agent that never
+// applied the pushed config (deliveredHash empty or stale) still reports
+// Drifted. This mirrors the HA reconciler's delivered-hash model
+// (internal/opamp/reconciler.go), reusing a signal Squadron already tracks.
+//
+// The no_intent and no_effective cases are unchanged.
+func computeConfigDrift(intent *ConfigIntent, effectiveConfig, deliveredHash string, supervised, includeDiff bool) (ConfigDriftStatus, *ConfigDriftDetails) {
 	checkedAt := time.Now()
 	normalizedEffective := normalizeConfigContent(effectiveConfig)
 
@@ -811,18 +879,29 @@ func computeConfigDrift(intent *ConfigIntent, effectiveConfig string, includeDif
 	}
 
 	effectiveHash := hashConfigContent(normalizedEffective)
-	if effectiveHash == intent.Hash {
-		return ConfigDriftStatusSynced, &ConfigDriftDetails{
-			IntentHash:    intent.Hash,
-			EffectiveHash: effectiveHash,
-			CheckedAt:     checkedAt,
-		}
-	}
 
 	details := &ConfigDriftDetails{
 		IntentHash:    intent.Hash,
 		EffectiveHash: effectiveHash,
 		CheckedAt:     checkedAt,
+	}
+	if supervised {
+		details.DeliveredHash = deliveredHash
+	}
+
+	// Exact content match — the agent is running byte-for-byte the stored intent
+	// (report-only agents, and supervised agents whose collector does not expand
+	// the config). Unchanged behavior.
+	if effectiveHash == intent.Hash {
+		return ConfigDriftStatusSynced, details
+	}
+
+	// Supervised agents: trust the DELIVERED signal over the (expanded) effective
+	// config. If the agent has confirmed applying the assigned config, it is
+	// reconciled — the effective-vs-intent expansion diff is expected and must
+	// not read as drift.
+	if supervised && deliveredHash != "" && deliveredHash == intent.Hash {
+		return ConfigDriftStatusSynced, details
 	}
 
 	if includeDiff && intent.Content != "" {

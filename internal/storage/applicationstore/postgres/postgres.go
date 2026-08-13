@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS agents (
     version          TEXT NOT NULL DEFAULT '',
     capabilities     JSONB NOT NULL DEFAULT '[]'::jsonb,
     effective_config TEXT NOT NULL DEFAULT '',
+    delivered_config_hash TEXT NOT NULL DEFAULT '',
     discovery_source TEXT NOT NULL DEFAULT 'opamp',
     deleted_at       TIMESTAMPTZ,
     created_at       TIMESTAMPTZ NOT NULL,
@@ -105,6 +106,12 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 CREATE INDEX IF NOT EXISTS idx_agents_group_id ON agents(group_id);
 CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+-- ADR 0040: agents gain a delivered_config_hash column (the confignorm hash of
+-- the config the agent has confirmed applied — the DELIVERED signal supervised-
+-- agent drift detection keys on). Added as an idempotent ALTER so Postgres
+-- databases created before 0040 upgrade in place; fresh databases already carry
+-- it from the CREATE TABLE above.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS delivered_config_hash TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS configs (
     id          TEXT PRIMARY KEY,
@@ -740,7 +747,7 @@ func scanGroup(sc scanner) (*types.Group, error) {
 // that threads a tenant through.
 // ============================================================================
 
-const agentColumns = `id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, discovery_source, created_at, updated_at`
+const agentColumns = `id, name, labels, status, last_seen, group_id, group_name, version, capabilities, effective_config, delivered_config_hash, discovery_source, created_at, updated_at`
 
 func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	labels, err := json.Marshal(agent.Labels)
@@ -831,6 +838,21 @@ func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, 
 	return nil
 }
 
+// UpdateAgentDeliveredConfigHash persists the confignorm hash of the config the
+// agent has confirmed applied (the DELIVERED/APPLIED signal, ADR 0040). Mirrors
+// UpdateAgentEffectiveConfig's not-found semantics.
+func (s *Storage) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE agents SET delivered_config_hash=$2, updated_at=now() WHERE id=$1`, id.String(), hash)
+	if err != nil {
+		return fmt.Errorf("update agent delivered config hash: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("agent not found: %s", id.String())
+	}
+	return nil
+}
+
 func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agent) error {
 	labels, err := json.Marshal(agent.Labels)
 	if err != nil {
@@ -876,7 +898,7 @@ func scanAgent(sc scanner) (*types.Agent, error) {
 	)
 	if err := sc.Scan(&idStr, &a.Name, &labels, &a.Status, &a.LastSeen,
 		&a.GroupID, &a.GroupName, &a.Version, &capabilities, &a.EffectiveConfig,
-		&a.DiscoverySource, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		&a.DeliveredConfigHash, &a.DiscoverySource, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
 	id, err := uuid.Parse(idStr)

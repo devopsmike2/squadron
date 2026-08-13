@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 
+	"github.com/devopsmike2/squadron/internal/confignorm"
 	"github.com/open-telemetry/opamp-go/protobufs"
 )
 
@@ -123,6 +124,39 @@ func wireConfigHash(body string) []byte {
 	hash.Write([]byte(body))
 	hash.Write([]byte("")) // content type (unset)
 	return hash.Sum(nil)
+}
+
+// appliedConfigHash returns the confignorm hash of the config content the agent
+// has confirmed applied, and true, when the agent has ACKED the remote config
+// Squadron currently has staged for it — its last-reported RemoteConfigStatus
+// hash equals the wire hash stamped on agent.remoteConfig (which calcRemoteConfig
+// derived from CustomInstanceConfig). Returns ("", false) otherwise: the agent
+// has not acked the current desired config (never delivered, mid-rollout, or a
+// report-only agent that has no remoteConfig staged).
+//
+// The returned hash is the confignorm hash of CustomInstanceConfig — the same
+// canonical hash the store stamps on the stored config (ConfigHash) and that
+// drift detection uses for the intent (see internal/confignorm). Because the
+// acked wire hash pins CustomInstanceConfig to exactly what the agent applied,
+// this value is directly comparable to the drift intent hash (ADR 0040): the
+// OpAMP server persists it via UpdateAgentDeliveredConfigHash so the services
+// layer can tell "the agent applied exactly what Squadron assigned" apart from
+// the env-/default-expanded effective config a supervised collector reports.
+func (agent *Agent) appliedConfigHash() (string, bool) {
+	if agent.Status == nil || agent.Status.RemoteConfigStatus == nil {
+		return "", false
+	}
+	if agent.remoteConfig == nil {
+		return "", false
+	}
+	acked := agent.Status.RemoteConfigStatus.LastRemoteConfigHash
+	if len(acked) == 0 {
+		return "", false
+	}
+	if !bytes.Equal(acked, agent.remoteConfig.ConfigHash) {
+		return "", false
+	}
+	return confignorm.Hash(agent.CustomInstanceConfig), true
 }
 
 // Configuration comparison helper functions
