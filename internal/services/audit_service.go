@@ -126,6 +126,18 @@ const (
 	// (the from_*/to_* pairs are empty strings when clearing/unassigned).
 	AuditEventAgentGroupReassigned = "agent.group_reassigned"
 
+	// AuditEventAgentConfigAdopted — adopt-on-first-supervise (ADR 0039). When a
+	// brownfield agent that advertises accepts_remote_config becomes supervised
+	// with NO assigned managed config but IS reporting a non-empty effective
+	// config, the OpAMP connect path seeds + assigns its initial managed config
+	// from that reported effective config (opamp extension stripped, ${ENV}
+	// preserved) instead of pushing the synthesized DefaultOTelConfig skeleton —
+	// which would clobber the agent's wired pipelines (see
+	// knowledge/2026-08-12-supervisor-initial-config-skeleton-clobber.md). This
+	// event records that auto-seed. Actor "opamp", target the new config; payload:
+	// agent_id, config_hash, note.
+	AuditEventAgentConfigAdopted = "agent.config_adopted_on_supervise"
+
 	// Backlog #5 (Southern log-fan-out incident) — operator dismisses the
 	// suspected-duplicate flag on a telemetry-only agent, confirming it is a
 	// legitimate separate agent and not a phantom of an OpAMP-managed host.
