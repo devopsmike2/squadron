@@ -621,9 +621,50 @@ CREATE TABLE IF NOT EXISTS connection_registry (
 CREATE INDEX IF NOT EXISTS idx_connection_registry_heartbeat ON connection_registry(last_heartbeat_at);
 `
 
-func (s *Storage) initSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, schemaSQL)
-	return err
+// schemaInitLockKey is the fixed 64-bit key for the Postgres transaction-scoped
+// advisory lock that serializes schema initialization (see initSchema).
+//
+// Concurrent Open() calls against the SAME database race in the system catalog:
+// `CREATE TABLE IF NOT EXISTS` is NOT concurrency-safe, so when two processes
+// create the same not-yet-existing table at once the loser fails with
+// `duplicate key value violates unique constraint "pg_type_typname_nsp_index"`
+// (SQLSTATE 23505) on the table's companion pg_type row. This flakes CI when the
+// `postgres` and `applicationstore` test packages open the shared TEST_POSTGRES_DSN
+// database concurrently. Every process initializing this schema takes the lock
+// under the same key, so exactly one runs the DDL at a time.
+//
+// The value is an arbitrary but stable application-chosen constant: the FNV-1a
+// 64-bit hash of "squadron.schema.init", reinterpreted as a signed int64
+// (pg_advisory_xact_lock takes a bigint).
+const schemaInitLockKey int64 = -1673074391011295357
+
+// initSchema applies schemaSQL. It runs inside a single transaction that first
+// takes a transaction-scoped advisory lock (pg_advisory_xact_lock) so concurrent
+// initializations serialize instead of racing the catalog; the lock auto-releases
+// on COMMIT/ROLLBACK. Postgres DDL is transactional, and every statement in
+// schemaSQL is idempotent (IF NOT EXISTS), so the second (blocked) runner sees a
+// fully-created schema and its DDL is a clean no-op. The normal single-process
+// path is unchanged apart from the added serialization.
+func (s *Storage) initSchema(ctx context.Context) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin schema init tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, schemaInitLockKey); err != nil {
+		return fmt.Errorf("acquire schema init advisory lock: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, schemaSQL); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema init: %w", err)
+	}
+	return nil
 }
 
 // ============================================================================
