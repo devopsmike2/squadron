@@ -705,6 +705,22 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 					zap.Error(err))
 			}
 		}
+
+		// Persist the DELIVERED/APPLIED signal (ADR 0040): when the agent has
+		// acked the remote config Squadron staged for it, stamp the confignorm
+		// hash of that config so drift detection can tell a supervised agent
+		// running exactly what Squadron assigned (Synced) apart from its env-/
+		// default-expanded, opamp-extension-carrying effective config (which
+		// never hash-matches the compact intent). Only fires when the agent has
+		// confirmed applying the current desired config; report-only agents and
+		// agents mid-delivery leave the stored hash untouched.
+		if hash, ok := agent.appliedConfigHash(); ok {
+			if err := s.agentService.UpdateAgentDeliveredConfigHash(ctx, agent.storeID(), hash); err != nil {
+				s.logger.Error("Failed to update agent delivered config hash",
+					zap.String("agentId", agent.InstanceIdStr),
+					zap.Error(err))
+			}
+		}
 	}
 }
 
