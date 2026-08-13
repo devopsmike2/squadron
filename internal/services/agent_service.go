@@ -17,6 +17,13 @@ type AgentService interface {
 	UpdateAgentStatus(ctx context.Context, id uuid.UUID, status AgentStatus) error
 	UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSeen time.Time) error
 	UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, effectiveConfig string) error
+	// UpdateAgentDeliveredConfigHash persists the confignorm hash of the config
+	// the agent has confirmed applied (the DELIVERED/APPLIED signal, ADR 0040).
+	// The OpAMP server calls it when an agent echoes back the remote-config hash
+	// Squadron staged for it; supervised-agent drift detection reads it back to
+	// tell "applied exactly what Squadron assigned" apart from the env-/default-
+	// expanded effective config a supervised collector reports.
+	UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error
 	// UpdateAgentRegistration persists the mutable registration/grouping
 	// fields (Name, Labels, Version, GroupID, GroupName) of an existing
 	// agent. Used by the OpAMP server when a registered agent re-reports a
@@ -61,19 +68,29 @@ type AgentService interface {
 
 // Agent represents an OpenTelemetry agent
 type Agent struct {
-	ID              uuid.UUID           `json:"id"`
-	Name            string              `json:"name"`
-	Labels          map[string]string   `json:"labels"`
-	Status          AgentStatus         `json:"status"`
-	LastSeen        time.Time           `json:"last_seen"`
-	GroupID         *string             `json:"group_id,omitempty"`
-	GroupName       *string             `json:"group_name,omitempty"`
-	Version         string              `json:"version"`
-	Capabilities    []string            `json:"capabilities"`
-	EffectiveConfig string              `json:"effective_config,omitempty"`
-	ConfigIntent    *ConfigIntent       `json:"config_intent,omitempty"`
-	DriftStatus     ConfigDriftStatus   `json:"drift_status"`
-	DriftDetails    *ConfigDriftDetails `json:"drift_details,omitempty"`
+	ID              uuid.UUID         `json:"id"`
+	Name            string            `json:"name"`
+	Labels          map[string]string `json:"labels"`
+	Status          AgentStatus       `json:"status"`
+	LastSeen        time.Time         `json:"last_seen"`
+	GroupID         *string           `json:"group_id,omitempty"`
+	GroupName       *string           `json:"group_name,omitempty"`
+	Version         string            `json:"version"`
+	Capabilities    []string          `json:"capabilities"`
+	EffectiveConfig string            `json:"effective_config,omitempty"`
+	// DeliveredConfigHash is the canonical (confignorm) hash of the config the
+	// agent has confirmed applied — the OpAMP server stamps it when the agent
+	// echoes back the remote-config hash Squadron staged for it. Comparable to
+	// ConfigIntent.Hash, it is the DELIVERED/APPLIED signal supervised-agent
+	// drift detection keys on (ADR 0040): a supervised collector's reported
+	// effective config is env-/default-expanded and carries the supervisor-
+	// injected opamp extension, so it never hash-matches the compact stored
+	// intent even when the agent is running exactly what Squadron sent. Empty
+	// until the agent confirms applying a pushed config.
+	DeliveredConfigHash string              `json:"delivered_config_hash,omitempty"`
+	ConfigIntent        *ConfigIntent       `json:"config_intent,omitempty"`
+	DriftStatus         ConfigDriftStatus   `json:"drift_status"`
+	DriftDetails        *ConfigDriftDetails `json:"drift_details,omitempty"`
 	// DiscoverySource records how Squadron first learned about this agent:
 	// "opamp" (a control connection opened) or "otlp" (passive-OTLP discovery
 	// — telemetry seen but no OpAMP socket). Surfaced on the service Agent so
@@ -135,8 +152,16 @@ const (
 
 // ConfigDriftDetails contains metadata about the drift evaluation
 type ConfigDriftDetails struct {
-	IntentHash    string    `json:"intent_hash,omitempty"`
-	EffectiveHash string    `json:"effective_hash,omitempty"`
+	IntentHash    string `json:"intent_hash,omitempty"`
+	EffectiveHash string `json:"effective_hash,omitempty"`
+	// DeliveredHash is the confignorm hash of the config the agent has confirmed
+	// applied (ADR 0040). Populated for supervised/managed agents; it is the
+	// signal a supervised agent is reconciled with — when it equals IntentHash
+	// the agent is Synced even though EffectiveHash differs (the reported
+	// effective config is env-/default-expanded and carries the supervisor-
+	// injected opamp extension). Empty for report-only agents and for agents
+	// that have not confirmed applying a pushed config.
+	DeliveredHash string    `json:"delivered_hash,omitempty"`
 	Diff          string    `json:"diff,omitempty"`
 	CheckedAt     time.Time `json:"checked_at"`
 }

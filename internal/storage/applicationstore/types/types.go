@@ -49,6 +49,16 @@ type ApplicationStore interface {
 	UpdateAgentStatus(ctx context.Context, id uuid.UUID, status AgentStatus) error
 	UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSeen time.Time) error
 	UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, effectiveConfig string) error
+	// UpdateAgentDeliveredConfigHash persists the canonical (confignorm) hash of
+	// the config content the agent has confirmed applied — i.e. the OpAMP server
+	// observed the agent echo back the same remote-config hash Squadron staged
+	// for it. This is the DELIVERED/APPLIED signal supervised-agent drift keys
+	// on: it is comparable to a stored config's ConfigHash, so drift detection
+	// can tell "the agent applied exactly what Squadron assigned" apart from the
+	// env-/default-expanded effective config a supervised collector reports.
+	// Empty string means "no config confirmed applied yet". See
+	// services.computeConfigDrift.
+	UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error
 	// UpdateAgentRegistration writes the mutable registration/grouping
 	// fields of an EXISTING agent (Name, Labels, Version, GroupID,
 	// GroupName) by ID. Used when an already-registered agent re-reports
@@ -1341,6 +1351,16 @@ type Agent struct {
 	Version         string            `json:"version"`
 	Capabilities    []string          `json:"capabilities"`
 	EffectiveConfig string            `json:"effective_config,omitempty"`
+	// DeliveredConfigHash is the canonical (confignorm) hash of the config
+	// content the agent has confirmed applied — the OpAMP server writes it when
+	// the agent echoes back the remote-config hash Squadron staged for it. It is
+	// comparable to a stored config's ConfigHash and is the DELIVERED/APPLIED
+	// signal supervised-agent drift detection keys on (a supervised collector's
+	// reported effective config is env-/default-expanded and carries the
+	// supervisor-injected opamp extension, so it never hash-matches the compact
+	// stored intent even when the agent is running exactly what Squadron sent).
+	// Empty until the agent confirms applying a pushed config. See ADR 0040.
+	DeliveredConfigHash string `json:"delivered_config_hash,omitempty"`
 	// DiscoverySource records how Squadron first learned about this
 	// agent. v0.36 introduces "otlp" for collectors that send
 	// telemetry to Squadron but never open an OpAMP connection;

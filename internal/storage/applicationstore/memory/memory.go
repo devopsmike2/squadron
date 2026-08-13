@@ -368,6 +368,23 @@ func (s *Store) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, ef
 	return nil
 }
 
+// UpdateAgentDeliveredConfigHash persists the confignorm hash of the config the
+// agent has confirmed applied (the DELIVERED/APPLIED signal). Mirrors
+// UpdateAgentEffectiveConfig; supervised-agent drift detection reads it back.
+func (s *Store) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	agent, exists := s.agents[id]
+	if !exists {
+		return fmt.Errorf("agent not found: %s", id)
+	}
+
+	agent.DeliveredConfigHash = hash
+	agent.UpdatedAt = time.Now()
+	return nil
+}
+
 // UpdateAgentRegistration writes the mutable registration/grouping fields
 // (Name, Labels, Version, GroupID, GroupName) of an existing agent.
 // Mirrors the sqlite impl; deep-copies Labels so the caller's map can't

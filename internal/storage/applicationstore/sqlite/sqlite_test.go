@@ -166,6 +166,43 @@ func TestSQLiteUpdateAgentLastSeen(t *testing.T) {
 	})
 }
 
+// TestSQLiteUpdateAgentDeliveredConfigHash verifies the ADR 0040
+// delivered-config-hash column round-trips: it defaults empty on a freshly
+// created agent, persists through GetAgent + ListAgents after an update, and
+// errors on a missing agent.
+func TestSQLiteUpdateAgentDeliveredConfigHash(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		// Defaults empty on create.
+		agent, err := store.GetAgent(context.Background(), agentID)
+		require.NoError(t, err)
+		require.NotNil(t, agent)
+		assert.Empty(t, agent.DeliveredConfigHash)
+
+		// Update persists.
+		const hash = "abc123deadbeef"
+		err = store.UpdateAgentDeliveredConfigHash(context.Background(), agentID, hash)
+		require.NoError(t, err)
+
+		agent, err = store.GetAgent(context.Background(), agentID)
+		require.NoError(t, err)
+		assert.Equal(t, hash, agent.DeliveredConfigHash)
+
+		// And through ListAgents.
+		agents, err := store.ListAgents(context.Background())
+		require.NoError(t, err)
+		require.Len(t, agents, 1)
+		assert.Equal(t, hash, agents[0].DeliveredConfigHash)
+	})
+}
+
+func TestSQLiteUpdateAgentDeliveredConfigHashNotFound(t *testing.T) {
+	withSQLiteStore(t, func(store types.ApplicationStore) {
+		err := store.UpdateAgentDeliveredConfigHash(context.Background(), uuid.New(), "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+}
+
 func TestSQLiteDeleteAgent(t *testing.T) {
 	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
 		err := store.DeleteAgent(context.Background(), agentID)

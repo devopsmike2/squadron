@@ -28,6 +28,7 @@ type MockAgentService struct {
 	UpdateAgentStatusErr          error
 	UpdateAgentLastSeenErr        error
 	UpdateAgentEffectiveConfigErr error
+	UpdateAgentDeliveredHashErr   error
 	UpdateAgentRegistrationErr    error
 	DeleteAgentErr                error
 	CreateGroupErr                error
@@ -156,6 +157,25 @@ func (m *MockAgentService) UpdateAgentEffectiveConfig(ctx context.Context, id uu
 	}
 
 	agent.EffectiveConfig = effectiveConfig
+	agent.UpdatedAt = time.Now()
+	return nil
+}
+
+// UpdateAgentDeliveredConfigHash implements services.AgentService
+func (m *MockAgentService) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.UpdateAgentDeliveredHashErr != nil {
+		return m.UpdateAgentDeliveredHashErr
+	}
+
+	agent, exists := m.agents[id]
+	if !exists {
+		return nil
+	}
+
+	agent.DeliveredConfigHash = hash
 	agent.UpdatedAt = time.Now()
 	return nil
 }
