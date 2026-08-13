@@ -285,7 +285,11 @@ export function AgentDetailsDrawer({
                     limit={4}
                   />
                 )}
-                <AgentOverview agent={agent} metrics={metrics} />
+                <AgentOverview
+                  agent={agent}
+                  metrics={metrics}
+                  onAgentChanged={mutateAgent}
+                />
               </TabsContent>
 
               <TabsContent value="config" className="space-y-4 py-4">
