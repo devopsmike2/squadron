@@ -68,6 +68,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { visibleLabels } from "@/types/agent";
 import type { Agent, ConfigDriftStatus } from "@/types/agent";
 
 // ============================================================
@@ -857,7 +858,10 @@ function VirtualizedAgentTable({
                     <DriftBadge status={a.drift_status} />
                   </div>
                   <div className="px-4 py-3 truncate font-medium text-foreground">
-                    {a.name}
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate">{a.name}</span>
+                      {a.suspected_duplicate_of && <DuplicateTag agent={a} />}
+                    </span>
                   </div>
                   <div className="px-4 py-3 font-tabular text-xs text-muted-foreground">
                     {a.version}
@@ -938,7 +942,12 @@ function AgentTable({
               <TableCell>
                 <DriftBadge status={a.drift_status} />
               </TableCell>
-              <TableCell className="font-medium">{a.name}</TableCell>
+              <TableCell className="font-medium">
+                <span className="flex items-center gap-1.5">
+                  {a.name}
+                  {a.suspected_duplicate_of && <DuplicateTag agent={a} />}
+                </span>
+              </TableCell>
               <TableCell className="font-tabular text-xs text-muted-foreground">
                 {a.version}
               </TableCell>
@@ -966,7 +975,7 @@ function AgentTable({
               </TableCell>
               <TableCell>
                 <div className="flex flex-wrap gap-1">
-                  {Object.entries(a.labels ?? {})
+                  {visibleLabels(a.labels)
                     .slice(0, 3)
                     .map(([k, v]) => (
                       <Badge
@@ -977,9 +986,9 @@ function AgentTable({
                         {k}={v}
                       </Badge>
                     ))}
-                  {Object.keys(a.labels ?? {}).length > 3 && (
+                  {visibleLabels(a.labels).length > 3 && (
                     <span className="text-[10px] text-muted-foreground">
-                      +{Object.keys(a.labels ?? {}).length - 3}
+                      +{visibleLabels(a.labels).length - 3}
                     </span>
                   )}
                 </div>
@@ -1008,6 +1017,29 @@ function StatusBadge({ status }: { status: Agent["status"] }) {
       <span className="status-dot" style={{ ["--dot" as string]: color }} />
       <span className="text-xs capitalize text-foreground">{status}</span>
     </span>
+  );
+}
+
+// Backlog #5 — compact "duplicate" tag shown next to a suspected-duplicate
+// agent's name in the table layouts. The card layout has its own inline badge.
+// Hover reveals the managed agent it likely shadows; click-through to the
+// drawer is where Dismiss / Decommission live.
+function DuplicateTag({ agent }: { agent: Agent }) {
+  const dup = agent.suspected_duplicate_of;
+  if (!dup) return null;
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] uppercase tracking-wider"
+      style={{
+        color: "var(--destructive)",
+        borderColor: "color-mix(in oklch, var(--destructive) 40%, transparent)",
+        background: "color-mix(in oklch, var(--destructive) 10%, transparent)",
+      }}
+      title={`Likely duplicate of ${dup.of_agent_name}: ${dup.reason}`}
+    >
+      Duplicate
+    </Badge>
   );
 }
 

@@ -902,3 +902,59 @@ func TestHandleAdoptConfig_BadID(t *testing.T) {
 	w := adoptReq(t, handlers, "not-a-uuid", "")
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+// dismissDuplicate drives HandleDismissDuplicate with the :id path param set,
+// returning the recorder.
+func dismissDuplicate(t *testing.T, h *AgentHandlers, agentID string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: agentID}}
+	c.Request = httptest.NewRequest("POST", "/api/v1/agents/"+agentID+"/dismiss-duplicate", nil)
+	h.HandleDismissDuplicate(c)
+	return w
+}
+
+// TestHandleDismissDuplicate_SetsFlagAndAudits: dismissing a suspected-duplicate
+// telemetry-only agent persists the reserved dismiss label and emits one
+// agent.duplicate_dismissed audit event.
+func TestHandleDismissDuplicate_SetsFlagAndAudits(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	audit := &recordingAuditService{}
+	h := NewAgentHandlers(mock, &mockConfigSender{}, zap.NewNop()).WithAuditService(audit)
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{
+		ID:              agentID,
+		Name:            "web-01",
+		Labels:          map[string]string{"host.name": "web-01"},
+		DiscoverySource: "otlp",
+	}))
+
+	w := dismissDuplicate(t, h, agentID.String())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	got, err := mock.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Equal(t, "true", got.Labels[services.LabelDuplicateDismissed],
+		"dismiss must persist the reserved label the detector honors")
+
+	require.Len(t, audit.recorded, 1)
+	assert.Equal(t, services.AuditEventAgentDuplicateDismissed, audit.recorded[0].EventType)
+	assert.Equal(t, agentID.String(), audit.recorded[0].TargetID)
+}
+
+// TestHandleDismissDuplicate_UnknownAgent: 404 when the agent doesn't exist.
+func TestHandleDismissDuplicate_UnknownAgent(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := dismissDuplicate(t, handlers, uuid.New().String())
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandleDismissDuplicate_BadID: 400 on a non-UUID agent id.
+func TestHandleDismissDuplicate_BadID(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := dismissDuplicate(t, handlers, "not-a-uuid")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}

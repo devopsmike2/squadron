@@ -159,3 +159,11 @@ export const decommissionAgent = (
 ): Promise<{ ok: boolean; agent_id: string }> => {
   return apiDelete<{ ok: boolean; agent_id: string }>(`/agents/${agentId}`);
 };
+
+/** Backlog #5: dismiss the suspected-duplicate flag on a telemetry-only agent,
+ * confirming it is a legitimate separate agent (not a phantom of an
+ * OpAMP-managed host). Clears the warning badge/banner and persists the
+ * decision so it stays cleared. Does not delete or move any telemetry. */
+export const dismissDuplicate = (agentId: string): Promise<Agent> => {
+  return apiPost<Agent>(`/agents/${agentId}/dismiss-duplicate`, {});
+};

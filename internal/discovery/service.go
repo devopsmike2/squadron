@@ -162,10 +162,26 @@ func (s *Service) RegisterIfUnknown(ctx context.Context, obs Observation) {
 	if name == "" {
 		name = obs.AgentID
 	}
+	// Stamp host.name as an explicit label so the duplicate-identity detector
+	// (backlog #5) has an authoritative host identity for this telemetry-only
+	// agent — the same label key the OpAMP path populates from the agent
+	// description's non-identifying attributes. Without this, a telemetry-only
+	// agent's host.name would only live in its display Name, which the detector
+	// deliberately does not trust as a host identity. Only stamped when the
+	// telemetry actually carried a host.name (empty host.name stays unflagged).
+	labels := obs.Labels
+	if obs.Hostname != "" {
+		if labels == nil {
+			labels = make(map[string]string, 1)
+		}
+		if _, ok := labels["host.name"]; !ok {
+			labels["host.name"] = obs.Hostname
+		}
+	}
 	agent := &apptypes.Agent{
 		ID:              parsed,
 		Name:            name,
-		Labels:          obs.Labels,
+		Labels:          labels,
 		Status:          apptypes.AgentStatusOnline,
 		LastSeen:        now,
 		Version:         obs.Version,

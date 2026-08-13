@@ -47,17 +47,18 @@ func NewAgentService(appStore applicationstore.ApplicationStore, driftMetrics *m
 // CreateAgent creates an agent
 func (s *AgentServiceImpl) CreateAgent(ctx context.Context, agent *Agent) error {
 	storageAgent := &applicationstore.Agent{
-		ID:           agent.ID,
-		Name:         agent.Name,
-		Labels:       agent.Labels,
-		Status:       applicationstore.AgentStatus(agent.Status),
-		LastSeen:     agent.LastSeen,
-		GroupID:      agent.GroupID,
-		GroupName:    agent.GroupName,
-		Version:      agent.Version,
-		Capabilities: agent.Capabilities,
-		CreatedAt:    agent.CreatedAt,
-		UpdatedAt:    agent.UpdatedAt,
+		ID:              agent.ID,
+		Name:            agent.Name,
+		Labels:          agent.Labels,
+		Status:          applicationstore.AgentStatus(agent.Status),
+		LastSeen:        agent.LastSeen,
+		GroupID:         agent.GroupID,
+		GroupName:       agent.GroupName,
+		Version:         agent.Version,
+		Capabilities:    agent.Capabilities,
+		DiscoverySource: agent.DiscoverySource,
+		CreatedAt:       agent.CreatedAt,
+		UpdatedAt:       agent.UpdatedAt,
 	}
 	if err := s.appStore.CreateAgent(ctx, storageAgent); err != nil {
 		return err
@@ -110,6 +111,7 @@ func (s *AgentServiceImpl) GetAgent(ctx context.Context, id uuid.UUID) (*Agent, 
 		Version:         agent.Version,
 		Capabilities:    agent.Capabilities,
 		EffectiveConfig: agent.EffectiveConfig,
+		DiscoverySource: agent.DiscoverySource,
 		DriftStatus:     ConfigDriftStatusUnknown,
 		CreatedAt:       agent.CreatedAt,
 		UpdatedAt:       agent.UpdatedAt,
@@ -122,7 +124,48 @@ func (s *AgentServiceImpl) GetAgent(ctx context.Context, id uuid.UUID) (*Agent, 
 		)
 	}
 
+	// Duplicate-identity detection needs the whole fleet to find the managed
+	// agent this one might shadow. GetAgent isn't a hot path, so a single
+	// fleet read is acceptable; we project the rows to the minimal fields the
+	// detector reads and copy the verdict back onto the returned agent.
+	s.annotateSuspectedDuplicate(ctx, result)
+
 	return result, nil
+}
+
+// annotateSuspectedDuplicate loads the fleet, runs the duplicate detector over
+// a lightweight projection, and copies the verdict for target onto it. Best-
+// effort: a fleet-read error leaves target.SuspectedDuplicateOf nil (unflagged)
+// rather than failing the GetAgent.
+func (s *AgentServiceImpl) annotateSuspectedDuplicate(ctx context.Context, target *Agent) {
+	if target == nil {
+		return
+	}
+	fleet, err := s.appStore.ListAgents(ctx)
+	if err != nil {
+		s.logger.Warn("duplicate detection: fleet read failed (non-fatal)",
+			zap.String("agent_id", target.ID.String()), zap.Error(err))
+		return
+	}
+	projection := make([]*Agent, 0, len(fleet))
+	for _, a := range fleet {
+		projection = append(projection, &Agent{
+			ID:              a.ID,
+			Name:            a.Name,
+			Labels:          a.Labels,
+			Version:         a.Version,
+			Capabilities:    a.Capabilities,
+			DiscoverySource: a.DiscoverySource,
+			CreatedAt:       a.CreatedAt,
+		})
+	}
+	detectDuplicates(projection)
+	for _, a := range projection {
+		if a.ID == target.ID {
+			target.SuspectedDuplicateOf = a.SuspectedDuplicateOf
+			return
+		}
+	}
 }
 
 // ListAgents lists all agents
@@ -145,6 +188,7 @@ func (s *AgentServiceImpl) ListAgents(ctx context.Context) ([]*Agent, error) {
 			Version:         agent.Version,
 			Capabilities:    agent.Capabilities,
 			EffectiveConfig: agent.EffectiveConfig,
+			DiscoverySource: agent.DiscoverySource,
 			DriftStatus:     ConfigDriftStatusUnknown,
 			CreatedAt:       agent.CreatedAt,
 			UpdatedAt:       agent.UpdatedAt,
@@ -159,6 +203,11 @@ func (s *AgentServiceImpl) ListAgents(ctx context.Context) ([]*Agent, error) {
 
 		result[i] = current
 	}
+
+	// Flag suspected duplicate-identity agents (telemetry-only shadows of an
+	// OpAMP-managed agent on the same host). Computed on read over the fleet
+	// we already loaded — no persistence, no background job.
+	detectDuplicates(result)
 
 	// Refresh fleet drift gauges as a side effect. This is the dominant code
 	// path that walks the whole fleet, so gauges stay reasonably fresh as long

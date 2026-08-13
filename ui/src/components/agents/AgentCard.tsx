@@ -16,6 +16,7 @@
  */
 
 import { Badge } from "@/components/ui/badge";
+import { visibleLabels } from "@/types/agent";
 import type { Agent, ConfigDriftStatus } from "@/types/agent";
 
 const STATUS_TONE: Record<Agent["status"], { dot: string; label: string }> = {
@@ -84,9 +85,10 @@ export function AgentCard({
 }: AgentCardProps) {
   const status = STATUS_TONE[agent.status] ?? STATUS_TONE.offline;
   const drift = DRIFT_TONE[agent.drift_status ?? "default"];
-  const labels = Object.entries(agent.labels ?? {});
-  const visibleLabels = labels.slice(0, 3);
-  const overflow = labels.length - visibleLabels.length;
+  const labels = visibleLabels(agent.labels);
+  const shownLabels = labels.slice(0, 3);
+  const overflow = labels.length - shownLabels.length;
+  const dup = agent.suspected_duplicate_of;
 
   // Environment from labels — the OTel convention is
   // deployment.environment (e.g. "prod", "staging"). Some collectors
@@ -185,12 +187,28 @@ export function AgentCard({
             Telemetry-only
           </Badge>
         )}
+        {dup && (
+          <Badge
+            variant="outline"
+            className="text-[10px] font-medium"
+            style={{
+              color: "var(--destructive)",
+              borderColor:
+                "color-mix(in oklch, var(--destructive) 40%, transparent)",
+              background:
+                "color-mix(in oklch, var(--destructive) 10%, transparent)",
+            }}
+            title={`Likely duplicate of ${dup.of_agent_name}: ${dup.reason}. Open the agent to Dismiss or Decommission.`}
+          >
+            Likely duplicate
+          </Badge>
+        )}
       </div>
 
       {/* Row 3: labels + relative last-seen */}
       <div className="mt-auto flex items-end justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1">
-          {visibleLabels.map(([k, v]) => (
+          {shownLabels.map(([k, v]) => (
             <span
               key={k}
               className="inline-flex items-center rounded-sm border border-border/40 bg-background/30 px-1 py-0.5 font-mono text-[10px] text-muted-foreground"
