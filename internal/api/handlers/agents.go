@@ -639,6 +639,163 @@ func (h *AgentHandlers) HandleSendConfigToAgent(c *gin.Context) {
 	})
 }
 
+// ClearAgentConfigResponse is returned by HandleClearAgentConfig.
+//
+// Cleared reports whether an agent-scoped config actually existed and was
+// removed (the delete is idempotent, so a clear on an agent with none succeeds
+// with cleared=false). FellBackTo is "group" when the agent belongs to a group
+// that has a config — now the resolved desired config — or "none" when no group
+// config applies. GroupID is set when FellBackTo is "group". Pushed reports
+// whether that resolved group config was delivered to the (connected) agent in
+// this call; the reconcile loop is the durability backstop when it was not.
+type ClearAgentConfigResponse struct {
+	Cleared    bool   `json:"cleared"`
+	FellBackTo string `json:"fell_back_to"`
+	GroupID    string `json:"group_id,omitempty"`
+	Pushed     bool   `json:"pushed"`
+	Message    string `json:"message"`
+}
+
+// HandleClearAgentConfig handles DELETE /api/v1/agents/:id/config.
+//
+// Clears an agent's OWN agent-scoped config so config resolution falls back to
+// the agent's GROUP config. Config resolution is agent-specific-wins
+// (internal/opamp/config_resolver.go resolveStoredConfig: agent-scoped config,
+// else group config, else the connect-path default/adopt-on-supervise). A
+// supervised agent that was auto-seeded an agent-scoped config on first
+// supervise (adopt-on-first-supervise, ADR 0039) therefore ignores any group
+// config assigned later. This endpoint is the operator's way to drop that
+// agent-scoped config so the agent resumes tracking its group's config.
+//
+// It deletes ONLY the agent-scoped config(s) — DeleteConfigsForAgent filters on
+// agent_id, so a group-scoped config (agent_id NULL) is never touched, and no
+// other agent is affected. Scoped agents:write, mirroring HandleUpdateAgentGroup.
+//
+// After clearing, if the agent is in a group that has a config, that group
+// config is the newly-resolved desired config; the handler delivers it promptly
+// via the same direct push HandleSendConfigToAgent uses, so a supervised agent
+// gets the group config now rather than on the next ~30s reconcile tick. A
+// delivery failure is non-fatal (the config is already cleared and the reconcile
+// loop re-delivers).
+//
+// Edge case — no group config: if the agent is in no group, or its group has no
+// config, clearing leaves the agent with NO resolved stored config. For a
+// supervised agent that still advertises accepts_remote_config and reports an
+// effective config, the next OpAMP connect can re-fire adopt-on-first-supervise
+// and re-seed a fresh agent-scoped config. The intended use is "fall back to an
+// EXISTING group config"; the UI disables the action when there is no group.
+func (h *AgentHandlers) HandleClearAgentConfig(c *gin.Context) {
+	agentID := c.Param("id")
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID format"})
+		return
+	}
+
+	agent, err := h.agentService.GetAgent(c.Request.Context(), agentUUID)
+	if err != nil {
+		h.logger.Error("Failed to get agent for clear-config",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agent"})
+		return
+	}
+	if agent == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+		return
+	}
+
+	// Was an agent-scoped config actually present? Reported back so the operator
+	// sees "nothing to clear" distinctly from "cleared"; the delete below is
+	// idempotent regardless of this.
+	existing, err := h.agentService.GetLatestConfigForAgent(c.Request.Context(), agentUUID)
+	if err != nil {
+		h.logger.Error("Failed to look up agent-scoped config for clear-config",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to look up agent config"})
+		return
+	}
+	hadAgentConfig := existing != nil
+
+	// Delete ONLY the agent-scoped config(s). Never touches a group config.
+	if err := h.agentService.DeleteConfigsForAgent(c.Request.Context(), agentUUID); err != nil {
+		h.logger.Error("Failed to clear agent-scoped config",
+			zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear agent config"})
+		return
+	}
+
+	resp := ClearAgentConfigResponse{
+		Cleared:    hadAgentConfig,
+		FellBackTo: "none",
+	}
+
+	// Resolve the newly-current desired config. With the agent-scoped row gone,
+	// resolution falls back to the group config (resolveStoredConfig precedence).
+	// When the agent is in a group that has a config, deliver it promptly —
+	// mirror the direct-push path so a supervised agent gets the group config now.
+	if agent.GroupID != nil && *agent.GroupID != "" {
+		groupCfg, gerr := h.agentService.GetLatestConfigForGroup(c.Request.Context(), *agent.GroupID)
+		if gerr != nil {
+			h.logger.Warn("clear-config: failed to resolve group config after clear",
+				zap.String("agent_id", agentID), zap.String("group_id", *agent.GroupID), zap.Error(gerr))
+		} else if groupCfg != nil {
+			resp.FellBackTo = "group"
+			resp.GroupID = *agent.GroupID
+
+			push := h.configsTracer.BeginPush(c.Request.Context(), agentUUID.String(), groupCfg.ID, *agent.GroupID, configs.SourceDirect)
+			if perr := h.commander.SendConfigToAgentWithContext(push.Context(), agentUUID, groupCfg.Content); perr != nil {
+				push.RecordNack(perr.Error())
+				push.End()
+				h.logger.Warn("clear-config: group config delivery failed; reconcile loop is the backstop",
+					zap.String("agent_id", agentID), zap.String("config_id", groupCfg.ID), zap.Error(perr))
+			} else {
+				push.RecordAck()
+				push.End()
+				resp.Pushed = true
+			}
+		}
+	}
+
+	// Operator-action audit (best-effort; a nil recorder or Record error never
+	// fails the request). Mirrors HandleUpdateAgentGroup.
+	if h.auditService != nil {
+		actor := middleware.ActorFromGin(c).String()
+		if actor == "" {
+			actor = services.AuditActorSystem
+		}
+		_ = h.auditService.Record(c.Request.Context(), services.AuditEntry{
+			Actor:      actor,
+			EventType:  services.AuditEventAgentConfigCleared,
+			TargetType: services.AuditTargetAgent,
+			TargetID:   agentID,
+			Action:     "config_cleared",
+			Payload: map[string]any{
+				"agent_id":         agentID,
+				"had_agent_config": hadAgentConfig,
+				"fell_back_to":     resp.FellBackTo,
+				"group_id":         resp.GroupID,
+			},
+		})
+	}
+
+	switch {
+	case resp.Pushed:
+		resp.Message = "Cleared the agent config. The group config is now in effect and was delivered to the agent."
+	case resp.FellBackTo == "group":
+		resp.Message = "Cleared the agent config. The group config is now in effect and will be delivered on the next reconcile."
+	default:
+		resp.Message = "Cleared the agent config. The agent is in no group with a config, so no config is currently assigned."
+	}
+
+	h.logger.Info("Cleared agent-scoped config",
+		zap.String("agent_id", agentID),
+		zap.Bool("had_agent_config", hadAgentConfig),
+		zap.String("fell_back_to", resp.FellBackTo),
+		zap.Bool("pushed", resp.Pushed))
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // HandleDecommissionAgent is DELETE /api/v1/agents/:id. v0.35
 // affordance for cleaning up agents that have been retired from
 // the fleet — without this, an offline Windows host that's been

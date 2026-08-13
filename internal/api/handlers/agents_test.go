@@ -958,3 +958,233 @@ func TestHandleDismissDuplicate_BadID(t *testing.T) {
 	w := dismissDuplicate(t, handlers, "not-a-uuid")
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+// recordingConfigSender records SendConfigToAgentWithContext calls so a test can
+// assert the clear-config handler delivered the resolved GROUP config to the
+// agent (and only that agent). The other AgentCommander methods are inherited
+// from mockConfigSender. err, when set, makes the push fail so the delivery-
+// failure path can be exercised. Single-goroutine use only (the handler pushes
+// synchronously on the request goroutine), so no locking.
+type recordingConfigSender struct {
+	mockConfigSender
+	sent map[uuid.UUID]string
+	err  error
+}
+
+func newRecordingConfigSender() *recordingConfigSender {
+	return &recordingConfigSender{sent: map[uuid.UUID]string{}}
+}
+
+func (r *recordingConfigSender) SendConfigToAgentWithContext(_ context.Context, agentID uuid.UUID, content string) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.sent[agentID] = content
+	return nil
+}
+
+// clearConfig drives HandleClearAgentConfig with the :id path param set,
+// returning the recorder.
+func clearConfig(t *testing.T, h *AgentHandlers, agentID string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: agentID}}
+	c.Request = httptest.NewRequest("DELETE", "/api/v1/agents/"+agentID+"/config", nil)
+	h.HandleClearAgentConfig(c)
+	return w
+}
+
+// TestHandleClearAgentConfig_FallsBackToGroupAndPushes: clearing an agent's
+// agent-scoped config removes it so resolution falls back to the group config,
+// delivers that group config to the agent, and touches neither the group config
+// nor any other agent's config.
+func TestHandleClearAgentConfig_FallsBackToGroupAndPushes(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	sender := newRecordingConfigSender()
+	h := NewAgentHandlers(mock, sender, zap.NewNop())
+	ctx := context.Background()
+
+	gid, gname := "grp-1", "prod"
+	agentID := uuid.New()
+	otherID := uuid.New()
+
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{
+		ID: agentID, Name: "a1", GroupID: &gid, GroupName: &gname}))
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: otherID, Name: "a2"}))
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: gid, Name: gname}))
+
+	// Agent-scoped override on a1 (the auto-seeded config we want to clear).
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-agent", AgentID: &agentID, Content: "agent-config", Version: 1}))
+	// Group config for grp-1 (the fallback).
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-group", GroupID: &gid, Content: "group-config", Version: 1}))
+	// A second agent's own config — must remain untouched.
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-other", AgentID: &otherID, Content: "other-config", Version: 1}))
+
+	w := clearConfig(t, h, agentID.String())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp ClearAgentConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Cleared)
+	assert.Equal(t, "group", resp.FellBackTo)
+	assert.Equal(t, gid, resp.GroupID)
+	assert.True(t, resp.Pushed)
+
+	// Agent-scoped config gone → resolution now falls back to the group config.
+	agentCfg, err := mock.GetLatestConfigForAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, agentCfg, "agent-scoped config must be removed")
+
+	// Group config untouched.
+	groupCfg, err := mock.GetLatestConfigForGroup(ctx, gid)
+	require.NoError(t, err)
+	require.NotNil(t, groupCfg)
+	assert.Equal(t, "group-config", groupCfg.Content)
+
+	// The other agent's own config untouched.
+	otherCfg, err := mock.GetLatestConfigForAgent(ctx, otherID)
+	require.NoError(t, err)
+	require.NotNil(t, otherCfg)
+	assert.Equal(t, "other-config", otherCfg.Content)
+
+	// The resolved group config was delivered to this agent (and only it).
+	assert.Equal(t, "group-config", sender.sent[agentID])
+	_, pushedOther := sender.sent[otherID]
+	assert.False(t, pushedOther, "no other agent should be pushed")
+}
+
+// TestHandleClearAgentConfig_NoGroupLeavesNoConfig: clearing an agent that is in
+// no group removes its agent-scoped config, reports fell_back_to=none, and
+// pushes nothing (there is no group config to deliver).
+func TestHandleClearAgentConfig_NoGroupLeavesNoConfig(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	sender := newRecordingConfigSender()
+	h := NewAgentHandlers(mock, sender, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1"})) // no group
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-agent", AgentID: &agentID, Content: "agent-config", Version: 1}))
+
+	w := clearConfig(t, h, agentID.String())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp ClearAgentConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Cleared)
+	assert.Equal(t, "none", resp.FellBackTo)
+	assert.False(t, resp.Pushed)
+
+	agentCfg, err := mock.GetLatestConfigForAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, agentCfg)
+
+	_, pushed := sender.sent[agentID]
+	assert.False(t, pushed, "nothing to push when the agent has no group config")
+}
+
+// TestHandleClearAgentConfig_NothingToClearStillReportsGroup: an agent already
+// tracking its group config (no agent-scoped override) reports cleared=false but
+// still resolves + delivers the group config.
+func TestHandleClearAgentConfig_NothingToClearStillReportsGroup(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	sender := newRecordingConfigSender()
+	h := NewAgentHandlers(mock, sender, zap.NewNop())
+	ctx := context.Background()
+
+	gid, gname := "grp-1", "prod"
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{
+		ID: agentID, Name: "a1", GroupID: &gid, GroupName: &gname}))
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: gid, Name: gname}))
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-group", GroupID: &gid, Content: "group-config", Version: 1}))
+
+	w := clearConfig(t, h, agentID.String())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp ClearAgentConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.Cleared, "no agent-scoped config existed")
+	assert.Equal(t, "group", resp.FellBackTo)
+	assert.True(t, resp.Pushed)
+	assert.Equal(t, "group-config", sender.sent[agentID])
+}
+
+// TestHandleClearAgentConfig_DeliveryFailureIsNonFatal: a failed group-config
+// push does not fail the request — the config is already cleared and the
+// reconcile loop is the delivery backstop.
+func TestHandleClearAgentConfig_DeliveryFailureIsNonFatal(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	sender := newRecordingConfigSender()
+	sender.err = fmt.Errorf("agent not connected")
+	h := NewAgentHandlers(mock, sender, zap.NewNop())
+	ctx := context.Background()
+
+	gid := "grp-1"
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1", GroupID: &gid}))
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: gid, Name: "prod"}))
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-agent", AgentID: &agentID, Content: "agent-config", Version: 1}))
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-group", GroupID: &gid, Content: "group-config", Version: 1}))
+
+	w := clearConfig(t, h, agentID.String())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp ClearAgentConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Cleared)
+	assert.Equal(t, "group", resp.FellBackTo)
+	assert.False(t, resp.Pushed, "delivery failed, so pushed is false")
+
+	// The agent-scoped config was still removed despite the delivery failure.
+	agentCfg, err := mock.GetLatestConfigForAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, agentCfg)
+}
+
+// TestHandleClearAgentConfig_EmitsAudit: clearing emits one
+// agent.config_cleared audit event.
+func TestHandleClearAgentConfig_EmitsAudit(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	audit := &recordingAuditService{}
+	sender := newRecordingConfigSender()
+	h := NewAgentHandlers(mock, sender, zap.NewNop()).WithAuditService(audit)
+	ctx := context.Background()
+
+	gid := "grp-1"
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1", GroupID: &gid}))
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-agent", AgentID: &agentID, Content: "agent-config", Version: 1}))
+
+	w := clearConfig(t, h, agentID.String())
+	require.Equal(t, http.StatusOK, w.Code)
+
+	require.Len(t, audit.recorded, 1)
+	assert.Equal(t, services.AuditEventAgentConfigCleared, audit.recorded[0].EventType)
+	assert.Equal(t, services.AuditTargetAgent, audit.recorded[0].TargetType)
+	assert.Equal(t, agentID.String(), audit.recorded[0].TargetID)
+	assert.Equal(t, true, audit.recorded[0].Payload["had_agent_config"])
+}
+
+// TestHandleClearAgentConfig_UnknownAgent: 404 when the agent doesn't exist.
+func TestHandleClearAgentConfig_UnknownAgent(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := clearConfig(t, handlers, uuid.New().String())
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandleClearAgentConfig_BadID: 400 on a non-UUID agent id.
+func TestHandleClearAgentConfig_BadID(t *testing.T) {
+	handlers, _ := setupAgentHandlersTest()
+	w := clearConfig(t, handlers, "not-a-uuid")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
