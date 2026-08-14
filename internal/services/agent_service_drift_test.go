@@ -132,10 +132,21 @@ func TestSupervisedAgentGenuineDivergenceDrifted(t *testing.T) {
 }
 
 // TestReportOnlyAgentDriftUnchanged verifies report-only agents (no
-// accepts_remote_config) keep the effective-vs-intent content comparison — the
-// DELIVERED path is gated on the supervised capability. Even a delivered hash
-// that equals the intent must NOT flip a report-only agent to synced when its
-// effective config differs from intent.
+// accepts_remote_config) keep the effective-vs-intent content comparison. A
+// report-only agent never gets a delivered_config_hash stamped — the OpAMP
+// stamping paths (appliedConfigHash / appliedConfigHashFromDesired) both gate on
+// the live accepts_remote_config wire capability — so its delivered hash is
+// always empty and drift is governed purely by content: exact match => synced,
+// differ => drifted, DeliveredHash never surfaced.
+//
+// (Pre-302vd this test also asserted that MANUALLY stamping delivered==intent on
+// a report-only agent still read drifted, because the delivered Synced path was
+// gated on the persisted supervised capability. That gate was the bug: it
+// conflated "no persisted accepts_remote_config" with "report-only", so a
+// wire-supervised agent whose persisted capability had been lost — the 302vd
+// fleet — was wrongly treated as report-only and read permanent drift. The
+// delivered path now keys on delivered PRESENCE, which report-only agents never
+// have, so this test exercises the realistic report-only state: empty delivered.)
 func TestReportOnlyAgentDriftUnchanged(t *testing.T) {
 	store := memory.NewStore()
 	service := NewAgentService(store, nil, nil, nil, zap.NewNop())
@@ -163,16 +174,72 @@ func TestReportOnlyAgentDriftUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ConfigDriftStatusSynced, got.DriftStatus)
 
-	// Effective differs -> drifted, even with a (spurious) delivered hash equal
-	// to the intent: the delivered path must stay gated to supervised agents.
+	// Effective differs and NO delivered signal was stamped (the only state a
+	// report-only agent can be in) -> drifted, DeliveredHash empty.
 	require.NoError(t, service.UpdateAgentEffectiveConfig(ctx, agentID, expandedEffective))
-	require.NoError(t, service.UpdateAgentDeliveredConfigHash(ctx, agentID, intentHash))
 	got, err = service.GetAgent(ctx, agentID)
 	require.NoError(t, err)
 	assert.Equal(t, ConfigDriftStatusDrifted, got.DriftStatus)
-	// DeliveredHash is not surfaced for report-only agents.
 	require.NotNil(t, got.DriftDetails)
 	assert.Empty(t, got.DriftDetails.DeliveredHash)
+}
+
+// TestSupervisedAppliedButPersistedCapabilityLostSynced reproduces the EXACT
+// 302vd production shape that #28 and #32 both missed, against the real surfaced-
+// drift producer (GetAgent -> populateAgentConfigState -> computeConfigDrift).
+//
+// The agent is a wire-supervised collector that has applied exactly the config
+// Squadron assigned, so the OpAMP server stamped its delivered_config_hash equal
+// to the intent hash (delivered == intent == the assigned wire hash). BUT its
+// PERSISTED capabilities row does NOT carry accepts_remote_config: the row first
+// registered via telemetry discovery (or predates capability persistence), and
+// UpdateAgentRegistration never re-writes capabilities, so agentAcceptsRemoteConfig
+// reads false at drift-compute time. Its effective config differs from intent only
+// by benign supervisor normalization (env expansion, collector-default expansion,
+// injected opamp extension), so effective_hash != intent_hash.
+//
+// Before the fix the surfaced drift_status keyed the delivered Synced branch on
+// the (stale, false) persisted capability, so the branch was skipped and the agent
+// read Drifted from effective-vs-intent — the permanent benign drift the pilot saw.
+// After the fix the delivered signal is trusted on presence, so it reads Synced.
+func TestSupervisedAppliedButPersistedCapabilityLostSynced(t *testing.T) {
+	store := memory.NewStore()
+	service := NewAgentService(store, nil, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	now := time.Now()
+	// Persisted capabilities lack accepts_remote_config — the 302vd row shape.
+	require.NoError(t, service.CreateAgent(ctx, &Agent{
+		ID: agentID, Name: "supervised-302vd", Status: AgentStatusOnline,
+		Capabilities: []string{"reports_effective_config"}, // NO accepts_remote_config persisted
+		LastSeen:     now, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	// Assigned config (the intent). Seeded directly: StoreConfigForAgent requires
+	// the persisted accepts_remote_config capability this row is missing, which is
+	// precisely the asymmetry under test.
+	intentHash := confignorm.Hash(compactIntent)
+	require.NoError(t, service.CreateConfig(ctx, &Config{
+		ID: uuid.New().String(), AgentID: &agentID,
+		ConfigHash: intentHash, Content: compactIntent, Version: 1, CreatedAt: now,
+	}))
+
+	// Effective differs only by benign normalization -> effective_hash != intent_hash.
+	require.NoError(t, service.UpdateAgentEffectiveConfig(ctx, agentID, expandedEffective))
+
+	// The OpAMP heartbeat stamped delivered == intent (via the LIVE wire
+	// capability), even though the persisted capability column is missing it.
+	require.NoError(t, service.UpdateAgentDeliveredConfigHash(ctx, agentID, intentHash))
+
+	got, err := service.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, got.DriftDetails)
+	// Synced via the delivered signal, NOT a content match: effective still differs.
+	assert.Equal(t, ConfigDriftStatusSynced, got.DriftStatus,
+		"a supervised agent that applied its assigned config (delivered == intent) must read synced even when its persisted accepts_remote_config capability was lost")
+	assert.NotEqual(t, got.DriftDetails.IntentHash, got.DriftDetails.EffectiveHash)
+	assert.Equal(t, got.DriftDetails.IntentHash, got.DriftDetails.DeliveredHash)
 }
 
 // TestSupervisedDeliveredHashTransitionCounters verifies UpdateAgentDeliveredConfigHash
