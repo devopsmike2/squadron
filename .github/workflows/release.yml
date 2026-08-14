@@ -73,12 +73,8 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          # :latest (main/branch pushes) builds amd64 ONLY — fast, a few
-          # minutes. Multi-arch (amd64+arm64; arm64 via slow QEMU emulation of
-          # the cgo/DuckDB build, ~40min) is reserved for TAGGED releases, the
-          # supported surface where arm64 users pull a version tag. Apple
-          # Silicon can Rosetta-run the amd64 :latest.
-          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          # amd64-only: arm64 QEMU emulation of the cgo/DuckDB build was ~45 min on tags for no consumer; add a native arm64 runner later if arm64 is needed.
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
