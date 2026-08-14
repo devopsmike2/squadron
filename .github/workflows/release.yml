@@ -25,7 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     # Cap the job so a stuck emulated build fails in bounded time instead of
     # hanging to the 6h GitHub default (observed: one 6h 0m run).
-    timeout-minutes: 45
+    # arm64 QEMU emulation of the cgo/DuckDB build runs near the old 45-min cap on tag pushes
+    timeout-minutes: 90
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
     permissions:
       contents: read
