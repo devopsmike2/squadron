@@ -726,15 +726,29 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 			}
 		}
 
-		// Persist the DELIVERED/APPLIED signal (ADR 0040): when the agent has
-		// acked the remote config Squadron staged for it, stamp the confignorm
-		// hash of that config so drift detection can tell a supervised agent
-		// running exactly what Squadron assigned (Synced) apart from its env-/
-		// default-expanded, opamp-extension-carrying effective config (which
-		// never hash-matches the compact intent). Only fires when the agent has
-		// confirmed applying the current desired config; report-only agents and
-		// agents mid-delivery leave the stored hash untouched.
-		if hash, ok := agent.appliedConfigHash(); ok {
+		// Persist the DELIVERED/APPLIED signal (ADR 0040 + follow-up): when the
+		// agent has acked the remote config Squadron assigned it, stamp the
+		// confignorm hash of that config so drift detection can tell a supervised
+		// agent running exactly what Squadron assigned (Synced) apart from its
+		// env-/default-expanded, opamp-extension-carrying effective config (which
+		// never hash-matches the compact intent). Two equivalent sources, tried in
+		// order:
+		//   1. appliedConfigHash — the in-memory staged-remoteConfig ack. Fast
+		//      path; fires on a fresh push+ack while remoteConfig is staged.
+		//   2. appliedConfigHashFromDesired — the store-derived reconciler
+		//      equivalence (LastRemoteConfigHash == wireConfigHash(desired stored
+		//      config)). Fires for an already-applied, already-converged supervised
+		//      agent that merely heartbeats after a control-plane upgrade, when no
+		//      remoteConfig is staged in memory — the case appliedConfigHash misses
+		//      and the reconciler does not (ADR 0040 follow-up).
+		// Only fires when the agent has confirmed applying the CURRENT desired
+		// config; report-only agents and agents mid-delivery leave the stored hash
+		// untouched.
+		hash, ok := agent.appliedConfigHash()
+		if !ok {
+			hash, ok = appliedConfigHashFromDesired(ctx, s.agentService, agent)
+		}
+		if ok {
 			if err := s.agentService.UpdateAgentDeliveredConfigHash(ctx, agent.storeID(), hash); err != nil {
 				s.logger.Error("Failed to update agent delivered config hash",
 					zap.String("agentId", agent.InstanceIdStr),
