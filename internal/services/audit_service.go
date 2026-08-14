@@ -146,6 +146,16 @@ const (
 	// existing agent.decommissioned event.
 	AuditEventAgentDuplicateDismissed = "agent.duplicate_dismissed"
 
+	// AuditEventAgentConfigCleared — operator clears an agent's own agent-scoped
+	// config via DELETE /api/v1/agents/:id/config so config resolution falls back
+	// to the agent's GROUP config (resolveStoredConfig precedence:
+	// agent-scoped > group). Used to hand a supervised agent that carries an
+	// auto-seeded agent-scoped config (adopt-on-first-supervise, ADR 0039) back to
+	// group-level management. Emitted by the HTTP handler; only the agent-scoped
+	// config row(s) are deleted — a group config is never touched. Payload:
+	// agent_id, had_agent_config, fell_back_to ("group"|"none"), group_id.
+	AuditEventAgentConfigCleared = "agent.config_cleared"
+
 	AuditEventConfigStored     = "config.stored"
 	AuditEventConfigApplied    = "config.applied"
 	AuditEventAlertRuleCreated = "alert_rule.created"
