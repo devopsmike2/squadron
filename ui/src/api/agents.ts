@@ -89,6 +89,28 @@ export interface SendConfigToAgentResponse {
   config_id?: string;
 }
 
+// Clear an agent's own agent-scoped config so config resolution falls back to
+// the agent's GROUP config. Response reports whether an agent-scoped config was
+// present (cleared), what resolution fell back to ("group" | "none"), and
+// whether the resolved group config was delivered to the agent (pushed).
+export interface ClearAgentConfigResponse {
+  cleared: boolean;
+  fell_back_to: "group" | "none";
+  group_id?: string;
+  pushed: boolean;
+  message: string;
+}
+
+// Clear an agent's agent-scoped config (fall back to group). Deletes only the
+// agent-scoped config(s); a group config is never touched. Intended to hand a
+// supervised agent that carries an auto-seeded agent-scoped config back to
+// group-level management.
+export const clearAgentConfig = (
+  agentId: string,
+): Promise<ClearAgentConfigResponse> => {
+  return apiDelete<ClearAgentConfigResponse>(`/agents/${agentId}/config`);
+};
+
 // Send configuration to agent
 export const sendConfigToAgent = (
   agentId: string,

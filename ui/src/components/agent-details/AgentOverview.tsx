@@ -3,6 +3,7 @@ import useSWR from "swr";
 
 import { updateAgentGroup } from "@/api/agents";
 import { getGroups } from "@/api/groups";
+import { ClearAgentConfigButton } from "@/components/agent-details/ClearAgentConfigButton";
 import { AuditTimeline } from "@/components/AuditTimeline";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -181,6 +182,12 @@ export function AgentOverview({
         <span className="text-xs text-muted-foreground">
           {meta.join(" • ")}
         </span>
+        {/* Clear an agent-scoped config so resolution falls back to the group
+          config. Only meaningful (enabled) when the intent is an agent override
+          and the agent is in a group — the button self-disables otherwise. */}
+        {intent?.source === "agent" && (
+          <ClearAgentConfigButton agent={agent} onCleared={onAgentChanged} />
+        )}
       </div>
     );
   };

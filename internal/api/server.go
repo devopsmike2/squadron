@@ -2835,6 +2835,11 @@ func (s *Server) registerRoutes() {
 			agents.GET("/:id", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgent)
 			agents.PATCH("/:id/group", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleUpdateAgentGroup)
 			agents.POST("/:id/config", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleSendConfigToAgent)
+			// Clear an agent's own agent-scoped config so resolution falls back to
+			// the agent's GROUP config (resolveStoredConfig precedence). Deletes
+			// ONLY the agent-scoped config(s), never a group config; agents:write
+			// like the sibling agent mutations.
+			agents.DELETE("/:id/config", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleClearAgentConfig)
 			agents.POST("/:id/restart", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleRestartAgent)
 			// Adopt an agent's reported effective config as a standalone
 			// managed Config template. Creates a config (validated,
