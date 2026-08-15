@@ -24,20 +24,25 @@ import (
 // adopt-on-supervise path exercises with REAL stateful behavior: CreateConfig
 // stores an agent-scoped config, GetLatestConfigForAgent reads it back. This
 // gives true create-once / idempotency semantics without standing up a store.
-// The agents under test carry no GroupID, so GetLatestConfigForGroup is never
-// called (it would panic on the embedded mock — which is the point: adopt must
-// not touch the group path here).
+// The agents under test seed no persisted row (agents map empty), so GetAgent
+// returns nil, the persisted-group fallback resolves to "", and
+// GetLatestConfigForGroup is never reached — adopt must not touch the group path
+// for these genuinely-ungrouped agents.
 type statefulAgentService struct {
 	*MockAgentService
-	mu      sync.Mutex
-	configs map[uuid.UUID]*services.Config
-	created int
+	mu           sync.Mutex
+	configs      map[uuid.UUID]*services.Config
+	agents       map[uuid.UUID]*services.Agent
+	groupConfigs map[string]*services.Config
+	created      int
 }
 
 func newStatefulAgentService() *statefulAgentService {
 	return &statefulAgentService{
 		MockAgentService: new(MockAgentService),
 		configs:          make(map[uuid.UUID]*services.Config),
+		agents:           make(map[uuid.UUID]*services.Agent),
+		groupConfigs:     make(map[string]*services.Config),
 	}
 }
 
@@ -45,6 +50,23 @@ func (f *statefulAgentService) GetLatestConfigForAgent(_ context.Context, id uui
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.configs[id], nil
+}
+
+// GetAgent returns the persisted agent row, or nil when none was seeded. The
+// resolver consults it to fall back to the persisted group membership when the
+// in-memory GroupID is empty; the agents in most adopt tests carry no persisted
+// row, so this returns nil and the group path stays inert (adopt still fires).
+func (f *statefulAgentService) GetAgent(_ context.Context, id uuid.UUID) (*services.Agent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.agents[id], nil
+}
+
+// GetLatestConfigForGroup reads back a seeded group config; nil when none.
+func (f *statefulAgentService) GetLatestConfigForGroup(_ context.Context, groupID string) (*services.Config, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.groupConfigs[groupID], nil
 }
 
 func (f *statefulAgentService) CreateConfig(_ context.Context, cfg *services.Config) error {
