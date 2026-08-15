@@ -282,6 +282,9 @@ func TestGetConfigForAgent_DefaultConfig(t *testing.T) {
 
 	// No agent config
 	mockService.On("GetLatestConfigForAgent", mock.Anything, agentID).Return(nil, nil)
+	// In-memory group is empty, so the resolver consults the persisted membership;
+	// no persisted row here, so it resolves to no group and falls to the default.
+	mockService.On("GetAgent", mock.Anything, agentID).Return(nil, nil)
 
 	server := &Server{
 		logger:       logger,

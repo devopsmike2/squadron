@@ -38,14 +38,52 @@ func resolveStoredConfig(ctx context.Context, svc services.AgentService, agent *
 		return agentConfig.Content, true
 	}
 
-	// Fall back to group-level config.
-	if agent.GroupID != nil && *agent.GroupID != "" {
-		if groupConfig, err := svc.GetLatestConfigForGroup(ctx, *agent.GroupID); err == nil && groupConfig != nil {
+	// Fall back to group-level config. Resolve the agent's group id preferring the
+	// in-memory GroupID, but fall back to the PERSISTED membership when the
+	// in-memory value is empty (see effectiveGroupID).
+	if groupID := effectiveGroupID(ctx, svc, agent); groupID != "" {
+		if groupConfig, err := svc.GetLatestConfigForGroup(ctx, groupID); err == nil && groupConfig != nil {
 			return groupConfig.Content, true
 		}
 	}
 
 	return "", false
+}
+
+// effectiveGroupID resolves the agent's group id for desired-config resolution.
+// It prefers the in-memory agent.GroupID, but when that is empty/nil it falls
+// back to the group_id persisted for the agent in the store.
+//
+// The store fallback closes a connect-path ordering window that unwires a
+// group-config-only agent on reconnect (the Southern-pilot 302vd regression,
+// v0.89.471). processAgentGrouping (server.go) applies config INSIDE the message
+// handler, and it first clobbers the in-memory agent.GroupID to the just-reported
+// value — EMPTY for an agent whose southern-pilot membership lives only in the
+// store (no group.* attribute on the wire). The persisted membership is only
+// restored later, in persistAgent (#36's preserve step / ensureAgentGroup
+// name->id resolution), which runs AFTER config has already been resolved. Without
+// this fallback resolveStoredConfig momentarily sees an EMPTY in-memory group,
+// misses the group config, returns found=false, and getConfigForAgent falls
+// through to adopt-on-supervise — which mints a skeleton agent-scoped intent that
+// then takes precedence over the still-present group config, reverting the
+// collector to a bare pipeline. Reading the persisted group id here makes
+// "resolved config = agent -> group -> nil" correct even inside that window: a
+// grouped agent resolves to its real group config and adopt is never reached.
+//
+// A genuinely-unconfigured agent (no agent-scoped config AND no persisted group)
+// still resolves to "", so getConfigForAgent's adopt-on-first-supervise path
+// (ADR 0039) is preserved unchanged. The store read is keyed by the same fleet id
+// (storeID) every other store-facing OpAMP caller uses, and only happens when the
+// in-memory group is empty — in steady state (#36 keeps in-memory and persisted
+// group in sync) it does not fire.
+func effectiveGroupID(ctx context.Context, svc services.AgentService, agent *Agent) string {
+	if agent.GroupID != nil && *agent.GroupID != "" {
+		return *agent.GroupID
+	}
+	if persisted, err := svc.GetAgent(ctx, agent.storeID()); err == nil && persisted != nil && persisted.GroupID != nil {
+		return *persisted.GroupID
+	}
+	return ""
 }
 
 // appliedConfigHashFromDesired derives the DELIVERED/APPLIED confignorm hash for
