@@ -626,6 +626,15 @@ func (s *Server) getConfigForAgent(ctx context.Context, agent *Agent) string {
 	return DefaultOTelConfig
 }
 
+// isEmptyGroup reports whether a group pointer carries no usable group
+// membership — either nil or a pointer to the empty string. extractGroupInfo
+// resolves an agent that reports no group.* attribute to an empty (NOT nil)
+// GroupID, so both cases must count as "no group reported" when deciding
+// whether a (re)connect should preserve the persisted membership.
+func isEmptyGroup(g *string) bool {
+	return g == nil || *g == ""
+}
+
 // persistAgent persists agent information to storage
 func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.AgentToServer) {
 	// Check if agent already exists in storage. Keyed by the FLEET id (not the
@@ -702,13 +711,46 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 			// path too, not just first connect.
 			s.ensureAgentGroup(ctx, agent, now)
 
+			// Preserve a previously-persisted group membership when THIS
+			// (re)connect reports no group. extractGroupInfo yields an EMPTY
+			// (not nil) GroupID for an agent that carries no group.* attribute,
+			// which — before this guard — flowed straight into
+			// UpdateAgentRegistration and wiped the stored group_id. That is the
+			// data-durability bug: a manual assignment made via
+			// PATCH /agents/:id/group (or any earlier agent-reported grouping)
+			// vanished on the next reconnect, and a control-plane restart —
+			// which reconnects every agent — wiped every manual membership at
+			// once (rollout canary scoping reads that stored group_id back).
+			//
+			// When the agent DOES report a group, ensureAgentGroup has already
+			// set agent.GroupID and the agent-declared group wins here
+			// (unchanged): an agent that reports a DIFFERENT group than the
+			// manual one still overrides it on reconnect. Only an EMPTY report
+			// is treated as "leave the persisted membership alone". The operator
+			// PATCH handler is a separate authoritative writer (explicit
+			// set/clear) and is unaffected by this guard.
+			groupID := agent.GroupID
+			groupName := agent.GroupName
+			if isEmptyGroup(groupID) && existingAgent != nil && !isEmptyGroup(existingAgent.GroupID) {
+				groupID = existingAgent.GroupID
+				groupName = existingAgent.GroupName
+				// Keep the in-memory registry consistent with the store so the
+				// per-instance reconciler and connect-path config resolver —
+				// both of which read agent.GroupID — resolve this agent's group
+				// config on subsequent ticks rather than treating it as ungrouped.
+				agent.mux.Lock()
+				agent.GroupID = groupID
+				agent.GroupName = groupName
+				agent.mux.Unlock()
+			}
+
 			registration := &services.Agent{
 				ID:        agent.storeID(),
 				Name:      name,
 				Labels:    labels,
 				Version:   version,
-				GroupID:   agent.GroupID,
-				GroupName: agent.GroupName,
+				GroupID:   groupID,
+				GroupName: groupName,
 			}
 			if err := s.agentService.UpdateAgentRegistration(ctx, registration); err != nil {
 				s.logger.Error("Failed to update agent registration",
