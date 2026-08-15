@@ -14,6 +14,7 @@ import AgentsPage from "./pages/Agents";
 import AlertsPage from "./pages/Alerts";
 import AuditPage from "./pages/Audit";
 import AuthCallbackPage from "./pages/AuthCallback";
+import CliPage from "./pages/Cli";
 import ConfigsPage from "./pages/Configs";
 import CostInsightsPage from "./pages/CostInsights";
 import DashboardPage from "./pages/Dashboard";
@@ -255,6 +256,7 @@ function AuthBoundary() {
               cost-spike events onto one horizontal axis. */}
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/settings/tokens" element={<SettingsTokensPage />} />
+          <Route path="/settings/cli" element={<CliPage />} />
           <Route path="/settings/siem" element={<SettingsSiemPage />} />
           <Route path="/settings/sso" element={<SettingsSSOPage />} />
           <Route path="/settings/identity" element={<SettingsIdentityPage />} />

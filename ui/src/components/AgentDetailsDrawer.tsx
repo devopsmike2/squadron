@@ -21,6 +21,7 @@ import { AgentOverview } from "@/components/agent-details/AgentOverview";
 import { VolumePanel } from "@/components/insights/VolumePanel";
 import { PipelineHealthAgentPanel } from "@/components/pipeline-health/PipelineHealthPanel";
 import { RecommendationsPanel } from "@/components/recommendations/RecommendationsPanel";
+import { CommandSnippet } from "@/components/shared/CommandSnippet";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
@@ -33,6 +34,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { restartAgentCommand } from "@/lib/squadronctl";
 
 interface AgentDetailsDrawerProps {
   agentId: string | null;
@@ -147,6 +149,12 @@ export function AgentDetailsDrawer({
                   />
                   {isRestarting ? "Restarting..." : "Restart"}
                 </Button>
+              )}
+              {agent && agentId && supportsRestart && (
+                <CommandSnippet
+                  variant="inline"
+                  command={restartAgentCommand(agentId)}
+                />
               )}
               {agent && agentId && (
                 <Button
