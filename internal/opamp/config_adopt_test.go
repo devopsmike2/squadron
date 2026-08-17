@@ -243,6 +243,88 @@ func TestAdoptOnSupervise_AdoptsFromEffectiveConfig(t *testing.T) {
 	assert.Contains(t, got, "${OAUTH_CLIENT_SECRET}")
 }
 
+// unwiredEffectiveConfig has receivers and exporters DEFINED but an empty
+// service.pipelines — components referenced by no pipeline. Adopting this would
+// persist a skeleton-equivalent (pipelines-bare) intent.
+const unwiredEffectiveConfig = `receivers:
+  filelog:
+    include:
+      - /var/log/app/*.log
+exporters:
+  otlphttp:
+    endpoint: http://collector:4318
+service:
+  pipelines: {}
+`
+
+// nopBootstrapEffectiveConfig is the supervisor's nop bootstrap fragment: a
+// single pipeline wired only to the nop receiver/exporter. It moves no telemetry.
+const nopBootstrapEffectiveConfig = `receivers:
+  nop:
+exporters:
+  nop:
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      exporters: [nop]
+`
+
+// TestAdoptOnSupervise_UnwiredEffectiveConfig_NotPersisted (skeleton-persist
+// guard): an agent reporting a pipelines-bare effective config (components
+// defined but referenced in no service::pipelines entry) must NOT have that
+// captured as a managed intent. Adopt returns the skeleton fallback and persists
+// nothing, leaving the agent unconfigured. RED before the guard (a skeleton
+// intent was created + assigned, which would then shadow any later real config).
+func TestAdoptOnSupervise_UnwiredEffectiveConfig_NotPersisted(t *testing.T) {
+	svc := newStatefulAgentService()
+	audit := &fakeAudit{}
+	server := &Server{logger: zap.NewNop(), agents: NewAgents(zap.NewNop()), agentService: svc, audit: audit}
+
+	id := uuid.New()
+	agent := remoteConfigAgent(id, unwiredEffectiveConfig, acceptsRemoteConfig)
+
+	got := server.getConfigForAgent(context.Background(), agent)
+
+	assert.Equal(t, DefaultOTelConfig, got, "unwired effective config must fall back to the skeleton")
+	assert.Equal(t, 0, svc.createdCount(), "no intent may be persisted for a pipelines-bare config")
+	assert.Nil(t, svc.configs[id], "no agent-scoped config may be created")
+	assert.Equal(t, 0, audit.count(), "no adopt audit event for a skipped adopt")
+}
+
+// TestAdoptOnSupervise_NopBootstrap_NotPersisted: the supervisor nop bootstrap
+// (a pipeline wired only to nop) is not a real config and must not be adopted.
+func TestAdoptOnSupervise_NopBootstrap_NotPersisted(t *testing.T) {
+	svc := newStatefulAgentService()
+	server := &Server{logger: zap.NewNop(), agents: NewAgents(zap.NewNop()), agentService: svc}
+
+	id := uuid.New()
+	agent := remoteConfigAgent(id, nopBootstrapEffectiveConfig, acceptsRemoteConfig)
+
+	got := server.getConfigForAgent(context.Background(), agent)
+
+	assert.Equal(t, DefaultOTelConfig, got)
+	assert.Equal(t, 0, svc.createdCount())
+	assert.Nil(t, svc.configs[id])
+}
+
+// TestAdoptOnSupervise_ExactSkeleton_NotPersisted: if the reported effective
+// config IS the synthesized DefaultOTelConfig skeleton (otlp -> otlp), adopting
+// it would persist the very skeleton the guard exists to keep out of the store.
+func TestAdoptOnSupervise_ExactSkeleton_NotPersisted(t *testing.T) {
+	svc := newStatefulAgentService()
+	server := &Server{logger: zap.NewNop(), agents: NewAgents(zap.NewNop()), agentService: svc}
+
+	id := uuid.New()
+	agent := remoteConfigAgent(id, DefaultOTelConfig, acceptsRemoteConfig)
+
+	got := server.getConfigForAgent(context.Background(), agent)
+
+	assert.Equal(t, DefaultOTelConfig, got)
+	assert.Equal(t, 0, svc.createdCount())
+	assert.Nil(t, svc.configs[id])
+}
+
 // TestAdoptOnSupervise_NoEffectiveConfig_Skeleton: an accepts_remote_config agent
 // that has reported NO effective config falls back to the skeleton (fresh agent,
 // unchanged behavior) — nothing is created.

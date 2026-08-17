@@ -113,6 +113,19 @@ CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 -- it from the CREATE TABLE above.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS delivered_config_hash TEXT NOT NULL DEFAULT '';
 
+-- configs carries agent config-intent (agent_id set) OR group config-assignment
+-- (group_id set). ON DELETE CASCADE mirrors the sqlite schema: hard-deleting an
+-- agent or group removes its now-meaningless configs rather than leaving orphan
+-- rows. These FKs apply to FRESH databases only; on an existing PVC the table
+-- already exists (CREATE TABLE IF NOT EXISTS is a no-op) so no in-place ALTER is
+-- performed — deliberately, because validating a new FK against a live table can
+-- fail on pre-existing dangling rows and would need a data-cleanup + write-path
+-- normalization pass. Referential integrity on existing deployments is enforced
+-- in application code instead: DeleteGroup nulls member agents' group and drops
+-- the group's configs in one transaction (see DeleteGroup). We do NOT add an
+-- agents.group_id -> groups FK: the write path stores '' (not NULL) for an
+-- ungrouped agent, which an FK would reject on insert, so the app-level cleanup
+-- is the safe mechanism for the agents side.
 CREATE TABLE IF NOT EXISTS configs (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL DEFAULT '',
@@ -121,7 +134,9 @@ CREATE TABLE IF NOT EXISTS configs (
     config_hash TEXT NOT NULL DEFAULT '',
     content     TEXT NOT NULL DEFAULT '',
     version     INTEGER NOT NULL DEFAULT 1,
-    created_at  TIMESTAMPTZ NOT NULL
+    created_at  TIMESTAMPTZ NOT NULL,
+    CONSTRAINT fk_configs_agent FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_configs_group FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_configs_group_id ON configs(group_id);
@@ -738,13 +753,36 @@ func (s *Storage) UpdateGroup(ctx context.Context, g *types.Group) error {
 	return nil
 }
 
+// DeleteGroup removes a group and cleans up references in one transaction so a
+// deleted group can never brick or dangle an agent (configs FK ON DELETE
+// hardening). Member agents' group is nulled (fall back to no-group resolution,
+// NOT deleted) and the group's group-scoped configs are removed. This runs in
+// application code — the Postgres agents/configs tables carry no FK on the live
+// pilot PVC (adding one in place is unsafe; see the schema note), so the cleanup
+// is done here to be correct on existing and fresh deployments alike.
 func (s *Storage) DeleteGroup(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE id=$1`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete group tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE agents SET group_id=NULL, group_name=NULL, updated_at=now() WHERE group_id=$1`, id); err != nil {
+		return fmt.Errorf("clear agent group membership: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM configs WHERE group_id=$1`, id); err != nil {
+		return fmt.Errorf("delete group configs: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM groups WHERE id=$1`, id)
 	if err != nil {
 		return fmt.Errorf("delete group: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("group not found: %s", id)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete group: %w", err)
 	}
 	return nil
 }
@@ -894,15 +932,32 @@ func (s *Storage) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UU
 	return nil
 }
 
+// UpdateAgentRegistration writes the mutable registration/grouping fields of an
+// existing agent (Name, Labels, Version, GroupID, GroupName, Capabilities).
+// Capabilities are PRESERVE-ON-EMPTY: overwritten only when the incoming list is
+// non-empty, so an OpAMP reconnect re-persists reported capabilities (the PR #35
+// root cause — telemetry-discovered rows never got their capabilities column
+// re-written) while a capability-less caller can never wipe a previously-stored
+// set. nil/empty are normalized to the '[]' sentinel the CASE checks.
 func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agent) error {
 	labels, err := json.Marshal(agent.Labels)
 	if err != nil {
 		return fmt.Errorf("marshal labels: %w", err)
 	}
+	capabilities, err := json.Marshal(agent.Capabilities)
+	if err != nil {
+		return fmt.Errorf("marshal capabilities: %w", err)
+	}
+	if len(agent.Capabilities) == 0 {
+		capabilities = []byte("[]")
+	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE agents SET name=$2, labels=$3, version=$4, group_id=$5, group_name=$6, updated_at=now()
+		UPDATE agents SET name=$2, labels=$3, version=$4, group_id=$5, group_name=$6,
+			capabilities = CASE WHEN $7::jsonb = '[]'::jsonb THEN capabilities ELSE $7::jsonb END,
+			updated_at=now()
 		WHERE id=$1 AND deleted_at IS NULL`,
-		agent.ID.String(), agent.Name, labels, agent.Version, agent.GroupID, agent.GroupName)
+		agent.ID.String(), agent.Name, labels, agent.Version, agent.GroupID, agent.GroupName,
+		string(capabilities))
 	if err != nil {
 		return fmt.Errorf("update agent registration: %w", err)
 	}

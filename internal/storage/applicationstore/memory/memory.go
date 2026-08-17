@@ -409,6 +409,14 @@ func (s *Store) UpdateAgentRegistration(ctx context.Context, agent *types.Agent)
 	existing.Version = agent.Version
 	existing.GroupID = agent.GroupID
 	existing.GroupName = agent.GroupName
+	// Capabilities are preserve-on-empty (mirrors the sqlite/postgres stores):
+	// an OpAMP reconnect re-persists reported capabilities, but an empty/nil
+	// incoming list leaves the stored set intact so a capability-less caller
+	// can't wipe it.
+	if len(agent.Capabilities) > 0 {
+		existing.Capabilities = make([]string, len(agent.Capabilities))
+		copy(existing.Capabilities, agent.Capabilities)
+	}
 	existing.UpdatedAt = time.Now()
 	return nil
 }
@@ -516,12 +524,32 @@ func (s *Store) UpdateGroup(ctx context.Context, group *types.Group) error {
 	return nil
 }
 
+// DeleteGroup removes a group and cleans up references so a deleted group can
+// never brick or dangle an agent (ADR: configs FK ON DELETE hardening). Member
+// agents' group membership is set to nil (they fall back to no-group resolution,
+// NOT deleted) and the group's group-scoped configs are removed. Mirrors the
+// sqlite/postgres transactional cleanup so behavior is identical across backends.
 func (s *Store) DeleteGroup(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.groups[id]; !exists {
 		return fmt.Errorf("group not found: %s", id)
+	}
+
+	// Null out member agents' group so nothing points at the deleted group.
+	for _, a := range s.agents {
+		if a.GroupID != nil && *a.GroupID == id {
+			a.GroupID = nil
+			a.GroupName = nil
+			a.UpdatedAt = time.Now()
+		}
+	}
+	// Drop the group's group-scoped configs (agent-scoped configs are untouched).
+	for cid, c := range s.configs {
+		if c.GroupID != nil && *c.GroupID == id {
+			delete(s.configs, cid)
+		}
 	}
 
 	delete(s.groups, id)
