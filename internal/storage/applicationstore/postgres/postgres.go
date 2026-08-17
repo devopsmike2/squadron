@@ -114,18 +114,19 @@ CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS delivered_config_hash TEXT NOT NULL DEFAULT '';
 
 -- configs carries agent config-intent (agent_id set) OR group config-assignment
--- (group_id set). ON DELETE CASCADE mirrors the sqlite schema: hard-deleting an
--- agent or group removes its now-meaningless configs rather than leaving orphan
--- rows. These FKs apply to FRESH databases only; on an existing PVC the table
--- already exists (CREATE TABLE IF NOT EXISTS is a no-op) so no in-place ALTER is
--- performed — deliberately, because validating a new FK against a live table can
--- fail on pre-existing dangling rows and would need a data-cleanup + write-path
--- normalization pass. Referential integrity on existing deployments is enforced
--- in application code instead: DeleteGroup nulls member agents' group and drops
--- the group's configs in one transaction (see DeleteGroup). We do NOT add an
--- agents.group_id -> groups FK: the write path stores '' (not NULL) for an
--- ungrouped agent, which an FK would reject on insert, so the app-level cleanup
--- is the safe mechanism for the agents side.
+-- (group_id set). Referential integrity for a deleted group (don't dangle member
+-- agents' group_id, don't orphan group configs) is enforced in APPLICATION code,
+-- transactionally, in DeleteGroup — NOT via DB foreign keys. Deliberate:
+--   * No in-place FK ALTER on an existing PVC (validating a new FK against live
+--     data can fail on pre-existing dangling rows), and adding FKs only to the
+--     fresh schema would silently diverge fresh vs migrated deployments.
+--   * The store intentionally supports inserting a config keyed to an agent/group
+--     id without a co-located parent row (e.g. isolated config CRUD); a configs->
+--     agents/groups FK would reject those inserts.
+--   * An agents.group_id -> groups FK is a non-starter regardless: the write path
+--     stores '' (not NULL) for an ungrouped agent, which an FK would reject.
+-- The transactional DeleteGroup cleanup delivers the SET-NULL fallback safely on
+-- existing and fresh deployments alike, which is the load-bearing guarantee.
 CREATE TABLE IF NOT EXISTS configs (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL DEFAULT '',
@@ -134,9 +135,7 @@ CREATE TABLE IF NOT EXISTS configs (
     config_hash TEXT NOT NULL DEFAULT '',
     content     TEXT NOT NULL DEFAULT '',
     version     INTEGER NOT NULL DEFAULT 1,
-    created_at  TIMESTAMPTZ NOT NULL,
-    CONSTRAINT fk_configs_agent FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-    CONSTRAINT fk_configs_group FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+    created_at  TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_configs_group_id ON configs(group_id);
