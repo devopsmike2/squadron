@@ -4,6 +4,7 @@ import useSWR from "swr";
 
 import { getAgents, updateAgentGroup } from "@/api/agents";
 import { getGroupAgents } from "@/api/groups";
+import { CommandSnippet } from "@/components/shared/CommandSnippet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { clearGroupCommand, shellQuote } from "@/lib/squadronctl";
 
 interface GroupAgentsProps {
   groupId: string;
@@ -89,6 +91,19 @@ export function GroupAgents({ groupId, onAgentClick }: GroupAgentsProps) {
 
   const agents = agentsData?.agents || [];
   const memberIds = new Set(agents.map((a) => a.id));
+
+  // squadronctl equivalents for the membership + config actions on this
+  // group. Add-agent maps to `agents set-group`, remove maps to
+  // `agents clear-group`, and assigning a config to the whole group is
+  // the CLI-only `groups assign-config`. The CLI accepts a group name
+  // or id for --group; prefer the name a member reports.
+  const groupNameOrId = agents.find((a) => a.group_name)?.group_name ?? groupId;
+  const setGroupTemplate = `squadronctl agents set-group <agent-id> --group ${shellQuote(
+    groupNameOrId,
+  )}`;
+  const assignConfigTemplate = `squadronctl groups assign-config ${shellQuote(
+    groupId,
+  )} --config <config-id>`;
   const candidates = (fleetData?.items ?? []).filter(
     (a) => a.group_id !== groupId && !memberIds.has(a.id),
   );
@@ -171,6 +186,22 @@ export function GroupAgents({ groupId, onAgentClick }: GroupAgentsProps) {
             {error}
           </p>
         )}
+        {/* Copy-as-command hints for the membership + config actions.
+            The UI covers add/remove; assigning a config to a group is
+            currently CLI-only, so the template is surfaced here. */}
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">CLI:</span>
+          <CommandSnippet
+            variant="inline"
+            label="Add agent"
+            command={setGroupTemplate}
+          />
+          <CommandSnippet
+            variant="inline"
+            label="Assign config"
+            command={assignConfigTemplate}
+          />
+        </div>
       </CardHeader>
       <CardContent>
         {agents.length === 0 ? (
@@ -210,19 +241,26 @@ export function GroupAgents({ groupId, onAgentClick }: GroupAgentsProps) {
                       {new Date(agent.last_seen).toLocaleString()}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={`Remove ${agent.name} from group`}
-                        disabled={busyId === agent.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          remove(agent.id);
-                        }}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                        Remove
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <CommandSnippet
+                          variant="inline"
+                          label={null}
+                          command={clearGroupCommand(agent.id)}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Remove ${agent.name} from group`}
+                          disabled={busyId === agent.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            remove(agent.id);
+                          }}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          Remove
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

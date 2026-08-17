@@ -2,8 +2,10 @@ import { Undo2 } from "lucide-react";
 import { useState } from "react";
 
 import { clearAgentConfig } from "@/api/agents";
+import { CommandSnippet } from "@/components/shared/CommandSnippet";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { clearConfigCommand } from "@/lib/squadronctl";
 import type { Agent } from "@/types/agent";
 
 interface ClearAgentConfigButtonProps {
@@ -78,16 +80,22 @@ export function ClearAgentConfigButton({
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={handleClear}
-        disabled={!canClear || isClearing}
-        title={title}
-      >
-        <Undo2 className="h-4 w-4 mr-2" />
-        {isClearing ? "Clearing..." : "Clear config (fall back to group)"}
-      </Button>
+      <div className="flex items-center gap-1">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleClear}
+          disabled={!canClear || isClearing}
+          title={title}
+        >
+          <Undo2 className="h-4 w-4 mr-2" />
+          {isClearing ? "Clearing..." : "Clear config (fall back to group)"}
+        </Button>
+        <CommandSnippet
+          variant="inline"
+          command={clearConfigCommand(agent.id)}
+        />
+      </div>
 
       {message && (
         <Alert
