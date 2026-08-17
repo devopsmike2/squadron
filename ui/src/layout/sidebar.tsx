@@ -44,6 +44,7 @@ import {
   Github,
   Fingerprint,
   ShieldCheck,
+  Terminal,
 } from "lucide-react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -318,6 +319,12 @@ export function AppSidebar() {
           title: "API tokens",
           url: "/settings/tokens",
           icon: KeyRound,
+        },
+        {
+          key: "settings-cli",
+          title: "CLI",
+          url: "/settings/cli",
+          icon: Terminal,
         },
         {
           key: "settings-siem",

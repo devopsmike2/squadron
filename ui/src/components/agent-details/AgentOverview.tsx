@@ -5,6 +5,7 @@ import { updateAgentGroup } from "@/api/agents";
 import { getGroups } from "@/api/groups";
 import { ClearAgentConfigButton } from "@/components/agent-details/ClearAgentConfigButton";
 import { AuditTimeline } from "@/components/AuditTimeline";
+import { CommandSnippet } from "@/components/shared/CommandSnippet";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InfoCard } from "@/components/ui/info-card";
@@ -15,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { clearGroupCommand, setGroupCommand } from "@/lib/squadronctl";
 import type { Agent } from "@/types/agent";
 
 interface Metrics {
@@ -60,6 +62,19 @@ function GroupSelector({
 
   const groups = groupsData?.groups ?? [];
   const current = agent.group_id ?? NO_GROUP;
+
+  // Copy-as-command hint: the squadronctl equivalent of the current
+  // membership. A grouped agent maps to `agents set-group` (preferring
+  // the group name the CLI also accepts); an ungrouped one maps to
+  // `agents clear-group`.
+  const currentGroupName = agent.group_id
+    ? (groups.find((g) => g.id === agent.group_id)?.name ??
+      agent.group_name ??
+      agent.group_id)
+    : null;
+  const groupCommand = currentGroupName
+    ? setGroupCommand(agent.id, currentGroupName)
+    : clearGroupCommand(agent.id);
 
   const handleChange = async (value: string) => {
     const nextGroupId = value === NO_GROUP ? null : value;
@@ -119,6 +134,7 @@ function GroupSelector({
           {message.text}
         </span>
       )}
+      <CommandSnippet variant="inline" command={groupCommand} />
     </div>
   );
 }
