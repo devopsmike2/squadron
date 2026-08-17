@@ -94,6 +94,75 @@ squadronctl agents list --group prod-collectors --drifted
 squadronctl agents get <agent-id>
 ```
 
+The list output includes a `DRIFT` column (`synced` / `drifted` /
+`no_intent` / `no_effective` / `unknown`). `agents get` shows the drift
+verdict, the resolved config intent (source + config id/version), and
+the group by default:
+
+```bash
+# Add the intent/effective hashes and the unified diff behind the verdict.
+squadronctl agents get <agent-id> --drift
+
+# Print ONLY the reported effective config (raw YAML) — pipe it to a file
+# or a diff tool.
+squadronctl agents get <agent-id> --effective > effective.yaml
+```
+
+### Agent operations (restart, group, config)
+
+First-class commands for the fleet operations the pilot used to hand-roll
+as `curl`/REST. All mutations need an API token with the `agents:write`
+scope (`groups assign-config` needs `groups:write`); a `403` names the
+missing scope, a `401` points you at `SQUADRON_TOKEN`.
+
+```bash
+# Restart one agent over OpAMP.
+squadronctl agents restart <agent-id>
+
+# Move an agent to a group. --group takes a group ID or a name (names
+# resolve against the group list; an ambiguous name is rejected).
+squadronctl agents set-group <agent-id> --group prod-collectors
+squadronctl agents set-group <agent-id> --group 22222222-2222-2222-2222-222222222222
+
+# Clear an agent's group assignment (equivalent: set-group --none).
+squadronctl agents clear-group <agent-id>
+squadronctl agents set-group <agent-id> --none
+
+# Drop an agent's OWN agent-scoped config so it falls back to its group
+# config. Prints fell_back_to / group_id / pushed.
+squadronctl agents clear-config <agent-id>
+
+# Assign an existing config to a group (config_id reference — create the
+# config first with `configs apply`). Pushes it to every agent in the group.
+squadronctl groups assign-config <group-id> --config <config-id>
+```
+
+#### Pilot workflow, end to end
+
+Move an agent into a group, point that group at a config, then drop the
+agent's own config so it tracks the group, and confirm what it ends up
+running:
+
+```bash
+# 1. Put the agent in the group.
+squadronctl agents set-group $AGENT --group prod-collectors
+
+# 2. Assign the group's config (referencing a config you already applied).
+CONFIG=$(squadronctl configs apply \
+  --file ./otel-collector.yaml --name "collector v3" -o json | jq -r .id)
+squadronctl groups assign-config prod-collectors --config $CONFIG
+
+# 3. Drop the agent's agent-scoped config so it resolves to the group config.
+squadronctl agents clear-config $AGENT
+# -> fell_back_to: group / pushed: true
+
+# 4. Confirm the drift verdict and inspect the effective config.
+squadronctl agents get $AGENT --drift
+squadronctl agents get $AGENT --effective
+```
+
+Every command respects `-o json` for scripting.
+
 ### Upload a config and roll it out
 
 The two-step CI flow: `apply` uploads the YAML, then `rollouts create`
