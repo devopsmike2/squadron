@@ -8,16 +8,95 @@ import "time"
 // Agent mirrors the agents endpoint response. Only the fields the CLI
 // renders or filters on are declared — anything extra in the server's
 // response is harmlessly ignored at decode time.
+//
+// The config-state fields (EffectiveConfig, ConfigIntent, DriftDetails,
+// DeliveredConfigHash) are populated on GET /api/v1/agents/:id (the
+// per-agent read runs populateAgentConfigState with content included);
+// the list endpoint omits the heavy content. They back the
+// `agents get --effective` / `--drift` views the pilot leans on.
 type Agent struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Labels      map[string]string `json:"labels"`
-	Status      string            `json:"status"`
-	LastSeen    time.Time         `json:"last_seen"`
-	GroupID     *string           `json:"group_id,omitempty"`
-	GroupName   *string           `json:"group_name,omitempty"`
-	Version     string            `json:"version"`
-	DriftStatus string            `json:"drift_status"`
+	ID                  string              `json:"id"`
+	Name                string              `json:"name"`
+	Labels              map[string]string   `json:"labels"`
+	Status              string              `json:"status"`
+	LastSeen            time.Time           `json:"last_seen"`
+	GroupID             *string             `json:"group_id,omitempty"`
+	GroupName           *string             `json:"group_name,omitempty"`
+	Version             string              `json:"version"`
+	DriftStatus         string              `json:"drift_status"`
+	EffectiveConfig     string              `json:"effective_config,omitempty"`
+	DeliveredConfigHash string              `json:"delivered_config_hash,omitempty"`
+	ConfigIntent        *ConfigIntent       `json:"config_intent,omitempty"`
+	DriftDetails        *ConfigDriftDetails `json:"drift_details,omitempty"`
+}
+
+// ConfigIntent mirrors services.ConfigIntent — what Squadron intends the
+// agent to run, resolved from the agent-scoped config or (falling back)
+// the group config. Source is "agent" or "group". Surfaced by
+// `agents get` so the pilot sees the desired-config id/source next to
+// the drift verdict.
+type ConfigIntent struct {
+	Source     string    `json:"source"`
+	SourceName string    `json:"source_name,omitempty"`
+	ConfigID   string    `json:"config_id"`
+	Version    int       `json:"version"`
+	Hash       string    `json:"hash"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Content    string    `json:"content,omitempty"`
+}
+
+// ConfigDriftDetails mirrors services.ConfigDriftDetails — the hashes and
+// unified diff behind an agent's drift_status. Rendered under
+// `agents get --drift`.
+type ConfigDriftDetails struct {
+	IntentHash    string    `json:"intent_hash,omitempty"`
+	EffectiveHash string    `json:"effective_hash,omitempty"`
+	DeliveredHash string    `json:"delivered_hash,omitempty"`
+	Diff          string    `json:"diff,omitempty"`
+	CheckedAt     time.Time `json:"checked_at"`
+}
+
+// UpdateAgentGroupRequest is the body PATCH /api/v1/agents/:id/group
+// accepts. A nil GroupID (or the empty string) clears the agent's group
+// assignment; a non-nil value must reference an existing group. Pointer
+// so "clear" (null) is distinct from "set to <id>".
+type UpdateAgentGroupRequest struct {
+	GroupID *string `json:"group_id"`
+}
+
+// RestartAgentResponse is the body POST /api/v1/agents/:id/restart
+// returns: whether the restart command was dispatched over OpAMP and a
+// human message.
+type RestartAgentResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// ClearAgentConfigResponse is the body DELETE /api/v1/agents/:id/config
+// returns. Cleared reports whether an agent-scoped config existed and was
+// removed; FellBackTo is "group" (GroupID set) or "none"; Pushed reports
+// whether the resolved group config was delivered in this call.
+type ClearAgentConfigResponse struct {
+	Cleared    bool   `json:"cleared"`
+	FellBackTo string `json:"fell_back_to"`
+	GroupID    string `json:"group_id,omitempty"`
+	Pushed     bool   `json:"pushed"`
+	Message    string `json:"message"`
+}
+
+// AssignGroupConfigRequest is the body POST /api/v1/groups/:id/config
+// accepts. The handler takes a config_id reference (not inline content);
+// it clones the referenced config into a new group-scoped version and
+// pushes it to every agent in the group.
+type AssignGroupConfigRequest struct {
+	ConfigID string `json:"config_id"`
+}
+
+// AssignGroupConfigResponse is the body POST /api/v1/groups/:id/config
+// returns: a message plus the newly created group-scoped config.
+type AssignGroupConfigResponse struct {
+	Message string `json:"message"`
+	Config  Config `json:"config"`
 }
 
 // AgentsResponse is the shape of GET /api/v1/agents. The map is keyed
