@@ -78,6 +78,7 @@ type Server struct {
 	telemetryService  services.TelemetryQueryService
 	savedQueryService services.SavedQueryService
 	alertService      services.AlertService
+	automationService services.AutomationService // optional; ADR 0038 — nil disables /api/v1/automations/* routes
 	auditService      services.AuditService
 	rolloutService    services.RolloutService
 	authService       services.AuthService
@@ -552,6 +553,11 @@ func (s *Server) SetOpAMPPort(p int) { s.opampPort = p }
 // inside the projector). The pricingTrampoline still guards
 // against nil for the test_server.go path.
 func (s *Server) SetPricer(p *pricing.Projector) { s.pricer = p }
+
+// SetAutomations wires the ADR 0038 automations CRUD surface. nil (the default)
+// disables the /api/v1/automations/* routes. The leader-only evaluator that
+// consumes these rules is wired separately in main.go.
+func (s *Server) SetAutomations(a services.AutomationService) { s.automationService = a }
 
 // SetCostSpikes wires the v0.29 cost-spike alerting layer: the
 // storage slice (always the application store) + an optional
@@ -2658,6 +2664,10 @@ func (s *Server) registerRoutes() {
 	// nil and made /readyz 503 forever (OpenShift pilot, 2026-08).
 	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, func() handlers.StorePinger { return s.appStore }, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
+	var automationHandlers *handlers.AutomationHandlers
+	if s.automationService != nil {
+		automationHandlers = handlers.NewAutomationHandlers(s.automationService, s.logger)
+	}
 	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.aiService, s.appStore, s.logger)
 	rolloutHandlers := handlers.NewRolloutHandlers(s.rolloutService, s.logger)
 	eventsHandlers := handlers.NewEventsHandlers(s.broker, s.logger)
@@ -2933,6 +2943,23 @@ func (s *Server) registerRoutes() {
 			alerts.GET("/:id", middleware.RequireScope(services.ScopeAlertsRead), alertHandlers.HandleGetAlertRule)
 			alerts.PUT("/:id", middleware.RequireScope(services.ScopeAlertsWrite), alertHandlers.HandleUpdateAlertRule)
 			alerts.DELETE("/:id", middleware.RequireScope(services.ScopeAlertsWrite), alertHandlers.HandleDeleteAlertRule)
+		}
+
+		// Automation routes (ADR 0038). Registered only when the automation
+		// service is wired (SetAutomations); otherwise the routes are absent
+		// (404). Reads need automations:read; every mutation — including the
+		// enable/disable toggle that arms a rule which can auto-restart agents —
+		// needs automations:write.
+		if automationHandlers != nil {
+			automations := v1.Group("/automations")
+			{
+				automations.GET("", middleware.RequireScope(services.ScopeAutomationsRead), automationHandlers.HandleListAutomations)
+				automations.POST("", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleCreateAutomation)
+				automations.GET("/:id", middleware.RequireScope(services.ScopeAutomationsRead), automationHandlers.HandleGetAutomation)
+				automations.PUT("/:id", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleUpdateAutomation)
+				automations.POST("/:id/enable", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleSetAutomationEnabled)
+				automations.DELETE("/:id", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleDeleteAutomation)
+			}
 		}
 
 		// Real-time event stream (Server-Sent Events). Stream carries

@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Storage {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, audit_events, audit_chain_checkpoints, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents, api_tokens, recommendation_dismissals, recommendation_outcomes, cost_spike_events, webhook_delivery_dedupe, iac_recommendation_verdicts, incident_drafts, discovery_scans, trace_resource_seen, siem_destinations, connection_registry"); err != nil {
+	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, automations, audit_events, audit_chain_checkpoints, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents, api_tokens, recommendation_dismissals, recommendation_outcomes, cost_spike_events, webhook_delivery_dedupe, iac_recommendation_verdicts, incident_drafts, discovery_scans, trace_resource_seen, siem_destinations, connection_registry"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return s
@@ -746,6 +746,91 @@ func TestPostgres_AlertRuleCRUD(t *testing.T) {
 	}
 	if err := s.DeleteAlertRule(ctx, "ar1"); err == nil {
 		t.Fatal("second delete should error (alert rule not found)")
+	}
+}
+
+func TestPostgres_AutomationCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	gid := "southern-pilot"
+	a1 := &types.Automation{
+		ID:              "au1",
+		Name:            "restart unhealthy pilot collectors",
+		Enabled:         true,
+		GroupID:         &gid,
+		Trigger:         types.AutomationTriggerAgentUnhealthy,
+		Action:          types.AutomationActionSupervisorRestart,
+		CooldownSeconds: 300,
+		MaxAttempts:     3,
+		DryRun:          false,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := s.CreateAutomation(ctx, a1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := s.GetAutomation(ctx, "au1")
+	if err != nil || got == nil {
+		t.Fatalf("get: err=%v got=%v", err, got)
+	}
+	if got.Name != a1.Name || got.GroupID == nil || *got.GroupID != gid || got.AgentID != nil ||
+		got.Trigger != types.AutomationTriggerAgentUnhealthy || got.Action != types.AutomationActionSupervisorRestart ||
+		got.CooldownSeconds != 300 || got.MaxAttempts != 3 || got.DryRun || !got.Enabled {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+
+	// Missing row must be (nil, nil).
+	if miss, err := s.GetAutomation(ctx, "nope"); err != nil || miss != nil {
+		t.Fatalf("missing get should be (nil,nil), got %v %v", miss, err)
+	}
+
+	// Update persists (flip enabled, switch to agent scope + dry-run).
+	aid := "agent-123"
+	a1.Enabled = false
+	a1.DryRun = true
+	a1.GroupID = nil
+	a1.AgentID = &aid
+	a1.Trigger = types.AutomationTriggerAgentSilent
+	a1.MaxAttempts = 5
+	a1.UpdatedAt = now.Add(time.Second)
+	if err := s.UpdateAutomation(ctx, a1); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ = s.GetAutomation(ctx, "au1"); got.Enabled || !got.DryRun || got.GroupID != nil ||
+		got.AgentID == nil || *got.AgentID != aid || got.Trigger != types.AutomationTriggerAgentSilent || got.MaxAttempts != 5 {
+		t.Fatalf("update didn't persist: %+v", got)
+	}
+
+	// A second automation to exercise list ordering (name ASC).
+	a2 := &types.Automation{ID: "au2", Name: "abc automation", Enabled: true, AgentID: &aid,
+		Trigger: types.AutomationTriggerAgentUnhealthy, Action: types.AutomationActionSupervisorRestart,
+		CooldownSeconds: 60, MaxAttempts: 1, CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateAutomation(ctx, a2); err != nil {
+		t.Fatalf("create au2: %v", err)
+	}
+	list, err := s.ListAutomations(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: err=%v len=%d", err, len(list))
+	}
+	if list[0].Name != "abc automation" || list[1].Name != a1.Name {
+		t.Fatalf("list order should be name ASC: %s,%s", list[0].Name, list[1].Name)
+	}
+
+	// Update / delete on a missing id are "not found".
+	if err := s.UpdateAutomation(ctx, &types.Automation{ID: "ghost"}); err == nil {
+		t.Fatal("update on missing automation should error")
+	}
+	if err := s.DeleteAutomation(ctx, "ghost"); err == nil {
+		t.Fatal("delete on missing automation should error")
+	}
+	if err := s.DeleteAutomation(ctx, "au1"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := s.DeleteAutomation(ctx, "au1"); err == nil {
+		t.Fatal("second delete should error (automation not found)")
 	}
 }
 

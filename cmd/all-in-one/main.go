@@ -34,6 +34,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
+	"github.com/devopsmike2/squadron/internal/automations"
 	"github.com/devopsmike2/squadron/internal/billing"
 	"github.com/devopsmike2/squadron/internal/config"
 	"github.com/devopsmike2/squadron/internal/configs"
@@ -292,6 +293,9 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	agentService := services.NewAgentService(appStore, driftMetrics, eventBroker, auditService, logger)
 	savedQueryService := services.NewSavedQueryService(appStore, logger)
 	alertService := services.NewAlertService(appStore, logger)
+	// ADR 0038 — agent automations CRUD surface. The leader-only evaluator that
+	// consumes these rules is wired further down, alongside the alert evaluator.
+	automationService := services.NewAutomationService(appStore, logger)
 	authService := services.NewAuthService(appStore, logger)
 	// v0.51 — wire audit fan-out for token issuance / revocation.
 	// AuthServiceImpl exposes SetAuditService so the audit service
@@ -699,6 +703,8 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// SetX accessor so the middleware order in v1.Use() stays
 	// deterministic (auth → access audit → handler).
 	wireAPIServerExtensions(apiServer, auditService, logger)
+	// ADR 0038 — mount the automations CRUD routes.
+	apiServer.SetAutomations(automationService)
 	// ADR 0026 / 0027 — install the runtime trace-budget + audit-checkpoint
 	// stores on the server BEFORE enterpriseServerWiring. The enterprise budgets
 	// and audit-attestation handlers capture these stores ONCE at construction
@@ -1746,6 +1752,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		if err := alertEvaluator.Stop(10 * time.Second); err != nil {
 			logger.Error("Failed to stop alert evaluator", zap.Error(err))
 		}
+	})
+
+	// ADR 0038 — agent automations evaluator. Leader-only singleton (like the
+	// alert evaluator and silent-agent watcher), so N app instances don't each
+	// fire the same restart. Harmless with zero enabled automations. Reuses the
+	// OpAMP ConfigSender as its Commander (supervisor_restart = OpAMP
+	// RestartCommand) and the audit service for the tamper-evident decision log.
+	// System (all-tenant) context: it scans every tenant's automations + agents.
+	automationEvaluator := automations.New(automations.Config{
+		SilenceThreshold: config.SilentAgents.SilenceThreshold,
+	}, appStore, configSender, auditService, logger)
+	elector.RunSingleton("automation-evaluator", func(ctx context.Context) {
+		automationEvaluator.Run(identity.WithSystemContext(ctx))
 	})
 
 	// Start the rollout engine. Walks active rollouts, advances stages,
