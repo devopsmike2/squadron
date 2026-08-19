@@ -2645,6 +2645,50 @@ func (s *Server) Stop(ctx context.Context) error {
 // below), and should nil-guard the store as defense-in-depth. Handlers
 // that use only NewServer constructor params (agentService,
 // telemetryService, alertService, broker, ...) are safe to build eagerly.
+// mountAutomations registers the /api/v1/automations/* CRUD routes (ADR 0038) on
+// the given bearer-group router. Like the incidents/actions routes, the handler
+// is built PER REQUEST so it reads s.automationService at REQUEST time rather
+// than capturing it at registerRoutes() time.
+//
+// WIRING-ORDER GOTCHA: registerRoutes runs inside NewServer, BEFORE main.go calls
+// SetAutomations. The previous code built the handler eagerly and mounted the
+// route group only when s.automationService was already non-nil — but it never
+// was at that point, so the ENTIRE /api/v1/automations group was silently absent
+// from the router the release/all-in-one binary actually serves. Every call
+// 404'd in production even though the evaluator, store, migrations, and handlers
+// all shipped (#41's tests exercised the handlers/store/evaluator directly, never
+// the mounted route on the real server, so CI stayed green). Mounting the group
+// unconditionally and resolving the service per request fixes that: a genuinely
+// unwired service now yields a clean 503 on a MOUNTED route instead of a 404 from
+// an absent one — the same late-bind pattern the incidents/actions routes adopted
+// in v0.89.211. Extracted so the seam is unit-testable with a bare *Server;
+// mirrors mountEnterpriseRBAC.
+//
+// Reads need automations:read; every mutation — including the enable/disable
+// toggle that arms a rule which can auto-restart agents — needs automations:write.
+func (s *Server) mountAutomations(rg gin.IRouter) {
+	automation := func(fn func(*handlers.AutomationHandlers, *gin.Context)) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			if s.automationService == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error": "automations are not available — no automation service wired",
+				})
+				return
+			}
+			fn(handlers.NewAutomationHandlers(s.automationService, s.logger), c)
+		}
+	}
+	automations := rg.Group("/automations")
+	{
+		automations.GET("", middleware.RequireScope(services.ScopeAutomationsRead), automation(func(h *handlers.AutomationHandlers, c *gin.Context) { h.HandleListAutomations(c) }))
+		automations.POST("", middleware.RequireScope(services.ScopeAutomationsWrite), automation(func(h *handlers.AutomationHandlers, c *gin.Context) { h.HandleCreateAutomation(c) }))
+		automations.GET("/:id", middleware.RequireScope(services.ScopeAutomationsRead), automation(func(h *handlers.AutomationHandlers, c *gin.Context) { h.HandleGetAutomation(c) }))
+		automations.PUT("/:id", middleware.RequireScope(services.ScopeAutomationsWrite), automation(func(h *handlers.AutomationHandlers, c *gin.Context) { h.HandleUpdateAutomation(c) }))
+		automations.POST("/:id/enable", middleware.RequireScope(services.ScopeAutomationsWrite), automation(func(h *handlers.AutomationHandlers, c *gin.Context) { h.HandleSetAutomationEnabled(c) }))
+		automations.DELETE("/:id", middleware.RequireScope(services.ScopeAutomationsWrite), automation(func(h *handlers.AutomationHandlers, c *gin.Context) { h.HandleDeleteAutomation(c) }))
+	}
+}
+
 func (s *Server) registerRoutes() {
 	// Initialize handlers
 	agentHandlers := handlers.NewAgentHandlersWithTracer(s.agentService, s.commander, s.configsTracer, s.logger).
@@ -2664,10 +2708,6 @@ func (s *Server) registerRoutes() {
 	// nil and made /readyz 503 forever (OpenShift pilot, 2026-08).
 	healthHandlers := handlers.NewHealthHandlers(s.agentService, s.telemetryService, func() handlers.StorePinger { return s.appStore }, s.logger)
 	alertHandlers := handlers.NewAlertHandlers(s.alertService, s.logger)
-	var automationHandlers *handlers.AutomationHandlers
-	if s.automationService != nil {
-		automationHandlers = handlers.NewAutomationHandlers(s.automationService, s.logger)
-	}
 	auditHandlers := handlers.NewAuditHandlers(s.auditService, s.aiService, s.appStore, s.logger)
 	rolloutHandlers := handlers.NewRolloutHandlers(s.rolloutService, s.logger)
 	eventsHandlers := handlers.NewEventsHandlers(s.broker, s.logger)
@@ -2945,22 +2985,12 @@ func (s *Server) registerRoutes() {
 			alerts.DELETE("/:id", middleware.RequireScope(services.ScopeAlertsWrite), alertHandlers.HandleDeleteAlertRule)
 		}
 
-		// Automation routes (ADR 0038). Registered only when the automation
-		// service is wired (SetAutomations); otherwise the routes are absent
-		// (404). Reads need automations:read; every mutation — including the
-		// enable/disable toggle that arms a rule which can auto-restart agents —
-		// needs automations:write.
-		if automationHandlers != nil {
-			automations := v1.Group("/automations")
-			{
-				automations.GET("", middleware.RequireScope(services.ScopeAutomationsRead), automationHandlers.HandleListAutomations)
-				automations.POST("", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleCreateAutomation)
-				automations.GET("/:id", middleware.RequireScope(services.ScopeAutomationsRead), automationHandlers.HandleGetAutomation)
-				automations.PUT("/:id", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleUpdateAutomation)
-				automations.POST("/:id/enable", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleSetAutomationEnabled)
-				automations.DELETE("/:id", middleware.RequireScope(services.ScopeAutomationsWrite), automationHandlers.HandleDeleteAutomation)
-			}
-		}
+		// Automation routes (ADR 0038). Mounted unconditionally via a late-bound
+		// trampoline so the group is present on the real router the release binary
+		// builds; see mountAutomations for why (registerRoutes runs BEFORE main.go
+		// calls SetAutomations, so an eager construction-time nil check left the
+		// whole group unmounted -> /api/v1/automations 404'd in production).
+		s.mountAutomations(v1)
 
 		// Real-time event stream (Server-Sent Events). Stream carries
 		// state-change events across every domain; the audit:read scope
