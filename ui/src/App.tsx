@@ -57,6 +57,7 @@ import { EventSubscriber } from "@/components/EventSubscriber";
 import { KeyboardShortcutsHelp } from "@/components/KeyboardShortcutsHelp";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { TourHost } from "@/components/tour/TourHost";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SWRProvider } from "@/lib/swr-provider";
 import { ApiProvider } from "@/providers/ApiProvider";
 
@@ -122,15 +123,37 @@ function AuthBoundary() {
   // subscriptions that would try to fetch authenticated endpoints). Once
   // authenticated the operator gets the full app.
   if (isPreAuthRoute) {
+    // These pre-auth screens render standalone, OUTSIDE the Layout
+    // <Outlet> error boundary that guards every authenticated route, so
+    // an unguarded render throw here (e.g. AuthCallback parsing a
+    // malformed OIDC handoff) would blank the login screen. Wrap them in
+    // the same boundary so the failure degrades to an inline message
+    // instead of a blank page — the standing "a render error must never
+    // blank a whole page" rule applies to pre-auth routes too.
     return (
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/auth/callback" element={<AuthCallbackPage />} />
-        {/* Other paths under unauthenticated bounce back to /login.
-            React-router needs a fallback that doesn't cause a render
-            loop with our redirect, so this is just defensive. */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <ErrorBoundary
+        fallback={
+          <div role="alert" className="container mx-auto p-6">
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 p-6">
+              <h1 className="text-xl font-semibold mb-2">
+                This page failed to render
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Something went wrong loading this view. Reload to try again.
+              </p>
+            </div>
+          </div>
+        }
+      >
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          {/* Other paths under unauthenticated bounce back to /login.
+              React-router needs a fallback that doesn't cause a render
+              loop with our redirect, so this is just defensive. */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </ErrorBoundary>
     );
   }
 
