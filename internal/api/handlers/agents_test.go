@@ -1055,6 +1055,17 @@ func TestHandleClearAgentConfig_FallsBackToGroupAndPushes(t *testing.T) {
 	assert.Equal(t, "group-config", sender.sent[agentID])
 	_, pushedOther := sender.sent[otherID]
 	assert.False(t, pushedOther, "no other agent should be pushed")
+
+	// Regression guard: clearing the agent-scoped config must PRESERVE group
+	// membership. Clearing the config only deletes agent-scoped config rows; it
+	// must never drop agents.group_id (which is what makes the fall-back-to-group
+	// resolution above work, and eliminates the "re-PATCH membership afterward"
+	// operator workaround). See the DELETE /agents/:id/config handler.
+	postClear, err := mock.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, postClear)
+	require.NotNil(t, postClear.GroupID, "clearing config must not drop group membership")
+	assert.Equal(t, gid, *postClear.GroupID)
 }
 
 // TestHandleClearAgentConfig_NoGroupLeavesNoConfig: clearing an agent that is in

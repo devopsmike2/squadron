@@ -751,6 +751,14 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 				Version:   version,
 				GroupID:   groupID,
 				GroupName: groupName,
+				// Persist the capabilities reported on this (re)connect. Before
+				// this, UpdateAgentRegistration never re-wrote capabilities, so an
+				// agent whose row first registered via telemetry discovery kept an
+				// empty capabilities column forever (the drift "2nd miss" root
+				// cause, PR #35). The store PRESERVES the existing set when this is
+				// empty, so a description-carrying-but-capability-less report can't
+				// wipe it.
+				Capabilities: capabilities,
 			}
 			if err := s.agentService.UpdateAgentRegistration(ctx, registration); err != nil {
 				s.logger.Error("Failed to update agent registration",
