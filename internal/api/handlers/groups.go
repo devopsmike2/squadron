@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -62,6 +63,43 @@ type CreateGroupRequest struct {
 	LearnFromVerdicts *bool `json:"learn_from_verdicts,omitempty"`
 }
 
+// agentCountsByGroup returns a map of group ID -> number of member
+// agents (agents whose GroupID points at that group). This is the
+// single source of truth for group membership counts: both the list
+// (HandleGetGroups) and detail (HandleGetGroup) paths call it, so the
+// two endpoints can never drift on how members are counted.
+func (h *GroupHandlers) agentCountsByGroup(ctx context.Context) (map[string]int, error) {
+	allAgents, err := h.agentService.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	counts := make(map[string]int)
+	for _, agent := range allAgents {
+		if agent.GroupID != nil {
+			counts[*agent.GroupID]++
+		}
+	}
+	return counts, nil
+}
+
+// enrichGroup populates the computed (non-stored) response fields on a
+// Group: AgentCount (from a precomputed counts map, see
+// agentCountsByGroup) and ConfigName (the latest assigned config's ID).
+// Shared by the list and detail handlers so both surface identical
+// derived fields — the detail path previously returned agent_count: 0
+// because it skipped this enrichment entirely.
+func (h *GroupHandlers) enrichGroup(ctx context.Context, group *services.Group, counts map[string]int) {
+	group.AgentCount = counts[group.ID]
+
+	// Get latest config for the group
+	config, err := h.agentService.GetLatestConfigForGroup(ctx, group.ID)
+	if err == nil && config != nil {
+		// Extract a simple name from the config (first line or ID)
+		group.ConfigName = config.ID
+	}
+}
+
 // handleGetGroups handles GET /api/v1/groups
 func (h *GroupHandlers) HandleGetGroups(c *gin.Context) {
 	// Get groups from storage (no filters supported in current interface)
@@ -72,32 +110,17 @@ func (h *GroupHandlers) HandleGetGroups(c *gin.Context) {
 		return
 	}
 
-	// Get all agents to count them per group
-	allAgents, err := h.agentService.ListAgents(c.Request.Context())
+	// Count agents per group (single shared counting path)
+	counts, err := h.agentCountsByGroup(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to get agents", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agents"})
 		return
 	}
 
-	// Count agents per group
-	agentCountByGroup := make(map[string]int)
-	for _, agent := range allAgents {
-		if agent.GroupID != nil {
-			agentCountByGroup[*agent.GroupID]++
-		}
-	}
-
 	// Enrich groups with agent count and config name
 	for _, group := range groups {
-		group.AgentCount = agentCountByGroup[group.ID]
-
-		// Get latest config for the group
-		config, err := h.agentService.GetLatestConfigForGroup(c.Request.Context(), group.ID)
-		if err == nil && config != nil {
-			// Extract a simple name from the config (first line or ID)
-			group.ConfigName = config.ID
-		}
+		h.enrichGroup(c.Request.Context(), group, counts)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -168,6 +191,17 @@ func (h *GroupHandlers) HandleGetGroup(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
 		return
 	}
+
+	// Populate the computed response fields (agent_count, config_name)
+	// using the SAME shared path as the list endpoint. Without this the
+	// detail view reported agent_count: 0 even for groups with members.
+	counts, err := h.agentCountsByGroup(c.Request.Context())
+	if err != nil {
+		h.logger.Error("Failed to get agents", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agents"})
+		return
+	}
+	h.enrichGroup(c.Request.Context(), group, counts)
 
 	c.JSON(http.StatusOK, group)
 }
