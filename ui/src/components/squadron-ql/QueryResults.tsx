@@ -28,7 +28,14 @@ interface QueryResultsProps {
 }
 
 export function QueryResults({ results }: QueryResultsProps) {
-  const { results: data, meta } = results;
+  // `results` and `meta` arrive straight off the /telemetry/query wire.
+  // A Go nil slice marshals to JSON `null`, so a zero-row query can
+  // return `results: null` (and, defensively, a nil `meta`); guard both
+  // so `data.length` / `data.map` and the meta readout below never throw
+  // and blank the query panel — same class as the Groups `labels: null`
+  // blank-page bug.
+  const data = results?.results ?? [];
+  const meta = results?.meta;
   const [activeView, setActiveView] = useState<"chart" | "table">("chart");
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
@@ -54,19 +61,23 @@ export function QueryResults({ results }: QueryResultsProps) {
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2 text-sm">
               <Database className="h-4 w-4 text-muted-foreground" />
-              <span className="font-medium">{meta.row_count}</span>
+              <span className="font-medium">
+                {meta?.row_count ?? data.length}
+              </span>
               <span className="text-muted-foreground">results</span>
             </div>
             <div className="flex items-center gap-2 text-sm">
               <Clock className="h-4 w-4 text-muted-foreground" />
               <span className="font-medium">
-                {(meta.execution_time / 1000000).toFixed(2)}ms
+                {((meta?.execution_time ?? 0) / 1000000).toFixed(2)}ms
               </span>
               <span className="text-muted-foreground">execution time</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline">{meta.query_type}</Badge>
+            {meta?.query_type && (
+              <Badge variant="outline">{meta.query_type}</Badge>
+            )}
             {canShowChart && (
               <div className="flex gap-1 ml-2">
                 <Button
