@@ -247,6 +247,28 @@ CREATE TABLE IF NOT EXISTS alert_rules (
 );
 CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
 
+-- ADR 0038, first slice — automations (condition-triggered auto-remediation).
+-- CRUD-only entity mirroring the sqlite backend. enabled / dry_run are native
+-- BOOLEAN (sqlite stored 0/1); agent_id / group_id are nullable (exactly one
+-- set per row, enforced at the service layer, not the schema). As with alert
+-- rules, OSS tenant scoping is omitted (single-tenant); the sqlite backend's
+-- tenant predicate is a no-op for OSS so behavior is identical.
+CREATE TABLE IF NOT EXISTS automations (
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+    agent_id         TEXT,
+    group_id         TEXT,
+    trigger_type     TEXT NOT NULL,
+    action_type      TEXT NOT NULL,
+    cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+    max_attempts     INTEGER NOT NULL DEFAULT 0,
+    dry_run          BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at       TIMESTAMPTZ NOT NULL,
+    updated_at       TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automations_enabled ON automations(enabled);
+
 -- ADR 0027 / ADR 0033 slice 4 — per-tenant tamper-evident audit hash-chain.
 -- HIGH-STAKES: the chain hash (internal/audit/chain) covers the immutable
 -- content columns + tenant_id + seq, chained via prev_hash. This port MUST

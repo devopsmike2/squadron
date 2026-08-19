@@ -58,8 +58,17 @@ const (
 	ScopeTelemetryRead = "telemetry:read"
 	ScopeAlertsRead    = "alerts:read"
 	ScopeAlertsWrite   = "alerts:write"
-	ScopeRolloutsRead  = "rollouts:read"
-	ScopeRolloutsWrite = "rollouts:write"
+	// ADR 0038 — agent automations (condition-triggered auto-remediation).
+	// automations:read lists/views rules; automations:write covers
+	// create/update/delete + the enable/disable toggle. Split like alerts:
+	// most operators read, a smaller change-management circle arms rules that
+	// can auto-restart agents. The Enterprise governance wedge (RBAC-to-arm,
+	// approval-gated automations) reuses the rollout-approvals seam per ADR
+	// 0029/0030 and is NOT part of this OSS scope.
+	ScopeAutomationsRead  = "automations:read"
+	ScopeAutomationsWrite = "automations:write"
+	ScopeRolloutsRead     = "rollouts:read"
+	ScopeRolloutsWrite    = "rollouts:write"
 	// v0.48 — separation of duties for approval workflows.
 	// rollouts:write covers Create/Abort/Pause/Resume; the new
 	// rollouts:approve covers Approve/Reject. Splitting these
@@ -192,6 +201,7 @@ func AllScopes() []string {
 		ScopeConfigsRead, ScopeConfigsWrite,
 		ScopeTelemetryRead,
 		ScopeAlertsRead, ScopeAlertsWrite,
+		ScopeAutomationsRead, ScopeAutomationsWrite,
 		ScopeRolloutsRead, ScopeRolloutsWrite, ScopeRolloutsApprove,
 		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant, ScopeAuditVerify, ScopeAuditAllTenants,
 		ScopeAuthRead, ScopeAuthWrite,

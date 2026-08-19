@@ -196,6 +196,30 @@ func (s *Storage) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
 
+	-- ADR 0038, first slice — automations (condition-triggered auto-remediation).
+	-- Mirrors migrations.go AutomationsSchema; created inline here (like every
+	-- other core table) because migrate() builds tables from this block, not from
+	-- the Migrations slice (that slice is a version-tracking record). tenant_id is
+	-- carried inline for forward-compat single-tenant scoping (inert in OSS).
+	CREATE TABLE IF NOT EXISTS automations (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		agent_id TEXT,
+		group_id TEXT,
+		trigger_type TEXT NOT NULL,
+		action_type TEXT NOT NULL,
+		cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+		max_attempts INTEGER NOT NULL DEFAULT 0,
+		dry_run INTEGER NOT NULL DEFAULT 0,
+		tenant_id TEXT NOT NULL DEFAULT 'default',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_automations_enabled ON automations(enabled);
+	CREATE INDEX IF NOT EXISTS idx_automations_tenant ON automations(tenant_id);
+
 	CREATE TABLE IF NOT EXISTS audit_events (
 		id TEXT PRIMARY KEY,
 		timestamp DATETIME NOT NULL,
@@ -2616,6 +2640,180 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------------------
+// Automations (ADR 0038, first slice). CRUD-only entity mirroring alert_rules,
+// including the same tenant scoping (inert in OSS single-tenant). Nullable
+// agent_id / group_id round-trip through sql.NullString ⇄ *string.
+// ---------------------------------------------------------------------------
+
+const automationColumns = `id, name, enabled, agent_id, group_id, trigger_type, action_type, cooldown_seconds, max_attempts, dry_run, created_at, updated_at`
+
+func (s *Storage) CreateAutomation(ctx context.Context, a *types.Automation) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	stmt := `
+		INSERT INTO automations (id, name, enabled, agent_id, group_id, trigger_type, action_type, cooldown_seconds, max_attempts, dry_run, tenant_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err = s.db.ExecContext(ctx, stmt,
+		a.ID, a.Name, boolToInt(a.Enabled), strPtrToNull(a.AgentID), strPtrToNull(a.GroupID),
+		string(a.Trigger), string(a.Action), a.CooldownSeconds, a.MaxAttempts, boolToInt(a.DryRun),
+		tenant, a.CreatedAt, a.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create automation: %w", err)
+	}
+	s.logger.Debug("Created automation", zap.String("automation_id", a.ID), zap.String("name", a.Name))
+	return nil
+}
+
+func (s *Storage) GetAutomation(ctx context.Context, id string) (*types.Automation, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT ` + automationColumns + ` FROM automations WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	a, err := scanAutomationRow(s.db.QueryRowContext(ctx, stmt, args...))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get automation: %w", err)
+	}
+	return a, nil
+}
+
+func (s *Storage) ListAutomations(ctx context.Context) ([]*types.Automation, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `SELECT ` + automationColumns + ` FROM automations`
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY name ASC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list automations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*types.Automation
+	for rows.Next() {
+		a, err := scanAutomationRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan automation: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Storage) UpdateAutomation(ctx context.Context, a *types.Automation) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `
+		UPDATE automations
+		SET name = ?, enabled = ?, agent_id = ?, group_id = ?, trigger_type = ?, action_type = ?,
+		    cooldown_seconds = ?, max_attempts = ?, dry_run = ?, updated_at = ?
+		WHERE id = ?
+	`
+	args := []any{
+		a.Name, boolToInt(a.Enabled), strPtrToNull(a.AgentID), strPtrToNull(a.GroupID),
+		string(a.Trigger), string(a.Action), a.CooldownSeconds, a.MaxAttempts, boolToInt(a.DryRun),
+		a.UpdatedAt, a.ID,
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update automation: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return fmt.Errorf("automation not found: %s", a.ID)
+	}
+	s.logger.Debug("Updated automation", zap.String("automation_id", a.ID))
+	return nil
+}
+
+func (s *Storage) DeleteAutomation(ctx context.Context, id string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM automations WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete automation: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return fmt.Errorf("automation not found: %s", id)
+	}
+	s.logger.Debug("Deleted automation", zap.String("automation_id", id))
+	return nil
+}
+
+// scanAutomationRow scans one automations row (selected via automationColumns)
+// into a types.Automation. Nullable agent_id / group_id map to *string.
+func scanAutomationRow(sc interface{ Scan(dest ...any) error }) (*types.Automation, error) {
+	a := &types.Automation{}
+	var (
+		enabledInt, dryRunInt int
+		agentID, groupID      sql.NullString
+		trigger, action       string
+	)
+	if err := sc.Scan(
+		&a.ID, &a.Name, &enabledInt, &agentID, &groupID, &trigger, &action,
+		&a.CooldownSeconds, &a.MaxAttempts, &dryRunInt, &a.CreatedAt, &a.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	a.Enabled = enabledInt != 0
+	a.DryRun = dryRunInt != 0
+	a.Trigger = types.AutomationTrigger(trigger)
+	a.Action = types.AutomationAction(action)
+	a.AgentID = nullToStrPtr(agentID)
+	a.GroupID = nullToStrPtr(groupID)
+	return a, nil
+}
+
+func strPtrToNull(s *string) any {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
+func nullToStrPtr(ns sql.NullString) *string {
+	if !ns.Valid {
+		return nil
+	}
+	v := ns.String
+	return &v
 }
 
 // Audit log
